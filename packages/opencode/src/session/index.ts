@@ -1064,6 +1064,7 @@ export namespace Session {
 
   export async function revert(input: RevertInput) {
     const all = await messages(input.sessionID)
+    const session = await get(input.sessionID)
     let lastUser: MessageV2.User | undefined
     let lastSnapshot: MessageV2.SnapshotPart | undefined
     for (const msg of all) {
@@ -1074,17 +1075,18 @@ export namespace Session {
         if ((msg.info.id === input.messageID && !input.partID) || part.id === input.partID) {
           // if no useful parts left in message, same as reverting whole message
           const partID = remaining.some((item) => ["text", "tool"].includes(item.type)) ? input.partID : undefined
-          const snapshot = await Snapshot.create(input.sessionID)
+          const snapshot = session.revert?.snapshot ?? (await Snapshot.create(input.sessionID))
+          log.info("revert snapshot", { snapshot })
           if (lastSnapshot) await Snapshot.restore(input.sessionID, lastSnapshot.snapshot)
-          const session = await update(input.sessionID, (draft) => {
+          const next = await update(input.sessionID, (draft) => {
             draft.revert = {
               // if not part id jump to the last user message
               messageID: !partID && lastUser ? lastUser.id : msg.info.id,
               partID,
-              snapshot: draft.revert?.snapshot ?? snapshot,
+              snapshot,
             }
           })
-          return session
+          return next
         }
         remaining.push(part)
       }
