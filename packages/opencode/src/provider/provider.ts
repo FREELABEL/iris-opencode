@@ -450,7 +450,12 @@ export namespace Provider {
           }
         }
       })
-      .catch(() => undefined)
+      .catch((error) => {
+        log.error("failed to find last used model", {
+          error,
+        })
+        return undefined
+      })
 
     if (lastused) return lastused
 
