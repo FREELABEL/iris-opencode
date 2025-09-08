@@ -469,6 +469,9 @@ export namespace Session {
     const userParts = await Promise.all(
       input.parts.map(async (part): Promise<MessageV2.Part[]> => {
         if (part.type === "file") {
+          log.info("processing_file", {
+            url: part.url,
+          })
           const url = new URL(part.url)
           switch (url.protocol) {
             case "data:":

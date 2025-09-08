@@ -8,9 +8,30 @@ import fs from "fs/promises"
 import { Filesystem } from "../util/filesystem"
 import { Instance } from "../project/instance"
 import { Flag } from "../flag/flag"
+import { ZipReader, BlobReader, BlobWriter } from "@zip.js/zip.js"
 
 export namespace LSPServer {
   const log = Log.create({ service: "lsp.server" })
+
+  async function extractZip(zipPath: string, extractToDir: string) {
+    const zipFileReader = new ZipReader(new BlobReader(new Blob([await Bun.file(zipPath).arrayBuffer()])))
+    const entries = await zipFileReader.getEntries()
+    for (const entry of entries) {
+      const outputPath = path.join(extractToDir, entry.filename)
+      if (entry.directory) {
+        await fs.mkdir(outputPath, { recursive: true })
+      } else {
+        await fs.mkdir(path.dirname(outputPath), { recursive: true })
+        if (entry.getData) {
+          const data = await entry.getData(new BlobWriter())
+          if (data) {
+            await Bun.write(outputPath, await data.arrayBuffer())
+          }
+        }
+      }
+    }
+    await zipFileReader.close()
+  }
 
   export interface Handle {
     process: ChildProcessWithoutNullStreams
@@ -159,7 +180,7 @@ export namespace LSPServer {
         const zipPath = path.join(Global.Path.bin, "vscode-eslint.zip")
         await Bun.file(zipPath).write(response)
 
-        await $`unzip -o -q ${zipPath}`.quiet().cwd(Global.Path.bin).nothrow()
+        await extractZip(zipPath, Global.Path.bin)
         await fs.rm(zipPath, { force: true })
 
         const extractedPath = path.join(Global.Path.bin, "vscode-eslint-main")
@@ -359,7 +380,7 @@ export namespace LSPServer {
           const zipPath = path.join(Global.Path.bin, "elixir-ls.zip")
           await Bun.file(zipPath).write(response)
 
-          await $`unzip -o -q ${zipPath}`.quiet().cwd(Global.Path.bin).nothrow()
+          await extractZip(zipPath, Global.Path.bin)
 
           await fs.rm(zipPath, {
             force: true,
@@ -462,7 +483,7 @@ export namespace LSPServer {
         await Bun.file(tempPath).write(downloadResponse)
 
         if (ext === "zip") {
-          await $`unzip -o -q ${tempPath}`.quiet().cwd(Global.Path.bin).nothrow()
+          await extractZip(tempPath, Global.Path.bin)
         } else {
           await $`tar -xf ${tempPath}`.cwd(Global.Path.bin).nothrow()
         }
@@ -629,7 +650,7 @@ export namespace LSPServer {
         const zipPath = path.join(Global.Path.bin, "clangd.zip")
         await Bun.file(zipPath).write(downloadResponse)
 
-        await $`unzip -o -q ${zipPath}`.quiet().cwd(Global.Path.bin).nothrow()
+        await extractZip(zipPath, Global.Path.bin)
         await fs.rm(zipPath, { force: true })
 
         const extractedDir = path.join(Global.Path.bin, assetName.replace(".zip", ""))
