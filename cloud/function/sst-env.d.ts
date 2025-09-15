@@ -30,6 +30,10 @@ declare module "sst" {
       "type": "sst.sst.Linkable"
       "username": string
     }
+    "Desktop": {
+      "type": "sst.cloudflare.StaticSite"
+      "url": string
+    }
     "FIREWORKS_API_KEY": {
       "type": "sst.sst.Secret"
       "value": string
