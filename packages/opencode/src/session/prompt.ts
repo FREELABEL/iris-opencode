@@ -285,7 +285,10 @@ export namespace SessionPrompt {
               if (m.info.role !== "assistant" || m.info.error === undefined) {
                 return true
               }
-              if (MessageV2.AbortedError.isInstance(m.info.error) && m.parts.some((part) => part.type === "text")) {
+              if (
+                MessageV2.AbortedError.isInstance(m.info.error) &&
+                m.parts.some((part) => part.type === "text" || part.type === "tool")
+              ) {
                 return true
               }
 
