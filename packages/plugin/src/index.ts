@@ -11,6 +11,18 @@ import type {
   Config,
 } from "@opencode-ai/sdk"
 import type { BunShell } from "./shell"
+export { z } from "zod/v4"
+import { z } from "zod/v4"
+
+export function tool<Args extends z.ZodRawShape>(input: {
+  description: string
+  args: Args
+  execute: (args: z.infer<z.ZodObject<Args>>) => Promise<string>
+}) {
+  return input
+}
+
+export type ToolDefinition = ReturnType<typeof tool>
 
 export type PluginInput = {
   client: ReturnType<typeof createOpencodeClient>
@@ -18,34 +30,16 @@ export type PluginInput = {
   directory: string
   worktree: string
   $: BunShell
-  Tool: {
-    define(id: string, init: any | (() => Promise<any>)): any
-  }
-  z: any // Zod instance for creating schemas
 }
-export type Plugin = (input: PluginInput) => Promise<Hooks>
 
-// Lightweight schema spec for HTTP-registered tools
-export type HttpParamSpec = {
-  type: "string" | "number" | "boolean" | "array"
-  description?: string
-  optional?: boolean
-  items?: "string" | "number" | "boolean"
-}
-export type HttpToolRegistration = {
-  id: string
-  description: string
-  parameters: {
-    type: "object"
-    properties: Record<string, HttpParamSpec>
-  }
-  callbackUrl: string
-  headers?: Record<string, string>
-}
+export type Plugin = (input: PluginInput) => Promise<Hooks>
 
 export interface Hooks {
   event?: (input: { event: Event }) => Promise<void>
   config?: (input: Config) => Promise<void>
+  tool?: {
+    [key: string]: ToolDefinition
+  }
   auth?: {
     provider: string
     loader?: (auth: () => Promise<Auth>, provider: Provider) => Promise<Record<string, any>>
@@ -129,7 +123,6 @@ export interface Hooks {
   "tool.register"?: (
     input: {},
     output: {
-      registerHTTP: (tool: HttpToolRegistration) => void | Promise<void>
       register: (tool: any) => void | Promise<void> // Tool.Info type from opencode
     },
   ) => Promise<void>
