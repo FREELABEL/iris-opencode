@@ -254,7 +254,83 @@ type Theme = {
   syntaxPunctuation: string
 }
 
+import { createContext, useContext, createSignal, createEffect, onMount } from "solid-js"
+import { Storage } from "../../../../storage/storage"
+
 export const Theme = Object.entries(OPENCODE_THEME).reduce((acc, [key, value]) => {
   acc[key as keyof Theme] = value.dark
   return acc
 }, {} as Theme)
+
+type ThemeMode = "dark" | "light" | "auto"
+
+interface ThemeContextValue {
+  mode: () => ThemeMode
+  setMode: (mode: ThemeMode) => void
+  currentTheme: () => Theme
+  isDark: () => boolean
+}
+
+const ThemeContext = createContext<ThemeContextValue>()
+
+export function ThemeProvider(props: { children: any }) {
+  const [mode, setMode] = createSignal<ThemeMode>("dark")
+
+  // Load saved theme preference
+  onMount(async () => {
+    try {
+      const saved = await Storage.read<ThemeMode>(["theme-mode"]).catch(() => null)
+      if (saved && ["dark", "light", "auto"].includes(saved)) {
+        setMode(saved)
+      }
+    } catch {
+      // Fallback to default if storage fails
+    }
+  })
+
+  // Save theme preference when it changes
+  createEffect(async () => {
+    const currentMode = mode()
+    try {
+      await Storage.write(["theme-mode"], currentMode)
+    } catch {
+      // Ignore storage errors
+    }
+  })
+
+  // For terminal environment, we'll assume dark mode by default
+  // since most terminals have dark backgrounds
+  const isDark = () => {
+    const currentMode = mode()
+    if (currentMode === "auto") {
+      // In terminal context, default to dark for auto mode
+      return true
+    }
+    return currentMode === "dark"
+  }
+
+  const currentTheme = () => {
+    const dark = isDark()
+    return Object.entries(OPENCODE_THEME).reduce((acc, [key, value]) => {
+      acc[key as keyof Theme] = dark ? value.dark : value.light
+      return acc
+    }, {} as Theme)
+  }
+
+  const value: ThemeContextValue = {
+    mode,
+    setMode,
+    currentTheme,
+    isDark,
+  }
+
+  return <ThemeContext.Provider value={value}>{props.children}</ThemeContext.Provider>
+}
+
+export function useTheme() {
+  const context = useContext(ThemeContext)
+  if (!context) {
+    throw new Error("useTheme must be used within a ThemeProvider")
+  }
+  return context
+}

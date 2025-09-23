@@ -4,7 +4,7 @@ import { TextAttributes } from "@opentui/core"
 import { RouteProvider, useRoute } from "./context/route"
 import { Home } from "./home"
 import { Switch, Match, createEffect } from "solid-js"
-import { Theme } from "./context/theme"
+import { ThemeProvider, useTheme } from "./context/theme"
 import { Installation } from "../../../installation"
 import { Global } from "../../../global"
 import { DialogProvider, useDialog } from "./ui/dialog"
@@ -77,17 +77,19 @@ export const TuiCommand = cmd({
         })
         return (
           <RouteProvider>
-            <SDKProvider>
-              <SyncProvider>
-                <LocalProvider>
-                  <DialogProvider>
-                    <CommandProvider>
-                      <App />
-                    </CommandProvider>
-                  </DialogProvider>
-                </LocalProvider>
-              </SyncProvider>
-            </SDKProvider>
+            <ThemeProvider>
+              <SDKProvider>
+                <SyncProvider>
+                  <LocalProvider>
+                    <DialogProvider>
+                      <CommandProvider>
+                        <App />
+                      </CommandProvider>
+                    </DialogProvider>
+                  </LocalProvider>
+                </SyncProvider>
+              </SDKProvider>
+            </ThemeProvider>
           </RouteProvider>
         )
       },
@@ -172,8 +174,10 @@ function App() {
     },
   ])
 
+  const { currentTheme } = useTheme()
+
   return (
-    <box width={dimensions().width} height={dimensions().height} backgroundColor={Theme.background}>
+    <box width={dimensions().width} height={dimensions().height} backgroundColor={currentTheme().background}>
       <box flexDirection="column" flexGrow={1}>
         <Switch>
           <Match when={route.data.type === "home"}>
@@ -186,27 +190,27 @@ function App() {
       </box>
       <box
         height={1}
-        backgroundColor={Theme.backgroundPanel}
+        backgroundColor={currentTheme().backgroundPanel}
         flexDirection="row"
         justifyContent="space-between"
         flexShrink={0}
       >
         <box flexDirection="row">
-          <box flexDirection="row" backgroundColor={Theme.backgroundElement} paddingLeft={1} paddingRight={1}>
-            <text fg={Theme.textMuted}>open</text>
+          <box flexDirection="row" backgroundColor={currentTheme().backgroundElement} paddingLeft={1} paddingRight={1}>
+            <text fg={currentTheme().textMuted}>open</text>
             <text attributes={TextAttributes.BOLD}>code </text>
-            <text fg={Theme.textMuted}>v{Installation.VERSION}</text>
+            <text fg={currentTheme().textMuted}>v{Installation.VERSION}</text>
           </box>
           <box paddingLeft={1} paddingRight={1}>
-            <text fg={Theme.textMuted}>{process.cwd().replace(Global.Path.home, "~")}</text>
+            <text fg={currentTheme().textMuted}>{process.cwd().replace(Global.Path.home, "~")}</text>
           </box>
         </box>
         <box flexDirection="row" flexShrink={0}>
-          <text fg={Theme.textMuted} paddingRight={1}>
+          <text fg={currentTheme().textMuted} paddingRight={1}>
             tab
           </text>
           <text fg={local.agent.color(local.agent.current().name)}>┃</text>
-          <text bg={local.agent.color(local.agent.current().name)} fg={Theme.background} wrap={false}>
+          <text bg={local.agent.color(local.agent.current().name)} fg={currentTheme().background} wrap={false}>
             {" "}
             <span style={{ bold: true }}>{local.agent.current().name.toUpperCase()}</span>
             <span> AGENT </span>

@@ -73,7 +73,7 @@ export function Session() {
     {
       title: "Share session",
       value: "session.share",
-      disabled: !session().share?.url,
+      disabled: !session()?.share?.url,
       category: "Session",
       onSelect: (dialog) => {
         sdk.session.share({
@@ -87,7 +87,7 @@ export function Session() {
     {
       title: "Unshare session",
       value: "session.unshare",
-      disabled: !!session().share?.url,
+      disabled: !!session()?.share?.url,
       category: "Session",
       onSelect: (dialog) => {
         sdk.session.unshare({
@@ -109,7 +109,7 @@ export function Session() {
   return (
     <box paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2} flexGrow={1}>
       <Show when={session()}>
-        <box paddingLeft={1} paddingRight={1} {...SplitBorder} borderColor={Theme.backgroundElement}>
+        <box paddingLeft={1} paddingRight={1} {...SplitBorder} borderColor={Theme.backgroundElement} flexShrink={0}>
           <text>
             <span style={{ bold: true, fg: Theme.accent }}>#</span>{" "}
             <span style={{ bold: true }}>{session().title}</span>
@@ -134,7 +134,7 @@ export function Session() {
           stickyStart="bottom"
           paddingTop={1}
           paddingBottom={1}
-          height={45}
+          flexGrow={1}
         >
           <For each={messages()}>
             {(message) => (

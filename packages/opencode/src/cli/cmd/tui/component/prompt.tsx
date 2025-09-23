@@ -13,6 +13,7 @@ import { createStore, produce } from "solid-js/store"
 import type { FilePart } from "@opencode-ai/sdk"
 import fuzzysort from "fuzzysort"
 import { useCommandDialog } from "./dialog-command"
+import { Shimmer } from "../ui/shimmer"
 
 export type PromptProps = {
   sessionID?: string
@@ -35,20 +36,17 @@ export function Prompt(props: PromptProps) {
   const sync = useSync()
   const session = createMemo(() => (props.sessionID ? sync.session.get(props.sessionID) : undefined))
 
-  const [store, setStore] = createStore<Prompt>({
-    input: "",
-    parts: [],
-  })
-
-  const messages = createMemo(() => {
-    if (!props.sessionID) return []
-    return sync.data.message[props.sessionID] ?? []
-  })
+  const messages = createMemo(() => (props.sessionID ? (sync.data.message[props.sessionID] ?? []) : []))
   const working = createMemo(() => {
     const last = messages()[messages().length - 1]
     if (!last) return false
     if (last.role === "user") return true
     return !last.time.completed
+  })
+
+  const [store, setStore] = createStore<Prompt>({
+    input: "",
+    parts: [],
   })
 
   createEffect(() => {
@@ -214,11 +212,11 @@ export function Prompt(props: PromptProps) {
                 <text>
                   esc <span style={{ fg: Theme.textMuted }}>interrupt</span>
                 </text>
-                <text fg={Theme.textMuted}>working...</text>
+                <Shimmer text="working" color={Theme.text} />
               </box>
             </Match>
             <Match when={true}>
-              <text>
+              <text live>
                 ctrl+k <span style={{ fg: Theme.textMuted }}>commands</span>
               </text>
             </Match>
