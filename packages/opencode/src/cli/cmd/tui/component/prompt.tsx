@@ -13,7 +13,6 @@ import { createStore, produce } from "solid-js/store"
 import type { FilePart } from "@opencode-ai/sdk"
 import fuzzysort from "fuzzysort"
 import { useCommandDialog } from "./dialog-command"
-import { Shimmer } from "../ui/shimmer"
 
 export type PromptProps = {
   sessionID?: string
