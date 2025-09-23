@@ -222,7 +222,15 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[] }) {
         </box>
       </Show>
       <Show when={!props.message.time.completed}>
-        <box paddingLeft={3} marginTop={1} flexDirection="row" gap={1}>
+        <box
+          paddingLeft={2}
+          marginTop={1}
+          flexDirection="row"
+          gap={1}
+          border={["left"]}
+          customBorderChars={SplitBorder.customBorderChars}
+          borderColor={Theme.backgroundElement}
+        >
           <text fg={local.agent.color(props.message.mode)}>{Locale.titlecase(props.message.mode)}</text>
           <text fg={Theme.textMuted}>
             {props.message.providerID}/{props.message.modelID}
