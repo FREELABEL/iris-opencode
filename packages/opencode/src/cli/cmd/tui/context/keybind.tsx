@@ -82,7 +82,6 @@ export function init() {
         option: evt.option,
       }
       for (const key of keybind) {
-        console.log("compareing", key, parsed)
         if (Keybind.match(key, parsed)) {
           return true
         }

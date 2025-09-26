@@ -15,7 +15,6 @@ import fuzzysort from "fuzzysort"
 import { useCommandDialog } from "./dialog-command"
 import { useKeybind } from "../context/keybind"
 import { Clipboard } from "../../../../util/clipboard"
-import { useKeyboard } from "@opentui/solid"
 
 export type PromptProps = {
   sessionID?: string
@@ -49,14 +48,6 @@ export function Prompt(props: PromptProps) {
     if (dialog.stack.length > 0) input.blur()
   })
 
-  useKeyboard((evt) => {
-    console.log({
-      focused: input.focused,
-      name: evt.name,
-      sessionID: props.sessionID,
-    })
-  })
-
   return (
     <>
       <Autocomplete
@@ -81,7 +72,6 @@ export function Prompt(props: PromptProps) {
             <input
               onPaste={async function (text) {
                 const content = await Clipboard.read()
-                console.log(content)
                 if (!content) {
                   this.insertText(text)
                 }
