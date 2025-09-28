@@ -49,7 +49,9 @@ export function Session() {
   })
 
   function toBottom() {
-    scroll.scrollTo(scroll.scrollHeight)
+    setTimeout(() => {
+      scroll.scrollTo(scroll.scrollHeight)
+    }, 50)
   }
 
   const local = useLocal()
@@ -122,7 +124,7 @@ export function Session() {
               messageID: message.id,
             },
           })
-          .then(() => setTimeout(() => toBottom(), 100))
+          .then(toBottom)
         dialog.clear()
       },
     },
@@ -142,7 +144,7 @@ export function Session() {
                 id: route.sessionID,
               },
             })
-            .then(() => setTimeout(() => toBottom(), 100))
+            .then(toBottom)
           return
         }
         sdk.session
@@ -154,7 +156,7 @@ export function Session() {
               messageID: message.id,
             },
           })
-          .then(() => setTimeout(() => toBottom(), 100))
+          .then(toBottom)
       },
     },
   ])
