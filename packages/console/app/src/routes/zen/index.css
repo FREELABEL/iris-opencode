@@ -1,11 +1,20 @@
 ::selection {
-  background: #FDFFCA;
-  color: var(--color-text);
+  background: var(--color-background-interactive);
+  color: var(--color-text-strong);
+
+  @media (prefers-color-scheme: dark) {
+    background: var(--color-background-interactive);
+    color: var(--color-text-inverted);
+  }
 }
 
 [data-page="zen"] {
   --color-background: hsl(0, 20%, 99%);
   --color-background-weak: hsl(0, 8%, 97%);
+  --color-background-strong: hsl(0, 5%, 12%);
+  --color-background-interactive: hsl(62, 84%, 88%);
+  --color-background-interactive-weaker: hsl(64, 74%, 95%);
+
 
   --color-text: hsl(0, 1%, 39%);
   --color-text-weak: hsl(0, 1%, 74%);
@@ -18,13 +27,15 @@
 
   --color-icon: hsl(0, 1%, 55%);
 
-  --color-selection: hsl(61, 67%, 76%);
 }
 
 [data-page="zen"] {
   @media (prefers-color-scheme: dark) {
     --color-background: hsl(0, 9%, 7%);
     --color-background-weak: hsl(0, 6%, 10%);
+    --color-background-strong: hsl(0, 15%, 94%);
+    --color-background-interactive: hsl(62, 100%, 90%);
+    --color-background-interactive-weaker: hsl(60, 20%, 8%);
 
     --color-text: hsl(0, 4%, 71%);
     --color-text-weak: hsl(0, 2%, 49%);
@@ -36,8 +47,6 @@
     --color-border-weak: hsl(0, 4%, 23%);
 
     --color-icon: hsl(10, 3%, 43%);
-
-    --color-selection: hsl(60, 44%, 17%);
   }
 }
 
@@ -60,7 +69,7 @@
   padding-bottom: 5rem;
 
   a {
-    color: var(--color-text);
+    color: var(--color-text-strong);
     text-decoration: underline;
     text-underline-offset: var(--space-0-75);
     text-decoration-thickness: 1px;
@@ -69,7 +78,7 @@
   [data-component="content"] {
     max-width: 67.5rem;
     margin: 0 auto;
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--color-border-weak);
     border-top: none;
   }
 
@@ -81,7 +90,7 @@
     justify-content: space-between;
     align-items: center;
     background: var(--color-background);
-    border-bottom: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border-weak);
 
     z-index: 10;
 
@@ -101,7 +110,7 @@
           a {
             text-decoration: none;
             span {
-              color: var(--color-text-dimmed);
+              color: var(--color-text-weak);
             }
           }
           a:hover {
@@ -139,7 +148,18 @@
     display: flex;
     padding: var(--vertical-padding) var(--padding);
 
+    [data-slot="zen logo dark"] {
+      display: none;
+    }
 
+    @media (prefers-color-scheme: dark) {
+      [data-slot="zen logo light"] {
+        display: none;
+      }
+      [data-slot="zen logo dark"] {
+        display: block;
+      }
+    }
   }
 
   [data-component="center"] {
@@ -156,7 +176,7 @@
 
       strong {
         font-size: 24px;
-        color: var(--color-text);
+        color: var(--color-text-strong);
         font-weight: 500;
         margin-bottom: 16px;
         display: block;
@@ -166,12 +186,17 @@
         color: var(--color-text-secondary);
         margin-bottom: 24px;
         max-width: 82%;
+
+        @media (max-width: 50rem) {
+          max-width: 100%;
+        }
       }
 
       button {
-        background: var(--color-text);
+        background: var(--color-background-strong);
         padding: 8px 20px;
         color: var(--color-text-inverted);
+        border: none;
         border-radius: 4px;
         font-weight: 500;
         cursor: pointer;
@@ -185,19 +210,36 @@
       display: flex;
       gap: 24px;
       margin-bottom: 56px;
+
+      svg {
+        color: var(--color-background-strong);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        svg {
+          color: var(--color-background-strong);
+        }
+      }
     }
 
 
 
     [data-slot="pricing-copy"] {
       strong {
-        color: var(--color-text);
+        color: var(--color-text-strong);
         font-weight: 500;
       }
 
       p:first-child {
         margin-bottom: 24px;
-        color: var(--color-text-secondary);
+        color: var(--color-text);
+        display: flex;
+        gap: 8px;
+
+        @media (max-width: 40rem) {
+          flex-direction: column;
+          gap: 4px;
+        }
       }
     }
 
@@ -220,19 +262,19 @@
     h3 {
       font-size: 16px;
       font-weight: 500;
-      color: var(--color-text);
+      color: var(--color-text-strong);
       margin-bottom: 12px;
     }
 
     p {
       margin-bottom: 12px;
-      color: var(--color-text-secondary);
+      color: var(--color-text);
     }
   }
 
 
   [data-component="problem"] {
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--color-border-weak);
     padding: var(--vertical-padding) var(--padding);
     color: var(--color-text-secondary);
 
@@ -249,7 +291,7 @@
         gap: 12px;
 
         span {
-          color: var(--color-text-dimmed);
+          color: var(--color-icon);
         }
       }
       li:last-child {
@@ -259,7 +301,7 @@
   }
 
   [data-component="how"] {
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--color-border-weak);
     padding: var(--vertical-padding) var(--padding);
     color: var(--color-text-secondary);
 
@@ -272,11 +314,11 @@
         gap: 12px;
 
         span {
-          color: var(--color-text-dimmed);
+          color: var(--color-icon);
         }
         strong {
           font-weight: 500;
-          color: var(--color-text);
+          color: var(--color-text-strong);
         }
       }
       li:last-child {
@@ -286,7 +328,7 @@
   }
 
   [data-component="privacy"] {
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--color-border-weak);
     padding: var(--vertical-padding) var(--padding);
     color: var(--color-text-secondary);
 
@@ -314,28 +356,42 @@
   }
 
   [data-component="email"] {
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--color-border-weak);
     padding: var(--vertical-padding) var(--padding);
-    color: var(--color-text-secondary);
+    color: var(--color-text);
 
     [data-slot="form"] {
       position: relative;
 
       input {
-        background: #F8F6F5;
+        background: var(--color-background-weak);
         border-radius: 6px;
-        border: 1px solid #E8E6E1;
+        border: 1px solid var(--color-border-weak);
         padding: 20px;
         display: flex;
         flex-direction: column;
         gap: 12px;
         width: 100%;
       }
+
+      input:focus {
+        background: var(--color-background-interactive-weaker);
+        outline: none;
+        border: none;
+        color: var(--color-text-strong);
+
+        border: 1px solid var(--color-background-strong); /* Tailwind blue-600 as example */
+
+        /* Tailwind-style ring */
+        box-shadow: 0 0 0 3px var(--color-background-interactive);
+        /* mimics "ring-2 ring-blue-600/50" */
+      }
+
       button {
         position: absolute;
         height: 40px;
         right: 12px;
-        background: var(--color-text);
+        background: var(--color-background-strong);
         padding: 4px 20px;
         color: var(--color-text-inverted);
         border-radius: 4px;
@@ -348,7 +404,7 @@
   }
 
   [data-component="faq"] {
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--color-border-weak);
     padding: var(--vertical-padding) var(--padding);
 
     ul {
@@ -363,17 +419,19 @@
       display: flex;
       gap: 16px;
       margin-bottom: 8px;
+      color: var(--color-text-strong);
+      font-weight: 500;
+
     }
 
     [data-slot="faq-answer"] {
-      color: var(--color-text-dimmed);
       margin-left: 40px;
       margin-bottom: 24px;
     }
   }
 
   [data-component="testimonials"] {
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--color-border-weak);
     padding: var(--vertical-padding) var(--padding);
     display: flex;
     flex-direction: column;
@@ -388,20 +446,26 @@
       text-decoration: none;
     }
     [data-slot="testimonial"] {
-      background: #F8F6F5;
+      background: var(--color-background-weak);
       border-radius: 6px;
-      border: 1px solid #E8E6E1;
+      border: 1px solid var(--color-border-weak);
       padding: 20px;
       display: flex;
       flex-direction: column;
       gap: 12px;
 
+      @media (max-width: 60rem) {
+        flex-direction: column-reverse;
+        gap: 24px;
+      }
+
       [data-slot="name"] {
         display: flex;
-        gap: 16px;
+        gap: 12px;
 
         @media (max-width: 60rem) {
           flex-direction: column;
+          gap: 8px;
         }
 
         span {
@@ -424,7 +488,7 @@
           margin-left: 0;
         }
         span {
-          color: var(--color-text-secondary);
+          color: var(--color-text);
           text-decoration: none;
         }
       }
@@ -436,7 +500,7 @@
       cursor: pointer;
       display: flex;
       align-items: center;
-      color: var(--color-text-secondary);
+      color: var(--color-text);
       gap: var(--space-2-5);
       font-size: 1rem;
 
@@ -445,7 +509,7 @@
       }
 
       strong {
-        color: var(--color-text);
+        color: var(--color-text-strong);
         font-weight: 500;
       }
 
@@ -470,7 +534,7 @@
       display: block;
       width: var(--space-4);
       height: var(--space-4);
-      color: var(--color-text-dimmed);
+      color: var(--color-text-weaker);
 
       [data-copied] & {
         display: none;
@@ -481,7 +545,7 @@
       display: none;
       width: var(--space-4);
       height: var(--space-4);
-      color: var(--color-text);
+      color: var(--color-text-strong);
 
       [data-copied] & {
         display: block;
@@ -490,7 +554,7 @@
   }
 
   [data-component="footer"] {
-    border-top: 1px solid var(--color-border);
+    border-top: 1px solid var(--color-border-weak);
     display: flex;
     flex-direction: row;
 
@@ -503,13 +567,13 @@
         text-decoration: none;
 
         span {
-          color: var(--color-text-dimmed);
+          color: var(--color-text-weaker);
         }
       }
     }
 
     [data-slot="cell"] + [data-slot="cell"] {
-      border-left: 1px solid var(--color-border);
+      border-left: 1px solid var(--color-border-weak);
     }
 
     /* Mobile: third column on its own row */
@@ -524,17 +588,17 @@
       [data-slot="cell"]:nth-child(3) {
         flex: 1 0 100%;
         border-left: none;
-        border-top: 1px solid var(--color-border);
+        border-top: 1px solid var(--color-border-weak);
       }
     }
   }
 
   [data-component="legal"] {
-    color: var(--color-text-dimmed);
+    color: var(--color-text-weaker);
     text-align: center;
 
     a {
-      color: var(--color-text-dimmed);
+      color: var(--color-text-weaker);
       text-decoration: none;
     }
   }
