@@ -58,8 +58,7 @@ export namespace Snapshot {
         .trim()
         .split("\n")
         .map((x) => x.trim())
-        .filter(Boolean)
-        .map((x) => path.join(Instance.worktree, x)),
+        .filter(Boolean),
     }
   }
 
@@ -94,7 +93,8 @@ export namespace Snapshot {
           .nothrow()
         if (result.exitCode !== 0) {
           log.info("file not found in history, deleting", { file })
-          await fs.unlink(file).catch(() => {})
+          const absolutePath = path.join(Instance.worktree, file)
+          await fs.unlink(absolutePath).catch(() => {})
         }
         files.add(file)
       }
