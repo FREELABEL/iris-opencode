@@ -6,7 +6,7 @@ import { useSync } from "@tui/context/sync"
 import { SplitBorder } from "@tui/component/border"
 import { Theme } from "@tui/context/theme"
 import { BoxRenderable, ScrollBoxRenderable } from "@opentui/core"
-import { Prompt } from "@tui/component/prompt"
+import { Prompt, type PromptRef } from "@tui/component/prompt"
 import type { AssistantMessage, Part, ToolPart, UserMessage, TextPart, ReasoningPart } from "@opencode-ai/sdk"
 import { useLocal } from "@tui/context/local"
 import { Locale } from "@/util/locale"
@@ -31,6 +31,7 @@ import { Header } from "./header"
 import { parsePatch } from "diff"
 import { useDialog } from "../../ui/dialog"
 import { DialogMessage } from "./dialog-message"
+import type { PromptInfo } from "../../component/prompt/history"
 
 export function Session() {
   const route = useRouteData("session")
@@ -44,9 +45,11 @@ export function Session() {
   const sdk = useSDK()
 
   let scroll: ScrollBoxRenderable
+  let prompt: PromptRef
   const keybind = useKeybind()
 
   useKeyboard((evt) => {
+    if (!prompt.focused) return
     if (keybind.match("messages_page_up", evt)) scroll.scrollBy(-scroll.height / 2)
     if (keybind.match("messages_page_down", evt)) scroll.scrollBy(scroll.height / 2)
   })
@@ -132,6 +135,17 @@ export function Session() {
             messageID: message.id,
           },
         })
+        const parts = sync.data.part[message.id]
+        prompt.set(
+          parts.reduce(
+            (agg, part) => {
+              if (part.type === "text") agg.input += part.text
+              if (part.type === "file") agg.parts.push(part)
+              return agg
+            },
+            { input: "", parts: [] as PromptInfo["parts"] },
+          ),
+        )
         dialog.clear()
       },
     },
@@ -150,6 +164,7 @@ export function Session() {
               id: route.sessionID,
             },
           })
+          prompt.set({ input: "", parts: [] })
           return
         }
         sdk.session.revert({
@@ -288,6 +303,7 @@ export function Session() {
         </Show>
         <box flexShrink={0}>
           <Prompt
+            ref={(r) => (prompt = r)}
             onSubmit={() => {
               toBottom()
             }}

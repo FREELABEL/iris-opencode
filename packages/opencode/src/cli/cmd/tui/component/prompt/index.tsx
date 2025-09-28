@@ -17,6 +17,13 @@ import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 export type PromptProps = {
   sessionID?: string
   onSubmit?: () => void
+  ref?: (ref: PromptRef) => void
+}
+
+export type PromptRef = {
+  focused: boolean
+  set(prompt: PromptInfo): void
+  reset(): void
 }
 
 export function Prompt(props: PromptProps) {
@@ -41,6 +48,22 @@ export function Prompt(props: PromptProps) {
   createEffect(() => {
     if (dialog.stack.length === 0 && input) input.focus()
     if (dialog.stack.length > 0) input.blur()
+  })
+
+  props.ref?.({
+    get focused() {
+      return input.focused
+    },
+    set(prompt) {
+      setStore(prompt)
+      input.cursorPosition = prompt.input.length
+    },
+    reset() {
+      setStore({
+        input: "",
+        parts: [],
+      })
+    },
   })
 
   return (

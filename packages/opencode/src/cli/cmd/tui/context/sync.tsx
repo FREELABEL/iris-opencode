@@ -39,6 +39,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
     sdk.event.subscribe().then(async (events) => {
       for await (const event of events.stream) {
+        console.log(event.type)
         switch (event.type) {
           case "todo.updated":
             setStore("todo", event.properties.sessionID, event.properties.todos)
@@ -76,6 +77,20 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             )
             break
           }
+          case "message.removed": {
+            const messages = store.message[event.properties.sessionID]
+            const result = Binary.search(messages, event.properties.messageID, (m) => m.id)
+            if (result.found) {
+              setStore(
+                "message",
+                event.properties.sessionID,
+                produce((draft) => {
+                  draft.splice(result.index, 1)
+                }),
+              )
+            }
+            break
+          }
           case "message.part.updated": {
             const parts = store.part[event.properties.part.messageID]
             if (!parts) {
@@ -94,6 +109,20 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 draft.splice(result.index, 0, event.properties.part)
               }),
             )
+            break
+          }
+
+          case "message.part.removed": {
+            const parts = store.part[event.properties.messageID]
+            const result = Binary.search(parts, event.properties.partID, (p) => p.id)
+            if (result.found)
+              setStore(
+                "part",
+                event.properties.messageID,
+                produce((draft) => {
+                  draft.splice(result.index, 1)
+                }),
+              )
             break
           }
         }
