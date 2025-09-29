@@ -32,6 +32,7 @@ import { parsePatch } from "diff"
 import { useDialog } from "../../ui/dialog"
 import { DialogMessage } from "./dialog-message"
 import type { PromptInfo } from "../../component/prompt/history"
+import { iife } from "@/util/iife"
 
 export function Session() {
   const route = useRouteData("session")
@@ -39,6 +40,7 @@ export function Session() {
   const session = createMemo(() => sync.session.get(route.sessionID)!)
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
   const todo = createMemo(() => sync.data.todo[route.sessionID] ?? [])
+  const permissions = createMemo(() => sync.data.permission[route.sessionID] ?? [])
 
   createEffect(() => sync.session.sync(route.sessionID))
 
@@ -49,9 +51,30 @@ export function Session() {
   const keybind = useKeybind()
 
   useKeyboard((evt) => {
-    if (!prompt.focused) return
+    if (dialog.stack.length > 0) return
     if (keybind.match("messages_page_up", evt)) scroll.scrollBy(-scroll.height / 2)
     if (keybind.match("messages_page_down", evt)) scroll.scrollBy(scroll.height / 2)
+
+    const first = permissions()[0]
+    if (first) {
+      const response = iife(() => {
+        if (evt.name === "return") return "once"
+        if (evt.name === "a") return "always"
+        if (evt.name === "d") return "reject"
+        return
+      })
+      if (response) {
+        sdk.postSessionIdPermissionsPermissionId({
+          path: {
+            permissionID: first.id,
+            id: route.sessionID,
+          },
+          body: {
+            response: response,
+          },
+        })
+      }
+    }
   })
 
   function toBottom() {
@@ -219,7 +242,7 @@ export function Session() {
   const dialog = useDialog()
 
   return (
-    <box paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2} flexGrow={1}>
+    <box paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2} flexGrow={1} onKeyDown={(e) => {}}>
       <Show when={session()}>
         <Header />
         <scrollbox
@@ -484,6 +507,7 @@ function TextPart(props: { part: TextPart; message: AssistantMessage }) {
 // Pending messages moved to individual tool pending functions
 
 function ToolPart(props: { part: ToolPart; message: AssistantMessage }) {
+  const sync = useSync()
   const component = createMemo(() => {
     const ready = ToolRegistry.ready(props.part.tool)
     if (!ready) return
@@ -491,11 +515,14 @@ function ToolPart(props: { part: ToolPart; message: AssistantMessage }) {
     const metadata = props.part.state.status === "pending" ? {} : (props.part.state.metadata ?? {})
     const input = props.part.state.input
     const container = ToolRegistry.container(props.part.tool)
+    const permissions = sync.data.permission[props.message.sessionID] ?? []
+    const permissionIndex = permissions.findIndex((x) => x.callID === props.part.callID)
+    const permission = permissions[permissionIndex]
 
     const style: BoxProps =
       container === "block"
         ? {
-            border: ["left"] as const,
+            border: permissionIndex === 0 ? (["left", "right"] as const) : (["left"] as const),
             paddingTop: 1,
             paddingBottom: 1,
             paddingLeft: 2,
@@ -503,7 +530,7 @@ function ToolPart(props: { part: ToolPart; message: AssistantMessage }) {
             gap: 1,
             backgroundColor: Theme.backgroundPanel,
             customBorderChars: SplitBorder.customBorderChars,
-            borderColor: Theme.background,
+            borderColor: permissionIndex === 0 ? Theme.warning : Theme.background,
           }
         : {
             paddingLeft: 3,
@@ -512,7 +539,7 @@ function ToolPart(props: { part: ToolPart; message: AssistantMessage }) {
     return (
       <box
         {...style}
-        renderBefore={function () {
+        renderAfter={function () {
           resize(this as BoxRenderable)
         }}
       >
@@ -520,11 +547,31 @@ function ToolPart(props: { part: ToolPart; message: AssistantMessage }) {
           component={ready}
           input={input}
           metadata={metadata}
+          permission={permission?.metadata ?? {}}
           output={props.part.state.status === "completed" ? props.part.state.output : undefined}
         />
         {props.part.state.status === "error" && (
           <box paddingLeft={2}>
             <text fg={Theme.error}>{props.part.state.error.replace("Error: ", "")}</text>
+          </box>
+        )}
+        {permission && (
+          <box gap={1}>
+            <text fg={Theme.text}>Permission required to run this tool:</text>
+            <box flexDirection="row" gap={2}>
+              <text>
+                <b>enter</b>
+                <span style={{ fg: Theme.textMuted }}> accept</span>
+              </text>
+              <text>
+                <b>a</b>
+                <span style={{ fg: Theme.textMuted }}> accept always</span>
+              </text>
+              <text>
+                <b>d</b>
+                <span style={{ fg: Theme.textMuted }}> deny</span>
+              </text>
+            </box>
           </box>
         )}
       </box>
@@ -537,6 +584,7 @@ function ToolPart(props: { part: ToolPart; message: AssistantMessage }) {
 type ToolProps<T extends Tool.Info> = {
   input: Partial<Tool.InferParameters<T>>
   metadata: Partial<Tool.InferMetadata<T>>
+  permission: Record<string, any>
   output?: string
 }
 
@@ -758,11 +806,22 @@ ToolRegistry.register<typeof EditTool>({
         <ToolTitle icon="←" fallback="Preparing edit..." when={props.input.filePath}>
           Edit {normalizePath(props.input.filePath!)}
         </ToolTitle>
-        <Show when={code()}>
-          <box paddingLeft={1}>
-            <text>{code()}</text>
-          </box>
-        </Show>
+        <Switch>
+          <Match when={props.permission["diff"]}>
+            <text>{props.permission["diff"]?.trim()}</text>
+          </Match>
+          <Match when={code()}>
+            <box paddingLeft={1}>
+              <text>{code()}</text>
+            </box>
+          </Match>
+          <Match when={props.input.newString && props.input.oldString}>
+            <box paddingLeft={1}>
+              <text>{props.input.oldString}</text>
+              <text>{props.input.newString}</text>
+            </box>
+          </Match>
+        </Switch>
       </>
     )
   },

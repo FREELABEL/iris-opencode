@@ -1,4 +1,4 @@
-import type { Message, Agent, Provider, Session, Part, Config, Todo, Command } from "@opencode-ai/sdk"
+import type { Message, Agent, Provider, Session, Part, Config, Todo, Command, Permission } from "@opencode-ai/sdk"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useSDK } from "@tui/context/sdk"
 import { Binary } from "@/util/binary"
@@ -12,6 +12,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       provider: Provider[]
       agent: Agent[]
       command: Command[]
+      permission: {
+        [sessionID: string]: Permission[]
+      }
       config: Config
       session: Session[]
       todo: {
@@ -27,6 +30,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       config: {},
       ready: false,
       agent: [],
+      permission: {},
       command: [],
       provider: [],
       session: [],
@@ -41,9 +45,45 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       for await (const event of events.stream) {
         console.log(event.type)
         switch (event.type) {
+          case "permission.updated": {
+            const permissions = store.permission[event.properties.sessionID]
+            if (!permissions) {
+              setStore("permission", event.properties.sessionID, [event.properties])
+              break
+            }
+            const match = Binary.search(permissions, event.properties.id, (p) => p.id)
+            setStore(
+              "permission",
+              event.properties.sessionID,
+              produce((draft) => {
+                if (match.found) {
+                  draft[match.index] = event.properties
+                  return
+                }
+                draft.push(event.properties)
+              }),
+            )
+            break
+          }
+
+          case "permission.replied": {
+            const permissions = store.permission[event.properties.sessionID]
+            const match = Binary.search(permissions, event.properties.permissionID, (p) => p.id)
+            if (!match.found) break
+            setStore(
+              "permission",
+              event.properties.sessionID,
+              produce((draft) => {
+                draft.splice(match.index, 1)
+              }),
+            )
+            break
+          }
+
           case "todo.updated":
             setStore("todo", event.properties.sessionID, event.properties.todos)
             break
+
           case "session.deleted": {
             const result = Binary.search(store.session, event.properties.info.id, (s) => s.id)
             if (result.found) {

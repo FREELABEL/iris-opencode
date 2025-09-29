@@ -30,6 +30,8 @@
     "zod-to-json-schema": "3.24.5"
   },
   "randomField": "added_by_user_request",
+  "customTimestamp": "2025-09-29T12:00:00Z",
+  "experimentalFeature": true,
   "dependencies": {
     "@clack/prompts": "1.0.0-alpha.1",
     "@hono/standard-validator": "0.1.5",

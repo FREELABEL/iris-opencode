@@ -1,13 +1,15 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "opencode",
+  "description": "AI-powered development tool",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.2.21",
   "scripts": {
     "dev": "bun run packages/opencode/src/index.ts",
     "typecheck": "bun turbo typecheck",
-    "prepare": "husky"
+    "prepare": "husky",
+    "random": "echo 'Random script'"
   },
   "workspaces": {
     "packages": [
@@ -57,5 +59,6 @@
   ],
   "patchedDependencies": {
     "@solidjs/start@1.1.7": "patches/@solidjs%2Fstart@1.1.7.patch"
-  }
+  },
+  "randomField": "randomValue123"
 }

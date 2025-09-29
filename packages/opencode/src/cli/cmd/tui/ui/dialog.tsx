@@ -1,8 +1,9 @@
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { batch, createContext, For, Show, useContext, type JSX, type ParentProps } from "solid-js"
 import { Theme } from "@tui/context/theme"
-import { RGBA } from "@opentui/core"
+import { Renderable, RGBA } from "@opentui/core"
 import { createStore, produce } from "solid-js/store"
+import { render } from "solid-js/web"
 
 const Border = {
   topLeft: "┃",
@@ -64,21 +65,30 @@ function init() {
       current.onClose?.()
       setStore("stack", store.stack.slice(0, -1))
       evt.preventDefault()
+      refocus()
     }
   })
 
+  const renderer = useRenderer()
+  let focus: Renderable | null
+  function refocus() {
+    setTimeout(() => {
+      if (!focus) return
+      if (focus.isDestroyed) return
+      function find(item: Renderable) {
+        for (const child of item.getChildren()) {
+          if (child === focus) return true
+          if (find(child)) return true
+        }
+        return false
+      }
+      const found = find(renderer.root)
+      if (!found) return
+      focus.focus()
+    }, 1)
+  }
+
   return {
-    push(element: JSX.Element, onClose?: () => void) {
-      setStore(
-        "stack",
-        produce((val) =>
-          val.push({
-            element,
-            onClose,
-          }),
-        ),
-      )
-    },
     clear() {
       for (const item of store.stack) {
         if (item.onClose) item.onClose()
@@ -87,8 +97,10 @@ function init() {
         setStore("size", "medium")
         setStore("stack", [])
       })
+      refocus()
     },
     replace(input: any, onClose?: () => void) {
+      focus = renderer.currentFocusedRenderable
       for (const item of store.stack) {
         if (item.onClose) item.onClose()
       }
@@ -122,13 +134,9 @@ export function DialogProvider(props: ParentProps) {
     <ctx.Provider value={value}>
       {props.children}
       <box position="absolute">
-        <For each={value.stack}>
-          {(item, index) => (
-            <Show when={index() === value.stack.length - 1}>
-              <Dialog size={value.size}>{item.element}</Dialog>
-            </Show>
-          )}
-        </For>
+        <Show when={value.stack.length}>
+          <Dialog size={value.size}>{value.stack.at(-1)!.element}</Dialog>
+        </Show>
       </box>
     </ctx.Provider>
   )

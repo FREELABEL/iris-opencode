@@ -1074,6 +1074,7 @@ export namespace SessionPrompt {
               case "finish":
                 assistantMsg.time.completed = Date.now()
                 assistantMsg.finish = value.finishReason
+                if (blocked) assistantMsg.finish = "rejected"
                 await Session.updateMessage(assistantMsg)
                 break
 
