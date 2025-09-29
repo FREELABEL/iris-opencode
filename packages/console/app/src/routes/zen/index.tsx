@@ -121,9 +121,9 @@ export default function Home() {
               data-component="nav-mobile-toggle"
               aria-expanded="false"
               aria-controls="nav-mobile-menu"
-              className="nav-toggle"
+              class="nav-toggle"
             >
-              <span className="sr-only">Open menu</span>
+              <span class="sr-only">Open menu</span>
 
               {/*hamburger*/}
               <svg class="icon icon-hamburger" width="24" height="24"
@@ -419,7 +419,7 @@ export default function Home() {
               <li>
                 <div data-slot="faq-item">
                   <div data-slot="faq-question">
-                    <svg className="icon" width="24" height="24"
+                    <svg class="icon" width="24" height="24"
                          viewBox="0 0 24 24" fill="none"
                          xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -438,7 +438,7 @@ export default function Home() {
               <li>
                 <div data-slot="faq-item">
                   <div data-slot="faq-question">
-                    <svg className="icon" width="24" height="24"
+                    <svg class="icon" width="24" height="24"
                          viewBox="0 0 24 24" fill="none"
                          xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -458,7 +458,7 @@ export default function Home() {
               <li>
                 <div data-slot="faq-item">
                   <div data-slot="faq-question">
-                    <svg className="icon" width="24" height="24"
+                    <svg class="icon" width="24" height="24"
                          viewBox="0 0 24 24" fill="none"
                          xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -480,7 +480,7 @@ export default function Home() {
               <li>
                 <div data-slot="faq-item">
                   <div data-slot="faq-question">
-                    <svg className="icon" width="24" height="24"
+                    <svg class="icon" width="24" height="24"
                          viewBox="0 0 24 24" fill="none"
                          xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -501,7 +501,7 @@ export default function Home() {
               <li>
                 <div data-slot="faq-item">
                   <div data-slot="faq-question">
-                    <svg className="icon" width="24" height="24"
+                    <svg class="icon" width="24" height="24"
                          viewBox="0 0 24 24" fill="none"
                          xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -522,7 +522,7 @@ export default function Home() {
               <li>
                 <div data-slot="faq-item">
                   <div data-slot="faq-question">
-                    <svg className="icon" width="24" height="24"
+                    <svg class="icon" width="24" height="24"
                          viewBox="0 0 24 24" fill="none"
                          xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -543,7 +543,7 @@ export default function Home() {
               <li>
                 <div data-slot="faq-item">
                   <div data-slot="faq-question">
-                    <svg className="icon" width="24" height="24"
+                    <svg class="icon" width="24" height="24"
                          viewBox="0 0 24 24" fill="none"
                          xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -564,7 +564,7 @@ export default function Home() {
               <li>
                 <div data-slot="faq-item">
                   <div data-slot="faq-question">
-                    <svg className="icon" width="24" height="24"
+                    <svg class="icon" width="24" height="24"
                          viewBox="0 0 24 24" fill="none"
                          xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -582,7 +582,7 @@ export default function Home() {
               <li>
                 <div data-slot="faq-item">
                   <div data-slot="faq-question">
-                    <svg className="icon" width="24" height="24"
+                    <svg class="icon" width="24" height="24"
                          viewBox="0 0 24 24" fill="none"
                          xmlns="http://www.w3.org/2000/svg">
                       <path
@@ -601,7 +601,7 @@ export default function Home() {
               <li>
                 <div data-slot="faq-item">
                   <div data-slot="faq-question">
-                    <svg className="icon" width="24" height="24"
+                    <svg class="icon" width="24" height="24"
                          viewBox="0 0 24 24" fill="none"
                          xmlns="http://www.w3.org/2000/svg">
                       <path
