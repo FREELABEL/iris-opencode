@@ -1,24 +1,15 @@
-import { A, createAsync, query } from "@solidjs/router"
+import { A, createAsync } from "@solidjs/router"
 import { createMemo } from "solid-js"
-
-const githubStars = query(async () => {
-  "use server"
-  try {
-    const response = await fetch("https://api.github.com/repos/sst/opencode")
-    const json = await response.json()
-    return json.stargazers_count as number
-  } catch {}
-  return undefined
-}, "githubStars")
+import { github } from "~/lib/github"
 
 export function Footer() {
-  const stars = createAsync(() => githubStars())
+  const githubData = createAsync(() => github())
   const starCount = createMemo(() =>
-    stars()
+    githubData()?.stars
       ? new Intl.NumberFormat("en-US", {
           notation: "compact",
           compactDisplay: "short",
-        }).format(stars()!)
+        }).format(githubData()!.stars!)
       : "25K",
   )
 

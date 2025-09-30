@@ -1,33 +1,25 @@
 import logoLight from "../asset/logo-ornate-light.svg"
 import logoDark from "../asset/logo-ornate-dark.svg"
-import { A, createAsync, query } from "@solidjs/router"
+import { A, createAsync } from "@solidjs/router"
 import { createMemo, Match, Show, Switch } from "solid-js"
 import { createStore } from "solid-js/store"
-
-const githubStars = query(async () => {
-  "use server"
-  try {
-    const response = await fetch("https://api.github.com/repos/sst/opencode")
-    const json = await response.json()
-    return json.stargazers_count as number
-  } catch {}
-  return undefined
-}, "githubStars")
+import { github } from "~/lib/github"
 
 export function Header(props: { zen?: boolean }) {
-  const stars = createAsync(() => githubStars())
+  const githubData = createAsync(() => github())
   const starCount = createMemo(() =>
-    stars()
+    githubData()?.stars
       ? new Intl.NumberFormat("en-US", {
           notation: "compact",
           compactDisplay: "short",
-        }).format(stars()!)
+        }).format(githubData()?.stars!)
       : "25K",
   )
 
   const [store, setStore] = createStore({
     mobileMenuOpen: false,
   })
+
   return (
     <section data-component="top">
       <A href="/">

@@ -13,6 +13,8 @@ import { Faq } from "~/component/faq"
 import { Header } from "~/component/header"
 import { Footer } from "~/component/footer"
 import { Legal } from "~/component/legal"
+import { github } from "~/lib/github"
+import { createMemo } from "solid-js"
 
 function CopyStatus() {
   return (
@@ -33,7 +35,9 @@ const defaultWorkspace = query(async () => {
 }, "defaultWorkspace")
 
 export default function Home() {
+  const githubData = createAsync(() => github())
   const workspace = createAsync(() => defaultWorkspace())
+  const release = createMemo(() => githubData()?.release)
 
   const handleCopyClick = (event: Event) => {
     const button = event.currentTarget as HTMLButtonElement
@@ -58,8 +62,12 @@ export default function Home() {
           <section data-component="hero">
             <div data-component="center">
               <div data-slot="hero-copy">
-                <a data-slot="releases" href="https://github.com/sst/opencode/releases" target="_blank">
-                  See what’s new in the latest release
+                <a
+                  data-slot="releases"
+                  href={release()?.url ?? "https://github.com/sst/opencode/releases"}
+                  target="_blank"
+                >
+                  See what’s new in {release()?.name ?? "the latest release"}
                 </a>
                 <strong>The AI coding agent built for the terminal</strong>
                 <p>
