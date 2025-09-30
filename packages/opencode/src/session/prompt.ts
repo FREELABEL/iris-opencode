@@ -433,6 +433,7 @@ export namespace SessionPrompt {
       if (Wildcard.all(item.id, enabledTools) === false) continue
       const schema = ProviderTransform.schema(input.providerID, input.modelID, z.toJSONSchema(item.parameters))
       tools[item.id] = tool({
+        id: item.id as any,
         description: item.description,
         inputSchema: jsonSchema(schema as any),
         async execute(args, options) {
