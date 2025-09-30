@@ -189,7 +189,6 @@
               a:hover {
                 background: var(--color-background-weak);
               }
-
             }
           }
         }
@@ -228,83 +227,83 @@
     }
   }
 
-  /* Tablist */
-  [data-component="tabs"] > [data-slot="tablist"] {
-    display: flex;
-    gap: 40px;
-    align-items: center;
-    border: 1px solid var(--color-border-weak);
-    border-bottom: none;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-    background: var(--color-background-weak);
-    padding: 0 20px;
-  }
-
-  /* Tabs */
-  [data-slot="tab"] {
-    appearance: none;
-    background: transparent;
-    border: 0;
-    padding: 16px 0;
-    margin: 0;
-    cursor: pointer;
-    color: var(--color-text-weak);
-    line-height: 1;
-    border-bottom: 2px solid transparent;
-  }
-  [data-slot="tab"][aria-selected="true"] {
-    color: var(--color-text-strong);
-    border-bottom-color: var(--color-background-strong);
-  }
-  [data-slot="tab"]:focus-visible {
-  }
-
-  /* Panels wrapper */
-  [data-component="tabs"] > [data-slot="panels"] {
-    background: var(--color-background-weak);
-    border: 1px solid var(--color-border-weak);
-    border-bottom-left-radius: 6px;
-    border-bottom-right-radius: 6px;
-    padding: 16px;
-  }
-
-  /* Panel content */
-  [data-slot="panel"] {
-    display: block;
-    margin: 0;
-    overflow: auto;
-    white-space: pre-wrap;
-    transition: opacity 0.18s ease;
-    font-size: 16px;
-    font-family: var(--font-mono);
-
-    [data-slot="command"] {
-      all: unset;
+  [data-component="tabs"] {
+    [data-slot="tablist"] {
       display: flex;
-      cursor: pointer;
+      gap: 40px;
       align-items: center;
-      color: var(--color-text-secondary);
-      gap: var(--space-2);
-      color: var(--color-text);
-      padding: 8px 16px 8px 8px;
-      border-radius: 4px;
+      border: 1px solid var(--color-border-weak);
+      border-bottom: none;
+      border-top-left-radius: 6px;
+      border-top-right-radius: 6px;
+      background: var(--color-background-weak);
+      padding: 0 20px;
+      overflow-x: auto;
 
-      [data-slot="highlight"] {
-        font-weight: 500;
-        color: var(--color-text-strong);
+      @media (max-width: 60rem) {
+        gap: 20px;
+        padding: 0 12px;
       }
     }
 
-    [data-slot="command"]:hover {
-      background: var(--color-background-weak-hover);
+    [data-slot="tab"] {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      padding: 16px 0;
+      margin: 0;
+      cursor: pointer;
+      color: var(--color-text-weak);
+      line-height: 1;
+      border-bottom: 2px solid transparent;
     }
-  }
 
-  /* Respect the hidden attribute */
-  [data-slot="panel"][hidden] {
-    display: none !important;
-    opacity: 0;
+    [data-slot="tab"][aria-selected="true"] {
+      color: var(--color-text-strong);
+      border-bottom-color: var(--color-background-strong);
+    }
+
+    [data-slot="tab"]:focus-visible {
+    }
+
+    [data-slot="panels"] {
+      background: var(--color-background-weak);
+      border: 1px solid var(--color-border-weak);
+      border-bottom-left-radius: 6px;
+      border-bottom-right-radius: 6px;
+      padding: 16px;
+    }
+
+    [data-slot="panel"] {
+      display: block;
+      margin: 0;
+      overflow: auto;
+      white-space: pre-wrap;
+      transition: opacity 0.18s ease;
+      font-size: 16px;
+      font-family: var(--font-mono);
+
+      [data-slot="command"] {
+        all: unset;
+        display: flex;
+        cursor: pointer;
+        align-items: center;
+        color: var(--color-text-secondary);
+        gap: var(--space-2);
+        color: var(--color-text);
+        padding: 8px 16px 8px 8px;
+        border-radius: 4px;
+
+        [data-slot="highlight"] {
+          font-weight: 500;
+          color: var(--color-text-strong);
+        }
+      }
+
+      [data-slot="command"]:hover {
+        background: var(--color-background-weak-hover);
+      }
+    }
   }
 
   [data-component="center"] {
@@ -345,8 +344,6 @@
         margin-bottom: 16px;
         display: block;
       }
-
-
 
       p {
         color: var(--color-text-secondary);
@@ -512,9 +509,6 @@
         display: none;
       }
     }
-
-    }
-
   }
 
   [data-component="privacy"] {
@@ -538,8 +532,6 @@
         color: var(--color-icon);
         line-height: 200%;
       }
-
-
     }
   }
 
