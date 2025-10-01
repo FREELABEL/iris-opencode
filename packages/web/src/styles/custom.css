@@ -91,6 +91,11 @@ body > .page > header button[data-open-modal] > kbd kbd:first-child {
   font-size: 20px !important;
 }
 
+.starlight-aside__title {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+
 body > .page > .main-frame .main-pane > main > .content-panel + .content-panel {
  border-top: none !important;
 }
@@ -199,7 +204,7 @@ site-search > button span {
 .starlight-aside {
   display: flex;
   gap: 16px;
-  align-items: center;
+  align-items: start;
 
   .starlight-aside__content {
     margin-top: 0;
