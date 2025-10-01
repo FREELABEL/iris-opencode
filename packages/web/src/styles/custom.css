@@ -4,6 +4,7 @@
   --sl-nav-gap: 40px;
   --sl-color-text: hsl(0, 1%, 39%);
   --sl-border-color: hsl(0, 1%, 85%);
+  --sl-color-hairline-shade: hsl(0, 1%, 85%);
 
   --color-background: hsl(0, 20%, 99%);
   --color-background-weak: hsl(0, 8%, 97%);
@@ -36,6 +37,7 @@ body {
     --sl-color-gray-5: hsl(0, 4%, 23%);
     --sl-color-text: hsl(0, 4%, 71%);
     --sl-border-color: hsl(0, 4%, 23%);
+    --sl-color-hairline-shade: hsl(0, 4%, 23%);
 
     --color-background: hsl(0, 9%, 7%);
     --color-background-weak: hsl(0, 6%, 10%);
@@ -56,6 +58,37 @@ body {
     --color-icon: hsl(10, 3%, 43%);
 
   }
+}
+
+.header:where(.astro-tcroauqe) {
+  border-bottom: 1px solid var(--color-border-weak) !important;
+}
+
+.sl-markdown-content hr {
+  border-bottom: 1px solid var(--color-border-weak) !important;
+}
+
+#starlight__on-this-page--mobile {
+  border-bottom: 1px solid var(--color-border-weak) !important;
+}
+
+mobile-starlight-toc nav summary .toggle {
+  opacity: 60% !important;
+  text-decoration: none !important;
+}
+
+nav.sidebar summary svg.caret {
+  color: var(--color-icon) !important;
+}
+
+body > .page > header button[data-open-modal] > kbd kbd {
+  color: var(--color-icon) !important;
+  font-size: 16px !important;
+  display: flex;
+}
+
+body > .page > header button[data-open-modal] > kbd kbd:first-child {
+  font-size: 20px !important;
 }
 
 body > .page > .main-frame .main-pane > main > .content-panel + .content-panel {
@@ -153,7 +186,10 @@ body > .page > header button[data-open-modal] {
   @media (prefers-color-scheme: dark) {
     background: var(--color-background-weak);
   }
+}
 
+body > .page > header button[data-open-modal] {
+  background: var(--color-background-weaker);
 }
 
 site-search > button span {
@@ -219,6 +255,14 @@ ul, ol {
 
 .sl-markdown-content .tab > [role="tab"][aria-selected="true"] {
   border-color: var(--color-text-strong);
+}
+
+.social-icons a svg {
+  color: var(--color-text-weak) !important;
+}
+
+.social-icons a svg:hover {
+  color: var(--color-text-strong) !important;
 }
 
 body > .page > header, :root[data-has-sidebar] body > .page > header {
