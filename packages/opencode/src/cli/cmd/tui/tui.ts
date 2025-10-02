@@ -2,8 +2,6 @@ import { cmd } from "@/cli/cmd/cmd"
 import { Instance } from "@/project/instance"
 import path from "path"
 import { Server } from "@/server/server"
-import { Config } from "@/config/config"
-import { InstanceBootstrap } from "@/project/bootstrap"
 
 export const TuiCommand = cmd({
   command: "$0 [project]",
