@@ -199,7 +199,7 @@ export function Session() {
       title: "Redo",
       value: "session.redo",
       keybind: "messages_redo",
-      disabled: !session().revert?.messageID,
+      disabled: !session()?.revert?.messageID,
       category: "Session",
       onSelect: (dialog) => {
         dialog.clear()
