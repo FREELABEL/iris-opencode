@@ -104,12 +104,10 @@ export function Session() {
         dialog.replace(() => (
           <DialogTimeline
             onMove={(messageID) => {
-              try {
-                const child = scroll.getChildren().find((child) => {
-                  return child.id === messageID
-                })
-                if (child) scroll.scrollBy(child.y - scroll.y - 1)
-              } catch {}
+              const child = scroll.getChildren().find((child) => {
+                return child.id === messageID
+              })
+              if (child) scroll.scrollBy(child.y - scroll.y - 1)
             }}
             sessionID={route.sessionID}
           />
