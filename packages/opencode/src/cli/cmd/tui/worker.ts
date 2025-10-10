@@ -1,6 +1,7 @@
 import { Installation } from "@/installation"
 import { Server } from "@/server/server"
 import { Log } from "@/util/log"
+import { Instance } from "@/project/instance"
 
 await Log.init({
   print: process.argv.includes("--print-logs"),
@@ -17,3 +18,12 @@ const server = Server.listen({
 })
 
 postMessage(JSON.stringify({ type: "ready", url: server.url }))
+
+onmessage = async (evt) => {
+  const parsed = JSON.parse(evt.data)
+  if (parsed.type === "shutdown") {
+    await Instance.disposeAll()
+    server.stop()
+    postMessage(JSON.stringify({ type: "shutdown.complete" }))
+  }
+}

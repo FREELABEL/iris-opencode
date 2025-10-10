@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import solidPlugin from "../../../node_modules/@opentui/solid/scripts/solid-plugin"
+import solidPlugin from "../node_modules/@opentui/solid/scripts/solid-plugin"
 import path from "path"
 import { $ } from "bun"
 
@@ -48,7 +48,7 @@ for (const [os, arch] of targets) {
       execArgv: [`--user-agent=opencode/${version}`, `--env-file=""`, `--`],
       windows: {},
     },
-    entrypoints: ["./src/index.ts", path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js")],
+    entrypoints: ["./src/index.ts", path.resolve(dir, "./node_modules/@opentui/core/parser.worker.js")],
     define: {
       OPENCODE_VERSION: `'${version}'`,
       OTUI_TREE_SITTER_WORKER_PATH: "/$bunfs/root/../../node_modules/@opentui/core/parser.worker.js",
