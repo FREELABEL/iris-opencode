@@ -313,7 +313,12 @@ export namespace Server {
         ),
         async (c) => {
           const sessionID = c.req.valid("param").id
-          const session = await Session.get(sessionID)
+          const session = await Session.get(sessionID).catch(() => null)
+          if (!session) {
+            return c.json(new NamedError.Unknown({ message: "Session not found" }).toObject(), {
+              status: 404,
+            })
+          }
           return c.json(session)
         },
       )
