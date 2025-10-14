@@ -19,11 +19,35 @@ const opencode = await createOpencode({
 })
 console.log("✅ Opencode server ready")
 
-const sessions = new Map<
-  string,
-  { client: any; server: any; sessionId: string; channel: string; thread: string; eventStream: any }
->()
+const sessions = new Map<string, { client: any; server: any; sessionId: string; channel: string; thread: string }>()
 const toolStatusMessages = new Map<string, string>() // Track tool status messages by session
+let globalEventStream: any = null
+
+async function initializeGlobalEventStream(client: any) {
+  if (globalEventStream) return globalEventStream
+
+  globalEventStream = await client.event.subscribe()
+
+  // Listen for events in background
+  ;(async () => {
+    for await (const event of globalEventStream.stream) {
+      if (event.type === "message.part.updated") {
+        const part = event.properties.part
+        if (part.type === "tool") {
+          // Find the session for this tool update
+          for (const [sessionKey, session] of sessions.entries()) {
+            if (session.sessionId === part.sessionID) {
+              handleToolUpdate(part, session.channel, session.thread)
+              break
+            }
+          }
+        }
+      }
+    }
+  })()
+
+  return globalEventStream
+}
 
 async function handleToolUpdate(toolPart: any, channel: string, thread: string) {
   const toolName = toolPart.tool || "unknown"
@@ -97,22 +121,10 @@ app.message(async ({ message, say }) => {
 
     console.log("✅ Created opencode session:", createResult.data.id)
 
-    // Start listening to events for this session
-    const eventStream = await client.event.subscribe()
+    // Initialize global event stream if not already done
+    await initializeGlobalEventStream(client)
 
-    // Listen for events in the background
-    ;(async () => {
-      for await (const event of eventStream.stream) {
-        if (event.type === "message.part.updated" && event.properties.part.sessionID === createResult.data.id) {
-          const part = event.properties.part
-          if (part.type === "tool") {
-            handleToolUpdate(part, channel, thread)
-          }
-        }
-      }
-    })()
-
-    session = { client, server, sessionId: createResult.data.id, channel, thread, eventStream }
+    session = { client, server, sessionId: createResult.data.id, channel, thread }
     sessions.set(sessionKey, session)
 
     const shareResult = await client.session.share({ path: { id: createResult.data.id } })
