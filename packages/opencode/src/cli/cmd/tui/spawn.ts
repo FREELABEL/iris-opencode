@@ -2,6 +2,7 @@ import { cmd } from "@/cli/cmd/cmd"
 import { Instance } from "@/project/instance"
 import path from "path"
 import { Server } from "@/server/server"
+import { upgrade } from "@/cli/upgrade"
 
 export const TuiSpawnCommand = cmd({
   command: "spawn [project]",
@@ -23,6 +24,7 @@ export const TuiSpawnCommand = cmd({
         default: "127.0.0.1",
       }),
   handler: async (args) => {
+    upgrade()
     const server = Server.listen({
       port: args.port,
       hostname: "127.0.0.1",

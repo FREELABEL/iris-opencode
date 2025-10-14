@@ -2,6 +2,7 @@ import { cmd } from "@/cli/cmd/cmd"
 import { tui } from "./app"
 import { Rpc } from "@/util/rpc"
 import { type rpc } from "./worker"
+import { upgrade } from "@/cli/upgrade"
 
 export const TuiThreadCommand = cmd({
   command: "$0 [project]",
@@ -24,6 +25,7 @@ export const TuiThreadCommand = cmd({
         default: "127.0.0.1",
       }),
   handler: async (args) => {
+    upgrade()
     const worker = new Worker("./src/cli/cmd/tui/worker.ts")
     worker.onerror = console.error
     const client = Rpc.client<typeof rpc>(worker)
