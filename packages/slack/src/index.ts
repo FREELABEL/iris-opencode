@@ -54,7 +54,7 @@ async function handleToolUpdate(toolPart: any, channel: string, thread: string) 
   const state = toolPart.state || "unknown"
   const icon = state === "completed" ? "✅" : state === "error" ? "❌" : state === "running" ? "🔄" : "⏳"
 
-  const toolMessage = `${icon} *${toolName}* (${state})`
+  const toolMessage = `${icon} *${toolName}*`
   const sessionKey = `${channel}-${thread}`
 
   // Get existing tools for this session
