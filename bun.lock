@@ -190,6 +190,7 @@
         "@opentui/core": "0.0.0-20251010-2eed09fd",
         "@opentui/solid": "0.0.0-20251010-2eed09fd",
         "@parcel/watcher": "2.5.1",
+        "@solid-primitives/event-bus": "1.1.2",
         "@standard-schema/spec": "1.0.0",
         "@zip.js/zip.js": "2.7.62",
         "ai": "catalog:",

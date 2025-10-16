@@ -125,6 +125,9 @@ import type {
   TuiExecuteCommandErrors,
   TuiShowToastData,
   TuiShowToastResponses,
+  TuiPublishData,
+  TuiPublishResponses,
+  TuiPublishErrors,
   AuthSetData,
   AuthSetResponses,
   AuthSetErrors,
@@ -711,6 +714,20 @@ class Tui extends _HeyApiClient {
   public showToast<ThrowOnError extends boolean = false>(options?: Options<TuiShowToastData, ThrowOnError>) {
     return (options?.client ?? this._client).post<TuiShowToastResponses, unknown, ThrowOnError>({
       url: "/tui/show-toast",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    })
+  }
+
+  /**
+   * Publish a TUI event
+   */
+  public publish<ThrowOnError extends boolean = false>(options?: Options<TuiPublishData, ThrowOnError>) {
+    return (options?.client ?? this._client).post<TuiPublishResponses, TuiPublishErrors, ThrowOnError>({
+      url: "/tui/publish",
       ...options,
       headers: {
         "Content-Type": "application/json",

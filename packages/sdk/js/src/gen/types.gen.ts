@@ -1055,6 +1055,69 @@ export type LspStatus = {
   status: "connected" | "error"
 }
 
+export type EventTuiPromptAppend = {
+  type: "tui.prompt.append"
+  properties: {
+    text: string
+  }
+}
+
+export type EventTuiPromptSubmit = {
+  type: "tui.prompt.submit"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventTuiPromptClear = {
+  type: "tui.prompt.clear"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventTuiCommandExecute = {
+  type: "tui.command.execute"
+  properties: {
+    command: "session.list"
+    [key: string]:
+      | {
+          command: string
+        }
+      | "session.list"
+  }
+}
+
+export type EventTuiSessionList = {
+  type: "tui.session.list"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventTuiThemeList = {
+  type: "tui.theme.list"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventTuiModelList = {
+  type: "tui.model.list"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventTuiToastShow = {
+  type: "tui.toast.show"
+  properties: {
+    title?: string
+    message: string
+    variant: "info" | "success" | "warning" | "error"
+  }
+}
+
 export type OAuth = {
   type: "oauth"
   refresh: string
@@ -1242,6 +1305,14 @@ export type Event =
   | EventSessionUpdated
   | EventSessionDeleted
   | EventSessionError
+  | EventTuiPromptAppend
+  | EventTuiPromptSubmit
+  | EventTuiPromptClear
+  | EventTuiCommandExecute
+  | EventTuiSessionList
+  | EventTuiThemeList
+  | EventTuiModelList
+  | EventTuiToastShow
   | EventServerConnected
 
 export type ProjectListData = {
@@ -1514,9 +1585,38 @@ export type SessionGetResponses = {
 export type SessionGetResponse = SessionGetResponses[keyof SessionGetResponses]
 
 export type SessionUpdateData = {
-  body?: {
-    title?: string
-  }
+  body?:
+    | {
+        text: string
+      }
+    | {
+        [key: string]: unknown
+      }
+    | {
+        [key: string]: unknown
+      }
+    | {
+        [key: string]: unknown
+      }
+    | {
+        [key: string]: unknown
+      }
+    | {
+        [key: string]: unknown
+      }
+    | {
+        command: "session.list"
+        [key: string]:
+          | {
+              command: string
+            }
+          | "session.list"
+      }
+    | {
+        title?: string
+        message: string
+        variant: "info" | "success" | "warning" | "error"
+      }
   path: {
     id: string
   }
@@ -2552,7 +2652,12 @@ export type TuiClearPromptResponse = TuiClearPromptResponses[keyof TuiClearPromp
 
 export type TuiExecuteCommandData = {
   body?: {
-    command: string
+    command: "session.list"
+    [key: string]:
+      | {
+          command: string
+        }
+      | "session.list"
   }
   path?: never
   query?: {
@@ -2600,6 +2705,41 @@ export type TuiShowToastResponses = {
 }
 
 export type TuiShowToastResponse = TuiShowToastResponses[keyof TuiShowToastResponses]
+
+export type TuiPublishData = {
+  body?:
+    | EventTuiPromptAppend
+    | EventTuiPromptSubmit
+    | EventTuiPromptClear
+    | EventTuiCommandExecute
+    | EventTuiSessionList
+    | EventTuiThemeList
+    | EventTuiModelList
+    | EventTuiToastShow
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/tui/publish"
+}
+
+export type TuiPublishErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type TuiPublishError = TuiPublishErrors[keyof TuiPublishErrors]
+
+export type TuiPublishResponses = {
+  /**
+   * Event published successfully
+   */
+  200: boolean
+}
+
+export type TuiPublishResponse = TuiPublishResponses[keyof TuiPublishResponses]
 
 export type AuthSetData = {
   body?: Auth
