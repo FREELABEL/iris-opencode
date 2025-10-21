@@ -50,7 +50,7 @@ for (const [os, arch] of targets) {
     conditions: ["browser"],
     tsconfig: "./tsconfig.json",
     plugins: [solidPlugin],
-    sourcemap: true,
+    sourcemap: "external",
     compile: {
       target: `bun-${os}-${arch}` as any,
       outfile: `dist/${name}/bin/opencode`,
