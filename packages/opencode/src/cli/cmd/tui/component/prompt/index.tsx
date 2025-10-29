@@ -475,13 +475,7 @@ export function Prompt(props: PromptProps) {
           borderColor={keybind.leader ? Theme.accent : store.mode === "shell" ? Theme.secondary : undefined}
           justifyContent="space-evenly"
         >
-          <box
-            backgroundColor={Theme.backgroundElement}
-            width={3}
-            height="100%"
-            justifyContent="center"
-            alignItems="center"
-          >
+          <box backgroundColor={Theme.backgroundElement} width={3} height="100%" alignItems="center" paddingTop={1}>
             <text attributes={TextAttributes.BOLD} fg={Theme.primary}>
               {store.mode === "normal" ? ">" : "!"}
             </text>
@@ -537,20 +531,27 @@ export function Prompt(props: PromptProps) {
                 }
                 if (store.mode === "normal") autocomplete.onKeyDown(e)
                 if (!autocomplete.visible) {
-                  if (e.name === "up" || e.name === "down") {
-                    if (input.cursorOffset === 0 || e.option) {
-                      const direction = e.name === "up" ? -1 : 1
-                      const item = history.move(direction, input.plainText)
+                  if (
+                    (e.name === "up" && input.cursorOffset === 0) ||
+                    (e.name === "down" && input.cursorOffset === input.plainText.length)
+                  ) {
+                    const direction = e.name === "up" ? -1 : 1
+                    const item = history.move(direction, input.plainText)
 
-                      if (item) {
-                        input.setText(item.input, { history: false })
-                        setStore("prompt", item)
-                        restoreExtmarksFromParts(item.parts)
-                        e.preventDefault()
-                      }
-                      return
+                    if (item) {
+                      input.setText(item.input, { history: false })
+                      setStore("prompt", item)
+                      restoreExtmarksFromParts(item.parts)
+                      e.preventDefault()
+                      if (direction === -1) input.cursorOffset = 0
+                      if (direction === 1) input.cursorOffset = input.plainText.length
                     }
+                    return
                   }
+
+                  if (e.name === "up" && input.visualCursor.visualRow === 0) input.cursorOffset = 0
+                  if (e.name === "down" && input.visualCursor.visualRow === input.height - 1)
+                    input.cursorOffset = input.plainText.length
                 }
                 if (!autocomplete.visible) {
                   if (e.name === "escape" && props.sessionID) {
