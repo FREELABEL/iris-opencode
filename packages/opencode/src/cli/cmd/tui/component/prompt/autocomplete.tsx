@@ -51,9 +51,12 @@ export function Autocomplete(props: {
   })
 
   function insertPart(text: string, part: PromptInfo["parts"][number]) {
-    const append = "@" + text + " "
     const input = props.input()
     const currentCursorOffset = input.visualCursor.offset
+
+    const charAfterCursor = props.value.at(currentCursorOffset)
+    const needsSpace = charAfterCursor !== " " && charAfterCursor !== undefined
+    const append = "@" + text + (needsSpace ? " " : "")
 
     input.cursorOffset = store.index
     const startCursor = input.logicalCursor
@@ -316,8 +319,9 @@ export function Autocomplete(props: {
         }
         if (!store.visible) {
           if (e.name === "@") {
-            const last = props.value.at(-1)
-            if (last === " " || last === undefined) {
+            const cursorOffset = props.input().visualCursor.offset
+            const charBeforeCursor = cursorOffset === 0 ? undefined : props.value.at(cursorOffset - 1)
+            if (charBeforeCursor === " " || charBeforeCursor === undefined) {
               show("@")
             }
           }
