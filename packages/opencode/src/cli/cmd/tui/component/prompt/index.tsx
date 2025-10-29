@@ -150,14 +150,14 @@ export function Prompt(props: PromptProps) {
         onSelect: async () => {
           const content = await Clipboard.read()
           if (content?.mime.startsWith("image/")) {
-          await pasteImage({
-            filename: "clipboard",
-            mime: content.mime,
-            content: content.data,
-          })
+            await pasteImage({
+              filename: "clipboard",
+              mime: content.mime,
+              content: content.data,
+            })
           }
         },
-      }
+      },
     ]
   })
 
@@ -316,7 +316,7 @@ export function Prompt(props: PromptProps) {
 
     // Expand pasted text inline before submitting
     const allExtmarks = input.extmarks.getAllForTypeId(promptPartTypeId)
-    const sortedExtmarks = allExtmarks.sort((a, b) => b.start - a.start)
+    const sortedExtmarks = allExtmarks.sort((a: { start: number }, b: { start: number }) => b.start - a.start)
 
     for (const extmark of sortedExtmarks) {
       const partIndex = store.extmarkToPartIndex.get(extmark.id)
@@ -403,48 +403,47 @@ export function Prompt(props: PromptProps) {
   }
   const exit = useExit()
 
-  async function pasteImage(file: {filename?: string, content: string, mime: string}) {
-                const currentOffset = input.visualCursor.offset
-                const extmarkStart = currentOffset
-                  const count = store.prompt.parts.filter((x) => x.type === "file").length
-                  const virtualText = `[Image ${count + 1}]`
-                  const extmarkEnd = extmarkStart + virtualText.length
-                  const textToInsert = virtualText + " "
+  async function pasteImage(file: { filename?: string; content: string; mime: string }) {
+    const currentOffset = input.visualCursor.offset
+    const extmarkStart = currentOffset
+    const count = store.prompt.parts.filter((x) => x.type === "file").length
+    const virtualText = `[Image ${count + 1}]`
+    const extmarkEnd = extmarkStart + virtualText.length
+    const textToInsert = virtualText + " "
 
-                  input.insertText(textToInsert)
+    input.insertText(textToInsert)
 
-                  const extmarkId = input.extmarks.create({
-                    start: extmarkStart,
-                    end: extmarkEnd,
-                    virtual: true,
-                    styleId: pasteStyleId,
-                    typeId: promptPartTypeId,
-                  })
+    const extmarkId = input.extmarks.create({
+      start: extmarkStart,
+      end: extmarkEnd,
+      virtual: true,
+      styleId: pasteStyleId,
+      typeId: promptPartTypeId,
+    })
 
-                  const part: Omit<FilePart, "id" | "messageID" | "sessionID"> = {
-                    type: "file" as const,
-                    mime: file.mime,
-                    filename: file.filename,
-                    url: `data:${file.mime};base64,${file.content}`,
-                    source: {
-                      type: "file",
-                      path: file.filename ?? "",
-                      text: {
-                        start: extmarkStart,
-                        end: extmarkEnd,
-                        value: virtualText,
-                      },
-                    },
-                  }
-                  setStore(
-                    produce((draft) => {
-                      const partIndex = draft.prompt.parts.length
-                      draft.prompt.parts.push(part)
-                      draft.extmarkToPartIndex.set(extmarkId, partIndex)
-                    }),
-                  )
-                  return
-
+    const part: Omit<FilePart, "id" | "messageID" | "sessionID"> = {
+      type: "file" as const,
+      mime: file.mime,
+      filename: file.filename,
+      url: `data:${file.mime};base64,${file.content}`,
+      source: {
+        type: "file",
+        path: file.filename ?? "",
+        text: {
+          start: extmarkStart,
+          end: extmarkEnd,
+          value: virtualText,
+        },
+      },
+    }
+    setStore(
+      produce((draft) => {
+        const partIndex = draft.prompt.parts.length
+        draft.prompt.parts.push(part)
+        draft.extmarkToPartIndex.set(extmarkId, partIndex)
+      }),
+    )
+    return
   }
 
   return (
@@ -565,56 +564,77 @@ export function Prompt(props: PromptProps) {
                 }
               }}
               onSubmit={submit}
-              onPaste={(event: PasteEvent) => {
+              onPaste={async (event: PasteEvent) => {
                 if (props.disabled) {
                   event.preventDefault()
                   return
                 }
 
                 const pastedContent = event.text.trim()
-                const lineCount = (pastedContent.match(/\n/g)?.length ?? 0) + 1
-
-                if (lineCount <= 5) {
+                if (!pastedContent) {
+                  command.trigger("prompt.paste")
                   return
                 }
 
-                event.preventDefault()
-
-                const currentOffset = input.visualCursor.offset
-                const virtualText = `[Pasted ~${lineCount} lines]`
-                const textToInsert = virtualText + " "
-                const extmarkStart = currentOffset
-                const extmarkEnd = extmarkStart + virtualText.length
-
-                input.insertText(textToInsert)
-
-                const extmarkId = input.extmarks.create({
-                  start: extmarkStart,
-                  end: extmarkEnd,
-                  virtual: true,
-                  styleId: pasteStyleId,
-                  typeId: promptPartTypeId,
-                })
-
-                const part = {
-                  type: "text" as const,
-                  text: pastedContent,
-                  source: {
-                    text: {
-                      start: extmarkStart,
-                      end: extmarkEnd,
-                      value: virtualText,
-                    },
-                  },
+                // trim ' from the beginning and end of the pasted content. just
+                // ' and nothing else
+                const filepath = pastedContent.replace(/^'+|'+$/g, "")
+                const file = Bun.file(filepath)
+                if (file.type.startsWith("image/")) {
+                  const content = await file
+                    .arrayBuffer()
+                    .then((buffer) => Buffer.from(buffer).toString("base64"))
+                    .catch(() => {})
+                  if (content) {
+                    await pasteImage({
+                      filename: file.name,
+                      mime: file.type,
+                      content,
+                    })
+                    return
+                  }
                 }
 
-                setStore(
-                  produce((draft) => {
-                    const partIndex = draft.prompt.parts.length
-                    draft.prompt.parts.push(part)
-                    draft.extmarkToPartIndex.set(extmarkId, partIndex)
-                  }),
-                )
+                const lineCount = (pastedContent.match(/\n/g)?.length ?? 0) + 1
+                if (lineCount >= 5) {
+                  event.preventDefault()
+                  const currentOffset = input.visualCursor.offset
+                  const virtualText = `[Pasted ~${lineCount} lines]`
+                  const textToInsert = virtualText + " "
+                  const extmarkStart = currentOffset
+                  const extmarkEnd = extmarkStart + virtualText.length
+
+                  input.insertText(textToInsert)
+
+                  const extmarkId = input.extmarks.create({
+                    start: extmarkStart,
+                    end: extmarkEnd,
+                    virtual: true,
+                    styleId: pasteStyleId,
+                    typeId: promptPartTypeId,
+                  })
+
+                  const part = {
+                    type: "text" as const,
+                    text: pastedContent,
+                    source: {
+                      text: {
+                        start: extmarkStart,
+                        end: extmarkEnd,
+                        value: virtualText,
+                      },
+                    },
+                  }
+
+                  setStore(
+                    produce((draft) => {
+                      const partIndex = draft.prompt.parts.length
+                      draft.prompt.parts.push(part)
+                      draft.extmarkToPartIndex.set(extmarkId, partIndex)
+                    }),
+                  )
+                  return
+                }
               }}
               ref={(r: TextareaRenderable) => (input = r)}
               onMouseDown={(r: MouseEvent) => r.target?.focus()}
