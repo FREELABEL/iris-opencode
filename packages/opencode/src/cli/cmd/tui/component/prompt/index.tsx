@@ -27,6 +27,7 @@ import { Editor } from "@tui/util/editor"
 import { useExit } from "../../context/exit"
 import { Clipboard } from "../../util/clipboard"
 import type { FilePart } from "@opencode-ai/sdk"
+import { TuiEvent } from "../../event"
 
 export type PromptProps = {
   sessionID?: string
@@ -162,7 +163,7 @@ export function Prompt(props: PromptProps) {
     ]
   })
 
-  sdk.event.on("tui.prompt.append", (evt) => {
+  sdk.event.on(TuiEvent.PromptAppend.type, (evt) => {
     setStore(
       "prompt",
       produce((draft) => {

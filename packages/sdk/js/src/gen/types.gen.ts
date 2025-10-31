@@ -19,10 +19,6 @@ export type KeybindsConfig = {
    */
   leader?: string
   /**
-   * Show help dialog
-   */
-  app_help?: string
-  /**
    * Exit the application
    */
   app_exit?: string
@@ -34,18 +30,6 @@ export type KeybindsConfig = {
    * List available themes
    */
   theme_list?: string
-  /**
-   * Create/update AGENTS.md
-   */
-  project_init?: string
-  /**
-   * Toggle tool details
-   */
-  tool_details?: string
-  /**
-   * Toggle thinking blocks
-   */
-  thinking_blocks?: string
   /**
    * Toggle sidebar
    */
@@ -86,14 +70,6 @@ export type KeybindsConfig = {
    * Compact the session
    */
   session_compact?: string
-  /**
-   * Cycle to next child session
-   */
-  session_child_cycle?: string
-  /**
-   * Cycle to previous child session
-   */
-  session_child_cycle_reverse?: string
   /**
    * Scroll messages up by one page
    */
@@ -139,14 +115,6 @@ export type KeybindsConfig = {
    */
   command_list?: string
   /**
-   * Next recent model
-   */
-  model_cycle_recent?: string
-  /**
-   * Previous recent model
-   */
-  model_cycle_recent_reverse?: string
-  /**
    * List agents
    */
   agent_list?: string
@@ -174,54 +142,6 @@ export type KeybindsConfig = {
    * Insert newline in input
    */
   input_newline?: string
-  /**
-   * @deprecated use agent_cycle. Next mode
-   */
-  switch_mode?: string
-  /**
-   * @deprecated use agent_cycle_reverse. Previous mode
-   */
-  switch_mode_reverse?: string
-  /**
-   * @deprecated use agent_cycle. Next agent
-   */
-  switch_agent?: string
-  /**
-   * @deprecated use agent_cycle_reverse. Previous agent
-   */
-  switch_agent_reverse?: string
-  /**
-   * @deprecated Currently not available. List files
-   */
-  file_list?: string
-  /**
-   * @deprecated Close file
-   */
-  file_close?: string
-  /**
-   * @deprecated Search file
-   */
-  file_search?: string
-  /**
-   * @deprecated Split/unified diff
-   */
-  file_diff_toggle?: string
-  /**
-   * @deprecated Navigate to previous message
-   */
-  messages_previous?: string
-  /**
-   * @deprecated Navigate to next message
-   */
-  messages_next?: string
-  /**
-   * @deprecated Toggle layout
-   */
-  messages_layout_toggle?: string
-  /**
-   * @deprecated use messages_undo. Revert message
-   */
-  messages_revert?: string
 }
 
 export type AgentConfig = {
@@ -441,6 +361,9 @@ export type Config = {
           status?: "alpha" | "beta"
           options?: {
             [key: string]: unknown
+          }
+          headers?: {
+            [key: string]: string
           }
           provider?: {
             npm: string
@@ -1009,6 +932,9 @@ export type Model = {
   options: {
     [key: string]: unknown
   }
+  headers?: {
+    [key: string]: string
+  }
   provider?: {
     npm: string
   }
@@ -1157,6 +1083,10 @@ export type EventTuiToastShow = {
     title?: string
     message: string
     variant: "info" | "success" | "warning" | "error"
+    /**
+     * Duration in milliseconds
+     */
+    duration?: number
   }
 }
 
@@ -2728,6 +2658,10 @@ export type TuiShowToastData = {
     title?: string
     message: string
     variant: "info" | "success" | "warning" | "error"
+    /**
+     * Duration in milliseconds
+     */
+    duration?: number
   }
   path?: never
   query?: {

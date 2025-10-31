@@ -25,6 +25,7 @@ import { DialogAlert } from "./ui/dialog-alert"
 import { ToastProvider, useToast } from "./ui/toast"
 import { ExitProvider } from "./context/exit"
 import type { SessionRoute } from "./context/route"
+import { TuiEvent } from "./event"
 
 export function tui(input: {
   url: string
@@ -119,7 +120,7 @@ function App() {
       await sync.session.sync(data.sessionID).catch(() => {
         toast.show({
           message: `Session not found: ${data.sessionID}`,
-          type: "error",
+          variant: "error",
         })
         return route.navigate({ type: "home" })
       })
@@ -231,8 +232,17 @@ function App() {
     }
   })
 
-  event.on("tui.command.execute", (evt) => {
+  event.on(TuiEvent.CommandExecute.type, (evt) => {
     command.trigger(evt.properties.command)
+  })
+
+  event.on(TuiEvent.ToastShow.type, (evt) => {
+    toast.show({
+      title: evt.properties.title,
+      message: evt.properties.message,
+      variant: evt.properties.variant,
+      duration: evt.properties.duration,
+    })
   })
 
   return (

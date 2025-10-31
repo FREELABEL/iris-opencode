@@ -8,7 +8,6 @@ import { Global } from "@/global"
 import { iife } from "@/util/iife"
 import { createSimpleContext } from "./helper"
 import { useToast } from "../ui/toast"
-import type { Provider } from "@opencode-ai/sdk"
 
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
@@ -40,7 +39,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const [providerID, modelID] = props.initialModel.split("/")
           if (!providerID || !modelID)
             return toast.show({
-              type: "warning",
+              variant: "warning",
               message: `Invalid model format: ${props.initialModel}`,
               duration: 3000,
             })
@@ -60,7 +59,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           })
         else
           toast.show({
-            type: "warning",
+            variant: "warning",
             message: `Agent ${value.name}'s configured model ${value.model.providerID}/${value.model.modelID} is not valid`,
             duration: 3000,
           })
@@ -93,7 +92,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         set(name: string) {
           if (!agents().some((x) => x.name === name))
             return toast.show({
-              type: "warning",
+              variant: "warning",
               message: `Agent not found: ${name}`,
               duration: 3000,
             })
@@ -211,7 +210,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             if (!isModelValid(model)) {
               toast.show({
                 message: `Model ${model.providerID}/${model.modelID} is not valid`,
-                type: "warning",
+                variant: "warning",
                 duration: 3000,
               })
               return

@@ -2,12 +2,17 @@ import { createContext, useContext, type ParentProps, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTheme } from "@tui/context/theme"
 import { SplitBorder } from "../component/border"
+import { TextAttributes } from "@opentui/core"
+import z from "zod"
 
-export interface ToastOptions {
-  message: string | null
-  duration?: number
-  type: "info" | "success" | "warning" | "error"
-}
+export const Schema = z.object({
+  title: z.string().optional(),
+  message: z.string(),
+  variant: z.enum(["info", "success", "warning", "error"]),
+  duration: z.number().default(5000).optional().describe("Duration in milliseconds"),
+})
+
+export type ToastOptions = z.infer<typeof Schema>
 
 export function Toast() {
   const toast = useToast()
@@ -19,7 +24,7 @@ export function Toast() {
         <box
           position="absolute"
           justifyContent="center"
-          alignItems="center"
+          alignItems="flex-start"
           top={2}
           right={2}
           paddingLeft={2}
@@ -27,10 +32,13 @@ export function Toast() {
           paddingTop={1}
           paddingBottom={1}
           backgroundColor={theme.backgroundPanel}
-          borderColor={theme[current().type]}
+          borderColor={theme[current().variant]}
           border={["left", "right"]}
           customBorderChars={SplitBorder.customBorderChars}
         >
+          <Show when={current().title}>
+            <text attributes={TextAttributes.BOLD} marginBottom={1}>{current().title}</text>
+          </Show>
           <text>{current().message}</text>
         </box>
       )}
@@ -47,12 +55,13 @@ function init() {
 
   return {
     show(options: ToastOptions) {
-      const { duration, ...currentToast } = options
+      const parsedOptions = Schema.parse(options)
+      const { duration, ...currentToast } = parsedOptions
       setStore("currentToast", currentToast)
       if (timeoutHandle) clearTimeout(timeoutHandle)
       timeoutHandle = setTimeout(() => {
         setStore("currentToast", null)
-      }, duration ?? 5000).unref()
+      }, duration).unref()
     },
     get currentToast(): ToastOptions | null {
       return store.currentToast
