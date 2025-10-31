@@ -1,8 +1,9 @@
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { batch, createContext, Show, useContext, type JSX, type ParentProps } from "solid-js"
+import { batch, createContext, createEffect, Show, useContext, type JSX, type ParentProps } from "solid-js"
 import { useTheme } from "@tui/context/theme"
 import { Renderable, RGBA } from "@opentui/core"
 import { createStore } from "solid-js/store"
+import { createEventBus } from "@solid-primitives/event-bus"
 
 const Border = {
   topLeft: "┃",
@@ -65,6 +66,7 @@ function init() {
     }[],
     size: "medium" as "medium" | "large",
   })
+  const allClosedEvent = createEventBus<void>()
 
   useKeyboard((evt) => {
     if (evt.name === "escape" && store.stack.length > 0) {
@@ -94,6 +96,12 @@ function init() {
       focus.focus()
     }, 1)
   }
+
+  createEffect(() => {
+    if (store.stack.length === 0) {
+      allClosedEvent.emit()
+    }
+  })
 
   return {
     clear() {
@@ -128,6 +136,9 @@ function init() {
     setSize(size: "medium" | "large") {
       setStore("size", size)
     },
+    get allClosedEvent() {
+      return allClosedEvent
+    }
   }
 }
 

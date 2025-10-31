@@ -25,6 +25,7 @@ import { DialogAlert } from "./ui/dialog-alert"
 import { ToastProvider, useToast } from "./ui/toast"
 import { ExitProvider } from "./context/exit"
 import type { SessionRoute } from "./context/route"
+import { Session as SessionApi } from "@/session"
 import { TuiEvent } from "./event"
 
 export function tui(input: {
@@ -243,6 +244,16 @@ function App() {
       variant: evt.properties.variant,
       duration: evt.properties.duration,
     })
+  })
+
+  event.on(SessionApi.Event.Deleted.type, (evt) => {
+    if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
+      route.navigate({ type: "home" })
+      toast.show({
+        variant: "info",
+        message: "The current session was deleted",
+      })
+    }
   })
 
   return (
