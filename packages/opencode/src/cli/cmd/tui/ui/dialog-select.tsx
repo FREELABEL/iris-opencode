@@ -160,7 +160,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
 
   return (
     <box gap={1}>
-      <box paddingLeft={2} paddingRight={1}>
+      <box paddingLeft={3} paddingRight={2}>
         <box flexDirection="row" justifyContent="space-between">
           <text fg={theme.text} attributes={TextAttributes.BOLD}>
             {props.title}
@@ -188,8 +188,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         </box>
       </box>
       <scrollbox
-        paddingLeft={1}
-        paddingRight={1}
+        paddingLeft={2}
+        paddingRight={2}
         scrollbarOptions={{ visible: false }}
         ref={(r: ScrollBoxRenderable) => (scroll = r)}
         maxHeight={height()}
@@ -198,7 +198,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           {([category, options], index) => (
             <>
               <Show when={category}>
-                <box paddingTop={index() > 0 ? 1 : 0} paddingLeft={0}>
+                <box paddingTop={index() > 0 ? 1 : 0} paddingLeft={1}>
                   <text fg={theme.accent} attributes={TextAttributes.BOLD}>
                     {category}
                   </text>
@@ -225,8 +225,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                       backgroundColor={
                         active() ? (option.bg ?? theme.primary) : RGBA.fromInts(0, 0, 0, 0)
                       }
-                      paddingLeft={0}
-                      paddingRight={0}
+                      paddingLeft={1}
+                      paddingRight={1}
                       gap={1}
                     >
                       <Option
@@ -246,7 +246,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           )}
         </For>
       </scrollbox>
-      <box paddingRight={1} paddingLeft={2} flexDirection="row" paddingBottom={1} gap={1}>
+      <box paddingRight={2} paddingLeft={3} flexDirection="row" paddingBottom={1} gap={1}>
         <For each={props.keybind ?? []}>
           {(item) => (
             <text>
@@ -274,7 +274,7 @@ function Option(props: {
   return (
     <>
       <Show when={props.current && !props.active}>
-        <text flexShrink={0} fg={theme.primary} marginRight={0}>
+        <text flexShrink={0} fg={theme.primary} marginRight={1}>
           ●
         </text>
       </Show>
