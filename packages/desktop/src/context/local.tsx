@@ -1,19 +1,11 @@
 import { createStore, produce, reconcile } from "solid-js/store"
 import { batch, createEffect, createMemo } from "solid-js"
-import { pipe, sumBy, uniqueBy } from "remeda"
-import type {
-  FileContent,
-  FileNode,
-  Model,
-  Provider,
-  File as FileStatus,
-  Part,
-  Message,
-  AssistantMessage,
-} from "@opencode-ai/sdk"
+import { uniqueBy } from "remeda"
+import type { FileContent, FileNode, Model, Provider, File as FileStatus } from "@opencode-ai/sdk"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
 import { useSync } from "./sync"
+import { makePersisted } from "@solid-primitives/storage"
 
 export type LocalFile = FileNode &
   Partial<{
@@ -44,6 +36,37 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   init: () => {
     const sdk = useSDK()
     const sync = useSync()
+
+    function isModelValid(model: ModelKey) {
+      const provider = sync.data.provider.find((x) => x.id === model.providerID)
+      return !!provider?.models[model.modelID]
+    }
+
+    function getFirstValidModel(...modelFns: (() => ModelKey | undefined)[]) {
+      for (const modelFn of modelFns) {
+        const model = modelFn()
+        if (!model) continue
+        if (isModelValid(model)) return model
+      }
+    }
+
+    // Automatically update model when agent changes
+    createEffect(() => {
+      const value = agent.current()
+      if (value.model) {
+        if (isModelValid(value.model))
+          model.set({
+            providerID: value.model.providerID,
+            modelID: value.model.modelID,
+          })
+        // else
+        //   toast.show({
+        //     type: "warning",
+        //     message: `Agent ${value.name}'s configured model ${value.model.providerID}/${value.model.modelID} is not valid`,
+        //     duration: 3000,
+        //   })
+      }
+    })
 
     const agent = (() => {
       const list = createMemo(() => sync.data.agent.filter((x) => x.mode !== "subagent"))
@@ -76,11 +99,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     })()
 
     const model = (() => {
-      const list = createMemo(() =>
-        sync.data.provider.flatMap((p) => Object.values(p.models).map((m) => ({ ...m, provider: p }) as LocalModel)),
-      )
-      const find = (key: ModelKey) => list().find((m) => m.id === key?.modelID && m.provider.id === key.providerID)
-
       const [store, setStore] = createStore<{
         model: Record<string, ModelKey>
         recent: ModelKey[]
@@ -95,27 +113,76 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         localStorage.setItem("model", JSON.stringify(store.recent))
       })
 
-      const fallback = createMemo(() => {
-        if (store.recent.length) return store.recent[0]
+      const list = createMemo(() =>
+        sync.data.provider.flatMap((p) => Object.values(p.models).map((m) => ({ ...m, provider: p }) as LocalModel)),
+      )
+      const find = (key: ModelKey) => list().find((m) => m.id === key?.modelID && m.provider.id === key.providerID)
+
+      const fallbackModel = createMemo(() => {
+        if (sync.data.config.model) {
+          const [providerID, modelID] = sync.data.config.model.split("/")
+          if (isModelValid({ providerID, modelID })) {
+            return {
+              providerID,
+              modelID,
+            }
+          }
+        }
+
+        for (const item of store.recent) {
+          if (isModelValid(item)) {
+            return item
+          }
+        }
         const provider = sync.data.provider[0]
         const model = Object.values(provider.models)[0]
-        return { modelID: model.id, providerID: provider.id }
+        return {
+          providerID: provider.id,
+          modelID: model.id,
+        }
       })
 
-      const current = createMemo(() => {
+      const currentModel = createMemo(() => {
         const a = agent.current()
-        return find(store.model[agent.current().name]) ?? find(a.model ?? fallback())
+        const key = getFirstValidModel(
+          () => store.model[a.name],
+          () => a.model,
+          fallbackModel,
+        )!
+        return find(key)
       })
 
       const recent = createMemo(() => store.recent.map(find).filter(Boolean))
 
+      const cycle = (direction: 1 | -1) => {
+        const recentList = recent()
+        const current = currentModel()
+        if (!current) return
+
+        const index = recentList.findIndex((x) => x?.provider.id === current.provider.id && x?.id === current.id)
+        if (index === -1) return
+
+        let next = index + direction
+        if (next < 0) next = recentList.length - 1
+        if (next >= recentList.length) next = 0
+
+        const val = recentList[next]
+        if (!val) return
+
+        model.set({
+          providerID: val.provider.id,
+          modelID: val.id,
+        })
+      }
+
       return {
-        list,
-        current,
+        current: currentModel,
         recent,
+        list,
+        cycle,
         set(model: ModelKey | undefined, options?: { recent?: boolean }) {
           batch(() => {
-            setStore("model", agent.current().name, model ?? fallback())
+            setStore("model", agent.current().name, model ?? fallbackModel())
             if (options?.recent && model) {
               const uniq = uniqueBy([model, ...store.recent], (x) => x.providerID + x.modelID)
               if (uniq.length > 5) uniq.pop()
@@ -129,18 +196,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const file = (() => {
       const [store, setStore] = createStore<{
         node: Record<string, LocalFile>
-        opened: string[]
-        active?: string
       }>({
         node: Object.fromEntries(sync.data.node.map((x) => [x.path, x])),
-        opened: [],
       })
 
-      const active = createMemo(() => {
-        if (!store.active) return undefined
-        return store.node[store.active]
-      })
-      const opened = createMemo(() => store.opened.map((x) => store.node[x]))
       const changeset = createMemo(() => new Set(sync.data.changes.map((f) => f.path)))
       const changes = createMemo(() => Array.from(changeset()).sort((a, b) => a.localeCompare(b)))
 
@@ -181,18 +240,18 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         return false
       }
 
-      const resetNode = (path: string) => {
-        setStore("node", path, {
-          loaded: undefined,
-          pinned: undefined,
-          content: undefined,
-          selection: undefined,
-          scrollTop: undefined,
-          folded: undefined,
-          view: undefined,
-          selectedChange: undefined,
-        })
-      }
+      // const resetNode = (path: string) => {
+      //   setStore("node", path, {
+      //     loaded: undefined,
+      //     pinned: undefined,
+      //     content: undefined,
+      //     selection: undefined,
+      //     scrollTop: undefined,
+      //     folded: undefined,
+      //     view: undefined,
+      //     selectedChange: undefined,
+      //   })
+      // }
 
       const relative = (path: string) => path.replace(sync.data.path.directory + "/", "")
 
@@ -228,16 +287,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       const open = async (path: string, options?: { pinned?: boolean; view?: LocalFile["view"] }) => {
         const relativePath = relative(path)
         if (!store.node[relativePath]) await fetch(path)
-        setStore("opened", (x) => {
-          if (x.includes(relativePath)) return x
-          return [
-            ...opened()
-              .filter((x) => x.pinned)
-              .map((x) => x.path),
-            relativePath,
-          ]
-        })
-        setStore("active", relativePath)
+        // setStore("opened", (x) => {
+        //   if (x.includes(relativePath)) return x
+        //   return [
+        //     ...opened()
+        //       .filter((x) => x.pinned)
+        //       .map((x) => x.path),
+        //     relativePath,
+        //   ]
+        // })
+        // setStore("active", relativePath)
         context.addActive()
         if (options?.pinned) setStore("node", path, "pinned", true)
         if (options?.view && store.node[relativePath].view === undefined) setStore("node", path, "view", options.view)
@@ -259,27 +318,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         })
       }
 
-      const search = (query: string) => sdk.client.find.files({ query: { query } }).then((x) => x.data!)
+      const searchFiles = (query: string) =>
+        sdk.client.find.files({ query: { query, dirs: "false" } }).then((x) => x.data!)
+      const searchFilesAndDirectories = (query: string) =>
+        sdk.client.find.files({ query: { query, dirs: "true" } }).then((x) => x.data!)
 
       sdk.event.listen((e) => {
         const event = e.details
         switch (event.type) {
-          case "message.part.updated":
-            const part = event.properties.part
-            if (part.type === "tool" && part.state.status === "completed") {
-              switch (part.tool) {
-                case "read":
-                  break
-                case "edit":
-                  // load(part.state.input["filePath"] as string)
-                  break
-                default:
-                  break
-              }
-            }
-            break
           case "file.watcher.updated":
-            setTimeout(sync.load.changes, 1000)
             const relativePath = relative(event.properties.file)
             if (relativePath.startsWith(".git/")) return
             load(relativePath)
@@ -288,22 +335,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       })
 
       return {
-        active,
-        opened,
-        node: (path: string) => store.node[path],
+        node: async (path: string) => {
+          if (!store.node[path]) {
+            await init(path)
+          }
+          return store.node[path]
+        },
         update: (path: string, node: LocalFile) => setStore("node", path, reconcile(node)),
         open,
         load,
         init,
-        close(path: string) {
-          setStore("opened", (opened) => opened.filter((x) => x !== path))
-          if (store.active === path) {
-            const index = store.opened.findIndex((f) => f === path)
-            const previous = store.opened[Math.max(0, index - 1)]
-            setStore("active", previous)
-          }
-          resetNode(path)
-        },
         expand(path: string) {
           setStore("node", path, "expanded", true)
           if (store.node[path].loaded) return
@@ -318,17 +359,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         },
         scroll(path: string, scrollTop: number) {
           setStore("node", path, "scrollTop", scrollTop)
-        },
-        move(path: string, to: number) {
-          const index = store.opened.findIndex((f) => f === path)
-          if (index === -1) return
-          setStore(
-            "opened",
-            produce((opened) => {
-              opened.splice(to, 0, opened.splice(index, 1)[0])
-            }),
-          )
-          setStore("node", path, "pinned", true)
         },
         view(path: string): View {
           const n = store.node[path]
@@ -367,169 +397,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               !x.path.replace(new RegExp(`^${path + "/"}`), "").includes("/"),
           )
         },
-        search,
+        searchFiles,
+        searchFilesAndDirectories,
         relative,
-      }
-    })()
-
-    const session = (() => {
-      const [store, setStore] = createStore<{
-        active?: string
-        activeMessage?: string
-      }>({})
-
-      const active = createMemo(() => {
-        if (!store.active) return undefined
-        return sync.session.get(store.active)
-      })
-
-      createEffect(() => {
-        if (!store.active) return
-        sync.session.sync(store.active)
-      })
-
-      const valid = (part: Part) => {
-        if (!part) return false
-        switch (part.type) {
-          case "step-start":
-          case "step-finish":
-          case "file":
-          case "patch":
-            return false
-          case "text":
-            return !part.synthetic && part.text.trim()
-          case "reasoning":
-            return part.text.trim()
-          case "tool":
-            switch (part.tool) {
-              case "todoread":
-              case "todowrite":
-              case "list":
-              case "grep":
-                return false
-            }
-            return true
-          default:
-            return true
-        }
-      }
-
-      const hasValidParts = (message: Message) => {
-        return sync.data.part[message.id]?.filter(valid).length > 0
-      }
-      // const hasTextPart = (message: Message) => {
-      //   return !!sync.data.part[message.id]?.filter(valid).find((p) => p.type === "text")
-      // }
-
-      const messages = createMemo(() => (store.active ? (sync.data.message[store.active] ?? []) : []))
-      const messagesWithValidParts = createMemo(() => messages().filter(hasValidParts) ?? [])
-      const userMessages = createMemo(() =>
-        messages()
-          .filter((m) => m.role === "user")
-          .sort((a, b) => b.id.localeCompare(a.id)),
-      )
-
-      const working = createMemo(() => {
-        const last = messages()[messages().length - 1]
-        if (!last) return false
-        if (last.role === "user") return true
-        return !last.time.completed
-      })
-
-      const cost = createMemo(() => {
-        const total = pipe(
-          messages(),
-          sumBy((x) => (x.role === "assistant" ? x.cost : 0)),
-        )
-        return new Intl.NumberFormat("en-US", {
-          style: "currency",
-          currency: "USD",
-        }).format(total)
-      })
-
-      const last = createMemo(() => {
-        return messages().findLast((x) => x.role === "assistant") as AssistantMessage
-      })
-
-      const lastUserMessage = createMemo(() => {
-        return userMessages()?.at(0)
-      })
-
-      const activeMessage = createMemo(() => {
-        if (!store.active || !store.activeMessage) return lastUserMessage()
-        return sync.data.message[store.active]?.find((m) => m.id === store.activeMessage)
-      })
-
-      const activeAssistantMessages = createMemo(() => {
-        if (!store.active || !activeMessage()) return []
-        return sync.data.message[store.active]?.filter(
-          (m) => m.role === "assistant" && m.parentID == activeMessage()?.id,
-        )
-      })
-
-      const model = createMemo(() => {
-        if (!last()) return
-        const model = sync.data.provider.find((x) => x.id === last().providerID)?.models[last().modelID]
-        return model
-      })
-
-      const tokens = createMemo(() => {
-        if (!last()) return
-        const tokens = last().tokens
-        const total = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
-        return new Intl.NumberFormat("en-US", {
-          notation: "compact",
-          compactDisplay: "short",
-        }).format(total)
-      })
-
-      const context = createMemo(() => {
-        if (!last()) return
-        if (!model()?.limit.context) return 0
-        const tokens = last().tokens
-        const total = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
-        return Math.round((total / model()!.limit.context) * 100)
-      })
-
-      const getMessageText = (message: Message | Message[] | undefined): string => {
-        if (!message) return ""
-        if (Array.isArray(message)) return message.map((m) => getMessageText(m)).join(" ")
-        return sync.data.part[message.id]
-          ?.filter((p) => p.type === "text")
-          ?.filter((p) => !p.synthetic)
-          .map((p) => p.text)
-          .join(" ")
-      }
-
-      return {
-        active,
-        activeMessage,
-        activeAssistantMessages,
-        lastUserMessage,
-        cost,
-        last,
-        model,
-        tokens,
-        context,
-        messages,
-        messagesWithValidParts,
-        userMessages,
-        working,
-        getMessageText,
-        setActive(sessionId: string | undefined) {
-          setStore("active", sessionId)
-          setStore("activeMessage", undefined)
-        },
-        clearActive() {
-          setStore("active", undefined)
-          setStore("activeMessage", undefined)
-        },
-        setActiveMessage(messageId: string | undefined) {
-          setStore("activeMessage", messageId)
-        },
-        clearActiveMessage() {
-          setStore("activeMessage", undefined)
-        },
       }
     })()
 
@@ -551,9 +421,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         all() {
           return store.items
         },
-        active() {
-          return store.activeTab ? file.active() : undefined
-        },
+        // active() {
+        //   return store.activeTab ? file.active() : undefined
+        // },
         addActive() {
           setStore("activeTab", true)
         },
@@ -587,12 +457,60 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       }
     })()
 
+    const layout = (() => {
+      const [store, setStore] = makePersisted(
+        createStore({
+          sidebar: {
+            opened: true,
+            width: 240,
+          },
+          review: {
+            state: "closed" as "open" | "closed" | "tab",
+          },
+        }),
+        {
+          name: "default-layout",
+        },
+      )
+
+      return {
+        sidebar: {
+          opened: createMemo(() => store.sidebar.opened),
+          open() {
+            setStore("sidebar", "opened", true)
+          },
+          close() {
+            setStore("sidebar", "opened", false)
+          },
+          toggle() {
+            setStore("sidebar", "opened", (x) => !x)
+          },
+          width: createMemo(() => store.sidebar.width),
+          resize(width: number) {
+            setStore("sidebar", "width", width)
+          },
+        },
+        review: {
+          state: createMemo(() => store.review?.state ?? "closed"),
+          open() {
+            setStore("review", "state", "open")
+          },
+          close() {
+            setStore("review", "state", "closed")
+          },
+          tab() {
+            setStore("review", "state", "tab")
+          },
+        },
+      }
+    })()
+
     const result = {
       model,
       agent,
       file,
-      session,
       context,
+      layout,
     }
     return result
   },

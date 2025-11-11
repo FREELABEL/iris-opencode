@@ -25,8 +25,8 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
         [pkg.name]: `./bin/${pkg.name}`,
       },
       scripts: {
-        preinstall: "node ./preinstall.mjs",
-        postinstall: "node ./postinstall.mjs",
+        preinstall: "bun ./preinstall.mjs || node ./preinstall.mjs",
+        postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs",
       },
       version: Script.version,
       optionalDependencies: binaries,
@@ -39,6 +39,15 @@ for (const [name] of Object.entries(binaries)) {
   await $`cd dist/${name} && chmod 777 -R . && bun publish --access public --tag ${Script.channel}`
 }
 await $`cd ./dist/${pkg.name} && bun publish --access public --tag ${Script.channel}`
+
+if (!Script.preview) {
+  const major = Script.version.split(".")[0]
+  const majorTag = `latest-${major}`
+  for (const [name] of Object.entries(binaries)) {
+    await $`cd dist/${name} && npm dist-tag add ${name}@${Script.version} ${majorTag}`
+  }
+  await $`cd ./dist/${pkg.name} && npm dist-tag add ${pkg.name}-ai@${Script.version} ${majorTag}`
+}
 
 if (!Script.preview) {
   for (const key of Object.keys(binaries)) {
@@ -108,15 +117,13 @@ if (!Script.preview) {
     "build() {",
     `  cd "opencode-\${pkgver}"`,
     `  bun install`,
-    "  cd packages/tui",
-    `  CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=\${pkgver}" -o tui cmd/opencode/main.go`,
-    "  cd ../opencode",
-    `  bun build --define OPENCODE_TUI_PATH="'$(realpath ../tui/tui)'" --define OPENCODE_VERSION="'\${pkgver}'" --compile --target=bun-linux-x64 --outfile=opencode ./src/index.ts`,
+    "  cd ./packages/opencode",
+    `  OPENCODE_CHANNEL=latest OPENCODE_VERSION=${pkgver} bun run ./script/build.ts --single`,
     "}",
     "",
     "package() {",
     `  cd "opencode-\${pkgver}/packages/opencode"`,
-    '  install -Dm755 ./opencode "${pkgdir}/usr/bin/opencode"',
+    '  install -Dm755 $(find dist/*/bin/opencode) "${pkgdir}/usr/bin/opencode"',
     "}",
     "",
   ].join("\n")

@@ -7,7 +7,7 @@ import z from "zod"
 import * as path from "path"
 import { Tool } from "./tool"
 import { LSP } from "../lsp"
-import { createTwoFilesPatch } from "diff"
+import { createTwoFilesPatch, diffLines } from "diff"
 import { Permission } from "../permission"
 import DESCRIPTION from "./edit.txt"
 import { File } from "../file"
@@ -16,6 +16,7 @@ import { FileTime } from "../file/time"
 import { Filesystem } from "../util/filesystem"
 import { Instance } from "../project/instance"
 import { Agent } from "../agent/agent"
+import { Snapshot } from "@/snapshot"
 
 export const EditTool = Tool.define("edit", {
   description: DESCRIPTION,
@@ -34,12 +35,27 @@ export const EditTool = Tool.define("edit", {
       throw new Error("oldString and newString must be different")
     }
 
+    const agent = await Agent.get(ctx.agent)
+
     const filePath = path.isAbsolute(params.filePath) ? params.filePath : path.join(Instance.directory, params.filePath)
     if (!Filesystem.contains(Instance.directory, filePath)) {
-      throw new Error(`File ${filePath} is not in the current working directory`)
+      const parentDir = path.dirname(filePath)
+      if (agent.permission.external_directory === "ask") {
+        await Permission.ask({
+          type: "external_directory",
+          pattern: parentDir,
+          sessionID: ctx.sessionID,
+          messageID: ctx.messageID,
+          callID: ctx.callID,
+          title: `Edit file outside working directory: ${filePath}`,
+          metadata: {
+            filepath: filePath,
+            parentDir,
+          },
+        })
+      }
     }
 
-    const agent = await Agent.get(ctx.agent)
     let diff = ""
     let contentOld = ""
     let contentNew = ""
@@ -114,10 +130,23 @@ export const EditTool = Tool.define("edit", {
       }
     }
 
+    const filediff: Snapshot.FileDiff = {
+      file: filePath,
+      before: contentOld,
+      after: contentNew,
+      additions: 0,
+      deletions: 0,
+    }
+    for (const change of diffLines(contentOld, contentNew)) {
+      if (change.added) filediff.additions += change.count || 0
+      if (change.removed) filediff.deletions += change.count || 0
+    }
+
     return {
       metadata: {
         diagnostics,
         diff,
+        filediff,
       },
       title: `${path.relative(Instance.worktree, filePath)}`,
       output,

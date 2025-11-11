@@ -6,9 +6,14 @@ import z from "zod"
 import { Config } from "../config/config"
 import { spawn } from "child_process"
 import { Instance } from "../project/instance"
+import { Bus } from "../bus"
 
 export namespace LSP {
   const log = Log.create({ service: "lsp" })
+
+  export const Event = {
+    Updated: Bus.event("lsp.updated", z.object({})),
+  }
 
   export const Range = z
     .object({
@@ -101,14 +106,39 @@ export namespace LSP {
       }
     },
     async (state) => {
-      for (const client of state.clients) {
-        await client.shutdown()
-      }
+      await Promise.all(state.clients.map((client) => client.shutdown()))
     },
   )
 
   export async function init() {
     return state()
+  }
+
+  export const Status = z
+    .object({
+      id: z.string(),
+      name: z.string(),
+      root: z.string(),
+      status: z.union([z.literal("connected"), z.literal("error")]),
+    })
+    .meta({
+      ref: "LSPStatus",
+    })
+  export type Status = z.infer<typeof Status>
+
+  export async function status() {
+    return state().then((x) => {
+      const result: Status[] = []
+      for (const client of x.clients) {
+        result.push({
+          id: client.serverID,
+          name: x.servers[client.serverID].id,
+          root: path.relative(Instance.directory, client.root),
+          status: "connected",
+        })
+      }
+      return result
+    })
   }
 
   async function getClients(file: string) {
@@ -149,17 +179,21 @@ export namespace LSP {
       }).catch((err) => {
         s.broken.add(root + server.id)
         handle.process.kill()
-        log.error(`Failed to initialize LSP client ${server.id}`, { error: err })
+        log.error(`Failed to initialize LSP client ${server.id}`, {
+          error: err,
+        })
         return undefined
       })
       if (!client) continue
       s.clients.push(client)
       result.push(client)
+      Bus.publish(Event.Updated, {})
     }
     return result
   }
 
   export async function touchFile(input: string, waitForDiagnostics?: boolean) {
+    log.info("touching file", { file: input })
     const clients = await getClients(input)
     await run(async (client) => {
       if (!clients.includes(client)) return

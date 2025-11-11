@@ -6,10 +6,13 @@ import { generateText, type ModelMessage } from "ai"
 import { MessageV2 } from "./message-v2"
 import { Identifier } from "@/id/id"
 import { Snapshot } from "@/snapshot"
-
 import { ProviderTransform } from "@/provider/transform"
 import { SystemPrompt } from "./system"
 import { Log } from "@/util/log"
+import path from "path"
+import { Instance } from "@/project/instance"
+import { Storage } from "@/storage/storage"
+import { Bus } from "@/bus"
 
 export namespace SessionSummary {
   const log = Log.create({ service: "session.summary" })
@@ -20,7 +23,7 @@ export namespace SessionSummary {
       messageID: z.string(),
     }),
     async (input) => {
-      const all = await Session.messages(input.sessionID)
+      const all = await Session.messages({ sessionID: input.sessionID })
       await Promise.all([
         summarizeSession({ sessionID: input.sessionID, messages: all }),
         summarizeMessage({ messageID: input.messageID, messages: all }),
@@ -29,11 +32,29 @@ export namespace SessionSummary {
   )
 
   async function summarizeSession(input: { sessionID: string; messages: MessageV2.WithParts[] }) {
-    const diffs = await computeDiff({ messages: input.messages })
+    const files = new Set(
+      input.messages
+        .flatMap((x) => x.parts)
+        .filter((x) => x.type === "patch")
+        .flatMap((x) => x.files)
+        .map((x) => path.relative(Instance.worktree, x)),
+    )
+    const diffs = await computeDiff({ messages: input.messages }).then((x) =>
+      x.filter((x) => {
+        return files.has(x.file)
+      }),
+    )
     await Session.update(input.sessionID, (draft) => {
       draft.summary = {
-        diffs,
+        additions: diffs.reduce((sum, x) => sum + x.additions, 0),
+        deletions: diffs.reduce((sum, x) => sum + x.deletions, 0),
+        files: diffs.length,
       }
+    })
+    await Storage.write(["session_diff", input.sessionID], diffs)
+    Bus.publish(Session.Event.Diff, {
+      sessionID: input.sessionID,
+      diff: diffs,
     })
   }
 
@@ -68,9 +89,15 @@ export namespace SessionSummary {
           ),
           {
             role: "user" as const,
-            content: textPart?.text ?? "",
+            content: `
+              The following is the text to summarize:
+              <text>
+              ${textPart?.text ?? ""}
+              </text>
+            `,
           },
         ],
+        headers: small.info.headers,
         model: small.language,
       })
       log.info("title", { title: result.text })
@@ -84,23 +111,30 @@ export namespace SessionSummary {
           m.info.role === "assistant" && m.parts.some((p) => p.type === "step-finish" && p.reason !== "tool-calls"),
       )
     ) {
-      const result = await generateText({
-        model: small.language,
-        maxOutputTokens: 50,
-        messages: [
-          {
-            role: "user",
-            content: `
+      let summary = messages
+        .findLast((m) => m.info.role === "assistant")
+        ?.parts.findLast((p) => p.type === "text")?.text
+      if (!summary || diffs.length > 0) {
+        const result = await generateText({
+          model: small.language,
+          maxOutputTokens: 100,
+          messages: [
+            {
+              role: "user",
+              content: `
             Summarize the following conversation into 2 sentences MAX explaining what the assistant did and why. Do not explain the user's input. Do not speak in the third person about the assistant.
             <conversation>
             ${JSON.stringify(MessageV2.toModelMessage(messages))}
             </conversation>
             `,
-          },
-        ],
-      })
-      userMsg.summary.body = result.text
-      log.info("body", { body: result.text })
+            },
+          ],
+          headers: small.info.headers,
+        }).catch(() => {})
+        if (result) summary = result.text
+      }
+      userMsg.summary.body = summary
+      log.info("body", { body: summary })
       await Session.updateMessage(userMsg)
     }
   }
@@ -111,15 +145,7 @@ export namespace SessionSummary {
       messageID: Identifier.schema("message").optional(),
     }),
     async (input) => {
-      let all = await Session.messages(input.sessionID)
-      if (input.messageID)
-        all = all.filter(
-          (x) => x.info.id === input.messageID || (x.info.role === "assistant" && x.info.parentID === input.messageID),
-        )
-
-      return computeDiff({
-        messages: all,
-      })
+      return Storage.read<Snapshot.FileDiff[]>(["session_diff", input.sessionID]) ?? []
     },
   )
 

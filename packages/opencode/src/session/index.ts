@@ -2,8 +2,6 @@ import { Decimal } from "decimal.js"
 import z from "zod"
 import { type LanguageModelUsage, type ProviderMetadata } from "ai"
 
-import PROMPT_INITIALIZE from "../session/prompt/initialize.txt"
-
 import { Bus } from "../bus"
 import { Config } from "../config/config"
 import { Flag } from "../flag/flag"
@@ -14,20 +12,26 @@ import { Share } from "../share/share"
 import { Storage } from "../storage/storage"
 import { Log } from "../util/log"
 import { MessageV2 } from "./message-v2"
-import { Project } from "../project/project"
 import { Instance } from "../project/instance"
 import { SessionPrompt } from "./prompt"
 import { fn } from "@/util/fn"
+import { Command } from "../command"
 import { Snapshot } from "@/snapshot"
 
 export namespace Session {
   const log = Log.create({ service: "session" })
 
-  const parentSessionTitlePrefix = "New session - "
-  const childSessionTitlePrefix = "Child session - "
+  const parentTitlePrefix = "New session - "
+  const childTitlePrefix = "Child session - "
 
   function createDefaultTitle(isChild = false) {
-    return (isChild ? childSessionTitlePrefix : parentSessionTitlePrefix) + new Date().toISOString()
+    return (isChild ? childTitlePrefix : parentTitlePrefix) + new Date().toISOString()
+  }
+
+  export function isDefaultTitle(title: string) {
+    return new RegExp(
+      `^(${parentTitlePrefix}|${childTitlePrefix})\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$`,
+    ).test(title)
   }
 
   export const Info = z
@@ -38,7 +42,10 @@ export namespace Session {
       parentID: Identifier.schema("session").optional(),
       summary: z
         .object({
-          diffs: Snapshot.FileDiff.array(),
+          additions: z.number(),
+          deletions: z.number(),
+          files: z.number(),
+          diffs: Snapshot.FileDiff.array().optional(),
         })
         .optional(),
       share: z
@@ -78,6 +85,12 @@ export namespace Session {
   export type ShareInfo = z.output<typeof ShareInfo>
 
   export const Event = {
+    Created: Bus.event(
+      "session.created",
+      z.object({
+        info: Info,
+      }),
+    ),
     Updated: Bus.event(
       "session.updated",
       z.object({
@@ -88,6 +101,13 @@ export namespace Session {
       "session.deleted",
       z.object({
         info: Info,
+      }),
+    ),
+    Diff: Bus.event(
+      "session.diff",
+      z.object({
+        sessionID: z.string(),
+        diff: Snapshot.FileDiff.array(),
       }),
     ),
     Error: Bus.event(
@@ -124,7 +144,7 @@ export namespace Session {
       const session = await createNext({
         directory: Instance.directory,
       })
-      const msgs = await messages(input.sessionID)
+      const msgs = await messages({ sessionID: input.sessionID })
       for (const msg of msgs) {
         if (input.messageID && msg.info.id >= input.messageID) break
         const cloned = await updateMessage({
@@ -167,6 +187,9 @@ export namespace Session {
     }
     log.info("created", result)
     await Storage.write(["session", Instance.project.id, result.id], result)
+    Bus.publish(Event.Created, {
+      info: result,
+    })
     const cfg = await Config.get()
     if (!result.parentID && (Flag.OPENCODE_AUTO_SHARE || cfg.share === "auto"))
       share(result.id)
@@ -209,7 +232,7 @@ export namespace Session {
     })
     await Storage.write(["share", id], share)
     await Share.sync("session/info/" + id, session)
-    for (const msg of await messages(id)) {
+    for (const msg of await messages({ sessionID: id })) {
       await Share.sync("session/message/" + id + "/" + msg.info.id, msg.info)
       for (const part of msg.parts) {
         await Share.sync("session/part/" + id + "/" + msg.info.id + "/" + part.id, part)
@@ -240,41 +263,26 @@ export namespace Session {
     return result
   }
 
-  export const messages = fn(Identifier.schema("session"), async (sessionID) => {
-    const result = [] as MessageV2.WithParts[]
-    for (const p of await Storage.list(["message", sessionID])) {
-      const read = await Storage.read<MessageV2.Info>(p)
-      result.push({
-        info: read,
-        parts: await getParts(read.id),
-      })
-    }
-    result.sort((a, b) => (a.info.id > b.info.id ? 1 : -1))
-    return result
+  export const diff = fn(Identifier.schema("session"), async (sessionID) => {
+    const diffs = await Storage.read<Snapshot.FileDiff[]>(["session_diff", sessionID])
+    return diffs ?? []
   })
 
-  export const getMessage = fn(
+  export const messages = fn(
     z.object({
       sessionID: Identifier.schema("session"),
-      messageID: Identifier.schema("message"),
+      limit: z.number().optional(),
     }),
     async (input) => {
-      return {
-        info: await Storage.read<MessageV2.Info>(["message", input.sessionID, input.messageID]),
-        parts: await getParts(input.messageID),
+      const result = [] as MessageV2.WithParts[]
+      for await (const msg of MessageV2.stream(input.sessionID)) {
+        if (input.limit && result.length >= input.limit) break
+        result.push(msg)
       }
+      result.reverse()
+      return result
     },
   )
-
-  export const getParts = fn(Identifier.schema("message"), async (messageID) => {
-    const result = [] as MessageV2.Part[]
-    for (const item of await Storage.list(["part", messageID])) {
-      const read = await Storage.read<MessageV2.Part>(item)
-      result.push(read)
-    }
-    result.sort((a, b) => (a.id > b.id ? 1 : -1))
-    return result
-  })
 
   export async function* list() {
     const project = Instance.project
@@ -408,22 +416,13 @@ export namespace Session {
       messageID: Identifier.schema("message"),
     }),
     async (input) => {
-      await SessionPrompt.prompt({
+      await SessionPrompt.command({
         sessionID: input.sessionID,
         messageID: input.messageID,
-        model: {
-          providerID: input.providerID,
-          modelID: input.modelID,
-        },
-        parts: [
-          {
-            id: Identifier.ascending("part"),
-            type: "text",
-            text: PROMPT_INITIALIZE.replace("${path}", Instance.worktree),
-          },
-        ],
+        model: input.providerID + "/" + input.modelID,
+        command: Command.Default.INIT,
+        arguments: "",
       })
-      await Project.setInitialized(Instance.project.id)
     },
   )
 }

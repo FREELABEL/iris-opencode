@@ -2,45 +2,40 @@ import z from "zod"
 import { spawn } from "child_process"
 import { Tool } from "./tool"
 import DESCRIPTION from "./bash.txt"
-import { Permission } from "../permission"
-import { Filesystem } from "../util/filesystem"
-import { lazy } from "../util/lazy"
 import { Log } from "../util/log"
-import { Wildcard } from "../util/wildcard"
-import { $ } from "bun"
 import { Instance } from "../project/instance"
-import { Agent } from "../agent/agent"
+import { lazy } from "@/util/lazy"
+import { Language } from "web-tree-sitter"
+import { Agent } from "@/agent/agent"
+import { $ } from "bun"
+import { Filesystem } from "@/util/filesystem"
+import { Wildcard } from "@/util/wildcard"
+import { Permission } from "@/permission"
 
 const MAX_OUTPUT_LENGTH = 30_000
 const DEFAULT_TIMEOUT = 1 * 60 * 1000
 const MAX_TIMEOUT = 10 * 60 * 1000
 const SIGKILL_TIMEOUT_MS = 200
 
-const log = Log.create({ service: "bash-tool" })
+export const log = Log.create({ service: "bash-tool" })
 
 const parser = lazy(async () => {
-  try {
-    const { default: Parser } = await import("tree-sitter")
-    const Bash = await import("tree-sitter-bash")
-    const p = new Parser()
-    p.setLanguage(Bash.language as any)
-    return p
-  } catch (e) {
-    const { default: Parser } = await import("web-tree-sitter")
-    const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, { with: { type: "wasm" } })
-    await Parser.init({
-      locateFile() {
-        return treeWasm
-      },
-    })
-    const { default: bashWasm } = await import("tree-sitter-bash/tree-sitter-bash.wasm" as string, {
-      with: { type: "wasm" },
-    })
-    const bashLanguage = await Parser.Language.load(bashWasm)
-    const p = new Parser()
-    p.setLanguage(bashLanguage)
-    return p
-  }
+  const { Parser } = await import("web-tree-sitter")
+  const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
+    with: { type: "wasm" },
+  })
+  await Parser.init({
+    locateFile() {
+      return treeWasm
+    },
+  })
+  const { default: bashWasm } = await import("tree-sitter-bash/tree-sitter-bash.wasm" as string, {
+    with: { type: "wasm" },
+  })
+  const bashLanguage = await Language.load(bashWasm)
+  const p = new Parser()
+  p.setLanguage(bashLanguage)
+  return p
 })
 
 export const BashTool = Tool.define("bash", {
@@ -55,12 +50,19 @@ export const BashTool = Tool.define("bash", {
       ),
   }),
   async execute(params, ctx) {
+    if (params.timeout !== undefined && params.timeout < 0) {
+      throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
+    }
     const timeout = Math.min(params.timeout ?? DEFAULT_TIMEOUT, MAX_TIMEOUT)
     const tree = await parser().then((p) => p.parse(params.command))
+    if (!tree) {
+      throw new Error("Failed to parse command")
+    }
     const permissions = await Agent.get(ctx.agent).then((x) => x.permission.bash)
 
     const askPatterns = new Set<string>()
     for (const node of tree.rootNode.descendantsOfType("command")) {
+      if (!node) continue
       const command = []
       for (let i = 0; i < node.childCount; i++) {
         const child = node.child(i)
@@ -105,22 +107,10 @@ export const BashTool = Tool.define("bash", {
         }
         if (action === "ask") {
           const pattern = (() => {
-            let head = ""
-            let sub: string | undefined
-            for (let i = 0; i < node.childCount; i++) {
-              const child = node.child(i)
-              if (!child) continue
-              if (child.type === "command_name") {
-                if (!head) {
-                  head = child.text
-                }
-                continue
-              }
-              if (!sub && child.type === "word") {
-                if (!child.text.startsWith("-")) sub = child.text
-              }
-            }
-            if (!head) return
+            if (command.length === 0) return
+            const head = command[0]
+            // Find first non-flag argument as subcommand
+            const sub = command.slice(1).find((arg) => !arg.startsWith("-"))
             return sub ? `${head} ${sub} *` : `${head} *`
           })()
           if (pattern) {
@@ -149,6 +139,9 @@ export const BashTool = Tool.define("bash", {
     const proc = spawn(params.command, {
       shell: true,
       cwd: Instance.directory,
+      env: {
+        ...process.env,
+      },
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     })

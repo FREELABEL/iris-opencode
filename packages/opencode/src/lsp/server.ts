@@ -54,7 +54,17 @@ export namespace LSPServer {
 
   export const Deno: Info = {
     id: "deno",
-    root: NearestRoot(["deno.json", "deno.jsonc"]),
+    root: async (file) => {
+      const files = Filesystem.up({
+        targets: ["deno.json", "deno.jsonc"],
+        start: path.dirname(file),
+        stop: Instance.directory,
+      })
+      const first = await files.next()
+      await files.return()
+      if (!first.value) return undefined
+      return path.dirname(first.value)
+    },
     extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs"],
     async spawn(root) {
       const deno = Bun.which("deno")
@@ -416,7 +426,7 @@ export namespace LSPServer {
           return
         }
 
-        const release = await releaseResponse.json()
+        const release = (await releaseResponse.json()) as any
 
         const platform = process.platform
         const arch = process.arch
@@ -601,7 +611,7 @@ export namespace LSPServer {
           return
         }
 
-        const release = await releaseResponse.json()
+        const release = (await releaseResponse.json()) as any
 
         const platform = process.platform
         let assetName = ""
@@ -954,7 +964,9 @@ export namespace LSPServer {
 
         if (platform !== "win32") {
           const ok = await $`chmod +x ${bin}`.quiet().catch((error) => {
-            log.error("Failed to set executable permission for lua-language-server binary", { error })
+            log.error("Failed to set executable permission for lua-language-server binary", {
+              error,
+            })
           })
           if (!ok) return
         }

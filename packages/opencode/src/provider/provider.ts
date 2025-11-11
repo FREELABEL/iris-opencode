@@ -112,6 +112,7 @@ export namespace Provider {
             case "eu": {
               const regionRequiresPrefix = [
                 "eu-west-1",
+                "eu-west-2",
                 "eu-west-3",
                 "eu-north-1",
                 "eu-central-1",
@@ -192,7 +193,7 @@ export namespace Provider {
     },
     "google-vertex-anthropic": async () => {
       const project = process.env["GOOGLE_CLOUD_PROJECT"] ?? process.env["GCP_PROJECT"] ?? process.env["GCLOUD_PROJECT"]
-      const location = process.env["GOOGLE_CLOUD_LOCATION"] ?? process.env["VERTEX_LOCATION"] ?? "us-east5"
+      const location = process.env["GOOGLE_CLOUD_LOCATION"] ?? process.env["VERTEX_LOCATION"] ?? "global"
       const autoload = Boolean(project)
       if (!autoload) return { autoload: false }
       return {
@@ -210,6 +211,7 @@ export namespace Provider {
   }
 
   const state = Instance.state(async () => {
+    using _ = log.time("state")
     const config = await Config.get()
     const database = await ModelsDev.get()
 
@@ -223,7 +225,13 @@ export namespace Provider {
     } = {}
     const models = new Map<
       string,
-      { providerID: string; modelID: string; info: ModelsDev.Model; language: LanguageModel; npm?: string }
+      {
+        providerID: string
+        modelID: string
+        info: ModelsDev.Model
+        language: LanguageModel
+        npm?: string
+      }
     >()
     const sdk = new Map<number, SDK>()
     // Maps `${provider}/${key}` to the provider’s actual model ID for custom aliases.
@@ -257,6 +265,18 @@ export namespace Provider {
 
     const configProviders = Object.entries(config.provider ?? {})
 
+    // Add GitHub Copilot Enterprise provider that inherits from GitHub Copilot
+    if (database["github-copilot"]) {
+      const githubCopilot = database["github-copilot"]
+      database["github-copilot-enterprise"] = {
+        ...githubCopilot,
+        id: "github-copilot-enterprise",
+        name: "GitHub Copilot Enterprise",
+        // Enterprise uses a different API endpoint - will be set dynamically based on auth
+        api: undefined,
+      }
+    }
+
     for (const [providerID, provider] of configProviders) {
       const existing = database[providerID]
       const parsed: ModelsDev.Provider = {
@@ -269,7 +289,7 @@ export namespace Provider {
       }
 
       for (const [modelID, model] of Object.entries(provider.models ?? {})) {
-        const existing = parsed.models[modelID]
+        const existing = parsed.models[model.id ?? modelID]
         const parsedModel: ModelsDev.Model = {
           id: modelID,
           name: model.name ?? existing?.name ?? modelID,
@@ -306,6 +326,7 @@ export namespace Provider {
               input: ["text"],
               output: ["text"],
             },
+          headers: model.headers,
           provider: model.provider ?? existing?.provider,
         }
         if (model.id && model.id !== modelID) {
@@ -351,11 +372,41 @@ export namespace Provider {
       if (!plugin.auth) continue
       const providerID = plugin.auth.provider
       if (disabled.has(providerID)) continue
+
+      // For github-copilot plugin, check if auth exists for either github-copilot or github-copilot-enterprise
+      let hasAuth = false
       const auth = await Auth.get(providerID)
-      if (!auth) continue
+      if (auth) hasAuth = true
+
+      // Special handling for github-copilot: also check for enterprise auth
+      if (providerID === "github-copilot" && !hasAuth) {
+        const enterpriseAuth = await Auth.get("github-copilot-enterprise")
+        if (enterpriseAuth) hasAuth = true
+      }
+
+      if (!hasAuth) continue
       if (!plugin.auth.loader) continue
-      const options = await plugin.auth.loader(() => Auth.get(providerID) as any, database[plugin.auth.provider])
-      mergeProvider(plugin.auth.provider, options ?? {}, "custom")
+
+      // Load for the main provider if auth exists
+      if (auth) {
+        const options = await plugin.auth.loader(() => Auth.get(providerID) as any, database[plugin.auth.provider])
+        mergeProvider(plugin.auth.provider, options ?? {}, "custom")
+      }
+
+      // If this is github-copilot plugin, also register for github-copilot-enterprise if auth exists
+      if (providerID === "github-copilot") {
+        const enterpriseProviderID = "github-copilot-enterprise"
+        if (!disabled.has(enterpriseProviderID)) {
+          const enterpriseAuth = await Auth.get(enterpriseProviderID)
+          if (enterpriseAuth) {
+            const enterpriseOptions = await plugin.auth.loader(
+              () => Auth.get(enterpriseProviderID) as any,
+              database[enterpriseProviderID],
+            )
+            mergeProvider(enterpriseProviderID, enterpriseOptions ?? {}, "custom")
+          }
+        }
+      }
     }
 
     // load config
@@ -374,7 +425,8 @@ export namespace Provider {
           // Filter out experimental models
           .filter(
             ([, model]) =>
-              (!model.experimental && model.status !== "alpha") || Flag.OPENCODE_ENABLE_EXPERIMENTAL_MODELS,
+              ((!model.experimental && model.status !== "alpha") || Flag.OPENCODE_ENABLE_EXPERIMENTAL_MODELS) &&
+              model.status !== "deprecated",
           ),
       )
       provider.info.models = filteredModels
@@ -423,7 +475,8 @@ export namespace Provider {
         provider.id === "google-vertex-anthropic" ? `${installedPath}/dist/anthropic/index.mjs` : installedPath
       const mod = await import(modPath)
       if (options["timeout"] !== undefined && options["timeout"] !== null) {
-        // Only override fetch if user explicitly sets timeout
+        // Preserve custom fetch if it exists, wrap it with timeout logic
+        const customFetch = options["fetch"]
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const { signal, ...rest } = init ?? {}
 
@@ -433,7 +486,8 @@ export namespace Provider {
 
           const combined = signals.length > 1 ? AbortSignal.any(signals) : signals[0]
 
-          return fetch(input, {
+          const fetchFn = customFetch ?? fetch
+          return fetchFn(input, {
             ...rest,
             signal: combined,
             // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
