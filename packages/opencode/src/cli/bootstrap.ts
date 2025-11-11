@@ -6,10 +6,10 @@ export async function bootstrap<T>(directory: string, cb: () => Promise<T>) {
     directory,
     init: InstanceBootstrap,
     fn: async () => {
-      // Ensure we always dispose instance state, even on errors,
-      // so the CLI does not hang due to lingering watchers/subscriptions.
+      // Guarantee teardown of process-scoped state even on errors
       try {
-        return await cb()
+        const result = await cb()
+        return result
       } finally {
         await Instance.dispose()
       }
