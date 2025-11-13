@@ -798,7 +798,7 @@ export function Session() {
                 <Shimmer text={lastUserMessage().model.modelID} color={theme.text} />
                 <Show when={status().type === "retry"}>
                   <text fg={theme.error}>
-                    {status().message} [retry #{status().attempt}]
+                    {(status() as any).message} [retry #{(status() as any).attempt}]
                   </text>
                 </Show>
               </box>

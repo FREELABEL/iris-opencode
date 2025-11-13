@@ -16,6 +16,7 @@ import { Log } from "../util/log"
 import { ProviderTransform } from "@/provider/transform"
 import { SessionRetry } from "./retry"
 import { Config } from "@/config/config"
+import { Lock } from "../util/lock"
 
 export namespace SessionCompaction {
   const log = Log.create({ service: "session.compaction" })
@@ -87,8 +88,8 @@ export namespace SessionCompaction {
   }
 
   export async function run(input: { sessionID: string; providerID: string; modelID: string; signal?: AbortSignal }) {
-    await using lock = input.signal === undefined ? SessionLock.acquire({ sessionID: input.sessionID }) : undefined
-    const signal = input.signal ?? lock!.signal
+    const signal = input.signal ?? new AbortController().signal
+    await using lock = input.signal === undefined ? await Lock.write(input.sessionID) : undefined
 
     await Session.update(input.sessionID, (draft) => {
       draft.time.compacting = Date.now()
