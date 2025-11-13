@@ -30,10 +30,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       }
     }
 
-    // Automatically update model when agent changes
+    // Automatically update model when agent changes, but only if user hasn't selected a model
     createEffect(() => {
       const value = agent.current()
-      if (value.model) {
+      if (value.model && !modelStore.model[value.name]) {
         if (isModelValid(value.model))
           model.set({
             providerID: value.model.providerID,
