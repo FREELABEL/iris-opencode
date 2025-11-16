@@ -49,6 +49,7 @@ import { fn } from "@/util/fn"
 import { SessionRetry } from "./retry"
 import { SessionProcessor } from "./processor"
 import { iife } from "@/util/iife"
+import { TaskTool } from "@/tool/task"
 
 export namespace SessionPrompt {
   const log = Log.create({ service: "session.prompt" })
@@ -173,6 +174,16 @@ export namespace SessionPrompt {
           .meta({
             ref: "AgentPartInput",
           }),
+        MessageV2.SubtaskPart.omit({
+          messageID: true,
+          sessionID: true,
+        })
+          .partial({
+            id: true,
+          })
+          .meta({
+            ref: "SubtaskPartInput",
+          }),
       ]),
     ),
   })
@@ -290,7 +301,7 @@ export namespace SessionPrompt {
       let lastUser: MessageV2.User | undefined
       let lastAssistant: MessageV2.Assistant | undefined
       let lastFinished: MessageV2.Assistant | undefined
-      let tasks: MessageV2.CompactionPart[] = []
+      let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
       for (let i = msgs.length - 1; i >= 0; i--) {
         const msg = msgs[i]
         if (!lastUser && msg.info.role === "user") lastUser = msg.info as MessageV2.User
@@ -298,9 +309,9 @@ export namespace SessionPrompt {
         if (!lastFinished && msg.info.role === "assistant" && msg.info.finish)
           lastFinished = msg.info as MessageV2.Assistant
         if (lastUser && lastFinished) break
-        const compaction = msg.parts.find((part) => part.type === "compaction")
-        if (compaction && !lastFinished) {
-          tasks.push(compaction)
+        const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
+        if (task && !lastFinished) {
+          tasks.push(...task)
         }
       }
 
@@ -312,6 +323,87 @@ export namespace SessionPrompt {
 
       const model = await Provider.getModel(lastUser.model.providerID, lastUser.model.modelID)
       const task = tasks.pop()
+
+      // pending subtask
+      if (task?.type === "subtask") {
+        const taskTool = await TaskTool.init()
+        const assistantMessage = await Session.updateMessage({
+          id: Identifier.ascending("message"),
+          role: "assistant",
+          parentID: lastUser.id,
+          sessionID,
+          mode: task.agent,
+          path: {
+            cwd: Instance.directory,
+            root: Instance.worktree,
+          },
+          cost: 0,
+          tokens: {
+            input: 0,
+            output: 0,
+            reasoning: 0,
+            cache: { read: 0, write: 0 },
+          },
+          modelID: model.modelID,
+          providerID: model.providerID,
+          time: {
+            created: Date.now(),
+          },
+        })
+        let part = await Session.updatePart({
+          id: Identifier.ascending("part"),
+          messageID: assistantMessage.id,
+          sessionID: assistantMessage.sessionID,
+          type: "tool",
+          callID: ulid(),
+          tool: TaskTool.id,
+          state: {
+            status: "running",
+            input: {
+              prompt: task.prompt,
+              description: task.description,
+              subagent_type: task.agent,
+            },
+            time: {
+              start: Date.now(),
+            },
+          },
+        })
+        const result = await taskTool
+          .execute(
+            {
+              prompt: task.prompt,
+              description: task.description,
+              subagent_type: task.agent,
+            },
+            {
+              agent: task.agent,
+              messageID: assistantMessage.id,
+              sessionID: sessionID,
+              abort,
+              async metadata(input) {
+                part = await Session.updatePart({
+                  ...part,
+                  type: "tool",
+                  state: {
+                    ...(part as any).state,
+                    ...input,
+                  } as any,
+                } as any)
+              },
+            },
+          )
+          .catch(() => {})
+        await Session.updatePart({
+          ...part,
+          state: {
+            ...(part as any).state,
+            type: "completed",
+            ...result,
+          },
+        } as any)
+        continue
+      }
 
       // pending compaction
       if (task?.type === "compaction") {
@@ -1289,8 +1381,10 @@ export namespace SessionPrompt {
 
     if ((agent.mode === "subagent" && command.subtask !== false) || command.subtask === true) {
       parts.push({
-        type: "agent",
-        name: agent.name,
+        type: "subtask",
+        agent: agent.name,
+        description: command.description ?? "",
+        prompt: command.template,
       })
     }
 

@@ -149,6 +149,14 @@ export namespace MessageV2 {
   })
   export type CompactionPart = z.infer<typeof CompactionPart>
 
+  export const SubtaskPart = PartBase.extend({
+    type: z.literal("subtask"),
+    prompt: z.string(),
+    description: z.string(),
+    agent: z.string(),
+  })
+  export type SubtaskPart = z.infer<typeof SubtaskPart>
+
   export const RetryPart = PartBase.extend({
     type: z.literal("retry"),
     attempt: z.number(),
@@ -299,6 +307,7 @@ export namespace MessageV2 {
   export const Part = z
     .discriminatedUnion("type", [
       TextPart,
+      SubtaskPart,
       ReasoningPart,
       FilePart,
       ToolPart,
