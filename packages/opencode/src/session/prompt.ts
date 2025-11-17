@@ -394,15 +394,9 @@ export namespace SessionPrompt {
             },
           )
           .catch(() => {})
-        await Session.updateMessage({
-          ...assistantMessage,
-          role: "assistant",
-          time: {
-            ...assistantMessage.time,
-            completed: Date.now(),
-          },
-          finish: "tool-calls",
-        })
+        assistantMessage.finish = "tool-calls"
+        assistantMessage.time.completed = Date.now()
+        await Session.updateMessage(assistantMessage)
         if (result) {
           await Session.updatePart({
             ...part,
