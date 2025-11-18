@@ -164,7 +164,7 @@ export namespace SessionCompaction {
         time: {
           created: Date.now(),
         },
-        agent: "build",
+        agent: await Agent.getDefault(),
         model: input.model,
       })
       await Session.updatePart({
@@ -197,7 +197,7 @@ export namespace SessionCompaction {
         role: "user",
         model: input.model,
         sessionID: input.sessionID,
-        agent: "build",
+        agent: await Agent.getDefault(),
         time: {
           created: Date.now(),
         },

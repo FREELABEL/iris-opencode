@@ -183,6 +183,22 @@ export namespace Agent {
     return state().then((x) => x[agent])
   }
 
+  export async function getDefault() {
+    const cfg = await Config.get()
+    const defaultAgent = cfg.default_agent
+
+    if (defaultAgent) {
+      const agents = await state()
+      if (agents[defaultAgent]) {
+        return defaultAgent
+      }
+    }
+
+    // Fallback to build agent if it exists
+    const agents = await state()
+    return agents.build ? "build" : Object.keys(agents)[0]
+  }
+
   export async function list() {
     return state().then((x) => Object.values(x))
   }

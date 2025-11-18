@@ -475,7 +475,8 @@ export namespace ACP {
           description: agent.description,
         }))
 
-      const currentModeId = availableModes.find((m) => m.name === "build")?.id ?? availableModes[0].id
+      const defaultAgentName = await Agent.getDefault()
+      const currentModeId = availableModes.find((m) => m.name === defaultAgentName)?.id ?? availableModes[0].id
 
       const mcpServers: Record<string, Config.Mcp> = {}
       for (const server of params.mcpServers) {
@@ -577,7 +578,7 @@ export namespace ACP {
       if (!current) {
         this.sessionManager.setModel(session.id, model)
       }
-      const agent = session.modeId ?? "build"
+      const agent = session.modeId ?? (await Agent.getDefault())
 
       const parts: Array<
         { type: "text"; text: string } | { type: "file"; url: string; filename: string; mime: string }

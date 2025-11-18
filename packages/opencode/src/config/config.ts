@@ -497,6 +497,7 @@ export namespace Config {
         .catchall(Agent)
         .optional()
         .describe("@deprecated Use `agent` field instead."),
+      default_agent: z.string().optional().describe("Default agent to use when no agent is specified"),
       agent: z
         .object({
           plan: Agent.optional(),

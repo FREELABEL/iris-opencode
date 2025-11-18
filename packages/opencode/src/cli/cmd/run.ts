@@ -224,7 +224,7 @@ export const RunCommand = cmd({
         await sdk.session.command({
           path: { id: sessionID },
           body: {
-            agent: args.agent || "build",
+            agent: args.agent || (await Agent.getDefault()),
             model: args.model,
             command: args.command,
             arguments: message,
@@ -235,7 +235,7 @@ export const RunCommand = cmd({
         await sdk.session.prompt({
           path: { id: sessionID },
           body: {
-            agent: args.agent || "build",
+            agent: args.agent || (await Agent.getDefault()),
             model: modelParam,
             parts: [...fileParts, { type: "text", text: message }],
           },
