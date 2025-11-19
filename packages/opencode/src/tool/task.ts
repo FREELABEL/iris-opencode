@@ -8,6 +8,7 @@ import { Identifier } from "../id/id"
 import { Agent } from "../agent/agent"
 import { SessionLock } from "../session/lock"
 import { SessionPrompt } from "../session/prompt"
+import { iife } from "@/util/iife"
 
 export const TaskTool = Tool.define("task", async () => {
   const agents = await Agent.list().then((x) => x.filter((a) => a.mode !== "primary"))
@@ -28,12 +29,17 @@ export const TaskTool = Tool.define("task", async () => {
     async execute(params, ctx) {
       const agent = await Agent.get(params.subagent_type)
       if (!agent) throw new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`)
-      const session = params.session_id
-        ? await Session.get(params.session_id)
-        : await Session.create({
-            parentID: ctx.sessionID,
-            title: params.description + ` (@${agent.name} subagent)`,
-          })
+      const session = await iife(async () => {
+        if (params.session_id) {
+          const found = await Session.get(params.session_id).catch(() => {})
+          if (found) return found
+        }
+
+        return await Session.create({
+          parentID: ctx.sessionID,
+          title: params.description + ` (@${agent.name} subagent)`,
+        })
+      })
       const msg = await MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID })
       if (msg.info.role !== "assistant") throw new Error("Not an assistant message")
 
@@ -95,12 +101,11 @@ export const TaskTool = Tool.define("task", async () => {
       all = await Session.messages({ sessionID: session.id })
       all = all.filter((x) => x.info.role === "assistant")
       all = all.flatMap((msg) => msg.parts.filter((x: any) => x.type === "tool") as MessageV2.ToolPart[])
-      const text = (result.parts.findLast((x: any) => x.type === "text") as any)?.text ?? ""
-      const output = text
-        ? `${text}
+      const text = result.parts.findLast((x) => x.type === "text")?.text ?? ""
 
-[task-session:${session.id}]`
-        : `[task-session:${session.id}]`
+      const output =
+        text + "\n\n" + ["<session_metadata>", `Session ID: ${session.id}`, "</session_metadata>"].join("\n")
+
       return {
         title: params.description,
         metadata: {
