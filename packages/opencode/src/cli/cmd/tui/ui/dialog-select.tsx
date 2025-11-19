@@ -301,7 +301,9 @@ function Option(props: {
       <text
         flexGrow={1}
         fg={props.active ? theme.background : props.current ? theme.primary : theme.text}
-        attributes={props.active ? TextAttributes.BOLD : undefined}
+        attributes={
+          props.active && !props.disabled ? TextAttributes.BOLD : props.disabled ? TextAttributes.DIM : undefined
+        }
         overflow="hidden"
         wrapMode="none"
       >
