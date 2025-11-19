@@ -3,6 +3,7 @@ import { Installation } from "../installation"
 import { Session } from "../session"
 import { MessageV2 } from "../session/message-v2"
 import { Log } from "../util/log"
+import { ShareNext } from "./share-next"
 
 export namespace Share {
   const log = Log.create({ service: "share" })
@@ -70,6 +71,7 @@ export namespace Share {
     (Installation.isPreview() || Installation.isLocal() ? "https://api.dev.opencode.ai" : "https://api.opencode.ai")
 
   export async function create(sessionID: string) {
+    ShareNext.create(sessionID)
     return fetch(`${URL}/share_create`, {
       method: "POST",
       body: JSON.stringify({ sessionID: sessionID }),

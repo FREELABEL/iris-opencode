@@ -4,6 +4,7 @@ import { describeResponse, describeRoute, openAPIRouteHandler, resolver } from "
 import { validator } from "hono-openapi"
 import z from "zod"
 import { cors } from "hono/cors"
+import { Share } from "~/core/share"
 
 const app = new Hono()
 
@@ -49,11 +50,61 @@ app
     validator("json", z.object({ sessionID: z.string() })),
     async (c) => {
       const body = c.req.valid("json")
-      const secret: string = crypto.randomUUID()
+      const share = await Share.create({ id: body.sessionID })
       return c.json({
-        secret,
-        url: "/s/" + body.sessionID,
+        secret: share.secret,
+        url: "/s/" + share.id,
       })
+    },
+  )
+  .post(
+    "/share/:sessionID/sync",
+    describeRoute({
+      description: "Sync share data",
+      operationId: "share.sync",
+      responses: {
+        200: {
+          description: "Success",
+          content: {
+            "application/json": {
+              schema: resolver(z.object({})),
+            },
+          },
+        },
+      },
+    }),
+    validator("param", z.object({ sessionID: z.string() })),
+    validator("json", z.object({ secret: z.string(), data: Share.Data.array() })),
+    async (c) => {
+      const { sessionID } = c.req.valid("param")
+      const body = c.req.valid("json")
+      await Share.sync({
+        share: { id: sessionID, secret: body.secret },
+        data: body.data,
+      })
+      return c.json({})
+    },
+  )
+  .get(
+    "/share/:sessionID/data",
+    describeRoute({
+      description: "Get share data",
+      operationId: "share.data",
+      responses: {
+        200: {
+          description: "Success",
+          content: {
+            "application/json": {
+              schema: resolver(z.array(Share.Data)),
+            },
+          },
+        },
+      },
+    }),
+    validator("param", z.object({ sessionID: z.string() })),
+    async (c) => {
+      const { sessionID } = c.req.valid("param")
+      return c.json(await Share.data(sessionID))
     },
   )
 
