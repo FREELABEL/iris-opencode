@@ -589,8 +589,8 @@ export type EventSessionError = {
   }
 }
 
-export type EventVcsBranchChanged = {
-  type: "vcs.branch.changed"
+export type EventVcsBranchUpdated = {
+  type: "vcs.branch.updated"
   properties: {
     branch?: string
   }
@@ -677,7 +677,7 @@ export type Event =
   | EventSessionDeleted
   | EventSessionDiff
   | EventSessionError
-  | EventVcsBranchChanged
+  | EventVcsBranchUpdated
   | EventTuiPromptAppend
   | EventTuiCommandExecute
   | EventTuiToastShow
