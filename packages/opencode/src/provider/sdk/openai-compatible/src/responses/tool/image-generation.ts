@@ -1,10 +1,10 @@
-import { createProviderDefinedToolFactoryWithOutputSchema } from '@ai-sdk/provider-utils';
-import { z } from 'zod/v4';
+import { createProviderDefinedToolFactoryWithOutputSchema } from "@ai-sdk/provider-utils"
+import { z } from "zod/v4"
 
 export const imageGenerationArgsSchema = z
   .object({
-    background: z.enum(['auto', 'opaque', 'transparent']).optional(),
-    inputFidelity: z.enum(['low', 'high']).optional(),
+    background: z.enum(["auto", "opaque", "transparent"]).optional(),
+    inputFidelity: z.enum(["low", "high"]).optional(),
     inputImageMask: z
       .object({
         fileId: z.string().optional(),
@@ -12,29 +12,29 @@ export const imageGenerationArgsSchema = z
       })
       .optional(),
     model: z.string().optional(),
-    moderation: z.enum(['auto']).optional(),
+    moderation: z.enum(["auto"]).optional(),
     outputCompression: z.number().int().min(0).max(100).optional(),
-    outputFormat: z.enum(['png', 'jpeg', 'webp']).optional(),
+    outputFormat: z.enum(["png", "jpeg", "webp"]).optional(),
     partialImages: z.number().int().min(0).max(3).optional(),
-    quality: z.enum(['auto', 'low', 'medium', 'high']).optional(),
-    size: z.enum(['1024x1024', '1024x1536', '1536x1024', 'auto']).optional(),
+    quality: z.enum(["auto", "low", "medium", "high"]).optional(),
+    size: z.enum(["1024x1024", "1024x1536", "1536x1024", "auto"]).optional(),
   })
-  .strict();
+  .strict()
 
 export const imageGenerationOutputSchema = z.object({
   result: z.string(),
-});
+})
 
 type ImageGenerationArgs = {
   /**
    * Background type for the generated image. Default is 'auto'.
    */
-  background?: 'auto' | 'opaque' | 'transparent';
+  background?: "auto" | "opaque" | "transparent"
 
   /**
    * Input fidelity for the generated image. Default is 'low'.
    */
-  inputFidelity?: 'low' | 'high';
+  inputFidelity?: "low" | "high"
 
   /**
    * Optional mask for inpainting.
@@ -44,73 +44,72 @@ type ImageGenerationArgs = {
     /**
      * File ID for the mask image.
      */
-    fileId?: string;
+    fileId?: string
 
     /**
      * Base64-encoded mask image.
      */
-    imageUrl?: string;
-  };
+    imageUrl?: string
+  }
 
   /**
    * The image generation model to use. Default: gpt-image-1.
    */
-  model?: string;
+  model?: string
 
   /**
    * Moderation level for the generated image. Default: auto.
    */
-  moderation?: 'auto';
+  moderation?: "auto"
 
   /**
    * Compression level for the output image. Default: 100.
    */
-  outputCompression?: number;
+  outputCompression?: number
 
   /**
    * The output format of the generated image. One of png, webp, or jpeg.
    * Default: png
    */
-  outputFormat?: 'png' | 'jpeg' | 'webp';
+  outputFormat?: "png" | "jpeg" | "webp"
 
   /**
    * Number of partial images to generate in streaming mode, from 0 (default value) to 3.
    */
-  partialImages?: number;
+  partialImages?: number
 
   /**
    * The quality of the generated image.
    * One of low, medium, high, or auto. Default: auto.
    */
-  quality?: 'auto' | 'low' | 'medium' | 'high';
+  quality?: "auto" | "low" | "medium" | "high"
 
   /**
    * The size of the generated image.
    * One of 1024x1024, 1024x1536, 1536x1024, or auto.
    * Default: auto.
    */
-  size?: 'auto' | '1024x1024' | '1024x1536' | '1536x1024';
-};
+  size?: "auto" | "1024x1024" | "1024x1536" | "1536x1024"
+}
 
-const imageGenerationToolFactory =
-  createProviderDefinedToolFactoryWithOutputSchema<
-    {},
-    {
-      /**
-       * The generated image encoded in base64.
-       */
-      result: string;
-    },
-    ImageGenerationArgs
-  >({
-    id: 'openai.image_generation',
-    name: 'image_generation',
-    inputSchema: z.object({}),
-    outputSchema: imageGenerationOutputSchema,
-  });
+const imageGenerationToolFactory = createProviderDefinedToolFactoryWithOutputSchema<
+  {},
+  {
+    /**
+     * The generated image encoded in base64.
+     */
+    result: string
+  },
+  ImageGenerationArgs
+>({
+  id: "openai.image_generation",
+  name: "image_generation",
+  inputSchema: z.object({}),
+  outputSchema: imageGenerationOutputSchema,
+})
 
 export const imageGeneration = (
   args: ImageGenerationArgs = {}, // default
 ) => {
-  return imageGenerationToolFactory(args);
-};
+  return imageGenerationToolFactory(args)
+}
