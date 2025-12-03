@@ -6,7 +6,7 @@ import { Config } from "../config/config"
 import { Flag } from "../flag/flag"
 import { Identifier } from "../id/id"
 import { Installation } from "../installation"
-import { Share } from "../share/share"
+
 import { Storage } from "../storage/storage"
 import { Log } from "../util/log"
 import { MessageV2 } from "./message-v2"
@@ -15,8 +15,8 @@ import { SessionPrompt } from "./prompt"
 import { fn } from "@/util/fn"
 import { Command } from "../command"
 import { Snapshot } from "@/snapshot"
-import { ShareNext } from "@/share/share-next"
-import { Provider } from "@/provider/provider"
+
+import type { Provider } from "@/provider/provider"
 
 export namespace Session {
   const log = Log.create({ service: "session" })
@@ -223,6 +223,7 @@ export namespace Session {
     }
 
     if (cfg.enterprise?.url) {
+      const { ShareNext } = await import("@/share/share-next")
       const share = await ShareNext.create(id)
       await update(id, (draft) => {
         draft.share = {
@@ -233,6 +234,7 @@ export namespace Session {
 
     const session = await get(id)
     if (session.share) return session.share
+    const { Share } = await import("../share/share")
     const share = await Share.create(id)
     await update(id, (draft) => {
       draft.share = {
@@ -253,6 +255,7 @@ export namespace Session {
   export const unshare = fn(Identifier.schema("session"), async (id) => {
     const cfg = await Config.get()
     if (cfg.enterprise?.url) {
+      const { ShareNext } = await import("@/share/share-next")
       await ShareNext.remove(id)
       await update(id, (draft) => {
         draft.share = undefined
@@ -264,6 +267,7 @@ export namespace Session {
     await update(id, (draft) => {
       draft.share = undefined
     })
+    const { Share } = await import("../share/share")
     await Share.remove(id, share.secret)
   })
 
@@ -389,7 +393,7 @@ export namespace Session {
 
   export const getUsage = fn(
     z.object({
-      model: Provider.Model,
+      model: z.custom<Provider.Model>(),
       usage: z.custom<LanguageModelUsage>(),
       metadata: z.custom<ProviderMetadata>().optional(),
     }),
