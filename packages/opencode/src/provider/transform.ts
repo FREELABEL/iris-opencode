@@ -227,11 +227,12 @@ export namespace ProviderTransform {
       result["promptCacheKey"] = sessionID
     }
 
-    if (
-      model.providerID === "google" ||
-      (model.providerID.startsWith("opencode") && model.api.id.includes("gemini-3"))
-    ) {
+    if (model.api.npm === "@openrouter/ai-sdk-provider" && model.api.id.includes("gemini-3")) {
+      result["reasoning"] = { effort: "high" }
+    }
+    if (model.api.npm === "@ai-sdk/google" || model.api.npm === "@ai-sdk/google-vertex") {
       result["thinkingConfig"] = {
+        thinkingLevel: "high",
         includeThoughts: true,
       }
     }
