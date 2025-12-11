@@ -3,6 +3,7 @@ import { unique } from "remeda"
 import type { JSONSchema } from "zod/v4/core"
 import type { Provider } from "./provider"
 import type { ModelsDev } from "./models"
+import type { MessageV2 } from "@/session/message-v2"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -208,6 +209,38 @@ export namespace ProviderTransform {
   export function topP(model: Provider.Model) {
     if (model.api.id.toLowerCase().includes("qwen")) return 1
     return undefined
+  }
+
+  export function thinking(model: Provider.Model, thinking: MessageV2.Thinking) {
+    if (!model.capabilities.reasoning) return undefined
+
+    switch (model.api.npm) {
+      case "@openrouter/ai-sdk-provider":
+        return {
+          reasoning: { effort: thinking.effort },
+        }
+      case "@ai-sdk/openai-compatible":
+        const result: Record<string, any> = {
+          reasoningEffort: thinking.effort,
+        }
+
+        if (model.providerID === "baseten") {
+          result["chat_template_args"] = { enable_thinking: true }
+        }
+
+        return result
+
+      case "@ai-sdk/openai":
+        return {
+          reasoningEffort: thinking.effort,
+          reasoningSummary: "auto",
+          include: ["reasoning.encrypted_content"],
+        }
+
+      case "@ai-sdk/anthropic":
+        // TODO: map to thinking budgets
+        return {}
+    }
   }
 
   export function options(
