@@ -1365,7 +1365,7 @@ export namespace SessionPrompt {
     })
 
     if (aborted) {
-      output += "\n\nUser aborted the command"
+      output += ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
     }
     msg.time.completed = Date.now()
     await Session.updateMessage(msg)
