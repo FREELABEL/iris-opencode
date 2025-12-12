@@ -404,10 +404,6 @@ export namespace SessionPrompt {
           messages: msgs,
           parentID: lastUser.id,
           abort,
-          model: {
-            providerID: model.providerID,
-            modelID: model.id,
-          },
           sessionID,
           auto: task.auto,
         })

@@ -5,7 +5,6 @@ import { Identifier } from "../id/id"
 import { Instance } from "../project/instance"
 import { Provider } from "../provider/provider"
 import { MessageV2 } from "./message-v2"
-import { SystemPrompt } from "./system"
 import z from "zod"
 import { SessionPrompt } from "./prompt"
 import { Flag } from "../flag/flag"
@@ -87,16 +86,14 @@ export namespace SessionCompaction {
     parentID: string
     messages: MessageV2.WithParts[]
     sessionID: string
-    model: {
-      providerID: string
-      modelID: string
-    }
     abort: AbortSignal
     auto: boolean
   }) {
+    const userMessage = input.messages.findLast((m) => m.info.id === input.parentID)!.info as MessageV2.User
     const agent = await Agent.get("compaction")
-    const model = await Provider.getModel(input.model.providerID, input.model.modelID)
-    const system = [...SystemPrompt.compaction(model.providerID)]
+    const model = agent.model
+      ? await Provider.getModel(agent.model.providerID, agent.model.modelID)
+      : await Provider.getModel(userMessage.model.providerID, userMessage.model.modelID)
     const msg = (await Session.updateMessage({
       id: Identifier.ascending("message"),
       role: "assistant",
@@ -116,7 +113,7 @@ export namespace SessionCompaction {
         reasoning: 0,
         cache: { read: 0, write: 0 },
       },
-      modelID: input.model.modelID,
+      modelID: model.id,
       providerID: model.providerID,
       time: {
         created: Date.now(),
@@ -125,16 +122,16 @@ export namespace SessionCompaction {
     const processor = SessionProcessor.create({
       assistantMessage: msg,
       sessionID: input.sessionID,
-      model: model,
+      model,
       abort: input.abort,
     })
     const result = await processor.process({
-      user: input.messages.findLast((m) => m.info.id === input.parentID)!.info as MessageV2.User,
+      user: userMessage,
       agent,
       abort: input.abort,
       sessionID: input.sessionID,
       tools: {},
-      system,
+      system: [],
       messages: [
         ...MessageV2.toModelMessage(input.messages),
         {
@@ -158,8 +155,8 @@ export namespace SessionCompaction {
         time: {
           created: Date.now(),
         },
-        agent: input.agent,
-        model: input.model,
+        agent: userMessage.agent,
+        model: userMessage.model,
       })
       await Session.updatePart({
         id: Identifier.ascending("part"),

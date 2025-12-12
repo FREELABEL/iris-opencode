@@ -2,10 +2,12 @@ import { Config } from "../config/config"
 import z from "zod"
 import { Provider } from "../provider/provider"
 import { generateObject, type ModelMessage } from "ai"
-import PROMPT_GENERATE from "./generate.txt"
 import { SystemPrompt } from "../session/system"
 import { Instance } from "../project/instance"
 import { mergeDeep } from "remeda"
+
+import PROMPT_GENERATE from "./generate.txt"
+import PROMPT_COMPACTION from "./prompt/compaction.txt"
 
 export namespace Agent {
   export const Info = z
@@ -148,6 +150,17 @@ export namespace Agent {
         permission: agentPermission,
         mode: "subagent",
         internal: true,
+      },
+      compaction: {
+        name: "compaction",
+        mode: "primary",
+        internal: true,
+        prompt: PROMPT_COMPACTION,
+        tools: {
+          "*": false,
+        },
+        options: {},
+        permission: agentPermission,
       },
       build: {
         name: "build",

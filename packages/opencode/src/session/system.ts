@@ -119,15 +119,6 @@ export namespace SystemPrompt {
     return Promise.all(found).then((result) => result.filter(Boolean))
   }
 
-  export function compaction(providerID: string) {
-    switch (providerID) {
-      case "anthropic":
-        return [PROMPT_COMPACTION]
-      default:
-        return [PROMPT_COMPACTION]
-    }
-  }
-
   export function summarize(providerID: string) {
     switch (providerID) {
       case "anthropic":
