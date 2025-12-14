@@ -10,6 +10,7 @@ import type { MessageV2 } from "./message-v2"
 import { Plugin } from "@/plugin"
 import { SystemPrompt } from "./system"
 import { ToolRegistry } from "@/tool/registry"
+import { Flag } from "@/flag/flag"
 
 export namespace LLM {
   const log = Log.create({ service: "llm" })
@@ -133,6 +134,7 @@ export namespace LLM {
               "x-opencode-project": Instance.project.id,
               "x-opencode-session": input.sessionID,
               "x-opencode-request": input.user.id,
+              "x-opencode-client": Flag.OPENCODE_CLIENT,
             }
           : undefined),
         ...input.model.headers,
