@@ -1,17 +1,8 @@
 #!/usr/bin/env bun
 import { $ } from "bun"
 import { Script } from "@opencode-ai/script"
-import { collectBinaries, collectTargets } from "./utils"
 
 if (!Script.preview) {
-  for (const key of Object.keys(collectBinaries(collectTargets()))) {
-    if (key.includes("linux")) {
-      await $`cd dist/${key}/bin && tar -czf ../../${key}.tar.gz *`
-    } else {
-      await $`cd dist/${key}/bin && zip -r ../../${key}.zip *`
-    }
-  }
-
   // Calculate SHA values
   const arm64Sha = await $`sha256sum ./dist/opencode-linux-arm64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
   const x64Sha = await $`sha256sum ./dist/opencode-linux-x64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
