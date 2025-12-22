@@ -15,8 +15,12 @@
         "groups": [
           {
             "group": "Getting started",
-            "pages": ["index", "quickstart", "agent-skills", "development"],
+            "pages": ["index", "quickstart", "development"],
             "openapi": "https://opencode.ai/openapi.json"
+          },
+          {
+            "group": "Reference",
+            "pages": ["skills"]
           }
         ]
       }
