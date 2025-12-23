@@ -34,11 +34,15 @@ export const DialogManageModels: Component = () => {
         }}
       >
         {(i) => (
-          <div
-            class="w-full flex items-center justify-between gap-x-3"
-            classList={{ "text-text-weak": !local.model.visible({ modelID: i.id, providerID: i.provider.id }) }}
-          >
-            <span>{i.name}</span>
+          <div class="w-full flex items-center justify-between gap-x-3">
+            <span
+              classList={{
+                "text-gradient-default": !local.model.visible({ modelID: i.id, providerID: i.provider.id }),
+                "text-gradient-active": !!local.model.visible({ modelID: i.id, providerID: i.provider.id }),
+              }}
+            >
+              {i.name}
+            </span>
             <div onClick={(e) => e.stopPropagation()}>
               <Switch
                 checked={
