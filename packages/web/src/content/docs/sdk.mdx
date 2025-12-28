@@ -281,6 +281,28 @@ await client.session.prompt({
 
 ---
 
+### Permissions
+
+| Method              | Description              | Response                                                 |
+| ------------------- | ------------------------ | -------------------------------------------------------- |
+| `permission.list()` | List pending permissions | Returns <a href={typesUrl}><code>Permission[]</code></a> |
+
+---
+
+#### Examples
+
+```javascript
+// List pending permission requests across all sessions
+const pending = await client.permission.list()
+
+// Optionally, scope the request to a specific directory
+await client.permission.list({
+  directory: "/path/to/project",
+})
+```
+
+---
+
 ### Files
 
 | Method                    | Description                  | Response                                                                                    |
