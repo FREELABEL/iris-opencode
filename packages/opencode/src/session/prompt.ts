@@ -90,6 +90,7 @@ export namespace SessionPrompt {
     noReply: z.boolean().optional(),
     tools: z.record(z.string(), z.boolean()).optional(),
     system: z.string().optional(),
+    thinking: MessageV2.Thinking.optional(),
     parts: z.array(
       z.discriminatedUnion("type", [
         MessageV2.TextPart.omit({
@@ -727,6 +728,7 @@ export namespace SessionPrompt {
       agent: agent.name,
       model: input.model ?? agent.model ?? (await lastModel(input.sessionID)),
       system: input.system,
+      thinking: input.thinking,
     }
 
     const parts = await Promise.all(

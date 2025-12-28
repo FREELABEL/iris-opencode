@@ -336,7 +336,7 @@ export namespace ProviderTransform {
         include: true,
       }
       if (model.api.id.includes("gemini-3")) {
-        result["reasoning"] = { effort: "high" }
+        // result["reasoning"] = { effort: "high" }
       }
     }
 
@@ -356,7 +356,7 @@ export namespace ProviderTransform {
         includeThoughts: true,
       }
       if (model.api.id.includes("gemini-3")) {
-        result["thinkingConfig"]["thinkingLevel"] = "high"
+        // result["thinkingConfig"]["thinkingLevel"] = "high"
       }
     }
 
@@ -366,7 +366,7 @@ export namespace ProviderTransform {
       }
 
       if (!model.api.id.includes("codex") && !model.api.id.includes("gpt-5-pro")) {
-        result["reasoningEffort"] = "medium"
+        // result["reasoningEffort"] = "medium"
       }
 
       if (model.api.id.endsWith("gpt-5.") && model.providerID !== "azure") {
