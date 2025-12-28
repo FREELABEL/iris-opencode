@@ -253,12 +253,20 @@ export namespace ProviderTransform {
           reasoning: { effort: thinking.effort },
         }
 
+      // TODO: YOU CANNOT SET max_tokens if this is set!!!
+      case "@ai-sdk/gateway":
+        return {
+          reasoningEffort: thinking.effort,
+        }
+
+      case "@ai-sdk/cerebras":
+      // https://v5.ai-sdk.dev/providers/ai-sdk-providers/cerebras
+      case "@ai-sdk/togetherai":
+      // https://v5.ai-sdk.dev/providers/ai-sdk-providers/togetherai
       case "@ai-sdk/xai":
       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/xai
       case "@ai-sdk/deepinfra":
       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/deepinfra
-      case "@ai-sdk/azure":
-      // https://v5.ai-sdk.dev/providers/ai-sdk-providers/azure
       case "@ai-sdk/openai-compatible":
         const result: Record<string, any> = {
           reasoningEffort: thinking.effort,
@@ -270,6 +278,8 @@ export namespace ProviderTransform {
 
         return result
 
+      case "@ai-sdk/azure":
+      // https://v5.ai-sdk.dev/providers/ai-sdk-providers/azure
       case "@ai-sdk/openai":
         return {
           reasoningEffort: thinking.effort,
@@ -282,25 +292,38 @@ export namespace ProviderTransform {
         return {}
 
       case "@ai-sdk/amazon-bedrock":
-        // TODO: implement bedrock thinking options
-        return {}
-      case "@ai-sdk/google":
-        // TODO: implement google thinking options
-        return {}
+        // https://v5.ai-sdk.dev/providers/ai-sdk-providers/amazon-bedrock
+        return {
+          reasoningConfig: {
+            type: "enabled",
+            maxReasoningEffort: thinking.effort,
+          },
+        }
+
       case "@ai-sdk/google-vertex":
-        // TODO: implement google-vertex thinking options
-        return {}
-      case "@ai-sdk/gateway":
-        // TODO: implement gateway thinking options
-        return {}
+      // https://v5.ai-sdk.dev/providers/ai-sdk-providers/google-vertex
+      case "@ai-sdk/google":
+        // https://v5.ai-sdk.dev/providers/ai-sdk-providers/google-generative-ai
+        if (model.id.includes("2.5")) {
+          return {
+            thinkingConfig: {
+              includeThoughts: true,
+              thinkingBudget: thinking.effort === "medium" ? 8192 : 24576,
+            },
+          }
+        }
+        return {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: thinking.effort,
+          },
+        }
+
       case "@ai-sdk/mistral":
         // TODO: implement mistral thinking options
         // https://v5.ai-sdk.dev/providers/ai-sdk-providers/mistral
         return {}
 
-      case "@ai-sdk/cerebras":
-        // TODO: implement cerebras thinking options
-        return {}
       case "@ai-sdk/cohere":
         // TODO: implement cohere thinking options
         // https://v5.ai-sdk.dev/providers/ai-sdk-providers/cohere
@@ -315,10 +338,6 @@ export namespace ProviderTransform {
 
       case "@ai-sdk/perplexity":
         // https://v5.ai-sdk.dev/providers/ai-sdk-providers/perplexity
-        return {}
-
-      case "@ai-sdk/togetherai":
-        // https://v5.ai-sdk.dev/providers/ai-sdk-providers/togetherai
         return {}
     }
     return {}
@@ -416,6 +435,7 @@ export namespace ProviderTransform {
         return {
           ["anthropic" as string]: options,
         }
+      case "@ai-sdk/google-vertex":
       case "@ai-sdk/google":
         return {
           ["google" as string]: options,
