@@ -49,7 +49,7 @@ function EditBody(props: { request: PermissionRequest }) {
         <text fg={theme.textMuted}>Edit {normalizePath(filepath())}</text>
       </box>
       <Show when={diff()}>
-        <box>
+        <box maxHeight={Math.floor(dimensions().height / 4)} overflow="scroll">
           <diff
             diff={diff()}
             view={view()}
@@ -252,7 +252,9 @@ function Prompt<const T extends Record<string, string>>(props: {
       </box>
       <box
         flexDirection="row"
+        flexShrink={0}
         gap={1}
+        paddingTop={1}
         paddingLeft={2}
         paddingRight={3}
         paddingBottom={1}

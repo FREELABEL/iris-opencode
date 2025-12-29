@@ -1112,7 +1112,7 @@ export function Session() {
                 <Match when={permissions().length > 0}>
                   <PermissionPrompt request={permissions()[0]} />
                 </Match>
-                <Match when={true}>
+                <Match when={!session()?.parentID}>
                   <Prompt
                     ref={(r) => {
                       prompt = r
@@ -1537,8 +1537,10 @@ function InlineTool(props: { icon: string; complete: any; pending: string; child
   )
 }
 
-function BlockTool(props: { title: string; children: JSX.Element }) {
+function BlockTool(props: { title: string; children: JSX.Element; onClick?: () => void }) {
   const { theme } = useTheme()
+  const renderer = useRenderer()
+  const [hover, setHover] = createSignal(false)
   return (
     <box
       border={["left"]}
@@ -1547,9 +1549,15 @@ function BlockTool(props: { title: string; children: JSX.Element }) {
       paddingLeft={2}
       marginTop={1}
       gap={1}
-      backgroundColor={theme.backgroundPanel}
+      backgroundColor={hover() ? theme.backgroundMenu : theme.backgroundPanel}
       customBorderChars={SplitBorder.customBorderChars}
       borderColor={theme.background}
+      onMouseOver={() => props.onClick && setHover(true)}
+      onMouseOut={() => setHover(false)}
+      onMouseUp={() => {
+        if (renderer.getSelection()?.getSelectedText()) return
+        props.onClick?.()
+      }}
     >
       <text paddingLeft={3} fg={theme.textMuted}>
         {props.title}
@@ -1697,13 +1705,21 @@ function WebSearch(props: ToolProps<any>) {
 function Task(props: ToolProps<typeof TaskTool>) {
   const { theme } = useTheme()
   const keybind = useKeybind()
+  const { navigate } = useRoute()
 
   const current = createMemo(() => props.metadata.summary?.findLast((x) => x.state.status !== "pending"))
 
   return (
     <Switch>
       <Match when={props.metadata.summary?.length}>
-        <BlockTool title={"# " + Locale.titlecase(props.input.subagent_type ?? "unknown") + " Task"}>
+        <BlockTool
+          title={"# " + Locale.titlecase(props.input.subagent_type ?? "unknown") + " Task"}
+          onClick={
+            props.metadata.sessionId
+              ? () => navigate({ type: "session", sessionID: props.metadata.sessionId! })
+              : undefined
+          }
+        >
           <box>
             <text style={{ fg: theme.textMuted }}>
               {props.input.description} ({props.metadata.summary?.length} toolcalls)
