@@ -329,9 +329,16 @@ export namespace ProviderTransform {
         return {}
 
       case "@ai-sdk/cohere":
-        // TODO: implement cohere thinking options
         // https://v5.ai-sdk.dev/providers/ai-sdk-providers/cohere
-        return {}
+        const res: Record<string, any> = {
+          thinking: {
+            type: "enabled",
+          },
+        }
+        if (thinking.effort === "medium") {
+          res["thinking"]["budgetTokens"] = 8192
+        }
+        return res
 
       case "@ai-sdk/groq":
         // https://v5.ai-sdk.dev/providers/ai-sdk-providers/groq
