@@ -115,11 +115,15 @@ async function summarizeCommit(
   sessionId: string,
   message: string,
 ): Promise<string> {
+  console.log("summarizing commit:", message)
   const result = await opencode.client.session
     .prompt({
       path: { id: sessionId },
       body: {
         model: { providerID: "opencode", modelID: "claude-sonnet-4-5" },
+        tools: {
+          "*": false,
+        },
         parts: [
           {
             type: "text",
@@ -192,7 +196,7 @@ export async function buildNotes(from: string, to: string) {
 
   console.log("generating changelog since " + from)
 
-  const opencode = await createOpencode()
+  const opencode = await createOpencode({ port: 5044 })
   const notes: string[] = []
 
   try {
