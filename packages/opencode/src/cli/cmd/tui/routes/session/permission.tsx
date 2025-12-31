@@ -75,14 +75,16 @@ function EditBody(props: { request: PermissionRequest }) {
   )
 }
 
-function TextBody(props: { title: string; description?: string; icon: string }) {
+function TextBody(props: { title: string; description?: string; icon?: string }) {
   const { theme } = useTheme()
   return (
     <>
       <box flexDirection="row" gap={1} paddingLeft={1}>
-        <text fg={theme.textMuted} flexShrink={0}>
-          {props.icon}
-        </text>
+        <Show when={props.icon}>
+          <text fg={theme.textMuted} flexShrink={0}>
+            {props.icon}
+          </text>
+        </Show>
         <text fg={theme.textMuted}>{props.title}</text>
       </box>
       <Show when={props.description}>
@@ -113,12 +115,33 @@ export function PermissionPrompt(props: { request: PermissionRequest }) {
     return {}
   })
 
+  const { theme } = useTheme()
+
   return (
     <Switch>
       <Match when={store.always}>
         <Prompt
           title="Always allow"
-          body={<TextBody icon="→" title={props.request.always.join("\n")} />}
+          body={
+            <Switch>
+              <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
+                <TextBody title={"Are you sure you want to always allow " + props.request.permission + "?"} />
+              </Match>
+              <Match when={true}>
+                <box paddingLeft={1} gap={1}>
+                  <text fg={theme.textMuted}>Applies to the following patterns</text>
+                  <For each={props.request.always}>
+                    {(pattern) => (
+                      <text fg={theme.text}>
+                        {"- "}
+                        {pattern}
+                      </text>
+                    )}
+                  </For>
+                </box>
+              </Match>
+            </Switch>
+          }
           options={{ confirm: "Confirm", cancel: "Cancel" }}
           onSelect={(option) => {
             if (option === "cancel") {
