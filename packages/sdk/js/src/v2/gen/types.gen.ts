@@ -639,6 +639,16 @@ export type EventCommandExecuted = {
   }
 }
 
+export type PermissionAction = "allow" | "deny" | "ask"
+
+export type PermissionRule = {
+  permission: string
+  pattern: string
+  action: PermissionAction
+}
+
+export type PermissionRuleset = Array<PermissionRule>
+
 export type Session = {
   id: string
   projectID: string
@@ -661,6 +671,7 @@ export type Session = {
     compacting?: number
     archived?: number
   }
+  permission?: PermissionRuleset
   revert?: {
     messageID: string
     partID?: string
@@ -1895,16 +1906,6 @@ export type File = {
   status: "added" | "deleted" | "modified"
 }
 
-export type PermissionAction = "allow" | "deny" | "ask"
-
-export type PermissionRule = {
-  permission: string
-  pattern: string
-  action: PermissionAction
-}
-
-export type PermissionRuleset = Array<PermissionRule>
-
 export type Agent = {
   name: string
   description?: string
@@ -2467,6 +2468,7 @@ export type SessionCreateData = {
   body?: {
     parentID?: string
     title?: string
+    permission?: PermissionRuleset
   }
   path?: never
   query?: {
@@ -2982,6 +2984,9 @@ export type SessionPromptData = {
     }
     agent?: string
     noReply?: boolean
+    /**
+     * @deprecated tools and permissions have been merged, you can set permissions on the session itself now
+     */
     tools?: {
       [key: string]: boolean
     }
@@ -3166,6 +3171,9 @@ export type SessionPromptAsyncData = {
     }
     agent?: string
     noReply?: boolean
+    /**
+     * @deprecated tools and permissions have been merged, you can set permissions on the session itself now
+     */
     tools?: {
       [key: string]: boolean
     }

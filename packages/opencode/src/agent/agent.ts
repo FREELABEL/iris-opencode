@@ -11,7 +11,7 @@ import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { PermissionNext } from "@/permission/next"
-import { mergeDeep } from "remeda"
+import { mergeDeep, pipe, sortBy, values } from "remeda"
 
 export namespace Agent {
   export const Info = z
@@ -194,7 +194,12 @@ export namespace Agent {
   }
 
   export async function list() {
-    return state().then((x) => Object.values(x))
+    const cfg = await Config.get()
+    return pipe(
+      await state(),
+      values(),
+      sortBy([(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"]),
+    )
   }
 
   export async function defaultAgent() {

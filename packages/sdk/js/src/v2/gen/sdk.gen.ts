@@ -59,6 +59,7 @@ import type {
   PermissionReplyResponses,
   PermissionRespondErrors,
   PermissionRespondResponses,
+  PermissionRuleset,
   ProjectCurrentResponses,
   ProjectListResponses,
   ProjectUpdateErrors,
@@ -730,6 +731,7 @@ export class Session extends HeyApiClient {
       directory?: string
       parentID?: string
       title?: string
+      permission?: PermissionRuleset
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -741,6 +743,7 @@ export class Session extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "body", key: "parentID" },
             { in: "body", key: "title" },
+            { in: "body", key: "permission" },
           ],
         },
       ],

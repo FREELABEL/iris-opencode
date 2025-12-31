@@ -50,6 +50,28 @@ export const TaskTool = Tool.define("task", async () => {
         return await Session.create({
           parentID: ctx.sessionID,
           title: params.description + ` (@${agent.name} subagent)`,
+          permission: [
+            {
+              permission: "todowrite",
+              pattern: "*",
+              action: "deny",
+            },
+            {
+              permission: "todoread",
+              pattern: "*",
+              action: "deny",
+            },
+            {
+              permission: "task",
+              pattern: "*",
+              action: "deny",
+            },
+            ...(config.experimental?.primary_tools?.map((t) => ({
+              pattern: "*",
+              action: "allow" as const,
+              permission: t,
+            })) ?? []),
+          ],
         })
       })
       const msg = await MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID })
@@ -112,7 +134,6 @@ export const TaskTool = Tool.define("task", async () => {
           todoread: false,
           task: false,
           ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((t) => [t, false])),
-          ...agent.tools,
         },
         parts: promptParts,
       })

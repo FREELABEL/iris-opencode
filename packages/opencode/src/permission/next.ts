@@ -189,7 +189,9 @@ export namespace PermissionNext {
             action: "allow",
           })
         }
-        await Storage.write(["permission", projectID], s.approved)
+        // TODO: we don't save the permission ruleset to disk yet until there's
+        // UI to manage it
+        // await Storage.write(["permission", projectID], s.approved)
         existing.resolve()
         return
       }

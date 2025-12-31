@@ -89,7 +89,12 @@ export namespace SessionPrompt {
       .optional(),
     agent: z.string().optional(),
     noReply: z.boolean().optional(),
-    tools: z.record(z.string(), z.boolean()).optional(),
+    tools: z
+      .record(z.string(), z.boolean())
+      .optional()
+      .describe(
+        "@deprecated tools and permissions have been merged, you can set permissions on the session itself now",
+      ),
     system: z.string().optional(),
     variant: z.string().optional(),
     parts: z.array(
@@ -145,6 +150,23 @@ export namespace SessionPrompt {
 
     const message = await createUserMessage(input)
     await Session.touch(input.sessionID)
+
+    // this is backwards compatibility for allowing `tools` to be specified when
+    // prompting
+    const permissions: PermissionNext.Ruleset = []
+    for (const [tool, enabled] of Object.entries(input.tools ?? {})) {
+      permissions.push({
+        permission: tool,
+        action: enabled ? "allow" : "deny",
+        pattern: "*",
+      })
+    }
+    if (permissions.length > 0) {
+      session.permission = permissions
+      await Session.update(session.id, (draft) => {
+        draft.permission = permissions
+      })
+    }
 
     if (input.noReply === true) {
       return message
@@ -372,7 +394,7 @@ export namespace SessionPrompt {
             await PermissionNext.ask({
               ...req,
               sessionID: sessionID,
-              ruleset: taskAgent.permission,
+              ruleset: PermissionNext.merge(taskAgent.permission, session.permission ?? []),
             })
           },
         }
@@ -626,7 +648,7 @@ export namespace SessionPrompt {
           ...req,
           sessionID: input.session.parentID ?? input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-          ruleset: input.agent.permission,
+          ruleset: PermissionNext.merge(input.agent.permission, input.session.permission ?? []),
         })
       },
     })
