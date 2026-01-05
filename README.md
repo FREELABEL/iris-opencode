@@ -1,52 +1,40 @@
 <p align="center">
-  <a href="https://opencode.ai">
+  <a href="https://heyiris.io">
     <picture>
       <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
       <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
+      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="IRIS Code logo">
     </picture>
   </a>
 </p>
-<p align="center">The open source AI coding agent.</p>
+<p align="center"><strong>IRIS Code</strong> - AI-powered coding agent for the IRIS platform.</p>
 <p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
+  <a href="https://github.com/FREELABEL/iris-opencode"><img alt="GitHub" src="https://img.shields.io/badge/github-FREELABEL/iris--opencode-blue?style=flat-square" /></a>
 </p>
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+[![IRIS Code Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://heyiris.io)
 
 ---
 
 ### Installation
 
 ```bash
-# YOLO
-curl -fsSL https://opencode.ai/install | bash
+# One-line install (recommended)
+curl -fsSL https://raw.githubusercontent.com/FREELABEL/iris-opencode/main/install | bash
 
-# Package managers
-npm i -g opencode-ai@latest        # or bun/pnpm/yarn
-scoop bucket add extras; scoop install extras/opencode  # Windows
-choco install opencode             # Windows
-brew install opencode              # macOS and Linux
-paru -S opencode-bin               # Arch Linux
-mise use -g opencode               # Any OS
-nix run nixpkgs#opencode           # or github:anomalyco/opencode for latest dev branch
+# Or as part of the full IRIS SDK
+curl -fsSL https://heyiris.io/install-iris.sh | bash
 ```
 
-> [!TIP]
-> Remove versions older than 0.1.x before installing.
+> [!NOTE]
+> IRIS Code is a customized fork of [OpenCode](https://github.com/anomalyco/opencode), optimized for the IRIS platform.
 
-### Desktop App (BETA)
+### What is IRIS Code?
 
-OpenCode is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/opencode/releases) or [opencode.ai/download](https://opencode.ai/download).
-
-| Platform              | Download                              |
-| --------------------- | ------------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-darwin-aarch64.dmg` |
-| macOS (Intel)         | `opencode-desktop-darwin-x64.dmg`     |
-| Windows               | `opencode-desktop-windows-x64.exe`    |
-| Linux                 | `.deb`, `.rpm`, or AppImage           |
+IRIS Code is an AI-powered coding assistant that runs in your terminal. It can:
+- Read, write, and execute code autonomously
+- Work with multiple AI providers (Claude, GPT, local models)
+- Integrate seamlessly with the IRIS SDK and platform
 
 ```bash
 # macOS (Homebrew)
