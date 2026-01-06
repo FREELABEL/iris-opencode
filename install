@@ -447,11 +447,19 @@ echo -e ""
 echo -e "${MUTED}For more information visit ${NC}https://heyiris.io/developer"
 echo -e ""
 
-# Add to PATH for current session and launch
+# Add to PATH for current session
 export PATH="$INSTALL_DIR:$PATH"
 
-echo -e "${MUTED}Starting IRIS Code...${NC}"
-echo -e ""
-
-# Launch IRIS Code
-exec "$INSTALL_DIR/iris"
+# Only auto-launch if we have a proper TTY (not piped from curl)
+if [ -t 0 ]; then
+    echo -e "${MUTED}Starting IRIS Code...${NC}"
+    echo -e ""
+    exec "$INSTALL_DIR/iris"
+else
+    echo -e "${MUTED}To start IRIS Code, run:${NC}"
+    echo -e ""
+    echo -e "  ${CYAN}iris${NC}"
+    echo -e ""
+    echo -e "${MUTED}(Open a new terminal or run: ${NC}export PATH=\"\$HOME/.iris/bin:\$PATH\"${MUTED})${NC}"
+    echo -e ""
+fi
