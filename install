@@ -442,11 +442,16 @@ echo -e "${CYAN}██║██║  ██║██║███████║${
 echo -e "${CYAN}╚═╝╚═╝  ╚═╝╚═╝╚══════╝${NC}    ${MUTED} ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝${NC}"
 echo -e ""
 echo -e ""
-echo -e "${MUTED}IRIS Code includes free AI models. To start:${NC}"
-echo -e ""
-echo -e "cd <project>  ${MUTED}# Navigate to your project${NC}"
-echo -e "iris          ${MUTED}# Run IRIS Code${NC}"
+echo -e "${MUTED}IRIS Code includes free AI models.${NC}"
 echo -e ""
 echo -e "${MUTED}For more information visit ${NC}https://heyiris.io/developer"
 echo -e ""
+
+# Add to PATH for current session and launch
+export PATH="$INSTALL_DIR:$PATH"
+
+echo -e "${MUTED}Starting IRIS Code...${NC}"
 echo -e ""
+
+# Launch IRIS Code
+exec "$INSTALL_DIR/iris"
