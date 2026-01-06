@@ -10,8 +10,8 @@ process.chdir(dir)
 const { binaries } = await import("./build.ts")
 {
   const name = `${pkg.name}-${process.platform}-${process.arch}`
-  console.log(`smoke test: running dist/${name}/bin/opencode --version`)
-  await $`./dist/${name}/bin/opencode --version`
+  console.log(`smoke test: running dist/${name}/bin/iris --version`)
+  await $`./dist/${name}/bin/iris --version`
 }
 
 await $`mkdir -p ./dist/${pkg.name}`
@@ -21,9 +21,9 @@ await $`cp ./script/postinstall.mjs ./dist/${pkg.name}/postinstall.mjs`
 await Bun.file(`./dist/${pkg.name}/package.json`).write(
   JSON.stringify(
     {
-      name: pkg.name + "-ai",
+      name: "iris-code",
       bin: {
-        [pkg.name]: `./bin/${pkg.name}`,
+        iris: `./bin/iris`,
       },
       scripts: {
         postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs",
@@ -62,7 +62,7 @@ if (!Script.preview) {
     }
   }
 
-  const image = "ghcr.io/anomalyco/opencode"
+  const image = "ghcr.io/freelabel/iris-code"
   const platforms = "linux/amd64,linux/arm64"
   const tags = [`${image}:${Script.version}`, `${image}:latest`]
   const tagFlags = tags.flatMap((t) => ["-t", t])

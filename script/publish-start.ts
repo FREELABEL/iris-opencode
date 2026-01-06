@@ -35,7 +35,7 @@ await Bun.file(extensionToml).write(toml)
 
 await $`bun install`
 
-console.log("\n=== opencode ===\n")
+console.log("\n=== iris-code ===\n")
 await import(`../packages/opencode/script/publish.ts`)
 
 console.log("\n=== sdk ===\n")
