@@ -450,18 +450,16 @@ echo -e ""
 # Add to PATH for current session
 export PATH="$INSTALL_DIR:$PATH"
 
-# Auto-launch IRIS Code
-echo -e "${MUTED}Starting IRIS Code...${NC}"
-echo -e ""
-
-# If piped from curl, redirect stdin from /dev/tty so TUI works
+# Auto-launch only if we have a proper TTY
 if [ -t 0 ]; then
+    echo -e "${MUTED}Starting IRIS Code...${NC}"
+    echo -e ""
     exec "$INSTALL_DIR/iris"
-elif [ -e /dev/tty ]; then
-    exec "$INSTALL_DIR/iris" < /dev/tty
 else
     echo -e "${MUTED}To start IRIS Code, run:${NC}"
     echo -e ""
-    echo -e "  ${CYAN}iris${NC}"
+    echo -e "  ${CYAN}~/.iris/bin/iris${NC}"
+    echo -e ""
+    echo -e "${MUTED}Or open a new terminal and run:${NC} ${CYAN}iris${NC}"
     echo -e ""
 fi
