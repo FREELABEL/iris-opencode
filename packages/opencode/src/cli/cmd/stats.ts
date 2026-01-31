@@ -57,10 +57,20 @@ export const StatsCommand = cmd({
       .option("models", {
         describe: "show model statistics (default: hidden). Pass a number to show top N, otherwise shows all",
       })
-      .option("project", {
-        describe: "filter by project (default: all projects, empty string: current project)",
-        type: "string",
-      })
+  .option("project", {
+    describe: "filter by project (default: all projects, empty string: current project)",
+    type: "string",
+  })
+  .option("period", {
+    describe: "time period for analysis (daily, weekly, monthly, all)",
+    type: "string",
+    default: "all"
+  })
+  .option("admin", {
+    describe: "show admin-focused statistics",
+    type: "boolean",
+    default: false
+  })
   },
   handler: async (args) => {
     await bootstrap(process.cwd(), async () => {
@@ -73,7 +83,11 @@ export const StatsCommand = cmd({
         modelLimit = args.models
       }
 
-      displayStats(stats, args.tools, modelLimit)
+      if (args.admin) {
+        displayAdminStats(stats, args.period, args.tools, modelLimit)
+      } else {
+        displayStats(stats, args.tools, modelLimit)
+      }
     })
   },
 })
@@ -390,6 +404,286 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
     console.log("└────────────────────────────────────────────────────────┘")
   }
   console.log()
+}
+
+export function displayAdminStats(stats: SessionStats, period: string = "all", toolLimit?: number, modelLimit?: number) {
+  const width = 56
+
+  function renderRow(label: string, value: string): string {
+    const availableWidth = width - 1
+    const paddingNeeded = availableWidth - label.length - value.length
+    const padding = Math.max(0, paddingNeeded)
+    return `│${label}${" ".repeat(padding)}${value} │`
+  }
+
+  // Admin Dashboard Header
+  console.log("┌────────────────────────────────────────────────────────┐")
+  console.log("│                    IRIS ADMIN STATS                    │")
+  console.log(`│                    ${period.toUpperCase()} VIEW                     │`)
+  console.log("├────────────────────────────────────────────────────────┤")
+
+  // Key Admin Metrics
+  console.log("┌────────────────────────────────────────────────────────┐")
+  console.log("│                   KEY PERFORMANCE METRICS               │")
+  console.log("├────────────────────────────────────────────────────────┤")
+  console.log(renderRow("Total Sessions", stats.totalSessions.toLocaleString()))
+  console.log(renderRow("Total Messages", stats.totalMessages.toLocaleString()))
+  console.log(renderRow("Active Days", stats.days.toString()))
+  console.log(renderRow("Avg Sessions/Day", Math.round(stats.totalSessions / Math.max(1, stats.days)).toString()))
+  console.log(renderRow("Avg Messages/Session", Math.round(stats.totalMessages / Math.max(1, stats.totalSessions)).toString()))
+  console.log("└────────────────────────────────────────────────────────┘")
+  console.log()
+
+  // Cost Analysis
+  console.log("┌────────────────────────────────────────────────────────┐")
+  console.log("│                      COST ANALYSIS                       │")
+  console.log("├────────────────────────────────────────────────────────┤")
+  const cost = isNaN(stats.totalCost) ? 0 : stats.totalCost
+  const costPerDay = isNaN(stats.costPerDay) ? 0 : stats.costPerDay
+  const costPerSession = stats.totalSessions > 0 ? cost / stats.totalSessions : 0
+  
+  console.log(renderRow("Total Cost", `$${cost.toFixed(2)}`))
+  console.log(renderRow("Avg Cost/Day", `$${costPerDay.toFixed(2)}`))
+  console.log(renderRow("Avg Cost/Session", `$${costPerSession.toFixed(4)}`))
+  console.log(renderRow("Est Monthly Cost", `$${(costPerDay * 30).toFixed(2)}`))
+  console.log(renderRow("Est Annual Cost", `$${(costPerDay * 365).toFixed(2)}`))
+  console.log("└────────────────────────────────────────────────────────┘")
+  console.log()
+
+  // Token Efficiency Metrics
+  console.log("┌────────────────────────────────────────────────────────┐")
+  console.log("│                    TOKEN EFFICIENCY                     │")
+  console.log("├────────────────────────────────────────────────────────┤")
+  const totalTokens = stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.reasoning
+  const tokensPerSession = isNaN(stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.reasoning / stats.totalSessions) ? 0 : totalTokens / Math.max(1, stats.totalSessions)
+  const medianTokensPerSession = isNaN(stats.medianTokensPerSession) ? 0 : stats.medianTokensPerSession
+  const cacheHitRate = totalTokens > 0 ? (stats.totalTokens.cache.read / totalTokens) * 100 : 0
+  
+  console.log(renderRow("Total Input Tokens", formatNumber(stats.totalTokens.input)))
+  console.log(renderRow("Total Output Tokens", formatNumber(stats.totalTokens.output)))
+  console.log(renderRow("Total Reasoning Tokens", formatNumber(stats.totalTokens.reasoning)))
+  console.log(renderRow("Cache Reads", formatNumber(stats.totalTokens.cache.read)))
+  console.log(renderRow("Cache Writes", formatNumber(stats.totalTokens.cache.write)))
+  console.log(renderRow("Cache Hit Rate", `${cacheHitRate.toFixed(1)}%`))
+  console.log(renderRow("Avg Tokens/Session", formatNumber(Math.round(tokensPerSession))))
+  console.log(renderRow("Median Tokens/Session", formatNumber(Math.round(medianTokensPerSession))))
+  console.log("└────────────────────────────────────────────────────────┘")
+  console.log()
+
+  // Period-based Analysis
+  if (period !== "all") {
+    console.log("┌────────────────────────────────────────────────────────┐")
+    console.log(`│                  ${period.toUpperCase()} PERFORMANCE                 │`)
+    console.log("├────────────────────────────────────────────────────────┤")
+    
+    const dailyAvg = stats.totalSessions / Math.max(1, stats.days)
+    const weeklyTotal = dailyAvg * 7
+    const monthlyTotal = dailyAvg * 30
+    
+    console.log(renderRow("Daily Average Sessions", Math.round(dailyAvg).toString()))
+    console.log(renderRow("Weekly Projected Sessions", Math.round(weeklyTotal).toString()))
+    console.log(renderRow("Monthly Projected Sessions", Math.round(monthlyTotal).toString()))
+    console.log(renderRow("Daily Avg Cost", `$${costPerDay.toFixed(2)}`))
+    console.log(renderRow("Weekly Projected Cost", `$${(costPerDay * 7).toFixed(2)}`))
+    console.log(renderRow("Monthly Projected Cost", `$${(costPerDay * 30).toFixed(2)}`))
+    console.log("└────────────────────────────────────────────────────────┘")
+    console.log()
+  }
+
+  // Model Performance (top performers)
+  if (modelLimit !== undefined && Object.keys(stats.modelUsage).length > 0) {
+    const sortedModels = Object.entries(stats.modelUsage).sort(([, a], [, b]) => b.cost - a.cost)
+    const modelsToDisplay = modelLimit === Infinity ? sortedModels : sortedModels.slice(0, modelLimit)
+
+    console.log("┌────────────────────────────────────────────────────────┐")
+    console.log("│                 TOP COSTLY MODELS                       │")
+    console.log("├────────────────────────────────────────────────────────┤")
+
+    for (const [model, usage] of modelsToDisplay) {
+      const avgTokensPerMessage = usage.messages > 0 
+        ? (usage.tokens.input + usage.tokens.output) / usage.messages 
+        : 0
+      
+      console.log(`│ ${model.padEnd(54)} │`)
+      console.log(renderRow("  Total Cost", `$${usage.cost.toFixed(4)}`))
+      console.log(renderRow("  Messages", usage.messages.toLocaleString()))
+      console.log(renderRow("  Avg Tokens/Msg", formatNumber(Math.round(avgTokensPerMessage))))
+      console.log(renderRow("  Cost per Message", `$${(usage.cost / usage.messages).toFixed(6)}`))
+      console.log("├────────────────────────────────────────────────────────┤")
+    }
+    process.stdout.write("\x1B[1A")
+    console.log("└────────────────────────────────────────────────────────┘")
+  }
+  console.log()
+
+  // Tool Usage (admin view with insights)
+  if (Object.keys(stats.toolUsage).length > 0) {
+    const sortedTools = Object.entries(stats.toolUsage).sort(([, a], [, b]) => b - a)
+    const toolsToDisplay = toolLimit ? sortedTools.slice(0, toolLimit) : sortedTools
+
+    console.log("┌────────────────────────────────────────────────────────┐")
+    console.log("│                   TOOL USAGE ANALYSIS                   │")
+    console.log("├────────────────────────────────────────────────────────┤")
+
+    const maxCount = Math.max(...toolsToDisplay.map(([, count]) => count))
+    const totalToolUsage = Object.values(stats.toolUsage).reduce((a, b) => a + b, 0)
+
+    for (const [tool, count] of toolsToDisplay) {
+      const barLength = Math.max(1, Math.floor((count / maxCount) * 20))
+      const bar = "█".repeat(barLength)
+      const percentage = ((count / totalToolUsage) * 100).toFixed(1)
+
+      const maxToolLength = 18
+      const truncatedTool = tool.length > maxToolLength ? tool.substring(0, maxToolLength - 2) + ".." : tool
+      const toolName = truncatedTool.padEnd(maxToolLength)
+
+      const usagePerSession = stats.totalSessions > 0 ? (count / stats.totalSessions).toFixed(2) : "0.00"
+
+      const content = ` ${toolName} ${bar.padEnd(20)} ${count.toString().padStart(3)} (${percentage.padStart(4)}%) [${usagePerSession}/session]`
+      const padding = Math.max(0, width - content.length - 1)
+      console.log(`│${content}${" ".repeat(padding)} │`)
+    }
+    console.log("└────────────────────────────────────────────────────────┘")
+  }
+  console.log()
+
+  // Admin Summary Box
+  console.log("┌────────────────────────────────────────────────────────┐")
+  console.log("│                    ADMIN SUMMARY                         │")
+  console.log("├────────────────────────────────────────────────────────┤")
+  
+  const efficiencyScore = calculateEfficiencyScore(stats)
+  const utilizationRate = calculateUtilizationRate(stats)
+  const costEfficiency = calculateCostEfficiency(stats)
+  
+  console.log(renderRow("Efficiency Score", `${efficiencyScore}/100`))
+  console.log(renderRow("Utilization Rate", `${utilizationRate}%`))
+  console.log(renderRow("Cost Efficiency", costEfficiency))
+  console.log(renderRow("Health Status", getHealthStatus(stats)))
+  console.log("└────────────────────────────────────────────────────────┘")
+  console.log()
+
+  // AI-powered Insights
+  console.log("┌────────────────────────────────────────────────────────┐")
+  console.log("│                      AI INSIGHTS                         │")
+  console.log("├────────────────────────────────────────────────────────┤")
+  const insights = generateInsights(stats)
+  insights.forEach((insight, index) => {
+    console.log(`│ ${index + 1}. ${insight.padEnd(52)} │`)
+  })
+  console.log("└────────────────────────────────────────────────────────┘")
+  console.log()
+}
+
+function calculateEfficiencyScore(stats: SessionStats): number {
+  let score = 50 // Base score
+  
+  // Token efficiency (30% of score)
+  const avgTokens = stats.totalSessions > 0 
+    ? (stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.reasoning) / stats.totalSessions 
+    : 0
+  if (avgTokens < 1000) score += 15
+  else if (avgTokens < 5000) score += 10
+  else if (avgTokens < 10000) score += 5
+  
+  // Cost efficiency (20% of score)
+  if (stats.costPerDay < 1) score += 10
+  else if (stats.costPerDay < 5) score += 5
+  else if (stats.costPerDay < 10) score += 2
+  
+  // Cache efficiency (20% of score)
+  const totalTokens = stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.reasoning
+  const cacheRate = totalTokens > 0 ? (stats.totalTokens.cache.read / totalTokens) * 100 : 0
+  if (cacheRate > 20) score += 10
+  else if (cacheRate > 10) score += 5
+  else if (cacheRate > 5) score += 2
+  
+  // Session consistency (20% of score)
+  if (stats.medianTokensPerSession > 0) {
+    const variance = Math.abs(stats.tokensPerSession - stats.medianTokensPerSession) / stats.medianTokensPerSession
+    if (variance < 0.2) score += 10
+    else if (variance < 0.5) score += 5
+    else if (variance < 1.0) score += 2
+  }
+  
+  // Tool diversity (10% of score)
+  const toolCount = Object.keys(stats.toolUsage).length
+  if (toolCount > 10) score += 5
+  else if (toolCount > 5) score += 3
+  else if (toolCount > 2) score += 1
+  
+  return Math.min(100, Math.max(0, score))
+}
+
+function calculateUtilizationRate(stats: SessionStats): string {
+  const avgSessionsPerDay = stats.totalSessions / Math.max(1, stats.days)
+  const rate = Math.min(100, Math.round((avgSessionsPerDay / 10) * 100)) // Assuming 10 sessions/day is 100% utilization
+  return `${rate}%`
+}
+
+function calculateCostEfficiency(stats: SessionStats): string {
+  const avgTokensPerDollar = stats.totalCost > 0 
+    ? (stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.reasoning) / stats.totalCost 
+    : 0
+  
+  if (avgTokensPerDollar > 100000) return "Excellent"
+  if (avgTokensPerDollar > 50000) return "Good"
+  if (avgTokensPerDollar > 20000) return "Fair"
+  return "Poor"
+}
+
+function getHealthStatus(stats: SessionStats): string {
+  const score = calculateEfficiencyScore(stats)
+  if (score >= 80) return "🟢 Healthy"
+  if (score >= 60) return "🟡 Good"
+  if (score >= 40) return "🟠 Warning"
+  return "🔴 Critical"
+}
+
+function generateInsights(stats: SessionStats): string[] {
+  const insights: string[] = []
+  
+  // Cost insights
+  if (stats.costPerDay > 10) {
+    insights.push("High daily cost detected - consider optimization")
+  } else if (stats.costPerDay < 1) {
+    insights.push("Cost-efficient usage pattern observed")
+  }
+  
+  // Token efficiency insights
+  const avgTokens = stats.totalSessions > 0 
+    ? (stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.reasoning) / stats.totalSessions 
+    : 0
+  if (avgTokens > 10000) {
+    insights.push("High token usage per session - review prompts")
+  } else if (avgTokens < 1000) {
+    insights.push("Optimal token efficiency maintained")
+  }
+  
+  // Cache performance insights
+  const totalTokens = stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.reasoning
+  const cacheRate = totalTokens > 0 ? (stats.totalTokens.cache.read / totalTokens) * 100 : 0
+  if (cacheRate < 5) {
+    insights.push("Low cache hit rate - missing optimization opportunities")
+  } else if (cacheRate > 20) {
+    insights.push("Excellent cache utilization")
+  }
+  
+  // Tool usage insights
+  const topTools = Object.entries(stats.toolUsage).sort(([, a], [, b]) => b - a).slice(0, 3)
+  if (topTools.length > 0 && topTools[0][1] > stats.totalSessions) {
+    insights.push(`High dependency on ${topTools[0][0]} tool`)
+  }
+  
+  // Model diversity insights
+  const modelCount = Object.keys(stats.modelUsage).length
+  if (modelCount === 1) {
+    insights.push("Single model dependency - consider diversification")
+  } else if (modelCount > 3) {
+    insights.push("Good model diversity for resilience")
+  }
+  
+  return insights.slice(0, 5) // Limit to 5 insights
 }
 
 function formatNumber(num: number): string {
