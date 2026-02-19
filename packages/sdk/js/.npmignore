@@ -1,0 +1,13 @@
+# Source and build files
+src/
+script/
+example/
+tsconfig.json
+sst-env.d.ts
+
+# Development files
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+.env*

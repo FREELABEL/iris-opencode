@@ -1,0 +1,19 @@
+# Source and build files
+src/
+test/
+script/
+parsers-config.ts
+tsconfig.json
+bunfig.toml
+sst-env.d.ts
+Dockerfile
+
+# Documentation (README included by default)
+AGENTS.md
+
+# Development files
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+.env*

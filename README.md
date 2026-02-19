@@ -36,29 +36,24 @@ IRIS Code is an AI-powered coding assistant that runs in your terminal. It can:
 - Work with multiple AI providers (Claude, GPT, local models)
 - Integrate seamlessly with the IRIS SDK and platform
 
-```bash
-# macOS (Homebrew)
-brew install --cask opencode-desktop
-```
-
 #### Installation Directory
 
 The install script respects the following priority order for the installation path:
 
-1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
+1. `$IRIS_INSTALL_DIR` - Custom installation directory
 2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
 3. `$HOME/bin` - Standard user binary directory (if exists or can be created)
-4. `$HOME/.opencode/bin` - Default fallback
+4. `$HOME/.iris/bin` - Default fallback
 
 ```bash
 # Examples
-OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
+IRIS_INSTALL_DIR=/usr/local/bin curl -fsSL https://heyiris.io/install-code | bash
+XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://heyiris.io/install-code | bash
 ```
 
 ### Agents
 
-OpenCode includes two built-in agents you can switch between,
+IRIS Code includes two built-in agents you can switch between,
 you can switch between these using the `Tab` key.
 
 - **build** - Default, full access agent for development work
@@ -70,19 +65,15 @@ you can switch between these using the `Tab` key.
 Also, included is a **general** subagent for complex searches and multistep tasks.
 This is used internally and can be invoked using `@general` in messages.
 
-Learn more about [agents](https://opencode.ai/docs/agents).
+Learn more about [agents](https://heyiris.io/docs/agents).
 
 ### Documentation
 
-For more info on how to configure OpenCode [**head over to our docs**](https://opencode.ai/docs).
+For more info on how to configure IRIS Code [**head over to our docs**](https://heyiris.io/docs).
 
 ### Contributing
 
-If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
-
-### Building on OpenCode
-
-If you are working on a project that's related to OpenCode and is using "opencode" as a part of its name; for example, "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
+If you're interested in contributing to IRIS Code, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
 
 ### FAQ
 
@@ -91,15 +82,11 @@ If you are working on a project that's related to OpenCode and is using "opencod
 It's very similar to Claude Code in terms of capability. Here are the key differences:
 
 - 100% open source
-- Not coupled to any provider. Although we recommend the models we provide through [OpenCode Zen](https://opencode.ai/zen); OpenCode can be used with Claude, OpenAI, Google or even local models. As models evolve the gaps between them will close and pricing will drop so being provider-agnostic is important.
+- Not coupled to any provider. IRIS Code can be used with Claude, OpenAI, Google or even local models. As models evolve the gaps between them will close and pricing will drop so being provider-agnostic is important.
 - Out of the box LSP support
-- A focus on TUI. OpenCode is built by neovim users and the creators of [terminal.shop](https://terminal.shop); we are going to push the limits of what's possible in the terminal.
-- A client/server architecture. This for example can allow OpenCode to run on your computer, while you can drive it remotely from a mobile app. Meaning that the TUI frontend is just one of the possible clients.
-
-#### What's the other repo?
-
-The other confusingly named repo has no relation to this one. You can [read the story behind it here](https://x.com/thdxr/status/1933561254481666466).
+- A focus on TUI. We are going to push the limits of what's possible in the terminal.
+- A client/server architecture. This for example can allow IRIS Code to run on your computer, while you can drive it remotely from a mobile app. Meaning that the TUI frontend is just one of the possible clients.
 
 ---
 
-**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+**Join our community** [Discord](https://discord.gg/heyiris) | [X.com](https://x.com/heyiris)
