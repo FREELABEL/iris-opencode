@@ -16,6 +16,7 @@ import { ServeCommand } from "./cli/cmd/serve"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
 import { McpCommand } from "./cli/cmd/mcp"
+import { MarketplaceCommand } from "./cli/cmd/marketplace"
 import { GithubCommand } from "./cli/cmd/github"
 import { ExportCommand } from "./cli/cmd/export"
 import { ImportCommand } from "./cli/cmd/import"
@@ -27,6 +28,13 @@ import { EOL } from "os"
 import { WebCommand } from "./cli/cmd/web"
 import { PrCommand } from "./cli/cmd/pr"
 import { SessionCommand } from "./cli/cmd/session"
+// IRIS Platform commands
+import { PlatformChatCommand } from "./cli/cmd/platform-chat"
+import { PlatformAgentsCommand } from "./cli/cmd/platform-agents"
+import { PlatformLeadsCommand } from "./cli/cmd/platform-leads"
+import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
+import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
+import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -80,6 +88,7 @@ const cli = yargs(hideBin(process.argv))
   .completion("completion", "generate shell completion script")
   .command(AcpCommand)
   .command(McpCommand)
+  .command(MarketplaceCommand)
   .command(TuiThreadCommand)
   .command(TuiSpawnCommand)
   .command(AttachCommand)
@@ -99,6 +108,13 @@ const cli = yargs(hideBin(process.argv))
   .command(GithubCommand)
   .command(PrCommand)
   .command(SessionCommand)
+  // IRIS Platform
+  .command(PlatformChatCommand)
+  .command(PlatformAgentsCommand)
+  .command(PlatformLeadsCommand)
+  .command(PlatformWorkflowsCommand)
+  .command(PlatformBloqsCommand)
+  .command(PlatformSchedulesCommand)
   .fail((msg) => {
     if (
       msg.startsWith("Unknown argument") ||

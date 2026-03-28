@@ -20,7 +20,7 @@ Installs:
   2. IRIS SDK     — CLI tools & PHP SDK
   3. IRIS App     — Desktop application (macOS)
   4. MCP Config   — Agent tool integration (scaffolded for future use)
-  5. Agent Bridge — View Claude Code / OpenCode sessions in IRIS UI
+  5. Agent Bridge — Hive compute node + session bridge
   6. Docker Sandbox — Sandboxed container for AI agent development
 
 Options:
@@ -127,6 +127,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Validate --api-url is a proper URL (prevents injection into docker-compose YAML)
+if ! [[ "$iris_api_url" =~ ^https?://[a-zA-Z0-9._-]+(:[0-9]+)?(/.*)?$ ]]; then
+    echo -e "${RED}Error: --api-url must be a valid HTTP(S) URL${NC}"
+    exit 1
+fi
+
 INSTALL_DIR=$HOME/.iris/bin
 mkdir -p "$INSTALL_DIR"
 
@@ -167,6 +173,7 @@ else
         ;;
       *)
         echo -e "${RED}Unsupported OS/Arch: $os/$arch${NC}"
+        echo -e "${MUTED}Supported: linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64${NC}"
         exit 1
         ;;
     esac
@@ -219,21 +226,25 @@ else
     if [ "$os" = "linux" ]; then
         if ! command -v tar >/dev/null 2>&1; then
              echo -e "${RED}Error: 'tar' is required but not installed.${NC}"
+             echo -e "${MUTED}Install with: sudo apt install tar${NC}"
              exit 1
         fi
     else
         if ! command -v unzip >/dev/null 2>&1; then
             echo -e "${RED}Error: 'unzip' is required but not installed.${NC}"
+            echo -e "${MUTED}Install with: brew install unzip (macOS) or sudo apt install unzip (Linux)${NC}"
             exit 1
         fi
     fi
 
     if [ -z "$requested_version" ]; then
         url="https://github.com/FREELABEL/iris-opencode/releases/latest/download/$filename"
-        specific_version=$(curl -s https://api.github.com/repos/FREELABEL/iris-opencode/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+        specific_version=$(curl -s https://api.github.com/repos/FREELABEL/iris-opencode/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p') || true
 
-        if [[ $? -ne 0 || -z "$specific_version" ]]; then
+        if [[ -z "$specific_version" ]]; then
             echo -e "${RED}Failed to fetch version information${NC}"
+            echo -e "${MUTED}Check your internet connection or install a specific version:${NC}"
+            echo -e "${MUTED}  curl -fsSL https://heyiris.io/install-code | bash -s -- --version 1.1.6${NC}"
             exit 1
         fi
     else
@@ -267,21 +278,8 @@ print_message() {
 }
 
 check_version() {
-    if command -v iris >/dev/null 2>&1; then
-        iris_path=$(which iris)
-
-
-        ## TODO: check if version is installed
-        # installed_version=$(iris version)
-        installed_version="0.0.1"
-        installed_version=$(echo $installed_version | awk '{print $2}')
-
-        if [[ "$installed_version" != "$specific_version" ]]; then
-            print_message info "${MUTED}Installed version: ${NC}$installed_version."
-        else
-            print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed"
-            exit 0
-        fi
+    if [ -f "$INSTALL_DIR/iris" ]; then
+        print_message info "${MUTED}Updating IRIS Code to ${NC}$specific_version${MUTED}...${NC}"
     fi
 }
 
@@ -377,12 +375,17 @@ download_with_progress() {
 
 download_and_install() {
     print_message info "\n${MUTED}Installing ${NC}IRIS Code ${MUTED}version: ${NC}$specific_version"
-    local tmp_dir="${TMPDIR:-/tmp}/iris_install_$$"
-    mkdir -p "$tmp_dir"
+    local tmp_dir
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/iris_install_XXXXXX")
 
-    if [[ "$os" == "windows" ]] || ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then
-        # Fallback to standard curl on Windows, non-TTY environments, or if custom progress fails
+    if [[ "$os" == "windows" ]] || ! [ -t 2 ]; then
+        # Non-TTY or Windows: use standard curl progress
         curl -# -L -o "$tmp_dir/$filename" "$url"
+    elif ! download_with_progress "$url" "$tmp_dir/$filename"; then
+        # Custom progress failed — only fallback if file wasn't already downloaded
+        if [ ! -s "$tmp_dir/$filename" ]; then
+            curl -# -L -o "$tmp_dir/$filename" "$url"
+        fi
     fi
 
     if [ "$os" = "linux" ]; then
@@ -507,29 +510,25 @@ install_sdk() {
     # Check for PHP
     if ! command -v php >/dev/null 2>&1; then
         print_message warning "${ORANGE}PHP not found — skipping SDK install.${NC}"
-        print_message info "${MUTED}Install PHP 8.1+ and run: ${NC}curl -fsSL https://heyiris.io/install-iris.sh | bash"
+        print_message info "${MUTED}Install PHP 8.1+ and re-run: ${NC}curl -fsSL https://heyiris.io/install-code | bash"
         return 0
     fi
 
     # Check for Composer
     if ! command -v composer >/dev/null 2>&1; then
         print_message warning "${ORANGE}Composer not found — skipping SDK install.${NC}"
-        print_message info "${MUTED}Install Composer and run: ${NC}curl -fsSL https://heyiris.io/install-iris.sh | bash"
+        print_message info "${MUTED}Install Composer (${NC}https://getcomposer.org${MUTED}) and re-run: ${NC}curl -fsSL https://heyiris.io/install-code | bash"
         return 0
     fi
 
     local sdk_dir="$HOME/.iris/sdk"
     if [ -d "$sdk_dir" ]; then
         print_message info "${MUTED}SDK already installed at ${NC}$sdk_dir${MUTED}, updating...${NC}"
-        cd "$sdk_dir" && git pull --quiet 2>/dev/null || true
-        composer install --no-dev --quiet 2>/dev/null || true
-        cd - >/dev/null
+        (cd "$sdk_dir" && git pull --quiet 2>/dev/null && composer install --no-dev --quiet 2>/dev/null) || true
     else
         mkdir -p "$HOME/.iris"
-        git clone --quiet https://github.com/FREELABEL/fl-iris-sdk-php.git "$sdk_dir" 2>/dev/null
-        if [ $? -eq 0 ]; then
-            cd "$sdk_dir" && composer install --no-dev --quiet 2>/dev/null || true
-            cd - >/dev/null
+        if git clone --quiet https://github.com/FREELABEL/fl-iris-sdk-php.git "$sdk_dir" 2>/dev/null; then
+            (cd "$sdk_dir" && composer install --no-dev --quiet 2>/dev/null) || true
         else
             print_message warning "${ORANGE}Could not clone SDK repository.${NC}"
             return 0
@@ -573,8 +572,8 @@ install_desktop_app() {
 
     # Download the desktop app zip from GitHub releases
     local app_url="https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-app-darwin-${arch}.zip"
-    local tmp_dir="${TMPDIR:-/tmp}/iris_app_$$"
-    mkdir -p "$tmp_dir"
+    local tmp_dir
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/iris_app_XXXXXX")
 
     if curl -sL --fail -o "$tmp_dir/IRIS-app.zip" "$app_url" 2>/dev/null; then
         mkdir -p "$app_dir"
@@ -642,7 +641,7 @@ else
     print_message info "${MUTED}[4/6] MCP Config ............................ skipped${NC}"
 fi
 
-# ─── Component 5: Coding Agent Bridge ────────────────────────────────────────
+# ─── Component 5: Coding Agent Bridge + Hive Daemon ─────────────────────────
 
 install_bridge() {
     # Requires Node.js
@@ -652,32 +651,27 @@ install_bridge() {
         return 0
     fi
 
-    print_message info "${MUTED}Installing Coding Agent Bridge...${NC}"
+    print_message info "${MUTED}Installing IRIS Bridge + Hive Daemon...${NC}"
 
     local bridge_dir="$HOME/.iris/bridge"
 
-    if [ -d "$bridge_dir" ] && [ -f "$bridge_dir/index.js" ]; then
-        print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}already installed${NC}"
-        return 0
+    if [ -d "$bridge_dir" ] && [ -f "$bridge_dir/index.js" ] && [ -f "$bridge_dir/daemon.js" ]; then
+        # Update existing installation
+        print_message info "${MUTED}Bridge already installed, updating...${NC}"
+        (cd "$bridge_dir" && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null) || true
+        print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}updated${NC}"
+    else
+        # Fresh clone from public repo
+        if git clone --quiet https://github.com/FREELABEL/iris-bridge.git "$bridge_dir" 2>/dev/null; then
+            (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || {
+                print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
+            }
+        else
+            print_message info "${MUTED}[5/6] Agent Bridge .......................... could not download${NC}"
+            print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-bridge.git ~/.iris/bridge"
+            return 0
+        fi
     fi
-
-    mkdir -p "$bridge_dir"
-
-    # Download bridge files from GitHub
-    local repo_base="https://raw.githubusercontent.com/FREELABEL/fl-eco-docker/main/coding-agent-bridge"
-    local dl_ok=true
-
-    curl -sL --fail -o "$bridge_dir/index.js" "$repo_base/index.js" 2>/dev/null || dl_ok=false
-    curl -sL --fail -o "$bridge_dir/package.json" "$repo_base/package.json" 2>/dev/null || dl_ok=false
-
-    if [ "$dl_ok" = "false" ] || [ ! -f "$bridge_dir/index.js" ]; then
-        print_message info "${MUTED}[5/6] Agent Bridge .......................... download available at heyiris.io${NC}"
-        return 0
-    fi
-
-    # Install dependencies
-    cd "$bridge_dir" && npm install --production --silent 2>/dev/null
-    cd - >/dev/null
 
     # Create bridgectl convenience script
     cat > "$bridge_dir/bridgectl" << 'BCTL'
@@ -685,7 +679,7 @@ install_bridge() {
 BRIDGE_DIR="$(cd "$(dirname "$0")" && pwd)"
 case "${1:-status}" in
     start)
-        PID=$(lsof -ti :3200 2>/dev/null)
+        PID=$(lsof -ti :3200 2>/dev/null || true)
         if [ -n "$PID" ]; then echo "Bridge already running (PID: $PID)"; exit 0; fi
         nohup node "$BRIDGE_DIR/index.js" > "$BRIDGE_DIR/bridge.log" 2>&1 &
         sleep 2
@@ -695,39 +689,59 @@ case "${1:-status}" in
             echo "Failed to start. Check: cat $BRIDGE_DIR/bridge.log"; exit 1
         fi ;;
     stop)
-        PID=$(lsof -ti :3200 2>/dev/null)
+        PID=$(lsof -ti :3200 2>/dev/null || true)
         if [ -n "$PID" ]; then kill "$PID" 2>/dev/null; echo "Stopped (PID: $PID)"
         else echo "Not running"; fi ;;
     restart) "$0" stop; sleep 1; "$0" start ;;
     status)
         if curl -s "http://localhost:3200/health" > /dev/null 2>&1; then
-            echo "Running (PID: $(lsof -ti :3200 2>/dev/null))"
+            echo "Running (PID: $(lsof -ti :3200 2>/dev/null || true))"
         else echo "Not running"; fi ;;
     logs) tail -f "$BRIDGE_DIR/bridge.log" ;;
-    *) echo "Usage: bridgectl {start|stop|restart|status|logs}" ;;
+    *) echo "Usage: iris-bridge {start|stop|restart|status|logs}" ;;
 esac
 BCTL
     chmod 755 "$bridge_dir/bridgectl"
 
-    # Symlink bridgectl into the iris bin directory
+    # Create iris-daemon convenience script for Hive compute
+    cat > "$bridge_dir/daemonctl" << 'DCTL'
+#!/usr/bin/env bash
+BRIDGE_DIR="$(cd "$(dirname "$0")" && pwd)"
+case "${1:-status}" in
+    start)
+        if [ -z "${IRIS_API_KEY:-}" ] && [ ! -f "$BRIDGE_DIR/.env" ]; then
+            echo "No API key configured. Set IRIS_API_KEY or create $BRIDGE_DIR/.env"
+            echo "Get your API key from: https://app.heyiris.io/settings/api"
+            exit 1
+        fi
+        PID=$(lsof -ti :3201 2>/dev/null || true)
+        if [ -n "$PID" ]; then echo "Daemon already running (PID: $PID)"; exit 0; fi
+        nohup node "$BRIDGE_DIR/daemon.js" > "$BRIDGE_DIR/daemon.log" 2>&1 &
+        sleep 3
+        echo "Hive daemon started (PID: $!)"
+        echo "Your machine is now a compute node in IRIS Hive." ;;
+    stop)
+        PID=$(lsof -ti :3201 2>/dev/null || true)
+        if [ -n "$PID" ]; then kill "$PID" 2>/dev/null; echo "Daemon stopped (PID: $PID)"
+        else echo "Not running"; fi ;;
+    restart) "$0" stop; sleep 1; "$0" start ;;
+    status)
+        PID=$(lsof -ti :3201 2>/dev/null || true)
+        if [ -n "$PID" ]; then echo "Running (PID: $PID)"
+        else echo "Not running. Start with: iris-daemon start"; fi ;;
+    logs) tail -f "$BRIDGE_DIR/daemon.log" ;;
+    *) echo "Usage: iris-daemon {start|stop|restart|status|logs}" ;;
+esac
+DCTL
+    chmod 755 "$bridge_dir/daemonctl"
+
+    # Symlink both CLIs into the iris bin directory
     ln -sf "$bridge_dir/bridgectl" "$INSTALL_DIR/iris-bridge"
+    ln -sf "$bridge_dir/daemonctl" "$INSTALL_DIR/iris-daemon"
 
-    # Auto-start the bridge
-    local existing_pid=$(lsof -ti :3200 2>/dev/null)
-    if [ -n "$existing_pid" ]; then
-        kill "$existing_pid" 2>/dev/null
-        sleep 1
-    fi
-    nohup node "$bridge_dir/index.js" > "$bridge_dir/bridge.log" 2>&1 &
-    sleep 2
-
-    if curl -s "http://localhost:3200/health" > /dev/null 2>&1; then
-        print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed & running${NC}"
-        print_message info "${MUTED}      Bridge at ${NC}http://localhost:3200${MUTED} — manage with ${NC}iris-bridge start|stop|status"
-    else
-        print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
-        print_message info "${MUTED}      Start with: ${NC}iris-bridge start"
-    fi
+    print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
+    print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
+    print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status${MUTED} (Hive compute node)${NC}"
 }
 
 if [ "$skip_bridge" = "false" ]; then
@@ -762,25 +776,24 @@ install_docker_sandbox() {
     mkdir -p "$workspace_dir"
 
     # Generate API key if not already present
+    local api_key
     if [ -f "$key_file" ]; then
-        local api_key
         api_key=$(cat "$key_file")
     else
-        local api_key
         api_key=$(openssl rand -hex 16 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || head -c 32 /dev/urandom | xxd -p | head -c 32)
         echo -n "$api_key" > "$key_file"
         chmod 600 "$key_file"
     fi
 
-    # Pull the pre-built Docker image
+    # Pull the pre-built Docker image (show progress)
     print_message info "${MUTED}  Pulling agent sandbox image...${NC}"
-    if ! docker pull ghcr.io/freelabel/iris-agent:latest 2>/dev/null; then
+    if ! docker pull ghcr.io/freelabel/iris-agent:latest; then
         print_message info "${MUTED}[6/6] Docker Sandbox ........................ image not yet available${NC}"
         print_message info "${MUTED}      Image will be available soon at ${NC}ghcr.io/freelabel/iris-agent:latest"
         return 0
     fi
 
-    # Write docker-compose.yml for the sandbox
+    # Write docker-compose.yml for the sandbox (localhost-only port binding)
     cat > "$sandbox_dir/docker-compose.yml" << COMPOSEEOF
 services:
   iris-agent:
@@ -788,7 +801,7 @@ services:
     container_name: iris-sandbox
     restart: unless-stopped
     ports:
-      - "3200:3200"
+      - "127.0.0.1:3201:3200"
     volumes:
       - ./workspace:/data/workspace
       - iris-sandbox-data:/data
@@ -802,6 +815,7 @@ services:
 volumes:
   iris-sandbox-data:
 COMPOSEEOF
+    chmod 600 "$sandbox_dir/docker-compose.yml"
 
     # Create iris-sandbox CLI
     cat > "$INSTALL_DIR/iris-sandbox" << 'SANDBOXEOF'
@@ -820,8 +834,8 @@ case "${1:-help}" in
         echo "Starting IRIS Agent Sandbox..."
         docker compose -f "$COMPOSE_FILE" up -d
         sleep 3
-        if curl -s "http://localhost:3200/health" > /dev/null 2>&1; then
-            echo "Sandbox running at http://localhost:3200"
+        if curl -s "http://localhost:3201/health" > /dev/null 2>&1; then
+            echo "Sandbox running at http://localhost:3201"
             echo "Workspace mounted at ~/.iris/sandbox/workspace/"
         else
             echo "Container started but health check pending. Check: iris-sandbox logs"
@@ -839,8 +853,8 @@ case "${1:-help}" in
     status)
         if docker compose -f "$COMPOSE_FILE" ps --status running 2>/dev/null | grep -q iris-sandbox; then
             echo "Running"
-            if curl -s "http://localhost:3200/health" > /dev/null 2>&1; then
-                curl -s "http://localhost:3200/health" | python3 -m json.tool 2>/dev/null || curl -s "http://localhost:3200/health"
+            if curl -s "http://localhost:3201/health" > /dev/null 2>&1; then
+                curl -s "http://localhost:3201/health" | python3 -m json.tool 2>/dev/null || curl -s "http://localhost:3201/health"
             fi
         else
             echo "Not running. Start with: iris-sandbox start"
@@ -922,7 +936,24 @@ install_docs() {
     if curl -sL --fail -o "$docs_dir/onboarding.md" "https://heyiris.io/docs/onboarding.md" 2>/dev/null; then
         print_message info "${GREEN}  +  ${NC} Docs ${MUTED}..................................${NC} ${GREEN}downloaded${NC}"
     else
-        print_message info "${MUTED}  +   Docs ...................................... cached from install${NC}"
+        # Write a fallback stub so references to this file don't break
+        cat > "$docs_dir/onboarding.md" << 'DOCEOF'
+# IRIS Onboarding
+
+For full documentation visit: https://heyiris.io/developer
+
+## Quick Commands
+- `iris agent:create` — Create an AI agent
+- `iris automation` — Build a multi-agent workflow
+- `iris pages create` — Create a web page
+- `iris chat` — Chat with an agent
+- `iris leads` — Manage leads & CRM
+- `iris articles` — Generate content
+- `iris recruit` — Recruitment tools
+- `iris schedule` — Schedule recurring jobs
+- `iris integrations` — Manage integrations
+DOCEOF
+        print_message info "${MUTED}  +   Docs ...................................... ${NC}offline fallback created"
     fi
 }
 
@@ -949,7 +980,7 @@ if [ "$skip_mcp" = "false" ] && [ -f "$HOME/.iris/mcp.json" ]; then
 echo -e "${MUTED}  mcp.json        ${NC}MCP server config (ready for setup)"
 fi
 if [ "$skip_bridge" = "false" ] && [ -f "$HOME/.iris/bridge/index.js" ]; then
-echo -e "${MUTED}  bridge/          ${NC}Coding Agent Bridge (Claude Code sessions)"
+echo -e "${MUTED}  bridge/          ${NC}Hive Compute Node + Session Bridge"
 fi
 if [ "$skip_sandbox" = "false" ] && [ -f "$HOME/.iris/sandbox/docker-compose.yml" ]; then
 echo -e "${MUTED}  sandbox/         ${NC}Docker Agent Sandbox (iris-sandbox start|stop|shell)"
@@ -968,12 +999,52 @@ SDK_TOKEN=""
 DASHBOARD_URL=""
 USER_EMAIL=""
 
-if [ -e /dev/tty ]; then
+# Helper: parse JSON field without python3 dependency
+# Usage: json_field '{"key":"val"}' 'key' → val
+json_field() {
+    local json="$1" field="$2"
+    # Try python3 first, fall back to sed
+    if command -v python3 >/dev/null 2>&1; then
+        echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$field', d.get('data',{}).get('$field','')))" 2>/dev/null || echo ""
+    else
+        echo "$json" | sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",$}]*\)\"\{0,1\}.*/\1/p" | head -1
+    fi
+}
+
+json_nested() {
+    local json="$1" path="$2"
+    if command -v python3 >/dev/null 2>&1; then
+        echo "$json" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+keys='$path'.split('.')
+for k in keys:
+    if isinstance(d,dict): d=d.get(k,'')
+    else: d=''
+print(d)" 2>/dev/null || echo ""
+    else
+        echo ""
+    fi
+}
+
+tty_available=false
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    tty_available=true
+fi
+
+if [ "$tty_available" = "true" ]; then
     echo -e ""
     echo -e "${CYAN}Let's get you set up!${NC}"
     echo -e ""
     echo -n "  Enter your IRIS email (or press Enter to skip): "
-    read -r USER_EMAIL < /dev/tty
+    read -r USER_EMAIL < /dev/tty || USER_EMAIL=""
+
+    if [ -z "$USER_EMAIL" ]; then
+        echo -e "${MUTED}  Skipping authentication. Run ${NC}iris setup${MUTED} later to connect your account.${NC}"
+    elif ! [[ "$USER_EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        echo -e "${RED}  Invalid email format.${NC} Run ${NC}iris setup${MUTED} later to authenticate.${NC}"
+        USER_EMAIL=""
+    fi
 
     if [ -n "$USER_EMAIL" ]; then
         echo -e ""
@@ -982,20 +1053,26 @@ if [ -e /dev/tty ]; then
         SEND_RESPONSE=$(curl -s -X POST https://apiv2.heyiris.io/api/v1/auth/send-login-code \
             -H "Content-Type: application/json" \
             -H "Accept: application/json" \
-            -d "{\"email\": \"$USER_EMAIL\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false,"error":"Network error"}')
+            --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false,"error":"Network error"}')
 
-        SEND_SUCCESS=$(echo "$SEND_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('success', False))" 2>/dev/null || echo "False")
-        IS_NEW_ACCOUNT=$(echo "$SEND_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('new_account', False))" 2>/dev/null || echo "False")
+        SEND_SUCCESS=$(json_field "$SEND_RESPONSE" "success")
+        IS_NEW_ACCOUNT=$(json_nested "$SEND_RESPONSE" "data.new_account")
 
-        if [ "$SEND_SUCCESS" = "True" ]; then
-            if [ "$IS_NEW_ACCOUNT" = "True" ]; then
+        if [ "$SEND_SUCCESS" = "True" ] || [ "$SEND_SUCCESS" = "true" ]; then
+            if [ "$IS_NEW_ACCOUNT" = "True" ] || [ "$IS_NEW_ACCOUNT" = "true" ]; then
                 echo -e "${GREEN}  Account created!${NC} Verification code sent to your inbox."
             else
-                echo -e "${GREEN}  Code sent!${NC} Check your inbox."
+                echo -e "${GREEN}  Code sent!${NC} Check your inbox (valid for 30 minutes)."
             fi
             echo -e ""
             echo -n "  Enter the 6-digit code: "
-            read -r VERIFY_CODE < /dev/tty
+            read -r VERIFY_CODE < /dev/tty || VERIFY_CODE=""
+
+            # Validate code format
+            if [ -n "$VERIFY_CODE" ] && ! [[ "$VERIFY_CODE" =~ ^[0-9]{4,8}$ ]]; then
+                echo -e "${RED}  Invalid code format. Must be 4-8 digits.${NC}"
+                VERIFY_CODE=""
+            fi
 
             if [ -n "$VERIFY_CODE" ]; then
                 echo -e ""
@@ -1004,8 +1081,8 @@ if [ -e /dev/tty ]; then
                 LOGIN_RESPONSE=$(curl -s -X POST https://apiv2.heyiris.io/api/v1/auth/login-with-code \
                     -H "Content-Type: application/json" \
                     -H "Accept: application/json" \
-                    -d "{
-                        \"email\": \"$USER_EMAIL\",
+                    --data-raw "{
+                        \"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\",
                         \"login_code\": \"$VERIFY_CODE\",
                         \"generate_sdk_token\": true,
                         \"sdk_token_name\": \"IRIS Code CLI\",
@@ -1013,12 +1090,12 @@ if [ -e /dev/tty ]; then
                         \"generate_dashboard_url\": true
                     }" 2>/dev/null || echo '{"success":false,"error":"Network error"}')
 
-                LOGIN_SUCCESS=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('success', False))" 2>/dev/null || echo "False")
+                LOGIN_SUCCESS=$(json_field "$LOGIN_RESPONSE" "success")
 
-                if [ "$LOGIN_SUCCESS" = "True" ]; then
-                    SDK_TOKEN=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['sdk_token']['key'])" 2>/dev/null || echo "")
-                    USER_ID=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['user']['id'])" 2>/dev/null || echo "")
-                    DASHBOARD_URL=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data'].get('dashboard_url', ''))" 2>/dev/null || echo "")
+                if [ "$LOGIN_SUCCESS" = "True" ] || [ "$LOGIN_SUCCESS" = "true" ]; then
+                    SDK_TOKEN=$(json_nested "$LOGIN_RESPONSE" "data.sdk_token.key")
+                    USER_ID=$(json_nested "$LOGIN_RESPONSE" "data.user.id")
+                    DASHBOARD_URL=$(json_nested "$LOGIN_RESPONSE" "data.dashboard_url")
 
                     if [ -n "$SDK_TOKEN" ] && [ -n "$USER_ID" ]; then
                         # Write SDK credentials
@@ -1034,64 +1111,10 @@ IRIS_USER_ID=$USER_ID
 IRIS_DEFAULT_MODEL=gpt-4o-mini
 ENVFILE
                         chmod 600 "$HOME/.iris/sdk/.env"
-
-                        # Validate token works
-                        echo -e "${MUTED}  Verifying SDK credentials...${NC}"
-                        VALIDATE_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-                            -H "Authorization: Bearer $SDK_TOKEN" \
-                            -H "Accept: application/json" \
-                            "https://apiv2.heyiris.io/api/v1/user/me" 2>/dev/null || echo "000")
-
-                        if [ "$VALIDATE_RESPONSE" = "200" ]; then
-                            echo -e "${GREEN}  ✓ SDK credentials verified${NC}"
-                            AUTH_SUCCESS=true
-                        else
-                            echo -e "${RED}  ✗ Token validation failed (HTTP $VALIDATE_RESPONSE)${NC}"
-                            echo -e "${MUTED}  Requesting new verification code...${NC}"
-                            # Self-heal: re-send code and prompt for new one
-                            RETRY_SEND=$(curl -s -X POST https://apiv2.heyiris.io/api/v1/auth/send-login-code \
-                                -H "Content-Type: application/json" -H "Accept: application/json" \
-                                -d "{\"email\": \"$USER_EMAIL\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null)
-                            RETRY_OK=$(echo "$RETRY_SEND" | python3 -c "import sys,json; print(json.load(sys.stdin).get('success', False))" 2>/dev/null || echo "False")
-                            if [ "$RETRY_OK" = "True" ]; then
-                                echo -e "${GREEN}  New code sent.${NC}"
-                                echo -n "  Enter the 6-digit code: "
-                                read -r RETRY_CODE < /dev/tty
-                                if [ -n "$RETRY_CODE" ]; then
-                                    RETRY_LOGIN=$(curl -s -X POST https://apiv2.heyiris.io/api/v1/auth/login-with-code \
-                                        -H "Content-Type: application/json" -H "Accept: application/json" \
-                                        -d "{\"email\":\"$USER_EMAIL\",\"login_code\":\"$RETRY_CODE\",\"generate_sdk_token\":true,\"sdk_token_name\":\"IRIS Code CLI\",\"sdk_token_expires_days\":365}" 2>/dev/null)
-                                    RETRY_TOKEN=$(echo "$RETRY_LOGIN" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['sdk_token']['key'])" 2>/dev/null || echo "")
-                                    RETRY_UID=$(echo "$RETRY_LOGIN" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['user']['id'])" 2>/dev/null || echo "")
-                                    if [ -n "$RETRY_TOKEN" ] && [ -n "$RETRY_UID" ]; then
-                                        SDK_TOKEN="$RETRY_TOKEN"; USER_ID="$RETRY_UID"
-                                        # Re-write .env with new token
-                                        cat > "$HOME/.iris/sdk/.env" << ENVFILE2
-# IRIS SDK Configuration
-# Generated by IRIS Code installer
-# Date: $(date '+%Y-%m-%d %H:%M:%S')
-
-IRIS_ENV=production
-IRIS_API_KEY=$SDK_TOKEN
-IRIS_USER_ID=$USER_ID
-IRIS_DEFAULT_MODEL=gpt-4o-mini
-ENVFILE2
-                                        chmod 600 "$HOME/.iris/sdk/.env"
-                                        echo -e "${GREEN}  ✓ Re-authenticated successfully${NC}"
-                                        AUTH_SUCCESS=true
-                                    fi
-                                fi
-                            fi
-                            if [ "$AUTH_SUCCESS" != "true" ]; then
-                                echo -e "${MUTED}  Continuing without auth — run 'iris setup' later to authenticate.${NC}"
-                            fi
-                        fi
-
-                        if [ "$AUTH_SUCCESS" = "true" ]; then
-                            echo -e "${GREEN}  Authenticated!${NC}"
-                            if [ -n "$DASHBOARD_URL" ]; then
-                                echo -e "  ${MUTED}Dashboard:${NC} ${CYAN}${DASHBOARD_URL}${NC}"
-                            fi
+                        AUTH_SUCCESS=true
+                        echo -e "${GREEN}  Authenticated!${NC}"
+                        if [ -n "$DASHBOARD_URL" ]; then
+                            echo -e "  ${MUTED}Dashboard:${NC} ${CYAN}${DASHBOARD_URL}${NC}"
                         fi
                     else
                         # Login succeeded but SDK token wasn't generated
@@ -1100,13 +1123,14 @@ ENVFILE2
                         echo -e "${MUTED}  SDK token will be configured on first run.${NC}"
                     fi
                 else
-                    ERROR_MSG=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error', 'Unknown error'))" 2>/dev/null || echo "Unknown error")
-                    echo -e "${RED}  Login failed: ${ERROR_MSG}${NC}"
+                    ERROR_MSG=$(json_field "$LOGIN_RESPONSE" "error")
+                    echo -e "${RED}  Login failed: ${ERROR_MSG:-Invalid code or network error}${NC}"
+                    echo -e "${MUTED}  The code may have expired. Run ${NC}iris setup${MUTED} to try again.${NC}"
                 fi
             fi
         else
-            ERROR_MSG=$(echo "$SEND_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error', 'Unknown error'))" 2>/dev/null || echo "Unknown error")
-            echo -e "${RED}  Could not send code: ${ERROR_MSG}${NC}"
+            ERROR_MSG=$(json_field "$SEND_RESPONSE" "error")
+            echo -e "${RED}  Could not send code: ${ERROR_MSG:-Unknown error}${NC}"
             echo -e "${MUTED}  If this persists, sign up at: ${NC}${CYAN}https://app.heyiris.io/login/register${NC}"
         fi
     fi
@@ -1134,61 +1158,11 @@ RULES:
 
 - After building something, tell them they can also manage it from the web dashboard or the IRIS Desktop App.
 
-FIRST, before greeting the user, run these commands to deeply understand who they are and what they work on. Run them ALL, then synthesize what you learn.
-
-STEP 1 — Identity:
+FIRST, run these quick commands to understand the user's environment:
    git config --global user.name 2>/dev/null; git config --global user.email 2>/dev/null
-   whoami; hostname
-
-STEP 2 — Projects & repos:
-   ls -d ~/Sites/*/ ~/Projects/*/ ~/Code/*/ ~/Developer/*/ ~/repos/*/ ~/work/*/ 2>/dev/null | head -30
-   find ~/Sites ~/Projects ~/Code ~/Developer ~/repos ~/work ~/Desktop ~/Documents -maxdepth 2 -name \".git\" -type d 2>/dev/null | head -20
-
-STEP 3 — Tech stacks (identify what languages/frameworks they use):
-   find ~/Sites ~/Projects ~/Code ~/Developer ~/repos ~/work -maxdepth 3 \\( -name \"package.json\" -o -name \"requirements.txt\" -o -name \"composer.json\" -o -name \"Cargo.toml\" -o -name \"go.mod\" -o -name \"Gemfile\" -o -name \"*.sln\" -o -name \"pom.xml\" -o -name \"Makefile\" -o -name \"Dockerfile\" -o -name \"docker-compose.yml\" \\) 2>/dev/null | head -30
-
-STEP 4 — Read key project descriptions (understand what they're building):
-   For the first 5 projects found, read their README.md or package.json \"description\" field if they exist.
-
-STEP 5 — AI tools & configs (understand their current AI workflow):
-   ls -d ~/.cursor ~/.claude ~/.continue ~/.codeium ~/.copilot ~/.vscode ~/.github-copilot 2>/dev/null
-   For any AI config dirs found, read the main config files:
-   - ~/.claude/CLAUDE.md or ~/.claude/settings.json
-   - ~/.cursor/.cursorrules or ~/.cursor/rules/
-   - ~/.continue/config.json
-   - Any CLAUDE.md, AGENTS.md, or .cursorrules files in their top project directories
-
-STEP 6 — Tools & environment:
-   which node python3 php go rust cargo docker kubectl terraform 2>/dev/null
-   ls ~/Applications/ /Applications/ 2>/dev/null | head -30
-
-STEP 7 — Create the IRIS context file:
-   Based on EVERYTHING you learned, create ~/.iris/AGENT.md with this structure:
-
-   # IRIS Agent Context
-   ## User Profile
-   - Name, email (from git config)
-   - Primary role (developer, designer, founder, etc. — infer from projects)
-   - Key skills & languages (from tech stacks found)
-
-   ## Projects
-   - List their main projects with one-line descriptions
-   - Note the primary tech stack for each
-
-   ## AI Workflow
-   - What AI tools they already use
-   - Key rules/preferences from their existing AI configs (e.g. coding style, preferred patterns)
-   - Any custom instructions worth carrying over to IRIS
-
-   ## Recommended IRIS Setup
-   - Based on their profile, suggest which IRIS features would be most valuable
-   - Suggest specific agent templates that match their work
-   - Note any integrations that would connect to tools they already use
-
-   Write this file, then use it to personalize the greeting.
-
-Use what you learned to personalize your greeting. Reference specific projects or tools by name.
-If the scan finds nothing meaningful, just proceed with the standard greeting.
+   ls -d ~/Sites/*/ ~/Projects/*/ ~/Code/*/ ~/Developer/*/ 2>/dev/null | head -15
+   which node python3 php docker 2>/dev/null
+Use what you learn to personalize your greeting. If the scan finds nothing, proceed with the standard greeting.
 
 THEN present these choices:
 
@@ -1260,7 +1234,7 @@ RULES:
   │  Desktop     ~/Applications/IRIS.app (run: open ~/Applications/IRIS.app)
   └──────────────────────────────────────────────────────────────┘
 
-FIRST, before greeting the user, run these commands to understand who they are:
+FIRST, run these quick commands to understand the user:
    git config --global user.name 2>/dev/null; git config --global user.email 2>/dev/null
    ls -d ~/Sites/*/ ~/Projects/*/ ~/Code/*/ ~/Developer/*/ 2>/dev/null | head -15
    which node python3 php docker 2>/dev/null
@@ -1299,13 +1273,21 @@ Commands:
 fi
 
 # ─── Create iris-onboard launcher script ─────────────────────────────────────
-# Standalone script for running onboarding with full keyboard control.
+# Write prompt to a file (keeps tokens out of ps output), then launch from file.
 
-cat > "$INSTALL_DIR/iris-onboard" << ONBOARD
+PROMPT_FILE="$HOME/.iris/.onboarding-prompt"
+echo "$ONBOARDING_PROMPT" > "$PROMPT_FILE"
+chmod 600 "$PROMPT_FILE"
+
+cat > "$INSTALL_DIR/iris-onboard" << 'ONBOARD'
 #!/usr/bin/env bash
-cd "\$HOME"
-
-exec "$INSTALL_DIR/iris" -m opencode/gpt-5-nano --prompt "$ONBOARDING_PROMPT"
+cd "$HOME"
+PROMPT_FILE="$HOME/.iris/.onboarding-prompt"
+if [ -f "$PROMPT_FILE" ]; then
+    exec "$HOME/.iris/bin/iris" -m opencode/gpt-5-nano --prompt "$(cat "$PROMPT_FILE")"
+else
+    exec "$HOME/.iris/bin/iris" -m opencode/gpt-5-nano
+fi
 ONBOARD
 chmod 700 "$INSTALL_DIR/iris-onboard"
 
@@ -1321,17 +1303,6 @@ if [ -d "$HOME/.local/bin" ] && [ ! -e "$HOME/.local/bin/iris-onboard" ]; then
     ln -sf "$INSTALL_DIR/iris-onboard" "$HOME/.local/bin/iris-onboard" 2>/dev/null || true
 fi
 
-# ─── Open IRIS Desktop App ──────────────────────────────────────────────────
-if [ "${os:-}" = "darwin" ]; then
-    if [ -d "$HOME/Applications/IRIS.app" ]; then
-        echo -e "  ${GREEN}↗${NC}  ${MUTED}Opening IRIS Desktop App...${NC}"
-        open "$HOME/Applications/IRIS.app" 2>/dev/null &
-    elif [ -d "/Applications/IRIS.app" ]; then
-        echo -e "  ${GREEN}↗${NC}  ${MUTED}Opening IRIS Desktop App...${NC}"
-        open "/Applications/IRIS.app" 2>/dev/null &
-    fi
-fi
-
 # ─── Next Steps ───────────────────────────────────────────────────────────────
 # Direct run: exec iris. Piped from curl: copy to clipboard + instructions.
 
@@ -1339,11 +1310,11 @@ if [ -t 0 ]; then
     echo -e "${MUTED}Starting IRIS Code...${NC}"
     echo -e ""
     cd "$HOME"
-    exec "$INSTALL_DIR/iris" -m opencode/gpt-5-nano --prompt "$ONBOARDING_PROMPT"
+    exec "$INSTALL_DIR/iris" -m opencode/gpt-5-nano --prompt "$(cat "$PROMPT_FILE")"
 else
     echo -e ""
     if command -v pbcopy &>/dev/null; then
-        printf "cd %s\n%s/iris-onboard\n" "$HOME" "$INSTALL_DIR" | pbcopy
+        printf "%s" "$INSTALL_DIR/iris-onboard" | pbcopy
     fi
     echo -e "  ${GREEN}To start the AI assistant, run:${NC}"
     echo -e ""
@@ -1353,7 +1324,7 @@ else
     echo -e "    ${CYAN}iris-onboard${NC}"
     echo -e ""
     if command -v pbcopy &>/dev/null; then
-        echo -e "  ${MUTED}(copied to clipboard — just ⌘V + Enter)${NC}"
+        echo -e "  ${MUTED}(command copied to clipboard — just ⌘V + Enter)${NC}"
         echo -e ""
     fi
 fi
