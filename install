@@ -707,11 +707,21 @@ BCTL
     cat > "$bridge_dir/daemonctl" << 'DCTL'
 #!/usr/bin/env bash
 BRIDGE_DIR="$(cd "$(dirname "$0")" && pwd)"
+IRIS_CONFIG="$HOME/.iris/config.json"
+
+has_node_key() {
+    [ -n "${IRIS_API_KEY:-}" ] && return 0
+    [ -f "$BRIDGE_DIR/.env" ] && return 0
+    [ -f "$IRIS_CONFIG" ] && grep -q '"node_api_key"' "$IRIS_CONFIG" 2>/dev/null && return 0
+    return 1
+}
+
 case "${1:-status}" in
     start)
-        if [ -z "${IRIS_API_KEY:-}" ] && [ ! -f "$BRIDGE_DIR/.env" ]; then
-            echo "No API key configured. Set IRIS_API_KEY or create $BRIDGE_DIR/.env"
-            echo "Get your API key from: https://app.heyiris.io/settings/api"
+        if ! has_node_key; then
+            echo "No API key configured."
+            echo "  Register:  iris-daemon register"
+            echo "  Manual:    https://app.heyiris.io/dashboard/hive"
             exit 1
         fi
         PID=$(lsof -ti :3201 2>/dev/null || true)
@@ -730,7 +740,40 @@ case "${1:-status}" in
         if [ -n "$PID" ]; then echo "Running (PID: $PID)"
         else echo "Not running. Start with: iris-daemon start"; fi ;;
     logs) tail -f "$BRIDGE_DIR/daemon.log" ;;
-    *) echo "Usage: iris-daemon {start|stop|restart|status|logs}" ;;
+    register)
+        if [ ! -f "$HOME/.iris/sdk/.env" ]; then
+            echo "Not authenticated. Run 'iris setup' first."
+            exit 1
+        fi
+        SDK_TOKEN=$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" | cut -d= -f2)
+        if [ -z "$SDK_TOKEN" ]; then
+            echo "SDK token not found. Run 'iris setup' first."
+            exit 1
+        fi
+        HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My Machine")
+        HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
+        echo "Registering $(hostname -s) as Hive compute node..."
+        RESP=$(curl -sL --fail \
+            -H "Authorization: Bearer $SDK_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"$HOSTNAME_LABEL\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+            "https://apiv2.heyiris.io/api/v1/hive/register-node" 2>/dev/null)
+        if [ $? -eq 0 ] && echo "$RESP" | grep -q "node_key"; then
+            NODE_KEY=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
+                       echo "$RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+            if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
+                mkdir -p "$HOME/.iris"
+                printf '{"node_api_key":"%s","api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" > "$IRIS_CONFIG"
+                chmod 600 "$IRIS_CONFIG"
+                echo "Registered! Node key saved to ~/.iris/config.json"
+                echo "Start with: iris-daemon start"
+            else
+                echo "Registration failed. Visit: https://app.heyiris.io/dashboard/hive"
+            fi
+        else
+            echo "Registration failed. Visit: https://app.heyiris.io/dashboard/hive"
+        fi ;;
+    *) echo "Usage: iris-daemon {start|stop|restart|status|register|logs}" ;;
 esac
 DCTL
     chmod 755 "$bridge_dir/daemonctl"
@@ -741,7 +784,7 @@ DCTL
 
     print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
     print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
-    print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status${MUTED} (Hive compute node)${NC}"
+    print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status|register${MUTED} (Hive compute node)${NC}"
 }
 
 if [ "$skip_bridge" = "false" ]; then
@@ -1115,6 +1158,22 @@ ENVFILE
                         echo -e "${GREEN}  Authenticated!${NC}"
                         if [ -n "$DASHBOARD_URL" ]; then
                             echo -e "  ${MUTED}Dashboard:${NC} ${CYAN}${DASHBOARD_URL}${NC}"
+                        fi
+
+                        # Auto-register this machine as a Hive compute node
+                        HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
+                        HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
+                        NODE_RESPONSE=$(curl -sL --fail \
+                            -H "Authorization: Bearer $SDK_TOKEN" \
+                            -H "Content-Type: application/json" \
+                            --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+                            "https://apiv2.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+                        NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
+                        if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
+                            mkdir -p "$HOME/.iris"
+                            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
+                            chmod 600 "$HOME/.iris/config.json"
+                            echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
                         fi
                     else
                         # Login succeeded but SDK token wasn't generated
