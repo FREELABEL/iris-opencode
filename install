@@ -829,8 +829,19 @@ DCTL
     ln -sf "$bridge_dir/bridgectl" "$INSTALL_DIR/iris-bridge"
     ln -sf "$bridge_dir/daemonctl" "$INSTALL_DIR/iris-daemon"
 
-    # ─── iris-login: standalone auth command ────────────────────────────────
-    cat > "$INSTALL_DIR/iris-login" << 'IRISLOGIN'
+    print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
+    print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
+    print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status|register${MUTED} (Hive compute node)${NC}"
+}
+
+if [ "$skip_bridge" = "false" ]; then
+    install_bridge
+else
+    print_message info "${MUTED}[5/6] Agent Bridge .......................... skipped${NC}"
+fi
+
+# ─── iris-login: standalone auth command (always installed) ───────────────────
+cat > "$INSTALL_DIR/iris-login" << 'IRISLOGIN'
 #!/usr/bin/env bash
 set -euo pipefail
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; MUTED='\033[0;37m'; NC='\033[0m'
@@ -988,18 +999,7 @@ echo -e ""
 echo -e "${MUTED}Next: ${NC}iris-daemon start${MUTED} to join the Hive compute network${NC}"
 echo -e "${MUTED}  Or: ${NC}iris-onboard${MUTED} to start the AI assistant${NC}"
 IRISLOGIN
-    chmod 755 "$INSTALL_DIR/iris-login"
-
-    print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
-    print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
-    print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status|register${MUTED} (Hive compute node)${NC}"
-}
-
-if [ "$skip_bridge" = "false" ]; then
-    install_bridge
-else
-    print_message info "${MUTED}[5/6] Agent Bridge .......................... skipped${NC}"
-fi
+chmod 755 "$INSTALL_DIR/iris-login"
 
 # ─── Component 6: Docker Agent Sandbox ────────────────────────────────────────
 
