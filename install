@@ -156,6 +156,17 @@ if ! [[ "$iris_api_url" =~ ^https?://[a-zA-Z0-9._-]+(:[0-9]+)?(/.*)?$ ]]; then
     exit 1
 fi
 
+# ─── Pre-flight: verify required utilities ────────────────────────────────────
+_missing=""
+for _cmd in curl grep sed mktemp chmod mkdir; do
+    command -v "$_cmd" >/dev/null 2>&1 || _missing="$_missing $_cmd"
+done
+if [ -n "$_missing" ]; then
+    echo -e "${RED}Missing required utilities:${NC}$_missing"
+    echo -e "${MUTED}Install them and try again.${NC}"
+    exit 1
+fi
+
 INSTALL_DIR=$HOME/.iris/bin
 mkdir -p "$INSTALL_DIR"
 
@@ -760,7 +771,8 @@ case "${1:-status}" in
                         -H "Content-Type: application/json" \
                         -d "{\"name\": \"$_HLABEL\", \"capabilities\": {\"docker\": $_HDOCK}}" \
                         "https://apiv2.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
-                    _NKEY=$(echo "$_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
+                    _NKEY=$(echo "$_RESP" | jq -r '.node_key // empty' 2>/dev/null || \
+                            echo "$_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
                             echo "$_RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
                     if [ -n "$_NKEY" ] && [ "$_NKEY" != "null" ]; then
                         printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$_NKEY" "${_UID:-0}" > "$IRIS_CONFIG"
@@ -837,7 +849,8 @@ case "${1:-status}" in
             -d "{\"name\": \"$HOSTNAME_LABEL\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
             "https://apiv2.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo "000")
         RESP=$(cat "$REG_TMP" 2>/dev/null || echo '{}'); rm -f "$REG_TMP"
-        NODE_KEY=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
+        NODE_KEY=$(echo "$RESP" | jq -r '.node_key // empty' 2>/dev/null || \
+                   echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
                    echo "$RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
         if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
             mkdir -p "$HOME/.iris"
@@ -899,7 +912,9 @@ done
 
 json_field() {
     local json="$1" field="$2"
-    if command -v python3 >/dev/null 2>&1; then
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r "(.\"$field\" // .data.\"$field\") // empty" 2>/dev/null || echo ""
+    elif command -v python3 >/dev/null 2>&1; then
         echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$field', d.get('data',{}).get('$field','')))" 2>/dev/null || echo ""
     else
         echo "$json" | sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",$}]*\)\"\{0,1\}.*/\1/p" | head -1
@@ -908,7 +923,9 @@ json_field() {
 
 json_nested() {
     local json="$1" path="$2"
-    if command -v python3 >/dev/null 2>&1; then
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r ".$path // empty" 2>/dev/null || echo ""
+    elif command -v python3 >/dev/null 2>&1; then
         echo "$json" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
@@ -1300,12 +1317,12 @@ SDK_TOKEN=""
 DASHBOARD_URL=""
 USER_EMAIL=""
 
-# Helper: parse JSON field without python3 dependency
-# Usage: json_field '{"key":"val"}' 'key' → val
+# Helper: parse JSON (jq → python3 → sed fallback)
 json_field() {
     local json="$1" field="$2"
-    # Try python3 first, fall back to sed
-    if command -v python3 >/dev/null 2>&1; then
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r "(.\"$field\" // .data.\"$field\") // empty" 2>/dev/null || echo ""
+    elif command -v python3 >/dev/null 2>&1; then
         echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$field', d.get('data',{}).get('$field','')))" 2>/dev/null || echo ""
     else
         echo "$json" | sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",$}]*\)\"\{0,1\}.*/\1/p" | head -1
@@ -1314,7 +1331,9 @@ json_field() {
 
 json_nested() {
     local json="$1" path="$2"
-    if command -v python3 >/dev/null 2>&1; then
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r ".$path // empty" 2>/dev/null || echo ""
+    elif command -v python3 >/dev/null 2>&1; then
         echo "$json" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
