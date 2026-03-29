@@ -706,7 +706,9 @@ BCTL
     # Create iris-daemon convenience script for Hive compute
     cat > "$bridge_dir/daemonctl" << 'DCTL'
 #!/usr/bin/env bash
-BRIDGE_DIR="$(cd "$(dirname "$0")" && pwd)"
+REAL_SCRIPT="$0"
+[ -L "$REAL_SCRIPT" ] && REAL_SCRIPT="$(readlink "$REAL_SCRIPT")"
+BRIDGE_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 IRIS_CONFIG="$HOME/.iris/config.json"
 
 has_node_key() {
@@ -724,20 +726,32 @@ case "${1:-status}" in
             echo "  Manual:    https://app.heyiris.io/dashboard/hive"
             exit 1
         fi
-        PID=$(lsof -ti :3201 2>/dev/null || true)
-        if [ -n "$PID" ]; then echo "Daemon already running (PID: $PID)"; exit 0; fi
+        SOCK="$HOME/.iris/daemon.sock"
+        if [ -S "$SOCK" ] && node -e "require('net').createConnection('$SOCK',()=>{console.log('alive');process.exit(0)}).on('error',()=>process.exit(1))" 2>/dev/null; then
+            echo "Daemon already running"; exit 0
+        fi
+        rm -f "$SOCK"
         nohup node "$BRIDGE_DIR/daemon.js" > "$BRIDGE_DIR/daemon.log" 2>&1 &
         sleep 3
-        echo "Hive daemon started (PID: $!)"
-        echo "Your machine is now a compute node in IRIS Hive." ;;
+        if [ -S "$SOCK" ]; then
+            echo "Hive daemon started (PID: $!)"
+            echo "Your machine is now a compute node in IRIS Hive."
+        else
+            echo "Daemon failed to start. Check logs: iris-daemon logs"
+            tail -5 "$BRIDGE_DIR/daemon.log" 2>/dev/null
+            exit 1
+        fi ;;
     stop)
-        PID=$(lsof -ti :3201 2>/dev/null || true)
+        SOCK="$HOME/.iris/daemon.sock"
+        PID=$(lsof -ti :3200 2>/dev/null || true)
         if [ -n "$PID" ]; then kill "$PID" 2>/dev/null; echo "Daemon stopped (PID: $PID)"
+        elif [ -S "$SOCK" ]; then rm -f "$SOCK"; echo "Cleaned stale socket"
         else echo "Not running"; fi ;;
     restart) "$0" stop; sleep 1; "$0" start ;;
     status)
-        PID=$(lsof -ti :3201 2>/dev/null || true)
-        if [ -n "$PID" ]; then echo "Running (PID: $PID)"
+        SOCK="$HOME/.iris/daemon.sock"
+        if [ -S "$SOCK" ]; then
+            node "$BRIDGE_DIR/daemon.js" --status 2>/dev/null || echo "Not running. Start with: iris-daemon start"
         else echo "Not running. Start with: iris-daemon start"; fi ;;
     logs) tail -f "$BRIDGE_DIR/daemon.log" ;;
     register)
