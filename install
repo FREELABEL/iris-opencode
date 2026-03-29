@@ -979,8 +979,12 @@ echo -e ""
 echo -e "${CYAN}IRIS Login${NC}"
 echo -e ""
 echo -n "  Email: "
-read -r USER_EMAIL
+read -r USER_EMAIL || USER_EMAIL=""
 if [ -z "$USER_EMAIL" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
+if ! echo "$USER_EMAIL" | grep -qE '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'; then
+    echo -e "${RED}  Invalid email format.${NC}"
+    exit 1
+fi
 
 echo -e "${MUTED}  Sending verification code...${NC}"
 SEND_RESP=$(curl -s --max-time 15 -X POST "$API_BASE/api/v1/auth/send-login-code" \
@@ -998,7 +1002,7 @@ else
     echo -e "${GREEN}  Code sent!${NC} Check your inbox."
 fi
 echo -n "  Enter the 6-digit code: "
-read -r CODE
+read -r CODE || CODE=""
 if [ -z "$CODE" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
 
 echo -e "${MUTED}  Verifying...${NC}"
@@ -1663,18 +1667,32 @@ if [ -t 0 ]; then
     exec "$INSTALL_DIR/iris" -m opencode/gpt-5-nano --prompt "$(cat "$PROMPT_FILE")"
 else
     echo -e ""
-    if command -v pbcopy &>/dev/null; then
-        printf "%s" "iris-login" | pbcopy
-    fi
-    echo -e "  ${GREEN}Next step — authenticate:${NC}"
-    echo -e ""
-    echo -e "    ${CYAN}iris-login${NC}"
-    echo -e ""
-    echo -e "  ${MUTED}Then start the AI assistant:${NC}"
-    echo -e "    ${CYAN}iris-onboard${NC}"
-    echo -e ""
-    if command -v pbcopy &>/dev/null; then
-        echo -e "  ${MUTED}(${NC}iris-login${MUTED} copied to clipboard — just ⌘V + Enter)${NC}"
+    if [ "$AUTH_SUCCESS" = "true" ] || ([ -f "$HOME/.iris/sdk/.env" ] && grep -q "IRIS_API_KEY=." "$HOME/.iris/sdk/.env" 2>/dev/null); then
+        # Already authenticated — skip login prompt
+        echo -e "  ${GREEN}Ready to go!${NC} Start the AI assistant:"
         echo -e ""
+        echo -e "    ${CYAN}iris-onboard${NC}"
+        echo -e ""
+        if command -v pbcopy &>/dev/null; then
+            printf "%s" "iris-onboard" | pbcopy
+            echo -e "  ${MUTED}(command copied to clipboard)${NC}"
+            echo -e ""
+        fi
+    else
+        # Not authenticated — show login prompt
+        if command -v pbcopy &>/dev/null; then
+            printf "%s" "iris-login" | pbcopy
+        fi
+        echo -e "  ${GREEN}Next step — authenticate:${NC}"
+        echo -e ""
+        echo -e "    ${CYAN}iris-login${NC}"
+        echo -e ""
+        echo -e "  ${MUTED}Then start the AI assistant:${NC}"
+        echo -e "    ${CYAN}iris-onboard${NC}"
+        echo -e ""
+        if command -v pbcopy &>/dev/null; then
+            echo -e "  ${MUTED}(${NC}iris-login${MUTED} copied to clipboard — just ⌘V + Enter)${NC}"
+            echo -e ""
+        fi
     fi
 fi
