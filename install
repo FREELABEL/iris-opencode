@@ -800,7 +800,7 @@ case "${1:-status}" in
         HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My Machine")
         HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
         echo "Registering $(hostname -s) as Hive compute node..."
-        RESP=$(curl -sL --fail \
+        RESP=$(curl -sL --fail --max-time 10 \
             -H "Authorization: Bearer $SDK_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"name\": \"$HOSTNAME_LABEL\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
@@ -844,7 +844,7 @@ fi
 cat > "$INSTALL_DIR/iris-login" << 'IRISLOGIN'
 #!/usr/bin/env bash
 set -euo pipefail
-CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; MUTED='\033[0;37m'; NC='\033[0m'
+CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; MUTED='\033[0;2m'; NC='\033[0m'
 IRIS_DIR="$HOME/.iris"
 SDK_ENV="$IRIS_DIR/sdk/.env"
 CONFIG_JSON="$IRIS_DIR/config.json"
@@ -886,7 +886,7 @@ register_hive() {
     local token="$1" user_id="$2"
     local hostname_label; hostname_label=$(hostname -s 2>/dev/null || echo "My-Machine")
     local has_docker; has_docker=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-    local resp; resp=$(curl -sL --fail \
+    local resp; resp=$(curl -sL --fail --max-time 10 \
         -H "Authorization: Bearer $token" \
         -H "Content-Type: application/json" \
         -d "{\"name\": \"$(echo "$hostname_label" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $has_docker}}" \
@@ -937,7 +937,7 @@ read -r USER_EMAIL
 if [ -z "$USER_EMAIL" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
 
 echo -e "${MUTED}  Sending verification code...${NC}"
-SEND_RESP=$(curl -s -X POST "$API_BASE/api/v1/auth/send-login-code" \
+SEND_RESP=$(curl -s --max-time 15 -X POST "$API_BASE/api/v1/auth/send-login-code" \
     -H "Content-Type: application/json" -H "Accept: application/json" \
     --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false}')
 SEND_OK=$(json_field "$SEND_RESP" "success")
@@ -956,7 +956,7 @@ read -r CODE
 if [ -z "$CODE" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
 
 echo -e "${MUTED}  Verifying...${NC}"
-LOGIN_RESP=$(curl -s -X POST "$API_BASE/api/v1/auth/login-with-code" \
+LOGIN_RESP=$(curl -s --max-time 15 -X POST "$API_BASE/api/v1/auth/login-with-code" \
     -H "Content-Type: application/json" -H "Accept: application/json" \
     --data-raw "{
         \"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\",
@@ -1300,7 +1300,7 @@ ENVFILE
     # Auto-register this machine as a Hive compute node
     HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
     HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-    NODE_RESPONSE=$(curl -sL --fail \
+    NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
         -H "Authorization: Bearer $SDK_TOKEN" \
         -H "Content-Type: application/json" \
         --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
@@ -1339,7 +1339,7 @@ if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
         echo -e ""
         echo -e "${MUTED}  Sending verification code to ${NC}${USER_EMAIL}${MUTED}...${NC}"
 
-        SEND_RESPONSE=$(curl -s -X POST https://apiv2.heyiris.io/api/v1/auth/send-login-code \
+        SEND_RESPONSE=$(curl -s --max-time 15 -X POST https://apiv2.heyiris.io/api/v1/auth/send-login-code \
             -H "Content-Type: application/json" \
             -H "Accept: application/json" \
             --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false,"error":"Network error"}')
@@ -1367,7 +1367,7 @@ if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
                 echo -e ""
                 echo -e "${MUTED}  Verifying...${NC}"
 
-                LOGIN_RESPONSE=$(curl -s -X POST https://apiv2.heyiris.io/api/v1/auth/login-with-code \
+                LOGIN_RESPONSE=$(curl -s --max-time 15 -X POST https://apiv2.heyiris.io/api/v1/auth/login-with-code \
                     -H "Content-Type: application/json" \
                     -H "Accept: application/json" \
                     --data-raw "{
@@ -1409,7 +1409,7 @@ ENVFILE
                         # Auto-register this machine as a Hive compute node
                         HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
                         HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
-                        NODE_RESPONSE=$(curl -sL --fail \
+                        NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
                             -H "Authorization: Bearer $SDK_TOKEN" \
                             -H "Content-Type: application/json" \
                             --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
@@ -1527,56 +1527,50 @@ After it is created, show:
 - Their dashboard: $DASHBOARD (they can manage everything from the web UI too)
 - One suggested next step"
 else
-    ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user installed IRIS but is NOT authenticated yet. ONLY use CLI commands. Do NOT use curl.
+    ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user installed IRIS but is NOT authenticated yet.
+
+IMPORTANT: You CANNOT run iris-login for the user — it requires interactive keyboard input. Instead, tell them to run it themselves.
 
 RULES:
-- NEVER use curl or call APIs directly. Only CLI commands.
-- At the END of EVERY response, include these links in a clean ASCII table like this:
-
-  ┌──────────────────────────────────────────────────────────────┐
-  │  Dashboard   https://app.heyiris.io
-  │  Discover    https://app.heyiris.io/discover
-  │  Discord     https://discord.com/invite/Vmfrqmdkps
-  │  Docs        https://heyiris.io/developer
-  │  Desktop     ~/Applications/IRIS.app (run: open ~/Applications/IRIS.app)
-  └──────────────────────────────────────────────────────────────┘
+- NEVER use curl or call APIs directly.
+- NEVER try to run iris-login — it needs interactive input you can't provide.
 
 FIRST, run these quick commands to understand the user:
    git config --global user.name 2>/dev/null; git config --global user.email 2>/dev/null
    ls -d ~/Sites/*/ ~/Projects/*/ ~/Code/*/ ~/Developer/*/ 2>/dev/null | head -15
    which node python3 php docker 2>/dev/null
-Use what you learn to personalize the greeting. If the scan finds nothing, proceed with the standard greeting.
+Use what you learn to personalize the greeting.
 
-Step 1: Run this to authenticate: iris-login
-Step 2: After auth succeeds, present the choices:
+Then show this message:
 
-Welcome to IRIS! Here's what you can build:
+Welcome to IRIS! Before we build anything, you need to authenticate.
 
-1. An AI Agent
-   - Chat-powered assistant with 17+ integrations (Gmail, Slack, Google Drive, Calendar, and more)
-   - Attach files (PDF, CSV, DOCX) for automatic knowledge retrieval (RAG)
-   - Connect to voice AI, schedule recurring tasks, and share publicly via URL
+Run this command (I can't do it for you — it needs your keyboard input):
 
-2. A Multi-Agent Workflow
-   - Chain multiple AI agents into automated pipelines with human approval steps
-   - Generate content at scale: articles from videos, newsletters, legal packages
-   - Real-time progress tracking with background queue processing
+    iris-login
 
-3. A Web Page
-   - Design and publish a landing page using the drag-and-drop page composer
-   - AI-assisted layout suggestions and content generation
-   - Publish instantly to a public URL — no hosting setup required
+This will:
+  1. Ask for your email
+  2. Send a verification code
+  3. Save your API token locally
+  4. Register this machine as a Hive compute node
 
-4. Something else — here's what else IRIS can do:
-   - Lead management & CRM, knowledge bases, recruitment tools
-   - Content generation from 6 source types, 17+ integrations
-   - Tell me what you need and I will find the right command
+Once you've run iris-login, come back here and tell me what you'd like to build:
 
-Commands:
-  1. AI Agent -- run: ~/.iris/sdk/bin/iris agent:create
-  2. Multi-Agent Workflow -- run: ~/.iris/sdk/bin/iris automation
-  3. Web Page -- run: ~/.iris/sdk/bin/iris pages create
-  4. Something else -- check ~/.iris/docs/onboarding.md for commands"
+  1. An AI Agent — chat assistant with 17+ integrations
+  2. A Multi-Agent Workflow — automated pipelines with human approval
+  3. A Web Page — drag-and-drop page composer, publish instantly
+  4. Something else — CRM, knowledge bases, recruitment, content generation
+
+Already have a token? You can also run: iris-login --token YOUR_TOKEN --user-id YOUR_ID
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Dashboard   https://app.heyiris.io                         │
+  │  Discover    https://app.heyiris.io/discover                │
+  │  Discord     https://discord.com/invite/Vmfrqmdkps          │
+  │  Docs        https://heyiris.io/developer                   │
+  │  Desktop     ~/Applications/IRIS.app                        │
+  └──────────────────────────────────────────────────────────────┘"
 fi
 
 # ─── Create iris-onboard launcher script ─────────────────────────────────────
@@ -1596,7 +1590,7 @@ else
     exec "$HOME/.iris/bin/iris" -m opencode/gpt-5-nano
 fi
 ONBOARD
-chmod 700 "$INSTALL_DIR/iris-onboard"
+chmod 755 "$INSTALL_DIR/iris-onboard"
 
 # Symlink iris-onboard and iris-login into any PATH directory that already has iris
 for dir in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
