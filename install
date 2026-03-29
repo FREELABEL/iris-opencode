@@ -959,7 +959,7 @@ IRIS_DEFAULT_MODEL=gpt-4o-mini
 ENVFILE
     chmod 600 "$SDK_ENV"
     echo -e "${GREEN}Authenticated via token.${NC}"
-    register_hive "$PRE_TOKEN" "${PRE_USER_ID:-0}"
+    register_hive "$PRE_TOKEN" "${PRE_USER_ID:-0}" || true
     exit 0
 fi
 
@@ -1043,7 +1043,7 @@ chmod 600 "$SDK_ENV"
 echo -e "${GREEN}  Authenticated!${NC}"
 [ -n "$DASHBOARD" ] && echo -e "  ${MUTED}Dashboard:${NC} ${CYAN}${DASHBOARD}${NC}"
 
-register_hive "$SDK_TOKEN" "$USER_ID"
+register_hive "$SDK_TOKEN" "$USER_ID" || true
 
 echo -e ""
 echo -e "${MUTED}Next: ${NC}iris-daemon start${MUTED} to join the Hive compute network${NC}"
