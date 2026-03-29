@@ -34,6 +34,8 @@ Options:
         --skip-bridge       Skip Coding Agent Bridge installation
         --skip-sandbox      Skip Docker Sandbox installation
         --api-url <url>     Set IRIS API URL (default: https://app.heyiris.io)
+        --token <token>     Pre-seed SDK token (skip interactive auth)
+        --user-id <id>      Pre-seed user ID (used with --token)
         --only-code         Only install IRIS Code (skip SDK, app, MCP, bridge, sandbox)
 
 Examples:
@@ -42,6 +44,7 @@ Examples:
     curl -fsSL https://heyiris.io/install-code | bash -s -- --only-code
     curl -fsSL https://heyiris.io/install-code | bash -s -- --skip-app
     curl -fsSL https://heyiris.io/install-code | bash -s -- --api-url https://custom.example.com
+    curl -fsSL https://heyiris.io/install-code | bash -s -- --token api_token_xxx --user-id 42
 EOF
 }
 
@@ -54,6 +57,8 @@ skip_mcp=false
 skip_bridge=false
 skip_sandbox=false
 iris_api_url="https://app.heyiris.io"
+pre_token="${IRIS_SDK_TOKEN:-}"
+pre_user_id="${IRIS_USER_ID:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -109,6 +114,24 @@ while [[ $# -gt 0 ]]; do
                 shift 2
             else
                 echo -e "${RED}Error: --api-url requires a URL argument${NC}"
+                exit 1
+            fi
+            ;;
+        --token)
+            if [[ -n "${2:-}" ]]; then
+                pre_token="$2"
+                shift 2
+            else
+                echo -e "${RED}Error: --token requires a token argument${NC}"
+                exit 1
+            fi
+            ;;
+        --user-id)
+            if [[ -n "${2:-}" ]]; then
+                pre_user_id="$2"
+                shift 2
+            else
+                echo -e "${RED}Error: --user-id requires an ID argument${NC}"
                 exit 1
             fi
             ;;
@@ -666,6 +689,9 @@ install_bridge() {
             (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || {
                 print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
             }
+            if [ ! -d "$bridge_dir/node_modules/dotenv" ]; then
+                print_message warning "${ORANGE}Bridge dependencies incomplete. Run: cd ~/.iris/bridge && npm install${NC}"
+            fi
         else
             print_message info "${MUTED}[5/6] Agent Bridge .......................... could not download${NC}"
             print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-bridge.git ~/.iris/bridge"
@@ -1084,12 +1110,50 @@ print(d)" 2>/dev/null || echo ""
     fi
 }
 
+# ─── Pre-seeded token (non-interactive auth) ────────────────────────────────
+if [ -n "$pre_token" ]; then
+    mkdir -p "$HOME/.iris/sdk"
+    cat > "$HOME/.iris/sdk/.env" << ENVFILE
+# IRIS SDK Configuration
+# Pre-seeded by installer
+# Date: $(date '+%Y-%m-%d %H:%M:%S')
+
+IRIS_ENV=production
+IRIS_API_KEY=$pre_token
+IRIS_USER_ID=${pre_user_id:-0}
+IRIS_DEFAULT_MODEL=gpt-4o-mini
+ENVFILE
+    chmod 600 "$HOME/.iris/sdk/.env"
+    SDK_TOKEN="$pre_token"
+    USER_ID="${pre_user_id:-0}"
+    AUTH_SUCCESS=true
+    echo -e "  ${GREEN}Authenticated via pre-seeded token${NC}"
+
+    # Auto-register this machine as a Hive compute node
+    HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
+    HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
+    NODE_RESPONSE=$(curl -sL --fail \
+        -H "Authorization: Bearer $SDK_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+        "https://apiv2.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+    NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
+    if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
+        mkdir -p "$HOME/.iris"
+        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
+        chmod 600 "$HOME/.iris/config.json"
+        echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
+    else
+        echo -e "  ${MUTED}Hive auto-registration skipped. Register later: ${NC}iris-daemon register"
+    fi
+fi
+
 tty_available=false
 if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
     tty_available=true
 fi
 
-if [ "$tty_available" = "true" ]; then
+if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
     echo -e ""
     echo -e "${CYAN}Let's get you set up!${NC}"
     echo -e ""
@@ -1188,6 +1252,8 @@ ENVFILE
                             printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
                             chmod 600 "$HOME/.iris/config.json"
                             echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
+                        else
+                            echo -e "  ${MUTED}Hive auto-registration skipped. Register later: ${NC}iris-daemon register"
                         fi
                     else
                         # Login succeeded but SDK token wasn't generated
