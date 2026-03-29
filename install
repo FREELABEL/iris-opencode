@@ -781,13 +781,20 @@ case "${1:-status}" in
         else echo "Not running. Start with: iris-daemon start"; fi ;;
     logs) tail -f "$BRIDGE_DIR/daemon.log" ;;
     register)
-        if [ ! -f "$HOME/.iris/sdk/.env" ]; then
-            echo "Not authenticated. Run 'iris setup' first."
-            exit 1
+        if [ ! -f "$HOME/.iris/sdk/.env" ] || [ -z "$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)" ]; then
+            if command -v iris-login >/dev/null 2>&1; then
+                echo "Not authenticated. Running iris-login..."
+                iris-login
+                # Re-check after login
+                if [ ! -f "$HOME/.iris/sdk/.env" ]; then echo "Auth failed."; exit 1; fi
+            else
+                echo "Not authenticated. Run 'iris-login' first."
+                exit 1
+            fi
         fi
         SDK_TOKEN=$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" | cut -d= -f2)
         if [ -z "$SDK_TOKEN" ]; then
-            echo "SDK token not found. Run 'iris setup' first."
+            echo "SDK token not found. Run 'iris-login' first."
             exit 1
         fi
         HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My Machine")
@@ -821,6 +828,167 @@ DCTL
     # Symlink both CLIs into the iris bin directory
     ln -sf "$bridge_dir/bridgectl" "$INSTALL_DIR/iris-bridge"
     ln -sf "$bridge_dir/daemonctl" "$INSTALL_DIR/iris-daemon"
+
+    # ─── iris-login: standalone auth command ────────────────────────────────
+    cat > "$INSTALL_DIR/iris-login" << 'IRISLOGIN'
+#!/usr/bin/env bash
+set -euo pipefail
+CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; MUTED='\033[0;37m'; NC='\033[0m'
+IRIS_DIR="$HOME/.iris"
+SDK_ENV="$IRIS_DIR/sdk/.env"
+CONFIG_JSON="$IRIS_DIR/config.json"
+API_BASE="https://apiv2.heyiris.io"
+
+# Parse flags
+PRE_TOKEN="" ; PRE_USER_ID=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --token)  PRE_TOKEN="$2"; shift 2 ;;
+        --user-id) PRE_USER_ID="$2"; shift 2 ;;
+        --help|-h) echo "Usage: iris-login [--token TOKEN --user-id ID]"; exit 0 ;;
+        *) shift ;;
+    esac
+done
+
+json_field() {
+    local json="$1" field="$2"
+    if command -v python3 >/dev/null 2>&1; then
+        echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$field', d.get('data',{}).get('$field','')))" 2>/dev/null || echo ""
+    else
+        echo "$json" | sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",$}]*\)\"\{0,1\}.*/\1/p" | head -1
+    fi
+}
+
+json_nested() {
+    local json="$1" path="$2"
+    if command -v python3 >/dev/null 2>&1; then
+        echo "$json" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for k in '$path'.split('.'):
+    d=d.get(k,'') if isinstance(d,dict) else ''
+print(d)" 2>/dev/null || echo ""
+    else echo ""; fi
+}
+
+register_hive() {
+    local token="$1" user_id="$2"
+    local hostname_label; hostname_label=$(hostname -s 2>/dev/null || echo "My-Machine")
+    local has_docker; has_docker=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
+    local resp; resp=$(curl -sL --fail \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -d "{\"name\": \"$(echo "$hostname_label" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $has_docker}}" \
+        "$API_BASE/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+    local node_key; node_key=$(json_field "$resp" "node_key")
+    if [ -n "$node_key" ] && [ "$node_key" != "null" ]; then
+        mkdir -p "$IRIS_DIR"
+        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$node_key" "${user_id:-0}" > "$CONFIG_JSON"
+        chmod 600 "$CONFIG_JSON"
+        echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
+    else
+        echo -e "  ${MUTED}Hive registration skipped. Register later: ${NC}iris-daemon register"
+    fi
+}
+
+# ─── Scripted auth (--token flag) ──────────────────────────────────────────
+if [ -n "$PRE_TOKEN" ]; then
+    mkdir -p "$IRIS_DIR/sdk"
+    cat > "$SDK_ENV" << ENVFILE
+IRIS_ENV=production
+IRIS_API_KEY=$PRE_TOKEN
+IRIS_USER_ID=${PRE_USER_ID:-0}
+IRIS_DEFAULT_MODEL=gpt-4o-mini
+ENVFILE
+    chmod 600 "$SDK_ENV"
+    echo -e "${GREEN}Authenticated via token.${NC}"
+    register_hive "$PRE_TOKEN" "${PRE_USER_ID:-0}"
+    exit 0
+fi
+
+# ─── Already authenticated? ───────────────────────────────────────────────
+if [ -f "$SDK_ENV" ]; then
+    existing=$(grep IRIS_API_KEY "$SDK_ENV" 2>/dev/null | cut -d= -f2)
+    if [ -n "$existing" ]; then
+        echo -e "${GREEN}Already authenticated.${NC}"
+        echo -e "${MUTED}Token:${NC} ${existing:0:12}..."
+        echo -e "${MUTED}To re-authenticate, delete ~/.iris/sdk/.env and run ${NC}iris-login${MUTED} again.${NC}"
+        exit 0
+    fi
+fi
+
+# ─── Interactive email→code flow ──────────────────────────────────────────
+echo -e ""
+echo -e "${CYAN}IRIS Login${NC}"
+echo -e ""
+echo -n "  Email: "
+read -r USER_EMAIL
+if [ -z "$USER_EMAIL" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
+
+echo -e "${MUTED}  Sending verification code...${NC}"
+SEND_RESP=$(curl -s -X POST "$API_BASE/api/v1/auth/send-login-code" \
+    -H "Content-Type: application/json" -H "Accept: application/json" \
+    --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false}')
+SEND_OK=$(json_field "$SEND_RESP" "success")
+if [ "$SEND_OK" != "True" ] && [ "$SEND_OK" != "true" ]; then
+    echo -e "${RED}  Failed to send code.${NC} Sign up at: ${CYAN}https://app.heyiris.io/login/register${NC}"
+    exit 1
+fi
+IS_NEW=$(json_nested "$SEND_RESP" "data.new_account")
+if [ "$IS_NEW" = "True" ] || [ "$IS_NEW" = "true" ]; then
+    echo -e "${GREEN}  Account created!${NC} Check your inbox."
+else
+    echo -e "${GREEN}  Code sent!${NC} Check your inbox."
+fi
+echo -n "  Enter the 6-digit code: "
+read -r CODE
+if [ -z "$CODE" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
+
+echo -e "${MUTED}  Verifying...${NC}"
+LOGIN_RESP=$(curl -s -X POST "$API_BASE/api/v1/auth/login-with-code" \
+    -H "Content-Type: application/json" -H "Accept: application/json" \
+    --data-raw "{
+        \"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\",
+        \"login_code\": \"$CODE\",
+        \"generate_sdk_token\": true,
+        \"sdk_token_name\": \"IRIS Code CLI\",
+        \"sdk_token_expires_days\": 365,
+        \"generate_dashboard_url\": true
+    }" 2>/dev/null || echo '{"success":false}')
+LOGIN_OK=$(json_field "$LOGIN_RESP" "success")
+if [ "$LOGIN_OK" != "True" ] && [ "$LOGIN_OK" != "true" ]; then
+    echo -e "${RED}  Login failed.${NC} Code may have expired — run ${CYAN}iris-login${NC} to try again."
+    exit 1
+fi
+
+SDK_TOKEN=$(json_nested "$LOGIN_RESP" "data.sdk_token.key")
+USER_ID=$(json_nested "$LOGIN_RESP" "data.user.id")
+DASHBOARD=$(json_nested "$LOGIN_RESP" "data.dashboard_url")
+
+if [ -z "$SDK_TOKEN" ] || [ -z "$USER_ID" ]; then
+    echo -e "${RED}  Auth succeeded but token wasn't generated. Try again or visit ${CYAN}https://app.heyiris.io${NC}"
+    exit 1
+fi
+
+mkdir -p "$IRIS_DIR/sdk"
+cat > "$SDK_ENV" << ENVFILE
+IRIS_ENV=production
+IRIS_API_KEY=$SDK_TOKEN
+IRIS_USER_ID=$USER_ID
+IRIS_DEFAULT_MODEL=gpt-4o-mini
+ENVFILE
+chmod 600 "$SDK_ENV"
+
+echo -e "${GREEN}  Authenticated!${NC}"
+[ -n "$DASHBOARD" ] && echo -e "  ${MUTED}Dashboard:${NC} ${CYAN}${DASHBOARD}${NC}"
+
+register_hive "$SDK_TOKEN" "$USER_ID"
+
+echo -e ""
+echo -e "${MUTED}Next: ${NC}iris-daemon start${MUTED} to join the Hive compute network${NC}"
+echo -e "${MUTED}  Or: ${NC}iris-onboard${MUTED} to start the AI assistant${NC}"
+IRISLOGIN
+    chmod 755 "$INSTALL_DIR/iris-login"
 
     print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
     print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
@@ -1161,9 +1329,9 @@ if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
     read -r USER_EMAIL < /dev/tty || USER_EMAIL=""
 
     if [ -z "$USER_EMAIL" ]; then
-        echo -e "${MUTED}  Skipping authentication. Run ${NC}iris setup${MUTED} later to connect your account.${NC}"
+        echo -e "${MUTED}  Skipping authentication. Run ${NC}iris-login${MUTED} later to connect your account.${NC}"
     elif ! [[ "$USER_EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-        echo -e "${RED}  Invalid email format.${NC} Run ${NC}iris setup${MUTED} later to authenticate.${NC}"
+        echo -e "${RED}  Invalid email format.${NC} Run ${NC}iris-login${MUTED} later to authenticate.${NC}"
         USER_EMAIL=""
     fi
 
@@ -1264,7 +1432,7 @@ ENVFILE
                 else
                     ERROR_MSG=$(json_field "$LOGIN_RESPONSE" "error")
                     echo -e "${RED}  Login failed: ${ERROR_MSG:-Invalid code or network error}${NC}"
-                    echo -e "${MUTED}  The code may have expired. Run ${NC}iris setup${MUTED} to try again.${NC}"
+                    echo -e "${MUTED}  The code may have expired. Run ${NC}iris-login${MUTED} to try again.${NC}"
                 fi
             fi
         else
@@ -1379,7 +1547,7 @@ FIRST, run these quick commands to understand the user:
    which node python3 php docker 2>/dev/null
 Use what you learn to personalize the greeting. If the scan finds nothing, proceed with the standard greeting.
 
-Step 1: Run this to authenticate: ~/.iris/sdk/bin/iris setup
+Step 1: Run this to authenticate: iris-login
 Step 2: After auth succeeds, present the choices:
 
 Welcome to IRIS! Here's what you can build:
@@ -1430,16 +1598,19 @@ fi
 ONBOARD
 chmod 700 "$INSTALL_DIR/iris-onboard"
 
-# Symlink iris-onboard into any PATH directory that already has iris
+# Symlink iris-onboard and iris-login into any PATH directory that already has iris
 for dir in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
     if [ -L "$dir/iris" ] || [ -f "$dir/iris" ]; then
-        ln -sf "$INSTALL_DIR/iris-onboard" "$dir/iris-onboard" 2>/dev/null && break
+        ln -sf "$INSTALL_DIR/iris-onboard" "$dir/iris-onboard" 2>/dev/null
+        ln -sf "$INSTALL_DIR/iris-login" "$dir/iris-login" 2>/dev/null
+        break
     fi
 done
 
-# Ensure iris-onboard is also in ~/.local/bin as a fallback (common PATH dir)
-if [ -d "$HOME/.local/bin" ] && [ ! -e "$HOME/.local/bin/iris-onboard" ]; then
-    ln -sf "$INSTALL_DIR/iris-onboard" "$HOME/.local/bin/iris-onboard" 2>/dev/null || true
+# Ensure iris-onboard and iris-login are in ~/.local/bin as a fallback
+if [ -d "$HOME/.local/bin" ]; then
+    [ ! -e "$HOME/.local/bin/iris-onboard" ] && ln -sf "$INSTALL_DIR/iris-onboard" "$HOME/.local/bin/iris-onboard" 2>/dev/null || true
+    [ ! -e "$HOME/.local/bin/iris-login" ] && ln -sf "$INSTALL_DIR/iris-login" "$HOME/.local/bin/iris-login" 2>/dev/null || true
 fi
 
 # ─── Next Steps ───────────────────────────────────────────────────────────────
@@ -1453,17 +1624,17 @@ if [ -t 0 ]; then
 else
     echo -e ""
     if command -v pbcopy &>/dev/null; then
-        printf "%s" "$INSTALL_DIR/iris-onboard" | pbcopy
+        printf "%s" "iris-login" | pbcopy
     fi
-    echo -e "  ${GREEN}To start the AI assistant, run:${NC}"
+    echo -e "  ${GREEN}Next step — authenticate:${NC}"
     echo -e ""
-    echo -e "    ${CYAN}~/.iris/bin/iris-onboard${NC}"
+    echo -e "    ${CYAN}iris-login${NC}"
     echo -e ""
-    echo -e "  ${MUTED}Or open a new terminal and run:${NC}"
+    echo -e "  ${MUTED}Then start the AI assistant:${NC}"
     echo -e "    ${CYAN}iris-onboard${NC}"
     echo -e ""
     if command -v pbcopy &>/dev/null; then
-        echo -e "  ${MUTED}(command copied to clipboard — just ⌘V + Enter)${NC}"
+        echo -e "  ${MUTED}(${NC}iris-login${MUTED} copied to clipboard — just ⌘V + Enter)${NC}"
         echo -e ""
     fi
 fi
