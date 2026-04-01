@@ -1645,10 +1645,6 @@ chmod 755 "$INSTALL_DIR/iris-onboard"
 # Try /usr/local/bin first (always in PATH on macOS/Linux), then fallbacks.
 symlinked=false
 for dir in "/usr/local/bin" "$HOME/.local/bin" "$HOME/bin"; do
-    # Create /usr/local/bin on macOS if it doesn't exist (common on fresh installs)
-    if [ "$dir" = "/usr/local/bin" ] && [ ! -d "$dir" ]; then
-        sudo mkdir -p "$dir" 2>/dev/null && sudo chmod 755 "$dir" 2>/dev/null || true
-    fi
     if [ -d "$dir" ] && [ -w "$dir" ]; then
         ln -sf "$INSTALL_DIR/iris" "$dir/iris" 2>/dev/null || true
         ln -sf "$INSTALL_DIR/iris-onboard" "$dir/iris-onboard" 2>/dev/null || true
