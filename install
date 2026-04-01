@@ -1686,21 +1686,26 @@ else
 
     if [ "$AUTH_SUCCESS" = "true" ] || ([ -f "$HOME/.iris/sdk/.env" ] && grep -q "IRIS_API_KEY=." "$HOME/.iris/sdk/.env" 2>/dev/null); then
         # Already authenticated — skip login prompt
-        echo -e "  ${GREEN}Ready to go!${NC} Open a new terminal and run:"
+        echo -e "  ${GREEN}Ready to go!${NC} Start the AI assistant:"
         echo -e ""
         echo -e "    ${CYAN}${onboard_cmd}${NC}"
         echo -e ""
         if command -v pbcopy &>/dev/null; then
             printf "%s" "$onboard_cmd" | pbcopy
-            echo -e "  ${MUTED}(copied to clipboard — just ⌘V + Enter)${NC}"
-            echo -e ""
+            echo -e "  ${MUTED}(command copied to clipboard)${NC}"
         fi
+        if [ "$symlinked" != "true" ] && ! command -v iris >/dev/null 2>&1; then
+            echo -e ""
+            echo -e "  ${MUTED}To use ${NC}iris${MUTED} everywhere, open a new terminal or run:${NC}"
+            echo -e "    ${MUTED}source ~/.zshrc${NC}"
+        fi
+        echo -e ""
     else
         # Not authenticated — show login prompt
         if command -v pbcopy &>/dev/null; then
             printf "%s" "$login_cmd" | pbcopy
         fi
-        echo -e "  ${GREEN}Next step${NC} — open a new terminal and authenticate:"
+        echo -e "  ${GREEN}Next step${NC} — authenticate your account:"
         echo -e ""
         echo -e "    ${CYAN}${login_cmd}${NC}"
         echo -e ""
@@ -1708,8 +1713,13 @@ else
         echo -e "    ${CYAN}${onboard_cmd}${NC}"
         echo -e ""
         if command -v pbcopy &>/dev/null; then
-            echo -e "  ${MUTED}(${NC}${login_cmd}${MUTED} copied to clipboard — just ⌘V + Enter)${NC}"
-            echo -e ""
+            echo -e "  ${MUTED}(${NC}${login_cmd}${MUTED} copied to clipboard)${NC}"
         fi
+        if [ "$symlinked" != "true" ] && ! command -v iris >/dev/null 2>&1; then
+            echo -e ""
+            echo -e "  ${MUTED}To use ${NC}iris${MUTED} everywhere, open a new terminal or run:${NC}"
+            echo -e "    ${MUTED}source ~/.zshrc${NC}"
+        fi
+        echo -e ""
     fi
 fi
