@@ -556,14 +556,32 @@ install_sdk() {
     fi
 
     local sdk_dir="$HOME/.iris/sdk"
-    if [ -d "$sdk_dir" ]; then
+    if [ -d "$sdk_dir/.git" ]; then
+        # SDK repo exists — update it
         print_message info "${MUTED}SDK already installed at ${NC}$sdk_dir${MUTED}, updating...${NC}"
         (cd "$sdk_dir" && git pull --quiet 2>/dev/null && composer install --no-dev --quiet 2>/dev/null) || true
     else
+        # Fresh clone (preserve .env if it exists from auth)
+        local saved_env=""
+        if [ -f "$sdk_dir/.env" ]; then
+            saved_env=$(cat "$sdk_dir/.env")
+        fi
+        rm -rf "$sdk_dir" 2>/dev/null || true
         mkdir -p "$HOME/.iris"
         if git clone --quiet https://github.com/FREELABEL/fl-iris-sdk-php.git "$sdk_dir" 2>/dev/null; then
             (cd "$sdk_dir" && composer install --no-dev --quiet 2>/dev/null) || true
+            # Restore .env if it was saved
+            if [ -n "$saved_env" ]; then
+                echo "$saved_env" > "$sdk_dir/.env"
+                chmod 600 "$sdk_dir/.env"
+            fi
         else
+            # Restore .env even if clone failed
+            if [ -n "$saved_env" ]; then
+                mkdir -p "$sdk_dir"
+                echo "$saved_env" > "$sdk_dir/.env"
+                chmod 600 "$sdk_dir/.env"
+            fi
             print_message warning "${ORANGE}Could not clone SDK repository.${NC}"
             return 0
         fi
