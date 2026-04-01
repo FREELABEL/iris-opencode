@@ -497,8 +497,19 @@ if [[ "$no_modify_path" != "true" ]]; then
         fi
     done
 
+    # If no config file exists, create the default one for this shell
     if [[ -z $config_file ]]; then
-        print_message warning "No config file found for $current_shell. You may need to manually add to PATH:"
+        case $current_shell in
+            zsh)  config_file="$HOME/.zshrc" ;;
+            bash) config_file="$HOME/.bashrc" ;;
+            fish) config_file="$HOME/.config/fish/config.fish" ;;
+            *)    config_file="$HOME/.profile" ;;
+        esac
+        touch "$config_file" 2>/dev/null || true
+    fi
+
+    if [[ ! -f "$config_file" ]]; then
+        print_message warning "Could not create $config_file. You may need to manually add to PATH:"
         print_message info "  export PATH=$INSTALL_DIR:\$PATH"
     elif [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
         case $current_shell in
@@ -1634,6 +1645,10 @@ chmod 755 "$INSTALL_DIR/iris-onboard"
 # Try /usr/local/bin first (always in PATH on macOS/Linux), then fallbacks.
 symlinked=false
 for dir in "/usr/local/bin" "$HOME/.local/bin" "$HOME/bin"; do
+    # Create /usr/local/bin on macOS if it doesn't exist (common on fresh installs)
+    if [ "$dir" = "/usr/local/bin" ] && [ ! -d "$dir" ]; then
+        sudo mkdir -p "$dir" 2>/dev/null && sudo chmod 755 "$dir" 2>/dev/null || true
+    fi
     if [ -d "$dir" ] && [ -w "$dir" ]; then
         ln -sf "$INSTALL_DIR/iris" "$dir/iris" 2>/dev/null || true
         ln -sf "$INSTALL_DIR/iris-onboard" "$dir/iris-onboard" 2>/dev/null || true
@@ -1663,13 +1678,14 @@ if [ -t 0 ]; then
     exec "$INSTALL_DIR/iris" -m opencode/gpt-5-nano --prompt "$(cat "$PROMPT_FILE")"
 else
     echo -e ""
-    # Determine the command to show — use short name if it resolves, full path otherwise
-    if command -v iris-onboard >/dev/null 2>&1; then
+    # Determine the command to show — use short name if symlinked into PATH, full path otherwise
+    # Note: even after add_to_path, the current shell won't see it until reopened
+    if [ "$symlinked" = "true" ] || command -v iris-onboard >/dev/null 2>&1; then
         onboard_cmd="iris-onboard"
         login_cmd="iris-login"
     else
-        onboard_cmd="$INSTALL_DIR/iris-onboard"
-        login_cmd="$INSTALL_DIR/iris-login"
+        onboard_cmd="~/.iris/bin/iris-onboard"
+        login_cmd="~/.iris/bin/iris-login"
     fi
 
     if [ "$AUTH_SUCCESS" = "true" ] || ([ -f "$HOME/.iris/sdk/.env" ] && grep -q "IRIS_API_KEY=." "$HOME/.iris/sdk/.env" 2>/dev/null); then
