@@ -2,6 +2,41 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+import { join, basename } from "path"
+
+// ============================================================================
+// Sync helpers
+// ============================================================================
+
+const SYNC_DIR = ".iris/leads"
+
+function resolveSyncDir(): string {
+  let dir = process.cwd()
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(dir, "fl-docker-dev"))) return join(dir, SYNC_DIR)
+    const parent = join(dir, "..")
+    if (parent === dir) break
+    dir = parent
+  }
+  return join(process.cwd(), SYNC_DIR)
+}
+
+function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")
+}
+
+function leadFilename(l: Record<string, unknown>): string {
+  const name = String(l.name ?? l.first_name ?? "lead")
+  return `${l.id}-${slugify(name)}.json`
+}
+
+function findLocalFile(dir: string, id: number): string | undefined {
+  if (!existsSync(dir)) return undefined
+  const prefix = `${id}-`
+  const files = require("fs").readdirSync(dir).filter((f: string) => f.startsWith(prefix) && f.endsWith(".json"))
+  return files.length > 0 ? join(dir, files[0]) : undefined
+}
 
 // ============================================================================
 // Display helpers
@@ -342,19 +377,349 @@ const LeadsNoteCommand = cmd({
   },
 })
 
+const LeadsUpdateCommand = cmd({
+  command: "update <id>",
+  describe: "update a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("name", { describe: "new name", type: "string" })
+      .option("email", { describe: "new email", type: "string" })
+      .option("phone", { describe: "new phone", type: "string" })
+      .option("company", { describe: "new company", type: "string" })
+      .option("status", { describe: "new status", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Update Lead #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const payload: Record<string, unknown> = {}
+    if (args.name) payload.name = args.name
+    if (args.email) payload.email = args.email
+    if (args.phone) payload.phone = args.phone
+    if (args.company) payload.company = args.company
+    if (args.status) payload.status = args.status
+
+    if (Object.keys(payload).length === 0) {
+      prompts.log.warn("Nothing to update. Use --name, --email, --status, etc.")
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      const ok = await handleApiError(res, "Update lead")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as { data?: any }
+      const l = data?.data ?? data
+      spinner.stop(`${success("✓")} Updated: ${bold(String(l.name ?? l.id))}`)
+
+      printDivider()
+      printKV("ID", l.id)
+      printKV("Name", l.name)
+      printKV("Status", l.status)
+      printDivider()
+
+      prompts.outro(dim(`iris leads get ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LeadsPullCommand = cmd({
+  command: "pull <id>",
+  describe: "download lead JSON to local file",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("output", { alias: "o", describe: "output file path", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Pull Lead #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching lead…")
+
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args.id}`)
+      const ok = await handleApiError(res, "Pull lead")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as { data?: any }
+      const lead = data?.data ?? data
+
+      const dir = resolveSyncDir()
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+
+      const filename = args.output ?? leadFilename(lead)
+      const filepath = filename.startsWith("/") ? filename : join(dir, filename)
+
+      writeFileSync(filepath, JSON.stringify(lead, null, 2))
+      spinner.stop(success("Pulled"))
+
+      printDivider()
+      printKV("Name", lead.name)
+      printKV("ID", lead.id)
+      printKV("Email", lead.email)
+      printKV("Status", lead.status)
+      printKV("Company", lead.company)
+      printKV("Saved to", filepath)
+      printDivider()
+
+      prompts.outro(dim(`iris leads push ${args.id}  |  iris leads diff ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LeadsPushCommand = cmd({
+  command: "push <id>",
+  describe: "upload local lead JSON to API",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("file", { alias: "f", describe: "local JSON file path", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Push Lead #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+
+    try {
+      const dir = resolveSyncDir()
+      let filepath = args.file
+      if (!filepath) filepath = findLocalFile(dir, args.id)
+
+      if (!filepath || !existsSync(filepath)) {
+        spinner.start("")
+        spinner.stop("Failed", 1)
+        prompts.log.error(`Local file not found. Run: ${highlight(`iris leads pull ${args.id}`)}`)
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.start(`Pushing ${basename(filepath)}…`)
+
+      const lead = JSON.parse(readFileSync(filepath, "utf-8"))
+      const payload: Record<string, unknown> = {
+        name: lead.name,
+        email: lead.email,
+        phone: lead.phone,
+        company: lead.company,
+        status: lead.status,
+        source: lead.source,
+        lead_type: lead.lead_type,
+        keywords: lead.keywords,
+        contact_info: lead.contact_info,
+        address: lead.address,
+        city: lead.city,
+        state: lead.state,
+        zipcode: lead.zipcode,
+        country: lead.country,
+        price_bid: lead.price_bid,
+        price_min: lead.price_min,
+        price_max: lead.price_max,
+      }
+      for (const k of Object.keys(payload)) {
+        if (payload[k] === undefined) delete payload[k]
+      }
+      if (lead.bloq_id) payload.bloq_id = lead.bloq_id
+
+      const res = await irisFetch(`/api/v1/leads/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      const ok = await handleApiError(res, "Push lead")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as { data?: any }
+      const result = data?.data ?? data
+      spinner.stop(success("Pushed"))
+
+      printDivider()
+      printKV("Name", result.name)
+      printKV("ID", args.id)
+      printKV("Status", result.status)
+      printKV("From", filepath)
+      printDivider()
+
+      prompts.outro(dim(`iris leads diff ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LeadsDiffCommand = cmd({
+  command: "diff <id>",
+  describe: "compare local lead JSON vs live API",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("file", { alias: "f", describe: "local JSON file path", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Diff Lead #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Comparing…")
+
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args.id}`)
+      const ok = await handleApiError(res, "Fetch lead")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as { data?: any }
+      const live = data?.data ?? data
+
+      const dir = resolveSyncDir()
+      let filepath = args.file
+      if (!filepath) filepath = findLocalFile(dir, args.id)
+
+      if (!filepath || !existsSync(filepath)) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`Local file not found. Run: ${highlight(`iris leads pull ${args.id}`)}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const local = JSON.parse(readFileSync(filepath, "utf-8"))
+
+      const fields = ["name", "email", "phone", "company", "status", "source", "lead_type", "address", "city", "state", "zipcode", "country", "price_bid", "website", "stage"]
+      const changes: { field: string; live: unknown; local: unknown }[] = []
+
+      for (const f of fields) {
+        const liveVal = JSON.stringify(live[f] ?? null)
+        const localVal = JSON.stringify(local[f] ?? null)
+        if (liveVal !== localVal) {
+          changes.push({ field: f, live: live[f], local: local[f] })
+        }
+      }
+
+      // Compare nested arrays
+      for (const f of ["keywords", "contact_info"]) {
+        if (JSON.stringify(live[f] ?? null) !== JSON.stringify(local[f] ?? null)) {
+          changes.push({ field: f, live: "(changed)", local: "(changed)" })
+        }
+      }
+
+      // Count notes diff
+      const liveNotes = Array.isArray(live.notes) ? live.notes.length : 0
+      const localNotes = Array.isArray(local.notes) ? local.notes.length : 0
+      if (liveNotes !== localNotes) {
+        changes.push({ field: "notes", live: `${liveNotes} note(s)`, local: `${localNotes} note(s)` })
+      }
+
+      spinner.stop(changes.length === 0 ? success("In sync") : `${changes.length} difference(s)`)
+
+      printDivider()
+      printKV("Lead", live.name ?? `#${args.id}`)
+      printKV("Status (live)", live.status)
+      printKV("Status (local)", local.status)
+      console.log()
+
+      if (changes.length === 0) {
+        console.log(`  ${success("No differences")}`)
+      } else {
+        for (const c of changes) {
+          console.log(`  ${UI.Style.TEXT_WARNING}~ ${c.field}${UI.Style.TEXT_NORMAL}`)
+          console.log(`    ${UI.Style.TEXT_DANGER}- live:  ${String(c.live ?? "(empty)").slice(0, 120)}${UI.Style.TEXT_NORMAL}`)
+          console.log(`    ${UI.Style.TEXT_SUCCESS}+ local: ${String(c.local ?? "(empty)").slice(0, 120)}${UI.Style.TEXT_NORMAL}`)
+        }
+      }
+      console.log()
+      printDivider()
+
+      if (changes.length > 0) {
+        prompts.outro(dim(`iris leads push ${args.id}  — to push local changes live`))
+      } else {
+        prompts.outro("Done")
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LeadsDeleteCommand = cmd({
+  command: "delete <id>",
+  describe: "delete a lead",
+  builder: (yargs) =>
+    yargs.positional("id", { describe: "lead ID", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Delete Lead #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const confirmed = await prompts.confirm({ message: `Delete lead #${args.id}? This cannot be undone.` })
+    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Deleting…")
+
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args.id}`, { method: "DELETE" })
+      const ok = await handleApiError(res, "Delete lead")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Lead #${args.id} deleted`)
+      prompts.outro(dim("iris leads list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 // ============================================================================
 // Root command
 // ============================================================================
 
 export const PlatformLeadsCommand = cmd({
   command: "leads",
-  describe: "manage CRM leads",
+  describe: "manage CRM leads — pull, push, diff, CRUD",
   builder: (yargs) =>
     yargs
       .command(LeadsListCommand)
       .command(LeadsGetCommand)
       .command(LeadsSearchCommand)
       .command(LeadsCreateCommand)
+      .command(LeadsUpdateCommand)
+      .command(LeadsPullCommand)
+      .command(LeadsPushCommand)
+      .command(LeadsDiffCommand)
+      .command(LeadsDeleteCommand)
       .command(LeadsNoteCommand)
       .demandCommand(),
   async handler() {},

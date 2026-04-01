@@ -539,61 +539,14 @@ print_message info "\n${GREEN}[1/6]${NC} IRIS Code ${MUTED}.....................
 # ─── Component 2: IRIS SDK / CLI ─────────────────────────────────────────────
 
 install_sdk() {
-    print_message info "${MUTED}Installing IRIS SDK...${NC}"
-
-    # Check for PHP
-    if ! command -v php >/dev/null 2>&1; then
-        print_message info "${MUTED}[2/6] IRIS SDK .............................. skipped (PHP not found)${NC}"
-        print_message info "${MUTED}      Install PHP 8.1+ and re-run: ${NC}curl -fsSL https://heyiris.io/install-code | bash"
-        return 0
-    fi
-
-    # Check for Composer
-    if ! command -v composer >/dev/null 2>&1; then
-        print_message info "${MUTED}[2/6] IRIS SDK .............................. skipped (Composer not found)${NC}"
-        print_message info "${MUTED}      Install Composer (${NC}https://getcomposer.org${MUTED}) and re-run: ${NC}curl -fsSL https://heyiris.io/install-code | bash"
-        return 0
-    fi
-
+    # SDK commands are now built into IRIS Code (Node.js CLI) — no PHP required.
+    # Preserve any existing .env from previous PHP SDK installs (contains auth tokens).
     local sdk_dir="$HOME/.iris/sdk"
-    if [ -d "$sdk_dir/.git" ]; then
-        # SDK repo exists — update it
-        print_message info "${MUTED}SDK already installed at ${NC}$sdk_dir${MUTED}, updating...${NC}"
-        (cd "$sdk_dir" && git pull --quiet 2>/dev/null && composer install --no-dev --quiet 2>/dev/null) || true
-    else
-        # Fresh clone (preserve .env if it exists from auth)
-        local saved_env=""
-        if [ -f "$sdk_dir/.env" ]; then
-            saved_env=$(cat "$sdk_dir/.env")
-        fi
-        rm -rf "$sdk_dir" 2>/dev/null || true
-        mkdir -p "$HOME/.iris"
-        if git clone --quiet https://github.com/FREELABEL/fl-iris-sdk-php.git "$sdk_dir" 2>/dev/null; then
-            (cd "$sdk_dir" && composer install --no-dev --quiet 2>/dev/null) || true
-            # Restore .env if it was saved
-            if [ -n "$saved_env" ]; then
-                echo "$saved_env" > "$sdk_dir/.env"
-                chmod 600 "$sdk_dir/.env"
-            fi
-        else
-            # Restore .env even if clone failed
-            if [ -n "$saved_env" ]; then
-                mkdir -p "$sdk_dir"
-                echo "$saved_env" > "$sdk_dir/.env"
-                chmod 600 "$sdk_dir/.env"
-            fi
-            print_message warning "${ORANGE}Could not clone SDK repository.${NC}"
-            return 0
-        fi
+    if [ -f "$sdk_dir/.env" ]; then
+        mkdir -p "$sdk_dir"
     fi
 
-    # Symlink the iris-sdk CLI into the bin directory
-    if [ -f "$sdk_dir/bin/iris-sdk" ]; then
-        ln -sf "$sdk_dir/bin/iris-sdk" "$INSTALL_DIR/iris-sdk"
-        chmod 755 "$INSTALL_DIR/iris-sdk"
-    fi
-
-    print_message info "${GREEN}[2/6]${NC} IRIS SDK ${MUTED}...........................${NC} ${GREEN}installed${NC}"
+    print_message info "${GREEN}[2/6]${NC} IRIS SDK ${MUTED}...........................${NC} ${GREEN}built-in${NC} ${MUTED}(no PHP required)${NC}"
 }
 
 if [ "$skip_sdk" = "false" ]; then
@@ -1314,9 +1267,7 @@ echo -e "${MUTED}IRIS Code includes free AI models.${NC}"
 echo -e ""
 echo -e "${MUTED}Installed to:${NC}   ~/.iris/"
 echo -e "${MUTED}  bin/iris       ${NC}IRIS Code (AI coding agent)"
-if [ "$skip_sdk" = "false" ] && [ -d "$HOME/.iris/sdk" ]; then
-echo -e "${MUTED}  sdk/            ${NC}IRIS SDK (PHP CLI tools)"
-fi
+echo -e "${MUTED}  sdk/            ${NC}SDK commands built-in (no PHP required)"
 if [ "$skip_mcp" = "false" ] && [ -f "$HOME/.iris/mcp.json" ]; then
 echo -e "${MUTED}  mcp.json        ${NC}MCP server config (ready for setup)"
 fi
@@ -1540,15 +1491,8 @@ fi
 
 DASHBOARD="${DASHBOARD_URL:-https://app.heyiris.io}"
 
-# Check if SDK is available for onboarding prompt
-SDK_AVAILABLE=false
-if [ -f "$HOME/.iris/sdk/bin/iris-sdk" ] && command -v php >/dev/null 2>&1; then
-    SDK_AVAILABLE=true
-fi
-
 if [ "$AUTH_SUCCESS" = "true" ]; then
-    if [ "$SDK_AVAILABLE" = "true" ]; then
-    ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user is authenticated as $USER_EMAIL (user ID: $USER_ID). Auth is DONE -- do NOT run auth steps, do NOT read .env files, do NOT use curl. ONLY use the IRIS SDK CLI at ~/.iris/sdk/bin/iris.
+    ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user is authenticated as $USER_EMAIL (user ID: $USER_ID). Auth is DONE -- do NOT run auth steps, do NOT read .env files, do NOT use curl. Use the IRIS CLI (the 'iris' command).
 
 RULES:
 - NEVER use curl or call APIs directly. Only CLI commands.
@@ -1567,7 +1511,7 @@ RULES:
 FIRST, run these quick commands to understand the user's environment:
    git config --global user.name 2>/dev/null; git config --global user.email 2>/dev/null
    ls -d ~/Sites/*/ ~/Projects/*/ ~/Code/*/ ~/Developer/*/ 2>/dev/null | head -15
-   which node python3 php docker 2>/dev/null
+   which node python3 docker 2>/dev/null
 Use what you learn to personalize your greeting. If the scan finds nothing, proceed with the standard greeting.
 
 THEN present these choices:
@@ -1602,22 +1546,17 @@ Tell me what you'd like to build!
 
 Wait for their answer. Based on what they pick, IMMEDIATELY run the corresponding command on the NEXT turn:
 
-- Agent: Ask what it should do in one sentence, then run: ~/.iris/sdk/bin/iris agent:create
-- Multi-Agent Workflow: Ask what to automate in one sentence, then run: ~/.iris/sdk/bin/iris automation
-- Web Page: Ask what the page is for, then run: ~/.iris/sdk/bin/iris pages create
-- Knowledge base / RAG: Run: ~/.iris/sdk/bin/iris memory:compose
-- Manage KB lists (Kanban): Run: ~/.iris/sdk/bin/iris memory:lists <bloqId>
-- Add items to a list: Run: ~/.iris/sdk/bin/iris memory:items:create <listId> --title='Task name'
-- Move items between lists: Run: ~/.iris/sdk/bin/iris memory:items:move <itemId> <targetListId>
-- Search KB content: Run: ~/.iris/sdk/bin/iris memory:search <bloqId> 'query'
-- Sync with Google Drive: Run: ~/.iris/sdk/bin/iris memory:sync:import <bloqId> --source=google_drive --path='folder-id'
-- Lead management / CRM: Run: ~/.iris/sdk/bin/iris leads
-- Chat with an agent: Run: ~/.iris/sdk/bin/iris chat
-- Content generation: Run: ~/.iris/sdk/bin/iris articles
-- Recruitment: Run: ~/.iris/sdk/bin/iris recruit
-- Schedule a job: Run: ~/.iris/sdk/bin/iris schedule
-- Integrations: Run: ~/.iris/sdk/bin/iris integrations
-- Something else: Check ~/.iris/docs/onboarding.md for the right command
+- Agent: Ask what it should do in one sentence, then run: iris agents create
+- Multi-Agent Workflow: Ask what to automate in one sentence, then run: iris workflows list
+- Web Page: Ask what the page is for, then guide to dashboard: $DASHBOARD (Pages tab)
+- Knowledge base / RAG: Run: iris bloqs create
+- List knowledge bases: Run: iris bloqs list
+- Add content to KB: Run: iris bloqs ingest <bloqId> <file>
+- Add text to KB: Run: iris bloqs add-item <bloqId> <listId> 'content'
+- Lead management / CRM: Run: iris leads list
+- Chat with an agent: Run: iris chat 'your message' --agent <id>
+- Schedule a job: Run: iris schedules list
+- Something else: Check iris --help for all available commands
 - If the user asks about a specific project you found during scanning, help them set up IRIS for that project
 
 After it is created, show:
@@ -1625,58 +1564,6 @@ After it is created, show:
 - The exact CLI command to interact with it next
 - Their dashboard: $DASHBOARD (they can manage everything from the web UI too)
 - One suggested next step"
-    else
-    # Authenticated but SDK not installed (PHP missing)
-    ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user is authenticated as $USER_EMAIL (user ID: $USER_ID). Auth is DONE -- do NOT run auth steps.
-
-IMPORTANT: The IRIS SDK (PHP CLI) is NOT installed because PHP is not on this machine.
-The user CAN still use IRIS through the web dashboard and this AI assistant.
-
-RULES:
-- NEVER use curl or call APIs directly.
-- NEVER try to run ~/.iris/sdk/bin/iris commands — they will fail (PHP not installed).
-- Guide users to use the web dashboard for agent creation, workflows, and pages.
-- At the END of EVERY response, always include these links in a clean ASCII table like this:
-
-  ┌──────────────────────────────────────────────────────────────┐
-  │  Dashboard   $DASHBOARD
-  │  Discover    https://app.heyiris.io/discover
-  │  Discord     https://discord.com/invite/Vmfrqmdkps
-  │  Docs        https://heyiris.io/developer
-  │  Desktop     ~/Applications/IRIS.app (run: open ~/Applications/IRIS.app)
-  └──────────────────────────────────────────────────────────────┘
-
-FIRST, run these quick commands to understand the user's environment:
-   git config --global user.name 2>/dev/null; git config --global user.email 2>/dev/null
-   ls -d ~/Sites/*/ ~/Projects/*/ ~/Code/*/ ~/Developer/*/ 2>/dev/null | head -15
-   which node python3 php docker 2>/dev/null
-Use what you learn to personalize your greeting.
-
-THEN present these choices:
-
-Welcome to IRIS! Here's what you can build:
-
-1. An AI Agent — chat-powered assistant with 17+ integrations
-2. A Multi-Agent Workflow — automated pipelines with human approval
-3. A Web Page — drag-and-drop page composer, publish instantly
-4. Something else — CRM, knowledge bases, recruitment, content generation
-
-Tell me what you'd like to build!
-
-NOTE: Since PHP isn't installed, we'll set things up through the web dashboard at $DASHBOARD.
-To unlock the full CLI experience later, install PHP 8.1+ and run: curl -fsSL https://heyiris.io/install-code | bash
-
-Based on what they pick, guide them to the dashboard:
-- Agent: Open $DASHBOARD — click 'New Agent' to create one
-- Workflow: Open $DASHBOARD — go to Workflows tab
-- Web Page: Open $DASHBOARD — go to Pages tab
-- Other: Guide them to the appropriate section of the dashboard
-
-After helping, show:
-- What they can do next
-- Their dashboard: $DASHBOARD
-- One suggested next step"
-    fi
 else
     ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user installed IRIS but is NOT authenticated yet.
 

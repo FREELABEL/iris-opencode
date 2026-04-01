@@ -44,7 +44,8 @@ const SchedulesListCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("limit", { describe: "max results", type: "number", default: 20 })
-      .option("agent-id", { describe: "filter by agent ID", type: "number" }),
+      .option("agent-id", { describe: "filter by agent ID", type: "number" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  IRIS Schedules")
@@ -52,7 +53,7 @@ const SchedulesListCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const userId = await requireUserId((args as any)["user-id"])
+    const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
@@ -98,7 +99,9 @@ const SchedulesGetCommand = cmd({
   command: "get <id>",
   describe: "show schedule details",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "schedule ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Schedule #${args.id}`)
@@ -106,7 +109,7 @@ const SchedulesGetCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const userId = await requireUserId((args as any)["user-id"])
+    const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
@@ -146,7 +149,9 @@ const SchedulesRunCommand = cmd({
   command: "run <id>",
   describe: "trigger a schedule to run now",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "schedule ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Run Schedule #${args.id}`)
@@ -154,7 +159,7 @@ const SchedulesRunCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const userId = await requireUserId((args as any)["user-id"])
+    const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
@@ -194,7 +199,8 @@ const SchedulesHistoryCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
-      .option("limit", { describe: "max results", type: "number", default: 10 }),
+      .option("limit", { describe: "max results", type: "number", default: 10 })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Schedule History #${args.id}`)
@@ -202,7 +208,7 @@ const SchedulesHistoryCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const userId = await requireUserId((args as any)["user-id"])
+    const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
@@ -251,7 +257,8 @@ const SchedulesToggleCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
-      .option("disable", { describe: "disable the schedule", type: "boolean", default: false }),
+      .option("disable", { describe: "disable the schedule", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
     const action = args.disable ? "Disable" : "Enable"
@@ -260,7 +267,7 @@ const SchedulesToggleCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const userId = await requireUserId((args as any)["user-id"])
+    const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()

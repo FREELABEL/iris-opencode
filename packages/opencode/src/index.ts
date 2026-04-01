@@ -35,6 +35,14 @@ import { PlatformLeadsCommand } from "./cli/cmd/platform-leads"
 import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
 import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
+import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
+import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
+import { PlatformOpportunitiesCommand } from "./cli/cmd/platform-opportunities"
+import { PlatformServicesCommand } from "./cli/cmd/platform-services"
+import { PlatformProductsCommand } from "./cli/cmd/platform-products"
+import { PlatformEventsCommand } from "./cli/cmd/platform-events"
+import { PlatformVenuesCommand } from "./cli/cmd/platform-venues"
+import { PlatformProgramsCommand } from "./cli/cmd/platform-programs"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -115,6 +123,14 @@ const cli = yargs(hideBin(process.argv))
   .command(PlatformWorkflowsCommand)
   .command(PlatformBloqsCommand)
   .command(PlatformSchedulesCommand)
+  .command(PlatformN8nCommand)
+  .command(PlatformBoardsCommand)
+  .command(PlatformOpportunitiesCommand)
+  .command(PlatformServicesCommand)
+  .command(PlatformProductsCommand)
+  .command(PlatformEventsCommand)
+  .command(PlatformVenuesCommand)
+  .command(PlatformProgramsCommand)
   .fail((msg) => {
     if (
       msg.startsWith("Unknown argument") ||

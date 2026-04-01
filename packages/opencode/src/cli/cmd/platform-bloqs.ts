@@ -45,7 +45,7 @@ const BloqsListCommand = cmd({
 
     try {
       const params = new URLSearchParams({ per_page: String(args.limit) })
-      const res = await irisFetch(`/api/v1/user/${userId}/bloqs`)
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs?${params}`)
       const ok = await handleApiError(res, "List bloqs")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -83,6 +83,7 @@ const BloqsGetCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("files", { describe: "list files attached to this bloq", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -125,6 +126,27 @@ const BloqsGetCommand = cmd({
             console.log(`    ${dim("—")} ${bold(String(l.name ?? l.id))} ${dim(`(${l.items_count ?? 0} items)`)}`)
           }
           console.log()
+        }
+      }
+
+      // Load files if requested
+      if (args.files) {
+        const filesRes = await irisFetch(`/api/v1/users/${userId}/bloqs/${args.id}/files`)
+        if (filesRes.ok) {
+          const filesData = (await filesRes.json()) as { data?: any[] }
+          const files: any[] = filesData?.data ?? []
+          if (files.length > 0) {
+            console.log(`  ${dim("Files:")}`)
+            for (const f of files) {
+              const name = f.original_name ?? f.name ?? f.filename ?? `File #${f.id}`
+              const size = f.size ? dim(`(${formatBytes(f.size)})`) : ""
+              console.log(`    ${dim("—")} ${name} ${size}`)
+            }
+            console.log()
+          } else {
+            console.log(`  ${dim("Files: none")}`)
+            console.log()
+          }
         }
       }
 
@@ -271,14 +293,15 @@ const BloqsIngestCommand = cmd({
 })
 
 const BloqsAddItemCommand = cmd({
-  command: "add-item <bloq-id> <list-id> <content>",
+  command: "add-item <bloq-id> <list-id> [content]",
   describe: "add a text item to a bloq list",
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
       .positional("list-id", { describe: "list ID", type: "number", demandOption: true })
-      .positional("content", { describe: "item content", type: "string", demandOption: true })
+      .positional("content", { describe: "item content", type: "string" })
       .option("title", { describe: "item title", type: "string" })
+      .option("text", { describe: "item content (alternative to positional)", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -290,12 +313,30 @@ const BloqsAddItemCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
+    let content = args.content ?? args.text
+    if (!content) {
+      content = (await prompts.text({
+        message: "Content to add",
+        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+      })) as string
+      if (prompts.isCancel(content)) { prompts.outro("Cancelled"); return }
+    }
+
+    let title = args.title
+    if (!title) {
+      title = (await prompts.text({
+        message: "Title (optional)",
+        placeholder: "e.g. Meeting notes 2026-04-01",
+      })) as string
+      if (prompts.isCancel(title)) title = ""
+    }
+
     const spinner = prompts.spinner()
     spinner.start("Adding item…")
 
     try {
-      const payload: Record<string, unknown> = { content: args.content }
-      if (args.title) payload.title = args.title
+      const payload: Record<string, unknown> = { content }
+      if (title) payload.title = title
 
       const res = await irisFetch(
         `/api/v1/users/${userId}/bloqs/${args["bloq-id"]}/lists/${args["list-id"]}/items`,
@@ -314,13 +355,149 @@ const BloqsAddItemCommand = cmd({
   },
 })
 
+const BloqsComposeCommand = cmd({
+  command: "compose",
+  describe: "create a knowledge base with AI-assisted structure",
+  builder: (yargs) =>
+    yargs
+      .option("name", { describe: "bloq name", type: "string" })
+      .option("description", { describe: "bloq description / topic", type: "string" })
+      .option("lists", { describe: "number of lists to create", type: "number", default: 3 })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Compose Knowledge Base")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    // Step 1: Get name
+    let name = args.name
+    if (!name) {
+      name = (await prompts.text({
+        message: "What is this knowledge base about?",
+        placeholder: "e.g. Q1 2026 Marketing Strategy",
+        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+      })) as string
+      if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
+    }
+
+    // Step 2: Get description / topic for AI
+    let description = args.description
+    if (!description) {
+      description = (await prompts.text({
+        message: "Describe what kind of content it will hold",
+        placeholder: "e.g. Campaign plans, performance metrics, competitor research",
+      })) as string
+      if (prompts.isCancel(description)) description = name
+    }
+
+    // Step 3: Confirm list structure
+    const numLists = args.lists
+    const suggestedLists = generateListSuggestions(name, description ?? "", numLists)
+
+    prompts.log.info(`${bold("Suggested structure:")}`)
+    for (let i = 0; i < suggestedLists.length; i++) {
+      prompts.log.info(`  ${dim(`${i + 1}.`)} ${suggestedLists[i]}`)
+    }
+
+    const confirmed = await prompts.confirm({
+      message: "Create with this structure?",
+    })
+    if (prompts.isCancel(confirmed) || !confirmed) {
+      prompts.outro("Cancelled")
+      return
+    }
+
+    // Step 4: Create bloq
+    const spinner = prompts.spinner()
+    spinner.start("Creating knowledge base…")
+
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs`, {
+        method: "POST",
+        body: JSON.stringify({ name, description }),
+      })
+      const ok = await handleApiError(res, "Create bloq")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as { data?: any }
+      const bloq = data?.data ?? data
+      const bloqId = bloq.id
+
+      // Step 5: Create lists
+      let listsCreated = 0
+      for (const listName of suggestedLists) {
+        const listRes = await irisFetch(`/api/v1/users/${userId}/bloqs/${bloqId}/lists`, {
+          method: "POST",
+          body: JSON.stringify({ name: listName }),
+        })
+        if (listRes.ok) listsCreated++
+      }
+
+      spinner.stop(`${success("✓")} Created: ${bold(name)} with ${listsCreated} list(s)`)
+
+      printDivider()
+      printKV("ID", bloqId)
+      printKV("Name", name)
+      printKV("Lists", listsCreated)
+      printDivider()
+
+      prompts.outro(
+        `${dim(`iris bloqs get ${bloqId}`)}  ·  ${dim(`iris bloqs ingest ${bloqId} ./file.pdf`)}`,
+      )
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function generateListSuggestions(name: string, description: string, count: number): string[] {
+  const topic = (description || name).toLowerCase()
+
+  // Common patterns based on topic keywords
+  if (topic.includes("marketing") || topic.includes("campaign")) {
+    return ["Strategy & Plans", "Content & Assets", "Performance Metrics"].slice(0, count)
+  }
+  if (topic.includes("product") || topic.includes("roadmap")) {
+    return ["Features & Requirements", "Research & Insights", "Decisions & Notes"].slice(0, count)
+  }
+  if (topic.includes("client") || topic.includes("customer")) {
+    return ["Client Profiles", "Communications", "Deliverables"].slice(0, count)
+  }
+  if (topic.includes("research") || topic.includes("analysis")) {
+    return ["Sources & Data", "Key Findings", "Recommendations"].slice(0, count)
+  }
+  if (topic.includes("project")) {
+    return ["Tasks & Milestones", "Documentation", "Meeting Notes"].slice(0, count)
+  }
+
+  // Generic fallback
+  return ["Reference Material", "Notes & Insights", "Action Items"].slice(0, count)
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 // ============================================================================
 // Root command
 // ============================================================================
 
 export const PlatformBloqsCommand = cmd({
   command: "bloqs",
-  aliases: ["kb", "knowledge"],
+  aliases: ["kb", "knowledge", "memory"],
   describe: "manage knowledge bases (bloqs)",
   builder: (yargs) =>
     yargs
@@ -329,6 +506,7 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsCreateCommand)
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
+      .command(BloqsComposeCommand)
       .demandCommand(),
   async handler() {},
 })

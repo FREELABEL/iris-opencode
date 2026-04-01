@@ -6,8 +6,18 @@
  * 2. Command builders define the expected options/positionals
  * 3. API response parsing logic works correctly
  * 4. Error paths are handled gracefully with mocked fetch
+ * 5. Source code integrity — every handler that uses userId declares --user-id
+ * 6. Endpoint URL contracts — correct API paths for each resource
  */
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test"
+import { readFileSync } from "fs"
+import { join } from "path"
+
+// ── Source file paths for integrity tests ───────────────────────────────────
+const SRC_DIR = join(import.meta.dir, "../../src/cli/cmd")
+function readSource(filename: string): string {
+  return readFileSync(join(SRC_DIR, filename), "utf-8")
+}
 
 // ── Command exports ─────────────────────────────────────────────────────────
 
@@ -398,5 +408,290 @@ describe("fetch integration patterns", () => {
     const FL_API = "https://apiv2.heyiris.io"
     const url = `${FL_API}/api/v1/users/${userId}/bloqs/${bloqId}/files`
     expect(url).toBe("https://apiv2.heyiris.io/api/v1/users/193/bloqs/217/files")
+  })
+})
+
+// ============================================================================
+// Source code integrity — every requireUserId call must have --user-id option
+// ============================================================================
+// These tests read the actual source files and verify that:
+// - Every handler calling requireUserId also declares .option("user-id"
+// - Every URL template with ${userId} has requireUserId called before it
+// - No free-variable references to userId (must be declared in scope)
+// This catches the class of bugs where userId is used but never defined.
+
+describe("source code integrity: --user-id option declarations", () => {
+  const FILES_NEEDING_USER_ID = [
+    "platform-agents.ts",
+    "platform-bloqs.ts",
+    "platform-schedules.ts",
+    "platform-workflows.ts",
+    "platform-leads.ts",
+  ]
+
+  for (const file of FILES_NEEDING_USER_ID) {
+    test(`${file}: every requireUserId call is paired with .option("user-id")`, () => {
+      const source = readSource(file)
+
+      // Count requireUserId calls (excluding imports)
+      const requireCalls = source.match(/await requireUserId\(/g) ?? []
+      // Count user-id option declarations
+      const optionDecls = source.match(/\.option\("user-id"/g) ?? []
+
+      // Every handler that calls requireUserId should also declare the option
+      // Some files (like leads) may not need userId in paths but still use it
+      if (requireCalls.length > 0) {
+        expect(optionDecls.length).toBeGreaterThanOrEqual(requireCalls.length)
+      }
+    })
+  }
+
+  test("platform-workflows.ts: no (args as any) casts for user-id", () => {
+    const source = readSource("platform-workflows.ts")
+    expect(source).not.toContain('(args as any)["user-id"]')
+  })
+
+  test("platform-schedules.ts: no (args as any) casts for user-id", () => {
+    const source = readSource("platform-schedules.ts")
+    expect(source).not.toContain('(args as any)["user-id"]')
+  })
+})
+
+describe("source code integrity: userId scope safety", () => {
+  test("platform-workflows.ts: pollRun function takes userId as parameter", () => {
+    const source = readSource("platform-workflows.ts")
+    // pollRun must accept userId as a function parameter, not use it as a free variable
+    expect(source).toMatch(/async function pollRun\(\s*userId/)
+  })
+
+  test("platform-workflows.ts: pollRun is called with userId argument", () => {
+    const source = readSource("platform-workflows.ts")
+    // Every call to pollRun should pass userId as the first arg
+    const pollRunCalls = source.match(/await pollRun\(/g) ?? []
+    const pollRunWithUserId = source.match(/await pollRun\(userId/g) ?? []
+    expect(pollRunCalls.length).toBeGreaterThan(0)
+    expect(pollRunWithUserId.length).toBe(pollRunCalls.length)
+  })
+
+  test("platform-workflows.ts: every handler with userId URL calls requireUserId", () => {
+    const source = readSource("platform-workflows.ts")
+    // Split into handler blocks (each async handler(args) { ... })
+    const handlers = source.split(/async handler\(args\)/)
+    for (const block of handlers.slice(1)) {
+      // If this handler references ${userId} in a URL, it must call requireUserId
+      if (block.includes("${userId}") || block.includes("pollRun(")) {
+        expect(block).toContain("requireUserId")
+      }
+    }
+  })
+
+  test("platform-schedules.ts: every handler calls requireUserId", () => {
+    const source = readSource("platform-schedules.ts")
+    const handlers = source.split(/async handler\(args\)/)
+    for (const block of handlers.slice(1)) {
+      if (block.includes("${userId}")) {
+        expect(block).toContain("requireUserId")
+      }
+    }
+  })
+
+  test("platform-agents.ts: every handler with userId URL calls requireUserId", () => {
+    const source = readSource("platform-agents.ts")
+    const handlers = source.split(/async handler\(args\)/)
+    for (const block of handlers.slice(1)) {
+      if (block.includes("${userId}")) {
+        expect(block).toContain("requireUserId")
+      }
+    }
+  })
+
+  test("platform-bloqs.ts: every handler with userId URL calls requireUserId", () => {
+    const source = readSource("platform-bloqs.ts")
+    const handlers = source.split(/async handler\(args\)/)
+    for (const block of handlers.slice(1)) {
+      if (block.includes("${userId}")) {
+        expect(block).toContain("requireUserId")
+      }
+    }
+  })
+})
+
+// ============================================================================
+// Endpoint URL contracts — verify correct API paths for each resource
+// ============================================================================
+// These tests lock down the exact URL patterns each command must use.
+// They prevent regressions like:
+// - /api/v1/users/ vs /api/v1/user/ (singular vs plural)
+// - /history vs /executions
+// - Missing /bloqs/ prefix in nested routes
+// - Params constructed but not appended to URL
+
+describe("endpoint URL contracts: workflows", () => {
+  test("workflows list: /api/v1/users/{userId}/bloqs/workflows", () => {
+    const source = readSource("platform-workflows.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/workflows")
+  })
+
+  test("workflows run: /api/v1/workflows/{id}/execute/v6", () => {
+    const source = readSource("platform-workflows.ts")
+    expect(source).toContain("/api/v1/workflows/${args.id}/execute/v6")
+  })
+
+  test("workflows status: /api/v1/users/{userId}/bloqs/workflow-runs/{runId}", () => {
+    const source = readSource("platform-workflows.ts")
+    // Status command should use the user-scoped path
+    expect(source).toContain('/api/v1/users/${userId}/bloqs/workflow-runs/${args["run-id"]}')
+  })
+
+  test("workflows runs list: /api/v1/users/{userId}/bloqs/workflow-runs", () => {
+    const source = readSource("platform-workflows.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/workflow-runs?${params}")
+  })
+
+  test("workflows pollRun: /api/v1/users/{userId}/bloqs/workflow-runs/{runId}", () => {
+    const source = readSource("platform-workflows.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/workflow-runs/${runId}")
+  })
+
+  test("workflows does NOT use old /api/v1/workflows/runs/ path", () => {
+    const source = readSource("platform-workflows.ts")
+    // The old pre-fix path that returned 404
+    expect(source).not.toMatch(/irisFetch\(`\/api\/v1\/workflows\/runs\//)
+  })
+})
+
+describe("endpoint URL contracts: schedules", () => {
+  test("schedules list: /api/v1/users/{userId}/bloqs/scheduled-jobs", () => {
+    const source = readSource("platform-schedules.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/scheduled-jobs?${params}")
+  })
+
+  test("schedules get: /api/v1/users/{userId}/bloqs/scheduled-jobs/{id}", () => {
+    const source = readSource("platform-schedules.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}")
+  })
+
+  test("schedules run: /api/v1/users/{userId}/bloqs/scheduled-jobs/{id}/run", () => {
+    const source = readSource("platform-schedules.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}/run")
+  })
+
+  test("schedules history: uses /executions not /history", () => {
+    const source = readSource("platform-schedules.ts")
+    expect(source).toContain("/bloqs/scheduled-jobs/${args.id}/executions")
+    expect(source).not.toContain("/bloqs/scheduled-jobs/${args.id}/history")
+  })
+
+  test("schedules toggle: uses PUT method with is_active payload", () => {
+    const source = readSource("platform-schedules.ts")
+    expect(source).toContain('method: "PUT"')
+    expect(source).toContain("is_active:")
+  })
+
+  test("schedules does NOT use old /api/v1/schedules/ path", () => {
+    const source = readSource("platform-schedules.ts")
+    expect(source).not.toMatch(/irisFetch\(`\/api\/v1\/schedules\//)
+  })
+})
+
+describe("endpoint URL contracts: bloqs", () => {
+  test("bloqs list: uses /api/v1/user/{userId}/bloqs (SINGULAR user)", () => {
+    const source = readSource("platform-bloqs.ts")
+    expect(source).toContain("/api/v1/user/${userId}/bloqs")
+  })
+
+  test("bloqs list: appends query params to URL", () => {
+    const source = readSource("platform-bloqs.ts")
+    // The params must actually be used in the URL, not just constructed
+    expect(source).toMatch(/irisFetch\(`\/api\/v1\/user\/\$\{userId\}\/bloqs\?\$\{params\}`/)
+  })
+
+  test("bloqs get: uses /api/v1/users/{userId}/bloqs/{id} (PLURAL users)", () => {
+    const source = readSource("platform-bloqs.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/${args.id}")
+  })
+
+  test("bloqs lists: uses /api/v1/users/{userId}/bloqs/{id}/lists", () => {
+    const source = readSource("platform-bloqs.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/${args.id}/lists")
+  })
+
+  test("bloqs create: uses POST /api/v1/users/{userId}/bloqs", () => {
+    const source = readSource("platform-bloqs.ts")
+    expect(source).toMatch(/irisFetch\(`\/api\/v1\/users\/\$\{userId\}\/bloqs`/)
+  })
+
+  test("bloqs ingest: uses POST with /files suffix", () => {
+    const source = readSource("platform-bloqs.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/${args.id}/files")
+  })
+})
+
+describe("endpoint URL contracts: agents", () => {
+  test("agents list: /api/v1/users/{userId}/bloqs/agents", () => {
+    const source = readSource("platform-agents.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/agents")
+  })
+
+  test("agents get: /api/v1/users/{userId}/bloqs/agents/{id}", () => {
+    const source = readSource("platform-agents.ts")
+    expect(source).toContain("/api/v1/users/${userId}/bloqs/agents/${args.id}")
+  })
+
+  test("agents create: POST /api/v1/users/{userId}/bloqs/agents", () => {
+    const source = readSource("platform-agents.ts")
+    expect(source).toMatch(/irisFetch\(`\/api\/v1\/users\/\$\{userId\}\/bloqs\/agents`/)
+  })
+
+  test("agents chat: uses /api/chat/start", () => {
+    const source = readSource("platform-agents.ts")
+    expect(source).toContain("/api/chat/start")
+  })
+})
+
+describe("endpoint URL contracts: leads", () => {
+  test("leads list: /api/v1/leads (no userId in path)", () => {
+    const source = readSource("platform-leads.ts")
+    expect(source).toMatch(/irisFetch\(`\/api\/v1\/leads\?/)
+  })
+
+  test("leads get: /api/v1/leads/{id}", () => {
+    const source = readSource("platform-leads.ts")
+    expect(source).toContain("/api/v1/leads/${args.id}")
+  })
+
+  test("leads note: POST /api/v1/leads/{id}/notes", () => {
+    const source = readSource("platform-leads.ts")
+    expect(source).toContain("/api/v1/leads/${args.id}/notes")
+  })
+
+  test("leads create: POST /api/v1/leads", () => {
+    const source = readSource("platform-leads.ts")
+    expect(source).toMatch(/irisFetch\("\/api\/v1\/leads"/)
+  })
+})
+
+describe("endpoint URL contracts: chat", () => {
+  test("chat start: /api/chat/start", () => {
+    const source = readSource("platform-chat.ts")
+    expect(source).toContain("/api/chat/start")
+  })
+
+  test("chat poll: /api/workflows/{workflowId}", () => {
+    const source = readSource("platform-chat.ts")
+    expect(source).toContain("/api/workflows/${workflowId}")
+  })
+})
+
+// ============================================================================
+// Default model safety — agents create must default to nano model
+// ============================================================================
+
+describe("model safety", () => {
+  test("agents create defaults to gpt-4.1-nano, not gpt-3.5-turbo", () => {
+    const source = readSource("platform-agents.ts")
+    expect(source).toContain('gpt-4.1-nano')
+    expect(source).not.toContain("gpt-3.5-turbo")
+    expect(source).not.toContain("gpt-3.5")
   })
 })

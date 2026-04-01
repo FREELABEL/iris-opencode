@@ -1,13 +1,42 @@
 import { Auth } from "../../auth"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
+import { homedir } from "os"
+import { join } from "path"
 
 // ============================================================================
 // Base URLs
 // ============================================================================
 
 export const FL_API = process.env.IRIS_FL_API_URL ?? "https://apiv2.heyiris.io"
-export const IRIS_API = process.env.IRIS_API_URL ?? "https://iris-api.heyiris.io"
+export const IRIS_API = process.env.IRIS_API_URL ?? "https://iris-api.freelabel.net"
+
+// ============================================================================
+// Read ~/.iris/sdk/.env (written by iris-login)
+// ============================================================================
+
+let _sdkEnvCache: Record<string, string> | undefined
+
+async function readSdkEnv(): Promise<Record<string, string>> {
+  if (_sdkEnvCache) return _sdkEnvCache
+  _sdkEnvCache = {}
+  try {
+    const envPath = join(homedir(), ".iris", "sdk", ".env")
+    const file = Bun.file(envPath)
+    if (await file.exists()) {
+      const text = await file.text()
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim()
+        if (!trimmed || trimmed.startsWith("#")) continue
+        const eq = trimmed.indexOf("=")
+        if (eq > 0) {
+          _sdkEnvCache[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim()
+        }
+      }
+    }
+  } catch {}
+  return _sdkEnvCache
+}
 
 // ============================================================================
 // Auth token resolution
@@ -17,8 +46,11 @@ async function resolveToken(): Promise<string> {
   // 1. Try stored auth (iris auth login)
   const stored = await Auth.get("iris")
   if (stored?.type === "api" && stored.key) return stored.key
-  // 2. Env var fallback (backwards compat with PHP CLI users)
-  return process.env.IRIS_API_KEY ?? ""
+  // 2. Env var
+  if (process.env.IRIS_API_KEY) return process.env.IRIS_API_KEY
+  // 3. Read from ~/.iris/sdk/.env (written by iris-login installer)
+  const sdkEnv = await readSdkEnv()
+  return sdkEnv["IRIS_API_KEY"] ?? ""
 }
 
 // ============================================================================
@@ -101,7 +133,17 @@ export async function resolveUserId(): Promise<number | null> {
     }
   }
 
-  // 2. Auto-resolve from /api/v1/me
+  // 2. Read from ~/.iris/sdk/.env (written by iris-login)
+  const sdkEnv = await readSdkEnv()
+  if (sdkEnv["IRIS_USER_ID"]) {
+    const n = parseInt(sdkEnv["IRIS_USER_ID"], 10)
+    if (!isNaN(n)) {
+      _cachedUserId = n
+      return n
+    }
+  }
+
+  // 3. Auto-resolve from /api/v1/me
   try {
     const res = await irisFetch("/api/v1/me")
     if (res.ok) {
