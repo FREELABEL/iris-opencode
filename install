@@ -1368,7 +1368,7 @@ if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
     echo -e ""
     echo -e "${CYAN}Let's get you set up!${NC}"
     echo -e ""
-    echo -n "  Enter your IRIS email (or press Enter to skip): "
+    echo -n "  Enter your email (or press Enter to skip): "
     read -r USER_EMAIL < /dev/tty || USER_EMAIL=""
 
     if [ -z "$USER_EMAIL" ]; then
