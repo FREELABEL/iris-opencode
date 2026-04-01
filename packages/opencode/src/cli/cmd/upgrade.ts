@@ -5,11 +5,12 @@ import { Installation } from "../../installation"
 
 export const UpgradeCommand = {
   command: "upgrade [target]",
-  describe: "upgrade opencode to the latest or a specific version",
+  aliases: ["update"],
+  describe: "upgrade IRIS Code to the latest or a specific version",
   builder: (yargs: Argv) => {
     return yargs
       .positional("target", {
-        describe: "version to upgrade to, for ex '0.1.48' or 'v0.1.48'",
+        describe: "version to upgrade to, for ex '1.1.8' or 'v1.1.8'",
         type: "string",
       })
       .option("method", {
@@ -23,11 +24,12 @@ export const UpgradeCommand = {
     UI.empty()
     UI.println(UI.logo("  "))
     UI.empty()
-    prompts.intro("Upgrade")
+    const label = Installation.isIris() ? "IRIS Code Update" : "Upgrade"
+    prompts.intro(label)
     const detectedMethod = await Installation.method()
     const method = (args.method as Installation.Method) ?? detectedMethod
     if (method === "unknown") {
-      prompts.log.error(`opencode is installed to ${process.execPath} and may be managed by a package manager`)
+      prompts.log.error(`Installed to ${process.execPath} and may be managed by a package manager`)
       const install = await prompts.select({
         message: "Install anyways?",
         options: [
@@ -41,27 +43,51 @@ export const UpgradeCommand = {
         return
       }
     }
-    prompts.log.info("Using method: " + method)
+
+    const methodLabel = Installation.isIris() ? "iris-installer" : method
+    prompts.log.info("Using method: " + methodLabel)
     const target = args.target ? args.target.replace(/^v/, "") : await Installation.latest()
 
     if (Installation.VERSION === target) {
-      prompts.log.warn(`opencode upgrade skipped: ${target} is already installed`)
+      prompts.log.warn(`Already on latest: ${target}`)
       prompts.outro("Done")
       return
     }
 
     prompts.log.info(`From ${Installation.VERSION} → ${target}`)
     const spinner = prompts.spinner()
-    spinner.start("Upgrading...")
+    spinner.start(Installation.isIris() ? "Updating IRIS Code..." : "Upgrading...")
     const err = await Installation.upgrade(method, target).catch((err) => err)
     if (err) {
-      spinner.stop("Upgrade failed", 1)
+      spinner.stop("Update failed", 1)
       if (err instanceof Installation.UpgradeFailedError) prompts.log.error(err.data.stderr)
       else if (err instanceof Error) prompts.log.error(err.message)
       prompts.outro("Done")
       return
     }
-    spinner.stop("Upgrade complete")
+    spinner.stop(Installation.isIris() ? "IRIS Code updated" : "Upgrade complete")
+
+    if (Installation.isIris()) {
+      // Also update SDK and bridge if present
+      const { $ } = await import("bun")
+      const home = process.env.HOME || ""
+
+      const sdkDir = `${home}/.iris/sdk`
+      const bridgeDir = `${home}/.iris/bridge`
+
+      // Update SDK if it's a git repo and PHP is available
+      const sdkResult = await $`test -d ${sdkDir}/.git && command -v php >/dev/null && command -v composer >/dev/null && cd ${sdkDir} && git pull --quiet && composer install --no-dev --quiet && echo "sdk-updated"`.nothrow().quiet().text()
+      if (sdkResult.includes("sdk-updated")) {
+        prompts.log.info("SDK updated")
+      }
+
+      // Update bridge if it's a git repo and Node is available
+      const bridgeResult = await $`test -d ${bridgeDir}/.git && cd ${bridgeDir} && git pull --quiet && npm install --production --silent 2>/dev/null && echo "bridge-updated"`.nothrow().quiet().text()
+      if (bridgeResult.includes("bridge-updated")) {
+        prompts.log.info("Bridge updated")
+      }
+    }
+
     prompts.outro("Done")
   },
 }

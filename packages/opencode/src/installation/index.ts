@@ -57,7 +57,16 @@ export namespace Installation {
     return CHANNEL === "local"
   }
 
+  export function isIris() {
+    return (
+      process.execPath.includes(path.join(".iris", "bin")) ||
+      process.execPath.includes("iris") ||
+      process.env.IRIS_MODE === "true"
+    )
+  }
+
   export async function method() {
+    if (process.execPath.includes(path.join(".iris", "bin"))) return "curl"
     if (process.execPath.includes(path.join(".opencode", "bin"))) return "curl"
     if (process.execPath.includes(path.join(".local", "bin"))) return "curl"
     const exec = process.execPath.toLowerCase()
@@ -120,36 +129,46 @@ export namespace Installation {
 
   export async function upgrade(method: Method, target: string) {
     let cmd
-    switch (method) {
-      case "curl":
-        cmd = $`curl -fsSL https://opencode.ai/install | bash`.env({
-          ...process.env,
-          VERSION: target,
-        })
-        break
-      case "npm":
-        cmd = $`npm install -g opencode-ai@${target}`
-        break
-      case "pnpm":
-        cmd = $`pnpm install -g opencode-ai@${target}`
-        break
-      case "bun":
-        cmd = $`bun install -g opencode-ai@${target}`
-        break
-      case "brew": {
-        const formula = await getBrewFormula()
-        cmd = $`brew install ${formula}`.env({
-          HOMEBREW_NO_AUTO_UPDATE: "1",
-          ...process.env,
-        })
-        break
+
+    if (isIris()) {
+      // IRIS: always use our installer
+      cmd = $`curl -fsSL https://heyiris.io/install-code | bash`.env({
+        ...process.env,
+        VERSION: target,
+      })
+    } else {
+      switch (method) {
+        case "curl":
+          cmd = $`curl -fsSL https://opencode.ai/install | bash`.env({
+            ...process.env,
+            VERSION: target,
+          })
+          break
+        case "npm":
+          cmd = $`npm install -g opencode-ai@${target}`
+          break
+        case "pnpm":
+          cmd = $`pnpm install -g opencode-ai@${target}`
+          break
+        case "bun":
+          cmd = $`bun install -g opencode-ai@${target}`
+          break
+        case "brew": {
+          const formula = await getBrewFormula()
+          cmd = $`brew install ${formula}`.env({
+            HOMEBREW_NO_AUTO_UPDATE: "1",
+            ...process.env,
+          })
+          break
+        }
+        default:
+          throw new Error(`Unknown method: ${method}`)
       }
-      default:
-        throw new Error(`Unknown method: ${method}`)
     }
+
     const result = await cmd.quiet().throws(false)
     log.info("upgraded", {
-      method,
+      method: isIris() ? "iris-installer" : method,
       target,
       stdout: result.stdout.toString(),
       stderr: result.stderr.toString(),
@@ -166,6 +185,16 @@ export namespace Installation {
   export const USER_AGENT = `opencode/${CHANNEL}/${VERSION}/${Flag.OPENCODE_CLIENT}`
 
   export async function latest(installMethod?: Method) {
+    // IRIS: check our own GitHub releases
+    if (isIris()) {
+      return fetch("https://api.github.com/repos/FREELABEL/iris-opencode/releases/latest")
+        .then((res) => {
+          if (!res.ok) throw new Error(res.statusText)
+          return res.json()
+        })
+        .then((data: any) => data.tag_name.replace(/^v/, ""))
+    }
+
     const detectedMethod = installMethod || (await method())
 
     if (detectedMethod === "brew") {
