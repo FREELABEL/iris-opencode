@@ -447,48 +447,46 @@ else
 fi
 
 
-add_to_path() {
-    local config_file=$1
-    local command=$2
+# ─── PATH setup (env file pattern, like Rust/Bun) ────────────────────────────
+# Create ~/.iris/env — a single sourceable file that sets up PATH.
+# Then add `source ~/.iris/env` to the user's shell config.
 
-    if grep -Fxq "$command" "$config_file"; then
-        print_message info "Command already exists in $config_file, skipping write."
-    elif [[ -w $config_file ]]; then
-        echo -e "\n# iris-code" >> "$config_file"
-        echo "$command" >> "$config_file"
-        print_message info "${MUTED}Successfully added ${NC}IRIS Code ${MUTED}to \$PATH in ${NC}$config_file"
-    else
-        print_message warning "Manually add the directory to $config_file (or similar):"
-        print_message info "  $command"
-    fi
-}
-
-XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+IRIS_ENV_FILE="$HOME/.iris/env"
 
 current_shell=$(basename "$SHELL")
-case $current_shell in
-    fish)
-        config_files="$HOME/.config/fish/config.fish"
-    ;;
-    zsh)
-        config_files="$HOME/.zshrc $HOME/.zshenv $XDG_CONFIG_HOME/zsh/.zshrc $XDG_CONFIG_HOME/zsh/.zshenv"
-    ;;
-    bash)
-        config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile $XDG_CONFIG_HOME/bash/.bashrc $XDG_CONFIG_HOME/bash/.bash_profile"
-    ;;
-    ash)
-        config_files="$HOME/.ashrc $HOME/.profile /etc/profile"
-    ;;
-    sh)
-        config_files="$HOME/.ashrc $HOME/.profile /etc/profile"
-    ;;
-    *)
-        # Default case if none of the above matches
-        config_files="$HOME/.bashrc $HOME/.bash_profile $XDG_CONFIG_HOME/bash/.bashrc $XDG_CONFIG_HOME/bash/.bash_profile"
-    ;;
-esac
 
+if [ "$current_shell" = "fish" ]; then
+    cat > "$IRIS_ENV_FILE" << 'ENVF'
+# IRIS Code PATH setup (sourced by your shell config)
+if not contains "$HOME/.iris/bin" $PATH
+    set -gx PATH "$HOME/.iris/bin" $PATH
+end
+ENVF
+else
+    cat > "$IRIS_ENV_FILE" << 'ENVF'
+# IRIS Code PATH setup (sourced by your shell config)
+case ":${PATH}:" in
+    *:"$HOME/.iris/bin":*) ;;
+    *) export PATH="$HOME/.iris/bin:$PATH" ;;
+esac
+ENVF
+fi
+
+# Source it now so iris works in the current session
+. "$IRIS_ENV_FILE"
+
+# Add source line to shell config (if not already there)
 if [[ "$no_modify_path" != "true" ]]; then
+    XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+
+    # Find the right shell config file
+    case $current_shell in
+        fish) config_files="$HOME/.config/fish/config.fish" ;;
+        zsh)  config_files="$HOME/.zshrc $HOME/.zshenv" ;;
+        bash) config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile" ;;
+        *)    config_files="$HOME/.bashrc $HOME/.profile" ;;
+    esac
+
     config_file=""
     for file in $config_files; do
         if [[ -f $file ]]; then
@@ -497,43 +495,28 @@ if [[ "$no_modify_path" != "true" ]]; then
         fi
     done
 
-    # If no config file exists, create the default one for this shell
+    # Create default config file if none exists
     if [[ -z $config_file ]]; then
         case $current_shell in
             zsh)  config_file="$HOME/.zshrc" ;;
             bash) config_file="$HOME/.bashrc" ;;
-            fish) config_file="$HOME/.config/fish/config.fish" ;;
+            fish) mkdir -p "$HOME/.config/fish" 2>/dev/null; config_file="$HOME/.config/fish/config.fish" ;;
             *)    config_file="$HOME/.profile" ;;
         esac
         touch "$config_file" 2>/dev/null || true
     fi
 
-    if [[ ! -f "$config_file" ]]; then
-        print_message warning "Could not create $config_file. You may need to manually add to PATH:"
-        print_message info "  export PATH=$INSTALL_DIR:\$PATH"
-    elif [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-        case $current_shell in
-            fish)
-                add_to_path "$config_file" "fish_add_path $INSTALL_DIR"
-            ;;
-            zsh)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
-            ;;
-            bash)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
-            ;;
-            ash)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
-            ;;
-            sh)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
-            ;;
-            *)
-                export PATH=$INSTALL_DIR:$PATH
-                print_message warning "Manually add the directory to $config_file (or similar):"
-                print_message info "  export PATH=$INSTALL_DIR:\$PATH"
-            ;;
-        esac
+    # Add source line if not already present
+    if [ "$current_shell" = "fish" ]; then
+        source_line="source \"$IRIS_ENV_FILE\""
+    else
+        source_line=". \"$HOME/.iris/env\""
+    fi
+
+    if [[ -f "$config_file" ]] && ! grep -q "\.iris/env" "$config_file" 2>/dev/null; then
+        echo "" >> "$config_file"
+        echo "# IRIS Code" >> "$config_file"
+        echo "$source_line" >> "$config_file"
     fi
 fi
 
@@ -1641,29 +1624,6 @@ fi
 ONBOARD
 chmod 755 "$INSTALL_DIR/iris-onboard"
 
-# Symlink all CLI commands into a directory that's already in PATH.
-# Try /usr/local/bin first (always in PATH on macOS/Linux), then fallbacks.
-symlinked=false
-for dir in "/usr/local/bin" "$HOME/.local/bin" "$HOME/bin"; do
-    if [ -d "$dir" ] && [ -w "$dir" ]; then
-        ln -sf "$INSTALL_DIR/iris" "$dir/iris" 2>/dev/null || true
-        ln -sf "$INSTALL_DIR/iris-onboard" "$dir/iris-onboard" 2>/dev/null || true
-        ln -sf "$INSTALL_DIR/iris-login" "$dir/iris-login" 2>/dev/null || true
-        symlinked=true
-        break
-    fi
-done
-
-# Fallback: create ~/.local/bin if nothing was writable
-if [ "$symlinked" = "false" ]; then
-    mkdir -p "$HOME/.local/bin" 2>/dev/null || true
-    if [ -d "$HOME/.local/bin" ]; then
-        ln -sf "$INSTALL_DIR/iris" "$HOME/.local/bin/iris" 2>/dev/null || true
-        ln -sf "$INSTALL_DIR/iris-onboard" "$HOME/.local/bin/iris-onboard" 2>/dev/null || true
-        ln -sf "$INSTALL_DIR/iris-login" "$HOME/.local/bin/iris-login" 2>/dev/null || true
-    fi
-fi
-
 # ─── Next Steps ───────────────────────────────────────────────────────────────
 # Direct run: exec iris. Piped from curl: copy to clipboard + instructions.
 
@@ -1674,52 +1634,25 @@ if [ -t 0 ]; then
     exec "$INSTALL_DIR/iris" -m opencode/gpt-5-nano --prompt "$(cat "$PROMPT_FILE")"
 else
     echo -e ""
-    # Determine the command to show — use short name if symlinked into PATH, full path otherwise
-    # Note: even after add_to_path, the current shell won't see it until reopened
-    if [ "$symlinked" = "true" ] || command -v iris-onboard >/dev/null 2>&1; then
-        onboard_cmd="iris-onboard"
-        login_cmd="iris-login"
-    else
-        onboard_cmd="~/.iris/bin/iris-onboard"
-        login_cmd="~/.iris/bin/iris-login"
-    fi
-
     if [ "$AUTH_SUCCESS" = "true" ] || ([ -f "$HOME/.iris/sdk/.env" ] && grep -q "IRIS_API_KEY=." "$HOME/.iris/sdk/.env" 2>/dev/null); then
-        # Already authenticated — skip login prompt
-        echo -e "  ${GREEN}Ready to go!${NC} Start the AI assistant:"
+        echo -e "  ${GREEN}Ready to go!${NC} To get started, run:"
         echo -e ""
-        echo -e "    ${CYAN}${onboard_cmd}${NC}"
+        echo -e "    ${CYAN}source ~/.iris/env && iris-onboard${NC}"
         echo -e ""
         if command -v pbcopy &>/dev/null; then
-            printf "%s" "$onboard_cmd" | pbcopy
+            printf "%s" "source ~/.iris/env && iris-onboard" | pbcopy
             echo -e "  ${MUTED}(command copied to clipboard)${NC}"
-        fi
-        if [ "$symlinked" != "true" ] && ! command -v iris >/dev/null 2>&1; then
             echo -e ""
-            echo -e "  ${MUTED}To use ${NC}iris${MUTED} everywhere, open a new terminal or run:${NC}"
-            echo -e "    ${MUTED}source ~/.zshrc${NC}"
         fi
-        echo -e ""
     else
-        # Not authenticated — show login prompt
-        if command -v pbcopy &>/dev/null; then
-            printf "%s" "$login_cmd" | pbcopy
-        fi
-        echo -e "  ${GREEN}Next step${NC} — authenticate your account:"
+        echo -e "  ${GREEN}To get started, run:${NC}"
         echo -e ""
-        echo -e "    ${CYAN}${login_cmd}${NC}"
-        echo -e ""
-        echo -e "  ${MUTED}Then start the AI assistant:${NC}"
-        echo -e "    ${CYAN}${onboard_cmd}${NC}"
+        echo -e "    ${CYAN}source ~/.iris/env && iris-login${NC}"
         echo -e ""
         if command -v pbcopy &>/dev/null; then
-            echo -e "  ${MUTED}(${NC}${login_cmd}${MUTED} copied to clipboard)${NC}"
-        fi
-        if [ "$symlinked" != "true" ] && ! command -v iris >/dev/null 2>&1; then
+            printf "%s" "source ~/.iris/env && iris-login" | pbcopy
+            echo -e "  ${MUTED}(command copied to clipboard)${NC}"
             echo -e ""
-            echo -e "  ${MUTED}To use ${NC}iris${MUTED} everywhere, open a new terminal or run:${NC}"
-            echo -e "    ${MUTED}source ~/.zshrc${NC}"
         fi
-        echo -e ""
     fi
 fi
