@@ -543,15 +543,15 @@ install_sdk() {
 
     # Check for PHP
     if ! command -v php >/dev/null 2>&1; then
-        print_message warning "${ORANGE}PHP not found — skipping SDK install.${NC}"
-        print_message info "${MUTED}Install PHP 8.1+ and re-run: ${NC}curl -fsSL https://heyiris.io/install-code | bash"
+        print_message info "${MUTED}[2/6] IRIS SDK .............................. skipped (PHP not found)${NC}"
+        print_message info "${MUTED}      Install PHP 8.1+ and re-run: ${NC}curl -fsSL https://heyiris.io/install-code | bash"
         return 0
     fi
 
     # Check for Composer
     if ! command -v composer >/dev/null 2>&1; then
-        print_message warning "${ORANGE}Composer not found — skipping SDK install.${NC}"
-        print_message info "${MUTED}Install Composer (${NC}https://getcomposer.org${MUTED}) and re-run: ${NC}curl -fsSL https://heyiris.io/install-code | bash"
+        print_message info "${MUTED}[2/6] IRIS SDK .............................. skipped (Composer not found)${NC}"
+        print_message info "${MUTED}      Install Composer (${NC}https://getcomposer.org${MUTED}) and re-run: ${NC}curl -fsSL https://heyiris.io/install-code | bash"
         return 0
     fi
 
@@ -688,12 +688,13 @@ install_bridge() {
     print_message info "${MUTED}Installing IRIS Bridge + Hive Daemon...${NC}"
 
     local bridge_dir="$HOME/.iris/bridge"
+    local bridge_updated=false
 
     if [ -d "$bridge_dir" ] && [ -f "$bridge_dir/index.js" ] && [ -f "$bridge_dir/daemon.js" ]; then
         # Update existing installation
         print_message info "${MUTED}Bridge already installed, updating...${NC}"
         (cd "$bridge_dir" && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null) || true
-        print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}updated${NC}"
+        bridge_updated=true
     else
         # Fresh clone from public repo
         if git clone --quiet https://github.com/FREELABEL/iris-bridge.git "$bridge_dir" 2>/dev/null; then
@@ -878,7 +879,11 @@ DCTL
     ln -sf "$bridge_dir/bridgectl" "$INSTALL_DIR/iris-bridge"
     ln -sf "$bridge_dir/daemonctl" "$INSTALL_DIR/iris-daemon"
 
-    print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
+    if [ "$bridge_updated" = "true" ]; then
+        print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}updated${NC}"
+    else
+        print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
+    fi
     print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
     print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status|register${MUTED} (Hive compute node)${NC}"
 }
@@ -1517,7 +1522,14 @@ fi
 
 DASHBOARD="${DASHBOARD_URL:-https://app.heyiris.io}"
 
+# Check if SDK is available for onboarding prompt
+SDK_AVAILABLE=false
+if [ -f "$HOME/.iris/sdk/bin/iris-sdk" ] && command -v php >/dev/null 2>&1; then
+    SDK_AVAILABLE=true
+fi
+
 if [ "$AUTH_SUCCESS" = "true" ]; then
+    if [ "$SDK_AVAILABLE" = "true" ]; then
     ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user is authenticated as $USER_EMAIL (user ID: $USER_ID). Auth is DONE -- do NOT run auth steps, do NOT read .env files, do NOT use curl. ONLY use the IRIS SDK CLI at ~/.iris/sdk/bin/iris.
 
 RULES:
@@ -1595,6 +1607,58 @@ After it is created, show:
 - The exact CLI command to interact with it next
 - Their dashboard: $DASHBOARD (they can manage everything from the web UI too)
 - One suggested next step"
+    else
+    # Authenticated but SDK not installed (PHP missing)
+    ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user is authenticated as $USER_EMAIL (user ID: $USER_ID). Auth is DONE -- do NOT run auth steps.
+
+IMPORTANT: The IRIS SDK (PHP CLI) is NOT installed because PHP is not on this machine.
+The user CAN still use IRIS through the web dashboard and this AI assistant.
+
+RULES:
+- NEVER use curl or call APIs directly.
+- NEVER try to run ~/.iris/sdk/bin/iris commands — they will fail (PHP not installed).
+- Guide users to use the web dashboard for agent creation, workflows, and pages.
+- At the END of EVERY response, always include these links in a clean ASCII table like this:
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Dashboard   $DASHBOARD
+  │  Discover    https://app.heyiris.io/discover
+  │  Discord     https://discord.com/invite/Vmfrqmdkps
+  │  Docs        https://heyiris.io/developer
+  │  Desktop     ~/Applications/IRIS.app (run: open ~/Applications/IRIS.app)
+  └──────────────────────────────────────────────────────────────┘
+
+FIRST, run these quick commands to understand the user's environment:
+   git config --global user.name 2>/dev/null; git config --global user.email 2>/dev/null
+   ls -d ~/Sites/*/ ~/Projects/*/ ~/Code/*/ ~/Developer/*/ 2>/dev/null | head -15
+   which node python3 php docker 2>/dev/null
+Use what you learn to personalize your greeting.
+
+THEN present these choices:
+
+Welcome to IRIS! Here's what you can build:
+
+1. An AI Agent — chat-powered assistant with 17+ integrations
+2. A Multi-Agent Workflow — automated pipelines with human approval
+3. A Web Page — drag-and-drop page composer, publish instantly
+4. Something else — CRM, knowledge bases, recruitment, content generation
+
+Tell me what you'd like to build!
+
+NOTE: Since PHP isn't installed, we'll set things up through the web dashboard at $DASHBOARD.
+To unlock the full CLI experience later, install PHP 8.1+ and run: curl -fsSL https://heyiris.io/install-code | bash
+
+Based on what they pick, guide them to the dashboard:
+- Agent: Open $DASHBOARD — click 'New Agent' to create one
+- Workflow: Open $DASHBOARD — go to Workflows tab
+- Web Page: Open $DASHBOARD — go to Pages tab
+- Other: Guide them to the appropriate section of the dashboard
+
+After helping, show:
+- What they can do next
+- Their dashboard: $DASHBOARD
+- One suggested next step"
+    fi
 else
     ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user installed IRIS but is NOT authenticated yet.
 
@@ -1661,19 +1725,27 @@ fi
 ONBOARD
 chmod 755 "$INSTALL_DIR/iris-onboard"
 
-# Symlink iris-onboard and iris-login into any PATH directory that already has iris
-for dir in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
-    if [ -L "$dir/iris" ] || [ -f "$dir/iris" ]; then
-        ln -sf "$INSTALL_DIR/iris-onboard" "$dir/iris-onboard" 2>/dev/null
-        ln -sf "$INSTALL_DIR/iris-login" "$dir/iris-login" 2>/dev/null
+# Symlink all CLI commands into a directory that's already in PATH.
+# Try /usr/local/bin first (always in PATH on macOS/Linux), then fallbacks.
+symlinked=false
+for dir in "/usr/local/bin" "$HOME/.local/bin" "$HOME/bin"; do
+    if [ -d "$dir" ] && [ -w "$dir" ]; then
+        ln -sf "$INSTALL_DIR/iris" "$dir/iris" 2>/dev/null || true
+        ln -sf "$INSTALL_DIR/iris-onboard" "$dir/iris-onboard" 2>/dev/null || true
+        ln -sf "$INSTALL_DIR/iris-login" "$dir/iris-login" 2>/dev/null || true
+        symlinked=true
         break
     fi
 done
 
-# Ensure iris-onboard and iris-login are in ~/.local/bin as a fallback
-if [ -d "$HOME/.local/bin" ]; then
-    [ ! -e "$HOME/.local/bin/iris-onboard" ] && ln -sf "$INSTALL_DIR/iris-onboard" "$HOME/.local/bin/iris-onboard" 2>/dev/null || true
-    [ ! -e "$HOME/.local/bin/iris-login" ] && ln -sf "$INSTALL_DIR/iris-login" "$HOME/.local/bin/iris-login" 2>/dev/null || true
+# Fallback: create ~/.local/bin if nothing was writable
+if [ "$symlinked" = "false" ]; then
+    mkdir -p "$HOME/.local/bin" 2>/dev/null || true
+    if [ -d "$HOME/.local/bin" ]; then
+        ln -sf "$INSTALL_DIR/iris" "$HOME/.local/bin/iris" 2>/dev/null || true
+        ln -sf "$INSTALL_DIR/iris-onboard" "$HOME/.local/bin/iris-onboard" 2>/dev/null || true
+        ln -sf "$INSTALL_DIR/iris-login" "$HOME/.local/bin/iris-login" 2>/dev/null || true
+    fi
 fi
 
 # ─── Next Steps ───────────────────────────────────────────────────────────────
@@ -1686,31 +1758,40 @@ if [ -t 0 ]; then
     exec "$INSTALL_DIR/iris" -m opencode/gpt-5-nano --prompt "$(cat "$PROMPT_FILE")"
 else
     echo -e ""
+    # Determine the command to show — use short name if it resolves, full path otherwise
+    if command -v iris-onboard >/dev/null 2>&1; then
+        onboard_cmd="iris-onboard"
+        login_cmd="iris-login"
+    else
+        onboard_cmd="$INSTALL_DIR/iris-onboard"
+        login_cmd="$INSTALL_DIR/iris-login"
+    fi
+
     if [ "$AUTH_SUCCESS" = "true" ] || ([ -f "$HOME/.iris/sdk/.env" ] && grep -q "IRIS_API_KEY=." "$HOME/.iris/sdk/.env" 2>/dev/null); then
         # Already authenticated — skip login prompt
-        echo -e "  ${GREEN}Ready to go!${NC} Start the AI assistant:"
+        echo -e "  ${GREEN}Ready to go!${NC} Open a new terminal and run:"
         echo -e ""
-        echo -e "    ${CYAN}iris-onboard${NC}"
+        echo -e "    ${CYAN}${onboard_cmd}${NC}"
         echo -e ""
         if command -v pbcopy &>/dev/null; then
-            printf "%s" "iris-onboard" | pbcopy
-            echo -e "  ${MUTED}(command copied to clipboard)${NC}"
+            printf "%s" "$onboard_cmd" | pbcopy
+            echo -e "  ${MUTED}(copied to clipboard — just ⌘V + Enter)${NC}"
             echo -e ""
         fi
     else
         # Not authenticated — show login prompt
         if command -v pbcopy &>/dev/null; then
-            printf "%s" "iris-login" | pbcopy
+            printf "%s" "$login_cmd" | pbcopy
         fi
-        echo -e "  ${GREEN}Next step — authenticate:${NC}"
+        echo -e "  ${GREEN}Next step${NC} — open a new terminal and authenticate:"
         echo -e ""
-        echo -e "    ${CYAN}iris-login${NC}"
+        echo -e "    ${CYAN}${login_cmd}${NC}"
         echo -e ""
         echo -e "  ${MUTED}Then start the AI assistant:${NC}"
-        echo -e "    ${CYAN}iris-onboard${NC}"
+        echo -e "    ${CYAN}${onboard_cmd}${NC}"
         echo -e ""
         if command -v pbcopy &>/dev/null; then
-            echo -e "  ${MUTED}(${NC}iris-login${MUTED} copied to clipboard — just ⌘V + Enter)${NC}"
+            echo -e "  ${MUTED}(${NC}${login_cmd}${MUTED} copied to clipboard — just ⌘V + Enter)${NC}"
             echo -e ""
         fi
     fi
