@@ -11,7 +11,7 @@ NC='\033[0m' # No Color
 
 usage() {
     cat <<EOF
-IRIS Installer — Code, SDK, Desktop App, Bridge, Docker Sandbox
+IRIS Installer — Code, SDK, Desktop App, Bridge, Docker Sandbox, Remotion
 
 Usage: install [options]
 
@@ -22,6 +22,7 @@ Installs:
   4. MCP Config   — Agent tool integration (scaffolded for future use)
   5. Agent Bridge — Hive compute node + session bridge
   6. Docker Sandbox — Sandboxed container for AI agent development
+  7. Remotion     — Video & image generation compositions (lazy-installed)
 
 Options:
     -h, --help              Display this help message
@@ -33,6 +34,7 @@ Options:
         --skip-mcp          Skip MCP config scaffolding
         --skip-bridge       Skip Coding Agent Bridge installation
         --skip-sandbox      Skip Docker Sandbox installation
+        --skip-remotion     Skip Remotion video framework installation
         --api-url <url>     Set IRIS API URL (default: https://app.heyiris.io)
         --token <token>     Pre-seed SDK token (skip interactive auth)
         --user-id <id>      Pre-seed user ID (used with --token)
@@ -56,6 +58,7 @@ skip_app=false
 skip_mcp=false
 skip_bridge=false
 skip_sandbox=false
+skip_remotion=false
 iris_api_url="https://app.heyiris.io"
 pre_token="${IRIS_SDK_TOKEN:-}"
 pre_user_id="${IRIS_USER_ID:-}"
@@ -108,6 +111,10 @@ while [[ $# -gt 0 ]]; do
             skip_sandbox=true
             shift
             ;;
+        --skip-remotion)
+            skip_remotion=true
+            shift
+            ;;
         --api-url)
             if [[ -n "${2:-}" ]]; then
                 iris_api_url="$2"
@@ -141,6 +148,7 @@ while [[ $# -gt 0 ]]; do
             skip_mcp=true
             skip_bridge=true
             skip_sandbox=true
+            skip_remotion=true
             shift
             ;;
         *)
@@ -528,7 +536,7 @@ fi
 # Add to PATH for current session
 export PATH="$INSTALL_DIR:$PATH"
 
-print_message info "\n${GREEN}[1/6]${NC} IRIS Code ${MUTED}..........................${NC} ${GREEN}installed${NC}"
+print_message info "\n${GREEN}[1/7]${NC} IRIS Code ${MUTED}..........................${NC} ${GREEN}installed${NC}"
 
 # ─── Component 2: IRIS SDK / CLI ─────────────────────────────────────────────
 
@@ -540,13 +548,13 @@ install_sdk() {
         mkdir -p "$sdk_dir"
     fi
 
-    print_message info "${GREEN}[2/6]${NC} IRIS SDK ${MUTED}...........................${NC} ${GREEN}built-in${NC} ${MUTED}(no PHP required)${NC}"
+    print_message info "${GREEN}[2/7]${NC} IRIS SDK ${MUTED}...........................${NC} ${GREEN}built-in${NC} ${MUTED}(no PHP required)${NC}"
 }
 
 if [ "$skip_sdk" = "false" ]; then
     install_sdk
 else
-    print_message info "${MUTED}[2/6] IRIS SDK .............................. skipped${NC}"
+    print_message info "${MUTED}[2/7] IRIS SDK .............................. skipped${NC}"
 fi
 
 # ─── Component 3: IRIS Desktop App ───────────────────────────────────────────
@@ -554,7 +562,7 @@ fi
 install_desktop_app() {
     # Desktop app is macOS only for now (Nativefier produces .app bundles)
     if [ "${os:-}" != "darwin" ]; then
-        print_message info "${MUTED}[3/6] IRIS App .............................. skipped (macOS only)${NC}"
+        print_message info "${MUTED}[3/7] IRIS App .............................. skipped (macOS only)${NC}"
         return 0
     fi
 
@@ -565,7 +573,7 @@ install_desktop_app() {
 
     # Skip if already installed
     if [ -d "$app_path" ] || [ -d "/Applications/IRIS.app" ]; then
-        print_message info "${GREEN}[3/6]${NC} IRIS App ${MUTED}...........................${NC} ${GREEN}already installed${NC}"
+        print_message info "${GREEN}[3/7]${NC} IRIS App ${MUTED}...........................${NC} ${GREEN}already installed${NC}"
         return 0
     fi
 
@@ -580,21 +588,21 @@ install_desktop_app() {
         rm -rf "$tmp_dir"
 
         if [ -d "$app_path" ]; then
-            print_message info "${GREEN}[3/6]${NC} IRIS App ${MUTED}...........................${NC} ${GREEN}installed${NC}"
+            print_message info "${GREEN}[3/7]${NC} IRIS App ${MUTED}...........................${NC} ${GREEN}installed${NC}"
             print_message info "${MUTED}      Installed to ${NC}~/Applications/IRIS.app"
         else
-            print_message info "${MUTED}[3/6] IRIS App .............................. download available at heyiris.io${NC}"
+            print_message info "${MUTED}[3/7] IRIS App .............................. download available at heyiris.io${NC}"
         fi
     else
         rm -rf "$tmp_dir"
-        print_message info "${MUTED}[3/6] IRIS App .............................. download available at ${NC}https://heyiris.io/download"
+        print_message info "${MUTED}[3/7] IRIS App .............................. download available at ${NC}https://heyiris.io/download"
     fi
 }
 
 if [ "$skip_app" = "false" ]; then
     install_desktop_app
 else
-    print_message info "${MUTED}[3/6] IRIS App .............................. skipped${NC}"
+    print_message info "${MUTED}[3/7] IRIS App .............................. skipped${NC}"
 fi
 
 # ─── Component 4: MCP Configuration Scaffold ─────────────────────────────────
@@ -605,7 +613,7 @@ scaffold_mcp_config() {
 
     # Don't overwrite existing config
     if [ -f "$mcp_config" ]; then
-        print_message info "${GREEN}[4/6]${NC} MCP Config ${MUTED}.........................${NC} ${GREEN}already configured${NC}"
+        print_message info "${GREEN}[4/7]${NC} MCP Config ${MUTED}.........................${NC} ${GREEN}already configured${NC}"
         return 0
     fi
 
@@ -630,14 +638,14 @@ scaffold_mcp_config() {
 }
 MCPEOF
 
-    print_message info "${GREEN}[4/6]${NC} MCP Config ${MUTED}.........................${NC} ${GREEN}scaffolded${NC}"
+    print_message info "${GREEN}[4/7]${NC} MCP Config ${MUTED}.........................${NC} ${GREEN}scaffolded${NC}"
     print_message info "${MUTED}      Config at ${NC}~/.iris/mcp.json${MUTED} (enable when MCP servers are ready)${NC}"
 }
 
 if [ "$skip_mcp" = "false" ]; then
     scaffold_mcp_config
 else
-    print_message info "${MUTED}[4/6] MCP Config ............................ skipped${NC}"
+    print_message info "${MUTED}[4/7] MCP Config ............................ skipped${NC}"
 fi
 
 # ─── Component 5: Coding Agent Bridge + Hive Daemon ─────────────────────────
@@ -645,7 +653,7 @@ fi
 install_bridge() {
     # Requires Node.js
     if ! command -v node >/dev/null 2>&1; then
-        print_message info "${MUTED}[5/6] Agent Bridge .......................... skipped (Node.js not found)${NC}"
+        print_message info "${MUTED}[5/7] Agent Bridge .......................... skipped (Node.js not found)${NC}"
         print_message info "${MUTED}      Install Node.js to enable: ${NC}https://nodejs.org"
         return 0
     fi
@@ -670,7 +678,7 @@ install_bridge() {
                 print_message warning "${ORANGE}Bridge dependencies incomplete. Run: cd ~/.iris/bridge && npm install${NC}"
             fi
         else
-            print_message info "${MUTED}[5/6] Agent Bridge .......................... could not download${NC}"
+            print_message info "${MUTED}[5/7] Agent Bridge .......................... could not download${NC}"
             print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-bridge.git ~/.iris/bridge"
             return 0
         fi
@@ -845,9 +853,9 @@ DCTL
     ln -sf "$bridge_dir/daemonctl" "$INSTALL_DIR/iris-daemon"
 
     if [ "$bridge_updated" = "true" ]; then
-        print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}updated${NC}"
+        print_message info "${GREEN}[5/7]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}updated${NC}"
     else
-        print_message info "${GREEN}[5/6]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
+        print_message info "${GREEN}[5/7]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
     fi
     print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
     print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status|register${MUTED} (Hive compute node)${NC}"
@@ -856,7 +864,7 @@ DCTL
 if [ "$skip_bridge" = "false" ]; then
     install_bridge
 else
-    print_message info "${MUTED}[5/6] Agent Bridge .......................... skipped${NC}"
+    print_message info "${MUTED}[5/7] Agent Bridge .......................... skipped${NC}"
 fi
 
 # ─── iris-login: standalone auth command (always installed) ───────────────────
@@ -1043,14 +1051,14 @@ chmod 755 "$INSTALL_DIR/iris-login"
 install_docker_sandbox() {
     # Check if Docker is installed
     if ! command -v docker >/dev/null 2>&1; then
-        print_message info "${MUTED}[6/6] Docker Sandbox ........................ skipped (Docker not found)${NC}"
+        print_message info "${MUTED}[6/7] Docker Sandbox ........................ skipped (Docker not found)${NC}"
         print_message info "${MUTED}      Install Docker to enable: ${NC}https://docs.docker.com/get-docker/"
         return 0
     fi
 
     # Check if Docker daemon is running
     if ! docker info >/dev/null 2>&1; then
-        print_message info "${MUTED}[6/6] Docker Sandbox ........................ skipped (Docker not running)${NC}"
+        print_message info "${MUTED}[6/7] Docker Sandbox ........................ skipped (Docker not running)${NC}"
         print_message info "${MUTED}      Start Docker Desktop and re-run the installer${NC}"
         return 0
     fi
@@ -1076,7 +1084,7 @@ install_docker_sandbox() {
     # Pull the pre-built Docker image (show progress)
     print_message info "${MUTED}  Pulling agent sandbox image...${NC}"
     if ! docker pull ghcr.io/freelabel/iris-agent:latest; then
-        print_message info "${MUTED}[6/6] Docker Sandbox ........................ image not yet available${NC}"
+        print_message info "${MUTED}[6/7] Docker Sandbox ........................ image not yet available${NC}"
         print_message info "${MUTED}      Image will be available soon at ${NC}ghcr.io/freelabel/iris-agent:latest"
         return 0
     fi
@@ -1203,7 +1211,7 @@ esac
 SANDBOXEOF
     chmod 755 "$INSTALL_DIR/iris-sandbox"
 
-    print_message info "${GREEN}[6/6]${NC} Docker Sandbox ${MUTED}.....................${NC} ${GREEN}installed${NC}"
+    print_message info "${GREEN}[6/7]${NC} Docker Sandbox ${MUTED}.....................${NC} ${GREEN}installed${NC}"
     print_message info "${MUTED}      Start with: ${NC}iris-sandbox start"
     print_message info "${MUTED}      Workspace:  ${NC}~/.iris/sandbox/workspace/"
     print_message info "${MUTED}      Commands:   ${NC}iris-sandbox start|stop|shell|logs|status|update"
@@ -1212,7 +1220,147 @@ SANDBOXEOF
 if [ "$skip_sandbox" = "false" ]; then
     install_docker_sandbox
 else
-    print_message info "${MUTED}[6/6] Docker Sandbox ........................ skipped${NC}"
+    print_message info "${MUTED}[6/7] Docker Sandbox ........................ skipped${NC}"
+fi
+
+# ─── Component 7: Remotion Video Framework (Lazy-Installed) ─────────────────
+
+install_remotion() {
+    # Requires Node.js (for npx remotion)
+    if ! command -v node >/dev/null 2>&1; then
+        print_message info "${MUTED}[7/7] Remotion ............................. skipped (Node.js not found)${NC}"
+        return 0
+    fi
+
+    local remotion_dir="$HOME/.iris/remotion"
+
+    if [ -d "$remotion_dir/.git" ]; then
+        # Update existing installation
+        (cd "$remotion_dir" && git pull --quiet 2>/dev/null) || true
+        print_message info "${MUTED}      Compositions updated from upstream${NC}"
+    else
+        # Fresh clone (source only — NO npm install, that's lazy)
+        if git clone --quiet --depth 1 https://github.com/FREELABEL/iris-remotion.git "$remotion_dir" 2>/dev/null; then
+            : # success
+        else
+            print_message info "${MUTED}[7/7] Remotion ............................. could not download${NC}"
+            print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-remotion.git ~/.iris/remotion"
+            return 0
+        fi
+    fi
+
+    # FFmpeg advisory (not a blocker — stills work without it)
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        print_message info "${MUTED}      Note: FFmpeg not found — video renders need it (brew install ffmpeg)${NC}"
+    fi
+
+    # Create iris-remotion wrapper script with lazy npm install
+    cat > "$INSTALL_DIR/iris-remotion" << 'REMOTIONEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+REMOTION_DIR="$HOME/.iris/remotion"
+
+# Verify source exists
+if [ ! -f "$REMOTION_DIR/package.json" ]; then
+    echo "Remotion not found. Run: curl -fsSL https://heyiris.io/install-code | bash"
+    exit 1
+fi
+
+# LAZY INSTALL: first-use npm install (~700MB, one-time)
+if [ ! -d "$REMOTION_DIR/node_modules" ]; then
+    echo "First run — installing Remotion dependencies (~2 min, one-time)..."
+    echo ""
+    (cd "$REMOTION_DIR" && npm install 2>&1) || {
+        echo "npm install failed. Try manually: cd ~/.iris/remotion && npm install"
+        exit 1
+    }
+    echo ""
+    echo "Remotion ready."
+fi
+
+# FFmpeg warning for video renders
+case "${1:-}" in
+    render)
+        if ! command -v ffmpeg >/dev/null 2>&1; then
+            echo "Warning: FFmpeg not found — video rendering requires it."
+            echo "  macOS:  brew install ffmpeg"
+            echo "  Linux:  sudo apt install ffmpeg"
+            echo ""
+        fi
+        ;;
+esac
+
+# Dispatch subcommand
+case "${1:-help}" in
+    render)
+        shift
+        cd "$REMOTION_DIR" && npx remotion render "$@"
+        ;;
+    still)
+        shift
+        cd "$REMOTION_DIR" && npx remotion still "$@"
+        ;;
+    preview|studio)
+        shift
+        cd "$REMOTION_DIR" && npx remotion studio "$@"
+        ;;
+    list|compositions)
+        cd "$REMOTION_DIR" && npx remotion compositions
+        ;;
+    init)
+        echo "Installing/repairing Remotion dependencies..."
+        cd "$REMOTION_DIR" && npm install
+        echo "Done."
+        ;;
+    update)
+        echo "Updating Remotion compositions..."
+        OLD_HASH=""
+        if [ -f "$REMOTION_DIR/package.json" ]; then
+            OLD_HASH=$(md5 -q "$REMOTION_DIR/package.json" 2>/dev/null || md5sum "$REMOTION_DIR/package.json" 2>/dev/null | cut -d' ' -f1 || echo "")
+        fi
+        (cd "$REMOTION_DIR" && git pull 2>&1) || {
+            echo "git pull failed. Try manually: cd ~/.iris/remotion && git pull"
+            exit 1
+        }
+        NEW_HASH=$(md5 -q "$REMOTION_DIR/package.json" 2>/dev/null || md5sum "$REMOTION_DIR/package.json" 2>/dev/null | cut -d' ' -f1 || echo "")
+        if [ -d "$REMOTION_DIR/node_modules" ] && [ "$OLD_HASH" != "$NEW_HASH" ]; then
+            echo "Dependencies changed — reinstalling..."
+            (cd "$REMOTION_DIR" && npm install)
+        fi
+        echo "Compositions updated."
+        ;;
+    help|--help|-h|*)
+        echo "IRIS Remotion — Video & image generation"
+        echo ""
+        echo "Usage: iris-remotion <command> [options]"
+        echo ""
+        echo "Commands:"
+        echo "  render <comp> [output] [--props '{}']  Render a video (MP4)"
+        echo "  still  <comp> [output] [--props '{}']  Render a still image (PNG)"
+        echo "  preview                                 Open Remotion Studio in browser"
+        echo "  list                                    List available compositions"
+        echo "  init                                    (Re)install dependencies"
+        echo "  update                                  Update compositions from upstream"
+        echo ""
+        echo "Examples:"
+        echo "  iris-remotion still SocialPostStill out.png --props '{\"brand\":\"freelabel\"}'"
+        echo "  iris-remotion render BrandIntro out.mp4 --props '{\"brand\":\"beatbox\"}'"
+        echo "  iris-remotion preview"
+        echo "  iris-remotion list"
+        ;;
+esac
+REMOTIONEOF
+    chmod 755 "$INSTALL_DIR/iris-remotion"
+
+    print_message info "${GREEN}[7/7]${NC} Remotion ${MUTED}............................${NC} ${GREEN}registered${NC} ${MUTED}(deps install on first use)${NC}"
+    print_message info "${MUTED}      Render:   ${NC}iris-remotion render|still|preview|list"
+    print_message info "${MUTED}      Update:   ${NC}iris-remotion update"
+}
+
+if [ "$skip_remotion" = "false" ]; then
+    install_remotion
+else
+    print_message info "${MUTED}[7/7] Remotion ............................. skipped${NC}"
 fi
 
 # ─── Download onboarding docs for the AI agent ───────────────────────────────
@@ -1270,6 +1418,9 @@ echo -e "${MUTED}  bridge/          ${NC}Hive Compute Node + Session Bridge"
 fi
 if [ "$skip_sandbox" = "false" ] && [ -f "$HOME/.iris/sandbox/docker-compose.yml" ]; then
 echo -e "${MUTED}  sandbox/         ${NC}Docker Agent Sandbox (iris-sandbox start|stop|shell)"
+fi
+if [ "$skip_remotion" = "false" ] && [ -f "$HOME/.iris/remotion/package.json" ]; then
+echo -e "${MUTED}  remotion/        ${NC}Video & graphics (iris-remotion render|still|preview)"
 fi
 echo -e ""
 echo -e "${MUTED}For more information visit ${NC}https://heyiris.io/developer"
