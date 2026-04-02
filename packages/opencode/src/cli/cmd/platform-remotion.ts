@@ -141,4 +141,7 @@ export const PlatformRemotionCommand = cmd({
       .command(InitCommand)
       .command(UpdateCommand)
       .demandCommand(1, "Specify a subcommand: render, still, preview, list, init, update"),
+  async handler() {
+    // handled by subcommands
+  },
 })
