@@ -822,14 +822,472 @@ const HiveStatusCommand = cmd({
 })
 
 // ============================================================================
+// Daemon Operations — tasks, cancel, queue, pause, resume, purge, doctor
+// ============================================================================
+
+const BRIDGE_URL = process.env.BRIDGE_URL ?? "http://localhost:3200"
+
+function readNodeKey(): string | null {
+  try {
+    const fs = require("fs")
+    const path = require("path")
+    const home = process.env.HOME || process.env.USERPROFILE || ""
+    const configPath = path.join(home, ".iris", "config.json")
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+      return config.node_api_key || null
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+async function nodeFetch(path: string, options: RequestInit = {}) {
+  const nodeKey = readNodeKey()
+  if (!nodeKey) throw new Error("No node_api_key in ~/.iris/config.json. Run the IRIS installer first.")
+  return fetch(`${IRIS_API}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${nodeKey}`,
+      ...((options.headers as Record<string, string>) || {}),
+    },
+  })
+}
+
+async function bridgeFetch(path: string) {
+  return fetch(`${BRIDGE_URL}${path}`, { headers: { Accept: "application/json" } })
+}
+
+// ── iris hive tasks ─────────────────────────────────────────────────────
+
+const HiveTasksCommand = cmd({
+  command: "tasks",
+  describe: "list pending/running tasks on your node",
+  builder: (yargs) =>
+    yargs
+      .option("status", { describe: "filter by status", type: "string", choices: ["pending", "running", "all"], default: "all" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Hive Tasks")
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading tasks…")
+
+    try {
+      // Cloud: pending tasks from iris-api
+      const pendingRes = await nodeFetch("/api/v6/node-agent/tasks/pending")
+      const pendingData = await pendingRes.json() as Record<string, unknown>
+      const pendingTasks = (pendingData.tasks ?? []) as Record<string, unknown>[]
+
+      // Local: running tasks from bridge daemon
+      let runningTasks: Record<string, unknown>[] = []
+      try {
+        const queueRes = await bridgeFetch("/daemon/queue")
+        const queueData = await queueRes.json() as Record<string, unknown>
+        runningTasks = (queueData.tasks ?? []) as Record<string, unknown>[]
+      } catch { /* bridge not running */ }
+
+      spinner.stop(`${pendingTasks.length} pending, ${runningTasks.length} running`)
+      printDivider()
+
+      if (runningTasks.length > 0) {
+        console.log(bold("  Running:"))
+        for (const t of runningTasks) {
+          const id = dim(String(t.id ?? "").substring(0, 12) + "…")
+          const title = bold(String(t.title ?? t.type ?? "unknown"))
+          const uptime = t.uptime_s ? dim(`${t.uptime_s}s`) : ""
+          console.log(`    ${success("▶")} ${id}  ${title}  ${uptime}`)
+        }
+        console.log()
+      }
+
+      if (pendingTasks.length > 0) {
+        console.log(bold("  Pending (cloud):"))
+        for (const t of pendingTasks) {
+          const id = dim(String(t.id ?? "").substring(0, 12) + "…")
+          const title = String(t.title ?? "unknown")
+          const status = dim(String(t.status ?? ""))
+          console.log(`    ◌ ${id}  ${title}  ${status}`)
+        }
+      }
+
+      if (pendingTasks.length === 0 && runningTasks.length === 0) {
+        console.log(dim("  No tasks. Node is idle."))
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+// ── iris hive cancel ────────────────────────────────────────────────────
+
+const HiveCancelCommand = cmd({
+  command: "cancel [task-id]",
+  describe: "cancel a task or all pending tasks",
+  builder: (yargs) =>
+    yargs
+      .positional("task-id", { describe: "task ID to cancel (omit for interactive)", type: "string" })
+      .option("all", { describe: "cancel ALL pending tasks", type: "boolean", default: false })
+      .option("stale", { describe: "cancel tasks older than 1 hour", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Cancel Tasks")
+
+    const spinner = prompts.spinner()
+
+    try {
+      if (args.all || args.stale) {
+        spinner.start("Fetching pending tasks…")
+        const res = await nodeFetch("/api/v6/node-agent/tasks/pending")
+        const data = await res.json() as Record<string, unknown>
+        let tasks = (data.tasks ?? []) as Record<string, unknown>[]
+
+        if (args.stale) {
+          const oneHourAgo = Date.now() - 60 * 60 * 1000
+          tasks = tasks.filter(t => {
+            const created = new Date(String(t.created_at ?? "")).getTime()
+            return created < oneHourAgo
+          })
+        }
+
+        if (tasks.length === 0) {
+          spinner.stop("No tasks to cancel")
+          prompts.outro("Done")
+          return
+        }
+
+        spinner.stop(`Found ${tasks.length} task(s) to cancel`)
+
+        const confirm = await prompts.confirm({ message: `Cancel ${tasks.length} task(s)?` })
+        if (!confirm || prompts.isCancel(confirm)) { prompts.outro("Cancelled"); return }
+
+        let cancelled = 0
+        for (const t of tasks) {
+          try {
+            await nodeFetch(`/api/v6/node-agent/tasks/${t.id}/result`, {
+              method: "POST",
+              body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
+            })
+            cancelled++
+            console.log(`  ${success("✓")} ${String(t.id).substring(0, 12)}… — ${t.title}`)
+          } catch (err) {
+            console.log(`  ${dim("✗")} ${String(t.id).substring(0, 12)}… — ${err instanceof Error ? err.message : "failed"}`)
+          }
+        }
+        console.log()
+        prompts.log.success(`${cancelled}/${tasks.length} tasks cancelled`)
+      } else if (args["task-id"]) {
+        spinner.start("Cancelling…")
+        const res = await nodeFetch(`/api/v6/node-agent/tasks/${args["task-id"]}/result`, {
+          method: "POST",
+          body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
+        })
+        if (res.ok) {
+          spinner.stop(success("Task cancelled"))
+        } else {
+          const err = await res.text()
+          spinner.stop("Failed", 1)
+          prompts.log.error(err)
+        }
+      } else {
+        // Interactive: show pending and let user pick
+        spinner.start("Fetching tasks…")
+        const res = await nodeFetch("/api/v6/node-agent/tasks/pending")
+        const data = await res.json() as Record<string, unknown>
+        const tasks = (data.tasks ?? []) as Record<string, unknown>[]
+        spinner.stop(`${tasks.length} pending`)
+
+        if (tasks.length === 0) {
+          console.log(dim("  No pending tasks to cancel."))
+          prompts.outro("Done")
+          return
+        }
+
+        const selected = await prompts.select({
+          message: "Select task to cancel:",
+          options: tasks.map(t => ({
+            value: String(t.id),
+            label: `${String(t.id).substring(0, 12)}… — ${t.title}`,
+          })),
+        })
+        if (prompts.isCancel(selected)) { prompts.outro("Cancelled"); return }
+
+        await nodeFetch(`/api/v6/node-agent/tasks/${selected}/result`, {
+          method: "POST",
+          body: JSON.stringify({ status: "failed", output: "Cancelled via iris hive cancel", error: "Manually cancelled" }),
+        })
+        prompts.log.success("Task cancelled")
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+// ── iris hive queue ─────────────────────────────────────────────────────
+
+const HiveQueueCommand = cmd({
+  command: "queue",
+  describe: "show daemon queue (running tasks, capacity)",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Daemon Queue")
+
+    try {
+      const [queueRes, healthRes, capacityRes] = await Promise.all([
+        bridgeFetch("/daemon/queue").catch(() => null),
+        bridgeFetch("/daemon/health").catch(() => null),
+        bridgeFetch("/daemon/capacity").catch(() => null),
+      ])
+
+      if (!queueRes || !queueRes.ok) {
+        prompts.log.warn("Daemon not running. Start with: npm run bridge")
+        prompts.outro("Done")
+        return
+      }
+
+      const queue = await queueRes.json() as Record<string, unknown>
+      const health = healthRes ? await healthRes.json() as Record<string, unknown> : {}
+      const capacity = capacityRes ? await capacityRes.json() as Record<string, unknown> : {}
+
+      printDivider()
+      printKV("Status", health.paused ? highlight("PAUSED") : success("active"))
+      printKV("Node", health.node_name ?? dim("unknown"))
+      printKV("Tasks", `${queue.active_tasks ?? 0} active`)
+      printKV("Capacity", capacity.level ?? "unknown")
+      printKV("Uptime", health.uptime_s ? `${Math.round(Number(health.uptime_s) / 60)}m` : dim("unknown"))
+      console.log()
+
+      const tasks = (queue.tasks ?? []) as Record<string, unknown>[]
+      if (tasks.length > 0) {
+        console.log(bold("  Active tasks:"))
+        for (const t of tasks) {
+          const id = dim(String(t.id ?? "").substring(0, 12) + "…")
+          const title = bold(String(t.title ?? t.type ?? ""))
+          const uptime = t.uptime_s ? dim(`${t.uptime_s}s`) : ""
+          const pid = t.pid ? dim(`PID:${t.pid}`) : ""
+          console.log(`    ${success("▶")} ${id}  ${title}  ${uptime}  ${pid}`)
+        }
+      } else {
+        console.log(dim("  No active tasks. Waiting for dispatch."))
+      }
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+// ── iris hive pause / resume ────────────────────────────────────────────
+
+const HivePauseCommand = cmd({
+  command: "pause",
+  describe: "pause daemon (no new tasks accepted)",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    try {
+      const res = await fetch(`${BRIDGE_URL}/daemon/pause`, { method: "POST" })
+      if (res.ok) {
+        prompts.log.success("Daemon paused — no new tasks will be accepted")
+      } else {
+        prompts.log.error("Failed to pause daemon")
+      }
+    } catch {
+      prompts.log.error("Daemon not running. Start with: npm run bridge")
+    }
+  },
+})
+
+const HiveResumeCommand = cmd({
+  command: "resume",
+  describe: "resume daemon (accept tasks again)",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    try {
+      const res = await fetch(`${BRIDGE_URL}/daemon/resume`, { method: "POST" })
+      if (res.ok) {
+        prompts.log.success("Daemon resumed — accepting tasks")
+      } else {
+        prompts.log.error("Failed to resume daemon")
+      }
+    } catch {
+      prompts.log.error("Daemon not running. Start with: npm run bridge")
+    }
+  },
+})
+
+// ── iris hive purge ─────────────────────────────────────────────────────
+
+const HivePurgeCommand = cmd({
+  command: "purge",
+  describe: "cancel ALL pending tasks + clear daemon state (emergency)",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Purge All Tasks")
+
+    const confirm = await prompts.confirm({ message: "Cancel ALL pending tasks on this node? This is irreversible." })
+    if (!confirm || prompts.isCancel(confirm)) { prompts.outro("Cancelled"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Purging…")
+
+    try {
+      const res = await nodeFetch("/api/v6/node-agent/tasks/pending")
+      const data = await res.json() as Record<string, unknown>
+      const tasks = (data.tasks ?? []) as Record<string, unknown>[]
+
+      let cancelled = 0
+      for (const t of tasks) {
+        try {
+          await nodeFetch(`/api/v6/node-agent/tasks/${t.id}/result`, {
+            method: "POST",
+            body: JSON.stringify({ status: "failed", output: "Purged via iris hive purge", error: "Emergency purge" }),
+          })
+          cancelled++
+        } catch { /* best effort */ }
+      }
+
+      spinner.stop(success(`${cancelled} tasks purged`))
+
+      // Also try to pause the daemon to prevent re-dispatch
+      try {
+        await fetch(`${BRIDGE_URL}/daemon/pause`, { method: "POST" })
+        prompts.log.info("Daemon paused to prevent re-dispatch. Resume with: iris hive resume")
+      } catch {
+        prompts.log.warn("Daemon not reachable — tasks may be re-dispatched on next heartbeat")
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+// ── iris hive doctor ────────────────────────────────────────────────────
+
+const HiveDoctorCommand = cmd({
+  command: "doctor",
+  describe: "diagnose daemon health, connectivity, and stale tasks",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Hive Doctor")
+
+    const checks: { name: string; status: "pass" | "fail" | "warn"; detail: string }[] = []
+
+    // 1. Node key
+    const nodeKey = readNodeKey()
+    checks.push(nodeKey
+      ? { name: "Node API key", status: "pass", detail: `${nodeKey.substring(0, 15)}…` }
+      : { name: "Node API key", status: "fail", detail: "Missing — run iris-login or add node_api_key to ~/.iris/config.json" }
+    )
+
+    // 2. Bridge daemon
+    try {
+      const res = await bridgeFetch("/daemon/health")
+      if (res.ok) {
+        const h = await res.json() as Record<string, unknown>
+        checks.push({ name: "Bridge daemon", status: "pass", detail: `${h.status} | ${h.running_tasks} tasks | uptime ${Math.round(Number(h.uptime_s || 0) / 60)}m` })
+      } else {
+        checks.push({ name: "Bridge daemon", status: "fail", detail: `HTTP ${res.status}` })
+      }
+    } catch {
+      checks.push({ name: "Bridge daemon", status: "warn", detail: "Not running (localhost:3200). Start with: npm run bridge" })
+    }
+
+    // 3. Cloud connectivity
+    if (nodeKey) {
+      try {
+        const res = await nodeFetch("/api/v6/node-agent/heartbeat", { method: "POST", body: JSON.stringify({}) })
+        if (res.ok) {
+          const h = await res.json() as Record<string, unknown>
+          checks.push({ name: "Cloud API", status: "pass", detail: `Connected to ${IRIS_API}` })
+          checks.push({ name: "Node ID", status: "pass", detail: String(h.node_id ?? "unknown").substring(0, 16) + "…" })
+        } else {
+          checks.push({ name: "Cloud API", status: "fail", detail: `HTTP ${res.status} — key may be invalid` })
+        }
+      } catch (err) {
+        checks.push({ name: "Cloud API", status: "fail", detail: err instanceof Error ? err.message : "Connection failed" })
+      }
+    }
+
+    // 4. Stale tasks
+    if (nodeKey) {
+      try {
+        const res = await nodeFetch("/api/v6/node-agent/tasks/pending")
+        const data = await res.json() as Record<string, unknown>
+        const tasks = (data.tasks ?? []) as Record<string, unknown>[]
+        const stale = tasks.filter(t => {
+          const created = new Date(String(t.created_at ?? "")).getTime()
+          return (Date.now() - created) > 60 * 60 * 1000
+        })
+        if (tasks.length === 0) {
+          checks.push({ name: "Pending tasks", status: "pass", detail: "0 pending" })
+        } else if (stale.length > 0) {
+          checks.push({ name: "Pending tasks", status: "warn", detail: `${tasks.length} pending (${stale.length} stale >1hr). Run: iris hive cancel --stale` })
+        } else {
+          checks.push({ name: "Pending tasks", status: "pass", detail: `${tasks.length} pending` })
+        }
+      } catch { /* skip */ }
+    }
+
+    // 5. Capacity
+    try {
+      const res = await bridgeFetch("/daemon/capacity")
+      if (res.ok) {
+        const c = await res.json() as Record<string, unknown>
+        const level = String(c.level ?? "unknown")
+        const status = level === "overloaded" ? "warn" : "pass"
+        checks.push({ name: "Capacity", status, detail: level })
+      }
+    } catch { /* bridge not running */ }
+
+    // Display results
+    printDivider()
+    for (const check of checks) {
+      const icon = check.status === "pass" ? success("✓") : check.status === "warn" ? highlight("⚠") : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+      console.log(`  ${icon}  ${bold(check.name)}: ${check.detail}`)
+    }
+    console.log()
+
+    const failures = checks.filter(c => c.status === "fail")
+    if (failures.length > 0) {
+      prompts.log.warn(`${failures.length} issue(s) found`)
+    } else {
+      prompts.log.success("All checks passed")
+    }
+    prompts.outro("Done")
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
 export const PlatformHiveCommand = cmd({
   command: "hive",
-  describe: "manage Hive projects, deployments, PRs & issues",
+  describe: "manage Hive nodes, tasks, projects & deployments",
   builder: (yargs) =>
     yargs
+      // Daemon operations (fast debugging)
+      .command(HiveTasksCommand)
+      .command(HiveCancelCommand)
+      .command(HiveQueueCommand)
+      .command(HivePauseCommand)
+      .command(HiveResumeCommand)
+      .command(HivePurgeCommand)
+      .command(HiveDoctorCommand)
+      // Project management
       .command(HiveListCommand)
       .command(HiveCreateCommand)
       .command(HiveGetCommand)
