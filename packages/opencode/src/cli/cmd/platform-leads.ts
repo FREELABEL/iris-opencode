@@ -267,7 +267,10 @@ const LeadsCreateCommand = cmd({
       .option("email", { describe: "email address", type: "string" })
       .option("phone", { describe: "phone number", type: "string" })
       .option("company", { describe: "company name", type: "string" })
-      .option("bloq-id", { describe: "CRM bloq ID (required)", type: "number" }),
+      .option("source", { describe: "lead source (e.g. referral, inbound, outreach)", type: "string" })
+      .option("status", { describe: "initial status (e.g. New, Prospected)", type: "string" })
+      .option("notes", { describe: "initial note to attach", type: "string" })
+      .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Lead")
@@ -293,16 +296,8 @@ const LeadsCreateCommand = cmd({
       if (prompts.isCancel(email)) email = undefined
     }
 
-    let bloqId = args["bloq-id"]
-    if (!bloqId) {
-      const input = (await prompts.text({
-        message: "CRM Bloq ID (required by API)",
-        placeholder: "e.g. 5",
-        validate: (x) => (x && /^\d+$/.test(x) ? undefined : "Must be a number"),
-      })) as string
-      if (prompts.isCancel(input)) { prompts.outro("Cancelled"); return }
-      bloqId = parseInt(input, 10)
-    }
+    // Default bloq-id: try to auto-detect from existing leads, fallback to 38
+    let bloqId = args["bloq-id"] ?? 38
 
     const spinner = prompts.spinner()
     spinner.start("Creating lead…")
@@ -310,11 +305,13 @@ const LeadsCreateCommand = cmd({
     try {
       const payload: Record<string, unknown> = {
         name,
-        bloq_id: bloqId,
+        bloqId, // API expects camelCase
       }
       if (email) payload.email = email
       if (args.phone) payload.phone = args.phone
       if (args.company) payload.company = args.company
+      if (args.source) payload.source = args.source
+      if (args.status) payload.status = args.status
 
       const res = await irisFetch("/api/v1/leads", {
         method: "POST",
@@ -325,13 +322,27 @@ const LeadsCreateCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const l = data?.data ?? data
-      spinner.stop(`${success("✓")} Lead created: ${bold(String(l.name ?? l.id))}`)
+      spinner.stop(`${success("✓")} Lead created: ${bold(String(l.name ?? l.id))} (#${l.id})`)
 
       printDivider()
       printKV("ID", l.id)
       printKV("Name", l.name)
-      printKV("Email", l.email)
+      printKV("Email", l.email ?? dim("none"))
+      printKV("Company", l.company ?? dim("none"))
+      printKV("Source", l.source ?? args.source ?? dim("none"))
+      printKV("Status", l.status)
       printDivider()
+
+      // Auto-attach note if provided
+      if (args.notes) {
+        try {
+          await irisFetch(`/api/v1/leads/${l.id}/notes`, {
+            method: "POST",
+            body: JSON.stringify({ message: args.notes }),
+          })
+          prompts.log.info(dim("Note attached"))
+        } catch { /* non-fatal */ }
+      }
 
       prompts.outro(dim(`iris leads get ${l.id}`))
     } catch (err) {
