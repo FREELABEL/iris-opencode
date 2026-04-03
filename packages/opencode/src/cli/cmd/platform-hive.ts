@@ -18,7 +18,7 @@ function statusBadge(status: string): string {
   const badges: Record<string, string> = {
     deployed: `${UI.Style.TEXT_SUCCESS}● deployed${UI.Style.TEXT_NORMAL}`,
     deploying: `${UI.Style.TEXT_HIGHLIGHT}◌ deploying${UI.Style.TEXT_NORMAL}`,
-    failed: `${UI.Style.TEXT_ERROR}✗ failed${UI.Style.TEXT_NORMAL}`,
+    failed: `${UI.Style.TEXT_DANGER}✗ failed${UI.Style.TEXT_NORMAL}`,
     stopped: `${dim("○ stopped")}`,
     not_deployed: `${dim("○ not deployed")}`,
   }
@@ -418,7 +418,7 @@ const HiveEnvSetCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
-    const pairs = (args.pairs as string[]) || []
+    const pairs = (args.pairs as unknown as string[]) || []
     const vars: Record<string, string> = {}
     for (const pair of pairs) {
       const eqIdx = pair.indexOf("=")
