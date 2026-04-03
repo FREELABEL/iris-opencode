@@ -528,7 +528,7 @@ const StagesListCommand = cmd({
     spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/events/${args["event-id"]}/stages`)
+      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/stages`)
       const ok = await handleApiError(res, "List stages")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -587,7 +587,7 @@ const StageCreateCommand = cmd({
       if (args.subtitle) payload.subtitle = args.subtitle
       if (args.description) payload.description = args.description
 
-      const res = await irisFetch(`/api/events/${args["event-id"]}/stages`, { method: "POST", body: JSON.stringify(payload) })
+      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/stages`, { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create stage")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -628,7 +628,7 @@ const StageDeleteCommand = cmd({
     spinner.start("Deleting…")
 
     try {
-      const res = await irisFetch(`/api/events/${args["event-id"]}/stages/${args["stage-id"]}`, { method: "DELETE" })
+      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/stages/${args["stage-id"]}`, { method: "DELETE" })
       const ok = await handleApiError(res, "Delete stage")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -662,7 +662,7 @@ const VendorsListCommand = cmd({
     spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/events/${args["event-id"]}/vendors`)
+      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/vendors`)
       const ok = await handleApiError(res, "List vendors")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -724,7 +724,7 @@ const VendorCreateCommand = cmd({
       if (args.url) payload.url = args.url
       if (args["profile-id"]) payload.profile_id = args["profile-id"]
 
-      const res = await irisFetch(`/api/events/${args["event-id"]}/vendors`, { method: "POST", body: JSON.stringify(payload) })
+      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/vendors`, { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create vendor")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -765,7 +765,7 @@ const VendorDeleteCommand = cmd({
     spinner.start("Deleting…")
 
     try {
-      const res = await irisFetch(`/api/events/${args["event-id"]}/vendors/${args["vendor-id"]}`, { method: "DELETE" })
+      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/vendors/${args["vendor-id"]}`, { method: "DELETE" })
       const ok = await handleApiError(res, "Delete vendor")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -799,7 +799,7 @@ const TicketsListCommand = cmd({
     spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/events/${args["event-id"]}/tickets`)
+      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets`)
       const ok = await handleApiError(res, "List tickets")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -860,7 +860,7 @@ const TicketCreateCommand = cmd({
       if (args.description) payload.description = args.description
       if (args.url) payload.url = args.url
 
-      const res = await irisFetch(`/api/events/${args["event-id"]}/tickets`, { method: "POST", body: JSON.stringify(payload) })
+      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets`, { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create ticket")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -902,7 +902,7 @@ const TicketDeleteCommand = cmd({
     spinner.start("Deleting…")
 
     try {
-      const res = await irisFetch(`/api/events/${args["event-id"]}/tickets/${args["ticket-id"]}`, { method: "DELETE" })
+      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets/${args["ticket-id"]}`, { method: "DELETE" })
       const ok = await handleApiError(res, "Delete ticket")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 

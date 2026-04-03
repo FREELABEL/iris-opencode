@@ -699,6 +699,7 @@ const PackageDeleteCommand = cmd({
 
 export const PlatformProgramsCommand = cmd({
   command: "programs",
+  aliases: ["locale", "community"],
   describe: "manage programs & membership packages — pull, push, diff, CRUD",
   builder: (yargs) =>
     yargs

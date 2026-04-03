@@ -82,8 +82,8 @@ const ListCommand = cmd({
       const ok = await handleApiError(res, "List products")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      const data = (await res.json()) as { data?: any[] }
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      const raw = (await res.json()) as any
+      const items: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
       spinner.stop(`${items.length} product(s)`)
 
       if (items.length === 0) { prompts.log.warn("No products found"); prompts.outro("Done"); return }

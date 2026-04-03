@@ -78,12 +78,12 @@ const ListCommand = cmd({
       if (args.search) params.set("query", args.search)
       if (args.type) params.set("type", args.type)
 
-      const res = await irisFetch(`/api/venues?${params}`)
+      const res = await irisFetch(`/api/v1/venues?${params}`)
       const ok = await handleApiError(res, "List venues")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      const data = (await res.json()) as any
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      const raw = (await res.json()) as any
+      const items: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
       spinner.stop(`${items.length} venue(s)`)
 
       if (items.length === 0) { prompts.log.warn("No venues found"); prompts.outro("Done"); return }
@@ -117,7 +117,7 @@ const GetCommand = cmd({
     spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/venues/${args.id}`)
+      const res = await irisFetch(`/api/v1/venues/${args.id}`)
       const ok = await handleApiError(res, "Get venue")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -253,7 +253,7 @@ const UpdateCommand = cmd({
     spinner.start("Updating…")
 
     try {
-      const res = await irisFetch(`/api/venues/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
+      const res = await irisFetch(`/api/v1/venues/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Update venue")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -293,7 +293,7 @@ const PullCommand = cmd({
     spinner.start("Fetching…")
 
     try {
-      const res = await irisFetch(`/api/venues/${args.id}`)
+      const res = await irisFetch(`/api/v1/venues/${args.id}`)
       const ok = await handleApiError(res, "Pull venue")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -368,7 +368,7 @@ const PushCommand = cmd({
       }
       for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
 
-      const res = await irisFetch(`/api/venues/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
+      const res = await irisFetch(`/api/v1/venues/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Push venue")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -406,7 +406,7 @@ const DiffCommand = cmd({
     spinner.start("Comparing…")
 
     try {
-      const res = await irisFetch(`/api/venues/${args.id}`)
+      const res = await irisFetch(`/api/v1/venues/${args.id}`)
       const ok = await handleApiError(res, "Fetch venue")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -482,7 +482,7 @@ const DeleteCommand = cmd({
     spinner.start("Deleting…")
 
     try {
-      const res = await irisFetch(`/api/venues/${args.id}`, { method: "DELETE" })
+      const res = await irisFetch(`/api/v1/venues/${args.id}`, { method: "DELETE" })
       const ok = await handleApiError(res, "Delete venue")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 

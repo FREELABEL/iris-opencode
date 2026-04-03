@@ -44,6 +44,7 @@ import { PlatformEventsCommand } from "./cli/cmd/platform-events"
 import { PlatformVenuesCommand } from "./cli/cmd/platform-venues"
 import { PlatformProgramsCommand } from "./cli/cmd/platform-programs"
 import { PlatformRemotionCommand } from "./cli/cmd/platform-remotion"
+import { PlatformHiveCommand } from "./cli/cmd/platform-hive"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -133,6 +134,7 @@ const cli = yargs(hideBin(process.argv))
   .command(PlatformVenuesCommand)
   .command(PlatformProgramsCommand)
   .command(PlatformRemotionCommand)
+  .command(PlatformHiveCommand)
   .fail((msg) => {
     if (
       msg.startsWith("Unknown argument") ||
