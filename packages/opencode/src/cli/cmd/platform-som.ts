@@ -284,6 +284,83 @@ const SomEditCommand = cmd({
   },
 })
 
+// ── Help ──
+
+const SomHelpCommand = cmd({
+  command: "help",
+  describe: "show the full SOM outreach management guide",
+  builder: (yargs) => yargs,
+  async handler() {
+    const b = bold
+    const d = dim
+
+    console.log("")
+    console.log(b("SOM — Sales Outreach Machine"))
+    console.log(d("Automated Instagram DM outreach across 4 campaigns"))
+    console.log("")
+
+    console.log(b("CAMPAIGNS"))
+    console.log("  courses   Board #38   @heyiris.io         AI builders, tech founders")
+    console.log("  creators  Board #80   @thediscoverpage_    Artists, creators, hip-hop culture")
+    console.log("  beatbox   Board #224  @thebeatbox__        DJs, producers, beatmakers")
+    console.log("  venues    Board #292  @freelabelnet        Cafes, venues, event spaces")
+    console.log("")
+
+    console.log(b("DASHBOARD"))
+    console.log("  iris som                       Overview of all 4 campaigns")
+    console.log("  iris som -s                    With full script text")
+    console.log("  iris som -c creators           Just one campaign")
+    console.log("  iris som --json                JSON output for scripting")
+    console.log("")
+
+    console.log(b("EDIT SCRIPTS"))
+    console.log("  iris som edit creators          Interactive — pick a step to edit")
+    console.log("  iris som edit creators --step=1 Jump to step 1")
+    console.log("  iris som edit beatbox --step=1 --field=script   Edit DM text")
+    console.log("  iris som edit beatbox --step=1 --field=ai       Edit AI prompt")
+    console.log("  iris som edit beatbox --step=1 --field=both     Edit both")
+    console.log("")
+
+    console.log(b("STRATEGY CRUD"))
+    console.log("  iris outreach list 80           List strategies on a board")
+    console.log("  iris outreach show 80 18        Show strategy + all steps")
+    console.log("  iris outreach create 80 --from-json=file.json")
+    console.log("  iris outreach update 80 18 --from-json=file.json")
+    console.log("  iris outreach apply 80 18 412   Apply strategy to a lead")
+    console.log("  iris outreach delete 80 18      Delete a strategy")
+    console.log("")
+
+    console.log(b("RUN BATCHES"))
+    console.log("  npm run som:all -- limit=15 enrich=1    All 4 campaigns")
+    console.log("  npm run som:creators -- limit=20        Just creators")
+    console.log("  npm run som:beatbox -- limit=5 dry=1    Dry run (no DMs)")
+    console.log("")
+
+    console.log(b("LEAD GENERATION"))
+    console.log("  npm run leadgen:custom -- custom mode=comments \\")
+    console.log("    post=https://instagram.com/p/XXX/ ig=heyiris.io board=80 limit=200")
+    console.log("")
+
+    console.log(b("SCRIPT BEST PRACTICES"))
+    console.log("  " + d("1.") + " No URLs in Step 1 — triggers Instagram spam filters")
+    console.log("  " + d("2.") + " No income claims — triggers skepticism + spam detection")
+    console.log("  " + d("3.") + " Lead with monetization — what they get paid for, not your tech")
+    console.log("  " + d("4.") + " Single audience per campaign — don't list multiple personas")
+    console.log("  " + d("5.") + " Soft CTA — \"What are you working on?\" not \"Sign up now\"")
+    console.log("  " + d("6.") + " Under 4 sentences — mobile DMs are small")
+    console.log("  " + d("7.") + " AI prompt does the heavy lifting — template + personalization")
+    console.log("")
+
+    console.log(b("TROUBLESHOOTING"))
+    console.log("  \"All leads already have outreach\"  → Scrape fresh leads")
+    console.log("  \"No Instagram handle — skipping\"   → Venue/business lead without IG")
+    console.log("  \"Lead map API timed out\"            → API slow under parallel load")
+    console.log("  \"No Open Instagram btn\"             → Lead has no IG handle in system")
+    console.log("  \"No Send message in menu\"           → Private account or DMs blocked")
+    console.log("")
+  },
+})
+
 // ── Parent command ──
 
 export const PlatformSomCommand = cmd({
@@ -293,6 +370,7 @@ export const PlatformSomCommand = cmd({
     yargs
       .command(SomOverviewCommand)
       .command(SomEditCommand)
+      .command(SomHelpCommand)
       // Default to overview when no subcommand
       .option("campaign", { alias: "c", describe: "show only one campaign", type: "string" })
       .option("scripts", { alias: "s", describe: "show full script text", type: "boolean" })
