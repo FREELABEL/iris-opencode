@@ -261,6 +261,26 @@ const MarketplaceInstallCommand = cmd({
 
       installSpinner.stop(`${UI.Style.TEXT_SUCCESS}✓${UI.Style.TEXT_NORMAL} Installed!`)
 
+      // Write SKILL.md locally for Claude Code auto-discovery
+      try {
+        const { existsSync, mkdirSync, writeFileSync } = await import("fs")
+        const { join } = await import("path")
+        const home = process.env.HOME ?? process.env.USERPROFILE ?? "~"
+        const skillDir = join(home, ".iris", "skills", String(args.slug))
+        const wellKnownUrl = `https://raichu.heyiris.io/.well-known/skills/${args.slug}/SKILL.md`
+        const mdRes = await fetch(wellKnownUrl)
+        if (mdRes.ok) {
+          const md = await mdRes.text()
+          if (md && md.length > 50) {
+            if (!existsSync(skillDir)) mkdirSync(skillDir, { recursive: true })
+            writeFileSync(join(skillDir, "SKILL.md"), md, "utf-8")
+            prompts.log.info(`${UI.Style.TEXT_DIM}Skill docs saved to ~/.iris/skills/${args.slug}/SKILL.md${UI.Style.TEXT_NORMAL}`)
+          }
+        }
+      } catch {
+        // Best effort — skill works without local SKILL.md
+      }
+
       console.log()
       prompts.log.info(
         `${UI.Style.TEXT_SUCCESS_BOLD}${args.slug}${UI.Style.TEXT_NORMAL} is now available to your agents.`,
