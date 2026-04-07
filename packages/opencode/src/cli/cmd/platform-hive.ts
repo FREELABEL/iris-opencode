@@ -1271,6 +1271,566 @@ const HiveDoctorCommand = cmd({
 })
 
 // ============================================================================
+// Script deployment — push, exec, list, rm
+// ============================================================================
+
+const HiveScriptPushCommand = cmd({
+  command: "push <file>",
+  describe: "push a local script to the node and execute it",
+  builder: (yargs) =>
+    yargs
+      .positional("file", { type: "string", describe: "local file path" })
+      .option("persist", { type: "boolean", default: true, describe: "keep script on node after execution" })
+      .option("args", { type: "array", string: true, default: [], describe: "arguments to pass to the script" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Push Script")
+
+    const fs = require("fs")
+    const path = require("path")
+    const filePath = args.file as string
+
+    if (!fs.existsSync(filePath)) {
+      prompts.log.error(`File not found: ${filePath}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const filename = path.basename(filePath)
+    const content = fs.readFileSync(filePath, "utf-8")
+    const spinner = prompts.spinner()
+    spinner.start(`Pushing ${bold(filename)} to node...`)
+
+    try {
+      const res = await fetch(`${BRIDGE_URL}/execute-script`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename,
+          content,
+          persist: args.persist,
+          args: args.args,
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
+        spinner.stop(`Failed: ${err.error}`, 1)
+        prompts.outro("Done")
+        return
+      }
+
+      const result = await res.json() as Record<string, unknown>
+      spinner.stop(result.status === "completed" ? success("Completed") : highlight(String(result.status)))
+
+      printDivider()
+      printKV("Exit code", String(result.exit_code ?? "?"))
+      printKV("Duration", `${result.duration_ms}ms`)
+      if (result.script_path) printKV("Persisted", success(String(result.script_path)))
+      if (result.machine) printKV("Machine", dim(String(result.machine)))
+
+      const stdout = String(result.stdout ?? "").trim()
+      const stderr = String(result.stderr ?? "").trim()
+      if (stdout) {
+        console.log()
+        console.log(bold("  stdout:"))
+        for (const line of stdout.split("\n").slice(0, 50)) {
+          console.log(`    ${line}`)
+        }
+      }
+      if (stderr) {
+        console.log()
+        console.log(highlight("  stderr:"))
+        for (const line of stderr.split("\n").slice(0, 20)) {
+          console.log(`    ${line}`)
+        }
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.log.warn("Is the daemon running? Start with: npm run hive:daemon")
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveScriptExecCommand = cmd({
+  command: "exec <filename>",
+  describe: "execute a script already on the node",
+  builder: (yargs) =>
+    yargs
+      .positional("filename", { type: "string", describe: "script name (in /scripts/)" })
+      .option("args", { type: "array", string: true, default: [], describe: "arguments to pass" })
+      .option("timeout", { type: "number", default: 30000, describe: "timeout in ms" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Execute Script")
+
+    const filename = args.filename as string
+    const spinner = prompts.spinner()
+    spinner.start(`Running ${bold(filename)}...`)
+
+    try {
+      // First read the script content from the node, then execute it
+      const readRes = await bridgeFetch(`/files?path=/scripts/${encodeURIComponent(filename)}`)
+      if (!readRes.ok) {
+        spinner.stop(`Script not found: ${filename}`, 1)
+        prompts.log.warn("Push a script first: iris hive script push <file>")
+        prompts.outro("Done")
+        return
+      }
+
+      const fileInfo = await readRes.json() as Record<string, unknown>
+      const content = fileInfo.content as string
+      if (!content) {
+        spinner.stop("Script too large to read inline (>512KB)", 1)
+        prompts.outro("Done")
+        return
+      }
+
+      const res = await fetch(`${BRIDGE_URL}/execute-script`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename,
+          content,
+          persist: true,
+          args: args.args,
+          timeout_ms: args.timeout,
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
+        spinner.stop(`Failed: ${err.error}`, 1)
+        prompts.outro("Done")
+        return
+      }
+
+      const result = await res.json() as Record<string, unknown>
+      spinner.stop(result.status === "completed" ? success("Completed") : highlight(String(result.status)))
+
+      printDivider()
+      printKV("Exit code", String(result.exit_code ?? "?"))
+      printKV("Duration", `${result.duration_ms}ms`)
+
+      const stdout = String(result.stdout ?? "").trim()
+      const stderr = String(result.stderr ?? "").trim()
+      if (stdout) {
+        console.log()
+        for (const line of stdout.split("\n").slice(0, 80)) {
+          console.log(`  ${line}`)
+        }
+      }
+      if (stderr) {
+        console.log()
+        console.log(highlight("  stderr:"))
+        for (const line of stderr.split("\n").slice(0, 20)) {
+          console.log(`    ${line}`)
+        }
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.log.warn("Is the daemon running? Start with: npm run hive:daemon")
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveScriptListCommand = cmd({
+  command: "list",
+  describe: "list persisted scripts on the node",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Node Scripts")
+
+    try {
+      const res = await bridgeFetch("/files?path=/scripts")
+      if (!res.ok) {
+        prompts.log.warn("No scripts directory yet. Push a script first.")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = await res.json() as Record<string, unknown>
+      const entries = (data.entries ?? []) as Record<string, unknown>[]
+
+      if (entries.length === 0) {
+        console.log(dim("  No scripts. Push one with: iris hive script push <file>"))
+      } else {
+        printDivider()
+        for (const entry of entries) {
+          const name = bold(String(entry.name))
+          const size = dim(`${entry.size} bytes`)
+          const modified = entry.modified ? dim(new Date(String(entry.modified)).toLocaleString()) : ""
+          console.log(`  ${success("■")} ${name}  ${size}  ${modified}`)
+        }
+        console.log()
+        console.log(dim(`  ${entries.length} script(s) on node`))
+      }
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.log.warn("Is the daemon running? Start with: npm run hive:daemon")
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveScriptRmCommand = cmd({
+  command: "rm <filename>",
+  describe: "delete a persisted script from the node",
+  builder: (yargs) =>
+    yargs.positional("filename", { type: "string", describe: "script name to delete" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Remove Script")
+
+    const filename = args.filename as string
+
+    try {
+      const res = await fetch(`${BRIDGE_URL}/files?path=/scripts/${encodeURIComponent(filename)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
+        prompts.log.error(String(err.error ?? "Delete failed"))
+        prompts.outro("Done")
+        return
+      }
+
+      prompts.log.success(`Deleted ${bold(filename)}`)
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveScriptDemoCommand = cmd({
+  command: "demo",
+  describe: "install and run a demo health-check script on the node",
+  builder: (yargs) =>
+    yargs.option("schedule", {
+      type: "string",
+      describe: 'also schedule it (e.g. "*/5 * * * *")',
+    }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Hive Script Demo")
+
+    const DEMO_SCRIPT = `#!/bin/bash
+# iris-hive-demo.sh — Node health check & system report
+echo "=== IRIS Hive Node Health Report ==="
+echo "Timestamp: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+echo "Hostname:  $(hostname)"
+echo "Uptime:    $(uptime | sed 's/.*up //' | sed 's/,.*//')"
+echo ""
+echo "--- System ---"
+echo "OS:      $(uname -s) $(uname -r)"
+echo "Arch:    $(uname -m)"
+echo "CPUs:    $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo '?')"
+echo ""
+echo "--- Memory ---"
+if command -v free &>/dev/null; then
+  free -h | head -2
+elif [[ "$(uname)" == "Darwin" ]]; then
+  total=$(sysctl -n hw.memsize 2>/dev/null)
+  echo "Total: $((total / 1073741824)) GB"
+fi
+echo ""
+echo "--- Disk ---"
+df -h / | tail -1 | awk '{print "Used: "$3" / "$2"  ("$5" full)"}'
+echo ""
+echo "--- Daemon ---"
+health=$(curl -s http://localhost:3200/health 2>/dev/null)
+if [ $? -eq 0 ]; then
+  echo "Status:  $(echo "$health" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)"
+  echo "Node:    $(echo "$health" | grep -o '"node_name":"[^"]*"' | cut -d'"' -f4)"
+  echo "Tasks:   $(echo "$health" | grep -o '"running_tasks":[0-9]*' | cut -d: -f2)"
+else
+  echo "Status:  unreachable"
+fi
+echo ""
+echo "=== Report Complete ==="
+`
+
+    const spinner = prompts.spinner()
+    spinner.start("Pushing demo script to node...")
+
+    try {
+      const res = await fetch(`${BRIDGE_URL}/execute-script`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: "iris-hive-demo.sh",
+          content: DEMO_SCRIPT,
+          persist: true,
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
+        spinner.stop(`Failed: ${err.error}`, 1)
+        prompts.outro("Done")
+        return
+      }
+
+      const result = await res.json() as Record<string, unknown>
+      spinner.stop(result.status === "completed" ? success("Demo executed") : highlight(String(result.status)))
+
+      const stdout = String(result.stdout ?? "").trim()
+      if (stdout) {
+        console.log()
+        for (const line of stdout.split("\n")) {
+          console.log(`  ${line}`)
+        }
+      }
+
+      console.log()
+      printKV("Script", success("/scripts/iris-hive-demo.sh (persisted)"))
+      printKV("Duration", `${result.duration_ms}ms`)
+
+      // Optionally schedule it
+      if (args.schedule) {
+        const schedRes = await fetch(`${BRIDGE_URL}/schedules`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: "iris-hive-demo.sh",
+            cron: args.schedule,
+          }),
+        })
+
+        if (schedRes.ok) {
+          const sched = await schedRes.json() as Record<string, unknown>
+          const schedObj = sched.schedule as Record<string, unknown>
+          printKV("Scheduled", success(`${args.schedule} (${schedObj?.id})`))
+        } else {
+          const err = await schedRes.json().catch(() => ({ error: "unknown" })) as Record<string, unknown>
+          prompts.log.warn(`Schedule failed: ${err.error}`)
+        }
+      } else {
+        console.log(dim(`  Tip: add --schedule "*/5 * * * *" to run it on a cron`))
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.log.warn("Is the daemon running? Start with: npm run hive:daemon")
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveScriptCommand = cmd({
+  command: "script",
+  describe: "deploy & run scripts on Hive nodes",
+  builder: (yargs) =>
+    yargs
+      .command(HiveScriptDemoCommand)
+      .command(HiveScriptPushCommand)
+      .command(HiveScriptExecCommand)
+      .command(HiveScriptListCommand)
+      .command(HiveScriptRmCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
+// Schedule management
+// ============================================================================
+
+const HiveScheduleListCommand = cmd({
+  command: "list",
+  describe: "list cron schedules on the local node",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Node Schedules")
+
+    try {
+      const res = await bridgeFetch("/schedules")
+      if (!res.ok) {
+        prompts.log.warn("Schedule registry not available. Is the daemon running?")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = await res.json() as Record<string, unknown>
+      const schedules = (data.schedules ?? []) as Record<string, unknown>[]
+
+      if (schedules.length === 0) {
+        console.log(dim("  No schedules. Create one with: iris hive schedule add <script> --cron \"...\""))
+      } else {
+        printDivider()
+        for (const s of schedules) {
+          const id = dim(String(s.id ?? "").substring(0, 20))
+          const file = bold(String(s.filename))
+          const cronStr = String(s.cron)
+          const enabled = s.enabled ? success("● active") : dim("○ paused")
+          const runs = `${s.run_count ?? 0} runs`
+          const last = s.last_run ? dim(new Date(String(s.last_run)).toLocaleString()) : dim("never")
+          const lastStatus = s.last_status ? (s.last_status === "completed" ? success("ok") : highlight(String(s.last_status))) : ""
+
+          console.log(`  ${enabled}  ${file}  ${dim(cronStr)}  ${runs}  ${lastStatus}`)
+          console.log(`    ${id}  last: ${last}`)
+        }
+        console.log()
+        console.log(dim(`  ${schedules.length} schedule(s)`))
+      }
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveScheduleAddCommand = cmd({
+  command: "add <filename>",
+  describe: "schedule a persisted script to run on a cron",
+  builder: (yargs) =>
+    yargs
+      .positional("filename", { type: "string", describe: "script name (in /scripts/)" })
+      .option("cron", { type: "string", demandOption: true, describe: 'cron expression (e.g. "0 9 * * *")' })
+      .option("args", { type: "array", string: true, default: [], describe: "arguments to pass" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Add Schedule")
+
+    const spinner = prompts.spinner()
+    spinner.start("Creating schedule...")
+
+    try {
+      const res = await fetch(`${BRIDGE_URL}/schedules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: args.filename,
+          cron: args.cron,
+          args: args.args,
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
+        spinner.stop(`Failed: ${err.error}`, 1)
+        prompts.outro("Done")
+        return
+      }
+
+      const data = await res.json() as Record<string, unknown>
+      const s = data.schedule as Record<string, unknown>
+      spinner.stop(success("Schedule created"))
+
+      printDivider()
+      printKV("ID", String(s.id))
+      printKV("Script", bold(String(s.filename)))
+      printKV("Cron", String(s.cron))
+      if ((args.args as string[]).length > 0) printKV("Args", (args.args as string[]).join(" "))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveScheduleRmCommand = cmd({
+  command: "rm <id>",
+  describe: "remove a schedule",
+  builder: (yargs) =>
+    yargs.positional("id", { type: "string", describe: "schedule ID" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Remove Schedule")
+
+    try {
+      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
+        prompts.log.error(String(err.error))
+      } else {
+        const data = await res.json() as Record<string, unknown>
+        const s = data.schedule as Record<string, unknown>
+        prompts.log.success(`Removed schedule for ${bold(String(s?.filename ?? args.id))}`)
+      }
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveSchedulePauseCommand = cmd({
+  command: "pause <id>",
+  describe: "pause a schedule",
+  builder: (yargs) =>
+    yargs.positional("id", { type: "string", describe: "schedule ID" }),
+  async handler(args) {
+    UI.empty()
+    try {
+      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/pause`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      })
+      if (res.ok) {
+        prompts.log.success("Schedule paused")
+      } else {
+        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
+        prompts.log.error(String(err.error))
+      }
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+const HiveScheduleResumeCommand = cmd({
+  command: "resume <id>",
+  describe: "resume a paused schedule",
+  builder: (yargs) =>
+    yargs.positional("id", { type: "string", describe: "schedule ID" }),
+  async handler(args) {
+    UI.empty()
+    try {
+      const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/resume`, {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      })
+      if (res.ok) {
+        prompts.log.success("Schedule resumed")
+      } else {
+        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
+        prompts.log.error(String(err.error))
+      }
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+const HiveScheduleCommand = cmd({
+  command: "schedule",
+  describe: "manage cron schedules on the local node",
+  builder: (yargs) =>
+    yargs
+      .command(HiveScheduleListCommand)
+      .command(HiveScheduleAddCommand)
+      .command(HiveScheduleRmCommand)
+      .command(HiveSchedulePauseCommand)
+      .command(HiveScheduleResumeCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -1279,6 +1839,9 @@ export const PlatformHiveCommand = cmd({
   describe: "manage Hive nodes, tasks, projects & deployments",
   builder: (yargs) =>
     yargs
+      // Script deployment
+      .command(HiveScriptCommand)
+      .command(HiveScheduleCommand)
       // Daemon operations (fast debugging)
       .command(HiveTasksCommand)
       .command(HiveCancelCommand)

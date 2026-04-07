@@ -46,7 +46,37 @@ import { PlatformProgramsCommand } from "./cli/cmd/platform-programs"
 import { PlatformRemotionCommand } from "./cli/cmd/platform-remotion"
 import { PlatformHiveCommand } from "./cli/cmd/platform-hive"
 import { PlatformOutreachCommand } from "./cli/cmd/platform-outreach"
+import { PlatformOutreachStrategyCommand } from "./cli/cmd/platform-outreach-strategy"
+import { PlatformOutreachCampaignCommand } from "./cli/cmd/platform-outreach-campaign"
+import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
+import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
+import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
+import { PlatformPaymentsCommand } from "./cli/cmd/platform-payments"
+import { PlatformDeliverCommand } from "./cli/cmd/platform-deliver"
+import { PlatformRunCommand } from "./cli/cmd/platform-run"
+import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
+import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
+import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
+import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
+import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
+import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
+import { PlatformPackagesCommand } from "./cli/cmd/platform-packages"
+import { PlatformMarketplaceCommand } from "./cli/cmd/platform-marketplace"
+import { PlatformMemoryCommand } from "./cli/cmd/platform-memory"
+import { PlatformProfileCommand } from "./cli/cmd/platform-profile"
+import { PlatformBloqIngestCommand } from "./cli/cmd/platform-bloq-ingest"
+import { PlatformBloqMembersCommand } from "./cli/cmd/platform-bloq-members"
+import { PlatformEvalCommand } from "./cli/cmd/platform-eval"
+import { PlatformSdkCallCommand } from "./cli/cmd/platform-sdk-call"
+import { PlatformDiaryCommand } from "./cli/cmd/platform-diary"
+import { PlatformSkillsCommand } from "./cli/cmd/platform-skills"
+import { PlatformSopCommand } from "./cli/cmd/platform-sop"
+import { PlatformToolsCommand } from "./cli/cmd/platform-tools"
+import { PlatformUsersCommand } from "./cli/cmd/platform-users"
+import { PlatformPhoneCommand } from "./cli/cmd/platform-phone"
+import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
+import { PlatformWalletCommand } from "./cli/cmd/platform-wallet"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -138,7 +168,37 @@ const cli = yargs(hideBin(process.argv))
   .command(PlatformRemotionCommand)
   .command(PlatformHiveCommand)
   .command(PlatformOutreachCommand)
+  .command(PlatformOutreachStrategyCommand)
+  .command(PlatformOutreachCampaignCommand)
+  .command(PlatformOutreachSendCommand)
   .command(PlatformSomCommand)
+  .command(PlatformMonitorCommand)
+  .command(PlatformInvoicesCommand)
+  .command(PlatformPaymentsCommand)
+  .command(PlatformDeliverCommand)
+  .command(PlatformRunCommand)
+  .command(PlatformAtlasMeetingsCommand)
+  .command(PlatformAtlasBrandKitCommand)
+  .command(PlatformLeadsMeetingCommand)
+  .command(PlatformPagesCommand)
+  .command(PlatformPagesBatchCommand)
+  .command(PlatformCloudUploadCommand)
+  .command(PlatformPackagesCommand)
+  .command(PlatformMarketplaceCommand)
+  .command(PlatformMemoryCommand)
+  .command(PlatformProfileCommand)
+  .command(PlatformBloqIngestCommand)
+  .command(PlatformBloqMembersCommand)
+  .command(PlatformEvalCommand)
+  .command(PlatformSdkCallCommand)
+  .command(PlatformDiaryCommand)
+  .command(PlatformSkillsCommand)
+  .command(PlatformSopCommand)
+  .command(PlatformToolsCommand)
+  .command(PlatformUsersCommand)
+  .command(PlatformPhoneCommand)
+  .command(PlatformVoiceCommand)
+  .command(PlatformWalletCommand)
   .fail((msg) => {
     if (
       msg.startsWith("Unknown argument") ||
