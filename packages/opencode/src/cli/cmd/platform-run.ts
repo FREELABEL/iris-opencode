@@ -394,3 +394,35 @@ export const PlatformRunCommand = cmd({
       .demandCommand(),
   async handler() {},
 })
+
+// Top-level shortcuts so AI agents and users can find these without nesting
+export const PlatformConnectCommand = cmd({
+  command: "connect <type>",
+  describe: "connect an integration via OAuth or API key (alias for `integrations connect`)",
+  builder: (yargs) =>
+    yargs.positional("type", {
+      describe: "integration type (e.g., google-docs, canva, apollo)",
+      type: "string",
+      demandOption: true,
+    }),
+  async handler(args) {
+    return ConnectCommand.handler(args as any)
+  },
+})
+
+export const PlatformListConnectedCommand = cmd({
+  command: "list-connected",
+  aliases: ["connections"],
+  describe: "show your connected integrations (alias for `integrations list-connected`)",
+  async handler(args) {
+    return ListConnectedCommand.handler(args as any)
+  },
+})
+
+export const PlatformListAvailableCommand = cmd({
+  command: "list-available",
+  describe: "show all available integrations + connection status",
+  async handler(args) {
+    return ListAvailableCommand.handler(args as any)
+  },
+})
