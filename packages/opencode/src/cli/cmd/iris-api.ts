@@ -203,3 +203,45 @@ export function printKV(key: string, value: unknown): void {
   if (value === undefined || value === null || value === "") return
   console.log(`  ${dim(key + ":")}  ${String(value)}`)
 }
+
+// ============================================================================
+// Non-interactive prompt guard
+// ============================================================================
+//
+// Detects when the CLI is running in a non-interactive context (CI, scripts,
+// piped input, agent shells) and short-circuits @clack/prompts calls so they
+// fail loudly with a helpful "missing flag" message instead of hanging
+// forever waiting on stdin that will never arrive.
+//
+// Use isNonInteractive() to gate prompt calls, and missingFlagError() to throw
+// a consistent error pointing the user at the flag they should have passed.
+
+export function isNonInteractive(): boolean {
+  if (process.env.IRIS_NON_INTERACTIVE === "1" || process.env.IRIS_NON_INTERACTIVE === "true") return true
+  if (process.env.CI) return true
+  // process.stdin.isTTY is undefined when stdin is piped/redirected
+  return !process.stdin.isTTY
+}
+
+export class MissingFlagError extends Error {
+  constructor(flagName: string, hint?: string) {
+    const base = `Missing required --${flagName}. Pass it explicitly when running in a non-interactive shell (CI, scripts, agents).`
+    super(hint ? `${base} ${hint}` : base)
+    this.name = "MissingFlagError"
+  }
+}
+
+/**
+ * Wrap a @clack/prompts call so it fails fast in non-TTY contexts.
+ * Pass the flag name the user *should* have provided so the error tells
+ * them exactly what to add to their command.
+ */
+export async function promptOrFail<T>(
+  flagName: string,
+  promptFn: () => Promise<T>,
+): Promise<T> {
+  if (isNonInteractive()) {
+    throw new MissingFlagError(flagName)
+  }
+  return promptFn()
+}
