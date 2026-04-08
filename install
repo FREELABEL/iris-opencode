@@ -56,6 +56,8 @@ binary_path=""
 skip_sdk=false
 skip_app=false
 skip_mcp=false
+skip_agents_md=false
+only_docs_mode=false
 skip_bridge=false
 skip_sandbox=false
 skip_remotion=false
@@ -103,6 +105,10 @@ while [[ $# -gt 0 ]]; do
             skip_mcp=true
             shift
             ;;
+        --skip-agents-md)
+            skip_agents_md=true
+            shift
+            ;;
         --skip-bridge)
             skip_bridge=true
             shift
@@ -146,9 +152,23 @@ while [[ $# -gt 0 ]]; do
             skip_sdk=true
             skip_app=true
             skip_mcp=true
+            skip_agents_md=true
             skip_bridge=true
             skip_sandbox=true
             skip_remotion=true
+            shift
+            ;;
+        --only-docs)
+            # Re-fetch the IRIS scaffold (AGENTS.md + how-to/ recipes) only.
+            # Use this to update docs without reinstalling the binary.
+            skip_sdk=true
+            skip_app=true
+            skip_mcp=true
+            skip_agents_md=false
+            skip_bridge=true
+            skip_sandbox=true
+            skip_remotion=true
+            only_docs_mode=true
             shift
             ;;
         *)
@@ -165,14 +185,44 @@ if ! [[ "$iris_api_url" =~ ^https?://[a-zA-Z0-9._-]+(:[0-9]+)?(/.*)?$ ]]; then
 fi
 
 # ─── Pre-flight: verify required utilities ────────────────────────────────────
-_missing=""
+_missing_required=""
 for _cmd in curl grep sed mktemp chmod mkdir; do
-    command -v "$_cmd" >/dev/null 2>&1 || _missing="$_missing $_cmd"
+    command -v "$_cmd" >/dev/null 2>&1 || _missing_required="$_missing_required $_cmd"
 done
-if [ -n "$_missing" ]; then
-    echo -e "${RED}Missing required utilities:${NC}$_missing"
-    echo -e "${MUTED}Install them and try again.${NC}"
+if [ -n "$_missing_required" ]; then
+    echo -e "${RED}Missing required utilities:${NC}$_missing_required"
+    echo -e "${MUTED}These are usually built into your OS. On macOS, try running ${NC}xcode-select --install"
+    echo -e "${MUTED}On Linux: ${NC}sudo apt install coreutils curl"
     exit 1
+fi
+
+# Soft pre-flight: warn (don't exit) about commands the binary install needs
+_missing_soft=""
+for _cmd in unzip; do
+    command -v "$_cmd" >/dev/null 2>&1 || _missing_soft="$_missing_soft $_cmd"
+done
+if [ -n "$_missing_soft" ]; then
+    echo -e "${ORANGE}Warning:${NC} missing soft dependencies:$_missing_soft"
+    echo -e "${MUTED}The IRIS installer needs these to extract the binary. Attempting auto-install...${NC}"
+    if command -v brew >/dev/null 2>&1; then
+        for _pkg in $_missing_soft; do brew install "$_pkg" >/dev/null 2>&1 || true; done
+    elif command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y $_missing_soft >/dev/null 2>&1 || true
+    else
+        echo -e "${ORANGE}Could not auto-install. Please install manually:${NC}$_missing_soft"
+        echo -e "${MUTED}On macOS without Homebrew, first run:${NC}"
+        echo -e "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        echo -e "${MUTED}Then re-run this installer.${NC}"
+        exit 1
+    fi
+    # Re-check
+    for _cmd in $_missing_soft; do
+        if ! command -v "$_cmd" >/dev/null 2>&1; then
+            echo -e "${RED}Auto-install of $_cmd failed.${NC} Please install it manually and re-run."
+            exit 1
+        fi
+    done
+    echo -e "${GREEN}✓${NC} Auto-installed:$_missing_soft"
 fi
 
 INSTALL_DIR=$HOME/.iris/bin
@@ -447,7 +497,12 @@ install_from_binary() {
     chmod 755 "${INSTALL_DIR}/iris"
 }
 
-if [ -n "$binary_path" ]; then
+if [ "$only_docs_mode" = "true" ]; then
+    print_message info "${MUTED}Mode: --only-docs (refreshing IRIS docs, skipping binary install)${NC}"
+    # Skip binary install. The --only-docs flag also disables every other
+    # component except 4b (scaffold_iris_docs), so the script flows naturally
+    # through the rest, runs 4b, and exits at the bottom.
+elif [ -n "$binary_path" ]; then
     install_from_binary
 else
     check_version
@@ -646,6 +701,196 @@ if [ "$skip_mcp" = "false" ]; then
     scaffold_mcp_config
 else
     print_message info "${MUTED}[4/7] MCP Config ............................ skipped${NC}"
+fi
+
+# ─── Component 4b: IRIS docs scaffold (AGENTS.md + how-to/ recipes) ─────────
+#
+# Fetches the manifest + scaffold files from the public iris-code repo and
+# writes them under ~/.iris/. The agent reads ~/.iris/AGENTS.md every session
+# (see packages/opencode/src/session/system.ts) and uses ~/.iris/how-to/*.md
+# as on-demand recipes for IRIS-specific workflows.
+#
+# Source of truth: https://github.com/FREELABEL/iris-opencode/tree/dev/scaffold/
+# Updating recipes is a PR against that directory — no binary release needed.
+
+# Base URL for fetching scaffold files. Defaults to GitHub raw (always works
+# since the repo is public). When heyiris.io/docs/scaffold/ is verified to
+# serve these files, flip this single constant to switch to the brand URL.
+IRIS_SCAFFOLD_BASE_URL="${IRIS_SCAFFOLD_BASE_URL:-https://raw.githubusercontent.com/FREELABEL/iris-opencode/main/scaffold}"
+
+# Embedded fallback AGENTS.md — used only when both the network fetch and the
+# heyiris.io fallback fail. Bare-minimum identity so the agent still knows it
+# is IRIS even on an air-gapped install.
+write_embedded_fallback_agents_md() {
+    local dest="$1"
+    cat > "$dest" << 'EMBEDDEDEOF'
+# IRIS CLI (offline fallback)
+
+You are running inside the IRIS CLI — an AI coding assistant from the IRIS
+platform (heyiris.io). The full rule file and how-to recipes could not be
+fetched from GitHub during install (likely a network issue). To get them:
+
+  1. Restore network access
+  2. Run: ~/.iris/bin/iris install --only-docs
+     (or re-run the original install command)
+
+## Commands you can use right now
+
+- `iris-login` — authenticate
+- `iris-daemon start|stop|status` — local Hive daemon
+- `iris hive` — distributed compute mesh
+- `iris platform-*` — chat, agents, leads, workflows, bloqs, pages, contracts
+- `iris mcp serve` — expose IRIS as an MCP server
+- `iris --help` — full command tree
+
+By default, assume the user is working in their own project, not on IRIS
+source code. Read existing code before suggesting changes.
+EMBEDDEDEOF
+}
+
+# Fetch a single file from $IRIS_SCAFFOLD_BASE_URL/$1 to $2.
+# Returns 0 on success, 1 on failure.
+fetch_scaffold_file() {
+    local src="$1"
+    local dest="$2"
+    local url="${IRIS_SCAFFOLD_BASE_URL}/${src}"
+    local tmp
+    tmp=$(mktemp 2>/dev/null) || return 1
+
+    if curl -fsSL --max-time 15 "$url" -o "$tmp" 2>/dev/null; then
+        # sanity-check: file is non-empty
+        if [ -s "$tmp" ]; then
+            mkdir -p "$(dirname "$dest")"
+            mv "$tmp" "$dest"
+            return 0
+        fi
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+# Parse the JSON manifest with a 3-tier fallback chain (jq → python3 → sed).
+# Echoes one "src|dest" pair per line.
+parse_manifest_entries() {
+    local manifest="$1"
+
+    if command -v jq >/dev/null 2>&1; then
+        jq -r '.files[] | "\(.src)|\(.dest)"' "$manifest"
+        return $?
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "
+import json, sys
+with open('$manifest') as f:
+    data = json.load(f)
+for entry in data.get('files', []):
+    print(f\"{entry['src']}|{entry['dest']}\")
+" 2>/dev/null
+        return $?
+    fi
+
+    # Last-resort sed parser. Assumes manifest.json is pretty-printed (it is).
+    # Pulls "src": "..." and "dest": "..." pairs in order.
+    awk '
+        /"src"[[:space:]]*:/ {
+            match($0, /"src"[[:space:]]*:[[:space:]]*"[^"]*"/)
+            s = substr($0, RSTART, RLENGTH)
+            sub(/.*: *"/, "", s); sub(/"$/, "", s)
+            src = s
+        }
+        /"dest"[[:space:]]*:/ {
+            match($0, /"dest"[[:space:]]*:[[:space:]]*"[^"]*"/)
+            d = substr($0, RSTART, RLENGTH)
+            sub(/.*: *"/, "", d); sub(/"$/, "", d)
+            print src "|" d
+        }
+    ' "$manifest"
+}
+
+scaffold_iris_docs() {
+    local iris_dir="$HOME/.iris"
+    local manifest_local="$iris_dir/.manifest.json"
+    mkdir -p "$iris_dir"
+
+    print_message info "${MUTED}      Fetching scaffold from ${NC}${IRIS_SCAFFOLD_BASE_URL}"
+
+    # Step 1: fetch the manifest
+    if ! fetch_scaffold_file "manifest.json" "$manifest_local"; then
+        print_message warning "${ORANGE}[4b]${NC}  IRIS Docs ${MUTED}..........................${NC} ${ORANGE}fetch failed${NC}"
+        print_message info "${MUTED}      Writing embedded fallback AGENTS.md${NC}"
+        write_embedded_fallback_agents_md "$iris_dir/AGENTS.md"
+        bridge_legacy_agents_md "$iris_dir/AGENTS.md"
+        return 0
+    fi
+
+    # Step 2: parse manifest and fetch each file
+    local total=0
+    local fetched=0
+    local failed=0
+
+    while IFS='|' read -r src dest; do
+        [ -z "$src" ] && continue
+        total=$((total + 1))
+        local target="$iris_dir/$dest"
+
+        if fetch_scaffold_file "$src" "$target"; then
+            fetched=$((fetched + 1))
+        else
+            failed=$((failed + 1))
+            print_message warning "${MUTED}      ✗ ${NC}$src${MUTED} → fetch failed${NC}"
+        fi
+    done < <(parse_manifest_entries "$manifest_local")
+
+    if [ "$total" -eq 0 ]; then
+        print_message warning "${ORANGE}[4b]${NC}  IRIS Docs ${MUTED}..........................${NC} ${ORANGE}manifest empty${NC}"
+        write_embedded_fallback_agents_md "$iris_dir/AGENTS.md"
+        bridge_legacy_agents_md "$iris_dir/AGENTS.md"
+        return 0
+    fi
+
+    # Step 3: ensure AGENTS.md exists no matter what (use embedded if fetch failed)
+    if [ ! -f "$iris_dir/AGENTS.md" ]; then
+        write_embedded_fallback_agents_md "$iris_dir/AGENTS.md"
+    fi
+
+    # Step 4: dual-write bridge — also copy AGENTS.md to the legacy opencode XDG
+    # path so binaries that predate the ~/.iris/AGENTS.md reader (system.ts
+    # GLOBAL_RULE_FILES update) still pick up IRIS identity. New binaries prefer
+    # ~/.iris/AGENTS.md and treat this copy as a no-op fallback. Safe to remove
+    # once all clients are on the new binary release.
+    bridge_legacy_agents_md "$iris_dir/AGENTS.md"
+
+    print_message info "${GREEN}[4b]${NC}  IRIS Docs ${MUTED}..........................${NC} ${GREEN}${fetched}/${total} files${NC}"
+    print_message info "${MUTED}      Installed at ${NC}~/.iris/AGENTS.md${MUTED} + ${NC}~/.iris/how-to/"
+}
+
+# Bridge the IRIS AGENTS.md to the legacy opencode XDG location used by older
+# binaries. Only overwrites if the legacy file is missing OR was written by a
+# previous IRIS install (detected by an "IRIS CLI" marker line). NEVER clobbers
+# a user's hand-written customization.
+bridge_legacy_agents_md() {
+    local src="$1"
+    [ -f "$src" ] || return 0
+
+    local legacy_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+    local legacy_file="$legacy_dir/AGENTS.md"
+
+    if [ -f "$legacy_file" ] && ! grep -q "IRIS CLI" "$legacy_file" 2>/dev/null; then
+        # User-customized file (no IRIS marker) — leave it alone
+        print_message info "${MUTED}      Legacy XDG AGENTS.md is user-customized; not overwriting${NC}"
+        return 0
+    fi
+
+    mkdir -p "$legacy_dir"
+    cp "$src" "$legacy_file"
+    print_message info "${MUTED}      Bridged to ${NC}$legacy_file${MUTED} (for legacy binaries)${NC}"
+}
+
+if [ "$skip_agents_md" = "false" ]; then
+    scaffold_iris_docs
+else
+    print_message info "${MUTED}[4b]  IRIS Docs ........................... skipped${NC}"
 fi
 
 # ─── Component 5: Coding Agent Bridge + Hive Daemon ─────────────────────────
@@ -1045,6 +1290,228 @@ echo -e "${MUTED}Next: ${NC}iris-daemon start${MUTED} to join the Hive compute n
 echo -e "${MUTED}  Or: ${NC}iris-onboard${MUTED} to start the AI assistant${NC}"
 IRISLOGIN
 chmod 755 "$INSTALL_DIR/iris-login"
+
+# ─── iris-deps: lazy installer for IRIS ecosystem dependencies ────────────────
+# Standalone command at ~/.iris/bin/iris-deps that installs system dependencies
+# (brew, node, php, git, docker, unzip, jq, iterm, chrome, vscode, etc.) on
+# demand. Auto-bootstraps Homebrew first if missing. Idempotent: every operation
+# checks if the dep is already installed and skips with a green check.
+#
+# USAGE:
+#   iris-deps brew node php          # install specific deps
+#   iris-deps all                    # install full IRIS ecosystem
+#   iris-deps --list                 # list available packages
+#   iris-deps --help
+
+cat > "$INSTALL_DIR/iris-deps" << 'IRISDEPS'
+#!/usr/bin/env bash
+# iris-deps — install IRIS ecosystem dependencies on demand
+# Part of the IRIS CLI install. See: https://heyiris.io/docs
+
+set -e
+
+# ── Colors ────────────────────────────────────────────────────────────────────
+if [ -t 1 ]; then
+    GREEN='\033[0;32m'; RED='\033[0;31m'; ORANGE='\033[0;33m'
+    CYAN='\033[0;36m';  MUTED='\033[0;2m'; NC='\033[0m'
+else
+    GREEN=''; RED=''; ORANGE=''; CYAN=''; MUTED=''; NC=''
+fi
+
+OS=$(uname -s)
+ARCH=$(uname -m)
+
+print_help() {
+    cat <<HELP
+${CYAN}iris-deps${NC} — install IRIS ecosystem dependencies
+
+USAGE:
+  iris-deps <pkg> [<pkg>...]    Install one or more packages
+  iris-deps all                 Install full IRIS ecosystem (brew + git + node + php + unzip + jq + python3 + docker)
+  iris-deps --list              Show all available packages
+  iris-deps --help              Show this help
+
+PACKAGES:
+  ${GREEN}Required:${NC}
+    brew       Homebrew package manager (bootstraps everything else)
+    git        Git version control
+    unzip      Archive extractor (needed by IRIS installer)
+    jq         JSON parser (used by manifest fetch)
+    python3    Python 3 (manifest parser fallback)
+
+  ${GREEN}Recommended:${NC}
+    node       Node.js + npm (latest LTS)
+    php        PHP 8.3 (legacy CLI commands)
+    docker     Docker Desktop (for sandboxes & local services)
+
+  ${GREEN}macOS-only apps:${NC}
+    iterm      iTerm2
+    chrome     Google Chrome
+    vscode     Visual Studio Code
+
+EXAMPLES:
+  iris-deps brew                Install Homebrew (if missing)
+  iris-deps node php git        Install Node, PHP, and Git
+  iris-deps all                 Install the full IRIS ecosystem
+HELP
+}
+
+# ── Detection helpers ─────────────────────────────────────────────────────────
+is_installed() {
+    case "$1" in
+        brew)    command -v brew >/dev/null 2>&1 ;;
+        node)    command -v node >/dev/null 2>&1 ;;
+        npm)     command -v npm >/dev/null 2>&1 ;;
+        php)     command -v php >/dev/null 2>&1 ;;
+        git)     command -v git >/dev/null 2>&1 ;;
+        docker)  command -v docker >/dev/null 2>&1 ;;
+        unzip)   command -v unzip >/dev/null 2>&1 ;;
+        jq)      command -v jq >/dev/null 2>&1 ;;
+        python3) command -v python3 >/dev/null 2>&1 ;;
+        iterm)   [ -d "/Applications/iTerm.app" ] ;;
+        chrome)  [ -d "/Applications/Google Chrome.app" ] ;;
+        vscode)  [ -d "/Applications/Visual Studio Code.app" ] || command -v code >/dev/null 2>&1 ;;
+        *)       return 1 ;;
+    esac
+}
+
+show_version() {
+    case "$1" in
+        brew)    brew --version 2>/dev/null | head -1 ;;
+        node)    echo "node $(node --version 2>/dev/null)" ;;
+        npm)     echo "npm $(npm --version 2>/dev/null)" ;;
+        php)     php --version 2>/dev/null | head -1 ;;
+        git)     git --version 2>/dev/null ;;
+        docker)  docker --version 2>/dev/null ;;
+        unzip)   unzip -v 2>/dev/null | head -1 ;;
+        jq)      echo "jq $(jq --version 2>/dev/null)" ;;
+        python3) python3 --version 2>/dev/null ;;
+        *)       echo "(installed)" ;;
+    esac
+}
+
+# ── Brew bootstrap (the foundation for everything else on macOS) ─────────────
+install_brew() {
+    if [ "$OS" != "Darwin" ] && [ "$OS" != "Linux" ]; then
+        echo -e "${RED}✗${NC} Homebrew install not supported on $OS"
+        return 1
+    fi
+    echo -e "${CYAN}→${NC} Installing Homebrew (you may be prompted for your password)..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || {
+        echo -e "${RED}✗${NC} Homebrew install failed. See https://brew.sh for manual instructions."
+        return 1
+    }
+
+    # Add brew to PATH for the current session (Apple Silicon vs Intel)
+    if [ -f /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [ -f /usr/local/bin/brew ]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    elif [ -f /home/linuxbrew/.linuxbrew/bin/brew ]; then
+        eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+    fi
+}
+
+ensure_brew() {
+    is_installed brew && return 0
+    install_brew
+}
+
+# ── Per-package install ───────────────────────────────────────────────────────
+install_pkg() {
+    local pkg="$1"
+
+    if is_installed "$pkg"; then
+        echo -e "${GREEN}✓${NC} $pkg already installed ${MUTED}($(show_version "$pkg"))${NC}"
+        return 0
+    fi
+
+    echo -e "${CYAN}→${NC} Installing $pkg..."
+
+    case "$pkg" in
+        brew)
+            install_brew
+            ;;
+        node|npm)
+            ensure_brew && brew install node
+            ;;
+        php)
+            ensure_brew && brew install php
+            ;;
+        git)
+            ensure_brew && brew install git
+            ;;
+        docker)
+            if [ "$OS" = "Darwin" ]; then
+                ensure_brew && brew install --cask docker
+            elif [ "$OS" = "Linux" ]; then
+                curl -fsSL https://get.docker.com | sh
+            fi
+            ;;
+        unzip)
+            if [ "$OS" = "Darwin" ]; then
+                ensure_brew && brew install unzip
+            elif [ "$OS" = "Linux" ] && command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get install -y unzip
+            fi
+            ;;
+        jq)
+            ensure_brew && brew install jq
+            ;;
+        python3)
+            ensure_brew && brew install python3
+            ;;
+        iterm)
+            [ "$OS" != "Darwin" ] && { echo -e "${RED}✗${NC} iTerm is macOS-only"; return 1; }
+            ensure_brew && brew install --cask iterm2
+            ;;
+        chrome)
+            [ "$OS" != "Darwin" ] && { echo -e "${RED}✗${NC} chrome cask is macOS-only"; return 1; }
+            ensure_brew && brew install --cask google-chrome
+            ;;
+        vscode)
+            ensure_brew && brew install --cask visual-studio-code
+            ;;
+        *)
+            echo -e "${RED}✗${NC} Unknown package: $pkg"
+            echo -e "${MUTED}Run ${NC}iris-deps --list${MUTED} to see available packages.${NC}"
+            return 1
+            ;;
+    esac
+
+    if is_installed "$pkg"; then
+        echo -e "${GREEN}✓${NC} $pkg installed ${MUTED}($(show_version "$pkg"))${NC}"
+    else
+        echo -e "${RED}✗${NC} $pkg install failed"
+        return 1
+    fi
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+ALL_PKGS="brew git unzip jq python3 node php docker"
+LIST_PKGS="brew git unzip jq python3 node php docker iterm chrome vscode"
+
+case "${1:-}" in
+    ""|--help|-h)
+        print_help
+        exit 0
+        ;;
+    --list)
+        echo "$LIST_PKGS"
+        exit 0
+        ;;
+    all)
+        echo -e "${CYAN}Installing the full IRIS ecosystem...${NC}"
+        for p in $ALL_PKGS; do install_pkg "$p" || true; done
+        echo
+        echo -e "${GREEN}✓ Done.${NC} Run ${CYAN}iris-deps --list${NC} to see optional macOS apps (iterm, chrome, vscode)."
+        ;;
+    *)
+        for p in "$@"; do install_pkg "$p"; done
+        ;;
+esac
+IRISDEPS
+chmod 755 "$INSTALL_DIR/iris-deps"
 
 # ─── Component 6: Docker Agent Sandbox ────────────────────────────────────────
 

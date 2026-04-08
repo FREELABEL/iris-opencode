@@ -1,0 +1,42 @@
+{
+  "version": "2026.04.08",
+  "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
+  "files": [
+    {
+      "src": "AGENTS.md",
+      "dest": "AGENTS.md",
+      "managed": true,
+      "purpose": "Top-level rules file. Loaded into every session by packages/opencode/src/session/system.ts. Keep small (~500 tokens) — it points to how-to/ for deep content."
+    },
+    {
+      "src": "how-to/README.md",
+      "dest": "how-to/README.md",
+      "managed": true,
+      "purpose": "Index of all how-to recipes. The agent lists this directory and reads README.md to find the right recipe."
+    },
+    {
+      "src": "how-to/iris-login.md",
+      "dest": "how-to/iris-login.md",
+      "managed": true,
+      "purpose": "First-run authentication and setup."
+    },
+    {
+      "src": "how-to/outreach-campaign.md",
+      "dest": "how-to/outreach-campaign.md",
+      "managed": true,
+      "purpose": "SOM pipeline: discover → enrich → dispatch outreach across LinkedIn / Twitter / Instagram."
+    },
+    {
+      "src": "how-to/hive-dispatch.md",
+      "dest": "how-to/hive-dispatch.md",
+      "managed": true,
+      "purpose": "Connect a machine to the IRIS Hive and dispatch a distributed task."
+    },
+    {
+      "src": "how-to/lead-to-proposal.md",
+      "dest": "how-to/lead-to-proposal.md",
+      "managed": true,
+      "purpose": "Atlas OS flow: capture lead → create deal → send proposal → contract → payment gate."
+    }
+  ]
+}

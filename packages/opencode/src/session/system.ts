@@ -16,10 +16,19 @@ import PROMPT_ANTHROPIC_SPOOF from "./prompt/anthropic_spoof.txt"
 import PROMPT_CODEX from "./prompt/codex.txt"
 import type { Provider } from "@/provider/provider"
 
+const IRIS_IDENTITY = [
+  "You are the IRIS CLI, an AI coding assistant from the IRIS platform (heyiris.io).",
+  "You help users write and ship code in their own projects and can drive the IRIS platform on their behalf.",
+  "IRIS-specific commands include `iris-login`, `iris-daemon`, `iris hive`, `iris platform-*`, and `iris mcp serve`.",
+  "Run `iris --help` for the full command list.",
+  "By default, assume the user is working in their own project, not on IRIS source code.",
+].join(" ")
+
 export namespace SystemPrompt {
   export function header(providerID: string) {
-    if (providerID.includes("anthropic")) return [PROMPT_ANTHROPIC_SPOOF.trim()]
-    return []
+    const out: string[] = [IRIS_IDENTITY]
+    if (providerID.includes("anthropic")) out.push(PROMPT_ANTHROPIC_SPOOF.trim())
+    return out
   }
 
   export function provider(model: Provider.Model) {
@@ -62,6 +71,7 @@ export namespace SystemPrompt {
     "CONTEXT.md", // deprecated
   ]
   const GLOBAL_RULE_FILES = [
+    path.join(os.homedir(), ".iris", "AGENTS.md"),
     path.join(Global.Path.config, "AGENTS.md"),
     path.join(os.homedir(), ".claude", "CLAUDE.md"),
   ]
