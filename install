@@ -16,7 +16,7 @@ IRIS Installer — Code, SDK, Desktop App, Bridge, Docker Sandbox, Remotion
 Usage: install [options]
 
 Installs:
-  1. IRIS Code    — AI coding agent (terminal)
+  1. IRIS CLI    — AI coding agent (terminal)
   2. IRIS SDK     — CLI tools & PHP SDK
   3. IRIS App     — Desktop application (macOS)
   4. MCP Config   — Agent tool integration (scaffolded for future use)
@@ -26,8 +26,8 @@ Installs:
 
 Options:
     -h, --help              Display this help message
-    -v, --version <version> Install a specific IRIS Code version (e.g., 1.0.180)
-    -b, --binary <path>     Install IRIS Code from a local binary
+    -v, --version <version> Install a specific IRIS CLI version (e.g., 1.0.180)
+    -b, --binary <path>     Install IRIS CLI from a local binary
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
         --skip-sdk          Skip SDK/CLI installation
         --skip-app          Skip desktop app installation
@@ -38,7 +38,7 @@ Options:
         --api-url <url>     Set IRIS API URL (default: https://app.heyiris.io)
         --token <token>     Pre-seed SDK token (skip interactive auth)
         --user-id <id>      Pre-seed user ID (used with --token)
-        --only-code         Only install IRIS Code (skip SDK, app, MCP, bridge, sandbox)
+        --only-code         Only install IRIS CLI (skip SDK, app, MCP, bridge, sandbox)
 
 Examples:
     curl -fsSL https://heyiris.io/install-code | bash
@@ -396,7 +396,7 @@ print_message() {
 
 check_version() {
     if [ -f "$INSTALL_DIR/iris" ]; then
-        print_message info "${MUTED}Updating IRIS Code to ${NC}$specific_version${MUTED}...${NC}"
+        print_message info "${MUTED}Updating IRIS CLI to ${NC}$specific_version${MUTED}...${NC}"
     fi
 }
 
@@ -491,7 +491,7 @@ download_with_progress() {
 }
 
 download_and_install() {
-    print_message info "\n${MUTED}Installing ${NC}IRIS Code ${MUTED}version: ${NC}$specific_version"
+    print_message info "\n${MUTED}Installing ${NC}IRIS CLI ${MUTED}version: ${NC}$specific_version"
     local tmp_dir
     tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/iris_install_XXXXXX")
 
@@ -517,7 +517,7 @@ download_and_install() {
 }
 
 install_from_binary() {
-    print_message info "\n${MUTED}Installing ${NC}IRIS Code ${MUTED}from: ${NC}$binary_path"
+    print_message info "\n${MUTED}Installing ${NC}IRIS CLI ${MUTED}from: ${NC}$binary_path"
     cp "$binary_path" "${INSTALL_DIR}/iris"
     chmod 755 "${INSTALL_DIR}/iris"
 }
@@ -545,14 +545,14 @@ current_shell=$(basename "$SHELL")
 
 if [ "$current_shell" = "fish" ]; then
     cat > "$IRIS_ENV_FILE" << 'ENVF'
-# IRIS Code PATH setup (sourced by your shell config)
+# IRIS CLI PATH setup (sourced by your shell config)
 if not contains "$HOME/.iris/bin" $PATH
     set -gx PATH "$HOME/.iris/bin" $PATH
 end
 ENVF
 else
     cat > "$IRIS_ENV_FILE" << 'ENVF'
-# IRIS Code PATH setup (sourced by your shell config)
+# IRIS CLI PATH setup (sourced by your shell config)
 case ":${PATH}:" in
     *:"$HOME/.iris/bin":*) ;;
     *) export PATH="$HOME/.iris/bin:$PATH" ;;
@@ -603,7 +603,7 @@ if [[ "$no_modify_path" != "true" ]]; then
 
     if [[ -f "$config_file" ]] && ! grep -q "\.iris/env" "$config_file" 2>/dev/null; then
         echo "" >> "$config_file"
-        echo "# IRIS Code" >> "$config_file"
+        echo "# IRIS CLI" >> "$config_file"
         echo "$source_line" >> "$config_file"
     fi
 fi
@@ -616,12 +616,12 @@ fi
 # Add to PATH for current session
 export PATH="$INSTALL_DIR:$PATH"
 
-print_message info "\n${GREEN}[1/7]${NC} IRIS Code ${MUTED}..........................${NC} ${GREEN}installed${NC}"
+print_message info "\n${GREEN}[1/7]${NC} IRIS CLI ${MUTED}..........................${NC} ${GREEN}installed${NC}"
 
 # ─── Component 2: IRIS SDK / CLI ─────────────────────────────────────────────
 
 install_sdk() {
-    # SDK commands are now built into IRIS Code (Node.js CLI) — no PHP required.
+    # SDK commands are now built into IRIS CLI (Node.js CLI) — no PHP required.
     # Preserve any existing .env from previous PHP SDK installs (contains auth tokens).
     local sdk_dir="$HOME/.iris/sdk"
     if [ -f "$sdk_dir/.env" ]; then
@@ -1277,7 +1277,7 @@ LOGIN_RESP=$(curl -s --max-time 15 -X POST "$API_BASE/api/v1/auth/login-with-cod
         \"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\",
         \"login_code\": \"$CODE\",
         \"generate_sdk_token\": true,
-        \"sdk_token_name\": \"IRIS Code CLI\",
+        \"sdk_token_name\": \"IRIS CLI\",
         \"sdk_token_expires_days\": 365,
         \"generate_dashboard_url\": true
     }" 2>/dev/null || echo '{"success":false}')
@@ -1918,10 +1918,10 @@ echo -e "${CYAN}██║██╔══██╗██║╚════██�
 echo -e "${CYAN}██║██║  ██║██║███████║${NC}    ${MUTED}╚██████╗╚██████╔╝██████╔╝███████╗${NC}"
 echo -e "${CYAN}╚═╝╚═╝  ╚═╝╚═╝╚══════╝${NC}    ${MUTED} ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝${NC}"
 echo -e ""
-echo -e "${MUTED}IRIS Code includes free AI models.${NC}"
+echo -e "${MUTED}IRIS CLI includes free AI models.${NC}"
 echo -e ""
 echo -e "${MUTED}Installed to:${NC}   ~/.iris/"
-echo -e "${MUTED}  bin/iris       ${NC}IRIS Code (AI coding agent)"
+echo -e "${MUTED}  bin/iris       ${NC}IRIS CLI (AI coding agent)"
 echo -e "${MUTED}  sdk/            ${NC}SDK commands built-in (no PHP required)"
 if [ "$skip_mcp" = "false" ] && [ -f "$HOME/.iris/mcp.json" ]; then
 echo -e "${MUTED}  mcp.json        ${NC}MCP server config (ready for setup)"
@@ -2075,7 +2075,7 @@ if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
                         \"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\",
                         \"login_code\": \"$VERIFY_CODE\",
                         \"generate_sdk_token\": true,
-                        \"sdk_token_name\": \"IRIS Code CLI\",
+                        \"sdk_token_name\": \"IRIS CLI\",
                         \"sdk_token_expires_days\": 365,
                         \"generate_dashboard_url\": true
                     }" 2>/dev/null || echo '{"success":false,"error":"Network error"}')
@@ -2092,7 +2092,7 @@ if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
                         mkdir -p "$HOME/.iris/sdk"
                         cat > "$HOME/.iris/sdk/.env" << ENVFILE
 # IRIS SDK Configuration
-# Generated by IRIS Code installer
+# Generated by IRIS CLI installer
 # Date: $(date '+%Y-%m-%d %H:%M:%S')
 
 IRIS_ENV=production
@@ -2292,7 +2292,7 @@ chmod 755 "$INSTALL_DIR/iris-onboard"
 # Direct run: exec iris. Piped from curl: copy to clipboard + instructions.
 
 if [ -t 0 ]; then
-    echo -e "${MUTED}Starting IRIS Code...${NC}"
+    echo -e "${MUTED}Starting IRIS CLI...${NC}"
     echo -e ""
     cd "$HOME"
     exec "$INSTALL_DIR/iris" -m opencode/gpt-5-nano --prompt "$(cat "$PROMPT_FILE")"
