@@ -399,37 +399,58 @@ const ConnectCommand = cmd({
         }
 
         const sp2 = prompts.spinner()
-        sp2.start("Creating auth config…")
+        sp2.start("Checking for existing config…")
         try {
-          // 1. Create auth_config with the user's key
-          const acRes = await composioFetch("/v3/auth_configs", {
-            method: "POST",
-            body: JSON.stringify({
-              toolkit: { slug: apiKeyToolkit },
-              auth_config: {
-                name: `${apiKeyToolkit}-${Date.now()}`,
-                type: "use_custom_auth",
-                authScheme: "API_KEY",
-                credentials: { api_key: String(apiKey) },
-              },
-            }),
-          })
-          const acText = await acRes.text()
-          let acData: any = {}
-          try { acData = JSON.parse(acText) } catch {}
-          if (!acRes.ok) {
-            sp2.stop("Failed", 1)
-            prompts.log.error(`Auth config creation failed (HTTP ${acRes.status})`)
-            console.log(dim(acText.slice(0, 400)))
-            prompts.outro("Done")
-            return
-          }
-          const authConfigId = acData?.auth_config?.id ?? acData?.id
-          if (!authConfigId) {
-            sp2.stop("Failed", 1)
-            prompts.log.error("Integration provider returned no auth config id")
-            prompts.outro("Done")
-            return
+          // 1. Check if an auth_config already exists for this toolkit (avoid duplicates)
+          let authConfigId: string | null = null
+          try {
+            const existingRes = await composioFetch(
+              `/v3/auth_configs?toolkit_slug=${encodeURIComponent(apiKeyToolkit)}&limit=10`,
+            )
+            if (existingRes.ok) {
+              const existingData = (await existingRes.json()) as any
+              const items: any[] = existingData?.items ?? existingData?.auth_configs ?? existingData?.data ?? []
+              // Pick the first ENABLED config
+              const enabled = items.find((c) => String(c?.status ?? c?.state ?? "").toUpperCase() === "ENABLED")
+              if (enabled?.id) authConfigId = String(enabled.id)
+            }
+          } catch {}
+
+          if (authConfigId) {
+            sp2.message("Reusing existing config…")
+          } else {
+            // 2. Create new auth_config with the user's key
+            sp2.message("Registering new credentials…")
+            const acRes = await composioFetch("/v3/auth_configs", {
+              method: "POST",
+              body: JSON.stringify({
+                toolkit: { slug: apiKeyToolkit },
+                auth_config: {
+                  name: `${apiKeyToolkit}-${Date.now()}`,
+                  type: "use_custom_auth",
+                  authScheme: "API_KEY",
+                  credentials: { api_key: String(apiKey) },
+                },
+              }),
+            })
+            const acText = await acRes.text()
+            let acData: any = {}
+            try { acData = JSON.parse(acText) } catch {}
+            if (!acRes.ok) {
+              sp2.stop("Failed", 1)
+              prompts.log.error(`Auth config creation failed (HTTP ${acRes.status})`)
+              const sanitized = acText.replace(/composio/gi, "integration provider")
+              console.log(dim(sanitized.slice(0, 400)))
+              prompts.outro("Done")
+              return
+            }
+            authConfigId = acData?.auth_config?.id ?? acData?.id
+            if (!authConfigId) {
+              sp2.stop("Failed", 1)
+              prompts.log.error("Integration provider returned no auth config id")
+              prompts.outro("Done")
+              return
+            }
           }
 
           // 2. Create connected_account for this user — credentials must
