@@ -1,15 +1,15 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, dim, bold, success, FL_API } from "./iris-api"
+import { irisFetch, dim, bold, success, IRIS_API } from "./iris-api"
 import { homedir, platform, release, arch, hostname, userInfo } from "os"
 import { join } from "path"
 import { existsSync, readFileSync } from "fs"
 import { execSync } from "child_process"
 
-// Bug reports bloq + Todo list (created on iris-api)
+// Bug reports go to bloq #297 (under user 193) via PUBLIC endpoint — no auth required
+const BUG_REPORT_ENDPOINT = "/api/v1/public/bug-report"
 const BUG_BLOQ_ID = 297
-const BUG_LIST_ID = 1029
 
 // ============================================================================
 // System info collection
@@ -59,47 +59,21 @@ async function submitBug(args: {
   error?: string
   json?: boolean
 }): Promise<void> {
-  const auth = await requireAuth()
-  const userId = await requireUserId()
-
   const sysInfo = collectSystemInfo()
+  const reporter = `${sysInfo.user}@${sysInfo.hostname}`
 
-  // Build the bug report content
-  const lines: string[] = [
-    `## ${args.title}`,
-    "",
-    `**Severity:** ${args.severity}`,
-    `**Reported by:** ${sysInfo.user}@${sysInfo.hostname}`,
-    `**Date:** ${new Date().toISOString()}`,
-    "",
-    `### Description`,
-    args.description,
-    "",
-  ]
-
-  if (args.command) {
-    lines.push(`### Command That Failed`, "```", args.command, "```", "")
-  }
-
-  if (args.error) {
-    lines.push(`### Error Output`, "```", args.error, "```", "")
-  }
-
-  lines.push(`### System Info`)
-  for (const [k, v] of Object.entries(sysInfo)) {
-    lines.push(`- **${k}:** ${v}`)
-  }
-
-  const content = lines.join("\n")
-
-  // Submit as a bloq item (board card) on the IRIS CLI Bug Reports bloq
-  const res = await irisFetch(`/api/v1/user/bloqs/lists/${BUG_LIST_ID}/items`, {
+  // POST to public bug report endpoint — no auth required, always writes to user 193's bloq
+  const res = await fetch(`${IRIS_API}${BUG_REPORT_ENDPOINT}`, {
     method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
-      title: `[${args.severity.toUpperCase()}] ${args.title}`,
-      content,
-      type: "task",
-      status: "todo",
+      title: args.title,
+      description: args.description,
+      severity: args.severity,
+      reporter,
+      system_info: sysInfo,
+      command: args.command ?? null,
+      error: args.error ?? null,
     }),
   })
 
@@ -108,8 +82,8 @@ async function submitBug(args: {
     throw new Error(`Failed to submit bug report (HTTP ${res.status}): ${text}`)
   }
 
-  const data = (await res.json()) as { data?: { id?: number }; id?: number }
-  const itemId = data?.data?.id ?? data?.id
+  const data = (await res.json()) as { success?: boolean; data?: { item_id?: number; message?: string } }
+  const itemId = data?.data?.item_id
 
   if (args.json) {
     console.log(
@@ -240,46 +214,17 @@ const ReportCommand = cmd({
 const ListCommand = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "list your submitted bug reports",
-  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
-  async handler(args) {
-    await requireAuth()
-
-    const res = await irisFetch(`/api/v1/user/bloqs/${BUG_BLOQ_ID}`, {})
-    if (!res.ok) {
-      console.error(`Failed to fetch bug reports (HTTP ${res.status})`)
-      process.exit(1)
-    }
-
-    const data = (await res.json()) as { data?: any; lists?: any[] }
-    const bloq = data?.data ?? data
-    const lists = bloq?.lists ?? []
-
-    if (args.json) {
-      console.log(JSON.stringify(lists, null, 2))
-      return
-    }
-
-    let total = 0
-    for (const list of lists) {
-      const items = list.items ?? []
-      if (items.length === 0) continue
-      console.log("")
-      console.log(bold(`${list.name} (${items.length})`))
-      for (const item of items) {
-        const id = item.id ?? "?"
-        const title = item.title ?? "(untitled)"
-        console.log(`  #${id}  ${title}`)
-        total++
-      }
-    }
-
-    if (total === 0) {
-      console.log(dim("No bug reports yet."))
-    } else {
-      console.log("")
-      console.log(dim(`${total} total reports`))
-    }
+  describe: "view bug reports (opens dashboard)",
+  async handler() {
+    console.log("")
+    console.log(bold("📋 Bug Reports"))
+    console.log("")
+    console.log(`  All reports go to ${dim("IRIS CLI Bug Reports")} (bloq #${BUG_BLOQ_ID})`)
+    console.log(`  View at: ${success(`https://app.heyiris.io/iris?board=${BUG_BLOQ_ID}`)}`)
+    console.log("")
+    console.log(dim("To submit a new bug:"))
+    console.log(`  iris bug report`)
+    console.log("")
   },
 })
 
