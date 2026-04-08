@@ -34,6 +34,8 @@ import { PlatformAgentsCommand } from "./cli/cmd/platform-agents"
 import { PlatformLeadsCommand } from "./cli/cmd/platform-leads"
 import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
+import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
+import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
 import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
 import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
 import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
@@ -162,6 +164,8 @@ const cli = yargs(hideBin(process.argv))
   .command(PlatformLeadsCommand)
   .command(PlatformWorkflowsCommand)
   .command(PlatformBloqsCommand)
+  .command(PlatformBrandsCommand)
+  .command(PlatformCopycatCommand)
   .command(PlatformSchedulesCommand)
   .command(PlatformN8nCommand)
   .command(PlatformBoardsCommand)
