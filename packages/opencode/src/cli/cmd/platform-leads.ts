@@ -742,12 +742,244 @@ const LeadsDeleteCommand = cmd({
 })
 
 // ============================================================================
+// Payment Gate — create contract + Stripe checkout + proposal page
+// ============================================================================
+
+const LeadsPaymentGateCommand = cmd({
+  command: "payment-gate <id>",
+  aliases: ["invoice"],
+  describe: "create a payment gate (contract + Stripe + proposal page)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("amount", { alias: "a", describe: "total amount", type: "number", demandOption: true })
+      .option("scope", { alias: "s", describe: "scope of work", type: "string", demandOption: true })
+      .option("bloq", { alias: "b", describe: "bloq ID", type: "number" })
+      .option("package", { alias: "p", describe: "service package ID (auto-fills amount + scope)", type: "number" })
+      .option("no-auto-remind", { describe: "disable D+1/D+3/D+7 auto-reminders", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const body: Record<string, unknown> = {
+      amount: args.amount,
+      scope: args.scope,
+      auto_send_reminders: !args["no-auto-remind"],
+    }
+    if (args.bloq) body.bloq_id = args.bloq
+    if (args.package) body.package_id = args.package
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    if (!(await handleApiError(res, "Create payment gate"))) return
+
+    const data = await res.json().catch(() => ({}))
+
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    if (!data.success) {
+      if (data.error === "duplicate") {
+        prompts.log.warn(data.message || "A payment gate already exists for this lead")
+        const step = data.step?.data ?? {}
+        if (step.proposal_url) {
+          console.log("")
+          printKV("Existing Proposal", step.proposal_url)
+        }
+        return
+      }
+      prompts.log.error(data.message || "Failed to create payment gate")
+      return
+    }
+
+    console.log("")
+    console.log(success("Payment gate created!"))
+    printDivider()
+    printKV("Proposal URL", data.proposal_url ?? dim("(not generated)"))
+    printKV("Contract URL", data.contract_signing_url ?? dim("(not configured)"))
+    printKV("Stripe URL", data.stripe_checkout_url ?? dim("(not configured)"))
+    printKV("Custom Request", `#${data.custom_request_id}`)
+    printDivider()
+  },
+})
+
+// ============================================================================
+// Deal Status — show payment gate progress
+// ============================================================================
+
+const LeadsDealStatusCommand = cmd({
+  command: "deal-status <id>",
+  aliases: ["deal"],
+  describe: "show deal status for a lead's payment gate",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/deal-status`)
+    if (!(await handleApiError(res, "Get deal status"))) return
+
+    const result = await res.json().catch(() => ({}))
+    const status = result?.data ?? result
+
+    if (args.json) { console.log(JSON.stringify(status, null, 2)); return }
+
+    if (!status?.has_payment_gate) {
+      prompts.log.info(`No payment gate for lead #${args.id}`)
+      console.log(dim(`Create one: iris leads payment-gate ${args.id} -a 500 -s "Description"`))
+      return
+    }
+
+    const statusLabels: Record<string, string> = {
+      deal_closed: success("CLOSED"),
+      awaiting_payment: highlight("AWAITING PAYMENT"),
+      awaiting_contract: highlight("AWAITING CONTRACT"),
+      awaiting_both: dim("PENDING"),
+    }
+
+    console.log("")
+    console.log(bold(`Deal Status — Lead #${args.id}`))
+    printDivider()
+    printKV("Status", statusLabels[status.status] ?? status.status)
+    printKV("Amount", `$${Number(status.amount ?? 0).toFixed(2)}`)
+    printKV("Scope", status.scope ?? dim("—"))
+    printKV("Contract", status.contract_signed ? success("Signed") : highlight("Pending"))
+    printKV("Payment", status.payment_received ? success("Received") : highlight("Pending"))
+    printKV("Reminders", `${status.reminders_sent ?? 0}/${status.reminders_total ?? 0} sent`)
+    printKV("Auto-send", status.auto_send_reminders ? success("Yes") : dim("No"))
+
+    if (status.proposal_url) {
+      console.log("")
+      printKV("Proposal URL", status.proposal_url)
+    }
+    if (status.contract_signing_url) {
+      printKV("Contract URL", status.contract_signing_url)
+    }
+    if (status.stripe_checkout_url) {
+      printKV("Payment URL", status.stripe_checkout_url)
+    }
+    printDivider()
+  },
+})
+
+// ============================================================================
+// Packages — list service packages for a bloq
+// ============================================================================
+
+const LeadsPackagesCommand = cmd({
+  command: "packages <bloq>",
+  aliases: ["pkgs"],
+  describe: "list service packages for a bloq",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/packages`)
+    if (!(await handleApiError(res, "List packages"))) return
+
+    const result = await res.json().catch(() => ({}))
+    const packages: any[] = result?.data?.packages ?? result?.data ?? []
+
+    if (args.json) { console.log(JSON.stringify(packages, null, 2)); return }
+
+    if (!packages.length) {
+      prompts.log.info(`No packages found for bloq #${args.bloq}`)
+      console.log(dim("Create one in the dashboard or via API: POST /api/v1/bloqs/{id}/packages"))
+      return
+    }
+
+    console.log("")
+    console.log(bold(`Service Packages — Bloq #${args.bloq}`))
+    printDivider()
+    for (const pkg of packages) {
+      const billing = pkg.billing_type && pkg.billing_type !== "one_time" ? dim(` (${pkg.billing_type})`) : ""
+      const active = pkg.is_active === false ? dim(" [inactive]") : ""
+      console.log(`  ${dim(`#${pkg.id}`)}  ${bold(pkg.name)}  ${success(`$${Number(pkg.price ?? 0).toFixed(2)}`)}${billing}${active}`)
+      if (pkg.scope_template) {
+        console.log(`       ${dim(String(pkg.scope_template).slice(0, 70))}`)
+      }
+    }
+    printDivider()
+  },
+})
+
+// ============================================================================
+// Regenerate Checkout — force-refresh a stale Stripe session
+// ============================================================================
+
+const LeadsRegenCheckoutCommand = cmd({
+  command: "regen-checkout <id>",
+  aliases: ["refresh-checkout"],
+  describe: "force-regenerate the Stripe checkout session for a lead's payment gate",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    // Get the deal status to find the existing checkout URL
+    const statusRes = await irisFetch(`/api/v1/leads/${args.id}/deal-status`)
+    if (!(await handleApiError(statusRes, "Get deal status"))) return
+
+    const statusData = await statusRes.json().catch(() => ({}))
+    const status = statusData?.data ?? statusData
+
+    if (!status?.has_payment_gate) {
+      prompts.log.warn(`No payment gate for lead #${args.id}`)
+      return
+    }
+
+    if (!status.stripe_checkout_url) {
+      prompts.log.warn("No Stripe checkout URL on this payment gate")
+      return
+    }
+
+    // Trigger regeneration by hitting the checkout redirect URL.
+    // The CheckoutRedirectController auto-regenerates stale sessions on click.
+    const url = String(status.stripe_checkout_url)
+    prompts.log.info(`Hitting ${dim(url)} to trigger auto-refresh...`)
+
+    try {
+      const res = await fetch(url, { redirect: "manual" })
+      if (args.json) {
+        console.log(JSON.stringify({ status: res.status, location: res.headers.get("location") }, null, 2))
+        return
+      }
+      if (res.status === 302 || res.status === 301) {
+        const dest = res.headers.get("location") ?? "(unknown)"
+        console.log("")
+        console.log(success("Checkout session refreshed"))
+        printDivider()
+        printKV("Short URL", url)
+        printKV("Fresh Stripe URL", dest.length > 80 ? dest.slice(0, 80) + "..." : dest)
+        printDivider()
+      } else if (res.status === 200) {
+        prompts.log.success("Checkout link is healthy (returned 200)")
+      } else if (res.status === 410) {
+        prompts.log.error("Short URL has expired (our expiration). Create a new payment gate.")
+      } else {
+        prompts.log.error(`Unexpected status: ${res.status}`)
+      }
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
 export const PlatformLeadsCommand = cmd({
   command: "leads",
-  describe: "manage CRM leads — pull, push, diff, CRUD",
+  describe: "manage CRM leads — pull, push, diff, CRUD, payment gates",
   builder: (yargs) =>
     yargs
       .command(LeadsListCommand)
@@ -760,6 +992,10 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsDiffCommand)
       .command(LeadsDeleteCommand)
       .command(LeadsNoteCommand)
+      .command(LeadsPaymentGateCommand)
+      .command(LeadsDealStatusCommand)
+      .command(LeadsPackagesCommand)
+      .command(LeadsRegenCheckoutCommand)
       .demandCommand(),
   async handler() {},
 })
