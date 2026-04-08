@@ -767,6 +767,204 @@ const ConnectComposioCommand = cmd({
   },
 })
 
+// ============================================================================
+// Cleanup — find and remove duplicate auth_configs
+// ============================================================================
+
+const CleanupCommand = cmd({
+  command: "cleanup",
+  describe: "find and remove duplicate auth configs (keeps the one with most connections)",
+  builder: (y) =>
+    y
+      .option("yes", { alias: "y", type: "boolean", default: false, describe: "actually delete (default is dry run)" })
+      .option("toolkit", { alias: "t", type: "string", describe: "only clean up a specific toolkit slug" })
+      .option("json", { type: "boolean" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Cleanup duplicate integrations")
+
+    const sp = prompts.spinner()
+    sp.start("Fetching auth configs…")
+
+    // 1. Fetch all auth_configs (paginate if needed)
+    const allConfigs: any[] = []
+    let cursor: string | null = null
+    try {
+      do {
+        const path = cursor
+          ? `/v3/auth_configs?cursor=${encodeURIComponent(cursor)}&limit=100`
+          : `/v3/auth_configs?limit=100`
+        const res = await composioFetch(path)
+        if (!res.ok) {
+          sp.stop("Failed to fetch auth configs", 1)
+          prompts.log.error(`HTTP ${res.status}`)
+          prompts.outro("Done")
+          return
+        }
+        const data = (await res.json()) as any
+        const items = data?.items ?? data?.auth_configs ?? data?.data ?? []
+        allConfigs.push(...items)
+        cursor = data?.next_cursor ?? data?.nextCursor ?? null
+      } while (cursor)
+    } catch (e) {
+      sp.stop("Failed", 1)
+      prompts.log.error(e instanceof Error ? e.message : String(e))
+      prompts.outro("Done")
+      return
+    }
+
+    sp.message(`Found ${allConfigs.length} auth configs. Counting connections…`)
+
+    // 2. Fetch all connected_accounts to count usage per auth_config
+    const connectionCount = new Map<string, number>()
+    cursor = null
+    try {
+      do {
+        const path = cursor
+          ? `/v3/connected_accounts?cursor=${encodeURIComponent(cursor)}&limit=100`
+          : `/v3/connected_accounts?limit=100`
+        const res = await composioFetch(path)
+        if (!res.ok) break
+        const data = (await res.json()) as any
+        const items = data?.items ?? data?.data ?? []
+        for (const item of items) {
+          const acId = item?.auth_config?.id ?? item?.authConfigId ?? item?.auth_config_id
+          if (acId) {
+            connectionCount.set(acId, (connectionCount.get(acId) ?? 0) + 1)
+          }
+        }
+        cursor = data?.next_cursor ?? data?.nextCursor ?? null
+      } while (cursor)
+    } catch {
+      // continue with what we have
+    }
+
+    sp.stop(`Loaded ${allConfigs.length} configs with connection counts`)
+
+    // 3. Group by toolkit slug, optionally filtered
+    const groups = new Map<string, any[]>()
+    for (const cfg of allConfigs) {
+      const slug = String(cfg?.toolkit?.slug ?? cfg?.toolkit_slug ?? "?").toLowerCase()
+      if (args.toolkit && slug !== String(args.toolkit).toLowerCase()) continue
+      if (!groups.has(slug)) groups.set(slug, [])
+      groups.get(slug)!.push(cfg)
+    }
+
+    // 4. For each toolkit with >1 config, mark duplicates for deletion
+    type Plan = {
+      toolkit: string
+      keep: { id: string; name: string; connections: number; updated: string }
+      delete: { id: string; name: string; connections: number; updated: string }[]
+    }
+    const plans: Plan[] = []
+
+    for (const [toolkit, configs] of groups) {
+      if (configs.length <= 1) continue
+
+      // Annotate each with connection count and updated timestamp
+      const annotated = configs.map((c) => ({
+        id: String(c.id ?? ""),
+        name: String(c.name ?? c.auth_config?.name ?? "(unnamed)"),
+        connections: connectionCount.get(String(c.id ?? "")) ?? 0,
+        updated: String(c.updated_at ?? c.last_updated ?? c.created_at ?? ""),
+        raw: c,
+      }))
+
+      // Sort: most connections first, then most recently updated
+      annotated.sort((a, b) => {
+        if (b.connections !== a.connections) return b.connections - a.connections
+        return b.updated.localeCompare(a.updated)
+      })
+
+      const [keep, ...rest] = annotated
+      plans.push({
+        toolkit,
+        keep: { id: keep.id, name: keep.name, connections: keep.connections, updated: keep.updated },
+        delete: rest.map((r) => ({ id: r.id, name: r.name, connections: r.connections, updated: r.updated })),
+      })
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify({ dry_run: !args.yes, plans }, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    if (plans.length === 0) {
+      console.log()
+      console.log(`  ${success("✓")} No duplicates found across ${groups.size} toolkit${groups.size === 1 ? "" : "s"}.`)
+      prompts.outro("Done")
+      return
+    }
+
+    // 5. Show the plan
+    console.log()
+    console.log(bold(`Found ${plans.length} toolkit${plans.length === 1 ? "" : "s"} with duplicates:`))
+    printDivider()
+
+    let totalToDelete = 0
+    for (const plan of plans) {
+      console.log()
+      console.log(`  ${highlight(plan.toolkit)}`)
+      console.log(`    ${success("KEEP")}    ${dim(plan.keep.id)}  ${plan.keep.name}  ${dim(`(${plan.keep.connections} connections)`)}`)
+      for (const del of plan.delete) {
+        console.log(`    ${dim("DELETE")}  ${dim(del.id)}  ${del.name}  ${dim(`(${del.connections} connections)`)}`)
+        totalToDelete++
+      }
+    }
+    printDivider()
+    console.log()
+
+    if (!args.yes) {
+      console.log(`  ${dim(`Dry run — would delete ${totalToDelete} auth config${totalToDelete === 1 ? "" : "s"}.`)}`)
+      console.log(`  ${dim("Run with")} ${highlight("--yes")} ${dim("to actually delete.")}`)
+      prompts.outro("Done")
+      return
+    }
+
+    // 6. Confirm before deleting connections-bearing configs
+    const willDeleteConnections = plans.some((p) => p.delete.some((d) => d.connections > 0))
+    if (willDeleteConnections) {
+      const ok = await prompts.confirm({
+        message: "Some duplicates have active connections. Delete anyway?",
+        initialValue: false,
+      })
+      if (prompts.isCancel(ok) || !ok) {
+        prompts.outro("Cancelled")
+        return
+      }
+    }
+
+    // 7. Delete
+    const sp2 = prompts.spinner()
+    sp2.start(`Deleting ${totalToDelete} duplicate config${totalToDelete === 1 ? "" : "s"}…`)
+
+    let deleted = 0
+    let failed = 0
+    for (const plan of plans) {
+      for (const del of plan.delete) {
+        try {
+          const res = await composioFetch(`/v3/auth_configs/${del.id}`, { method: "DELETE" })
+          if (res.ok || res.status === 204) {
+            deleted++
+          } else {
+            failed++
+            console.log()
+            console.log(`  ${dim("Failed:")} ${del.id} (HTTP ${res.status})`)
+          }
+        } catch (e) {
+          failed++
+          console.log()
+          console.log(`  ${dim("Failed:")} ${del.id} (${e instanceof Error ? e.message : String(e)})`)
+        }
+      }
+    }
+
+    sp2.stop(failed === 0 ? `Deleted ${deleted}` : `Deleted ${deleted}, ${failed} failed`, failed === 0 ? 0 : 1)
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformRunCommand = cmd({
   command: "integrations",
   aliases: ["int"],
@@ -781,6 +979,7 @@ export const PlatformRunCommand = cmd({
       .command(ConnectCommand)
       .command(SetupCommand)
       .command(ConnectComposioCommand)
+      .command(CleanupCommand)
       .demandCommand(),
   async handler() {},
 })
