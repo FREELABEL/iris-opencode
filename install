@@ -297,8 +297,11 @@ else
       fi
 
       if [ "$os" = "darwin" ]; then
-        avx2=$(sysctl -n hw.optional.avx2_0 2>/dev/null || echo 0)
-        if [ "$avx2" != "1" ]; then
+        # AVX2 sysctl key has changed across macOS versions. Check both
+        # variants and only flag as missing if BOTH return 0/missing.
+        avx2_a=$(sysctl -n hw.optional.avx2_0 2>/dev/null || echo 0)
+        avx2_b=$(sysctl -n hw.optional.avx2 2>/dev/null || echo 0)
+        if [ "$avx2_a" != "1" ] && [ "$avx2_b" != "1" ]; then
           needs_baseline=true
         fi
       fi
@@ -313,6 +316,28 @@ else
     fi
 
     filename="$APP-$target$archive_ext"
+
+    # Verify the requested asset actually exists in the GitHub release. If
+    # the baseline build is missing (no baseline artifacts published for this
+    # version), fall back to the standard build with a clear warning. This
+    # protects against asset-name mismatches and macOS AVX2 detection quirks
+    # where a Mac actually supports AVX2 but the sysctl key differs.
+    if [ "$needs_baseline" = "true" ] && [ -z "$requested_version" ]; then
+      _probe_url="https://github.com/FREELABEL/iris-opencode/releases/latest/download/$filename"
+      if ! curl -fsSL --head --max-time 8 "$_probe_url" >/dev/null 2>&1; then
+        _fallback_filename="$APP-$os-$arch$archive_ext"
+        if [ "$is_musl" = "true" ]; then
+          _fallback_filename="$APP-$os-$arch-musl$archive_ext"
+        fi
+        echo -e "${ORANGE}Warning:${NC} baseline build ($filename) not published for this release."
+        echo -e "${MUTED}Falling back to standard build: ${NC}$_fallback_filename"
+        echo -e "${MUTED}If this binary crashes with 'Illegal instruction', your CPU likely lacks AVX2.${NC}"
+        echo -e "${MUTED}In that case, please file an issue: ${NC}https://github.com/FREELABEL/iris-opencode/issues"
+        filename="$_fallback_filename"
+        target="$os-$arch"
+        [ "$is_musl" = "true" ] && target="$target-musl"
+      fi
+    fi
 
 
     if [ "$os" = "linux" ]; then
