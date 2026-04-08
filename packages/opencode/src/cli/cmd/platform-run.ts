@@ -29,6 +29,14 @@ const INTEGRATION_TYPES = [
 const OAUTH_TYPES = ["google-drive", "google-calendar", "gmail", "slack", "github", "mailchimp"]
 const APIKEY_TYPES = ["vapi", "servis-ai", "smtp-email", "mailjet", "google-gemini", "savelife-ai"]
 
+// Composio toolkits that use API key auth (use `iris integrations setup <type>-api-key --api-key <key>`)
+const COMPOSIO_APIKEY_TOOLKITS: Record<string, string> = {
+  cloudflare: "cloudflare_api_key",
+  openai: "openai_api_key",
+  anthropic: "anthropic_api_key",
+  perplexity: "perplexity_api_key",
+}
+
 function isIntegration(t: string): boolean {
   return INTEGRATION_TYPES.includes(t.toLowerCase())
 }
@@ -103,10 +111,11 @@ function displayResult(result: any, name: string): void {
 // Composio OAuth URL via iris-api
 // ============================================================================
 
-async function getComposioOAuthUrl(type: string): Promise<string | null> {
+async function getComposioOAuthUrl(type: string): Promise<{ url: string | null; error: string | null }> {
   const userId = await requireUserId()
-  if (!userId) return null
+  if (!userId) return { url: null, error: "Not authenticated" }
   const bases = [IRIS_API, "https://main.heyiris.io", "https://heyiris.io", "https://iris-api.freelabel.net"]
+  let lastError: string | null = null
   for (const base of bases) {
     try {
       const res = await irisFetch(
@@ -114,14 +123,18 @@ async function getComposioOAuthUrl(type: string): Promise<string | null> {
         {},
         base,
       )
+      const data = await res.json().catch(() => ({})) as any
       if (res.ok) {
-        const data = (await res.json()) as any
         const url = data?.data?.oauth_url ?? data?.oauth_url ?? data?.url
-        if (url) return url
+        if (url) return { url, error: null }
+      } else {
+        lastError = data?.error ?? data?.message ?? `HTTP ${res.status}`
       }
-    } catch {}
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e)
+    }
   }
-  return null
+  return { url: null, error: lastError }
 }
 
 function openBrowser(url: string): void {
@@ -270,7 +283,9 @@ const ConnectCommand = cmd({
     const spinner = prompts.spinner()
     spinner.start("Generating OAuth URL…")
 
-    let url = await getComposioOAuthUrl(type)
+    const composioResult = await getComposioOAuthUrl(type)
+    let url = composioResult.url
+    let composioError = composioResult.error
 
     // Fallback to fl-api SDK route
     if (!url) {
@@ -286,8 +301,51 @@ const ConnectCommand = cmd({
 
     if (!url) {
       spinner.stop("Failed", 1)
+
+      // Detect API-key toolkits and route the user to the right command
+      const apiKeyToolkit = COMPOSIO_APIKEY_TOOLKITS[type]
+      if (apiKeyToolkit) {
+        prompts.log.warn(`${type} uses API key authentication, not OAuth.`)
+        console.log()
+        console.log(`  ${bold("Step 1:")} Get your API key`)
+        const hints: Record<string, string> = {
+          cloudflare: "https://dash.cloudflare.com/profile/api-tokens",
+          openai: "https://platform.openai.com/api-keys",
+          anthropic: "https://console.anthropic.com/settings/keys",
+          perplexity: "https://www.perplexity.ai/settings/api",
+        }
+        if (hints[type]) console.log(`  ${highlight(hints[type])}`)
+        console.log()
+        console.log(`  ${bold("Step 2:")} Create the auth config`)
+        console.log(`  ${highlight(`iris integrations setup ${apiKeyToolkit} --api-key <your-key>`)}`)
+        console.log()
+        console.log(`  ${bold("Step 3:")} Connect your account`)
+        console.log(`  ${highlight(`iris integrations connect-composio ${apiKeyToolkit}`)}`)
+        prompts.outro("Done")
+        return
+      }
+
+      // Detect "no auth_config" errors and surface the actual setup command
+      if (composioError && /auth.?config|integration.*not.*found/i.test(composioError)) {
+        prompts.log.error(`No Composio auth config exists for ${type}.`)
+        console.log()
+        console.log(`  ${dim("Composio error:")} ${composioError}`)
+        console.log()
+        console.log(`  ${bold("Fix:")} An admin needs to register OAuth credentials for ${type} with Composio first.`)
+        console.log(`  ${dim("Or, if this is an API-key integration, run:")}`)
+        console.log(`  ${highlight(`iris integrations setup ${type} --api-key <key>`)}`)
+        prompts.outro("Done")
+        return
+      }
+
       prompts.log.error(`Could not generate OAuth URL for ${type}.`)
-      prompts.log.info("OAuth client credentials may not be configured for this provider.")
+      if (composioError) {
+        console.log(`  ${dim("Reason:")} ${composioError}`)
+      } else {
+        prompts.log.info("OAuth client credentials may not be configured for this provider.")
+      }
+      console.log()
+      console.log(`  ${dim("Try:")} ${highlight("iris integrations list")} to see available integrations.`)
       prompts.outro("Done")
       return
     }
@@ -379,6 +437,181 @@ const ExecCommand = cmd({
 // (Top-level `run` is taken by opencode's RunCommand, so we use `integrations`.)
 // ============================================================================
 
+const COMPOSIO_KEY = process.env.COMPOSIO_API_KEY ?? "ak_c2m5Q0Av7lOHYK9NPTCn"
+const COMPOSIO_BASE = "https://backend.composio.dev/api"
+
+async function composioFetch(path: string, init?: RequestInit) {
+  return fetch(`${COMPOSIO_BASE}${path}`, {
+    ...init,
+    headers: {
+      "x-api-key": COMPOSIO_KEY,
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+  })
+}
+
+const SetupCommand = cmd({
+  command: "setup <toolkit>",
+  describe: "create a Composio v3 auth_config (calls Composio API directly)",
+  builder: (y) =>
+    y
+      .positional("toolkit", { type: "string", demandOption: true, describe: "Composio toolkit slug (e.g., cloudflare_api_key)" })
+      .option("api-key", { type: "string", describe: "API key for API_KEY toolkits" })
+      .option("managed", { type: "boolean", default: false, describe: "use Composio-managed credentials" })
+      .option("auth-scheme", { type: "string", default: "API_KEY" })
+      .option("name", { type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Setup: ${args.toolkit}`)
+
+    const toolkit = String(args.toolkit)
+    const managed = !!args.managed
+    const authScheme = String(args["auth-scheme"] ?? "API_KEY")
+    const apiKey = args["api-key"] ? String(args["api-key"]) : null
+
+    if (!managed && !apiKey && authScheme === "API_KEY") {
+      prompts.log.error("API_KEY toolkits need --api-key <key> or --managed")
+      prompts.outro("Done")
+      return
+    }
+
+    const body = {
+      toolkit: { slug: toolkit },
+      auth_config: {
+        name: args.name ? String(args.name) : `${toolkit}-config`,
+        type: managed ? "use_composio_managed_auth" : "use_custom_auth",
+        authScheme,
+        credentials: apiKey ? { api_key: apiKey } : {},
+      },
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("POST /v3/auth_configs…")
+    try {
+      const res = await composioFetch("/v3/auth_configs", {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
+      const text = await res.text()
+      let data: any = {}
+      try { data = JSON.parse(text) } catch {}
+
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`HTTP ${res.status}`)
+        console.log(text)
+        prompts.outro("Done")
+        return
+      }
+
+      const ac = data.auth_config ?? data
+      const id = ac?.id ?? data?.id
+      spinner.stop("Auth config created")
+      console.log()
+      console.log(`  ${bold("Toolkit:")}        ${highlight(toolkit)}`)
+      console.log(`  ${bold("Auth config ID:")} ${highlight(id ?? "?")}`)
+      console.log(`  ${bold("Auth scheme:")}    ${authScheme}`)
+      console.log(`  ${bold("Managed:")}        ${managed}`)
+      console.log()
+      console.log(`  ${bold("Next:")} ${highlight(`iris integrations connect-composio ${toolkit} --auth-config ${id}`)}`)
+      prompts.outro("Done")
+    } catch (e) {
+      spinner.stop("Failed", 1)
+      prompts.log.error(e instanceof Error ? e.message : String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ConnectComposioCommand = cmd({
+  command: "connect-composio <toolkit>",
+  describe: "create a Composio v3 connected_account (calls Composio API directly)",
+  builder: (y) =>
+    y
+      .positional("toolkit", { type: "string", demandOption: true })
+      .option("auth-config", { type: "string", describe: "auth_config id (ac_xxx); auto-discovered if omitted" })
+      .option("user-id", { type: "string", describe: "entity/user id (defaults to local user)" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Connect: ${args.toolkit}`)
+
+    const toolkit = String(args.toolkit)
+    let authConfigId = args["auth-config"] ? String(args["auth-config"]) : null
+    const userId = args["user-id"] ? String(args["user-id"]) : `user-${(await requireUserId().catch(() => 0)) || "local"}`
+
+    const spinner = prompts.spinner()
+
+    // Auto-discover auth_config if not provided
+    if (!authConfigId) {
+      spinner.start("Looking up auth_config…")
+      try {
+        const res = await composioFetch(`/v3/auth_configs?toolkit_slug=${encodeURIComponent(toolkit)}`)
+        const data = (await res.json()) as any
+        const items = data.items ?? data.data ?? []
+        if (items.length === 0) {
+          spinner.stop("None found", 1)
+          prompts.log.error(`No auth_config for ${toolkit}. Run: iris integrations setup ${toolkit} --api-key <key>`)
+          prompts.outro("Done")
+          return
+        }
+        authConfigId = items[0].id
+        spinner.stop(`Found ${authConfigId}`)
+      } catch (e) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(e instanceof Error ? e.message : String(e))
+        prompts.outro("Done")
+        return
+      }
+    }
+
+    spinner.start("POST /v3/connected_accounts…")
+    try {
+      const res = await composioFetch("/v3/connected_accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          auth_config: { id: authConfigId },
+          connection: { user_id: userId },
+        }),
+      })
+      const text = await res.text()
+      let data: any = {}
+      try { data = JSON.parse(text) } catch {}
+
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`HTTP ${res.status}`)
+        console.log(text)
+        prompts.outro("Done")
+        return
+      }
+
+      const cid = data.id ?? data.connected_account_id
+      const url = data.redirect_url ?? data.redirectUrl ?? data.connectionData?.redirectUrl
+      const status = data.status ?? data.connectionData?.status
+
+      spinner.stop("Connected account created")
+      console.log()
+      console.log(`  ${bold("Connected account:")} ${highlight(cid ?? "?")}`)
+      console.log(`  ${bold("Status:")}            ${status ?? "?"}`)
+      if (url) {
+        console.log()
+        console.log(`  ${bold("Authorize:")} ${highlight(url)}`)
+        openBrowser(url)
+        console.log(`  ${dim("(Opened in browser)")}`)
+      } else {
+        console.log()
+        console.log(`  ${dim("API_KEY toolkit — connection is active immediately, no redirect needed.")}`)
+      }
+      prompts.outro("Done")
+    } catch (e) {
+      spinner.stop("Failed", 1)
+      prompts.log.error(e instanceof Error ? e.message : String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformRunCommand = cmd({
   command: "integrations",
   aliases: ["int"],
@@ -391,6 +624,8 @@ export const PlatformRunCommand = cmd({
       .command(ListConnectedCommand)
       .command(ListAvailableCommand)
       .command(ConnectCommand)
+      .command(SetupCommand)
+      .command(ConnectComposioCommand)
       .demandCommand(),
   async handler() {},
 })
