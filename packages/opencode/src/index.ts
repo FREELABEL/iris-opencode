@@ -55,6 +55,7 @@ import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
 import { PlatformPaymentsCommand } from "./cli/cmd/platform-payments"
 import { PlatformDeliverCommand } from "./cli/cmd/platform-deliver"
 import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedCommand, PlatformListAvailableCommand } from "./cli/cmd/platform-run"
+import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
@@ -178,6 +179,7 @@ const cli = yargs(hideBin(process.argv))
   .command(PlatformPaymentsCommand)
   .command(PlatformDeliverCommand)
   .command(PlatformRunCommand)
+  .command(PlatformTranscribeCommand)
   .command(PlatformConnectCommand)
   .command(PlatformListConnectedCommand)
   .command(PlatformListAvailableCommand)
