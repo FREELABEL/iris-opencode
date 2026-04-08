@@ -20,13 +20,38 @@ import { exec } from "child_process"
 // ============================================================================
 
 const INTEGRATION_TYPES = [
-  "atlas-os", "beatbox-showcase", "buffer", "copycat-ai", "fal-ai",
-  "fl-api", "genesis", "github-copilot", "gmail", "google-calendar",
-  "google-drive", "google-gemini", "macos", "savelife-ai", "servis-ai",
-  "slack", "vagaro", "vapi", "whatsapp", "workflow-composer",
+  // Communication
+  "gmail", "outlook", "slack", "whatsapp",
+  // Calendar
+  "google-calendar", "outlook-calendar",
+  // Storage / Docs
+  "google-drive", "google-docs", "dropbox", "onedrive",
+  // Design / Content
+  "canva", "buffer",
+  // CRM / Lead enrichment
+  "apollo", "hubspot", "pipedrive",
+  // Accounting (Phase 2 — auto-sync coming soon)
+  "quickbooks", "xero",
+  // Payments
+  "stripe",
+  // Secrets
+  "1password",
+  // Infrastructure
+  "cloudflare", "github",
+  // Internal
+  "atlas-os", "beatbox-showcase", "copycat-ai", "fal-ai", "fl-api",
+  "genesis", "github-copilot", "google-gemini", "macos", "savelife-ai",
+  "servis-ai", "vagaro", "vapi", "workflow-composer",
 ]
 
-const OAUTH_TYPES = ["google-drive", "google-calendar", "gmail", "slack", "github", "mailchimp"]
+const OAUTH_TYPES = [
+  "google-drive", "google-docs", "google-calendar", "gmail",
+  "outlook", "outlook-calendar", "onedrive",
+  "slack", "github", "mailchimp",
+  "canva", "dropbox", "apollo", "hubspot", "pipedrive",
+  "quickbooks", "xero",
+  "1password",
+]
 const APIKEY_TYPES = ["vapi", "servis-ai", "smtp-email", "mailjet", "google-gemini", "savelife-ai"]
 
 // Composio toolkits that use API key auth (use `iris integrations setup <type>-api-key --api-key <key>`)
