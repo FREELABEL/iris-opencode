@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -166,7 +166,19 @@ const CreateCommand = cmd({
 
     let title = args.title
     if (!title) {
-      title = (await prompts.text({ message: "Product title", validate: (x) => (x && x.length > 0 ? undefined : "Required") })) as string
+      try {
+        title = (await promptOrFail("title", () =>
+          prompts.text({ message: "Product title", validate: (x) => (x && x.length > 0 ? undefined : "Required") }),
+        )) as string
+      } catch (err) {
+        if (err instanceof MissingFlagError) {
+          prompts.log.error(err.message)
+          prompts.outro("Done")
+          process.exitCode = 2
+          return
+        }
+        throw err
+      }
       if (prompts.isCancel(title)) { prompts.outro("Cancelled"); return }
     }
 
@@ -442,7 +454,9 @@ const DeleteCommand = cmd({
   command: "delete <id>",
   describe: "delete a product",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "product ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "product ID", type: "number", demandOption: true })
+      .option("yes", { describe: "skip confirmation prompt", type: "boolean", alias: "y", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Product #${args.id}`)
@@ -450,7 +464,16 @@ const DeleteCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const confirmed = await prompts.confirm({ message: `Delete product #${args.id}?` })
+    let confirmed: boolean | symbol = args.yes
+    if (!confirmed) {
+      if (isNonInteractive()) {
+        prompts.log.error("Refusing to delete without --yes in non-interactive mode.")
+        prompts.outro("Done")
+        process.exitCode = 2
+        return
+      }
+      confirmed = await prompts.confirm({ message: `Delete product #${args.id}?` })
+    }
     if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
 
     const spinner = prompts.spinner()

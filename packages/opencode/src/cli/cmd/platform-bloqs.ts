@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive } from "./iris-api"
 import path from "path"
 
 // ============================================================================
@@ -183,20 +183,39 @@ const BloqsCreateCommand = cmd({
 
     let name = args.name
     if (!name) {
-      name = (await prompts.text({
-        message: "Bloq name",
-        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
-      })) as string
+      try {
+        name = (await promptOrFail("name", () =>
+          prompts.text({
+            message: "Bloq name",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          }),
+        )) as string
+      } catch (err) {
+        if (err instanceof MissingFlagError) {
+          prompts.log.error(err.message)
+          prompts.outro("Done")
+          process.exitCode = 2
+          return
+        }
+        throw err
+      }
       if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
     }
 
+    // --description is optional. In a TTY we still prompt for it; in
+    // non-interactive mode we silently default to empty string instead of
+    // hanging.
     let description = args.description
-    if (!description) {
-      description = (await prompts.text({
-        message: "Description (optional)",
-        placeholder: "e.g. Company knowledge base for Q1 2026",
-      })) as string
-      if (prompts.isCancel(description)) description = ""
+    if (description === undefined) {
+      if (isNonInteractive()) {
+        description = ""
+      } else {
+        description = (await prompts.text({
+          message: "Description (optional)",
+          placeholder: "e.g. Company knowledge base for Q1 2026",
+        })) as string
+        if (prompts.isCancel(description)) description = ""
+      }
     }
 
     const spinner = prompts.spinner()
@@ -315,20 +334,36 @@ const BloqsAddItemCommand = cmd({
 
     let content = args.content ?? args.text
     if (!content) {
-      content = (await prompts.text({
-        message: "Content to add",
-        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
-      })) as string
+      try {
+        content = (await promptOrFail("content", () =>
+          prompts.text({
+            message: "Content to add",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          }),
+        )) as string
+      } catch (err) {
+        if (err instanceof MissingFlagError) {
+          prompts.log.error(err.message)
+          prompts.outro("Done")
+          process.exitCode = 2
+          return
+        }
+        throw err
+      }
       if (prompts.isCancel(content)) { prompts.outro("Cancelled"); return }
     }
 
     let title = args.title
-    if (!title) {
-      title = (await prompts.text({
-        message: "Title (optional)",
-        placeholder: "e.g. Meeting notes 2026-04-01",
-      })) as string
-      if (prompts.isCancel(title)) title = ""
+    if (title === undefined) {
+      if (isNonInteractive()) {
+        title = ""
+      } else {
+        title = (await prompts.text({
+          message: "Title (optional)",
+          placeholder: "e.g. Meeting notes 2026-04-01",
+        })) as string
+        if (prompts.isCancel(title)) title = ""
+      }
     }
 
     const spinner = prompts.spinner()
@@ -377,22 +412,38 @@ const BloqsComposeCommand = cmd({
     // Step 1: Get name
     let name = args.name
     if (!name) {
-      name = (await prompts.text({
-        message: "What is this knowledge base about?",
-        placeholder: "e.g. Q1 2026 Marketing Strategy",
-        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
-      })) as string
+      try {
+        name = (await promptOrFail("name", () =>
+          prompts.text({
+            message: "What is this knowledge base about?",
+            placeholder: "e.g. Q1 2026 Marketing Strategy",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          }),
+        )) as string
+      } catch (err) {
+        if (err instanceof MissingFlagError) {
+          prompts.log.error(err.message)
+          prompts.outro("Done")
+          process.exitCode = 2
+          return
+        }
+        throw err
+      }
       if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
     }
 
-    // Step 2: Get description / topic for AI
+    // Step 2: Get description / topic for AI (optional — defaults to name in non-TTY)
     let description = args.description
-    if (!description) {
-      description = (await prompts.text({
-        message: "Describe what kind of content it will hold",
-        placeholder: "e.g. Campaign plans, performance metrics, competitor research",
-      })) as string
-      if (prompts.isCancel(description)) description = name
+    if (description === undefined) {
+      if (isNonInteractive()) {
+        description = name
+      } else {
+        description = (await prompts.text({
+          message: "Describe what kind of content it will hold",
+          placeholder: "e.g. Campaign plans, performance metrics, competitor research",
+        })) as string
+        if (prompts.isCancel(description)) description = name
+      }
     }
 
     // Step 3: Confirm list structure
@@ -404,9 +455,15 @@ const BloqsComposeCommand = cmd({
       prompts.log.info(`  ${dim(`${i + 1}.`)} ${suggestedLists[i]}`)
     }
 
-    const confirmed = await prompts.confirm({
-      message: "Create with this structure?",
-    })
+    let confirmed: boolean | symbol
+    if (isNonInteractive()) {
+      // Auto-confirm in non-interactive mode (compose is invoked deliberately)
+      confirmed = true
+    } else {
+      confirmed = await prompts.confirm({
+        message: "Create with this structure?",
+      })
+    }
     if (prompts.isCancel(confirmed) || !confirmed) {
       prompts.outro("Cancelled")
       return

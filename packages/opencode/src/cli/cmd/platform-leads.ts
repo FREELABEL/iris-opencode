@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -280,23 +280,40 @@ const LeadsCreateCommand = cmd({
 
     let name = args.name
     if (!name) {
-      name = (await prompts.text({
-        message: "Full name",
-        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
-      })) as string
+      try {
+        name = (await promptOrFail("name", () =>
+          prompts.text({
+            message: "Full name",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          }),
+        )) as string
+      } catch (err) {
+        if (err instanceof MissingFlagError) {
+          prompts.log.error(err.message)
+          prompts.outro("Done")
+          process.exitCode = 2
+          return
+        }
+        throw err
+      }
       if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
     }
 
     let email = args.email
-    if (!email) {
-      email = (await prompts.text({
-        message: "Email address",
-        placeholder: "e.g. jane@company.com",
-      })) as string
-      if (prompts.isCancel(email)) email = undefined
+    if (email === undefined) {
+      if (isNonInteractive()) {
+        email = undefined
+      } else {
+        email = (await prompts.text({
+          message: "Email address",
+          placeholder: "e.g. jane@company.com",
+        })) as string
+        if (prompts.isCancel(email)) email = undefined
+      }
     }
 
-    // Default bloq-id: try to auto-detect from existing leads, fallback to 38
+    // Default bloq-id: try to auto-detect from existing leads, fallback to 38.
+    // (Replaces the old non-TTY-hanging prompt entirely — keeping main's UX win.)
     let bloqId = args["bloq-id"] ?? 38
 
     const spinner = prompts.spinner()
@@ -684,7 +701,9 @@ const LeadsDeleteCommand = cmd({
   command: "delete <id>",
   describe: "delete a lead",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "lead ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("yes", { describe: "skip confirmation prompt", type: "boolean", alias: "y", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Lead #${args.id}`)
@@ -692,7 +711,16 @@ const LeadsDeleteCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const confirmed = await prompts.confirm({ message: `Delete lead #${args.id}? This cannot be undone.` })
+    let confirmed: boolean | symbol = args.yes
+    if (!confirmed) {
+      if (isNonInteractive()) {
+        prompts.log.error("Refusing to delete without --yes in non-interactive mode.")
+        prompts.outro("Done")
+        process.exitCode = 2
+        return
+      }
+      confirmed = await prompts.confirm({ message: `Delete lead #${args.id}? This cannot be undone.` })
+    }
     if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
 
     const spinner = prompts.spinner()
