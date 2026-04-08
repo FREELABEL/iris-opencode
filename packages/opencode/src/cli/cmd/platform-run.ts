@@ -227,7 +227,7 @@ const ListIntegrationsCommand = cmd({
 
 const ListConnectedCommand = cmd({
   command: "list-connected",
-  describe: "show your connected integrations (merges fl-api + Composio)",
+  describe: "show your connected integrations",
   builder: (y) => y.option("json", { type: "boolean" }),
   async handler(args) {
     UI.empty()
@@ -265,7 +265,7 @@ const ListConnectedCommand = cmd({
     for (const c of composioItems) {
       const key = String(c?.toolkit?.slug ?? "?").toLowerCase()
       merged.set(key, {
-        source: "composio",
+        source: "oauth",
         type: key,
         status: String(c.status ?? "?").toLowerCase(),
         id: c.id,
@@ -289,8 +289,7 @@ const ListConnectedCommand = cmd({
     printDivider()
     for (const i of items) {
       const statusColor = i.status === "active" ? success(`[${i.status}]`) : dim(`[${i.status}]`)
-      const src = dim(`(${i.source})`)
-      console.log(`  ${highlight(i.type)}  ${statusColor}  ${dim("#" + i.id)}  ${src}`)
+      console.log(`  ${highlight(i.type)}  ${statusColor}`)
     }
     printDivider()
     prompts.outro(dim("iris integrations <type> <function> key=value …"))
@@ -329,7 +328,9 @@ const ConnectCommand = cmd({
   command: "connect <type>",
   describe: "start OAuth or show API-key instructions for an integration",
   builder: (y) =>
-    y.positional("type", { type: "string", demandOption: true }),
+    y
+      .positional("type", { type: "string", demandOption: true })
+      .option("print-url", { type: "boolean", default: false, describe: "print the OAuth URL instead of opening a browser" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Connect: ${args.type}`)
@@ -426,7 +427,7 @@ const ConnectCommand = cmd({
           const authConfigId = acData?.auth_config?.id ?? acData?.id
           if (!authConfigId) {
             sp2.stop("Failed", 1)
-            prompts.log.error("No auth_config id returned by Composio")
+            prompts.log.error("Integration provider returned no auth config id")
             prompts.outro("Done")
             return
           }
@@ -471,11 +472,9 @@ const ConnectCommand = cmd({
 
       // Detect "no auth_config" errors and surface the actual setup command
       if (composioError && /auth.?config|integration.*not.*found/i.test(composioError)) {
-        prompts.log.error(`No Composio auth config exists for ${type}.`)
+        prompts.log.error(`${type} is not yet configured.`)
         console.log()
-        console.log(`  ${dim("Composio error:")} ${composioError}`)
-        console.log()
-        console.log(`  ${bold("Fix:")} An admin needs to register OAuth credentials for ${type} with Composio first.`)
+        console.log(`  ${bold("Fix:")} An admin needs to register OAuth credentials for ${type}.`)
         console.log(`  ${dim("Or, if this is an API-key integration, run:")}`)
         console.log(`  ${highlight(`iris integrations setup ${type} --api-key <key>`)}`)
         prompts.outro("Done")
@@ -484,9 +483,13 @@ const ConnectCommand = cmd({
 
       prompts.log.error(`Could not generate OAuth URL for ${type}.`)
       if (composioError) {
-        console.log(`  ${dim("Reason:")} ${composioError}`)
+        // Sanitize provider names from error messages before showing to users
+        const sanitized = String(composioError)
+          .replace(/composio/gi, "integration provider")
+          .replace(/backend\.composio\.dev/gi, "iris.freelabel.net")
+        console.log(`  ${dim("Reason:")} ${sanitized}`)
       } else {
-        prompts.log.info("OAuth client credentials may not be configured for this provider.")
+        prompts.log.info("OAuth credentials may not be configured for this provider.")
       }
       console.log()
       console.log(`  ${dim("Try:")} ${highlight("iris integrations list")} to see available integrations.`)
@@ -494,16 +497,20 @@ const ConnectCommand = cmd({
       return
     }
 
-    spinner.stop("OAuth URL ready")
+    spinner.stop("Ready")
     console.log()
-    console.log(`  ${bold("Step 1:")} Authorize in your browser`)
-    console.log(`  ${highlight(url)}`)
+    if (args["print-url"]) {
+      console.log(`  ${dim("Authorize at:")} ${url}`)
+    } else {
+      console.log(`  ${success("→")} Opening ${highlight(type)} in your browser to authorize…`)
+      openBrowser(url)
+    }
     console.log()
-    openBrowser(url)
-    console.log(`  ${dim("(Opened in your default browser)")}`)
-    console.log()
-    console.log(`  ${bold("Step 2:")} After authorizing, check status with`)
-    console.log(`  ${highlight("iris integrations list-connected")}`)
+    if (!args["print-url"]) {
+      console.log(`  ${dim("If the browser didn't open, run:")} ${dim(`iris integrations connect ${type} --print-url`)}`)
+      console.log()
+    }
+    console.log(`  ${dim("After authorizing, verify with:")} ${highlight("iris integrations list-connected")}`)
     prompts.outro("Done")
   },
 })
@@ -597,12 +604,12 @@ async function composioFetch(path: string, init?: RequestInit) {
 
 const SetupCommand = cmd({
   command: "setup <toolkit>",
-  describe: "create a Composio v3 auth_config (calls Composio API directly)",
+  describe: "register an integration's API key (one-time per workspace)",
   builder: (y) =>
     y
-      .positional("toolkit", { type: "string", demandOption: true, describe: "Composio toolkit slug (e.g., cloudflare_api_key)" })
+      .positional("toolkit", { type: "string", demandOption: true, describe: "integration toolkit slug (e.g., cloudflare_api_key)" })
       .option("api-key", { type: "string", describe: "API key for API_KEY toolkits" })
-      .option("managed", { type: "boolean", default: false, describe: "use Composio-managed credentials" })
+      .option("managed", { type: "boolean", default: false, describe: "use platform-managed credentials" })
       .option("auth-scheme", { type: "string", default: "API_KEY" })
       .option("name", { type: "string" }),
   async handler(args) {
@@ -631,7 +638,7 @@ const SetupCommand = cmd({
     }
 
     const spinner = prompts.spinner()
-    spinner.start("POST /v3/auth_configs…")
+    spinner.start("Registering credentials…")
     try {
       const res = await composioFetch("/v3/auth_configs", {
         method: "POST",
@@ -644,21 +651,21 @@ const SetupCommand = cmd({
       if (!res.ok) {
         spinner.stop("Failed", 1)
         prompts.log.error(`HTTP ${res.status}`)
-        console.log(text)
+        const sanitized = text.replace(/composio/gi, "integration provider")
+          .replace(/backend\.composio\.dev/gi, "iris.freelabel.net")
+        console.log(sanitized)
         prompts.outro("Done")
         return
       }
 
       const ac = data.auth_config ?? data
       const id = ac?.id ?? data?.id
-      spinner.stop("Auth config created")
+      spinner.stop("Credentials registered")
       console.log()
-      console.log(`  ${bold("Toolkit:")}        ${highlight(toolkit)}`)
-      console.log(`  ${bold("Auth config ID:")} ${highlight(id ?? "?")}`)
-      console.log(`  ${bold("Auth scheme:")}    ${authScheme}`)
-      console.log(`  ${bold("Managed:")}        ${managed}`)
+      console.log(`  ${bold("Toolkit:")}      ${highlight(toolkit)}`)
+      console.log(`  ${bold("Auth scheme:")}  ${authScheme}`)
       console.log()
-      console.log(`  ${bold("Next:")} ${highlight(`iris integrations connect-composio ${toolkit} --auth-config ${id}`)}`)
+      console.log(`  ${bold("Next:")} ${highlight(`iris integrations connect-direct ${toolkit}`)}`)
       prompts.outro("Done")
     } catch (e) {
       spinner.stop("Failed", 1)
@@ -669,13 +676,14 @@ const SetupCommand = cmd({
 })
 
 const ConnectComposioCommand = cmd({
-  command: "connect-composio <toolkit>",
-  describe: "create a Composio v3 connected_account (calls Composio API directly)",
+  command: "connect-direct <toolkit>",
+  aliases: ["connect-composio"],
+  describe: "connect an integration using a registered API key (after `setup`)",
   builder: (y) =>
     y
       .positional("toolkit", { type: "string", demandOption: true })
-      .option("auth-config", { type: "string", describe: "auth_config id (ac_xxx); auto-discovered if omitted" })
-      .option("user-id", { type: "string", describe: "entity/user id (defaults to local user)" }),
+      .option("auth-config", { type: "string", describe: "auth config id (ac_xxx); auto-discovered if omitted" })
+      .option("user-id", { type: "string", describe: "user id (defaults to local user)" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Connect: ${args.toolkit}`)
