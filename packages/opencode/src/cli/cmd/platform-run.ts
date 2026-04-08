@@ -41,6 +41,38 @@ function isIntegration(t: string): boolean {
   return INTEGRATION_TYPES.includes(t.toLowerCase())
 }
 
+// Fetch a Composio auth_config and build the connection.state.val payload
+// using its expected_input_fields. Composio v3 requires credentials on the
+// connected_account in the exact field shape declared by the auth_config.
+async function buildComposioConnectionState(
+  authConfigId: string,
+  apiKey?: string | null,
+): Promise<{ authScheme: string; val: Record<string, string> } | null> {
+  try {
+    const res = await composioFetch(`/v3/auth_configs/${authConfigId}`)
+    if (!res.ok) return null
+    const ac = (await res.json()) as any
+    const fields: any[] = ac?.expected_input_fields ?? ac?.deprecated_params?.expected_input_fields ?? []
+    const scheme = ac?.auth_scheme ?? "API_KEY"
+    // Use provided key, falling back to whatever is stored on the auth_config
+    const key = apiKey ?? ac?.credentials?.api_key ?? ac?.credentials?.generic_api_key ?? null
+    if (!key) return null
+    const val: Record<string, string> = {}
+    if (fields.length > 0) {
+      // Populate every required string field with the same key
+      for (const f of fields) {
+        if (f?.required && f?.type === "string") val[f.name] = String(key)
+      }
+      if (Object.keys(val).length === 0) val[fields[0].name] = String(key)
+    } else {
+      val.generic_api_key = String(key)
+    }
+    return { authScheme: scheme, val }
+  } catch {
+    return null
+  }
+}
+
 // ============================================================================
 // Param parsing — key=value pairs into typed object
 // ============================================================================
@@ -302,27 +334,100 @@ const ConnectCommand = cmd({
     if (!url) {
       spinner.stop("Failed", 1)
 
-      // Detect API-key toolkits and route the user to the right command
+      // API-key toolkit: prompt inline for the user's key, then create
+      // auth_config + connected_account in one shot. No 3-step dump.
       const apiKeyToolkit = COMPOSIO_APIKEY_TOOLKITS[type]
       if (apiKeyToolkit) {
-        prompts.log.warn(`${type} uses API key authentication, not OAuth.`)
-        console.log()
-        console.log(`  ${bold("Step 1:")} Get your API key`)
+        spinner.stop("API key required")
         const hints: Record<string, string> = {
           cloudflare: "https://dash.cloudflare.com/profile/api-tokens",
           openai: "https://platform.openai.com/api-keys",
           anthropic: "https://console.anthropic.com/settings/keys",
           perplexity: "https://www.perplexity.ai/settings/api",
         }
-        if (hints[type]) console.log(`  ${highlight(hints[type])}`)
         console.log()
-        console.log(`  ${bold("Step 2:")} Create the auth config`)
-        console.log(`  ${highlight(`iris integrations setup ${apiKeyToolkit} --api-key <your-key>`)}`)
+        console.log(`  ${dim(`Get your ${type} API key:`)} ${highlight(hints[type] ?? "")}`)
         console.log()
-        console.log(`  ${bold("Step 3:")} Connect your account`)
-        console.log(`  ${highlight(`iris integrations connect-composio ${apiKeyToolkit}`)}`)
-        prompts.outro("Done")
-        return
+
+        const apiKey = await prompts.password({
+          message: `Paste your ${type} API key:`,
+          mask: "•",
+        })
+        if (prompts.isCancel(apiKey) || !apiKey) {
+          prompts.outro("Cancelled")
+          return
+        }
+
+        const sp2 = prompts.spinner()
+        sp2.start("Creating auth config…")
+        try {
+          // 1. Create auth_config with the user's key
+          const acRes = await composioFetch("/v3/auth_configs", {
+            method: "POST",
+            body: JSON.stringify({
+              toolkit: { slug: apiKeyToolkit },
+              auth_config: {
+                name: `${apiKeyToolkit}-${Date.now()}`,
+                type: "use_custom_auth",
+                authScheme: "API_KEY",
+                credentials: { api_key: String(apiKey) },
+              },
+            }),
+          })
+          const acText = await acRes.text()
+          let acData: any = {}
+          try { acData = JSON.parse(acText) } catch {}
+          if (!acRes.ok) {
+            sp2.stop("Failed", 1)
+            prompts.log.error(`Auth config creation failed (HTTP ${acRes.status})`)
+            console.log(dim(acText.slice(0, 400)))
+            prompts.outro("Done")
+            return
+          }
+          const authConfigId = acData?.auth_config?.id ?? acData?.id
+          if (!authConfigId) {
+            sp2.stop("Failed", 1)
+            prompts.log.error("No auth_config id returned by Composio")
+            prompts.outro("Done")
+            return
+          }
+
+          // 2. Create connected_account for this user — credentials must
+          // be passed in connection.state.val using the field names from
+          // the auth_config's expected_input_fields.
+          sp2.message("Connecting account…")
+          const userId = `user-${(await requireUserId().catch(() => 0)) || "local"}`
+          const state = await buildComposioConnectionState(authConfigId, String(apiKey))
+          const caRes = await composioFetch("/v3/connected_accounts", {
+            method: "POST",
+            body: JSON.stringify({
+              auth_config: { id: authConfigId },
+              connection: state ? { user_id: userId, state } : { user_id: userId },
+            }),
+          })
+          const caText = await caRes.text()
+          let caData: any = {}
+          try { caData = JSON.parse(caText) } catch {}
+          if (!caRes.ok) {
+            sp2.stop("Failed", 1)
+            prompts.log.error(`Connection failed (HTTP ${caRes.status})`)
+            console.log(dim(caText.slice(0, 400)))
+            prompts.outro("Done")
+            return
+          }
+
+          sp2.stop("Connected")
+          console.log()
+          console.log(`  ${success("✓")} ${type} is now connected.`)
+          console.log(`  ${dim("Connected account:")} ${caData?.id ?? caData?.connected_account_id ?? "?"}`)
+          prompts.outro("Done")
+          return
+        } catch (e) {
+          sp2.stop("Failed", 1)
+          prompts.log.error(e instanceof Error ? e.message : String(e))
+          prompts.outro("Done")
+          return
+        }
       }
 
       // Detect "no auth_config" errors and surface the actual setup command
@@ -567,11 +672,14 @@ const ConnectComposioCommand = cmd({
 
     spinner.start("POST /v3/connected_accounts…")
     try {
+      // Read expected_input_fields from the auth_config so credentials are
+      // submitted in the exact shape Composio requires (e.g. generic_api_key).
+      const state = await buildComposioConnectionState(authConfigId!)
       const res = await composioFetch("/v3/connected_accounts", {
         method: "POST",
         body: JSON.stringify({
           auth_config: { id: authConfigId },
-          connection: { user_id: userId },
+          connection: state ? { user_id: userId, state } : { user_id: userId },
         }),
       })
       const text = await res.text()
