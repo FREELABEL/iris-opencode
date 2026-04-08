@@ -11,7 +11,7 @@ NC='\033[0m' # No Color
 
 usage() {
     cat <<EOF
-IRIS Installer — Code, SDK, Desktop App, Bridge, Docker Sandbox, Remotion
+IRIS Installer — CLI, SDK, Desktop App, Bridge, Docker Sandbox, Remotion
 
 Usage: install [options]
 
@@ -194,6 +194,41 @@ if [ -n "$_missing_required" ]; then
     echo -e "${MUTED}These are usually built into your OS. On macOS, try running ${NC}xcode-select --install"
     echo -e "${MUTED}On Linux: ${NC}sudo apt install coreutils curl"
     exit 1
+fi
+
+# macOS version check — the IRIS binary is compiled with Bun and uses
+# LC_DYLD_CHAINED_FIXUPS (load command 0x80000034) for faster startup.
+# This load command was introduced in macOS 12 (Monterey). Older macOS
+# versions will install successfully but crash at runtime with:
+#   dyld: cannot load 'iris' (load command 0x80000034 is unknown)
+#   Abort trap: 6
+# Detect this BEFORE downloading so the user gets a clear explanation.
+if [ "$(uname -s)" = "Darwin" ]; then
+    _macos_version=$(sw_vers -productVersion 2>/dev/null || echo "")
+    _macos_major=$(echo "$_macos_version" | cut -d. -f1)
+    if [ -n "$_macos_major" ] && [ "$_macos_major" -lt 12 ] 2>/dev/null; then
+        echo -e "${RED}════════════════════════════════════════════════════════════════${NC}"
+        echo -e "${RED}  ⚠  macOS Version Warning${NC}"
+        echo -e "${RED}════════════════════════════════════════════════════════════════${NC}"
+        echo -e "${ORANGE}Your macOS version:${NC} $_macos_version"
+        echo -e "${ORANGE}IRIS CLI requires:${NC}  macOS 12 (Monterey) or later"
+        echo -e ""
+        echo -e "${MUTED}The binary will install and authenticate, but will fail to${NC}"
+        echo -e "${MUTED}run with this error:${NC}"
+        echo -e "${MUTED}  ${NC}dyld: cannot load 'iris' (load command 0x80000034 is unknown)"
+        echo -e "${MUTED}  ${NC}Abort trap: 6"
+        echo -e ""
+        echo -e "${MUTED}This is because IRIS is compiled with Bun, which uses Mach-O${NC}"
+        echo -e "${MUTED}features only available on macOS 12 and later.${NC}"
+        echo -e ""
+        echo -e "${MUTED}Options:${NC}"
+        echo -e "${MUTED}  1. Upgrade macOS:${NC} https://support.apple.com/macos/upgrade"
+        echo -e "${MUTED}  2. Report the issue:${NC} https://github.com/FREELABEL/iris-opencode/issues"
+        echo -e "${RED}════════════════════════════════════════════════════════════════${NC}"
+        echo -e ""
+        echo -e "${MUTED}Continuing install anyway in 5 seconds (Ctrl-C to abort)...${NC}"
+        sleep 5
+    fi
 fi
 
 # Soft pre-flight: warn (don't exit) about commands the binary install needs
@@ -1911,12 +1946,12 @@ install_docs
 # ─── Summary Banner ──────────────────────────────────────────────────────────
 
 echo -e ""
-echo -e "${CYAN}██╗██████╗ ██╗███████╗${NC}    ${MUTED}██████╗ ██████╗ ██████╗ ███████╗${NC}"
-echo -e "${CYAN}██║██╔══██╗██║██╔════╝${NC}    ${MUTED}██╔════╝██╔═══██╗██╔══██╗██╔════╝${NC}"
-echo -e "${CYAN}██║██████╔╝██║███████╗${NC}    ${MUTED}██║     ██║   ██║██║  ██║█████╗${NC}"
-echo -e "${CYAN}██║██╔══██╗██║╚════██║${NC}    ${MUTED}██║     ██║   ██║██║  ██║██╔══╝${NC}"
-echo -e "${CYAN}██║██║  ██║██║███████║${NC}    ${MUTED}╚██████╗╚██████╔╝██████╔╝███████╗${NC}"
-echo -e "${CYAN}╚═╝╚═╝  ╚═╝╚═╝╚══════╝${NC}    ${MUTED} ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝${NC}"
+echo -e "${CYAN}██╗██████╗ ██╗███████╗${NC}    ${MUTED} ██████╗██╗     ██╗${NC}"
+echo -e "${CYAN}██║██╔══██╗██║██╔════╝${NC}    ${MUTED}██╔════╝██║     ██║${NC}"
+echo -e "${CYAN}██║██████╔╝██║███████╗${NC}    ${MUTED}██║     ██║     ██║${NC}"
+echo -e "${CYAN}██║██╔══██╗██║╚════██║${NC}    ${MUTED}██║     ██║     ██║${NC}"
+echo -e "${CYAN}██║██║  ██║██║███████║${NC}    ${MUTED}╚██████╗███████╗██║${NC}"
+echo -e "${CYAN}╚═╝╚═╝  ╚═╝╚═╝╚══════╝${NC}    ${MUTED} ╚═════╝╚══════╝╚═╝${NC}"
 echo -e ""
 echo -e "${MUTED}IRIS CLI includes free AI models.${NC}"
 echo -e ""
