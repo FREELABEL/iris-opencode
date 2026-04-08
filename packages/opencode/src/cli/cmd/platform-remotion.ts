@@ -125,6 +125,28 @@ const UpdateCommand = cmd({
   },
 })
 
+const CarouselCommand = cmd({
+  command: "carousel <props>",
+  describe: "Batch-render all 9 carousel slides (CarouselSlide0..8)",
+  builder: (yargs) =>
+    yargs
+      .positional("props", {
+        describe: "Path to JSON file with { brand, slides: [...] }",
+        type: "string",
+        demandOption: true,
+      })
+      .option("output", {
+        type: "string",
+        alias: "o",
+        describe: "Output directory (default: ./carousel-<timestamp>)",
+      }),
+  async handler(args) {
+    const cmdArgs = ["carousel", args.props as string]
+    if (args.output) cmdArgs.push(args.output as string)
+    runIrisRemotion(cmdArgs)
+  },
+})
+
 // ============================================================================
 // Main command
 // ============================================================================
@@ -136,11 +158,12 @@ export const PlatformRemotionCommand = cmd({
     yargs
       .command(RenderCommand)
       .command(StillCommand)
+      .command(CarouselCommand)
       .command(PreviewCommand)
       .command(ListCommand)
       .command(InitCommand)
       .command(UpdateCommand)
-      .demandCommand(1, "Specify a subcommand: render, still, preview, list, init, update"),
+      .demandCommand(1, "Specify a subcommand: render, still, carousel, preview, list, init, update"),
   async handler() {
     // handled by subcommands
   },

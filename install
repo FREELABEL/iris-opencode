@@ -1329,6 +1329,25 @@ case "${1:-help}" in
         fi
         echo "Compositions updated."
         ;;
+    carousel)
+        shift
+        # Usage: iris-remotion carousel <props.json> [output-dir]
+        PROPS_FILE="$1"
+        OUTPUT_DIR="${2:-./carousel-$(date +%Y%m%d-%H%M%S)}"
+        if [ -z "$PROPS_FILE" ] || [ ! -f "$PROPS_FILE" ]; then
+            echo "Usage: iris-remotion carousel <props.json> [output-dir]"
+            echo "  props.json must contain { \"brand\": ..., \"slides\": [ ... 9 slide objects ... ] }"
+            exit 1
+        fi
+        mkdir -p "$OUTPUT_DIR"
+        PROPS_JSON=$(cat "$PROPS_FILE")
+        for i in 0 1 2 3 4 5 6 7 8; do
+            echo "Rendering CarouselSlide$i..."
+            SLIDE_PROPS=$(printf '%s' "$PROPS_JSON" | node -e "let p=JSON.parse(require('fs').readFileSync(0,'utf8'));p.slideIndex=$i;process.stdout.write(JSON.stringify(p))")
+            (cd "$REMOTION_DIR" && npx remotion still "CarouselSlide$i" "$OUTPUT_DIR/slide-$i.png" --props "$SLIDE_PROPS") || exit 1
+        done
+        echo "Done. 9 slides saved to: $OUTPUT_DIR"
+        ;;
     help|--help|-h|*)
         echo "IRIS Remotion — Video & image generation"
         echo ""
@@ -1337,6 +1356,7 @@ case "${1:-help}" in
         echo "Commands:"
         echo "  render <comp> [output] [--props '{}']  Render a video (MP4)"
         echo "  still  <comp> [output] [--props '{}']  Render a still image (PNG)"
+        echo "  carousel <props.json> [output-dir]      Batch-render 9 carousel slides"
         echo "  preview                                 Open Remotion Studio in browser"
         echo "  list                                    List available compositions"
         echo "  init                                    (Re)install dependencies"
@@ -1345,6 +1365,7 @@ case "${1:-help}" in
         echo "Examples:"
         echo "  iris-remotion still SocialPostStill out.png --props '{\"brand\":\"freelabel\"}'"
         echo "  iris-remotion render BrandIntro out.mp4 --props '{\"brand\":\"beatbox\"}'"
+        echo "  iris-remotion carousel ./client.json ./out/client-carousel"
         echo "  iris-remotion preview"
         echo "  iris-remotion list"
         ;;
