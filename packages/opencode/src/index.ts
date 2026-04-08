@@ -79,6 +79,10 @@ import { PlatformUsersCommand } from "./cli/cmd/platform-users"
 import { PlatformPhoneCommand } from "./cli/cmd/platform-phone"
 import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
 import { PlatformWalletCommand } from "./cli/cmd/platform-wallet"
+import { PlatformConfigCommand } from "./cli/cmd/platform-config"
+import { PlatformAppCommand } from "./cli/cmd/platform-app"
+import { PlatformAutomationCommand } from "./cli/cmd/platform-automation"
+import { PlatformAutomationTestCommand } from "./cli/cmd/platform-automation-test"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -206,6 +210,12 @@ const cli = yargs(hideBin(process.argv))
   .command(PlatformPhoneCommand)
   .command(PlatformVoiceCommand)
   .command(PlatformWalletCommand)
+  // PHP-port commands — config, app, automation, automation:test
+  // (integrations is owned by PlatformRunCommand in platform-run.ts)
+  .command(PlatformConfigCommand)
+  .command(PlatformAppCommand)
+  .command(PlatformAutomationCommand)
+  .command(PlatformAutomationTestCommand)
   .fail((msg) => {
     if (
       msg.startsWith("Unknown argument") ||
