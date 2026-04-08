@@ -227,7 +227,7 @@ const ListIntegrationsCommand = cmd({
 
 const ListConnectedCommand = cmd({
   command: "list-connected",
-  describe: "show your connected integrations",
+  describe: "show your connected integrations (merges fl-api + Composio)",
   builder: (y) => y.option("json", { type: "boolean" }),
   async handler(args) {
     UI.empty()
@@ -235,28 +235,65 @@ const ListConnectedCommand = cmd({
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     const userId = await requireUserId()
     if (!userId) { prompts.outro("Done"); return }
+
+    // Source 1: fl-api local integrations table
+    const flItems: any[] = []
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/integrations`)
-      const ok = await handleApiError(res, "List integrations")
-      if (!ok) { prompts.outro("Done"); return }
-      const data = (await res.json()) as any
-      const items: any[] = data?.data ?? data ?? []
-      if (args.json) { console.log(JSON.stringify(items, null, 2)); prompts.outro("Done"); return }
-      if (items.length === 0) {
-        prompts.log.warn("No integrations connected.")
-        prompts.outro(dim("iris integrations list-available"))
-        return
+      if (res.ok) {
+        const data = (await res.json()) as any
+        for (const i of (data?.data ?? data ?? [])) flItems.push(i)
       }
-      printDivider()
-      for (const i of items) {
-        console.log(`  ${highlight(i.type ?? i.name ?? "?")}  ${dim("[" + (i.status ?? "active") + "]")}  ${dim("#" + i.id)}`)
+    } catch {}
+
+    // Source 2: Composio connected_accounts (source of truth for OAuth)
+    const composioItems: any[] = []
+    try {
+      const cRes = await composioFetch(`/v3/connected_accounts?user_ids=user-${userId}`)
+      if (cRes.ok) {
+        const cData = (await cRes.json()) as any
+        for (const c of (cData?.items ?? cData?.data ?? [])) composioItems.push(c)
       }
-      printDivider()
-      prompts.outro(dim("iris integrations <type> <function> key=value …"))
-    } catch (e) {
-      prompts.log.error(e instanceof Error ? e.message : String(e))
-      prompts.outro("Done")
+    } catch {}
+
+    // Merge by toolkit slug — Composio takes precedence (it's the source of truth)
+    const merged = new Map<string, any>()
+    for (const i of flItems) {
+      const key = String(i.type ?? i.name ?? "?").toLowerCase()
+      merged.set(key, { source: "fl-api", type: key, status: i.status ?? "active", id: i.id })
     }
+    for (const c of composioItems) {
+      const key = String(c?.toolkit?.slug ?? "?").toLowerCase()
+      merged.set(key, {
+        source: "composio",
+        type: key,
+        status: String(c.status ?? "?").toLowerCase(),
+        id: c.id,
+        auth_scheme: c.authScheme ?? c.auth_scheme,
+      })
+    }
+    const items = Array.from(merged.values())
+
+    if (args.json) {
+      console.log(JSON.stringify(items, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    if (items.length === 0) {
+      prompts.log.warn("No integrations connected.")
+      prompts.outro(dim("iris integrations list-available"))
+      return
+    }
+
+    printDivider()
+    for (const i of items) {
+      const statusColor = i.status === "active" ? success(`[${i.status}]`) : dim(`[${i.status}]`)
+      const src = dim(`(${i.source})`)
+      console.log(`  ${highlight(i.type)}  ${statusColor}  ${dim("#" + i.id)}  ${src}`)
+    }
+    printDivider()
+    prompts.outro(dim("iris integrations <type> <function> key=value …"))
   },
 })
 
