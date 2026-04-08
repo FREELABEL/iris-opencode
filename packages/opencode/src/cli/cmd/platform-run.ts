@@ -332,13 +332,15 @@ const ConnectCommand = cmd({
     }
 
     if (!url) {
-      spinner.stop("Failed", 1)
-
       // API-key toolkit: prompt inline for the user's key, then create
       // auth_config + connected_account in one shot. No 3-step dump.
       const apiKeyToolkit = COMPOSIO_APIKEY_TOOLKITS[type]
       if (apiKeyToolkit) {
         spinner.stop("API key required")
+      } else {
+        spinner.stop("Failed", 1)
+      }
+      if (apiKeyToolkit) {
         const hints: Record<string, string> = {
           cloudflare: "https://dash.cloudflare.com/profile/api-tokens",
           openai: "https://platform.openai.com/api-keys",
