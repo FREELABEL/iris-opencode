@@ -36,8 +36,11 @@ jobs:
           - os: windows-latest
             target: windows-x64
             arch: x64
+            optional: true
 
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional == true }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,6 +120,7 @@ jobs:
 
   release:
     needs: build
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
