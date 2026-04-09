@@ -91,6 +91,7 @@ import { PlatformConfigCommand } from "./cli/cmd/platform-config"
 import { PlatformAppCommand } from "./cli/cmd/platform-app"
 import { PlatformAutomationCommand } from "./cli/cmd/platform-automation"
 import { PlatformAutomationTestCommand } from "./cli/cmd/platform-automation-test"
+import { HowToCommand } from "./cli/cmd/platform-howto"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -232,6 +233,7 @@ const cli = yargs(hideBin(process.argv))
   .command(PlatformAppCommand)
   .command(PlatformAutomationCommand)
   .command(PlatformAutomationTestCommand)
+  .command(HowToCommand)
   .fail((msg) => {
     if (
       msg.startsWith("Unknown argument") ||
