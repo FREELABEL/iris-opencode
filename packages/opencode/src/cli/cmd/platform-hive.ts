@@ -1831,12 +1831,565 @@ const HiveScheduleCommand = cmd({
 })
 
 // ============================================================================
+// Peer-to-Peer (Hive Connections) — invite, accept, list, peers, chat, files, exec
+//
+// These wrap iris-api endpoints at /api/v6/nodes/connections/* which are
+// already production-ready (HiveConnectionController + HiveNodeProxyController).
+// Trust model: single IRIS SDK token. No third-party accounts. Real-time
+// transport: Pusher private channels (server-side) — CLI uses polling for v1.
+// ============================================================================
+
+interface HiveConnectionRow {
+  id: string
+  status: string
+  invite_code: string
+  peer_user_id: number | null
+  peer_name: string | null
+  is_inviter: boolean
+  permissions: Record<string, boolean>
+  accepted_at: string | null
+  expires_at: string | null
+  created_at: string
+}
+
+function formatPerms(perms: Record<string, boolean>): string {
+  const enabled = Object.entries(perms || {})
+    .filter(([, v]) => v)
+    .map(([k]) => k)
+  return enabled.length > 0 ? enabled.join(",") : dim("none")
+}
+
+function printConnection(c: HiveConnectionRow): void {
+  const role = c.is_inviter ? dim("(inviter)") : dim("(invitee)")
+  const peer = c.peer_name ? bold(c.peer_name) : dim("pending — share invite code")
+  const statusColor =
+    c.status === "active"
+      ? `${UI.Style.TEXT_SUCCESS}● ${c.status}${UI.Style.TEXT_NORMAL}`
+      : `${UI.Style.TEXT_HIGHLIGHT}◌ ${c.status}${UI.Style.TEXT_NORMAL}`
+  console.log(`  ${peer}  ${role}  ${statusColor}`)
+  console.log(`    ${dim("id:")}    ${c.id}`)
+  console.log(`    ${dim("perms:")} ${formatPerms(c.permissions)}`)
+  if (c.status === "pending" && c.invite_code) {
+    console.log(`    ${dim("code:")}  ${highlight(c.invite_code)}  ${dim("(share with peer to accept)")}`)
+  }
+  if (c.expires_at) {
+    console.log(`    ${dim("expires:")} ${new Date(c.expires_at).toLocaleString()}`)
+  }
+}
+
+const HiveInviteCommand = cmd({
+  command: "invite",
+  describe: "generate an invite code to share your Hive with another IRIS user",
+  builder: (yargs) =>
+    yargs
+      .option("permissions", {
+        describe: "comma-separated: files,chat,terminal,tasks",
+        type: "string",
+        default: "files,chat",
+      })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Hive Invite")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const requested = String(args.permissions || "files,chat")
+      .split(",")
+      .map((p) => p.trim().toLowerCase())
+      .filter(Boolean)
+
+    const permissions: Record<string, boolean> = {
+      files: requested.includes("files"),
+      chat: requested.includes("chat"),
+      terminal: requested.includes("terminal"),
+      tasks: requested.includes("tasks"),
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Generating invite…")
+
+    try {
+      const res = await hiveFetch(`/api/v6/nodes/connections/invite`, {
+        method: "POST",
+        body: JSON.stringify({ user_id: userId, permissions }),
+      })
+      const ok = await handleApiError(res, "Generate invite")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const json = (await res.json()) as { invite_code: string; connection: HiveConnectionRow }
+      spinner.stop("Invite created")
+      printDivider()
+      console.log()
+      console.log(`  ${dim("Invite code:")}  ${bold(highlight(json.invite_code))}`)
+      console.log(`  ${dim("Permissions:")}  ${formatPerms(permissions)}`)
+      console.log(`  ${dim("Expires:")}      ${new Date(json.connection.expires_at || "").toLocaleString()}`)
+      console.log()
+      console.log(`  ${dim("Share this command with your peer:")}`)
+      console.log(`    ${highlight("iris hive accept " + json.invite_code)}`)
+      console.log()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveAcceptCommand = cmd({
+  command: "accept <code>",
+  describe: "accept a Hive invite code from another IRIS user",
+  builder: (yargs) =>
+    yargs
+      .positional("code", { describe: "12-character invite code", type: "string", demandOption: true })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Hive Accept")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const code = String(args.code).trim().toUpperCase()
+    if (code.length !== 12) {
+      prompts.log.error("Invite code must be 12 characters")
+      prompts.outro("Done"); return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start(`Accepting invite ${code}…`)
+
+    try {
+      const res = await hiveFetch(`/api/v6/nodes/connections/accept`, {
+        method: "POST",
+        body: JSON.stringify({ user_id: userId, invite_code: code }),
+      })
+      const ok = await handleApiError(res, "Accept invite")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const json = (await res.json()) as { connection: HiveConnectionRow }
+      spinner.stop("Connected!")
+      printDivider()
+      console.log()
+      printConnection(json.connection)
+      console.log()
+      console.log(`  ${dim("Next steps:")}`)
+      console.log(`    ${highlight("iris hive peers " + json.connection.id)}    ${dim("# list peer's nodes")}`)
+      console.log(`    ${highlight("iris hive chat " + json.connection.id)}     ${dim("# chat with peer")}`)
+      console.log()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveConnectionsCommand = cmd({
+  command: "connections",
+  aliases: ["conns"],
+  describe: "list your active Hive peer connections",
+  builder: (yargs) => yargs.option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Hive Connections")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading connections…")
+
+    try {
+      const res = await hiveFetch(`/api/v6/nodes/connections/?user_id=${userId}`)
+      const ok = await handleApiError(res, "List connections")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const json = (await res.json()) as { connections: HiveConnectionRow[] }
+      const conns = json.connections || []
+      spinner.stop(`${conns.length} connection(s)`)
+      printDivider()
+
+      if (conns.length === 0) {
+        console.log()
+        console.log(dim("  No connections yet."))
+        console.log(dim("  Create one with: ") + highlight("iris hive invite"))
+        console.log()
+      } else {
+        for (const c of conns) {
+          console.log()
+          printConnection(c)
+        }
+        console.log()
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HivePeersCommand = cmd({
+  command: "peers <connection-id>",
+  describe: "list a connected peer's online compute nodes",
+  builder: (yargs) =>
+    yargs
+      .positional("connection-id", { describe: "connection UUID", type: "string", demandOption: true })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Peer Nodes")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const connId = String(args["connection-id"])
+    const spinner = prompts.spinner()
+    spinner.start("Loading peer nodes…")
+
+    try {
+      const res = await hiveFetch(`/api/v6/nodes/connections/${connId}/nodes?user_id=${userId}`)
+      const ok = await handleApiError(res, "List peer nodes")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const json = (await res.json()) as { nodes: Array<Record<string, unknown>> }
+      const nodes = json.nodes || []
+      spinner.stop(`${nodes.length} node(s) online`)
+      printDivider()
+
+      if (nodes.length === 0) {
+        console.log()
+        console.log(dim("  No peer nodes online right now."))
+        console.log()
+      } else {
+        for (const n of nodes) {
+          console.log()
+          console.log(`  ${bold(String(n.name))}  ${dim(String(n.id))}`)
+          console.log(`    ${dim("status:")} ${success(String(n.connection_status))}  ${dim("active tasks:")} ${n.active_tasks}`)
+          if (n.last_heartbeat_at) {
+            console.log(`    ${dim("last seen:")} ${new Date(String(n.last_heartbeat_at)).toLocaleString()}`)
+          }
+        }
+        console.log()
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveChatCommand = cmd({
+  command: "chat <connection-id>",
+  describe: "open an interactive chat session with a connected peer",
+  builder: (yargs) =>
+    yargs
+      .positional("connection-id", { describe: "connection UUID", type: "string", demandOption: true })
+      .option("history", { describe: "show last N messages on open", type: "number", default: 20 })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Hive Chat")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const connId = String(args["connection-id"])
+    const histLimit = Number(args.history) || 20
+
+    // Load recent history
+    try {
+      const res = await hiveFetch(
+        `/api/v6/nodes/connections/${connId}/messages?user_id=${userId}&limit=${histLimit}`,
+      )
+      const ok = await handleApiError(res, "Load history")
+      if (!ok) { prompts.outro("Done"); return }
+
+      const json = (await res.json()) as { messages: Array<Record<string, unknown>> }
+      const msgs = (json.messages || []).slice().reverse() // oldest first
+
+      printDivider()
+      console.log(dim(`  ${msgs.length} recent message(s). Type to send. Ctrl-D or /quit to exit.`))
+      console.log()
+
+      for (const m of msgs) {
+        const isMe = Number(m.sender_user_id) === userId
+        const who = isMe ? success(String(m.sender_name)) : highlight(String(m.sender_name))
+        const when = dim(new Date(String(m.created_at)).toLocaleTimeString())
+        console.log(`  ${who} ${when}`)
+        console.log(`    ${m.message}`)
+      }
+      console.log()
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+      return
+    }
+
+    // Track most recent timestamp for cursor polling
+    let lastSeenAt = new Date().toISOString()
+
+    // Background poller — checks for new messages every 2s
+    let polling = true
+    const pollLoop = async () => {
+      while (polling) {
+        try {
+          const res = await hiveFetch(
+            `/api/v6/nodes/connections/${connId}/messages?user_id=${userId}&limit=20`,
+          )
+          if (res.ok) {
+            const json = (await res.json()) as { messages: Array<Record<string, unknown>> }
+            const fresh = (json.messages || [])
+              .filter((m) => String(m.created_at) > lastSeenAt && Number(m.sender_user_id) !== userId)
+              .reverse() // oldest first
+            for (const m of fresh) {
+              const who = highlight(String(m.sender_name))
+              const when = dim(new Date(String(m.created_at)).toLocaleTimeString())
+              process.stdout.write(`\r\x1b[K  ${who} ${when}\n`)
+              process.stdout.write(`    ${m.message}\n`)
+              process.stdout.write(`  ${dim("you>")} `)
+              lastSeenAt = String(m.created_at)
+            }
+          }
+        } catch {}
+        await new Promise((r) => setTimeout(r, 2000))
+      }
+    }
+    pollLoop()
+
+    // Read user input via readline
+    const readline = await import("readline")
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+    const prompt = `  ${dim("you>")} `
+
+    const sendMessage = async (text: string): Promise<void> => {
+      try {
+        const res = await hiveFetch(`/api/v6/nodes/connections/${connId}/messages`, {
+          method: "POST",
+          body: JSON.stringify({ user_id: userId, message: text }),
+        })
+        if (!res.ok) {
+          const body = await res.text().catch(() => "")
+          process.stdout.write(`\r\x1b[K  ${dim("(send failed:")} ${body}${dim(")")}\n`)
+        } else {
+          const json = (await res.json()) as { message?: { created_at?: string } }
+          if (json.message?.created_at) lastSeenAt = json.message.created_at
+        }
+      } catch (err) {
+        process.stdout.write(`\r\x1b[K  ${dim("(error:")} ${err instanceof Error ? err.message : String(err)}${dim(")")}\n`)
+      }
+    }
+
+    await new Promise<void>((resolve) => {
+      rl.setPrompt(prompt)
+      rl.prompt()
+      rl.on("line", async (line) => {
+        const text = line.trim()
+        if (text === "/quit" || text === "/exit") {
+          rl.close()
+          return
+        }
+        if (text.length > 0) {
+          await sendMessage(text)
+        }
+        rl.prompt()
+      })
+      rl.on("close", () => {
+        polling = false
+        resolve()
+      })
+    })
+
+    console.log()
+    prompts.outro("Chat closed")
+  },
+})
+
+const HiveFilesCommand = cmd({
+  command: "files <connection-id>",
+  describe: "browse or download files from a peer's node",
+  builder: (yargs) =>
+    yargs
+      .positional("connection-id", { describe: "connection UUID", type: "string", demandOption: true })
+      .option("node", { describe: "peer node ID (run: iris hive peers <conn>)", type: "string", demandOption: true })
+      .option("path", { describe: "remote path to browse", type: "string", default: "/" })
+      .option("download", { describe: "download remote file to this local path", type: "string" })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(args.download ? "◈  Hive Download" : "◈  Hive Files")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const connId = String(args["connection-id"])
+    const nodeId = String(args.node)
+    const remotePath = String(args.path)
+    const isDownload = Boolean(args.download)
+
+    const spinner = prompts.spinner()
+    spinner.start(isDownload ? `Downloading ${remotePath}…` : `Browsing ${remotePath}…`)
+
+    try {
+      const res = await hiveFetch(`/api/v6/nodes/connections/${connId}/relay`, {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: userId,
+          node_id: nodeId,
+          action: isDownload ? "download" : "files",
+          params: { path: remotePath },
+        }),
+      })
+      const ok = await handleApiError(res, isDownload ? "Download" : "Browse")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const json = (await res.json()) as { result?: Record<string, unknown> }
+      const result = json.result || {}
+
+      if (isDownload && result.content_base64) {
+        const fs = await import("fs")
+        const localPath = String(args.download)
+        fs.writeFileSync(localPath, Buffer.from(String(result.content_base64), "base64"))
+        spinner.stop(`Saved to ${localPath} (${result.size} bytes)`)
+      } else if (result.type === "file") {
+        spinner.stop(`File: ${result.path}`)
+        printDivider()
+        console.log()
+        printKV("size", `${result.size} bytes`)
+        printKV("modified", String(result.modified))
+        if (result.content) {
+          console.log()
+          console.log(dim("--- file content ---"))
+          console.log(String(result.content))
+        }
+      } else {
+        // Directory listing
+        const entries = (result.entries as Array<Record<string, unknown>>) || []
+        spinner.stop(`${entries.length} entries in ${result.path}`)
+        printDivider()
+        console.log()
+        for (const e of entries) {
+          const icon = e.type === "directory" ? "📁" : "📄"
+          const size = e.type === "file" ? dim(`${e.size} bytes`) : dim(`${e.children ?? 0} items`)
+          console.log(`  ${icon}  ${bold(String(e.name))}  ${size}`)
+        }
+        console.log()
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveExecCommand = cmd({
+  command: "exec <connection-id> <command>",
+  describe: "run a shell command on a peer's node and stream the output back",
+  builder: (yargs) =>
+    yargs
+      .positional("connection-id", { describe: "connection UUID", type: "string", demandOption: true })
+      .positional("command", { describe: "shell command (quote it)", type: "string", demandOption: true })
+      .option("node", { describe: "peer node ID (run: iris hive peers <conn>)", type: "string", demandOption: true })
+      .option("cwd", { describe: "remote working directory", type: "string" })
+      .option("timeout", { describe: "max seconds (1-60)", type: "number", default: 30 })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Hive Remote Exec")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const connId = String(args["connection-id"])
+    const nodeId = String(args.node)
+    const command = String(args.command)
+    const timeout = Math.max(1, Math.min(Number(args.timeout) || 30, 60))
+
+    const spinner = prompts.spinner()
+    spinner.start(`Running on peer node…`)
+
+    try {
+      const res = await hiveFetch(`/api/v6/nodes/connections/${connId}/relay`, {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: userId,
+          node_id: nodeId,
+          action: "exec",
+          params: {
+            command,
+            cwd: args.cwd || null,
+            timeout_seconds: timeout,
+          },
+        }),
+      })
+      const ok = await handleApiError(res, "Remote exec")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const json = (await res.json()) as {
+        result?: { command: string; stdout: string; stderr: string; exit_code: number; duration_ms: number; cwd?: string }
+      }
+      const r = json.result
+      if (!r) {
+        spinner.stop("Empty result", 1)
+        prompts.outro("Done"); return
+      }
+
+      const exitOk = r.exit_code === 0
+      spinner.stop(exitOk ? `exit ${r.exit_code} (${r.duration_ms}ms)` : `exit ${r.exit_code} (${r.duration_ms}ms)`, exitOk ? 0 : 1)
+      printDivider()
+      console.log()
+      console.log(`  ${dim("$")} ${highlight(r.command)}`)
+      if (r.cwd) console.log(`  ${dim("cwd:")} ${r.cwd}`)
+      console.log()
+      if (r.stdout) {
+        console.log(r.stdout.replace(/\n$/, ""))
+      }
+      if (r.stderr) {
+        console.log()
+        console.log(dim("--- stderr ---"))
+        console.log(r.stderr.replace(/\n$/, ""))
+      }
+      console.log()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
 export const PlatformHiveCommand = cmd({
   command: "hive",
-  describe: "manage Hive nodes, tasks, projects & deployments",
+  describe: "manage Hive nodes, tasks, projects & peer connections",
   builder: (yargs) =>
     yargs
       // Script deployment
@@ -1863,6 +2416,14 @@ export const PlatformHiveCommand = cmd({
       .command(HivePrCommand)
       .command(HiveIssuesCommand)
       .command(HiveStatusCommand)
+      // Peer-to-Peer (Hive Connections)
+      .command(HiveInviteCommand)
+      .command(HiveAcceptCommand)
+      .command(HiveConnectionsCommand)
+      .command(HivePeersCommand)
+      .command(HiveChatCommand)
+      .command(HiveFilesCommand)
+      .command(HiveExecCommand)
       .demandCommand(),
   async handler() {},
 })
