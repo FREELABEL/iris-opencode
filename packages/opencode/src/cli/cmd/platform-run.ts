@@ -124,11 +124,105 @@ function parseParams(raw: string[]): Record<string, unknown> {
 // Integration execute (routes through fl-api execute-direct)
 // ============================================================================
 
+/**
+ * macOS integration is inherently local — Mail.app, Messages.app, Calendar etc.
+ * live on the user's machine, not the cloud. Route these calls directly to the
+ * local bridge daemon at localhost:3200 instead of through the remote API.
+ *
+ * Returns null if the function is not a known macos function (caller should
+ * fall back to the remote API path).
+ */
+async function executeMacosLocal(
+  fn: string,
+  params: Record<string, unknown>,
+): Promise<any | null> {
+  const bridgePort = process.env.BRIDGE_PORT ?? "3200"
+  const bridgeBase = process.env.BRIDGE_URL ?? `http://localhost:${bridgePort}`
+
+  // Map function name → { method, path, body? }
+  type Route = { method: "GET" | "POST"; path: string; useBody: boolean }
+  const routes: Record<string, Route> = {
+    send_email: { method: "POST", path: "/api/mail/send", useBody: true },
+    draft_email: { method: "POST", path: "/api/mail/draft", useBody: true },
+    search_mail: { method: "GET", path: "/api/mail/search", useBody: false },
+    send_imessage: { method: "POST", path: "/api/imessage/direct-send", useBody: true },
+    search_imessages: { method: "GET", path: "/api/imessage/search", useBody: false },
+    get_conversations: { method: "GET", path: "/api/imessage/conversations", useBody: false },
+    get_calendar_events: { method: "GET", path: "/api/calendar/events", useBody: false },
+    list_calendars: { method: "GET", path: "/api/calendar/list", useBody: false },
+    create_calendar_event: { method: "POST", path: "/api/calendar/create-event", useBody: true },
+    search_apps: { method: "GET", path: "/api/apps/search", useBody: false },
+    open_app: { method: "POST", path: "/api/apps/open", useBody: true },
+  }
+
+  const route = routes[fn]
+  if (!route) return null // unknown function — fall back to remote API
+
+  let url = `${bridgeBase}${route.path}`
+  let body: string | undefined
+
+  if (route.useBody) {
+    body = JSON.stringify(params)
+  } else {
+    // GET — encode params as query string
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) qs.set(k, String(v))
+    }
+    if ([...qs].length > 0) url += `?${qs.toString()}`
+  }
+
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: route.method,
+      headers: route.useBody ? { "Content-Type": "application/json" } : undefined,
+      body,
+    })
+  } catch (e) {
+    throw new Error(
+      `Cannot reach local bridge at ${bridgeBase}. ` +
+        `Start it with: iris-daemon start  (error: ${e instanceof Error ? e.message : String(e)})`,
+    )
+  }
+
+  const text = await res.text().catch(() => "")
+  if (!res.ok) {
+    let errMsg = text
+    try {
+      const parsed = JSON.parse(text)
+      errMsg = parsed.error ?? text
+    } catch { /* keep raw text */ }
+    throw new Error(`Bridge ${route.method} ${route.path} failed (HTTP ${res.status}): ${errMsg}`)
+  }
+
+  let data: any = {}
+  try {
+    data = text ? JSON.parse(text) : {}
+  } catch {
+    data = { raw: text }
+  }
+
+  // Wrap to match the iris-api response shape (success/data/message)
+  return {
+    success: true,
+    data,
+    message: data.message ?? `${fn} completed via local bridge`,
+  }
+}
+
 export async function executeIntegrationCall(
   type: string,
   fn: string,
   params: Record<string, unknown>,
 ): Promise<any> {
+  // Local fast path for macos — calls the bridge directly, no remote API.
+  if (type === "macos") {
+    const localResult = await executeMacosLocal(fn, params)
+    if (localResult !== null) return localResult
+    // Unknown macos function (e.g. calendar) — fall through to remote API
+  }
+
   const userId = await requireUserId()
   if (!userId) throw new Error("user_id required")
   const res = await irisFetch(
@@ -570,7 +664,11 @@ const ExecCommand = cmd({
       .positional("target", { type: "string", demandOption: true, describe: "integration type or tool name" })
       .positional("function", { type: "string", describe: "function (for integrations)" })
       .positional("params", { type: "string", array: true, default: [], describe: "key=value params" })
-      .option("json", { type: "boolean" }),
+      .option("json", { type: "boolean" })
+      .option("params-file", {
+        type: "string",
+        describe: "load params from a JSON file (merged with key=value params; key=value wins on conflict)",
+      }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Run: ${args.target}`)
@@ -579,7 +677,28 @@ const ExecCommand = cmd({
     const target = String(args.target)
     let fn = args.function ? String(args.function) : undefined
     const rawParams = (args.params as string[]) ?? []
-    let params = parseParams(rawParams)
+    const cliParams = parseParams(rawParams)
+
+    // Merge --params-file (if provided) with CLI key=value params.
+    // CLI key=value wins on conflict, so you can override file values inline.
+    let params: Record<string, unknown> = {}
+    const paramsFile = args["params-file"] as string | undefined
+    if (paramsFile) {
+      try {
+        const fs = await import("fs")
+        const fileText = fs.readFileSync(paramsFile, "utf-8")
+        const fileJson = JSON.parse(fileText)
+        if (typeof fileJson !== "object" || fileJson === null || Array.isArray(fileJson)) {
+          throw new Error("--params-file must be a JSON object")
+        }
+        params = { ...fileJson }
+      } catch (e) {
+        prompts.log.error(`Failed to load --params-file: ${e instanceof Error ? e.message : String(e)}`)
+        prompts.outro("Done")
+        return
+      }
+    }
+    params = { ...params, ...cliParams }
 
     try {
       if (isIntegration(target)) {

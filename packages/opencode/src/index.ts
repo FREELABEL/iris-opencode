@@ -36,6 +36,8 @@ import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
 import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
+import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
+import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
 import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
 import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
 import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
@@ -64,6 +66,7 @@ import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
 import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
+import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
 import { PlatformPackagesCommand } from "./cli/cmd/platform-packages"
 import { PlatformMarketplaceCommand } from "./cli/cmd/platform-marketplace"
@@ -166,6 +169,8 @@ const cli = yargs(hideBin(process.argv))
   .command(PlatformBloqsCommand)
   .command(PlatformBrandsCommand)
   .command(PlatformCopycatCommand)
+  .command(PlatformGoodDealsCommand)
+  .command(PlatformBloqContextCommand)
   .command(PlatformSchedulesCommand)
   .command(PlatformN8nCommand)
   .command(PlatformBoardsCommand)
@@ -197,6 +202,7 @@ const cli = yargs(hideBin(process.argv))
   .command(PlatformLeadsMeetingCommand)
   .command(PlatformPagesCommand)
   .command(PlatformPagesBatchCommand)
+  .command(PlatformPartialsCommand)
   .command(PlatformCloudUploadCommand)
   .command(PlatformPackagesCommand)
   .command(PlatformMarketplaceCommand)
