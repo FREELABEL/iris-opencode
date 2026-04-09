@@ -6,7 +6,7 @@ import { Installation } from "../../installation"
 export const UpgradeCommand = {
   command: "upgrade [target]",
   aliases: ["update"],
-  describe: "upgrade IRIS Code to the latest or a specific version",
+  describe: "upgrade IRIS CLI to the latest or a specific version",
   builder: (yargs: Argv) => {
     return yargs
       .positional("target", {
@@ -24,7 +24,7 @@ export const UpgradeCommand = {
     UI.empty()
     UI.println(UI.logo("  "))
     UI.empty()
-    const label = Installation.isIris() ? "IRIS Code Update" : "Upgrade"
+    const label = Installation.isIris() ? "IRIS CLI Update" : "Upgrade"
     prompts.intro(label)
     const detectedMethod = await Installation.method()
     const method = (args.method as Installation.Method) ?? detectedMethod
@@ -56,7 +56,7 @@ export const UpgradeCommand = {
 
     prompts.log.info(`From ${Installation.VERSION} → ${target}`)
     const spinner = prompts.spinner()
-    spinner.start(Installation.isIris() ? "Updating IRIS Code..." : "Upgrading...")
+    spinner.start(Installation.isIris() ? "Updating IRIS CLI..." : "Upgrading...")
     const err = await Installation.upgrade(method, target).catch((err) => err)
     if (err) {
       spinner.stop("Update failed", 1)
@@ -65,7 +65,7 @@ export const UpgradeCommand = {
       prompts.outro("Done")
       return
     }
-    spinner.stop(Installation.isIris() ? "IRIS Code updated" : "Upgrade complete")
+    spinner.stop(Installation.isIris() ? "IRIS CLI updated" : "Upgrade complete")
 
     if (Installation.isIris()) {
       // Also update SDK and bridge if present
