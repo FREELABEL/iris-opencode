@@ -37,6 +37,12 @@
       "dest": "how-to/lead-to-proposal.md",
       "managed": true,
       "purpose": "Atlas OS flow: capture lead → create deal → send proposal → contract → payment gate."
+    },
+    {
+      "src": "how-to/payment-gate-contracts.md",
+      "dest": "how-to/payment-gate-contracts.md",
+      "managed": true,
+      "purpose": "Full payment gate flow: contract + proposal page + Stripe checkout + auto-reminders. Covers PaymentGateService, line items, deliverables, and deal-status tracking."
     }
   ]
 }
