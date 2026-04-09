@@ -38,6 +38,9 @@ import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
 import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
+import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
+import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
+import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventory"
 import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
 import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
 import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
@@ -171,6 +174,9 @@ const cli = yargs(hideBin(process.argv))
   .command(PlatformCopycatCommand)
   .command(PlatformGoodDealsCommand)
   .command(PlatformBloqContextCommand)
+  .command(PlatformAtlasLedgerCommand)
+  .command(PlatformAtlasStaffCommand)
+  .command(PlatformAtlasInventoryCommand)
   .command(PlatformSchedulesCommand)
   .command(PlatformN8nCommand)
   .command(PlatformBoardsCommand)
