@@ -43,6 +43,12 @@
       "dest": "how-to/payment-gate-contracts.md",
       "managed": true,
       "purpose": "Full payment gate flow: contract + proposal page + Stripe checkout + auto-reminders. Covers PaymentGateService, line items, deliverables, and deal-status tracking."
+    },
+    {
+      "src": "how-to/debug-install-failures.md",
+      "dest": "how-to/debug-install-failures.md",
+      "managed": true,
+      "purpose": "Diagnose 5 common install failure modes: baseline asset mismatch, macOS version floor, missing deps, scaffold fetch fail, branding. Includes quick diagnostic command to send users."
     }
   ]
 }
