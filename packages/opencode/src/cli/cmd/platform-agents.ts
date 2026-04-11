@@ -170,6 +170,7 @@ const AgentsCreateCommand = cmd({
     yargs
       .option("name", { describe: "agent name", type: "string" })
       .option("description", { describe: "agent description", type: "string" })
+      .option("prompt", { describe: "system prompt / instructions", type: "string" })
       .option("model", { describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
       .option("bloq-id", { describe: "knowledge base bloq ID", type: "number" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -201,13 +202,23 @@ const AgentsCreateCommand = cmd({
       if (prompts.isCancel(description)) description = ""
     }
 
+    let prompt = args.prompt
+    if (!prompt) {
+      prompt = (await prompts.text({
+        message: "System prompt / instructions",
+        placeholder: "e.g. You are a helpful assistant that specializes in...",
+        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+      })) as string
+      if (prompts.isCancel(prompt)) { prompts.outro("Cancelled"); return }
+    }
+
     const model = args.model ?? "gpt-4.1-nano"
 
     const spinner = prompts.spinner()
     spinner.start("Creating agent…")
 
     try {
-      const payload: Record<string, unknown> = { name, description, model }
+      const payload: Record<string, unknown> = { name, description, prompt, model }
       if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents`, {
