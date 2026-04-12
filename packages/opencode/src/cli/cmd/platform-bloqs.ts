@@ -554,7 +554,7 @@ function formatBytes(bytes: number): string {
 
 export const PlatformBloqsCommand = cmd({
   command: "bloqs",
-  aliases: ["kb", "knowledge", "memory"],
+  aliases: ["kb", "knowledge", "memory", "projects"],
   describe: "manage knowledge bases (bloqs)",
   builder: (yargs) =>
     yargs

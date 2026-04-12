@@ -2389,6 +2389,7 @@ const HiveExecCommand = cmd({
 
 export const PlatformHiveCommand = cmd({
   command: "hive",
+  aliases: ["compute"],
   describe: "manage Hive nodes, tasks, projects & peer connections",
   builder: (yargs) =>
     yargs

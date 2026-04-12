@@ -104,11 +104,20 @@ export async function requireAuth(): Promise<string | null> {
 // ============================================================================
 
 export async function handleApiError(res: Response, action: string): Promise<boolean> {
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     prompts.log.warn("Authentication failed — your token may be expired or invalid.")
     prompts.log.info(
       `Re-authenticate:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login --force${UI.Style.TEXT_NORMAL}`,
     )
+    return false
+  }
+  if (res.status === 403) {
+    let msg = "Access denied"
+    try {
+      const body = (await res.json()) as { error?: string; message?: string }
+      msg = body.error ?? body.message ?? msg
+    } catch {}
+    prompts.log.warn(msg)
     return false
   }
   if (!res.ok) {

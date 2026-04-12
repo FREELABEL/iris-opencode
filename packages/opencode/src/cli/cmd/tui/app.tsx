@@ -204,14 +204,14 @@ function App() {
     if (!terminalTitleEnabled() || Flag.OPENCODE_DISABLE_TERMINAL_TITLE) return
 
     if (route.data.type === "home") {
-      renderer.setTerminalTitle("IRIS Code")
+      renderer.setTerminalTitle("IRIS CLI")
       return
     }
 
     if (route.data.type === "session") {
       const session = sync.session.get(route.data.sessionID)
       if (!session || SessionApi.isDefaultTitle(session.title)) {
-        renderer.setTerminalTitle("IRIS Code")
+        renderer.setTerminalTitle("IRIS CLI")
         return
       }
 
@@ -593,7 +593,7 @@ function App() {
     toast.show({
       variant: "success",
       title: "Update Complete",
-      message: `IRIS Code updated to v${evt.properties.version}`,
+      message: `IRIS CLI updated to v${evt.properties.version}`,
       duration: 5000,
     })
   })
@@ -602,7 +602,7 @@ function App() {
     toast.show({
       variant: "info",
       title: "Update Available",
-      message: `IRIS Code v${evt.properties.version} is available. Run 'iris upgrade' to update manually.`,
+      message: `IRIS CLI v${evt.properties.version} is available. Run 'iris upgrade' to update manually.`,
       duration: 10000,
     })
   })

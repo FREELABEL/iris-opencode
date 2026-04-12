@@ -979,6 +979,7 @@ const LeadsRegenCheckoutCommand = cmd({
 
 export const PlatformLeadsCommand = cmd({
   command: "leads",
+  aliases: ["crm"],
   describe: "manage CRM leads — pull, push, diff, CRUD, payment gates",
   builder: (yargs) =>
     yargs

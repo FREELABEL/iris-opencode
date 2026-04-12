@@ -257,6 +257,7 @@ const OutreachApplyCommand = cmd({
 
 export const PlatformOutreachCommand = cmd({
   command: "outreach",
+  aliases: ["reachr"],
   describe: "manage outreach strategies — list, show, create, update, apply, delete",
   builder: (yargs) =>
     yargs

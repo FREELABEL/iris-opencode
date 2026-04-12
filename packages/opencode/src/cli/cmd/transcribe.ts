@@ -157,16 +157,91 @@ async function runLocalWhisper(
   console.log()
 }
 
+// ============================================================================
+// Smart URL detection
+// ============================================================================
+
+function isSocialMediaUrl(url: string): boolean {
+  return /instagram\.com|tiktok\.com|twitter\.com|x\.com|threads\.net|facebook\.com/i.test(url)
+}
+
+function isYouTubeUrl(url: string): boolean {
+  return /youtube\.com|youtu\.be/i.test(url)
+}
+
+function ensureDep(name: string, installCmd: string): string | null {
+  const bin = which(name)
+  if (bin) return bin
+  // Try to auto-install
+  const sp2 = spawnSync("brew", ["install", name], { stdio: "pipe", timeout: 120_000 })
+  if (sp2.status === 0) return which(name)
+  return null
+}
+
+// ============================================================================
+// Local video download via yt-dlp (runs on user's machine, uses their cookies)
+// ============================================================================
+
+async function downloadVideoLocally(url: string): Promise<string | null> {
+  let ytdlp = which("yt-dlp")
+  if (!ytdlp) {
+    prompts.log.info("Installing yt-dlp…")
+    const install = spawnSync("brew", ["install", "yt-dlp"], { stdio: "pipe", timeout: 120_000 })
+    if (install.status !== 0) {
+      // Try pip fallback
+      spawnSync("pip3", ["install", "--user", "yt-dlp"], { stdio: "pipe", timeout: 60_000 })
+    }
+    ytdlp = which("yt-dlp")
+    if (!ytdlp) {
+      prompts.log.error("yt-dlp not found. Install: brew install yt-dlp")
+      return null
+    }
+  }
+
+  const outPath = join(tmpdir(), `iris-dl-${Date.now()}.mp4`)
+
+  // Build yt-dlp args — try with browser cookies first (Instagram needs them)
+  const baseArgs = [
+    "-f", "bestaudio[ext=m4a]/bestaudio/best",
+    "--no-playlist",
+    "-o", outPath,
+    "--no-warnings",
+    "--quiet",
+  ]
+
+  // Try with browser cookies (Chrome, Firefox, Safari — whatever works)
+  for (const browser of ["chrome", "firefox", "safari"]) {
+    const args = [...baseArgs, "--cookies-from-browser", browser, url]
+    const dl = spawnSync(ytdlp, args, { stdio: "pipe", timeout: 60_000 })
+    if (dl.status === 0 && existsSync(outPath)) return outPath
+  }
+
+  // Fallback: try without cookies (works for public YouTube, TikTok, etc.)
+  const dl = spawnSync(ytdlp, [...baseArgs, url], { stdio: "pipe", timeout: 60_000 })
+  if (dl.status === 0 && existsSync(outPath)) return outPath
+
+  // If all failed, show the actual error
+  const errDl = spawnSync(ytdlp, ["-f", "bestaudio/best", "--no-playlist", "-o", outPath, url], {
+    encoding: "utf8",
+    timeout: 60_000,
+  })
+  const errMsg = (errDl.stderr || errDl.stdout || "").trim().split("\n").pop() || "Download failed"
+  prompts.log.error(errMsg)
+  return null
+}
+
 /**
- * `iris transcribe <url>` — platform-level video transcription.
+ * `iris transcribe <url>` — smart transcription.
  *
- * Routes through the V6 tool registry's `transcribeVideo` system tool,
- * which calls PlatformTranscriptionService (Supadata for YouTube,
- * Whisper for everything else). Cached 7 days per URL.
+ * Routing:
+ * - Local file → whisper.cpp (offline)
+ * - Instagram/TikTok/X/Threads → download locally with yt-dlp (uses browser cookies) → whisper.cpp
+ * - YouTube → server-side Supadata (fast, cached) with local fallback
+ * - --local flag → always local pipeline
  */
 export const PlatformTranscribeCommand = cmd({
   command: "transcribe <url>",
-  describe: "transcribe a video/audio from a URL or local file (--local for offline)",
+  describe: "transcribe a video/audio from a URL or local file",
   builder: (y) =>
     y
       .positional("url", {
@@ -192,38 +267,144 @@ export const PlatformTranscribeCommand = cmd({
     const looksLikeFile =
       args.local || (!/^https?:\/\//i.test(url) && existsSync(resolve(url)))
 
+    // ── Local file ──────────────────────────────────────────────
     if (looksLikeFile) {
       await runLocalWhisper(url, args.language as string | undefined, !!args.json)
       prompts.outro("Done")
       return
     }
 
-    if (!(await requireAuth())) {
+    // ── Social media (Instagram, TikTok, X, Threads, Facebook) ─
+    // Download locally with yt-dlp (uses browser cookies), then whisper locally.
+    // No server auth needed. No round trips. Just works.
+    if (isSocialMediaUrl(url) || args.local) {
+      const dlSpinner = prompts.spinner()
+      dlSpinner.start("Downloading video…")
+
+      const videoPath = await downloadVideoLocally(url)
+      if (!videoPath) {
+        dlSpinner.stop("Download failed", 1)
+        prompts.outro("Done")
+        return
+      }
+      dlSpinner.stop("Downloaded")
+
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json)
+
+      // Cleanup temp file
+      try { spawnSync("rm", ["-f", videoPath]) } catch {}
       prompts.outro("Done")
       return
     }
+
+    // ── YouTube → try server first (Supadata is fast), fall back to local ─
+    if (isYouTubeUrl(url)) {
+      const token = await requireAuth()
+      if (token) {
+        const userId = await requireUserId()
+        if (userId) {
+          const spinner = prompts.spinner()
+          spinner.start("Transcribing via Supadata…")
+
+          try {
+            const res = await irisFetch(`/api/v1/v6/tools/execute`, {
+              method: "POST",
+              body: JSON.stringify({ tool: "transcribeVideo", params: { url }, user_id: userId }),
+            })
+
+            if (res.ok) {
+              const result = (await res.json()) as any
+              const data = result?.data ?? result
+
+              if (!result?.status?.includes?.("error") && !data?.error) {
+                spinner.stop("Done")
+
+                if (args.json) {
+                  console.log(JSON.stringify(result, null, 2))
+                  prompts.outro("Done")
+                  return
+                }
+
+                const text = data?.text ?? ""
+                const provider = data?.provider ?? "?"
+                const wordCount = data?.word_count ?? 0
+                const duration = data?.duration_seconds ?? 0
+                const cached = data?.cached ? success("(cached)") : dim("(fresh)")
+                const transcriptUrl = data?.transcript_url
+
+                printDivider()
+                console.log(`  ${bold("Provider:")}  ${highlight(provider)} ${cached}`)
+                console.log(`  ${bold("Words:")}     ${wordCount}`)
+                console.log(`  ${bold("Duration:")}  ~${duration}s`)
+                if (transcriptUrl) {
+                  console.log(`  ${bold("CDN:")}       ${highlight(transcriptUrl)}`)
+                }
+                printDivider()
+                console.log()
+                console.log(text)
+                console.log()
+                prompts.outro("Done")
+                return
+              }
+            }
+            spinner.stop("Server unavailable — falling back to local", 1)
+          } catch {
+            spinner.stop("Server unavailable — falling back to local", 1)
+          }
+        }
+      }
+
+      // YouTube server failed → download locally + whisper
+      prompts.log.info("Downloading YouTube audio locally…")
+      const dlSpinner = prompts.spinner()
+      dlSpinner.start("Downloading…")
+      const videoPath = await downloadVideoLocally(url)
+      if (!videoPath) {
+        dlSpinner.stop("Download failed", 1)
+        prompts.outro("Done")
+        return
+      }
+      dlSpinner.stop("Downloaded")
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json)
+      try { spawnSync("rm", ["-f", videoPath]) } catch {}
+      prompts.outro("Done")
+      return
+    }
+
+    // ── Other URLs → try server, fall back to local download ───
+    const token = await requireAuth()
+    if (!token) {
+      // No auth — try local anyway
+      const dlSpinner = prompts.spinner()
+      dlSpinner.start("Downloading…")
+      const videoPath = await downloadVideoLocally(url)
+      if (!videoPath) { dlSpinner.stop("Failed", 1); prompts.outro("Done"); return }
+      dlSpinner.stop("Downloaded")
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json)
+      try { spawnSync("rm", ["-f", videoPath]) } catch {}
+      prompts.outro("Done")
+      return
+    }
+
     const userId = await requireUserId()
-
-    const params: Record<string, unknown> = { url }
-    if (args.language) params.language = String(args.language)
-
     const spinner = prompts.spinner()
     spinner.start("Transcribing…")
 
     try {
       const res = await irisFetch(`/api/v1/v6/tools/execute`, {
         method: "POST",
-        body: JSON.stringify({
-          tool: "transcribeVideo",
-          params,
-          user_id: userId,
-        }),
+        body: JSON.stringify({ tool: "transcribeVideo", params: { url }, user_id: userId }),
       })
 
       if (!res.ok) {
-        spinner.stop("Failed", 1)
-        const text = await res.text().catch(() => "")
-        prompts.log.error(`HTTP ${res.status}: ${text.slice(0, 300)}`)
+        spinner.stop("Server failed — trying local", 1)
+        const dlSpinner = prompts.spinner()
+        dlSpinner.start("Downloading…")
+        const videoPath = await downloadVideoLocally(url)
+        if (!videoPath) { dlSpinner.stop("Failed", 1); prompts.outro("Done"); return }
+        dlSpinner.stop("Downloaded")
+        await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json)
+        try { spawnSync("rm", ["-f", videoPath]) } catch {}
         prompts.outro("Done")
         return
       }
@@ -238,26 +419,14 @@ export const PlatformTranscribeCommand = cmd({
         return
       }
 
-      if (result?.status === "error" || data?.error) {
-        prompts.log.error(data?.error ?? result?.error ?? "Transcription failed")
-        prompts.outro("Done")
-        return
-      }
-
       const text = data?.text ?? ""
       const provider = data?.provider ?? "?"
       const wordCount = data?.word_count ?? 0
       const duration = data?.duration_seconds ?? 0
-      const cached = data?.cached ? success("(cached)") : dim("(fresh)")
-      const transcriptUrl = data?.transcript_url
-
       printDivider()
-      console.log(`  ${bold("Provider:")}  ${highlight(provider)} ${cached}`)
+      console.log(`  ${bold("Provider:")}  ${highlight(provider)}`)
       console.log(`  ${bold("Words:")}     ${wordCount}`)
       console.log(`  ${bold("Duration:")}  ~${duration}s`)
-      if (transcriptUrl) {
-        console.log(`  ${bold("CDN:")}       ${highlight(transcriptUrl)}`)
-      }
       printDivider()
       console.log()
       console.log(text)

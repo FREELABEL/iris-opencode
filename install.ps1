@@ -247,6 +247,14 @@ if "%1"=="status" (
     node "%BRIDGE_DIR%\daemon.js" --status 2>nul || echo Not running. Start with: iris-daemon start
     goto :eof
 )
+if "%1"=="share" (
+    node "%BRIDGE_DIR%\daemon.js" --share %2 %3 %4
+    goto :eof
+)
+if "%1"=="unshare" (
+    node "%BRIDGE_DIR%\daemon.js" --unshare
+    goto :eof
+)
 if "%1"=="logs" (
     type "%DAEMON_LOG%"
     goto :eof
@@ -256,7 +264,7 @@ if "%1"=="register" (
     echo Then run: iris-daemon start
     goto :eof
 )
-echo Usage: iris-daemon {start^|stop^|status^|register^|logs}
+echo Usage: iris-daemon {start^|stop^|status^|share^|unshare^|register^|logs}
 "@
         Set-Content -Path "$INSTALL_DIR\iris-daemon.cmd" -Value $DaemonCmdContent -Encoding ASCII
 

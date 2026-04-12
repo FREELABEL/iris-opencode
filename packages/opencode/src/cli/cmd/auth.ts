@@ -6,6 +6,7 @@ import { ModelsDev } from "../../provider/models"
 import { map, pipe, sortBy, values } from "remeda"
 import path from "path"
 import os from "os"
+import fs from "fs"
 import { Config } from "../../config/config"
 import { Global } from "../../global"
 import { Plugin } from "../../plugin"
@@ -214,43 +215,231 @@ export const AuthListCommand = cmd({
   },
 })
 
+// ============================================================================
+// IRIS Platform login — email → 6-digit code → SDK token
+// Mirrors the bash iris-login flow but lives inside the CLI.
+// ============================================================================
+
+const IRIS_DIR = path.join(os.homedir(), ".iris")
+const SDK_ENV_PATH = path.join(IRIS_DIR, "sdk", ".env")
+const IRIS_AUTH_API = process.env.IRIS_AUTH_API_URL ?? "https://apiv2.heyiris.io"
+
+async function irisLoginStatus(): Promise<{ authenticated: boolean; token?: string; userId?: string }> {
+  try {
+    if (fs.existsSync(SDK_ENV_PATH)) {
+      const text = fs.readFileSync(SDK_ENV_PATH, "utf-8")
+      const token = text.match(/^IRIS_API_KEY=(.+)$/m)?.[1]?.trim()
+      const userId = text.match(/^IRIS_USER_ID=(.+)$/m)?.[1]?.trim()
+      if (token) return { authenticated: true, token, userId }
+    }
+  } catch {}
+  return { authenticated: false }
+}
+
+async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
+  // Check existing auth
+  if (!forceReauth) {
+    const status = await irisLoginStatus()
+    if (status.authenticated) {
+      prompts.log.success("Already authenticated with IRIS Platform")
+      prompts.log.info(`Token: ${status.token!.slice(0, 12)}…`)
+      prompts.log.info(`To re-authenticate: ${UI.Style.TEXT_HIGHLIGHT}iris auth login --force${UI.Style.TEXT_NORMAL}`)
+      return true
+    }
+  }
+
+  // Email input
+  const email = await prompts.text({
+    message: "Enter your email",
+    placeholder: "you@example.com",
+    validate: (v) => {
+      if (!v || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return "Enter a valid email"
+    },
+  })
+  if (prompts.isCancel(email)) throw new UI.CancelledError()
+
+  // Send verification code
+  const spinner = prompts.spinner()
+  spinner.start("Sending verification code…")
+  try {
+    const sendRes = await fetch(`${IRIS_AUTH_API}/api/v1/auth/send-login-code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        email,
+        method: "with_login_code",
+        expiration_minutes: 30,
+        auto_create: true,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const sendData = (await sendRes.json()) as any
+    const ok = sendData?.success === true || sendData?.success === "True"
+    if (!ok) {
+      spinner.stop("Failed", 1)
+      prompts.log.error("Could not send code. Sign up at: https://app.heyiris.io/login/register")
+      return false
+    }
+    const isNew = sendData?.data?.new_account === true || sendData?.data?.new_account === "true"
+    spinner.stop(isNew ? "Account created! Check your inbox." : "Code sent! Check your inbox.")
+  } catch (e) {
+    spinner.stop("Failed", 1)
+    prompts.log.error(`Network error: ${e instanceof Error ? e.message : String(e)}`)
+    return false
+  }
+
+  // Code input
+  const code = await prompts.text({
+    message: "Enter the 6-digit code from your email",
+    validate: (v) => {
+      if (!v || !/^\d{4,8}$/.test(v.trim())) return "Enter the numeric code from your email"
+    },
+  })
+  if (prompts.isCancel(code)) throw new UI.CancelledError()
+
+  // Verify code and get SDK token
+  const verifySpinner = prompts.spinner()
+  verifySpinner.start("Verifying…")
+  try {
+    const loginRes = await fetch(`${IRIS_AUTH_API}/api/v1/auth/login-with-code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        email,
+        login_code: String(code).trim(),
+        generate_sdk_token: true,
+        sdk_token_name: "IRIS CLI",
+        sdk_token_expires_days: 365,
+        generate_dashboard_url: true,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const loginData = (await loginRes.json()) as any
+    const loginOk = loginData?.success === true || loginData?.success === "True"
+    if (!loginOk) {
+      verifySpinner.stop("Failed", 1)
+      prompts.log.error("Login failed — code may have expired. Try again.")
+      return false
+    }
+
+    const sdkToken = loginData?.data?.sdk_token?.key
+    const userId = loginData?.data?.user?.id
+    const dashboard = loginData?.data?.dashboard_url
+
+    if (!sdkToken || !userId) {
+      verifySpinner.stop("Failed", 1)
+      prompts.log.error("Auth succeeded but token wasn't generated. Try again or visit https://app.heyiris.io")
+      return false
+    }
+
+    // Write ~/.iris/sdk/.env
+    fs.mkdirSync(path.join(IRIS_DIR, "sdk"), { recursive: true })
+    fs.writeFileSync(
+      SDK_ENV_PATH,
+      [
+        "# IRIS SDK Configuration",
+        "# Generated by IRIS CLI",
+        `# Date: ${new Date().toISOString()}`,
+        "",
+        "IRIS_ENV=production",
+        `IRIS_API_KEY=${sdkToken}`,
+        `IRIS_USER_ID=${userId}`,
+        "IRIS_DEFAULT_MODEL=gpt-4o-mini",
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    )
+
+    // Also store in the opencode auth system so resolveToken() finds it first
+    await Auth.set("iris", { type: "api", key: sdkToken })
+
+    verifySpinner.stop("Authenticated!")
+    if (dashboard) {
+      prompts.log.info(`Dashboard: ${UI.Style.TEXT_HIGHLIGHT}${dashboard}${UI.Style.TEXT_NORMAL}`)
+    }
+    return true
+  } catch (e) {
+    verifySpinner.stop("Failed", 1)
+    prompts.log.error(`Network error: ${e instanceof Error ? e.message : String(e)}`)
+    return false
+  }
+}
+
 export const AuthLoginCommand = cmd({
   command: "login [url]",
-  describe: "log in to a provider",
+  describe: "log in to IRIS Platform or an AI provider",
   builder: (yargs) =>
-    yargs.positional("url", {
-      describe: "opencode auth provider",
-      type: "string",
-    }),
+    yargs
+      .positional("url", {
+        describe: "opencode auth provider URL",
+        type: "string",
+      })
+      .option("provider", {
+        describe: "skip selection — go directly to AI provider login",
+        type: "boolean",
+        default: false,
+      })
+      .option("force", {
+        describe: "re-authenticate even if already logged in",
+        type: "boolean",
+        default: false,
+      }),
   async handler(args) {
     await Instance.provide({
       directory: process.cwd(),
       async fn() {
         UI.empty()
-        prompts.intro("Add credential")
-        if (args.url) {
-          const wellknown = await fetch(`${args.url}/.well-known/opencode`).then((x) => x.json() as any)
-          prompts.log.info(`Running \`${wellknown.auth.command.join(" ")}\``)
-          const proc = Bun.spawn({
-            cmd: wellknown.auth.command,
-            stdout: "pipe",
-          })
-          const exit = await proc.exited
-          if (exit !== 0) {
-            prompts.log.error("Failed")
+
+        // If --provider flag or a URL is given, go straight to AI provider flow
+        if (args.provider || args.url) {
+          prompts.intro("Add AI provider credential")
+          if (args.url) {
+            const wellknown = await fetch(`${args.url}/.well-known/opencode`).then((x) => x.json() as any)
+            prompts.log.info(`Running \`${wellknown.auth.command.join(" ")}\``)
+            const proc = Bun.spawn({
+              cmd: wellknown.auth.command,
+              stdout: "pipe",
+            })
+            const exit = await proc.exited
+            if (exit !== 0) {
+              prompts.log.error("Failed")
+              prompts.outro("Done")
+              return
+            }
+            const token = await new Response(proc.stdout).text()
+            await Auth.set(args.url, {
+              type: "wellknown",
+              key: wellknown.auth.env,
+              token: token.trim(),
+            })
+            prompts.log.success("Logged into " + args.url)
             prompts.outro("Done")
             return
           }
-          const token = await new Response(proc.stdout).text()
-          await Auth.set(args.url, {
-            type: "wellknown",
-            key: wellknown.auth.env,
-            token: token.trim(),
+          // Fall through to AI provider picker below
+        } else {
+          // Default: IRIS Platform login
+          prompts.intro("IRIS Login")
+
+          const choice = await prompts.select({
+            message: "What would you like to log in to?",
+            options: [
+              { label: "IRIS Platform", value: "iris", hint: "email + code — for copycat, leads, agents, etc." },
+              { label: "AI Provider", value: "ai", hint: "API key for OpenAI, Anthropic, etc." },
+            ],
           })
-          prompts.log.success("Logged into " + args.url)
-          prompts.outro("Done")
-          return
+          if (prompts.isCancel(choice)) throw new UI.CancelledError()
+
+          if (choice === "iris") {
+            const ok = await irisLoginFlow(!!args.force)
+            prompts.outro("Done")
+            return
+          }
+          // choice === "ai" — fall through to AI provider picker
         }
+
+        // AI provider picker (original opencode flow)
+        if (!args.url) prompts.intro("Add AI provider credential")
         await ModelsDev.refresh().catch(() => {})
 
         const config = await Config.get()

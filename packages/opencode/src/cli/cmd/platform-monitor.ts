@@ -208,6 +208,75 @@ const KillCmd = cmd({
   },
 })
 
+// ── briefing ──
+
+const BriefingCmd = cmd({
+  command: "briefing",
+  aliases: ["brief", "morning"],
+  describe: "enable or disable morning briefing on an agent or bloq",
+  builder: (yargs) =>
+    yargs
+      .option("agent-id", { describe: "agent ID", type: "number" })
+      .option("bloq-id", { describe: "bloq ID (auto-finds agent)", type: "number" })
+      .option("time", { describe: "briefing time (HH:MM)", type: "string", default: "08:00" })
+      .option("disable", { describe: "disable briefing", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    let agentId = args.agentId as number | undefined
+    let bloqId = args.bloqId as number | undefined
+
+    if (!agentId && !bloqId) {
+      const id = await prompts.text({ message: "Agent ID or Bloq ID:" })
+      if (prompts.isCancel(id) || !id) { prompts.log.info("Cancelled"); return }
+      agentId = parseInt(String(id))
+    }
+
+    if (args.disable) {
+      const res = await irisFetch("/api/v1/monitor/enable-heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_id: agentId, bloq_id: bloqId,
+          mode: "off", frequency: "daily"
+        })
+      }, IRIS_API)
+      if (!(await handleApiError(res, "Disable briefing"))) return
+      prompts.log.success(`${success("✓")} Briefing disabled`)
+      return
+    }
+
+    const res = await irisFetch("/api/v1/monitor/enable-heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent_id: agentId,
+        bloq_id: bloqId,
+        mode: "briefing",
+        frequency: "daily",
+        briefing_time: args.time
+      })
+    }, IRIS_API)
+    if (!(await handleApiError(res, "Enable briefing"))) return
+    const body = await getJson(res)
+    const data = body.data ?? body
+
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    console.log("")
+    console.log(bold("Morning Briefing Enabled"))
+    printDivider()
+    printKV("Agent", `#${data.agent_id ?? agentId} ${data.agent_name ?? ""}`)
+    printKV("Mode", "briefing")
+    printKV("Time", String(args.time))
+    printKV("Frequency", "daily")
+    printKV("Data Sources", "Gmail + Calendar (auto-enabled)")
+    printDivider()
+    console.log(dim("Your briefing will be delivered daily at " + args.time))
+  },
+})
+
 export const PlatformMonitorCommand = cmd({
   command: "monitor",
   aliases: ["health"],
@@ -218,6 +287,7 @@ export const PlatformMonitorCommand = cmd({
       .command(AgentCmd)
       .command(LoopsCmd)
       .command(KillCmd)
+      .command(BriefingCmd)
       .demandCommand(),
   async handler() {},
 })

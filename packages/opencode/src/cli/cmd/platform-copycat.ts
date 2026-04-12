@@ -1,7 +1,9 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, highlight, success } from "./iris-api"
+import { homedir } from "os"
+import { join } from "path"
 
 // ============================================================================
 // Copycat CLI — Phase 6
@@ -36,6 +38,113 @@ async function callCopycat(action: string, params: Record<string, unknown>, user
   return await res.json()
 }
 
+// ============================================================================
+// Instagram cookie helpers
+// ============================================================================
+
+const COOKIES_DIR = join(homedir(), ".iris", "cookies")
+const IG_COOKIES_PATH = join(COOKIES_DIR, "instagram.json")
+
+function isInstagramUrl(url: unknown): boolean {
+  return typeof url === "string" && /instagram\.com/i.test(url)
+}
+
+function isInstagramAuthError(errorText: string): boolean {
+  return /instagram|download.*social.*video|login_required|checkpoint_required/i.test(errorText)
+    && /fail|error|403|401|cookie/i.test(errorText)
+}
+
+async function loadInstagramCookies(): Promise<any[] | null> {
+  try {
+    const file = Bun.file(IG_COOKIES_PATH)
+    if (await file.exists()) {
+      const data = JSON.parse(await file.text())
+      // Check if cookies are recent (< 7 days old)
+      const cookies = data?.cookies ?? data
+      if (Array.isArray(cookies) && cookies.length > 0) {
+        const savedAt = data?.saved_at ? new Date(data.saved_at).getTime() : 0
+        const sevenDays = 7 * 24 * 60 * 60 * 1000
+        if (Date.now() - savedAt < sevenDays) return cookies
+      }
+    }
+  } catch {}
+  return null
+}
+
+async function captureInstagramCookies(): Promise<any[] | null> {
+  prompts.log.info("Instagram requires authentication to download videos.")
+  prompts.log.info("Opening a browser window — log into Instagram, then come back here.")
+
+  const spinner = prompts.spinner()
+  spinner.start("Launching browser…")
+
+  try {
+    // Dynamically require Playwright at runtime — use eval to prevent bundler from resolving
+    let chromium: any
+    try {
+      // eslint-disable-next-line no-eval
+      chromium = eval('require')("playwright").chromium
+    } catch {
+      try {
+        chromium = eval('require')("playwright-core").chromium
+      } catch {
+        prompts.log.error("Playwright not installed. Run: npm install -g playwright && npx playwright install chromium")
+        return null
+      }
+    }
+    const browser = await chromium.launch({ headless: false })
+    const context = await browser.newContext()
+    const page = await context.newPage()
+
+    spinner.stop("Browser opened")
+    prompts.log.info("Log into Instagram in the browser window. I'll detect when you're done.")
+
+    await page.goto("https://www.instagram.com/accounts/login/")
+
+    // Wait for successful login (URL changes away from /login/)
+    try {
+      await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 120_000 })
+    } catch {
+      await browser.close()
+      prompts.log.error("Login timed out after 2 minutes.")
+      return null
+    }
+
+    // Give Instagram a moment to set all cookies
+    await page.waitForTimeout(3000)
+
+    // Capture cookies
+    const cookies = await context.cookies()
+    await browser.close()
+
+    if (!cookies.length) {
+      prompts.log.error("No cookies captured.")
+      return null
+    }
+
+    // Save for reuse
+    const { existsSync, mkdirSync, writeFileSync } = await import("fs")
+    mkdirSync(COOKIES_DIR, { recursive: true })
+    writeFileSync(IG_COOKIES_PATH, JSON.stringify({
+      cookies,
+      saved_at: new Date().toISOString(),
+      account: "user",
+    }, null, 2), { mode: 0o600 })
+
+    prompts.log.success(`Cookies saved (${cookies.length} cookies) — reusable for 7 days.`)
+    return cookies
+  } catch (e) {
+    spinner.stop("Failed", 1)
+    const msg = e instanceof Error ? e.message : String(e)
+    prompts.log.error(`Browser auth failed: ${msg}`)
+    return null
+  }
+}
+
+// ============================================================================
+// Core action runner with Instagram auto-auth retry
+// ============================================================================
+
 async function runAction(args: any, action: string, params: Record<string, unknown>, label: string) {
   UI.empty()
   prompts.intro(`◈  copycat ${action}`)
@@ -48,18 +157,65 @@ async function runAction(args: any, action: string, params: Record<string, unkno
     if (v !== undefined && v !== null) clean[k] = v
   }
 
+  // For Instagram URLs, pre-attach cookies if we have them
+  const url = clean.video_url ?? clean.instagram_url ?? clean.url
+  if (isInstagramUrl(url)) {
+    const existing = await loadInstagramCookies()
+    if (existing) {
+      clean._instagram_cookies = existing
+    }
+  }
+
   const spinner = prompts.spinner()
   spinner.start(label)
   try {
-    const data = await callCopycat(action, clean, userId)
-    if (data == null) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-    spinner.stop("Done")
+    let data = await callCopycat(action, clean, userId)
+
+    // Detect Instagram auth failure and offer to fix it
+    if (data == null && isInstagramUrl(url)) {
+      spinner.stop("Instagram auth required", 1)
+      const cookies = await captureInstagramCookies()
+      if (cookies) {
+        clean._instagram_cookies = cookies
+        const retrySpinner = prompts.spinner()
+        retrySpinner.start("Retrying with cookies…")
+        data = await callCopycat(action, clean, userId)
+        if (data == null) { retrySpinner.stop("Failed", 1); prompts.outro("Done"); return }
+        retrySpinner.stop("Done")
+      } else {
+        prompts.outro("Done")
+        return
+      }
+    } else if (data == null) {
+      spinner.stop("Failed", 1)
+      prompts.outro("Done")
+      return
+    } else {
+      // Check if the response itself contains an Instagram auth error
+      const errorText = JSON.stringify(data)
+      if (isInstagramAuthError(errorText) && isInstagramUrl(url)) {
+        spinner.stop("Instagram auth required", 1)
+        const cookies = await captureInstagramCookies()
+        if (cookies) {
+          clean._instagram_cookies = cookies
+          const retrySpinner = prompts.spinner()
+          retrySpinner.start("Retrying with cookies…")
+          data = await callCopycat(action, clean, userId)
+          if (data == null) { retrySpinner.stop("Failed", 1); prompts.outro("Done"); return }
+          retrySpinner.stop("Done")
+        } else {
+          prompts.outro("Done")
+          return
+        }
+      } else {
+        spinner.stop("Done")
+      }
+    }
 
     if (args.json) {
       console.log(JSON.stringify(data, null, 2))
     } else {
       const payload = data?.data ?? data
-      // Print compact key:value pairs for the top-level fields
       if (typeof payload === "object" && payload !== null) {
         for (const [k, v] of Object.entries(payload)) {
           if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
@@ -101,7 +257,16 @@ const TranscribeCommand = cmd({
     .positional("url", { type: "string", demandOption: true })
     .option("language", { type: "string", describe: "ISO 639-1 code (en, es, …)" }),
   async handler(args) {
-    await runAction(args, "transcribe_video", { video_url: args.url, language: args.language }, "Transcribing…")
+    // Delegate to `iris transcribe` which handles local download + whisper
+    // for social media, and server-side Supadata for YouTube.
+    // This avoids the broken 4-hop server proxy chain entirely.
+    const { PlatformTranscribeCommand } = await import("./transcribe")
+    await PlatformTranscribeCommand.handler({
+      ...args,
+      url: args.url,
+      local: false,
+      json: args.json ?? false,
+    })
   },
 })
 
