@@ -5,6 +5,14 @@
  * and test the auth/fetch helpers by controlling env vars + mocking fetch.
  */
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from "bun:test"
+import { readFileSync } from "fs"
+import { join } from "path"
+
+// ── Source file reader for integrity tests ──────────────────────────────────
+const SRC_DIR = join(import.meta.dir, "../../src/cli/cmd")
+function readSource(filename: string): string {
+  return readFileSync(join(SRC_DIR, filename), "utf-8")
+}
 
 // ── Display helper imports ──────────────────────────────────────────────────
 // Import the pure display helpers directly (no side-effects)
@@ -293,5 +301,94 @@ describe("API base URL constants", () => {
     const override = "https://local.api.example.com"
     const result = override ?? "https://apiv2.heyiris.io"
     expect(result).toBe(override)
+  })
+
+  test("PLATFORM_URLS is exported with all required fields", async () => {
+    const { PLATFORM_URLS } = await import("../../src/cli/cmd/iris-api")
+    expect(PLATFORM_URLS).toBeDefined()
+    expect(PLATFORM_URLS.flApi).toBeTruthy()
+    expect(PLATFORM_URLS.irisApi).toBeTruthy()
+    expect(Array.isArray(PLATFORM_URLS.irisApiFallbacks)).toBe(true)
+    expect(PLATFORM_URLS.irisApiFallbacks.length).toBeGreaterThan(0)
+  })
+
+  test("FL_API and IRIS_API are aliases of PLATFORM_URLS", async () => {
+    const { FL_API, IRIS_API, PLATFORM_URLS } = await import("../../src/cli/cmd/iris-api")
+    expect(FL_API).toBe(PLATFORM_URLS.flApi)
+    expect(IRIS_API).toBe(PLATFORM_URLS.irisApi)
+  })
+
+  test("defaults point to Railway (not old DO URLs)", async () => {
+    const { PLATFORM_URLS } = await import("../../src/cli/cmd/iris-api")
+    // Should NOT be the old DO URLs
+    expect(PLATFORM_URLS.flApi).not.toContain("apiv2.heyiris.io")
+    expect(PLATFORM_URLS.irisApi).not.toContain("iris-api.freelabel.net")
+    // Should be Railway URLs
+    expect(PLATFORM_URLS.flApi).toContain("raichu")
+    expect(PLATFORM_URLS.irisApi).toContain("main.heyiris.io")
+  })
+})
+
+// ============================================================================
+// Integration routing — exec and chat must target IRIS_API, not FL_API
+// ============================================================================
+
+describe("integration exec routing", () => {
+  test("executeIntegrationCall sends POST to IRIS_API, not FL_API", () => {
+    const src = readSource("platform-run.ts")
+    // The irisFetch call in executeIntegrationCall must include IRIS_API as third arg
+    const execBlock = src.slice(
+      src.indexOf("export async function executeIntegrationCall"),
+      src.indexOf("return await res.json()", src.indexOf("executeIntegrationCall"))
+    )
+    expect(execBlock).toContain("IRIS_API")
+  })
+
+  test("system tool exec sends POST to IRIS_API", () => {
+    const src = readSource("platform-run.ts")
+    const toolExecMatch = src.match(/v1\/v6\/tools\/execute.*?IRIS_API/s)
+    expect(toolExecMatch).toBeTruthy()
+  })
+
+  test("INTEGRATION_TYPES includes Composio slug aliases", () => {
+    const src = readSource("platform-run.ts")
+    expect(src).toContain('"googledrive"')
+    expect(src).toContain('"googledocs"')
+  })
+
+  test("SLUG_ALIASES maps unhyphenated to canonical forms", () => {
+    const src = readSource("platform-run.ts")
+    expect(src).toContain("googledrive: \"google-drive\"")
+    expect(src).toContain("googledocs: \"google-docs\"")
+    expect(src).toContain("googlecalendar: \"google-calendar\"")
+  })
+})
+
+describe("chat routing", () => {
+  test("chat start sends POST to IRIS_API", () => {
+    const src = readSource("platform-chat.ts")
+    // Find the chat/start call — must include IRIS_API
+    const chatStartMatch = src.match(/chat\/start.*?IRIS_API/s)
+    expect(chatStartMatch).toBeTruthy()
+  })
+
+  test("workflow polling uses IRIS_API", () => {
+    const src = readSource("platform-chat.ts")
+    const pollMatch = src.match(/workflows\/\$\{workflowId\}.*?IRIS_API/s)
+    expect(pollMatch).toBeTruthy()
+  })
+
+  test("chat resume uses IRIS_API", () => {
+    const src = readSource("platform-chat.ts")
+    // Both resume calls must include IRIS_API
+    const resumeMatches = src.match(/chat\/resume.*?IRIS_API/gs)
+    expect(resumeMatches).toBeTruthy()
+    expect(resumeMatches!.length).toBeGreaterThanOrEqual(2)
+  })
+
+  test("agents chat sends POST to IRIS_API", () => {
+    const src = readSource("platform-agents.ts")
+    const chatMatch = src.match(/chat\/start.*?IRIS_API/s)
+    expect(chatMatch).toBeTruthy()
   })
 })
