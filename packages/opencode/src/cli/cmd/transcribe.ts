@@ -29,6 +29,7 @@ async function runLocalWhisper(
   filePath: string,
   language: string | undefined,
   asJson: boolean,
+  sourceUrl?: string,
 ) {
   const abs = resolve(filePath)
   if (!existsSync(abs)) {
@@ -113,27 +114,24 @@ async function runLocalWhisper(
     ? require("fs").readFileSync(txtPath, "utf8")
     : ""
 
-  // Post to canonical /api/v1/transcribe so the local result lands in the
-  // same cache + usage log as Supadata/Whisper. Non-fatal — print local
-  // text either way. This is what makes --local visible to billing/history.
+  // Sync to server so the transcript is searchable in the user's knowledge base.
+  // Best-effort — silent on failure.
   const estimatedDuration = Math.round((text.split(/\s+/).length / 150) * 60)
+  const syncUrl = sourceUrl ?? (/^https?:\/\//i.test(filePath) ? filePath : undefined)
   try {
-    const sync = await irisFetch("/api/v1/transcribe", {
-      method: "POST",
-      body: JSON.stringify({
-        pre_transcribed: {
+    if (syncUrl && text) {
+      await irisFetch("/api/v1/transcripts", {
+        method: "POST",
+        body: JSON.stringify({
+          url: syncUrl,
           text,
-          provider: "local",
+          provider: "whisper.cpp (local)",
           duration_seconds: estimatedDuration,
-        },
-      }),
-    })
-    if (!sync.ok) {
-      const body = await sync.text().catch(() => "")
-      console.log(dim(`  (canonical sync failed: HTTP ${sync.status} ${body.slice(0, 120)})`))
+        }),
+      })
     }
-  } catch (e) {
-    console.log(dim(`  (canonical sync skipped: ${e instanceof Error ? e.message : String(e)})`))
+  } catch {
+    // Silent — server sync is best-effort
   }
 
   if (asJson) {
@@ -148,9 +146,7 @@ async function runLocalWhisper(
   }
 
   printDivider()
-  console.log(`  ${bold("Provider:")}  ${highlight("whisper.cpp (local)")} ${success("(offline)")}`)
-  console.log(`  ${bold("Source:")}    ${dim(abs)}`)
-  console.log(`  ${bold("Saved:")}     ${highlight(txtPath)}`)
+  console.log(`  ${bold("Saved:")}  ${highlight(txtPath)}`)
   printDivider()
   console.log()
   console.log(text)
@@ -289,7 +285,7 @@ export const PlatformTranscribeCommand = cmd({
       }
       dlSpinner.stop("Downloaded")
 
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url)
 
       // Cleanup temp file
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
@@ -365,7 +361,7 @@ export const PlatformTranscribeCommand = cmd({
         return
       }
       dlSpinner.stop("Downloaded")
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url)
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
       prompts.outro("Done")
       return
@@ -380,7 +376,7 @@ export const PlatformTranscribeCommand = cmd({
       const videoPath = await downloadVideoLocally(url)
       if (!videoPath) { dlSpinner.stop("Failed", 1); prompts.outro("Done"); return }
       dlSpinner.stop("Downloaded")
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url)
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
       prompts.outro("Done")
       return
@@ -403,7 +399,7 @@ export const PlatformTranscribeCommand = cmd({
         const videoPath = await downloadVideoLocally(url)
         if (!videoPath) { dlSpinner.stop("Failed", 1); prompts.outro("Done"); return }
         dlSpinner.stop("Downloaded")
-        await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json)
+        await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url)
         try { spawnSync("rm", ["-f", videoPath]) } catch {}
         prompts.outro("Done")
         return
