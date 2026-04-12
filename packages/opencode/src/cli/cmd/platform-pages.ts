@@ -99,8 +99,12 @@ const ListCmd = cmd({
     try {
       const res = await irisFetch("/api/v1/pages")
       if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const data = (await res.json()) as { data?: any[] }
-      let pages = data?.data ?? []
+      const json = (await res.json()) as any
+      // Handle both direct array and Laravel paginator ({ data: { data: [...] } })
+      let pages: any[] = []
+      if (Array.isArray(json?.data)) pages = json.data
+      else if (Array.isArray(json?.data?.data)) pages = json.data.data
+      else if (Array.isArray(json)) pages = json
       if (args["page-type"]) {
         pages = pages.filter((p: any) => {
           const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type

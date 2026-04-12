@@ -45,6 +45,36 @@ const INTEGRATION_TYPES = [
   "servis-ai", "vagaro", "vapi", "workflow-composer",
 ]
 
+// Known functions per integration — shown when user runs `exec <type>` without a function
+const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string }[]> = {
+  "gmail": [
+    { name: "read_emails", description: "Read emails from inbox (limit, unread_only, query)" },
+    { name: "search_emails", description: "Search emails with Gmail query syntax" },
+    { name: "send_email", description: "Send an email (to, subject, body)" },
+  ],
+  "google-drive": [
+    { name: "search_files", description: "Search for files by name" },
+    { name: "export_file", description: "Export a file as plain text (file_id)" },
+    { name: "read_doc", description: "Read a Google Doc (alias for export_file)" },
+  ],
+  "google-calendar": [
+    { name: "get_events", description: "Get calendar events (max_results, time_min, time_max)" },
+    { name: "create_event", description: "Create a calendar event" },
+  ],
+  "slack": [
+    { name: "send_message", description: "Send a message to a channel (channel, text)" },
+    { name: "list_channels", description: "List available channels" },
+  ],
+  "canva": [
+    { name: "list_designs", description: "List your Canva designs" },
+    { name: "export_design", description: "Export a design (design_id, format)" },
+  ],
+  "buffer": [
+    { name: "create_post", description: "Schedule a social post (text, profile_ids)" },
+    { name: "list_profiles", description: "List connected social profiles" },
+  ],
+}
+
 const OAUTH_TYPES = [
   "google-drive", "google-docs", "google-calendar", "gmail",
   "outlook", "outlook-calendar", "onedrive",
@@ -321,7 +351,7 @@ const ListToolsCommand = cmd({
     prompts.intro("◈  V6 System Tools")
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     try {
-      const res = await irisFetch("/api/v1/v6/tools/registry")
+      const res = await irisFetch("/api/v1/tools/registry", {}, IRIS_API)
       if (!res.ok) {
         prompts.log.warn(`Could not fetch registry: HTTP ${res.status}`)
         prompts.outro("Done")
@@ -715,8 +745,20 @@ const ExecCommand = cmd({
     try {
       if (isIntegration(target)) {
         if (!fn) {
-          prompts.log.warn(`No function specified for ${target}.`)
-          prompts.outro(dim(`iris integrations exec ${target} <function> key=value …`))
+          // Show available functions for this integration
+          const functions = INTEGRATION_FUNCTIONS[target] ?? INTEGRATION_FUNCTIONS[SLUG_ALIASES[target] ?? ""]
+          if (functions) {
+            prompts.log.warn(`No function specified for ${target}. Available functions:`)
+            console.log()
+            for (const f of functions) {
+              console.log(`  ${highlight(f.name)}  ${dim(f.description)}`)
+            }
+            console.log()
+            prompts.outro(dim(`iris integrations exec ${target} ${functions[0]?.name ?? "<function>"} key=value …`))
+          } else {
+            prompts.log.warn(`No function specified for ${target}.`)
+            prompts.outro(dim(`iris integrations exec ${target} <function> key=value …`))
+          }
           return
         }
         const spinner = prompts.spinner()
@@ -738,7 +780,7 @@ const ExecCommand = cmd({
       const userId = await requireUserId()
       const spinner = prompts.spinner()
       spinner.start(`Executing tool ${target}…`)
-      const res = await irisFetch(`/api/v1/v6/tools/execute`, {
+      const res = await irisFetch(`/api/v1/tools/execute`, {
         method: "POST",
         body: JSON.stringify({ tool: target, params, user_id: userId }),
       }, IRIS_API)

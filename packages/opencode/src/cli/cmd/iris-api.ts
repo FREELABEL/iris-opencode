@@ -123,8 +123,15 @@ export async function handleApiError(res: Response, action: string): Promise<boo
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
     try {
-      const body = (await res.json()) as { error?: string; message?: string }
+      const body = (await res.json()) as { error?: string; message?: string; errors?: Record<string, string[]> }
       msg = body.error ?? body.message ?? msg
+      // Laravel validation returns { errors: { field: ["msg", ...] } }
+      if (body.errors && typeof body.errors === "object") {
+        const details = Object.entries(body.errors)
+          .map(([field, msgs]) => `  ${field}: ${(msgs as string[]).join(", ")}`)
+          .join("\n")
+        if (details) msg += "\n" + details
+      }
     } catch {}
     prompts.log.error(`${action} failed: ${msg}`)
     return false
