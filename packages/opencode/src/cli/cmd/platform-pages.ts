@@ -9,7 +9,15 @@ import { join } from "path"
 // Helpers
 // ============================================================================
 
-function publicUrl(slug: string): string {
+/**
+ * Get the public URL for a page. Prefers the API-provided public_url,
+ * falls back to constructing from slug.
+ */
+function publicUrl(slugOrPage: string | { public_url?: string; slug?: string }): string {
+  if (typeof slugOrPage === "object" && slugOrPage.public_url) {
+    return slugOrPage.public_url
+  }
+  const slug = typeof slugOrPage === "string" ? slugOrPage : (slugOrPage.slug ?? "")
   const env = process.env.IRIS_ENV ?? "production"
   return env === "local"
     ? `http://local.iris.freelabel.net:9300/p/${slug}`
@@ -128,7 +136,7 @@ const ListCmd = cmd({
         const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type ?? "-"
         console.log(`  ${bold(p.slug)}  ${dim(`#${p.id}`)}  ${formatStatus(p.status)}`)
         console.log(`    ${dim(p.title ?? "")}  ${dim(`[${tpl}]`)}`)
-        console.log(`    ${dim(publicUrl(p.slug))}`)
+        console.log(`    ${dim(publicUrl(p))}`)
         console.log()
       }
       printDivider()
@@ -170,7 +178,7 @@ const ViewCmd = cmd({
       printKV("Title", page.title)
       printKV("Status", formatStatus(page.status))
       printKV("Published", page.published_at ?? "Not published")
-      printKV("URL", publicUrl(page.slug))
+      printKV("URL", publicUrl(page))
       const compCount = page?.json_content?.components?.length ?? 0
       printKV("Components", compCount)
       printDivider()
@@ -506,7 +514,7 @@ const CreateCmd = cmd({
       printKV("Slug", p.slug)
       printKV("Title", p.title)
       printKV("Status", p.status)
-      printKV("URL", publicUrl(p.slug))
+      printKV("URL", publicUrl(p))
       printDivider()
       prompts.outro(dim(`iris pages publish ${p.slug}`))
     } catch (err) {
