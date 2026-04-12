@@ -2189,6 +2189,8 @@ if [ "$AUTH_SUCCESS" = "true" ]; then
 
 RULES:
 - NEVER use curl or call APIs directly. Only CLI commands.
+- NEVER guess or hallucinate URLs. Page URLs follow the format: https://heyiris.io/p/{slug} (NOT subdomains). Always read the URL from CLI output.
+- When a CLI command produces output, READ it carefully and use the exact values shown. Do not make up IDs, URLs, or status values.
 - At the END of EVERY response, always include these links in a clean ASCII table like this:
 
   ┌──────────────────────────────────────────────────────────────┐
@@ -2241,7 +2243,8 @@ Wait for their answer. Based on what they pick, IMMEDIATELY run the correspondin
 
 - Agent: Ask what it should do in one sentence, then run: iris agents create
 - Multi-Agent Workflow: Ask what to automate in one sentence, then run: iris workflows list
-- Web Page: Ask what the page is for, then guide to dashboard: $DASHBOARD (Pages tab)
+- Web Page: Ask what the page is for, then run: iris pages create --slug <slug> --title "<title>" --template landing
+  After creation, the public URL is https://heyiris.io/p/<slug> (shown in CLI output). Use iris pages publish <slug> to go live.
 - Knowledge base / RAG: Run: iris bloqs create
 - List knowledge bases: Run: iris bloqs list
 - Add content to KB: Run: iris bloqs ingest <bloqId> <file>
