@@ -307,7 +307,7 @@ export function Sidebar(props: { sessionID: string }) {
           <text fg={theme.textMuted}>
             <span style={{ fg: theme.success }}>•</span> <b>IRIS</b>
             <span style={{ fg: theme.text }}>
-              <b> Code</b>
+              <b> CLI</b>
             </span>{" "}
             <span>{Installation.VERSION}</span>
           </text>
