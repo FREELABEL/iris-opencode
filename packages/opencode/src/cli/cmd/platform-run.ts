@@ -12,6 +12,7 @@ import {
   success,
   highlight,
   IRIS_API,
+  PLATFORM_URLS,
 } from "./iris-api"
 import { exec } from "child_process"
 
@@ -25,7 +26,7 @@ const INTEGRATION_TYPES = [
   // Calendar
   "google-calendar", "outlook-calendar",
   // Storage / Docs
-  "google-drive", "google-docs", "dropbox", "onedrive",
+  "google-drive", "googledrive", "google-docs", "googledocs", "dropbox", "onedrive",
   // Design / Content
   "canva", "buffer",
   // CRM / Lead enrichment
@@ -211,6 +212,15 @@ async function executeMacosLocal(
   }
 }
 
+// Composio returns slugs without hyphens (googledrive), but iris-api expects
+// the hyphenated form (google-drive). Normalize before sending to backend.
+const SLUG_ALIASES: Record<string, string> = {
+  googledrive: "google-drive",
+  googledocs: "google-docs",
+  googlecalendar: "google-calendar",
+  outlookcalendar: "outlook-calendar",
+}
+
 export async function executeIntegrationCall(
   type: string,
   fn: string,
@@ -223,14 +233,16 @@ export async function executeIntegrationCall(
     // Unknown macos function (e.g. calendar) — fall through to remote API
   }
 
+  const normalized = SLUG_ALIASES[type] ?? type
   const userId = await requireUserId()
   if (!userId) throw new Error("user_id required")
   const res = await irisFetch(
     `/api/v1/users/${userId}/integrations/execute-direct?user_id=${userId}`,
     {
       method: "POST",
-      body: JSON.stringify({ integration: type, action: fn, params }),
+      body: JSON.stringify({ integration: normalized, action: fn, params }),
     },
+    IRIS_API, // execute-direct lives on iris-api, not fl-api
   )
   if (!res.ok) {
     const text = await res.text().catch(() => "")
@@ -265,7 +277,7 @@ function displayResult(result: any, name: string): void {
 async function getComposioOAuthUrl(type: string): Promise<{ url: string | null; error: string | null }> {
   const userId = await requireUserId()
   if (!userId) return { url: null, error: "Not authenticated" }
-  const bases = [IRIS_API, "https://main.heyiris.io", "https://heyiris.io", "https://iris-api.freelabel.net"]
+  const bases = [IRIS_API, ...PLATFORM_URLS.irisApiFallbacks]
   let lastError: string | null = null
   for (const base of bases) {
     try {
@@ -729,7 +741,7 @@ const ExecCommand = cmd({
       const res = await irisFetch(`/api/v1/v6/tools/execute`, {
         method: "POST",
         body: JSON.stringify({ tool: target, params, user_id: userId }),
-      })
+      }, IRIS_API)
       if (!res.ok) {
         spinner.stop("Failed", 1)
         prompts.log.error(`HTTP ${res.status}`)

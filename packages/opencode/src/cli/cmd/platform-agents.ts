@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -282,7 +282,7 @@ const AgentsChatCommand = cmd({
       const startRes = await irisFetch("/api/chat/start", {
         method: "POST",
         body: JSON.stringify(payload),
-      })
+      }, IRIS_API)
       const ok = await handleApiError(startRes, "Chat")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -295,7 +295,7 @@ const AgentsChatCommand = cmd({
       let run: { status: string; summary?: string; response?: string; output?: string; error?: string } = { status: "pending" }
       while (true) {
         if ((Date.now() - start) / 1000 > maxSecs) break
-        const pollRes = await irisFetch(`/api/workflows/${workflow_id}`)
+        const pollRes = await irisFetch(`/api/workflows/${workflow_id}`, {}, IRIS_API)
         if (pollRes.ok) {
           run = (await pollRes.json()) as typeof run
           if (run.status === "completed" || run.status === "failed") break

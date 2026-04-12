@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API } from "./iris-api"
 
 // ============================================================================
 // Polling helper
@@ -27,7 +27,7 @@ async function pollWorkflow(workflowId: string, timeoutSecs = 300): Promise<Work
     if ((Date.now() - start) / 1000 > timeoutSecs) {
       throw new Error(`Timed out after ${timeoutSecs}s. Workflow ID: ${workflowId}`)
     }
-    const res = await irisFetch(`/api/workflows/${workflowId}`)
+    const res = await irisFetch(`/api/workflows/${workflowId}`, {}, IRIS_API)
     if (!res.ok) throw new Error(`HTTP ${res.status} polling workflow`)
     const run = (await res.json()) as WorkflowRun
 
@@ -167,7 +167,7 @@ async function executeChat(args: {
     const startRes = await irisFetch("/api/chat/start", {
       method: "POST",
       body: JSON.stringify(payload),
-    })
+    }, IRIS_API)
 
     const ok = await handleApiError(startRes, "Chat")
     if (!ok) {
@@ -296,7 +296,7 @@ const ChatApproveCommand = cmd({
         const res = await irisFetch(`/api/chat/resume`, {
           method: "POST",
           body: JSON.stringify({ workflow_id: workflowId, action: "approve" }),
-        })
+        }, IRIS_API)
         const ok = await handleApiError(res, "Approve")
         if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
         spinner.stop("Approved — waiting for completion…")
@@ -310,7 +310,7 @@ const ChatApproveCommand = cmd({
       const res = await irisFetch(`/api/chat/resume`, {
         method: "POST",
         body: JSON.stringify({ workflow_id: workflowId, action: "approve" }),
-      })
+      }, IRIS_API)
       const ok = await handleApiError(res, "Approve")
       if (!ok) {
         console.log(JSON.stringify({ error: "Failed to approve workflow" }))

@@ -5,11 +5,22 @@ import { homedir } from "os"
 import { join } from "path"
 
 // ============================================================================
-// Base URLs
+// Base URLs — single source of truth for all platform endpoints.
+// Override with env vars for local dev or custom deployments.
 // ============================================================================
 
-export const FL_API = process.env.IRIS_FL_API_URL ?? "https://apiv2.heyiris.io"
-export const IRIS_API = process.env.IRIS_API_URL ?? "https://iris-api.freelabel.net"
+export const PLATFORM_URLS = {
+  /** fl-api (Laravel backend — users, bloqs, leads, workflows) */
+  flApi: process.env.IRIS_FL_API_URL ?? "https://raichu.heyiris.io",
+  /** iris-api (V6 engine — chat, integrations exec, tools, monitor) */
+  irisApi: process.env.IRIS_API_URL ?? "https://main.heyiris.io",
+  /** Fallback URLs for iris-api (tried in order when primary fails) */
+  irisApiFallbacks: ["https://heyiris.io", "https://iris-api.freelabel.net"],
+} as const
+
+// Aliases for backward compat — prefer PLATFORM_URLS in new code
+export const FL_API = PLATFORM_URLS.flApi
+export const IRIS_API = PLATFORM_URLS.irisApi
 
 // ============================================================================
 // Read ~/.iris/sdk/.env (written by iris-login)
@@ -79,12 +90,9 @@ export async function irisFetch(
 export async function requireAuth(): Promise<string | null> {
   const token = await resolveToken()
   if (!token) {
-    prompts.log.warn("You are not logged in.")
+    prompts.log.warn("You are not logged in to the IRIS Platform.")
     prompts.log.info(
-      `Set your API key:  ${UI.Style.TEXT_HIGHLIGHT}export IRIS_API_KEY=<your-key>${UI.Style.TEXT_NORMAL}`,
-    )
-    prompts.log.info(
-      `Or run:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login${UI.Style.TEXT_NORMAL}`,
+      `Run:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login${UI.Style.TEXT_NORMAL}  (select "IRIS Platform")`,
     )
     return null
   }
@@ -99,7 +107,7 @@ export async function handleApiError(res: Response, action: string): Promise<boo
   if (res.status === 401 || res.status === 403) {
     prompts.log.warn("Authentication failed — your token may be expired or invalid.")
     prompts.log.info(
-      `Refresh:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login${UI.Style.TEXT_NORMAL}`,
+      `Re-authenticate:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login --force${UI.Style.TEXT_NORMAL}`,
     )
     return false
   }

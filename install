@@ -2316,9 +2316,9 @@ cat > "$INSTALL_DIR/iris-onboard" << 'ONBOARD'
 cd "$HOME"
 PROMPT_FILE="$HOME/.iris/.onboarding-prompt"
 if [ -f "$PROMPT_FILE" ]; then
-    exec "$HOME/.iris/bin/iris" -m opencode/gpt-5-nano --prompt "$(cat "$PROMPT_FILE")"
+    exec "$HOME/.iris/bin/iris" -m opencode/big-pickle --prompt "$(cat "$PROMPT_FILE")"
 else
-    exec "$HOME/.iris/bin/iris" -m opencode/gpt-5-nano
+    exec "$HOME/.iris/bin/iris" -m opencode/big-pickle
 fi
 ONBOARD
 chmod 755 "$INSTALL_DIR/iris-onboard"
@@ -2330,7 +2330,7 @@ if [ -t 0 ]; then
     echo -e "${MUTED}Starting IRIS CLI...${NC}"
     echo -e ""
     cd "$HOME"
-    exec "$INSTALL_DIR/iris" -m opencode/gpt-5-nano --prompt "$(cat "$PROMPT_FILE")"
+    exec "$INSTALL_DIR/iris" -m opencode/big-pickle --prompt "$(cat "$PROMPT_FILE")"
 else
     echo -e ""
     if [ "$AUTH_SUCCESS" = "true" ] || ([ -f "$HOME/.iris/sdk/.env" ] && grep -q "IRIS_API_KEY=." "$HOME/.iris/sdk/.env" 2>/dev/null); then
