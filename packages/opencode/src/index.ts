@@ -68,6 +68,8 @@ import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
+import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
+import { PlatformContractsCommand } from "./cli/cmd/platform-contracts"
 import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
@@ -224,6 +226,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAtlasBrandKitCommand))
   .command(reg(PlatformLeadsMeetingCommand))
   .command(reg(PlatformOnboardCommand))
+  .command(reg(PlatformProposalsCommand))
+  .command(reg(PlatformContractsCommand))
   .command(reg(PlatformPagesCommand))
   .command(reg(PlatformPagesBatchCommand))
   .command(reg(PlatformPartialsCommand))
