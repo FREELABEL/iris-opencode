@@ -19,6 +19,7 @@ const ProposalsCreateCommand = cmd({
       .option("duration", { alias: "d", describe: "duration in months (default: 12)", type: "number" })
       .option("deposit", { describe: "deposit percentage 0-100", type: "number" })
       .option("rev-share", { describe: "revenue share percentage (e.g. 5)", type: "number" })
+      .option("pass-fees", { describe: "pass processing fees to client (Stripe 2.9% + $0.30)", type: "boolean" })
       .option("brand-logo", { describe: "brand logo URL for proposal header", type: "string" })
       .option("package", { alias: "p", describe: "service package ID (auto-fills amount + scope)", type: "number" })
       .option("template", { alias: "t", describe: "proposal template name", type: "string" })
@@ -86,6 +87,7 @@ const ProposalsCreateCommand = cmd({
     if (args.deposit !== undefined) body.deposit_percent = args.deposit
     if (args["brand-logo"]) body.brand_logo_url = args["brand-logo"]
     if (args["rev-share"] !== undefined) body.rev_share_percent = args["rev-share"]
+    if (args["pass-fees"]) body.processing_fee_mode = "pass_to_client"
 
     const spinner = prompts.spinner()
     spinner.start("Generating proposal...")
