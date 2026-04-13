@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -24,6 +24,12 @@ function publicUrl(slugOrPage: string | { public_url?: string; slug?: string }):
     : `https://heyiris.io/p/${slug}`
 }
 
+// Pages CRUD routes through iris-api (which proxies to fl-api with service token).
+// The SDK key authenticates against iris-api; fl-api doesn't recognize it directly.
+function pagesFetch(path: string, options?: RequestInit): Promise<Response> {
+  return irisFetch(path, options ?? {}, IRIS_API)
+}
+
 function formatStatus(status: string): string {
   if (status === "published") return success("● Published")
   if (status === "draft") return `${UI.Style.TEXT_WARNING}○ Draft${UI.Style.TEXT_NORMAL}`
@@ -36,7 +42,7 @@ async function getBySlug(slug: string, includeJson = false): Promise<any | null>
     include_json: includeJson ? "1" : "0",
     include_drafts: "1",
   })
-  const res = await irisFetch(`/api/v1/pages/by-slug/${encodeURIComponent(slug)}?${params}`)
+  const res = await pagesFetch(`/api/v1/pages/by-slug/${encodeURIComponent(slug)}?${params}`)
   if (!res.ok) {
     await handleApiError(res, `Get page ${slug}`)
     return null
@@ -105,7 +111,7 @@ const ListCmd = cmd({
     const sp = prompts.spinner()
     sp.start("Loading pages…")
     try {
-      const res = await irisFetch("/api/v1/pages")
+      const res = await pagesFetch("/api/v1/pages")
       if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const json = (await res.json()) as any
       // Handle both direct array and Laravel paginator ({ data: { data: [...] } })
@@ -237,7 +243,7 @@ const SetCmd = cmd({
       const json = page.json_content ?? {}
       const parsed = parseValue(args.value)
       setNestedValue(json, args.path, parsed)
-      const res = await irisFetch(`/api/v1/pages/${page.id}`, {
+      const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
         method: "PUT",
         body: JSON.stringify({ json_content: json }),
       })
@@ -336,7 +342,7 @@ const PushCmd = cmd({
       if (local.seo_description) updateData.seo_description = local.seo_description
       if (local.og_image) updateData.og_image = local.og_image
 
-      const res = await irisFetch(`/api/v1/pages/${page.id}`, {
+      const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
         method: "PUT",
         body: JSON.stringify(updateData),
       })
@@ -437,7 +443,7 @@ const PublishCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const res = await irisFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
+      const res = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
       if (!(await handleApiError(res, "Publish"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       sp.stop(success("Published"))
       console.log(`  ${highlight(publicUrl(args.slug))}`)
@@ -463,7 +469,7 @@ const UnpublishCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const res = await irisFetch(`/api/v1/pages/${page.id}/unpublish`, { method: "POST" })
+      const res = await pagesFetch(`/api/v1/pages/${page.id}/unpublish`, { method: "POST" })
       if (!(await handleApiError(res, "Unpublish"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       sp.stop(success("Unpublished (draft)"))
       prompts.outro("Done")
@@ -521,7 +527,7 @@ const CreateCmd = cmd({
         json_content: jsonContent,
         auto_publish: true,
       }
-      const res = await irisFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
+      const res = await pagesFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
       if (!(await handleApiError(res, "Create page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as { data?: any }
       const p = data?.data ?? data
@@ -587,7 +593,7 @@ const VersionsCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const res = await irisFetch(`/api/v1/pages/${page.id}/versions`)
+      const res = await pagesFetch(`/api/v1/pages/${page.id}/versions`)
       if (!(await handleApiError(res, "Versions"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as { data?: any[] }
       const versions = data?.data ?? []
@@ -624,7 +630,7 @@ const RollbackCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const res = await irisFetch(`/api/v1/pages/${page.id}/rollback/${args.version}`, { method: "POST" })
+      const res = await pagesFetch(`/api/v1/pages/${page.id}/rollback/${args.version}`, { method: "POST" })
       if (!(await handleApiError(res, "Rollback"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       sp.stop(success(`Rolled back to v${args.version}`))
       prompts.outro("Done")
