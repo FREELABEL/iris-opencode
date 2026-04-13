@@ -120,6 +120,50 @@ const DaemonLogsCommand = cmd({
   },
 })
 
+const DaemonRunsCommand = cmd({
+  command: "runs",
+  aliases: ["schedules"],
+  describe: "show scheduled script runs and history",
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Bridge Schedules")
+    try {
+      const res = await fetch("http://localhost:3200/daemon/schedules", { signal: AbortSignal.timeout(3000) })
+      if (!res.ok) { prompts.log.error(`HTTP ${res.status}`); prompts.outro("Done"); return }
+      const data = await res.json() as { schedules?: any[] }
+      const schedules = data.schedules ?? []
+
+      if (schedules.length === 0) {
+        prompts.log.warn("No schedules. Create one with: iris hive schedule add <script> --cron \"...\"")
+        prompts.outro("Done")
+        return
+      }
+
+      console.log(`  ${dim("─".repeat(56))}`)
+      for (const s of schedules) {
+        const status = s.running
+          ? `${UI.Style.TEXT_HIGHLIGHT}running${UI.Style.TEXT_NORMAL}`
+          : s.last_status === "completed"
+            ? `${UI.Style.TEXT_SUCCESS}completed${UI.Style.TEXT_NORMAL}`
+            : s.last_status === "failed"
+              ? `${UI.Style.TEXT_DANGER}failed${UI.Style.TEXT_NORMAL}`
+              : dim("pending")
+
+        console.log(`  ${bold(s.filename)}  ${dim(s.cron)}  ${status}`)
+        console.log(`    ${dim("Runs:")} ${s.run_count}  ${dim("Last:")} ${s.last_run ? new Date(s.last_run).toLocaleString() : "never"}  ${dim("Duration:")} ${s.last_duration_ms ? `${s.last_duration_ms}ms` : "—"}`)
+        console.log(`    ${dim("ID:")} ${dim(s.id)}`)
+        console.log()
+      }
+      console.log(`  ${dim("─".repeat(56))}`)
+      prompts.outro(dim("iris hive schedule list  |  iris bridge logs"))
+    } catch (err) {
+      prompts.log.error("Daemon not reachable on :3200. Is it running?")
+      prompts.log.info(dim("Start with: iris bridge start"))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const DaemonRegisterCommand = cmd({
   command: "register",
   describe: "register this machine as a Hive compute node",
@@ -143,6 +187,7 @@ export const PlatformDaemonCommand = cmd({
       .command(DaemonStatusCommand)
       .command(DaemonRestartCommand)
       .command(DaemonLogsCommand)
+      .command(DaemonRunsCommand)
       .command(DaemonRegisterCommand)
       .demandCommand(),
   async handler() {},
