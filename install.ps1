@@ -186,13 +186,13 @@ if (-not $HasNode) {
         $BridgeUpdated = $true
     } else {
         try {
-            git clone --quiet https://github.com/FREELABEL/iris-bridge.git $BridgeDir 2>$null
+            git clone --quiet https://github.com/FREELABEL/iris-daemon.git $BridgeDir 2>$null
             Push-Location $BridgeDir
             npm install --production --silent 2>$null
             Pop-Location
         } catch {
             Write-StepSkipped "5/5" "Agent Bridge" "could not download"
-            Write-Muted "Try manually: git clone https://github.com/FREELABEL/iris-bridge.git ~\.iris\bridge"
+            Write-Muted "Try manually: git clone https://github.com/FREELABEL/iris-daemon.git ~\.iris\bridge"
         }
     }
 

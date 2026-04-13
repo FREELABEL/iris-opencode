@@ -975,7 +975,7 @@ install_bridge() {
         bridge_updated=true
     else
         # Fresh clone from public repo
-        if git clone --quiet https://github.com/FREELABEL/iris-bridge.git "$bridge_dir" 2>/dev/null; then
+        if git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null; then
             (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || {
                 print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
             }
@@ -984,7 +984,7 @@ install_bridge() {
             fi
         else
             print_message info "${MUTED}[5/7] Agent Bridge .......................... could not download${NC}"
-            print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-bridge.git ~/.iris/bridge"
+            print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-daemon.git ~/.iris/bridge"
             return 0
         fi
     fi

@@ -15,7 +15,7 @@ If the daemon directory doesn't exist:
 ```bash
 $ ls ~/.iris/bridge/daemon.js
 # If missing, re-run the IRIS installer with Node present, OR clone manually:
-$ git clone https://github.com/FREELABEL/iris-bridge.git ~/.iris/bridge && cd ~/.iris/bridge && npm install --production
+$ git clone https://github.com/FREELABEL/iris-daemon.git ~/.iris/bridge && cd ~/.iris/bridge && npm install --production
 ```
 
 ## Step 1: Start the daemon

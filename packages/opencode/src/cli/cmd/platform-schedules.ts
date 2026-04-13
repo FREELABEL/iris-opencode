@@ -291,20 +291,190 @@ const SchedulesToggleCommand = cmd({
   },
 })
 
+const SchedulesCreateCommand = cmd({
+  command: "create",
+  describe: "create a scheduled job (any type: agent, heartbeat, competitor crawl, SEO check, hive)",
+  builder: (yargs) =>
+    yargs
+      .option("type", {
+        describe: "job type",
+        type: "string",
+        choices: ["agent_task", "heartbeat", "competitor_intelligence", "seo_rank_check", "hive_task_dispatch", "custom_script", "code_workflow"],
+        demandOption: true,
+      })
+      .option("frequency", {
+        describe: "run frequency",
+        type: "string",
+        choices: ["once", "hourly", "every_2_hours", "every_4_hours", "every_6_hours", "every_8_hours", "every_12_hours", "daily", "weekdays", "weekly", "monthly"],
+        default: "daily",
+      })
+      .option("agent", { describe: "agent ID (required — used for scheduling)", type: "number", demandOption: true })
+      .option("name", { describe: "job name/task_name", type: "string" })
+      .option("prompt", { describe: "task prompt (for agent_task type)", type: "string" })
+      .option("time", { describe: "time of day to run (HH:MM, 24h)", type: "string", default: "09:00" })
+      .option("timezone", { describe: "timezone", type: "string", default: "America/New_York" })
+      .option("max-runs", { describe: "max number of executions (null = unlimited)", type: "number" })
+      .option("params", { describe: "JSON params for tool jobs (e.g., sources, keywords, domain)", type: "string" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Create Schedule: ${args.type}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    // Parse params JSON
+    let params: Record<string, unknown> = {}
+    if (args.params) {
+      try {
+        params = JSON.parse(args.params)
+      } catch {
+        prompts.log.error("Invalid JSON in --params")
+        prompts.outro("Done")
+        return
+      }
+    }
+
+    // Build default names based on type
+    const typeNames: Record<string, string> = {
+      agent_task: "Scheduled Agent Task",
+      heartbeat: "Heartbeat",
+      competitor_intelligence: "Competitor Intelligence Crawl",
+      seo_rank_check: "SEO Rank Check",
+      hive_task_dispatch: "Hive Task Dispatch",
+      custom_script: "Custom Script",
+      code_workflow: "Code Workflow",
+    }
+    const taskName = args.name ?? typeNames[args.type] ?? args.type
+
+    // Build default prompts based on type
+    const typePrompts: Record<string, string> = {
+      agent_task: args.prompt ?? "Execute scheduled task",
+      heartbeat: "Run heartbeat check",
+      competitor_intelligence: "Crawl competitor sources and ingest into knowledge base",
+      seo_rank_check: "Check keyword rankings vs competitors",
+      hive_task_dispatch: "Dispatch Hive campaign task",
+      custom_script: "Execute custom script on Hive node",
+      code_workflow: "Execute code workflow on Hive node",
+    }
+    const prompt = args.prompt ?? typePrompts[args.type] ?? taskName
+
+    const payload: Record<string, unknown> = {
+      agent_id: args.agent,
+      task_name: taskName,
+      prompt,
+      time: args.time,
+      frequency: args.frequency,
+      timezone: args.timezone,
+      data: {
+        type: args.type,
+        params,
+        ...params,
+      },
+    }
+
+    if (args["max-runs"]) {
+      payload.max_runs = args["max-runs"]
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Creating schedule…")
+
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+      const ok = await handleApiError(res, "Create schedule")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as { data?: any }
+      const job = data?.data ?? data
+      spinner.stop(success(`Created #${job.id ?? "?"}`))
+
+      printDivider()
+      printKV("ID", job.id)
+      printKV("Type", args.type)
+      printKV("Name", taskName)
+      printKV("Frequency", args.frequency)
+      printKV("Time", args.time)
+      printKV("Agent", args.agent)
+      printKV("Status", job.status ?? "scheduled")
+      printKV("Next Run", job.next_run_at ?? "pending")
+      if (Object.keys(params).length > 0) {
+        printKV("Params", JSON.stringify(params).slice(0, 100))
+      }
+      printDivider()
+
+      prompts.log.info(dim(`iris schedule list   — view all schedules`))
+      prompts.log.info(dim(`iris schedule run ${job.id ?? "<id>"}  — trigger now`))
+      prompts.outro(success("Schedule created"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const SchedulesDeleteCommand = cmd({
+  command: "delete <id>",
+  aliases: ["rm"],
+  describe: "delete a scheduled job",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Delete Schedule #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Deleting…")
+
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`, {
+        method: "DELETE",
+      })
+      const ok = await handleApiError(res, "Delete schedule")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(success("Deleted"))
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 // ============================================================================
 // Root command
 // ============================================================================
 
 export const PlatformSchedulesCommand = cmd({
   command: "schedules",
-  describe: "manage agent scheduled jobs",
+  aliases: ["schedule"],
+  describe: "manage scheduled jobs — create, list, run, toggle, delete (all job types)",
   builder: (yargs) =>
     yargs
+      .command(SchedulesCreateCommand)
       .command(SchedulesListCommand)
       .command(SchedulesGetCommand)
       .command(SchedulesRunCommand)
       .command(SchedulesHistoryCommand)
       .command(SchedulesToggleCommand)
+      .command(SchedulesDeleteCommand)
       .demandCommand(),
   async handler() {},
 })
