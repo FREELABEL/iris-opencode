@@ -23,6 +23,8 @@ const ProposalsCreateCommand = cmd({
       .option("brand-logo", { describe: "brand logo URL for proposal header", type: "string" })
       .option("package", { alias: "p", describe: "service package ID (auto-fills amount + scope)", type: "number" })
       .option("template", { alias: "t", describe: "proposal template name", type: "string" })
+      .option("list-price", { describe: "list price before discount (shows strikethrough on proposal)", type: "number" })
+      .option("discount", { describe: "discount percentage (auto-calculated from list-price vs amount if omitted)", type: "number" })
       .option("skip-contract", { describe: "skip contract attachment", type: "boolean" })
       .option("skip-send", { describe: "generate but don't send to client", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean" }),
@@ -88,6 +90,8 @@ const ProposalsCreateCommand = cmd({
     if (args["brand-logo"]) body.brand_logo_url = args["brand-logo"]
     if (args["rev-share"] !== undefined) body.rev_share_percent = args["rev-share"]
     if (args["pass-fees"]) body.processing_fee_mode = "pass_to_client"
+    if (args["list-price"] !== undefined) body.list_price = args["list-price"]
+    if (args["discount"] !== undefined) body.discount_percent = args["discount"]
 
     const spinner = prompts.spinner()
     spinner.start("Generating proposal...")
@@ -122,6 +126,11 @@ const ProposalsCreateCommand = cmd({
     console.log(success("Proposal created!"))
     printDivider()
     printKV("Lead", `${leadData.name ?? leadData.first_name ?? ""} (#${leadId})`)
+    if (args["list-price"]) {
+      const discPct = args["discount"] ?? Math.round((1 - (Number(amount) / Number(args["list-price"]))) * 100)
+      printKV("List Price", `$${Number(args["list-price"]).toFixed(2)}${args.interval && args.interval !== "one-time" ? "/" + args.interval : ""}`)
+      printKV("Discount", `${discPct}% off`)
+    }
     printKV("Amount", `$${Number(amount).toFixed(2)}${args.interval && args.interval !== "one-time" ? "/" + args.interval : ""}`)
     if (args.interval && args.interval !== "one-time") {
       const dur = args.duration ?? 12
