@@ -21,7 +21,7 @@ function publicUrl(slugOrPage: string | { public_url?: string; slug?: string }):
   const env = process.env.IRIS_ENV ?? "production"
   return env === "local"
     ? `http://local.iris.freelabel.net:9300/p/${slug}`
-    : `https://heyiris.io/p/${slug}`
+    : `https://main.heyiris.io/p/${slug}`
 }
 
 // Pages CRUD routes through iris-api (which proxies to fl-api with service token).
