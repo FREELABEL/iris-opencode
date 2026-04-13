@@ -1157,6 +1157,34 @@ DCTL
     ln -sf "$bridge_dir/bridgectl" "$INSTALL_DIR/iris-bridge"
     ln -sf "$bridge_dir/daemonctl" "$INSTALL_DIR/iris-daemon"
 
+    # ── macOS LaunchAgent: auto-start daemon on login ──
+    if [ "$(uname)" = "Darwin" ]; then
+        local plist_name="io.heyiris.daemon.plist"
+        local plist_src="$bridge_dir/installers/macos/$plist_name"
+        local plist_dest="$HOME/Library/LaunchAgents/$plist_name"
+        local wrapper_src="$bridge_dir/installers/macos/iris-daemon-wrapper.sh"
+        local wrapper_dest="$HOME/.iris/iris-daemon-wrapper.sh"
+
+        # Copy and configure wrapper script
+        if [ -f "$wrapper_src" ]; then
+            cp "$wrapper_src" "$wrapper_dest"
+            # Point wrapper to ~/.iris/bridge (where main installer puts daemon)
+            sed -i '' "s|DAEMON_DIR=\"\${IRIS_DIR}/daemon\"|DAEMON_DIR=\"\${IRIS_DIR}/bridge\"|g" "$wrapper_dest" 2>/dev/null || true
+            chmod 755 "$wrapper_dest"
+        fi
+
+        # Install plist with HOME path substitution
+        if [ -f "$plist_src" ]; then
+            sed "s|__HOME__|$HOME|g" "$plist_src" > "$plist_dest"
+            # Also fix daemon path to bridge
+            sed -i '' "s|/.iris/daemon|/.iris/bridge|g" "$plist_dest" 2>/dev/null || true
+
+            # Load (unload first if already loaded)
+            launchctl unload "$plist_dest" 2>/dev/null || true
+            launchctl load "$plist_dest" 2>/dev/null || true
+        fi
+    fi
+
     if [ "$bridge_updated" = "true" ]; then
         print_message info "${GREEN}[5/7]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}updated${NC}"
     else
@@ -1164,6 +1192,9 @@ DCTL
     fi
     print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
     print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status|register${MUTED} (Hive compute node)${NC}"
+    if [ "$(uname)" = "Darwin" ]; then
+        print_message info "${MUTED}      Auto-start: ${NC}enabled${MUTED} (starts on login)${NC}"
+    fi
 }
 
 if [ "$skip_bridge" = "false" ]; then
