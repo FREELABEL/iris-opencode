@@ -18,6 +18,7 @@ const ProposalsCreateCommand = cmd({
       .option("interval", { alias: "i", describe: "billing interval: month|quarter|year|one-time", type: "string" })
       .option("duration", { alias: "d", describe: "duration in months (default: 12)", type: "number" })
       .option("deposit", { describe: "deposit percentage 0-100", type: "number" })
+      .option("rev-share", { describe: "revenue share percentage (e.g. 5)", type: "number" })
       .option("brand-logo", { describe: "brand logo URL for proposal header", type: "string" })
       .option("package", { alias: "p", describe: "service package ID (auto-fills amount + scope)", type: "number" })
       .option("template", { alias: "t", describe: "proposal template name", type: "string" })
@@ -84,6 +85,7 @@ const ProposalsCreateCommand = cmd({
     if (args.duration) body.duration_months = args.duration
     if (args.deposit !== undefined) body.deposit_percent = args.deposit
     if (args["brand-logo"]) body.brand_logo_url = args["brand-logo"]
+    if (args["rev-share"] !== undefined) body.rev_share_percent = args["rev-share"]
 
     const spinner = prompts.spinner()
     spinner.start("Generating proposal...")
@@ -127,6 +129,9 @@ const ProposalsCreateCommand = cmd({
       if (args.deposit) {
         const dep = total * (args.deposit / 100)
         printKV("Deposit", `${args.deposit}% = $${dep.toFixed(2)} upfront`)
+      }
+      if (args["rev-share"]) {
+        printKV("Rev Share", `${args["rev-share"]}% of net platform revenue`)
       }
     }
     printKV("Scope", String(scope))
