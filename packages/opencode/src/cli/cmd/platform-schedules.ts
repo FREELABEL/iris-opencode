@@ -21,15 +21,48 @@ function statusColor(status: string): string {
   return `${c}${status}${UI.Style.TEXT_NORMAL}`
 }
 
-function printSchedule(s: Record<string, unknown>): void {
-  const name = bold(String(s.name ?? s.title ?? `Schedule #${s.id}`))
+function timeUntil(dateStr: string | null | undefined): string {
+  if (!dateStr) return ""
+  const now = Date.now()
+  const target = new Date(String(dateStr)).getTime()
+  const diff = target - now
+  if (isNaN(target)) return ""
+  if (diff < 0) return "overdue"
+  if (diff < 60_000) return `${Math.round(diff / 1000)}s`
+  if (diff < 3600_000) return `${Math.round(diff / 60_000)}m`
+  if (diff < 86400_000) return `${Math.round(diff / 3600_000)}h`
+  return `${Math.round(diff / 86400_000)}d`
+}
+
+function taskLabel(s: Record<string, any>): string {
+  const data = s.data ?? {}
+  return data.task_type ?? data.type ?? s.task_name ?? ""
+}
+
+function printSchedule(s: Record<string, any>, showCountdown = true): void {
+  const name = bold(String(s.name ?? s.title ?? s.task_name ?? `Schedule #${s.id}`))
   const id = dim(`#${s.id}`)
   const status = s.status ? `  ${statusColor(String(s.status))}` : ""
   const freq = s.frequency ?? s.cron_expression ?? s.interval
   const freqStr = freq ? `  ${dim(String(freq))}` : ""
-  console.log(`  ${name}  ${id}${status}${freqStr}`)
-  if (s.description) {
-    console.log(`    ${dim(String(s.description).slice(0, 100))}`)
+
+  // Task type label
+  const tl = taskLabel(s)
+  const typeStr = tl ? `  ${dim(`[${tl}]`)}` : ""
+
+  // Countdown to next run
+  let countdown = ""
+  if (showCountdown && s.next_run_at && s.status === "scheduled") {
+    const until = timeUntil(String(s.next_run_at))
+    countdown = until ? `  ${UI.Style.TEXT_HIGHLIGHT}⏱ ${until}${UI.Style.TEXT_NORMAL}` : ""
+  }
+
+  console.log(`  ${name}  ${id}${status}${freqStr}${typeStr}${countdown}`)
+
+  // Show prompt/description on second line
+  const prompt = s.data?.prompt ?? s.prompt ?? s.description ?? ""
+  if (prompt) {
+    console.log(`    ${dim(String(prompt).slice(0, 100))}`)
   }
 }
 
@@ -43,8 +76,10 @@ const SchedulesListCommand = cmd({
   describe: "list scheduled jobs",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("limit", { describe: "max results", type: "number", default: 50 })
+      .option("active", { describe: "show only active/scheduled/running jobs (hide completed one-offs)", type: "boolean", default: false })
       .option("agent-id", { describe: "filter by agent ID", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -68,24 +103,65 @@ const SchedulesListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[]; total?: number }
-      const schedules: any[] = data?.data ?? []
-      spinner.stop(`${schedules.length} schedule(s)`)
+      let schedules: any[] = data?.data ?? []
 
-      if (schedules.length === 0) {
-        prompts.log.warn("No schedules found")
+      // --active: filter to scheduled/running/paused only (skip completed/cancelled one-offs)
+      if (args.active) {
+        schedules = schedules.filter((s: any) => {
+          const status = String(s.status ?? "").toLowerCase()
+          return ["scheduled", "running", "paused", "active", "enabled"].includes(status)
+        })
+      }
+
+      spinner.stop(`${schedules.length} schedule(s)${args.active ? " (active)" : ""}`)
+
+      if (args.json) {
+        console.log(JSON.stringify(schedules.map((s: any) => ({
+          id: s.id,
+          name: s.name ?? s.title ?? s.task_name,
+          status: s.status,
+          frequency: s.frequency,
+          task_type: taskLabel(s),
+          prompt: s.data?.prompt ?? s.prompt,
+          next_run_at: s.next_run_at,
+          time_until: timeUntil(s.next_run_at),
+          last_run_at: s.last_run_at,
+        })), null, 2))
         prompts.outro("Done")
         return
       }
 
+      if (schedules.length === 0) {
+        prompts.log.warn(args.active ? "No active schedules. Use without --active to see all." : "No schedules found")
+        prompts.outro("Done")
+        return
+      }
+
+      // Table header
       printDivider()
+      console.log(`  ${dim("ID".padEnd(6))} ${dim("Status".padEnd(12))} ${dim("Freq".padEnd(14))} ${dim("Next Run".padEnd(8))} ${dim("Name / Task")}`)
+      printDivider()
+
       for (const s of schedules) {
-        printSchedule(s)
-        console.log()
+        const id = String(s.id ?? "").padEnd(6)
+        const status = String(s.status ?? "?").padEnd(12)
+        const freq = String(s.frequency ?? "-").padEnd(14)
+        const until = s.next_run_at && s.status === "scheduled" ? timeUntil(s.next_run_at).padEnd(8) : "-".padEnd(8)
+        const name = String(s.name ?? s.title ?? s.task_name ?? `Schedule #${s.id}`).slice(0, 40)
+        const tl = taskLabel(s)
+        const typeTag = tl ? dim(` [${tl}]`) : ""
+
+        const statusStr = statusColor(String(s.status ?? ""))
+        console.log(`  ${dim(id)} ${statusStr.padEnd(12)} ${dim(freq)} ${UI.Style.TEXT_HIGHLIGHT}${until}${UI.Style.TEXT_NORMAL} ${bold(name)}${typeTag}`)
+
+        const prompt = s.data?.prompt ?? s.prompt ?? ""
+        if (prompt) console.log(`  ${" ".repeat(6)} ${dim(String(prompt).slice(0, 80))}`)
       }
       printDivider()
 
+      prompts.log.info(`${dim("Tip: iris schedules list --active")} — show only running/scheduled jobs`)
       prompts.outro(
-        `${dim("iris schedules get <id>")}  ·  ${dim("iris schedules run <id>")}`,
+        `${dim("iris schedules get <id>")}  ·  ${dim("iris schedules history <id>")}`,
       )
     } catch (err) {
       spinner.stop("Error", 1)
@@ -299,7 +375,7 @@ const SchedulesCreateCommand = cmd({
       .option("type", {
         describe: "job type",
         type: "string",
-        choices: ["agent_task", "heartbeat", "competitor_intelligence", "seo_rank_check", "hive_task_dispatch", "custom_script", "code_workflow"],
+        choices: ["agent_task", "heartbeat", "competitor_intelligence", "seo_rank_check", "hive_task_dispatch", "custom_script", "code_workflow", "browser_workflow", "agentic_browser"],
         demandOption: true,
       })
       .option("frequency", {
@@ -347,6 +423,8 @@ const SchedulesCreateCommand = cmd({
       hive_task_dispatch: "Hive Task Dispatch",
       custom_script: "Custom Script",
       code_workflow: "Code Workflow",
+      browser_workflow: "Browser Workflow",
+      agentic_browser: "AI Browser Agent",
     }
     const taskName = args.name ?? typeNames[args.type] ?? args.type
 
@@ -359,6 +437,8 @@ const SchedulesCreateCommand = cmd({
       hive_task_dispatch: "Dispatch Hive campaign task",
       custom_script: "Execute custom script on Hive node",
       code_workflow: "Execute code workflow on Hive node",
+      browser_workflow: "Execute Playwright browser automation on Hive node",
+      agentic_browser: "AI browser agent — give it a goal, it navigates autonomously",
     }
     const prompt = args.prompt ?? typePrompts[args.type] ?? taskName
 
