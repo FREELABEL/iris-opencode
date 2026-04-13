@@ -123,10 +123,19 @@ const DaemonLogsCommand = cmd({
 const DaemonRunsCommand = cmd({
   command: "runs",
   aliases: ["schedules"],
-  describe: "show scheduled script runs and history",
-  async handler() {
+  describe: "show scheduled script runs, output, and source code",
+  builder: (yargs) =>
+    yargs
+      .option("output", { alias: "o", describe: "show last run stdout", type: "boolean", default: false })
+      .option("code", { alias: "c", describe: "show script source code", type: "boolean", default: false })
+      .option("all", { alias: "a", describe: "show everything (output + code)", type: "boolean", default: false }),
+  async handler(args) {
     UI.empty()
     prompts.intro("◈  Bridge Schedules")
+
+    const showOutput = args.all || args.output
+    const showCode = args.all || args.code
+
     try {
       const res = await fetch("http://localhost:3200/daemon/schedules", { signal: AbortSignal.timeout(3000) })
       if (!res.ok) { prompts.log.error(`HTTP ${res.status}`); prompts.outro("Done"); return }
@@ -139,23 +148,69 @@ const DaemonRunsCommand = cmd({
         return
       }
 
-      console.log(`  ${dim("─".repeat(56))}`)
+      console.log(`  ${dim("─".repeat(60))}`)
       for (const s of schedules) {
         const status = s.running
-          ? `${UI.Style.TEXT_HIGHLIGHT}running${UI.Style.TEXT_NORMAL}`
+          ? `${UI.Style.TEXT_HIGHLIGHT}● running${UI.Style.TEXT_NORMAL}`
           : s.last_status === "completed"
-            ? `${UI.Style.TEXT_SUCCESS}completed${UI.Style.TEXT_NORMAL}`
+            ? `${UI.Style.TEXT_SUCCESS}● completed${UI.Style.TEXT_NORMAL}`
             : s.last_status === "failed"
-              ? `${UI.Style.TEXT_DANGER}failed${UI.Style.TEXT_NORMAL}`
-              : dim("pending")
+              ? `${UI.Style.TEXT_DANGER}● failed${UI.Style.TEXT_NORMAL}`
+              : dim("○ pending")
 
         console.log(`  ${bold(s.filename)}  ${dim(s.cron)}  ${status}`)
         console.log(`    ${dim("Runs:")} ${s.run_count}  ${dim("Last:")} ${s.last_run ? new Date(s.last_run).toLocaleString() : "never"}  ${dim("Duration:")} ${s.last_duration_ms ? `${s.last_duration_ms}ms` : "—"}`)
+        if (s.last_exit_code !== undefined && s.last_exit_code !== null) {
+          console.log(`    ${dim("Exit:")} ${s.last_exit_code === 0 ? "0" : `${UI.Style.TEXT_DANGER}${s.last_exit_code}${UI.Style.TEXT_NORMAL}`}`)
+        }
         console.log(`    ${dim("ID:")} ${dim(s.id)}`)
+
+        // Show last stdout
+        if (showOutput && s.last_stdout) {
+          console.log()
+          console.log(`    ${dim("── Last Output ──────────────────────────────────")}`)
+          for (const line of s.last_stdout.trim().split("\n").slice(-20)) {
+            console.log(`    ${line}`)
+          }
+          if (s.last_stderr) {
+            console.log(`    ${dim("── Stderr ──")}`)
+            for (const line of s.last_stderr.trim().split("\n").slice(-5)) {
+              console.log(`    ${UI.Style.TEXT_DANGER}${line}${UI.Style.TEXT_NORMAL}`)
+            }
+          }
+        }
+
+        // Show script source code
+        if (showCode) {
+          const { existsSync, readFileSync } = await import("fs")
+          const { join: pathJoin } = await import("path")
+          const { homedir: osHome } = await import("os")
+          // Check multiple script locations (data/scripts from daemon, scripts/ from user)
+          const candidates = [
+            pathJoin(osHome(), ".iris", "data", "scripts", s.filename),
+            pathJoin(osHome(), ".iris", "scripts", s.filename),
+            pathJoin(osHome(), ".iris", "bridge", "scripts", s.filename),
+          ]
+          const scriptPath = candidates.find(p => existsSync(p)) ?? candidates[0]
+          if (existsSync(scriptPath)) {
+            const code = readFileSync(scriptPath, "utf-8")
+            console.log()
+            console.log(`    ${dim("── Source (" + s.filename + ") ──────────────────────")}`)
+            for (const line of code.split("\n")) {
+              console.log(`    ${dim(line)}`)
+            }
+          }
+        }
+
         console.log()
       }
-      console.log(`  ${dim("─".repeat(56))}`)
-      prompts.outro(dim("iris hive schedule list  |  iris bridge logs"))
+      console.log(`  ${dim("─".repeat(60))}`)
+      if (!showOutput && !showCode) {
+        prompts.log.info(dim("iris bridge runs -o     show last output"))
+        prompts.log.info(dim("iris bridge runs -c     show script code"))
+        prompts.log.info(dim("iris bridge runs -a     show everything"))
+      }
+      prompts.outro("Done")
     } catch (err) {
       prompts.log.error("Daemon not reachable on :3200. Is it running?")
       prompts.log.info(dim("Start with: iris bridge start"))
