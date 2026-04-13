@@ -198,11 +198,21 @@ const SchedulesListCommand = cmd({
           const id = dim(`#${s.id}`)
           const status = String(s.status ?? "").toLowerCase()
 
-          // Status badge
+          // Status badge — detect stuck jobs (running + once + old)
           let badge = ""
-          if (status === "running") badge = `${UI.Style.TEXT_HIGHLIGHT}running${UI.Style.TEXT_NORMAL}`
-          else if (status === "paused") badge = `${UI.Style.TEXT_WARNING}paused${UI.Style.TEXT_NORMAL}`
-          else if (status === "scheduled") {
+          if (status === "running") {
+            const freq = String(s.frequency ?? "").toLowerCase()
+            const createdAt = s.created_at ? new Date(String(s.created_at)).getTime() : 0
+            const age = Date.now() - createdAt
+            const isStuck = freq === "once" && age > 3600_000 // once + older than 1 hour
+            if (isStuck) {
+              badge = `${UI.Style.TEXT_DANGER}⚠ stuck${UI.Style.TEXT_NORMAL}`
+            } else {
+              badge = `${UI.Style.TEXT_HIGHLIGHT}running${UI.Style.TEXT_NORMAL}`
+            }
+          } else if (status === "paused") {
+            badge = `${UI.Style.TEXT_WARNING}paused${UI.Style.TEXT_NORMAL}`
+          } else if (status === "scheduled") {
             const until = timeUntil(s.next_run_at)
             badge = until === "overdue"
               ? `${UI.Style.TEXT_DANGER}⚠ overdue${UI.Style.TEXT_NORMAL}`
@@ -218,6 +228,10 @@ const SchedulesListCommand = cmd({
           const agentName = s.data?.agent_name ?? ""
           const name = agentName || String(s.name ?? s.title ?? s.task_name ?? "").slice(0, 50)
 
+          // Origin tag — show where this task came from
+          const createdFrom = String(s.data?.created_from ?? s.data?.source ?? "")
+          const originTag = createdFrom.includes("heartbeat") ? dim(" (via heartbeat)") : ""
+
           // Description — short, one line, no repeats
           const tl = taskLabel(s)
           const prompt = s.data?.prompt ?? s.prompt ?? ""
@@ -232,7 +246,7 @@ const SchedulesListCommand = cmd({
             }
           }
 
-          console.log(`  ${id}  ${badge.padEnd(12)}  ${dim(freq.padEnd(12))}  ${bold(name)}`)
+          console.log(`  ${id}  ${badge.padEnd(12)}  ${dim(freq.padEnd(12))}  ${bold(name)}${originTag}`)
           if (desc) console.log(`        ${dim(desc)}`)
         }
       }
