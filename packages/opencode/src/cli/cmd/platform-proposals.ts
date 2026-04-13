@@ -15,10 +15,14 @@ const ProposalsCreateCommand = cmd({
       .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
       .option("amount", { alias: "a", describe: "total amount ($)", type: "number" })
       .option("scope", { alias: "s", describe: "scope of work", type: "string" })
+      .option("interval", { alias: "i", describe: "billing interval: month|quarter|year|one-time", type: "string" })
+      .option("duration", { alias: "d", describe: "duration in months (default: 12)", type: "number" })
+      .option("deposit", { describe: "deposit percentage 0-100", type: "number" })
+      .option("brand-logo", { describe: "brand logo URL for proposal header", type: "string" })
       .option("package", { alias: "p", describe: "service package ID (auto-fills amount + scope)", type: "number" })
       .option("template", { alias: "t", describe: "proposal template name", type: "string" })
-      .option("no-contract", { describe: "skip contract attachment", type: "boolean" })
-      .option("no-send", { describe: "generate but don't send to client", type: "boolean" })
+      .option("skip-contract", { describe: "skip contract attachment", type: "boolean" })
+      .option("skip-send", { describe: "generate but don't send to client", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -74,8 +78,12 @@ const ProposalsCreateCommand = cmd({
       generate_proposal: true,
     }
     if (args.package) body.package_id = args.package
-    if (args["no-contract"]) body.skip_contract = true
+    if (args["skip-contract"]) body.skip_contract = true
     if (args.template) body.template = args.template
+    if (args.interval) body.interval = args.interval
+    if (args.duration) body.duration_months = args.duration
+    if (args.deposit !== undefined) body.deposit_percent = args.deposit
+    if (args["brand-logo"]) body.brand_logo_url = args["brand-logo"]
 
     const spinner = prompts.spinner()
     spinner.start("Generating proposal...")
@@ -110,7 +118,17 @@ const ProposalsCreateCommand = cmd({
     console.log(success("Proposal created!"))
     printDivider()
     printKV("Lead", `${leadData.name ?? leadData.first_name ?? ""} (#${leadId})`)
-    printKV("Amount", `$${Number(amount).toFixed(2)}`)
+    printKV("Amount", `$${Number(amount).toFixed(2)}${args.interval && args.interval !== "one-time" ? "/" + args.interval : ""}`)
+    if (args.interval && args.interval !== "one-time") {
+      const dur = args.duration ?? 12
+      const total = Number(amount) * dur
+      printKV("Duration", `${dur} months`)
+      printKV("Total", `$${total.toFixed(2)}`)
+      if (args.deposit) {
+        const dep = total * (args.deposit / 100)
+        printKV("Deposit", `${args.deposit}% = $${dep.toFixed(2)} upfront`)
+      }
+    }
     printKV("Scope", String(scope))
     printDivider()
     printKV("Proposal URL", data.proposal_url ?? dim("(not generated)"))
@@ -118,7 +136,7 @@ const ProposalsCreateCommand = cmd({
     printKV("Payment URL", data.stripe_checkout_url ?? dim("(not configured)"))
     printDivider()
 
-    if (!args["no-send"] && data.proposal_url) {
+    if (!args["skip-send"] && data.proposal_url) {
       console.log("")
       console.log(dim("Proposal ready to send. Use outreach or share the URL above."))
     }
