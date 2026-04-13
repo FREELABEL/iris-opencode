@@ -494,6 +494,22 @@ const CreateCmd = cmd({
     const sp = prompts.spinner()
     sp.start("Creating…")
     try {
+      // Build initial json_content — the API requires it
+      const template = args.template ?? "landing"
+      const jsonContent = {
+        meta: { template, version: 1 },
+        theme: {},
+        components: [
+          {
+            type: "HeroSection",
+            props: {
+              title: args.title,
+              subtitle: args["seo-description"] ?? "",
+            },
+          },
+        ],
+      }
+
       const payload: Record<string, unknown> = {
         slug: args.slug,
         title: args.title,
@@ -502,8 +518,9 @@ const CreateCmd = cmd({
         owner_type: args["owner-type"],
         owner_id: args["owner-id"],
         status: "draft",
+        json_content: jsonContent,
+        auto_publish: true,
       }
-      if (args.template) payload.template = args.template
       const res = await irisFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
       if (!(await handleApiError(res, "Create page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as { data?: any }
