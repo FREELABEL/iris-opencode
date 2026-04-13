@@ -503,14 +503,29 @@ const CreateCmd = cmd({
       // Build initial json_content — the API requires it
       const template = args.template ?? "landing"
       const jsonContent = {
-        meta: { template, version: 1 },
-        theme: {},
+        version: "1.0",
+        type: template,
+        theme: { mode: "dark", backgroundColor: "#000000", branding: { name: args.title, primaryColor: "#34d399" } },
         components: [
           {
-            type: "HeroSection",
+            type: "Hero",
+            id: `${args.slug}-hero`,
             props: {
+              themeMode: "dark",
               title: args.title,
               subtitle: args["seo-description"] ?? "",
+              labelText: "NEW",
+              labelColor: "#34d399",
+              textAlign: "center",
+            },
+          },
+          {
+            type: "SiteFooter",
+            id: `${args.slug}-footer`,
+            props: {
+              themeMode: "dark",
+              brandName: args.title,
+              links: [],
             },
           },
         ],
@@ -643,6 +658,71 @@ const RollbackCmd = cmd({
 })
 
 // ============================================================================
+// Component Registry — available component types for the page builder
+// ============================================================================
+
+const COMPONENT_REGISTRY: { type: string; description: string; requiredProps: string[] }[] = [
+  { type: "Hero", description: "Full-width hero banner with title, subtitle, CTA buttons", requiredProps: ["title"] },
+  { type: "SiteNavigation", description: "Top navigation bar with logo, links, CTA button", requiredProps: ["logo"] },
+  { type: "SiteFooter", description: "Footer with brand name, links, copyright", requiredProps: ["brandName"] },
+  { type: "AnnouncementBanner", description: "Dismissible banner strip at top of page", requiredProps: ["text"] },
+  { type: "TestimonialsSection", description: "Customer testimonials with avatars and quotes", requiredProps: ["testimonials"] },
+  { type: "TeamSection", description: "Team member grid with photos and roles", requiredProps: ["members"] },
+  { type: "ContactSection", description: "Contact form with configurable fields", requiredProps: ["heading"] },
+  { type: "LogoMarquee", description: "Auto-scrolling logo carousel (trusted by...)", requiredProps: ["logos"] },
+  { type: "FeatureShowcase", description: "Feature highlights with icons and descriptions", requiredProps: ["features"] },
+  { type: "ComparisonMatrix", description: "Pricing/feature comparison table", requiredProps: ["columns", "rows"] },
+  { type: "ClientGrid", description: "Client/partner logo grid", requiredProps: ["clients"] },
+  { type: "CareersListing", description: "Job listings with department filters", requiredProps: ["jobs"] },
+  { type: "PortfolioGallery", description: "Image/project gallery grid with lightbox", requiredProps: ["items"] },
+  { type: "ProductGrid", description: "E-commerce product cards with prices", requiredProps: ["products"] },
+  { type: "ServiceMenu", description: "Service/menu items with prices and descriptions", requiredProps: ["categories"] },
+  { type: "EventGrid", description: "Event cards with dates and venues", requiredProps: ["events"] },
+  { type: "FundingTiers", description: "Pricing/funding tier cards", requiredProps: ["tiers"] },
+  { type: "BeforeAfter", description: "Before/after image slider comparison", requiredProps: ["before", "after"] },
+  { type: "MapSection", description: "Interactive map with location markers", requiredProps: ["locations"] },
+  { type: "NewsletterSignup", description: "Email signup form", requiredProps: ["heading"] },
+  { type: "StepWizard", description: "Multi-step form wizard", requiredProps: ["steps"] },
+  { type: "FileUpload", description: "File upload dropzone", requiredProps: [] },
+  { type: "ShoppingCart", description: "Shopping cart with line items", requiredProps: [] },
+  { type: "OrderConfirmation", description: "Order confirmation/receipt page", requiredProps: [] },
+]
+
+const ComponentRegistryCmd = cmd({
+  command: "component-registry",
+  aliases: ["registry", "available-components"],
+  describe: "list available component types for the page builder",
+  builder: (y) => y.option("json", { type: "boolean" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Page Component Registry")
+
+    if (args.json) {
+      console.log(JSON.stringify(COMPONENT_REGISTRY, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    console.log()
+    console.log(`  ${bold("Available components for Genesis pages:")}`)
+    console.log()
+    for (const c of COMPONENT_REGISTRY) {
+      console.log(`  ${highlight(c.type)}`)
+      console.log(`    ${dim(c.description)}`)
+      if (c.requiredProps.length) {
+        console.log(`    ${dim("Required props: " + c.requiredProps.join(", "))}`)
+      }
+      console.log()
+    }
+    console.log(`  ${dim(`${COMPONENT_REGISTRY.length} components available`)}`)
+    console.log()
+    prompts.log.info(`Example: ${dim('iris pages set my-page "components.1" \'{"type":"Hero","props":{"title":"Hello"}}\'')}`)
+    prompts.log.info(`Reference: ${dim("iris pages pull component-showcase")} — pull a working example`)
+    prompts.outro("Done")
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
@@ -663,6 +743,7 @@ export const PlatformPagesCommand = cmd({
       .command(UnpublishCmd)
       .command(CreateCmd)
       .command(ComponentsCmd)
+      .command(ComponentRegistryCmd)
       .command(VersionsCmd)
       .command(RollbackCmd)
       .demandCommand(),

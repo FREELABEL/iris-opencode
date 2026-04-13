@@ -46,6 +46,47 @@ Recipes available out of the box:
 
 When the user asks something that might match a recipe, **read the recipe file first** instead of guessing. The recipes have exact commands, expected output, and known gotchas.
 
+## Critical Rules
+
+- **NEVER use curl or call APIs directly.** Use `iris` CLI commands.
+- **NEVER guess or hallucinate URLs.** Always read URLs from CLI output. Page URLs follow: `main.heyiris.io/p/{slug}`
+- **NEVER invent component type names.** Run `iris pages component-registry` first. Invalid types render blank.
+- **READ CLI output carefully.** Use exact values shown — don't make up IDs, URLs, or status values.
+
+## Genesis Page Builder — Component Rules
+
+When building or editing pages with `iris pages`, follow these rules:
+
+1. **Run `iris pages component-registry`** before adding components to see all valid types
+2. **Use `iris pages pull component-showcase`** as a reference for working component JSON
+3. **Page URLs** are shown in CLI output — format: `main.heyiris.io/p/{slug}`
+
+**Valid component types (use ONLY these exact names):**
+Hero, SiteNavigation, SiteFooter, AnnouncementBanner, TestimonialsSection, TeamSection, ContactSection, LogoMarquee, FeatureShowcase, ComparisonMatrix, ClientGrid, CareersListing, PortfolioGallery, ProductGrid, ServiceMenu, EventGrid, FundingTiers, BeforeAfter, MapSection, NewsletterSignup, StepWizard, FileUpload, ShoppingCart, OrderConfirmation
+
+**Every component needs:** `type` (exact name from above), `id` (unique string), `props` (object)
+
+**Workflow: pull → edit → push**
+```bash
+iris pages pull <slug>        # download to pages/<slug>.json
+# edit the JSON file
+iris pages push <slug>        # upload back
+```
+
+## Integration Functions
+
+When running `iris integrations exec <type>` without a function, the CLI shows available functions.
+
+| Integration | Functions |
+|-------------|-----------|
+| gmail | `read_emails`, `search_emails`, `send_email` |
+| google-drive | `search_files`, `export_file`, `read_doc` |
+| google-calendar | `get_events`, `create_event` |
+| slack | `send_message`, `list_channels` |
+| canva | `list_designs`, `export_design` |
+
+Run `iris integrations exec <type>` (no function) to discover functions for any integration.
+
 ## What you should NOT assume
 
 - You are NOT working on the IRIS source code unless `cwd` is the `iris-code` repo. By default, assume the user is in their OWN project and behave like a general-purpose coding agent there.
