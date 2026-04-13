@@ -431,6 +431,8 @@ const SchedulesHistoryCommand = cmd({
     yargs
       .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
       .option("limit", { describe: "max results", type: "number", default: 10 })
+      .option("full", { describe: "show full response (not just preview)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -461,18 +463,217 @@ const SchedulesHistoryCommand = cmd({
         return
       }
 
-      printDivider()
-      for (const r of runs) {
-        const status = statusColor(String(r.status ?? "unknown"))
-        const created = r.created_at ? dim(String(r.created_at)) : ""
-        console.log(`  ${bold(String(r.id))}  ${status}  ${created}`)
-        if (r.summary ?? r.response) {
-          console.log(`    ${dim(String(r.summary ?? r.response).slice(0, 120))}`)
-        }
-        console.log()
+      if (args.json) {
+        console.log(JSON.stringify(runs, null, 2))
+        prompts.outro("Done")
+        return
       }
+
+      for (const r of runs) {
+        const statusBadge = r.status === "completed"
+          ? `${UI.Style.TEXT_SUCCESS}✓ completed${UI.Style.TEXT_NORMAL}`
+          : r.status === "failed"
+          ? `${UI.Style.TEXT_DANGER}✗ failed${UI.Style.TEXT_NORMAL}`
+          : statusColor(String(r.status ?? "?"))
+
+        const when = r.completed_at ?? r.started_at ?? r.created_at
+        const ago = when ? timeUntil(String(when)) : ""
+        const agoStr = ago === "overdue" ? dim("just now") : ago ? dim(`${ago} ago`) : ""
+
+        console.log()
+        printDivider()
+        console.log(`  ${bold(`Run #${r.id}`)}  ${statusBadge}  ${agoStr}`)
+
+        // Metadata line
+        const meta: string[] = []
+        if (r.model_used) meta.push(`model: ${r.model_used}`)
+        if (r.tokens_used) meta.push(`${Number(r.tokens_used).toLocaleString()} tokens`)
+        if (r.started_at && r.completed_at) {
+          const dur = Math.round((new Date(r.completed_at).getTime() - new Date(r.started_at).getTime()) / 1000)
+          meta.push(`${dur}s`)
+        }
+        if (r.execution_source) meta.push(r.execution_source)
+        if (meta.length) console.log(`  ${dim(meta.join("  ·  "))}`)
+
+        // Tools used
+        if (r.functions_executed) {
+          try {
+            const tools = JSON.parse(r.functions_executed)
+            if (Array.isArray(tools) && tools.length > 0) {
+              console.log(`  ${dim("tools: " + tools.join(", "))}`)
+            }
+          } catch {}
+        }
+
+        // Error
+        if (r.error_message) {
+          console.log(`  ${UI.Style.TEXT_DANGER}error: ${String(r.error_message).slice(0, 200)}${UI.Style.TEXT_NORMAL}`)
+        }
+
+        // Response
+        const response = String(r.response ?? r.response_preview ?? r.summary ?? "")
+        if (response) {
+          console.log()
+          if (args.full) {
+            // Full response with word wrap
+            const lines = response.split("\n")
+            for (const line of lines) {
+              console.log(`  ${dim(line)}`)
+            }
+          } else {
+            // Preview (first 3 lines or 200 chars)
+            const preview = response.replace(/\n/g, " ").slice(0, 200)
+            console.log(`  ${dim(`"${preview}${response.length > 200 ? "…" : ""}"`)}`)
+          }
+        }
+      }
+      console.log()
       printDivider()
 
+      if (!args.full) {
+        prompts.log.info(dim(`Tip: iris schedules history ${args.id} --full  — show complete responses`))
+      }
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Inspect — show agent config, system prompt, model, tools for a schedule
+// ============================================================================
+
+const SchedulesInspectCommand = cmd({
+  command: "inspect <id>",
+  describe: "show the agent config, system prompt, and tools for a scheduled job",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Inspect Schedule #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+
+    try {
+      // Fetch all schedules and find the one we want (the individual GET returns only data column)
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?per_page=200`)
+      const ok = await handleApiError(res, "Get schedules")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const allData = (await res.json()) as { data?: any[] }
+      const schedule = (allData?.data ?? []).find((s: any) => s.id === args.id)
+      if (!schedule) {
+        spinner.stop("Not found", 1)
+        prompts.log.error(`Schedule #${args.id} not found`)
+        prompts.outro("Done")
+        return
+      }
+
+      // Fetch agent details if agent_id exists
+      let agent: any = null
+      if (schedule.agent_id) {
+        try {
+          const agentRes = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${schedule.agent_id}`)
+          if (agentRes.ok) {
+            const agentData = (await agentRes.json()) as any
+            agent = agentData?.data ?? agentData
+          }
+        } catch {}
+      }
+
+      spinner.stop(bold(schedule.task_name ?? `Schedule #${args.id}`))
+
+      if (args.json) {
+        console.log(JSON.stringify({ schedule, agent }, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      // Schedule info
+      printDivider()
+      printKV("ID", schedule.id)
+      printKV("Status", schedule.status)
+      printKV("Frequency", schedule.frequency)
+      printKV("Next run", schedule.next_run_at)
+      printKV("Bloq", schedule.bloq?.name ?? (schedule.bloq_id ? `#${schedule.bloq_id}` : null))
+      printKV("Created", schedule.created_at)
+      printDivider()
+
+      // Agent config
+      if (agent) {
+        console.log()
+        console.log(`  ${bold("Agent Config")}`)
+        printDivider()
+        printKV("Agent ID", agent.id)
+        printKV("Name", agent.name)
+        printKV("Model", agent.model ?? agent.settings?.model)
+        printKV("Heartbeat mode", agent.heartbeat_mode)
+        printKV("Heartbeat freq", agent.settings?.heartbeat_frequency ?? agent.settings?.frequency)
+
+        // System prompt
+        const systemPrompt = agent.system_prompt ?? agent.instructions ?? agent.settings?.system_prompt
+        if (systemPrompt) {
+          console.log()
+          console.log(`  ${bold("System Prompt")}`)
+          printDivider()
+          const lines = String(systemPrompt).split("\n").slice(0, 20)
+          for (const line of lines) {
+            console.log(`  ${dim(line)}`)
+          }
+          if (String(systemPrompt).split("\n").length > 20) {
+            console.log(`  ${dim(`... (${String(systemPrompt).split("\\n").length} total lines)`)}`)
+          }
+        }
+
+        // Tools / capabilities
+        const tools = agent.settings?.tools ?? agent.capabilities ?? agent.settings?.capabilities
+        if (tools && (Array.isArray(tools) ? tools.length : Object.keys(tools).length)) {
+          console.log()
+          console.log(`  ${bold("Tools / Capabilities")}`)
+          printDivider()
+          const toolList = Array.isArray(tools) ? tools : Object.keys(tools)
+          console.log(`  ${dim(toolList.join(", "))}`)
+        }
+
+        // Integrations
+        const integrations = agent.settings?.integrations ?? []
+        if (Array.isArray(integrations) && integrations.length) {
+          console.log()
+          console.log(`  ${bold("Integrations")}`)
+          printDivider()
+          console.log(`  ${dim(integrations.join(", "))}`)
+        }
+
+        printDivider()
+      }
+
+      // Task prompt
+      const prompt = schedule.prompt ?? schedule.data?.prompt
+      if (prompt) {
+        console.log()
+        console.log(`  ${bold("Task Prompt")}`)
+        printDivider()
+        for (const line of String(prompt).split("\n").slice(0, 10)) {
+          console.log(`  ${dim(line)}`)
+        }
+      }
+
+      console.log()
+      prompts.log.info(dim(`Edit agent: iris agents update ${schedule.agent_id}`))
+      prompts.log.info(dim(`Run history: iris schedules history ${args.id} --full`))
       prompts.outro("Done")
     } catch (err) {
       spinner.stop("Error", 1)
@@ -708,6 +909,7 @@ export const PlatformSchedulesCommand = cmd({
       .command(SchedulesGetCommand)
       .command(SchedulesRunCommand)
       .command(SchedulesHistoryCommand)
+      .command(SchedulesInspectCommand)
       .command(SchedulesToggleCommand)
       .command(SchedulesDeleteCommand)
       .demandCommand(),
