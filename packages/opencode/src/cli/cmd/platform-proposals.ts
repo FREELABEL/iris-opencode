@@ -25,6 +25,7 @@ const ProposalsCreateCommand = cmd({
       .option("template", { alias: "t", describe: "proposal template name", type: "string" })
       .option("list-price", { describe: "list price before discount (shows strikethrough on proposal)", type: "number" })
       .option("discount", { describe: "discount percentage (auto-calculated from list-price vs amount if omitted)", type: "number" })
+      .option("sender-name", { describe: "sender name shown on proposal (e.g. 'Alex Mayo')", type: "string" })
       .option("skip-contract", { describe: "skip contract attachment", type: "boolean" })
       .option("skip-send", { describe: "generate but don't send to client", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean" }),
@@ -92,6 +93,7 @@ const ProposalsCreateCommand = cmd({
     if (args["pass-fees"]) body.processing_fee_mode = "pass_to_client"
     if (args["list-price"] !== undefined) body.list_price = args["list-price"]
     if (args["discount"] !== undefined) body.discount_percent = args["discount"]
+    if (args["sender-name"]) body.sender_name = args["sender-name"]
 
     const spinner = prompts.spinner()
     spinner.start("Generating proposal...")
