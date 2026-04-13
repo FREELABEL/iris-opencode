@@ -171,30 +171,73 @@ const SchedulesListCommand = cmd({
         return
       }
 
-      // Table header
-      printDivider()
-      console.log(`  ${dim("ID".padEnd(6))} ${dim("Env".padEnd(6))} ${dim("Status".padEnd(12))} ${dim("Freq".padEnd(14))} ${dim("Next".padEnd(8))} ${dim("Name / Task")}`)
-      printDivider()
+      // Group by execution environment
+      const groups: Record<string, { icon: string; label: string; description: string; items: any[] }> = {
+        hive: { icon: "⬡", label: "HIVE", description: "local machine", items: [] },
+        iris: { icon: "◉", label: "IRIS", description: "cloud heartbeats", items: [] },
+        auto: { icon: "⟳", label: "AUTO", description: "spawned by heartbeat", items: [] },
+        cloud: { icon: "☁", label: "CLOUD", description: "agent tasks", items: [] },
+        hook: { icon: "⚡", label: "HOOKS", description: "event listeners", items: [] },
+      }
 
       for (const s of schedules) {
-        const id = String(s.id ?? "").padEnd(6)
         const env = executionEnv(s)
-        const envStr = `${env.icon} ${dim(env.label)}`.padEnd(6)
-        const freq = String(s.frequency ?? "-").padEnd(14)
-        const until = s.next_run_at && s.status === "scheduled" ? timeUntil(s.next_run_at).padEnd(8) : "-".padEnd(8)
-        const name = String(s.name ?? s.title ?? s.task_name ?? `Schedule #${s.id}`).slice(0, 36)
-        const tl = taskLabel(s)
-        const typeTag = tl ? dim(` [${tl}]`) : ""
-
-        const statusStr = statusColor(String(s.status ?? ""))
-        console.log(`  ${dim(id)} ${envStr} ${statusStr} ${dim(freq)} ${UI.Style.TEXT_HIGHLIGHT}${until}${UI.Style.TEXT_NORMAL} ${bold(name)}${typeTag}`)
-
-        const prompt = s.data?.prompt ?? s.prompt ?? ""
-        if (prompt) console.log(`  ${" ".repeat(13)} ${dim(String(prompt).slice(0, 75))}`)
+        const group = groups[env.label] ?? groups["cloud"]
+        group.items.push(s)
       }
-      printDivider()
 
-      prompts.log.info(`${dim("Tip: iris schedules list --active")} — show only running/scheduled jobs`)
+      // Render each group
+      for (const [, group] of Object.entries(groups)) {
+        if (group.items.length === 0) continue
+
+        console.log()
+        console.log(`  ${group.icon} ${bold(group.label)} ${dim(`(${group.description})`)}`)
+        printDivider()
+
+        for (const s of group.items) {
+          const id = dim(`#${s.id}`)
+          const status = String(s.status ?? "").toLowerCase()
+
+          // Status badge
+          let badge = ""
+          if (status === "running") badge = `${UI.Style.TEXT_HIGHLIGHT}running${UI.Style.TEXT_NORMAL}`
+          else if (status === "paused") badge = `${UI.Style.TEXT_WARNING}paused${UI.Style.TEXT_NORMAL}`
+          else if (status === "scheduled") {
+            const until = timeUntil(s.next_run_at)
+            badge = until === "overdue"
+              ? `${UI.Style.TEXT_DANGER}⚠ overdue${UI.Style.TEXT_NORMAL}`
+              : `${UI.Style.TEXT_HIGHLIGHT}⏱ ${until}${UI.Style.TEXT_NORMAL}`
+          } else {
+            badge = statusColor(status)
+          }
+
+          // Frequency — clean up ugly underscores
+          const freq = String(s.frequency ?? "").replace(/_/g, " ")
+
+          // Name — prefer agent name from data, avoid repeating task_name as prompt
+          const agentName = s.data?.agent_name ?? ""
+          const name = agentName || String(s.name ?? s.title ?? s.task_name ?? "").slice(0, 50)
+
+          // Description — short, one line, no repeats
+          const tl = taskLabel(s)
+          const prompt = s.data?.prompt ?? s.prompt ?? ""
+          let desc = ""
+          if (tl && tl !== name && tl !== s.task_name) desc = tl
+          if (prompt && prompt !== name && prompt !== s.task_name && !prompt.startsWith(name)) {
+            // Deduplicate — if prompt just repeats task_name multiple times, skip it
+            const unique = [...new Set(prompt.split(/[.!?\n]+/).map((s: string) => s.trim()).filter(Boolean))]
+            const cleaned = unique.slice(0, 2).join(". ").slice(0, 60)
+            if (cleaned && cleaned !== name) {
+              desc = desc ? `${desc}: ${cleaned}` : cleaned
+            }
+          }
+
+          console.log(`  ${id}  ${badge.padEnd(12)}  ${dim(freq.padEnd(12))}  ${bold(name)}`)
+          if (desc) console.log(`        ${dim(desc)}`)
+        }
+      }
+
+      console.log()
       prompts.outro(
         `${dim("iris schedules get <id>")}  ·  ${dim("iris schedules history <id>")}`,
       )
