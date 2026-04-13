@@ -39,6 +39,28 @@ function taskLabel(s: Record<string, any>): string {
   return data.task_type ?? data.type ?? s.task_name ?? ""
 }
 
+function executionEnv(s: Record<string, any>): { label: string; icon: string } {
+  const data = s.data ?? {}
+  const taskName = String(s.task_name ?? "")
+  const dataType = String(data.type ?? "")
+
+  // Hive = dispatched to local daemon on user's machine
+  if (taskName === "hive_task_dispatch" || dataType === "hive_task_dispatch"
+      || data.task_type === "discover" || data.task_type === "som_batch"
+      || data.task_type === "som" || data.task_type === "social_stats_sync"
+      || data.task_type === "leadgen") {
+    return { label: "hive", icon: "⬡" }
+  }
+
+  // Heartbeat = runs on iris-api (cloud)
+  if (dataType === "heartbeat" || taskName === "heartbeat") {
+    return { label: "cloud", icon: "☁" }
+  }
+
+  // Agent tasks = runs on fl-api queue worker (cloud)
+  return { label: "cloud", icon: "☁" }
+}
+
 function printSchedule(s: Record<string, any>, showCountdown = true): void {
   const name = bold(String(s.name ?? s.title ?? s.task_name ?? `Schedule #${s.id}`))
   const id = dim(`#${s.id}`)
@@ -120,6 +142,7 @@ const SchedulesListCommand = cmd({
           id: s.id,
           name: s.name ?? s.title ?? s.task_name,
           status: s.status,
+          env: executionEnv(s).label,
           frequency: s.frequency,
           task_type: taskLabel(s),
           prompt: s.data?.prompt ?? s.prompt,
@@ -139,23 +162,24 @@ const SchedulesListCommand = cmd({
 
       // Table header
       printDivider()
-      console.log(`  ${dim("ID".padEnd(6))} ${dim("Status".padEnd(12))} ${dim("Freq".padEnd(14))} ${dim("Next Run".padEnd(8))} ${dim("Name / Task")}`)
+      console.log(`  ${dim("ID".padEnd(6))} ${dim("Env".padEnd(6))} ${dim("Status".padEnd(12))} ${dim("Freq".padEnd(14))} ${dim("Next".padEnd(8))} ${dim("Name / Task")}`)
       printDivider()
 
       for (const s of schedules) {
         const id = String(s.id ?? "").padEnd(6)
-        const status = String(s.status ?? "?").padEnd(12)
+        const env = executionEnv(s)
+        const envStr = `${env.icon} ${dim(env.label)}`.padEnd(6)
         const freq = String(s.frequency ?? "-").padEnd(14)
         const until = s.next_run_at && s.status === "scheduled" ? timeUntil(s.next_run_at).padEnd(8) : "-".padEnd(8)
-        const name = String(s.name ?? s.title ?? s.task_name ?? `Schedule #${s.id}`).slice(0, 40)
+        const name = String(s.name ?? s.title ?? s.task_name ?? `Schedule #${s.id}`).slice(0, 36)
         const tl = taskLabel(s)
         const typeTag = tl ? dim(` [${tl}]`) : ""
 
         const statusStr = statusColor(String(s.status ?? ""))
-        console.log(`  ${dim(id)} ${statusStr.padEnd(12)} ${dim(freq)} ${UI.Style.TEXT_HIGHLIGHT}${until}${UI.Style.TEXT_NORMAL} ${bold(name)}${typeTag}`)
+        console.log(`  ${dim(id)} ${envStr} ${statusStr} ${dim(freq)} ${UI.Style.TEXT_HIGHLIGHT}${until}${UI.Style.TEXT_NORMAL} ${bold(name)}${typeTag}`)
 
         const prompt = s.data?.prompt ?? s.prompt ?? ""
-        if (prompt) console.log(`  ${" ".repeat(6)} ${dim(String(prompt).slice(0, 80))}`)
+        if (prompt) console.log(`  ${" ".repeat(13)} ${dim(String(prompt).slice(0, 75))}`)
       }
       printDivider()
 
