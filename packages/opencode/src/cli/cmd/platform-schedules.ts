@@ -146,6 +146,21 @@ const SchedulesListCommand = cmd({
         })
       }
 
+      // Resolve bloq names in one batch
+      const bloqIds = [...new Set(schedules.map((s: any) => s.bloq_id).filter(Boolean))]
+      const bloqNames: Record<number, string> = {}
+      if (bloqIds.length > 0) {
+        try {
+          const bloqRes = await irisFetch(`/api/v1/users/${userId}/bloqs?ids=${bloqIds.join(",")}`)
+          if (bloqRes.ok) {
+            const bloqData = (await bloqRes.json()) as any
+            for (const b of (bloqData?.data ?? bloqData ?? [])) {
+              if (b?.id && b?.name) bloqNames[b.id] = b.name
+            }
+          }
+        } catch {}
+      }
+
       spinner.stop(`${schedules.length} schedule(s)${args.active ? " (active)" : ""}`)
 
       if (args.json) {
@@ -154,6 +169,8 @@ const SchedulesListCommand = cmd({
           name: s.name ?? s.title ?? s.task_name,
           status: s.status,
           env: executionEnv(s).label,
+          bloq_id: s.bloq_id ?? null,
+          bloq_name: s.bloq_id ? (bloqNames[s.bloq_id] ?? null) : null,
           frequency: s.frequency,
           task_type: taskLabel(s),
           prompt: s.data?.prompt ?? s.prompt,
@@ -246,8 +263,16 @@ const SchedulesListCommand = cmd({
             }
           }
 
+          // Bloq context — try eager-loaded relationship first, then batch lookup
+          const bloqId = s.bloq_id as number | null
+          const bloqName = s.bloq?.name ?? (bloqId ? bloqNames[bloqId] : null)
+          const bloqTag = bloqName ? dim(` → ${bloqName}`) : bloqId ? dim(` → bloq #${bloqId}`) : ""
+
           console.log(`  ${id}  ${badge.padEnd(12)}  ${dim(freq.padEnd(12))}  ${bold(name)}${originTag}`)
-          if (desc) console.log(`        ${dim(desc)}`)
+          if (bloqTag || desc) {
+            const parts = [bloqTag, desc ? dim(desc) : ""].filter(Boolean)
+            console.log(`        ${parts.join("  ")}`)
+          }
         }
       }
 
