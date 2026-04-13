@@ -49,6 +49,12 @@
       "dest": "how-to/debug-install-failures.md",
       "managed": true,
       "purpose": "Diagnose 5 common install failure modes: baseline asset mismatch, macOS version floor, missing deps, scaffold fetch fail, branding. Includes quick diagnostic command to send users."
+    },
+    {
+      "src": "how-to/pages.md",
+      "dest": "how-to/pages.md",
+      "managed": true,
+      "purpose": "Genesis page builder: create pages, valid component types, pull/edit/push workflow, component-showcase reference."
     }
   ]
 }

@@ -10,6 +10,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "send a campaign", "outreach", "find leads on linkedin/twitter/instagram", "DM people", "discover prospects" | `outreach-campaign.md` |
 | "connect my machine", "hive", "distributed", "run on multiple machines", "node not registering" | `hive-dispatch.md` |
 | "send a proposal", "create a deal", "invoice a client", "contract", "payment gate" | `lead-to-proposal.md` |
+| "build a page", "create a landing page", "genesis", "add components", "page builder" | `pages.md` |
 
 ## How to use these files
 

@@ -57,7 +57,7 @@ import { PlatformOutreachStrategyCommand } from "./cli/cmd/platform-outreach-str
 import { PlatformOutreachCampaignCommand } from "./cli/cmd/platform-outreach-campaign"
 import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
-import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
+import { PlatformMonitorCommand, BriefingCommand } from "./cli/cmd/platform-monitor"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
 import { PlatformPaymentsCommand } from "./cli/cmd/platform-payments"
 import { PlatformDeliverCommand } from "./cli/cmd/platform-deliver"
@@ -67,6 +67,7 @@ import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
+import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
 import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
@@ -118,7 +119,7 @@ const rawArgs = hideBin(process.argv)
 
 const cli = yargs(rawArgs)
   .parserConfiguration({ "populate--": true })
-  .scriptName("opencode")
+  .scriptName("iris")
   .wrap(100)
   .help("help", "show help")
   .alias("help", "h")
@@ -209,6 +210,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformOutreachSendCommand))
   .command(reg(PlatformSomCommand))
   .command(reg(PlatformMonitorCommand))
+  .command(reg(BriefingCommand))
   .command(reg(PlatformInvoicesCommand))
   .command(reg(PlatformPaymentsCommand))
   .command(reg(PlatformDeliverCommand))
@@ -221,6 +223,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAtlasMeetingsCommand))
   .command(reg(PlatformAtlasBrandKitCommand))
   .command(reg(PlatformLeadsMeetingCommand))
+  .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformPagesCommand))
   .command(reg(PlatformPagesBatchCommand))
   .command(reg(PlatformPartialsCommand))
