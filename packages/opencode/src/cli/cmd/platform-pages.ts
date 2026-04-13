@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -741,6 +741,86 @@ const COMPONENT_REGISTRY: { type: string; description: string; requiredProps: st
   { type: "OrderConfirmation", description: "Order confirmation/receipt page", requiredProps: [] },
 ]
 
+const ComposeCmd = cmd({
+  command: "compose <description..>",
+  describe: "AI-compose a page from a text description (uses Gemini)",
+  builder: (y) =>
+    y
+      .positional("description", { describe: "what the page should be", type: "string", array: true })
+      .option("slug", { describe: "page slug (auto-generated if omitted)", type: "string" })
+      .option("title", { describe: "page title", type: "string" })
+      .option("theme", { describe: "dark or light", type: "string", default: "dark", choices: ["dark", "light"] })
+      .option("style", { describe: "page style", type: "string", default: "landing", choices: ["landing", "dashboard", "product", "portfolio"] })
+      .option("model", { describe: "AI model override", type: "string" })
+      .option("json", { type: "boolean" }),
+  async handler(args) {
+    UI.empty()
+    const desc = (args.description as string[]).join(" ")
+    prompts.intro(`◈  Compose Page`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const userId = await resolveUserId()
+    if (!userId) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Composing with AI (this may take 10-30s)…")
+
+    try {
+      const payload: Record<string, unknown> = {
+        description: desc,
+        user_id: userId,
+        style: args.style,
+        theme_mode: args.theme,
+      }
+      if (args.slug) payload.slug = args.slug
+      if (args.title) payload.title = args.title
+      if (args.model) payload.model = args.model
+
+      const res = await pagesFetch("/api/v1/pages/compose", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as any
+        sp.stop("Failed", 1)
+        prompts.log.error(body.error ?? body.message ?? `HTTP ${res.status}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as any
+      if (!data.success) {
+        sp.stop("Failed", 1)
+        prompts.log.error(data.error ?? "Composition failed")
+        prompts.outro("Done")
+        return
+      }
+
+      sp.stop(success(`Created "${data.slug}"`))
+      printDivider()
+      printKV("Page ID", data.page_id)
+      printKV("Slug", data.slug)
+      printKV("URL", data.url)
+      printKV("Components", data.component_count ?? data.components?.length)
+      if (data.self_heal_attempts) printKV("Self-heal attempts", data.self_heal_attempts)
+      printDivider()
+
+      if (args.json) {
+        console.log(JSON.stringify(data, null, 2))
+      }
+
+      prompts.log.info(`View: ${dim(`iris pages view ${data.slug}`)}`)
+      prompts.log.info(`Edit: ${dim(`iris pages pull ${data.slug}`)}`)
+      prompts.outro("Done")
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const ComponentRegistryCmd = cmd({
   command: "component-registry",
   aliases: ["registry", "available-components"],
@@ -796,6 +876,7 @@ export const PlatformPagesCommand = cmd({
       .command(UnpublishCmd)
       .command(CreateCmd)
       .command(ComponentsCmd)
+      .command(ComposeCmd)
       .command(ComponentRegistryCmd)
       .command(VersionsCmd)
       .command(RollbackCmd)
