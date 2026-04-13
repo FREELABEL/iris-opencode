@@ -111,6 +111,7 @@ const SchedulesListCommand = cmd({
     yargs
       .option("limit", { describe: "max results", type: "number", default: 50 })
       .option("active", { describe: "show only active/scheduled/running jobs (hide completed one-offs)", type: "boolean", default: false })
+      .option("latest", { describe: "include latest execution result for each job", type: "boolean", default: false })
       .option("agent-id", { describe: "filter by agent ID", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -159,6 +160,24 @@ const SchedulesListCommand = cmd({
             }
           }
         } catch {}
+      }
+
+      // --latest: fetch last execution for each job (parallel)
+      const latestExecs: Record<number, any> = {}
+      if (args.latest && schedules.length > 0) {
+        const execPromises = schedules.map(async (s: any) => {
+          try {
+            const execRes = await irisFetch(
+              `/api/v1/users/${userId}/bloqs/scheduled-jobs/${s.id}/executions?per_page=1`
+            )
+            if (execRes.ok) {
+              const execData = (await execRes.json()) as any
+              const execs = execData?.data ?? []
+              if (execs.length > 0) latestExecs[s.id] = execs[0]
+            }
+          } catch {}
+        })
+        await Promise.all(execPromises)
       }
 
       spinner.stop(`${schedules.length} schedule(s)${args.active ? " (active)" : ""}`)
@@ -272,6 +291,25 @@ const SchedulesListCommand = cmd({
           if (bloqTag || desc) {
             const parts = [bloqTag, desc ? dim(desc) : ""].filter(Boolean)
             console.log(`        ${parts.join("  ")}`)
+          }
+
+          // Latest execution result
+          const exec = latestExecs[s.id]
+          if (exec) {
+            const execStatus = exec.status === "completed"
+              ? `${UI.Style.TEXT_SUCCESS}✓${UI.Style.TEXT_NORMAL}`
+              : exec.status === "failed"
+              ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+              : dim(exec.status ?? "?")
+            const when = exec.completed_at
+              ? timeUntil(exec.completed_at) === "overdue" ? dim("just now") : dim(`${timeUntil(exec.completed_at)} ago`)
+              : ""
+            const model = exec.model_used ? dim(`[${exec.model_used}]`) : ""
+            const tokens = exec.tokens_used ? dim(`${Number(exec.tokens_used).toLocaleString()} tok`) : ""
+            const preview = String(exec.response_preview ?? exec.response ?? "").replace(/\n/g, " ").slice(0, 70)
+
+            console.log(`        ${execStatus} ${when}  ${model}  ${tokens}`)
+            if (preview) console.log(`        ${dim(`"${preview}${preview.length >= 70 ? "…" : ""}"`)}`)
           }
         }
       }
