@@ -77,6 +77,28 @@ iris pages pull <slug>        # download to pages/<slug>.json
 iris pages push <slug>        # upload back
 ```
 
+## Autonomous Agent Scheduling
+
+Manage scheduled heartbeat agents, hive tasks, and workflows:
+
+```bash
+iris schedules list --active              # Grouped: ⬡ hive / ◉ iris / ☁ cloud
+iris schedules list --active --latest     # + last execution result
+iris schedules inspect <id>               # Agent config, system prompt, tools
+iris schedules history <id> --full        # Full execution output
+iris schedules run <id>                   # Trigger manually
+iris schedules toggle <id>               # Pause/resume
+iris schedules delete <id>               # Remove
+```
+
+### Creating Specialized Agents (Agent-First Architecture)
+Agents define their own mission and tools via database fields:
+- `initial_prompt` → agent's mission (injected as `<agent_mission>` in heartbeat)
+- `settings.system_prompt` → agent's identity (overrides generic prompt)
+- `settings.heartbeat_tools` → tool filter (e.g. `["manageLeads", "agent_memory"]`)
+
+Debug with: `iris schedules inspect <id>` to see the resolved config.
+
 ## Integration Functions
 
 When running `iris integrations exec <type>` without a function, the CLI shows available functions.
