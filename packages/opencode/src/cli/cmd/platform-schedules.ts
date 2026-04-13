@@ -43,21 +43,32 @@ function executionEnv(s: Record<string, any>): { label: string; icon: string } {
   const data = s.data ?? {}
   const taskName = String(s.task_name ?? "")
   const dataType = String(data.type ?? "")
+  const taskType = String(data.task_type ?? "")
 
   // Hive = dispatched to local daemon on user's machine
-  if (taskName === "hive_task_dispatch" || dataType === "hive_task_dispatch"
-      || data.task_type === "discover" || data.task_type === "som_batch"
-      || data.task_type === "som" || data.task_type === "social_stats_sync"
-      || data.task_type === "leadgen") {
+  if (dataType === "hive_task_dispatch" || taskName === "hive_task_dispatch"
+      || ["discover", "som_batch", "som", "social_stats_sync", "leadgen"].includes(taskType)) {
     return { label: "hive", icon: "⬡" }
   }
 
-  // Heartbeat = runs on iris-api (cloud)
+  // Heartbeat = runs on iris-api
   if (dataType === "heartbeat" || taskName === "heartbeat") {
+    return { label: "iris", icon: "◉" }
+  }
+
+  // Agent task = spawned by heartbeat or scheduler, runs on fl-api
+  if (dataType === "agent_task") {
+    const source = String(data.source ?? data.created_from ?? "")
+    if (source.includes("heartbeat")) return { label: "auto", icon: "⟳" }
     return { label: "cloud", icon: "☁" }
   }
 
-  // Agent tasks = runs on fl-api queue worker (cloud)
+  // Listener = event-driven
+  if (dataType === "listener") {
+    return { label: "hook", icon: "⚡" }
+  }
+
+  // Unknown / legacy (no type set)
   return { label: "cloud", icon: "☁" }
 }
 
