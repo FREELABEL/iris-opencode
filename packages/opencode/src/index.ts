@@ -275,6 +275,21 @@ if (hasHelp && hasNoCommand) {
   process.exit(0)
 }
 
+// Auto-start daemon if not running (silent, non-blocking)
+try {
+  const { join: pathJoin } = await import("path")
+  const { homedir: osHome } = await import("os")
+  const { existsSync } = await import("fs")
+  const daemonCtl = pathJoin(osHome(), ".iris", "bin", "iris-daemon")
+  if (existsSync(daemonCtl)) {
+    const health = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(500) }).catch(() => null)
+    if (!health?.ok) {
+      const { spawn } = await import("child_process")
+      spawn(daemonCtl, ["start"], { detached: true, stdio: "ignore" }).unref()
+    }
+  }
+} catch {}
+
 try {
   await cli.parse()
 } catch (e) {
