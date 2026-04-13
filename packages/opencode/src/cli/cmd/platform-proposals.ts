@@ -264,6 +264,62 @@ const ProposalsListCommand = cmd({
 })
 
 // ============================================================================
+// Proposals Cancel — cancel/clear an active proposal
+// ============================================================================
+
+const ProposalsCancelCommand = cmd({
+  command: "cancel <lead-id>",
+  aliases: ["clear", "delete"],
+  describe: "cancel the active proposal/payment gate for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const leadId = args["lead-id"]
+
+    // Find the active payment gate step
+    const stepsRes = await irisFetch(`/api/v1/leads/${leadId}/outreach-steps`)
+    if (!(await handleApiError(stepsRes, "Fetch outreach steps"))) return
+
+    const stepsData = await stepsRes.json().catch(() => ({}))
+    const steps = stepsData?.data ?? stepsData?.steps ?? stepsData ?? []
+
+    if (!Array.isArray(steps)) {
+      prompts.log.error("Could not read outreach steps")
+      return
+    }
+
+    const activeGates = steps.filter((s: any) => s.type === "payment_gate" && !s.is_completed)
+
+    if (activeGates.length === 0) {
+      prompts.log.info(`No active proposal for lead #${leadId}`)
+      return
+    }
+
+    // Complete each active payment gate + its reminder steps
+    let cancelled = 0
+    for (const gate of activeGates) {
+      const res = await irisFetch(`/api/v1/leads/${leadId}/outreach-steps/${gate.id}/complete`, {
+        method: "POST",
+      })
+      if (res.ok) cancelled++
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify({ cancelled, lead_id: leadId }))
+      return
+    }
+
+    console.log("")
+    console.log(success(`Cancelled ${cancelled} active proposal(s) for lead #${leadId}`))
+    console.log(dim(`Create a new one: iris proposals create ${leadId}`))
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -276,6 +332,7 @@ export const PlatformProposalsCommand = cmd({
       .command(ProposalsCreateCommand)
       .command(ProposalsStatusCommand)
       .command(ProposalsListCommand)
+      .command(ProposalsCancelCommand)
       .demandCommand(),
   async handler() {},
 })
