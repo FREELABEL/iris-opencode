@@ -336,6 +336,18 @@ const PushCmd = cmd({
         return
       }
 
+      // Validate component types BEFORE pushing
+      const validation = validateComponents(jsonContent)
+      if (!validation.valid) {
+        sp.stop("Validation failed", 1)
+        for (const err of validation.errors) {
+          if (err === "") console.log()
+          else prompts.log.error(err)
+        }
+        prompts.outro("Done")
+        return
+      }
+
       const updateData: Record<string, unknown> = { json_content: jsonContent }
       if (local.title) updateData.title = local.title
       if (local.seo_title) updateData.seo_title = local.seo_title
@@ -656,6 +668,47 @@ const RollbackCmd = cmd({
     }
   },
 })
+
+// ============================================================================
+// Component Validation — reject invalid types before push/create
+// ============================================================================
+
+const VALID_COMPONENT_TYPES = new Set([
+  "Hero", "SiteNavigation", "SiteFooter", "AnnouncementBanner",
+  "TestimonialsSection", "TeamSection", "ContactSection", "LogoMarquee",
+  "FeatureShowcase", "ComparisonMatrix", "ClientGrid", "CareersListing",
+  "PortfolioGallery", "ProductGrid", "ServiceMenu", "EventGrid",
+  "FundingTiers", "BeforeAfter", "MapSection", "NewsletterSignup",
+  "StepWizard", "FileUpload", "ShoppingCart", "OrderConfirmation",
+  "ProtectionPicker", "VehicleGrid",
+])
+
+function validateComponents(jsonContent: any): { valid: boolean; errors: string[] } {
+  const components = jsonContent?.components ?? []
+  const errors: string[] = []
+
+  for (let i = 0; i < components.length; i++) {
+    const c = components[i]
+    if (!c?.type) {
+      errors.push(`components[${i}]: missing "type" field`)
+      continue
+    }
+    if (!VALID_COMPONENT_TYPES.has(c.type)) {
+      errors.push(`components[${i}]: "${c.type}" is not a valid component type`)
+    }
+    if (!c.id) {
+      errors.push(`components[${i}] (${c.type}): missing "id" field`)
+    }
+  }
+
+  if (errors.length > 0) {
+    errors.push("")
+    errors.push(`Valid types: ${[...VALID_COMPONENT_TYPES].join(", ")}`)
+    errors.push(`Run: iris pages component-registry`)
+  }
+
+  return { valid: errors.length === 0, errors }
+}
 
 // ============================================================================
 // Component Registry — available component types for the page builder
