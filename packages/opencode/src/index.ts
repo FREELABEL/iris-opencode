@@ -57,7 +57,7 @@ import { PlatformOutreachStrategyCommand } from "./cli/cmd/platform-outreach-str
 import { PlatformOutreachCampaignCommand } from "./cli/cmd/platform-outreach-campaign"
 import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
-import { PlatformMonitorCommand, BriefingCommand } from "./cli/cmd/platform-monitor"
+import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
 import { PlatformPaymentsCommand } from "./cli/cmd/platform-payments"
 import { PlatformDeliverCommand } from "./cli/cmd/platform-deliver"
@@ -90,6 +90,8 @@ import { PlatformToolsCommand } from "./cli/cmd/platform-tools"
 import { PlatformUsersCommand } from "./cli/cmd/platform-users"
 import { PlatformPhoneCommand } from "./cli/cmd/platform-phone"
 import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
+import { PlatformMailCommand } from "./cli/cmd/platform-mail"
+import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformWalletCommand } from "./cli/cmd/platform-wallet"
 import { PlatformConfigCommand } from "./cli/cmd/platform-config"
 import { PlatformAppCommand } from "./cli/cmd/platform-app"
@@ -213,7 +215,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformOutreachSendCommand))
   .command(reg(PlatformSomCommand))
   .command(reg(PlatformMonitorCommand))
-  .command(reg(BriefingCommand))
+
   .command(reg(PlatformInvoicesCommand))
   .command(reg(PlatformPaymentsCommand))
   .command(reg(PlatformDeliverCommand))
@@ -249,6 +251,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformUsersCommand))
   .command(reg(PlatformPhoneCommand))
   .command(reg(PlatformVoiceCommand))
+  .command(reg(PlatformMailCommand))
+  .command(reg(PlatformImessageCommand))
   .command(reg(PlatformWalletCommand))
   // PHP-port commands — config, app, automation, automation:test
   // (integrations is owned by PlatformRunCommand in platform-run.ts)
