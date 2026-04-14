@@ -131,11 +131,27 @@ export namespace Installation {
     let cmd
 
     if (isIris()) {
-      // IRIS: always use our installer
-      cmd = $`curl -fsSL https://heyiris.io/install-code | bash`.env({
-        ...process.env,
-        VERSION: target,
-      })
+      // IRIS: download binary directly from GitHub release (don't re-run full installer)
+      const platform = process.platform === "darwin" ? "darwin" : "linux"
+      const arch = process.arch === "arm64" ? "arm64" : "x64"
+      const ext = platform === "linux" ? "tar.gz" : "zip"
+      const assetName = `iris-${platform}-${arch}.${ext}`
+      const releaseUrl = `https://github.com/FREELABEL/iris-opencode/releases/download/v${target}/${assetName}`
+      const binDir = path.dirname(process.execPath)
+      const tmpDir = path.join(binDir, ".iris-update-tmp")
+
+      cmd = $`set -e
+mkdir -p ${tmpDir}
+cd ${tmpDir}
+curl -fsSL -o ${assetName} ${releaseUrl}
+if [ "${ext}" = "tar.gz" ]; then
+  tar -xzf ${assetName}
+else
+  unzip -o ${assetName}
+fi
+cp -f iris ${binDir}/iris
+rm -rf ${tmpDir}
+echo "Updated to v${target}"`.env({ ...process.env })
     } else {
       switch (method) {
         case "curl":
