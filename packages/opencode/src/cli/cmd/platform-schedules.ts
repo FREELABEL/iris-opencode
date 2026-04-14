@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
 
 // ============================================================================
 // Display helpers
@@ -898,6 +898,183 @@ const SchedulesDeleteCommand = cmd({
 // Root command
 // ============================================================================
 
+// ============================================================================
+// Diagnose — test the full execution chain for a scheduled job
+// ============================================================================
+
+const SchedulesDiagnoseCommand = cmd({
+  command: "diagnose [id]",
+  describe: "test the full execution chain — scheduler, dispatch, worker, daemon",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "schedule ID to diagnose (or omit for full system check)", type: "number" })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Schedule Diagnostics")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const checks: { name: string; status: "pass" | "fail" | "warn"; detail: string }[] = []
+
+    const check = (name: string, status: "pass" | "fail" | "warn", detail: string) => {
+      checks.push({ name, status, detail })
+      const icon = status === "pass" ? `${UI.Style.TEXT_SUCCESS}✓${UI.Style.TEXT_NORMAL}` :
+                   status === "fail" ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}` :
+                   `${UI.Style.TEXT_WARNING}⚠${UI.Style.TEXT_NORMAL}`
+      console.log(`  ${icon} ${bold(name)}: ${dim(detail)}`)
+    }
+
+    console.log()
+
+    // 1. fl-api health (scheduler runs here)
+    try {
+      const res = await irisFetch("/api/v1/pages?per_page=1")
+      check("fl-api", res.ok ? "pass" : "fail", res.ok ? "reachable" : `HTTP ${res.status}`)
+    } catch (e) {
+      check("fl-api", "fail", `unreachable: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    // 2. iris-api health (heartbeat executor runs here)
+    try {
+      const res = await irisFetch("/api/health", {}, IRIS_API)
+      if (res.ok) {
+        const data = await res.json() as any
+        check("iris-api", "pass", `DB: ${data.database ?? "?"}, AI: ${Object.keys(data).filter(k => k.startsWith("ai_")).map(k => `${k.replace("ai_","")}=${(data[k] as any)?.status ?? "?"}`).join(", ") || "not checked"}`)
+      } else {
+        check("iris-api", "fail", `HTTP ${res.status}`)
+      }
+    } catch (e) {
+      check("iris-api", "fail", `unreachable: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    // 3. Local daemon (hive tasks execute here)
+    try {
+      const res = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(3000) })
+      if (res.ok) {
+        const data = await res.json() as any
+        const daemon = data.daemon ?? {}
+        check("daemon", "pass", `node: ${daemon.node_id?.slice(0, 12) ?? "?"}, status: ${daemon.status ?? "?"}`)
+      } else {
+        check("daemon", "fail", `HTTP ${res.status}`)
+      }
+    } catch {
+      check("daemon", "fail", "not running on localhost:3200 — run: iris-daemon start")
+    }
+
+    // 4. Daemon Pusher connection
+    try {
+      const res = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(3000) })
+      if (res.ok) {
+        const data = await res.json() as any
+        const configRes = await fetch("http://localhost:3200/daemon/queue", { signal: AbortSignal.timeout(3000) })
+        if (configRes.ok) {
+          const q = await configRes.json() as any
+          check("daemon-queue", q.paused ? "warn" : "pass", `active: ${q.active_tasks ?? 0}, paused: ${q.paused ? "YES" : "no"}, capacity: ${q.capacity ?? "?"}`)
+        }
+      }
+    } catch {}
+
+    // 5. Redis (queue backend)
+    try {
+      const res = await irisFetch("/api/health", {}, IRIS_API)
+      if (res.ok) {
+        check("redis-queue", "pass", "iris-api is up (Redis is the queue backend)")
+      }
+    } catch {
+      check("redis-queue", "warn", "could not verify")
+    }
+
+    // 6. If specific job ID given, check its state
+    if (args.id) {
+      console.log()
+      console.log(`  ${bold("Job #" + args.id)}`)
+      printDivider()
+
+      try {
+        const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?per_page=200`)
+        if (res.ok) {
+          const all = ((await res.json()) as any)?.data ?? []
+          const job = all.find((s: any) => s.id === args.id)
+          if (job) {
+            const env = executionEnv(job)
+            check("job-exists", "pass", `${job.task_name ?? "?"} | ${job.frequency ?? "?"} | ${env.icon} ${env.label}`)
+            check("job-status", job.status === "scheduled" ? "pass" : job.status === "running" ? "warn" : "fail",
+              `${job.status}${job.status === "running" ? " (may be stuck — check run_count)" : ""}`)
+
+            const nextRun = job.next_run_at ? new Date(job.next_run_at) : null
+            if (nextRun) {
+              const until = timeUntil(job.next_run_at)
+              check("next-run", until === "overdue" ? "warn" : "pass", `${job.next_run_at} (${until})`)
+            }
+
+            // Agent check
+            if (job.agent_id) {
+              const agent = job.agent
+              if (agent) {
+                check("agent", "pass", `#${agent.id} ${agent.name} | mode: ${agent.heartbeat_mode} | model: ${agent.config?.model ?? agent.settings?.model ?? "default"}`)
+                if (agent.initial_prompt) check("agent-mission", "pass", `${String(agent.initial_prompt).slice(0, 80)}...`)
+                else check("agent-mission", "warn", "no initial_prompt set — using generic heartbeat prompt")
+                if (agent.settings?.system_prompt) check("agent-identity", "pass", "custom system_prompt set")
+                if (agent.settings?.heartbeat_tools) check("agent-tools", "pass", `filtered: ${JSON.stringify(agent.settings.heartbeat_tools)}`)
+              }
+            }
+
+            // Bloq check
+            if (job.bloq) {
+              check("bloq", "pass", `#${job.bloq.id} ${job.bloq.name}`)
+            } else if (job.bloq_id) {
+              check("bloq", "warn", `#${job.bloq_id} (name not loaded)`)
+            }
+
+            // Execution check
+            try {
+              const execRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}/executions?per_page=1`)
+              if (execRes.ok) {
+                const execs = ((await execRes.json()) as any)?.data ?? []
+                if (execs.length > 0) {
+                  const e = execs[0]
+                  check("last-execution", e.status === "completed" ? "pass" : "fail",
+                    `#${e.id} ${e.status} | ${e.model_used ?? "?"} | ${e.tokens_used ? Number(e.tokens_used).toLocaleString() + " tok" : "?"}`)
+                  if (e.error_message) check("last-error", "fail", String(e.error_message).slice(0, 120))
+                } else {
+                  check("last-execution", "warn", "no executions yet")
+                }
+              }
+            } catch {}
+          } else {
+            check("job-exists", "fail", `job #${args.id} not found`)
+          }
+        }
+      } catch (e) {
+        check("job-lookup", "fail", `${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    // Summary
+    console.log()
+    printDivider()
+    const passed = checks.filter(c => c.status === "pass").length
+    const failed = checks.filter(c => c.status === "fail").length
+    const warned = checks.filter(c => c.status === "warn").length
+    console.log(`  ${passed} passed, ${warned} warnings, ${failed} failed`)
+
+    if (failed > 0) {
+      console.log()
+      console.log(`  ${bold("Fix these:")}`)
+      for (const c of checks.filter(c => c.status === "fail")) {
+        console.log(`    ${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL} ${c.name}: ${c.detail}`)
+      }
+    }
+
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformSchedulesCommand = cmd({
   command: "schedules",
   aliases: ["schedule"],
@@ -912,6 +1089,7 @@ export const PlatformSchedulesCommand = cmd({
       .command(SchedulesInspectCommand)
       .command(SchedulesToggleCommand)
       .command(SchedulesDeleteCommand)
+      .command(SchedulesDiagnoseCommand)
       .demandCommand(),
   async handler() {},
 })
