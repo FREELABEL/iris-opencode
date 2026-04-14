@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -9,11 +9,25 @@ import { join } from "path"
 // Helpers
 // ============================================================================
 
-function publicUrl(slug: string): string {
+/**
+ * Get the public URL for a page. Prefers the API-provided public_url,
+ * falls back to constructing from slug.
+ */
+function publicUrl(slugOrPage: string | { public_url?: string; slug?: string }): string {
+  if (typeof slugOrPage === "object" && slugOrPage.public_url) {
+    return slugOrPage.public_url
+  }
+  const slug = typeof slugOrPage === "string" ? slugOrPage : (slugOrPage.slug ?? "")
   const env = process.env.IRIS_ENV ?? "production"
   return env === "local"
     ? `http://local.iris.freelabel.net:9300/p/${slug}`
-    : `https://heyiris.io/p/${slug}`
+    : `https://main.heyiris.io/p/${slug}`
+}
+
+// Pages CRUD routes through iris-api (which proxies to fl-api with service token).
+// The SDK key authenticates against iris-api; fl-api doesn't recognize it directly.
+function pagesFetch(path: string, options?: RequestInit): Promise<Response> {
+  return irisFetch(path, options ?? {}, IRIS_API)
 }
 
 function formatStatus(status: string): string {
@@ -28,7 +42,7 @@ async function getBySlug(slug: string, includeJson = false): Promise<any | null>
     include_json: includeJson ? "1" : "0",
     include_drafts: "1",
   })
-  const res = await irisFetch(`/api/v1/pages/by-slug/${encodeURIComponent(slug)}?${params}`)
+  const res = await pagesFetch(`/api/v1/pages/by-slug/${encodeURIComponent(slug)}?${params}`)
   if (!res.ok) {
     await handleApiError(res, `Get page ${slug}`)
     return null
@@ -97,7 +111,7 @@ const ListCmd = cmd({
     const sp = prompts.spinner()
     sp.start("Loading pages…")
     try {
-      const res = await irisFetch("/api/v1/pages")
+      const res = await pagesFetch("/api/v1/pages")
       if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const json = (await res.json()) as any
       // Handle both direct array and Laravel paginator ({ data: { data: [...] } })
@@ -128,7 +142,7 @@ const ListCmd = cmd({
         const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type ?? "-"
         console.log(`  ${bold(p.slug)}  ${dim(`#${p.id}`)}  ${formatStatus(p.status)}`)
         console.log(`    ${dim(p.title ?? "")}  ${dim(`[${tpl}]`)}`)
-        console.log(`    ${dim(publicUrl(p.slug))}`)
+        console.log(`    ${dim(publicUrl(p))}`)
         console.log()
       }
       printDivider()
@@ -170,7 +184,7 @@ const ViewCmd = cmd({
       printKV("Title", page.title)
       printKV("Status", formatStatus(page.status))
       printKV("Published", page.published_at ?? "Not published")
-      printKV("URL", publicUrl(page.slug))
+      printKV("URL", publicUrl(page))
       const compCount = page?.json_content?.components?.length ?? 0
       printKV("Components", compCount)
       printDivider()
@@ -229,7 +243,7 @@ const SetCmd = cmd({
       const json = page.json_content ?? {}
       const parsed = parseValue(args.value)
       setNestedValue(json, args.path, parsed)
-      const res = await irisFetch(`/api/v1/pages/${page.id}`, {
+      const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
         method: "PUT",
         body: JSON.stringify({ json_content: json }),
       })
@@ -322,13 +336,25 @@ const PushCmd = cmd({
         return
       }
 
+      // Validate component types BEFORE pushing
+      const validation = validateComponents(jsonContent)
+      if (!validation.valid) {
+        sp.stop("Validation failed", 1)
+        for (const err of validation.errors) {
+          if (err === "") console.log()
+          else prompts.log.error(err)
+        }
+        prompts.outro("Done")
+        return
+      }
+
       const updateData: Record<string, unknown> = { json_content: jsonContent }
       if (local.title) updateData.title = local.title
       if (local.seo_title) updateData.seo_title = local.seo_title
       if (local.seo_description) updateData.seo_description = local.seo_description
       if (local.og_image) updateData.og_image = local.og_image
 
-      const res = await irisFetch(`/api/v1/pages/${page.id}`, {
+      const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
         method: "PUT",
         body: JSON.stringify(updateData),
       })
@@ -429,7 +455,7 @@ const PublishCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const res = await irisFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
+      const res = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
       if (!(await handleApiError(res, "Publish"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       sp.stop(success("Published"))
       console.log(`  ${highlight(publicUrl(args.slug))}`)
@@ -455,7 +481,7 @@ const UnpublishCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const res = await irisFetch(`/api/v1/pages/${page.id}/unpublish`, { method: "POST" })
+      const res = await pagesFetch(`/api/v1/pages/${page.id}/unpublish`, { method: "POST" })
       if (!(await handleApiError(res, "Unpublish"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       sp.stop(success("Unpublished (draft)"))
       prompts.outro("Done")
@@ -486,6 +512,37 @@ const CreateCmd = cmd({
     const sp = prompts.spinner()
     sp.start("Creating…")
     try {
+      // Build initial json_content — the API requires it
+      const template = args.template ?? "landing"
+      const jsonContent = {
+        version: "1.0",
+        type: template,
+        theme: { mode: "dark", backgroundColor: "#000000", branding: { name: args.title, primaryColor: "#34d399" } },
+        components: [
+          {
+            type: "Hero",
+            id: `${args.slug}-hero`,
+            props: {
+              themeMode: "dark",
+              title: args.title,
+              subtitle: args["seo-description"] ?? "",
+              labelText: "NEW",
+              labelColor: "#34d399",
+              textAlign: "center",
+            },
+          },
+          {
+            type: "SiteFooter",
+            id: `${args.slug}-footer`,
+            props: {
+              themeMode: "dark",
+              brandName: args.title,
+              links: [],
+            },
+          },
+        ],
+      }
+
       const payload: Record<string, unknown> = {
         slug: args.slug,
         title: args.title,
@@ -494,9 +551,10 @@ const CreateCmd = cmd({
         owner_type: args["owner-type"],
         owner_id: args["owner-id"],
         status: "draft",
+        json_content: jsonContent,
+        auto_publish: true,
       }
-      if (args.template) payload.template = args.template
-      const res = await irisFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
+      const res = await pagesFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
       if (!(await handleApiError(res, "Create page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as { data?: any }
       const p = data?.data ?? data
@@ -506,7 +564,7 @@ const CreateCmd = cmd({
       printKV("Slug", p.slug)
       printKV("Title", p.title)
       printKV("Status", p.status)
-      printKV("URL", publicUrl(p.slug))
+      printKV("URL", publicUrl(p))
       printDivider()
       prompts.outro(dim(`iris pages publish ${p.slug}`))
     } catch (err) {
@@ -562,7 +620,7 @@ const VersionsCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const res = await irisFetch(`/api/v1/pages/${page.id}/versions`)
+      const res = await pagesFetch(`/api/v1/pages/${page.id}/versions`)
       if (!(await handleApiError(res, "Versions"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as { data?: any[] }
       const versions = data?.data ?? []
@@ -599,7 +657,7 @@ const RollbackCmd = cmd({
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const res = await irisFetch(`/api/v1/pages/${page.id}/rollback/${args.version}`, { method: "POST" })
+      const res = await pagesFetch(`/api/v1/pages/${page.id}/rollback/${args.version}`, { method: "POST" })
       if (!(await handleApiError(res, "Rollback"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       sp.stop(success(`Rolled back to v${args.version}`))
       prompts.outro("Done")
@@ -608,6 +666,192 @@ const RollbackCmd = cmd({
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
+  },
+})
+
+// ============================================================================
+// Component Validation — reject invalid types before push/create
+// ============================================================================
+
+const VALID_COMPONENT_TYPES = new Set([
+  "Hero", "SiteNavigation", "SiteFooter", "AnnouncementBanner",
+  "TestimonialsSection", "TeamSection", "ContactSection", "LogoMarquee",
+  "FeatureShowcase", "ComparisonMatrix", "ClientGrid", "CareersListing",
+  "PortfolioGallery", "ProductGrid", "ServiceMenu", "EventGrid",
+  "FundingTiers", "BeforeAfter", "MapSection", "NewsletterSignup",
+  "StepWizard", "FileUpload", "ShoppingCart", "OrderConfirmation",
+  "ProtectionPicker", "VehicleGrid",
+])
+
+function validateComponents(jsonContent: any): { valid: boolean; errors: string[] } {
+  const components = jsonContent?.components ?? []
+  const errors: string[] = []
+
+  for (let i = 0; i < components.length; i++) {
+    const c = components[i]
+    if (!c?.type) {
+      errors.push(`components[${i}]: missing "type" field`)
+      continue
+    }
+    if (!VALID_COMPONENT_TYPES.has(c.type)) {
+      errors.push(`components[${i}]: "${c.type}" is not a valid component type`)
+    }
+    if (!c.id) {
+      errors.push(`components[${i}] (${c.type}): missing "id" field`)
+    }
+  }
+
+  if (errors.length > 0) {
+    errors.push("")
+    errors.push(`Valid types: ${[...VALID_COMPONENT_TYPES].join(", ")}`)
+    errors.push(`Run: iris pages component-registry`)
+  }
+
+  return { valid: errors.length === 0, errors }
+}
+
+// ============================================================================
+// Component Registry — available component types for the page builder
+// ============================================================================
+
+const COMPONENT_REGISTRY: { type: string; description: string; requiredProps: string[] }[] = [
+  { type: "Hero", description: "Full-width hero banner with title, subtitle, CTA buttons", requiredProps: ["title"] },
+  { type: "SiteNavigation", description: "Top navigation bar with logo, links, CTA button", requiredProps: ["logo"] },
+  { type: "SiteFooter", description: "Footer with brand name, links, copyright", requiredProps: ["brandName"] },
+  { type: "AnnouncementBanner", description: "Dismissible banner strip at top of page", requiredProps: ["text"] },
+  { type: "TestimonialsSection", description: "Customer testimonials with avatars and quotes", requiredProps: ["testimonials"] },
+  { type: "TeamSection", description: "Team member grid with photos and roles", requiredProps: ["members"] },
+  { type: "ContactSection", description: "Contact form with configurable fields", requiredProps: ["heading"] },
+  { type: "LogoMarquee", description: "Auto-scrolling logo carousel (trusted by...)", requiredProps: ["logos"] },
+  { type: "FeatureShowcase", description: "Feature highlights with icons and descriptions", requiredProps: ["features"] },
+  { type: "ComparisonMatrix", description: "Pricing/feature comparison table", requiredProps: ["columns", "rows"] },
+  { type: "ClientGrid", description: "Client/partner logo grid", requiredProps: ["clients"] },
+  { type: "CareersListing", description: "Job listings with department filters", requiredProps: ["jobs"] },
+  { type: "PortfolioGallery", description: "Image/project gallery grid with lightbox", requiredProps: ["items"] },
+  { type: "ProductGrid", description: "E-commerce product cards with prices", requiredProps: ["products"] },
+  { type: "ServiceMenu", description: "Service/menu items with prices and descriptions", requiredProps: ["categories"] },
+  { type: "EventGrid", description: "Event cards with dates and venues", requiredProps: ["events"] },
+  { type: "FundingTiers", description: "Pricing/funding tier cards", requiredProps: ["tiers"] },
+  { type: "BeforeAfter", description: "Before/after image slider comparison", requiredProps: ["before", "after"] },
+  { type: "MapSection", description: "Interactive map with location markers", requiredProps: ["locations"] },
+  { type: "NewsletterSignup", description: "Email signup form", requiredProps: ["heading"] },
+  { type: "StepWizard", description: "Multi-step form wizard", requiredProps: ["steps"] },
+  { type: "FileUpload", description: "File upload dropzone", requiredProps: [] },
+  { type: "ShoppingCart", description: "Shopping cart with line items", requiredProps: [] },
+  { type: "OrderConfirmation", description: "Order confirmation/receipt page", requiredProps: [] },
+]
+
+const ComposeCmd = cmd({
+  command: "compose <description..>",
+  describe: "AI-compose a page from a text description (uses Gemini)",
+  builder: (y) =>
+    y
+      .positional("description", { describe: "what the page should be", type: "string", array: true })
+      .option("slug", { describe: "page slug (auto-generated if omitted)", type: "string" })
+      .option("title", { describe: "page title", type: "string" })
+      .option("theme", { describe: "dark or light", type: "string", default: "dark", choices: ["dark", "light"] })
+      .option("style", { describe: "page style", type: "string", default: "landing", choices: ["landing", "dashboard", "product", "portfolio"] })
+      .option("model", { describe: "AI model override", type: "string" })
+      .option("json", { type: "boolean" }),
+  async handler(args) {
+    UI.empty()
+    const desc = (args.description as string[]).join(" ")
+    prompts.intro(`◈  Compose Page`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const userId = await resolveUserId()
+    if (!userId) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Composing with AI (this may take 10-30s)…")
+
+    try {
+      const payload: Record<string, unknown> = {
+        description: desc,
+        user_id: userId,
+        style: args.style,
+        theme_mode: args.theme,
+      }
+      if (args.slug) payload.slug = args.slug
+      if (args.title) payload.title = args.title
+      if (args.model) payload.model = args.model
+
+      const res = await pagesFetch("/api/v1/pages/compose", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as any
+        sp.stop("Failed", 1)
+        prompts.log.error(body.error ?? body.message ?? `HTTP ${res.status}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as any
+      if (!data.success) {
+        sp.stop("Failed", 1)
+        prompts.log.error(data.error ?? "Composition failed")
+        prompts.outro("Done")
+        return
+      }
+
+      sp.stop(success(`Created "${data.slug}"`))
+      printDivider()
+      printKV("Page ID", data.page_id)
+      printKV("Slug", data.slug)
+      printKV("URL", data.url)
+      printKV("Components", data.component_count ?? data.components?.length)
+      if (data.self_heal_attempts) printKV("Self-heal attempts", data.self_heal_attempts)
+      printDivider()
+
+      if (args.json) {
+        console.log(JSON.stringify(data, null, 2))
+      }
+
+      prompts.log.info(`View: ${dim(`iris pages view ${data.slug}`)}`)
+      prompts.log.info(`Edit: ${dim(`iris pages pull ${data.slug}`)}`)
+      prompts.outro("Done")
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ComponentRegistryCmd = cmd({
+  command: "component-registry",
+  aliases: ["registry", "available-components"],
+  describe: "list available component types for the page builder",
+  builder: (y) => y.option("json", { type: "boolean" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Page Component Registry")
+
+    if (args.json) {
+      console.log(JSON.stringify(COMPONENT_REGISTRY, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    console.log()
+    console.log(`  ${bold("Available components for Genesis pages:")}`)
+    console.log()
+    for (const c of COMPONENT_REGISTRY) {
+      console.log(`  ${highlight(c.type)}`)
+      console.log(`    ${dim(c.description)}`)
+      if (c.requiredProps.length) {
+        console.log(`    ${dim("Required props: " + c.requiredProps.join(", "))}`)
+      }
+      console.log()
+    }
+    console.log(`  ${dim(`${COMPONENT_REGISTRY.length} components available`)}`)
+    console.log()
+    prompts.log.info(`Example: ${dim('iris pages set my-page "components.1" \'{"type":"Hero","props":{"title":"Hello"}}\'')}`)
+    prompts.log.info(`Reference: ${dim("iris pages pull component-showcase")} — pull a working example`)
+    prompts.outro("Done")
   },
 })
 
@@ -632,6 +876,8 @@ export const PlatformPagesCommand = cmd({
       .command(UnpublishCmd)
       .command(CreateCmd)
       .command(ComponentsCmd)
+      .command(ComposeCmd)
+      .command(ComponentRegistryCmd)
       .command(VersionsCmd)
       .command(RollbackCmd)
       .demandCommand(),

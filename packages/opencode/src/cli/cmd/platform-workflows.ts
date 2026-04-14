@@ -390,13 +390,15 @@ const WorkflowsGetCommand = cmd({
 
 const WorkflowsCreateCommand = cmd({
   command: "create",
-  describe: "create a new workflow",
+  describe: "create a new workflow (visual, agentic, or code)",
   builder: (yargs) =>
     yargs
       .option("name", { describe: "workflow name", type: "string" })
       .option("description", { describe: "workflow description", type: "string" })
       .option("bloq-id", { describe: "bloq ID", type: "number" })
-      .option("type", { describe: "workflow type", type: "string" })
+      .option("type", { describe: "workflow type (standard, code)", type: "string" })
+      .option("script", { describe: "path to script file (for code workflows)", type: "string" })
+      .option("runtime", { describe: "script runtime: javascript, bash, python (default: javascript)", type: "string", default: "javascript" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -408,10 +410,26 @@ const WorkflowsCreateCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
+    // If --script is provided, auto-set type to 'code'
+    const isCode = args.script || args.type === "code"
+    let scriptContent = ""
+
+    if (args.script) {
+      const { existsSync, readFileSync } = await import("fs")
+      if (!existsSync(args.script)) {
+        prompts.log.error(`Script file not found: ${args.script}`)
+        prompts.outro("Done")
+        return
+      }
+      scriptContent = readFileSync(args.script, "utf-8")
+    }
+
     let name = args.name
     if (!name) {
+      const defaultName = args.script ? args.script.split("/").pop()?.replace(/\.[^.]+$/, "") ?? "code-workflow" : ""
       name = (await prompts.text({
         message: "Workflow name",
+        initialValue: defaultName,
         validate: (x) => (x && x.length > 0 ? undefined : "Required"),
       })) as string
       if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
@@ -424,7 +442,17 @@ const WorkflowsCreateCommand = cmd({
       const payload: Record<string, unknown> = { name }
       if (args.description) payload.description = args.description
       if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
-      if (args.type) payload.type = args.type
+
+      if (isCode) {
+        payload.type = "code"
+        payload.execution_mode = "code"
+        payload.settings = {
+          script_content: scriptContent,
+          runtime: args.runtime,
+        }
+      } else if (args.type) {
+        payload.type = args.type
+      }
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflows`, {
         method: "POST",
@@ -440,8 +468,16 @@ const WorkflowsCreateCommand = cmd({
       printDivider()
       printKV("ID", w.id)
       printKV("Name", w.name)
+      printKV("Type", isCode ? "code" : (w.type ?? "standard"))
+      if (isCode) {
+        printKV("Runtime", args.runtime)
+        printKV("Script", `${scriptContent.length} chars`)
+      }
       printDivider()
 
+      if (isCode) {
+        prompts.log.info(dim(`iris workflows run ${w.id}  — execute on Hive node`))
+      }
       prompts.outro(dim(`iris workflows get ${w.id}`))
     } catch (err) {
       spinner.stop("Error", 1)

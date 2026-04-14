@@ -16,15 +16,19 @@ You are running inside the **IRIS CLI** — an AI coding assistant from the IRIS
 | `iris-login` | Interactive auth — writes `~/.iris/sdk/.env`. Run after install. |
 | `iris-daemon start \| stop \| status` | Local Hive daemon (port 3200) for distributed compute |
 | `iris hive` | Distributed compute / agent mesh commands |
-| `iris platform-leads` | Lead capture, enrichment, outreach |
-| `iris platform-bloqs` | Manage bloqs (the core unit of IRIS knowledge/work) |
-| `iris platform-pages` | Genesis composable page builder |
-| `iris platform-workflows` | Workflow execution and history |
-| `iris platform-agents` | Agent CRUD, scheduling, heartbeat config |
-| `iris platform-chat` | Chat with agents from the terminal |
+| `iris leads` | Lead capture, enrichment, outreach (alias: `crm`) |
+| `iris bloqs` | Manage bloqs — knowledge bases (aliases: `kb`, `memory`) |
+| `iris pages` | Genesis composable page builder (alias: `genesis`) |
+| `iris workflows` | Workflow execution and history |
+| `iris agents` | Agent CRUD, scheduling, heartbeat config |
+| `iris chat` | Chat with agents from the terminal (alias: `c`) |
+| `iris integrations` | Execute integration functions, OAuth connect (alias: `int`) |
+| `iris connect <type>` | Connect an integration via OAuth |
+| `iris list-connected` | Show connected integrations |
 | `iris mcp serve` | Expose IRIS as an MCP server for other agents |
-| `iris auth` / `iris models` / `iris run` / `iris generate` | Standard CLI ops |
+| `iris auth` / `iris models` / `iris run` | Standard CLI ops |
 | `iris github` | GitHub integration |
+| `iris bug report` | Report bugs to the IRIS team |
 | `iris --help` | Full command tree |
 
 When the user asks "how do I X" and X maps to an IRIS command, **suggest the command first** before writing code from scratch.
@@ -45,6 +49,69 @@ Recipes available out of the box:
 - `lead-to-proposal.md` — capture lead → deal → proposal → contract → payment
 
 When the user asks something that might match a recipe, **read the recipe file first** instead of guessing. The recipes have exact commands, expected output, and known gotchas.
+
+## Critical Rules
+
+- **NEVER use curl or call APIs directly.** Use `iris` CLI commands.
+- **NEVER guess or hallucinate URLs.** Always read URLs from CLI output. Page URLs follow: `main.heyiris.io/p/{slug}`
+- **NEVER invent component type names.** Run `iris pages component-registry` first. Invalid types render blank.
+- **READ CLI output carefully.** Use exact values shown — don't make up IDs, URLs, or status values.
+
+## Genesis Page Builder — Component Rules
+
+When building or editing pages with `iris pages`, follow these rules:
+
+1. **Run `iris pages component-registry`** before adding components to see all valid types
+2. **Use `iris pages pull component-showcase`** as a reference for working component JSON
+3. **Page URLs** are shown in CLI output — format: `main.heyiris.io/p/{slug}`
+
+**Valid component types (use ONLY these exact names):**
+Hero, SiteNavigation, SiteFooter, AnnouncementBanner, TestimonialsSection, TeamSection, ContactSection, LogoMarquee, FeatureShowcase, ComparisonMatrix, ClientGrid, CareersListing, PortfolioGallery, ProductGrid, ServiceMenu, EventGrid, FundingTiers, BeforeAfter, MapSection, NewsletterSignup, StepWizard, FileUpload, ShoppingCart, OrderConfirmation
+
+**Every component needs:** `type` (exact name from above), `id` (unique string), `props` (object)
+
+**Workflow: pull → edit → push**
+```bash
+iris pages pull <slug>        # download to pages/<slug>.json
+# edit the JSON file
+iris pages push <slug>        # upload back
+```
+
+## Autonomous Agent Scheduling
+
+Manage scheduled heartbeat agents, hive tasks, and workflows:
+
+```bash
+iris schedules list --active              # Grouped: ⬡ hive / ◉ iris / ☁ cloud
+iris schedules list --active --latest     # + last execution result
+iris schedules inspect <id>               # Agent config, system prompt, tools
+iris schedules history <id> --full        # Full execution output
+iris schedules run <id>                   # Trigger manually
+iris schedules toggle <id>               # Pause/resume
+iris schedules delete <id>               # Remove
+```
+
+### Creating Specialized Agents (Agent-First Architecture)
+Agents define their own mission and tools via database fields:
+- `initial_prompt` → agent's mission (injected as `<agent_mission>` in heartbeat)
+- `settings.system_prompt` → agent's identity (overrides generic prompt)
+- `settings.heartbeat_tools` → tool filter (e.g. `["manageLeads", "agent_memory"]`)
+
+Debug with: `iris schedules inspect <id>` to see the resolved config.
+
+## Integration Functions
+
+When running `iris integrations exec <type>` without a function, the CLI shows available functions.
+
+| Integration | Functions |
+|-------------|-----------|
+| gmail | `read_emails`, `search_emails`, `send_email` |
+| google-drive | `search_files`, `export_file`, `read_doc` |
+| google-calendar | `get_events`, `create_event` |
+| slack | `send_message`, `list_channels` |
+| canva | `list_designs`, `export_design` |
+
+Run `iris integrations exec <type>` (no function) to discover functions for any integration.
 
 ## What you should NOT assume
 

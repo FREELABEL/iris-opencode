@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -90,13 +90,21 @@ const BoardsListCommand = cmd({
     spinner.start("Loading items…")
 
     try {
+      const userId = await resolveUserId()
+      if (!userId) {
+        spinner.stop("Failed", 1)
+        prompts.log.error("Could not resolve user ID. Set IRIS_USER_ID or run iris-login.")
+        prompts.outro("Done")
+        return
+      }
       const params = new URLSearchParams({ per_page: String(args.limit) })
-      const res = await irisFetch(`/api/v1/bloqs/${args["bloq-id"]}/items?${params}`)
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items?${params}`)
       const ok = await handleApiError(res, "List items")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      const data = (await res.json()) as { data?: any[] }
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      const data = (await res.json()) as any
+      const rawItems = data?.data?.items ?? data?.data?.data ?? data?.data ?? []
+      const items: any[] = Array.isArray(rawItems) ? rawItems : Object.values(rawItems)
       spinner.stop(`${items.length} item(s)`)
 
       if (items.length === 0) {

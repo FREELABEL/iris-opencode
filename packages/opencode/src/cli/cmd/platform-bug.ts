@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, dim, bold, success, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API, resolveUserId } from "./iris-api"
 import { homedir, platform, release, arch, hostname, userInfo } from "os"
 import { join } from "path"
 import { existsSync, readFileSync } from "fs"
@@ -214,16 +214,63 @@ const ReportCommand = cmd({
 const ListCommand = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "view bug reports (opens dashboard)",
-  async handler() {
+  describe: "list all bug reports",
+  builder: (yargs) =>
+    yargs
+      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const userId = await resolveUserId()
+    if (!userId) {
+      console.error("Could not resolve user ID. Set IRIS_USER_ID or run iris-login.")
+      return
+    }
+
+    const params = new URLSearchParams({ per_page: String(args.limit) })
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${BUG_BLOQ_ID}/items?${params}`)
+    const ok = await handleApiError(res, "List bug reports")
+    if (!ok) return
+
+    const data = (await res.json()) as any
+    const rawItems = data?.data?.items ?? data?.data?.data ?? data?.data ?? []
+    const items: any[] = Array.isArray(rawItems) ? rawItems : Object.values(rawItems)
+
+    if (args.json) {
+      console.log(JSON.stringify(items, null, 2))
+      return
+    }
+
     console.log("")
     console.log(bold("📋 Bug Reports"))
-    console.log("")
-    console.log(`  All reports go to ${dim("IRIS CLI Bug Reports")} (bloq #${BUG_BLOQ_ID})`)
-    console.log(`  View at: ${success(`https://app.heyiris.io/iris?board=${BUG_BLOQ_ID}`)}`)
-    console.log("")
-    console.log(dim("To submit a new bug:"))
-    console.log(`  iris bug report`)
+    console.log(`  ${dim(`Bloq #${BUG_BLOQ_ID} — ${items.length} item(s)`)}`)
+    printDivider()
+
+    if (items.length === 0) {
+      console.log(`  ${dim("No bug reports found")}`)
+    } else {
+      for (const item of items) {
+        const contentStr = item.content ?? item.description ?? ""
+        const severity = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1] ?? ""
+        const sevTag = severity ? `  [${severity.toUpperCase()}]` : ""
+        const status = item.status ? `  ${dim(item.status)}` : ""
+        console.log(`  ${bold(String(item.title))}  ${dim(`#${item.id}`)}${sevTag}${status}`)
+        if (contentStr) {
+          // Show first meaningful line (skip markdown headers)
+          const lines = String(contentStr).split("\n").filter((l: string) => l.trim() && !l.startsWith("**") && !l.startsWith("#"))
+          if (lines.length > 0) {
+            console.log(`    ${dim(lines[0].slice(0, 100))}`)
+          }
+        }
+        console.log()
+      }
+    }
+
+    printDivider()
+    console.log(dim("  iris bug report — submit a new bug"))
+    console.log(dim("  iris boards get <id> — view full details"))
     console.log("")
   },
 })

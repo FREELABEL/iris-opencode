@@ -294,9 +294,150 @@ const ProfileMembershipsCommand = cmd({
   },
 })
 
+// ============================================================================
+// profile create --name <name> [--bio] [--category] [--website]
+// ============================================================================
+
+const ProfileCreateCommand = cmd({
+  command: "create",
+  describe: "create a new profile",
+  builder: (yargs) =>
+    yargs
+      .option("name", { describe: "profile name", type: "string", demandOption: true })
+      .option("bio", { describe: "profile bio", type: "string" })
+      .option("category", { describe: "profile category", type: "string" })
+      .option("instagram", { describe: "Instagram handle", type: "string" })
+      .option("twitter", { describe: "Twitter handle", type: "string" })
+      .option("website", { describe: "website URL", type: "string" }),
+  async handler(args) {
+    await requireAuth()
+    const name = args.name as string
+    const body: Record<string, any> = { name }
+    if (args.bio) body.bio = args.bio
+    if (args.category) body.category = args.category
+    if (args.instagram) body.instagram = args.instagram
+    if (args.twitter) body.twitter = args.twitter
+    if (args.website) body.website_url = args.website
+
+    const res = await irisFetch("/api/v1/profile/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    const ok = await handleApiError(res, "Create profile")
+    if (!ok) { prompts.outro("Failed"); return }
+    const data = (await res.json()) as any
+    const profile = data?.data ?? data
+    printDivider()
+    printKV("PK", profile.pk ?? profile.id ?? "?")
+    printKV("Slug", profile.id ?? profile.slug ?? "?")
+    printKV("Name", profile.name ?? name)
+    if (profile.bio) printKV("Bio", profile.bio)
+    printDivider()
+    prompts.outro(success("Profile created"))
+  },
+})
+
+// ============================================================================
+// profile reassign-articles --from <pk> --to <pk> --match <keyword>
+// ============================================================================
+
+const ProfileReassignArticlesCommand = cmd({
+  command: "reassign-articles",
+  describe: "move articles from one profile to another by keyword match",
+  builder: (yargs) =>
+    yargs
+      .option("from", { describe: "source profile slug or PK", type: "string", demandOption: true })
+      .option("to", { describe: "target profile slug or PK", type: "string", demandOption: true })
+      .option("match", { describe: "keyword to match in article titles (case-insensitive)", type: "string", demandOption: true })
+      .option("dry-run", { describe: "preview without making changes", type: "boolean", default: false })
+      .option("yes", { alias: "y", describe: "skip confirmation", type: "boolean", default: false }),
+  async handler(args) {
+    await requireAuth()
+    const fromSlug = args.from as string
+    const toSlug = args.to as string
+    const keyword = (args.match as string).toLowerCase()
+    const dryRun = args["dry-run"] as boolean
+
+    // Resolve source profile
+    const fromProfile = await fetchProfile(fromSlug)
+    if (!fromProfile) { prompts.outro(`Source profile "${fromSlug}" not found`); return }
+    console.log(`  Source: ${bold(fromProfile.name)} (pk: ${fromProfile.pk})`)
+
+    // Resolve target profile
+    const toProfile = await fetchProfile(toSlug)
+    if (!toProfile) { prompts.outro(`Target profile "${toSlug}" not found`); return }
+    console.log(`  Target: ${bold(toProfile.name)} (pk: ${toProfile.pk})`)
+
+    // Fetch articles from source profile
+    const articlesRes = await irisFetch(`/api/v1/articles?profile_id=${fromProfile.pk}&limit=100`)
+    const articlesOk = await handleApiError(articlesRes, "Fetch articles")
+    if (!articlesOk) return
+    const articlesData = (await articlesRes.json()) as any
+    // Handle nested pagination (data.data) or flat array (data)
+    const rawArticles = articlesData?.data?.data ?? articlesData?.data ?? articlesData ?? []
+    const articles: any[] = Array.isArray(rawArticles) ? rawArticles : Object.values(rawArticles)
+
+    // Filter by keyword
+    const matching = articles.filter((a: any) =>
+      (a.title || "").toLowerCase().includes(keyword)
+    )
+
+    printDivider()
+    console.log(`  Found ${matching.length} articles matching "${args.match}" out of ${articles.length} total`)
+    printDivider()
+
+    if (matching.length === 0) {
+      prompts.outro("No matching articles found")
+      return
+    }
+
+    for (const article of matching) {
+      console.log(`  [${article.id}] ${article.title}`)
+    }
+
+    if (dryRun) {
+      printDivider()
+      prompts.outro(dim("Dry run — no changes made"))
+      return
+    }
+
+    const skipConfirm = args.yes as boolean
+    if (!skipConfirm) {
+      printDivider()
+      const confirmed = await prompts.confirm({
+        message: `Move ${matching.length} articles from "${fromProfile.name}" to "${toProfile.name}"?`,
+      })
+      if (!confirmed || prompts.isCancel(confirmed)) {
+        prompts.outro("Cancelled")
+        return
+      }
+    }
+
+    // Reassign each article
+    let moved = 0
+    for (const article of matching) {
+      const updateRes = await irisFetch(`/api/v1/articles/${article.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile_id: toProfile.pk }),
+      })
+      if (updateRes.ok) {
+        moved++
+        console.log(`  ✓ Moved: ${article.title}`)
+      } else {
+        console.log(`  ✗ Failed: ${article.title} (${updateRes.status})`)
+      }
+    }
+
+    printDivider()
+    prompts.outro(success(`Moved ${moved}/${matching.length} articles`))
+  },
+})
+
 export const PlatformProfileCommand = cmd({
   command: "profile",
-  describe: "manage profiles (show, get, set, links, memberships)",
+  describe: "manage profiles (show, get, set, create, links, memberships, reassign-articles)",
   builder: (yargs) =>
     yargs
       .command(ProfileShowCommand)
@@ -304,6 +445,8 @@ export const PlatformProfileCommand = cmd({
       .command(ProfileSetCommand)
       .command(ProfileLinksCommand)
       .command(ProfileMembershipsCommand)
+      .command(ProfileCreateCommand)
+      .command(ProfileReassignArticlesCommand)
       .demandCommand(),
   async handler() {},
 })
