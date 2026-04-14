@@ -2414,6 +2414,165 @@ const HiveExecCommand = cmd({
 })
 
 // ============================================================================
+// credentials — manage project credentials across machines
+// ============================================================================
+
+const HiveCredentialsListCommand = cmd({
+  command: "list <bloq-id>",
+  describe: "list project credentials",
+  builder: (yargs) =>
+    yargs.positional("bloq-id", { describe: "bloq/project ID", type: "number", demandOption: true }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const userId = await requireUserId()
+    if (!userId) return
+
+    const params = new URLSearchParams()
+    params.set("bloq_id", String(args["bloq-id"]))
+    params.set("user_id", String(userId))
+
+    const res = await hiveFetch(`/api/v1/project-credentials?${params}`)
+    const ok = await handleApiError(res, "List credentials")
+    if (!ok) return
+
+    const data = (await res.json()) as any
+    const creds: any[] = data?.data ?? []
+
+    printDivider()
+    if (creds.length === 0) {
+      console.log(`  ${dim("No credentials found")}`)
+    } else {
+      for (const c of creds) {
+        const expired = c.status === "expired" ? "  EXPIRED" : ""
+        console.log(`  ${bold(c.platform)}  ${dim(`bloq:${c.bloq_id}`)}  ${dim(c.credential_type)}  ${dim(`#${c.id}`)}${expired}`)
+      }
+    }
+    printDivider()
+    console.log(dim("  iris hive credentials add --help"))
+    console.log("")
+  },
+})
+
+const HiveCredentialsAddCommand = cmd({
+  command: "add",
+  describe: "store a new project credential",
+  builder: (yargs) =>
+    yargs
+      .option("bloq-id", { describe: "bloq/project ID", type: "number", demandOption: true })
+      .option("platform", { describe: "platform (n8n, youtube, instagram, twitter, linkedin, email)", type: "string", demandOption: true })
+      .option("type", { describe: "credential type", type: "string", choices: ["api_key", "browser_session"], default: "api_key" })
+      .option("key", { describe: "key=value pairs for api_key type (repeatable)", type: "array" }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    let credentials: Record<string, string> = {}
+
+    if (args.type === "api_key") {
+      // Parse key=value pairs from --key flags
+      const keys = (args.key || []) as string[]
+      if (keys.length === 0) {
+        // Interactive: ask for key-value pairs
+        console.log(dim("  Enter credentials as KEY=VALUE (one per line, empty line to finish):"))
+        let line: string | symbol
+        while (true) {
+          line = await prompts.text({ message: "KEY=VALUE (or empty to finish)", placeholder: "N8N_EMAIL=admin@example.com" })
+          if (prompts.isCancel(line) || !line || String(line).trim() === "") break
+          const eq = String(line).indexOf("=")
+          if (eq > 0) {
+            credentials[String(line).slice(0, eq).trim()] = String(line).slice(eq + 1).trim()
+          }
+        }
+      } else {
+        for (const kv of keys) {
+          const eq = String(kv).indexOf("=")
+          if (eq > 0) {
+            credentials[String(kv).slice(0, eq).trim()] = String(kv).slice(eq + 1).trim()
+          }
+        }
+      }
+    } else {
+      // browser_session: read from file
+      const filePath = await prompts.text({ message: "Path to session JSON file" })
+      if (prompts.isCancel(filePath)) return
+      try {
+        const content = await Bun.file(String(filePath)).text()
+        credentials = JSON.parse(content)
+      } catch (e: any) {
+        console.error(`Failed to read session file: ${e.message}`)
+        return
+      }
+    }
+
+    if (Object.keys(credentials).length === 0) {
+      console.log(dim("No credentials provided"))
+      return
+    }
+
+    const userId = await requireUserId()
+    if (!userId) return
+
+    const res = await hiveFetch("/api/v1/project-credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        bloq_id: args["bloq-id"],
+        platform: args.platform,
+        credential_type: args.type,
+        credentials: JSON.stringify(credentials),
+        user_id: userId,
+      }),
+    })
+    const ok = await handleApiError(res, "Store credential")
+    if (!ok) return
+
+    const data = (await res.json()) as any
+    const cred = data?.data ?? data
+    printDivider()
+    printKV("ID", cred.id)
+    printKV("Platform", args.platform)
+    printKV("Type", args.type)
+    printKV("Bloq", args["bloq-id"])
+    printKV("Keys", Object.keys(credentials).join(", "))
+    printDivider()
+    console.log(success("Credential stored — available to all Hive nodes for this project"))
+    console.log("")
+  },
+})
+
+const HiveCredentialsRemoveCommand = cmd({
+  command: "remove <id>",
+  describe: "revoke a project credential",
+  builder: (yargs) =>
+    yargs.positional("id", { describe: "credential ID", type: "string", demandOption: true }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const res = await hiveFetch(`/api/v1/project-credentials/${args.id}`, { method: "DELETE" })
+    const ok = await handleApiError(res, "Remove credential")
+    if (!ok) return
+
+    console.log(success(`Credential ${args.id} removed`))
+  },
+})
+
+const HiveCredentialsCommand = cmd({
+  command: "credentials",
+  aliases: ["creds"],
+  describe: "manage project credentials across Hive machines",
+  builder: (yargs) =>
+    yargs
+      .command(HiveCredentialsListCommand)
+      .command(HiveCredentialsAddCommand)
+      .command(HiveCredentialsRemoveCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -2455,6 +2614,8 @@ export const PlatformHiveCommand = cmd({
       .command(HiveChatCommand)
       .command(HiveFilesCommand)
       .command(HiveExecCommand)
+      // Credentials
+      .command(HiveCredentialsCommand)
       .demandCommand(),
   async handler() {},
 })
