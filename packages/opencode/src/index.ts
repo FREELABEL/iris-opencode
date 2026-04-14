@@ -67,6 +67,7 @@ import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
+import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
 import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
@@ -93,6 +94,7 @@ import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
 // TODO: platform-mail and platform-imessage commands (not yet implemented)
 // import { PlatformMailCommand } from "./cli/cmd/platform-mail"
 // import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
+import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
 import { PlatformWalletCommand } from "./cli/cmd/platform-wallet"
 import { PlatformConfigCommand } from "./cli/cmd/platform-config"
 import { PlatformAppCommand } from "./cli/cmd/platform-app"
@@ -229,6 +231,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAtlasMeetingsCommand))
   .command(reg(PlatformAtlasBrandKitCommand))
   .command(reg(PlatformLeadsMeetingCommand))
+  .command(reg(PlatformCampaignCommand))
   .command(reg(PlatformDaemonCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformProposalsCommand))
@@ -254,6 +257,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformVoiceCommand))
   // .command(reg(PlatformMailCommand))     // TODO: not yet implemented
   // .command(reg(PlatformImessageCommand)) // TODO: not yet implemented
+  .command(reg(PlatformCalendarCommand))
   .command(reg(PlatformWalletCommand))
   // PHP-port commands — config, app, automation, automation:test
   // (integrations is owned by PlatformRunCommand in platform-run.ts)
