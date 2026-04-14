@@ -146,7 +146,7 @@ const BoardsGetCommand = cmd({
 
     try {
       // Use the update endpoint path pattern to get an item
-      const res = await irisFetch(`/api/v1/bloqs/list/item/${args.id}`)
+      const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`)
       const ok = await handleApiError(res, "Get item")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -277,7 +277,7 @@ const BoardsUpdateCommand = cmd({
     spinner.start("Updating…")
 
     try {
-      const res = await irisFetch(`/api/v1/bloqs/list/item/${args.id}`, {
+      const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
       })
@@ -321,7 +321,7 @@ const BoardsPullCommand = cmd({
     spinner.start("Fetching item…")
 
     try {
-      const res = await irisFetch(`/api/v1/bloqs/list/item/${args.id}`)
+      const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`)
       const ok = await handleApiError(res, "Pull item")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -412,7 +412,7 @@ const BoardsPushCommand = cmd({
         if (payload[k] === undefined) delete payload[k]
       }
 
-      const res = await irisFetch(`/api/v1/bloqs/list/item/${args.id}`, {
+      const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
       })
@@ -457,7 +457,7 @@ const BoardsDiffCommand = cmd({
     spinner.start("Comparing…")
 
     try {
-      const res = await irisFetch(`/api/v1/bloqs/list/item/${args.id}`)
+      const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`)
       const ok = await handleApiError(res, "Fetch item")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
