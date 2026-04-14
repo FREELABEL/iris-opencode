@@ -2274,18 +2274,18 @@ Wait for their answer. Based on what they pick, IMMEDIATELY run the correspondin
 
 - Agent: Ask what it should do in one sentence, then run: iris agents create
 - Multi-Agent Workflow: Ask what to automate in one sentence, then run: iris workflows list
-- Web Page: Ask what the page is for, then run: iris pages create --slug <slug> --title "<title>" --template landing
-  After creation, the public URL is shown in CLI output (main.heyiris.io/p/<slug>). Auto-publishes on create.
-  To add more components: iris pages pull <slug>, edit pages/<slug>.json, iris pages push <slug>.
+- Web Page: Ask what the page is for, then run: iris pages create --slug SLUG --title 'TITLE' --template landing
+  After creation, the public URL is shown in CLI output (main.heyiris.io/p/SLUG). Auto-publishes on create.
+  To add more components: iris pages pull SLUG, edit pages/SLUG.json, iris pages push SLUG.
   Run: iris pages component-registry — to see ALL available component types.
   VALID component types (use ONLY these exact names): Hero, SiteNavigation, SiteFooter, AnnouncementBanner, TestimonialsSection, TeamSection, ContactSection, LogoMarquee, FeatureShowcase, ComparisonMatrix, ClientGrid, CareersListing, PortfolioGallery, ProductGrid, ServiceMenu, EventGrid, FundingTiers, BeforeAfter, MapSection, NewsletterSignup, StepWizard, FileUpload, ShoppingCart, OrderConfirmation.
   NEVER invent component types. If unsure, run: iris pages component-registry
 - Knowledge base / RAG: Run: iris bloqs create
 - List knowledge bases: Run: iris bloqs list
-- Add content to KB: Run: iris bloqs ingest <bloqId> <file>
-- Add text to KB: Run: iris bloqs add-item <bloqId> <listId> 'content'
+- Add content to KB: Run: iris bloqs ingest BLOQ_ID FILE_PATH
+- Add text to KB: Run: iris bloqs add-item BLOQ_ID LIST_ID 'content'
 - Lead management / CRM: Run: iris leads list
-- Chat with an agent: Run: iris chat 'your message' --agent <id>
+- Chat with an agent: Run: iris chat 'your message' --agent AGENT_ID
 - Schedule a job: Run: iris schedules list
 - Something else: Check iris --help for all available commands
 - If the user asks about a specific project you found during scanning, help them set up IRIS for that project
@@ -2346,7 +2346,7 @@ fi
 # Write prompt to a file (keeps tokens out of ps output), then launch from file.
 
 PROMPT_FILE="$HOME/.iris/.onboarding-prompt"
-echo "$ONBOARDING_PROMPT" > "$PROMPT_FILE"
+printf '%s' "$ONBOARDING_PROMPT" > "$PROMPT_FILE"
 chmod 600 "$PROMPT_FILE"
 
 cat > "$INSTALL_DIR/iris-onboard" << 'ONBOARD'
