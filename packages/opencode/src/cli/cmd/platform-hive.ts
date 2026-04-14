@@ -854,8 +854,35 @@ async function nodeFetch(path: string, options: RequestInit = {}) {
   })
 }
 
+// The daemon can run in two modes:
+//  1. Embedded in bridge (index.js) — routes at /daemon/*
+//  2. Standalone (daemon.js)        — routes at /*  (no prefix)
+// Detect which mode is active and cache the result.
+let _bridgePrefix: string | null = null
+
+async function detectBridgePrefix(): Promise<string> {
+  if (_bridgePrefix !== null) return _bridgePrefix
+  const opts = { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(2000) }
+  // Try embedded mode first (/daemon/health)
+  try {
+    const res = await fetch(`${BRIDGE_URL}/daemon/health`, opts)
+    if (res.ok) { _bridgePrefix = "/daemon"; return _bridgePrefix }
+  } catch { /* not embedded */ }
+  // Try standalone mode (/health)
+  try {
+    const res = await fetch(`${BRIDGE_URL}/health`, opts)
+    if (res.ok) { _bridgePrefix = ""; return _bridgePrefix }
+  } catch { /* not reachable */ }
+  // Neither worked — default to /daemon and let caller handle the error
+  _bridgePrefix = "/daemon"
+  return _bridgePrefix
+}
+
 async function bridgeFetch(path: string) {
-  return fetch(`${BRIDGE_URL}${path}`, { headers: { Accept: "application/json" } })
+  const prefix = await detectBridgePrefix()
+  // path comes in as "/daemon/queue" — strip the /daemon prefix and re-add the detected one
+  const cleanPath = path.replace(/^\/daemon/, "")
+  return fetch(`${BRIDGE_URL}${prefix}${cleanPath}`, { headers: { Accept: "application/json" } })
 }
 
 // ── iris hive tasks ─────────────────────────────────────────────────────
@@ -1047,7 +1074,7 @@ const HiveQueueCommand = cmd({
       ])
 
       if (!queueRes || !queueRes.ok) {
-        prompts.log.warn("Daemon not running. Start with: npm run bridge")
+        prompts.log.warn("Daemon not running. Start with: iris daemon start")
         prompts.outro("Done")
         return
       }
@@ -1093,14 +1120,15 @@ const HivePauseCommand = cmd({
   async handler() {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/daemon/pause`, { method: "POST" })
+      const prefix = await detectBridgePrefix()
+      const res = await fetch(`${BRIDGE_URL}${prefix}/pause`, { method: "POST" })
       if (res.ok) {
         prompts.log.success("Daemon paused — no new tasks will be accepted")
       } else {
         prompts.log.error("Failed to pause daemon")
       }
     } catch {
-      prompts.log.error("Daemon not running. Start with: npm run bridge")
+      prompts.log.error("Daemon not running. Start with: iris daemon start")
     }
   },
 })
@@ -1112,14 +1140,15 @@ const HiveResumeCommand = cmd({
   async handler() {
     UI.empty()
     try {
-      const res = await fetch(`${BRIDGE_URL}/daemon/resume`, { method: "POST" })
+      const prefix = await detectBridgePrefix()
+      const res = await fetch(`${BRIDGE_URL}${prefix}/resume`, { method: "POST" })
       if (res.ok) {
         prompts.log.success("Daemon resumed — accepting tasks")
       } else {
         prompts.log.error("Failed to resume daemon")
       }
     } catch {
-      prompts.log.error("Daemon not running. Start with: npm run bridge")
+      prompts.log.error("Daemon not running. Start with: iris daemon start")
     }
   },
 })
@@ -1160,7 +1189,8 @@ const HivePurgeCommand = cmd({
 
       // Also try to pause the daemon to prevent re-dispatch
       try {
-        await fetch(`${BRIDGE_URL}/daemon/pause`, { method: "POST" })
+        const purgePrefix = await detectBridgePrefix()
+        await fetch(`${BRIDGE_URL}${purgePrefix}/pause`, { method: "POST" })
         prompts.log.info("Daemon paused to prevent re-dispatch. Resume with: iris hive resume")
       } catch {
         prompts.log.warn("Daemon not reachable — tasks may be re-dispatched on next heartbeat")

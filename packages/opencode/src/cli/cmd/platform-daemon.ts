@@ -231,6 +231,40 @@ const DaemonRegisterCommand = cmd({
   },
 })
 
+const DaemonPassthroughCommand = cmd({
+  command: "* [args..]",
+  describe: false as any,
+  builder: (yargs) => yargs.strict(false),
+  async handler(args) {
+    const ctl = getDaemonCtl()
+    if (!ctl) {
+      prompts.log.error("Daemon not installed. Run: curl -fsSL https://heyiris.io/install-code | bash")
+      return
+    }
+    // Forward all unrecognized args to daemonctl
+    const rawArgs = (args._ as string[]).slice(1) // strip "bridge"/"daemon" prefix
+    const extraArgs = (args.args as string[]) || []
+    const allArgs = [...rawArgs, ...extraArgs]
+    if (allArgs.length === 0) {
+      prompts.log.error("No subcommand provided")
+      return
+    }
+    prompts.log.info(`Forwarding to daemonctl: ${allArgs.join(" ")}`)
+    try {
+      const child = spawn(ctl, allArgs, { stdio: "inherit" })
+      await new Promise<void>((resolve, reject) => {
+        child.on("close", (code) => {
+          if (code !== 0) reject(new Error(`daemonctl exited with code ${code}`))
+          else resolve()
+        })
+        child.on("error", reject)
+      })
+    } catch (e: any) {
+      prompts.log.error(e.message)
+    }
+  },
+})
+
 export const PlatformDaemonCommand = cmd({
   command: "bridge",
   aliases: ["daemon"],
@@ -244,6 +278,7 @@ export const PlatformDaemonCommand = cmd({
       .command(DaemonLogsCommand)
       .command(DaemonRunsCommand)
       .command(DaemonRegisterCommand)
-      .demandCommand(),
+      .command(DaemonPassthroughCommand)
+      .strict(false),
   async handler() {},
 })
