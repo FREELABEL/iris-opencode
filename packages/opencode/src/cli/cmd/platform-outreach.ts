@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { OutreachApproveGroup } from "./platform-outreach-approve"
 
 // ============================================================================
 // Outreach Strategy Commands — list, show, create, update, delete
@@ -267,6 +268,7 @@ export const PlatformOutreachCommand = cmd({
       .command(OutreachUpdateCommand)
       .command(OutreachDeleteCommand)
       .command(OutreachApplyCommand)
+      .command(OutreachApproveGroup)
       .demandCommand(),
   async handler() {},
 })

@@ -134,7 +134,17 @@ const CustomerSetupCommand = cmd({
       }
     }
 
-    // 3b. Enable nurture on the lead
+    // 3b. Link lead to bloq + enable nurture
+    if (!dryRun && bloqId) {
+      // Attach lead to the new bloq so heartbeat agent can find it
+      const attachRes = await irisFetch(`/api/v1/leads/${leadId}/attach-bloq`, {
+        method: "POST",
+        body: JSON.stringify({ bloq_id: bloqId }),
+      })
+      if (attachRes.ok) {
+        printKV("Bloq Link", `${success("✓")} lead → bloq #${bloqId}`)
+      }
+    }
     if (!dryRun && lead.email) {
       await irisFetch(`/api/v1/leads/${leadId}`, {
         method: "PUT",
