@@ -1026,6 +1026,7 @@ REAL_SCRIPT="$0"
 [ -L "$REAL_SCRIPT" ] && REAL_SCRIPT="$(readlink "$REAL_SCRIPT")"
 BRIDGE_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 IRIS_CONFIG="$HOME/.iris/config.json"
+IRIS_API="https://main.heyiris.io"
 
 has_node_key() {
     [ -n "${IRIS_API_KEY:-}" ] && return 0
@@ -1034,8 +1035,46 @@ has_node_key() {
     return 1
 }
 
+save_node_key() {
+    local key="$1"
+    mkdir -p "$HOME/.iris"
+    if [ -f "$IRIS_CONFIG" ] && command -v jq >/dev/null 2>&1; then
+        local tmp; tmp=$(mktemp 2>/dev/null || echo "/tmp/iris-cfg-$$")
+        jq --arg k "$key" --arg api "$IRIS_API" '.node_api_key=$k | .node_key=$k | .api_url=$api' "$IRIS_CONFIG" > "$tmp" 2>/dev/null && mv "$tmp" "$IRIS_CONFIG"
+    elif [ -f "$IRIS_CONFIG" ] && command -v python3 >/dev/null 2>&1; then
+        local tmp; tmp=$(mktemp 2>/dev/null || echo "/tmp/iris-cfg-$$")
+        python3 -c "
+import json
+with open('$IRIS_CONFIG') as f: d=json.load(f)
+d['node_api_key']='$key'; d['node_key']='$key'; d['api_url']='$IRIS_API'
+with open('$tmp','w') as f: json.dump(d,f,indent=2)
+" 2>/dev/null && mv "$tmp" "$IRIS_CONFIG"
+    else
+        printf '{"node_api_key":"%s","node_key":"%s","api_url":"%s"}\n' "$key" "$key" "$IRIS_API" > "$IRIS_CONFIG"
+    fi
+    chmod 600 "$IRIS_CONFIG"
+}
+
+# Parse --node-key from any position
+NODE_KEY_ARG=""
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --node-key|--key) NODE_KEY_ARG="$2"; shift 2 ;;
+        --node-key=*|--key=*) NODE_KEY_ARG="${1#*=}"; shift ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+set -- "${ARGS[@]}"
+
 case "${1:-status}" in
     start)
+        # If --node-key was passed, save it immediately (skip all auth)
+        if [ -n "$NODE_KEY_ARG" ]; then
+            save_node_key "$NODE_KEY_ARG"
+            echo "Node key saved."
+        fi
+
         if ! has_node_key; then
             # Self-heal: auto-register if SDK token exists
             if [ -f "$HOME/.iris/sdk/.env" ]; then
@@ -1048,14 +1087,13 @@ case "${1:-status}" in
                     _RESP=$(curl -sL --max-time 10 \
                         -H "Authorization: Bearer $_TOKEN" \
                         -H "Content-Type: application/json" \
-                        -d "{\"name\": \"$_HLABEL\", \"capabilities\": {\"docker\": $_HDOCK}}" \
-                        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
-                    _NKEY=$(echo "$_RESP" | jq -r '.node_key // empty' 2>/dev/null || \
-                            echo "$_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
-                            echo "$_RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                        -d "{\"user_id\": ${_UID:-0}, \"name\": \"$_HLABEL\", \"capabilities\": {\"docker\": $_HDOCK}}" \
+                        "$IRIS_API/api/v6/nodes" 2>/dev/null || echo '{}')
+                    _NKEY=$(echo "$_RESP" | jq -r '.credentials.api_key // .node_key // empty' 2>/dev/null || \
+                            echo "$_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('credentials',{}).get('api_key','') or d.get('node_key',''))" 2>/dev/null || \
+                            echo "$_RESP" | sed -n 's/.*"api_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
                     if [ -n "$_NKEY" ] && [ "$_NKEY" != "null" ]; then
-                        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$_NKEY" "${_UID:-0}" > "$IRIS_CONFIG"
-                        chmod 600 "$IRIS_CONFIG"
+                        save_node_key "$_NKEY"
                         echo "Registered! Continuing to start daemon..."
                     else
                         echo "Auto-registration failed. Register manually:"
@@ -1064,11 +1102,10 @@ case "${1:-status}" in
                     fi
                 fi
             fi
-            # Re-check after auto-registration attempt
             if ! has_node_key; then
                 echo "No API key configured."
-                echo "  Authenticate:  iris-login"
-                echo "  Then register: iris-daemon register"
+                echo "  Pass directly: iris-daemon start --node-key node_live_xxx"
+                echo "  Or authenticate: iris-login && iris-daemon register"
                 exit 1
             fi
         fi
@@ -1101,11 +1138,15 @@ case "${1:-status}" in
         else echo "Not running. Start with: iris-daemon start"; fi ;;
     logs) tail -f "$BRIDGE_DIR/daemon.log" ;;
     register)
+        if [ -n "$NODE_KEY_ARG" ]; then
+            save_node_key "$NODE_KEY_ARG"
+            echo "Node key saved. Start with: iris-daemon start"
+            exit 0
+        fi
         if [ ! -f "$HOME/.iris/sdk/.env" ] || [ -z "$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)" ]; then
             if command -v iris-login >/dev/null 2>&1; then
                 echo "Not authenticated. Running iris-login..."
                 iris-login
-                # Re-check after login
                 if [ ! -f "$HOME/.iris/sdk/.env" ]; then echo "Auth failed."; exit 1; fi
             else
                 echo "Not authenticated. Run 'iris-login' first."
@@ -1113,10 +1154,7 @@ case "${1:-status}" in
             fi
         fi
         SDK_TOKEN=$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" | cut -d= -f2)
-        if [ -z "$SDK_TOKEN" ]; then
-            echo "SDK token not found. Run 'iris-login' first."
-            exit 1
-        fi
+        if [ -z "$SDK_TOKEN" ]; then echo "SDK token not found. Run 'iris-login' first."; exit 1; fi
         HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My Machine")
         HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
         USER_ID=$(grep IRIS_USER_ID "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
@@ -1125,16 +1163,14 @@ case "${1:-status}" in
         HTTP_CODE=$(curl -sL --max-time 10 -o "$REG_TMP" -w "%{http_code}" \
             -H "Authorization: Bearer $SDK_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"name\": \"$HOSTNAME_LABEL\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo "000")
+            -d "{\"user_id\": ${USER_ID:-0}, \"name\": \"$HOSTNAME_LABEL\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+            "$IRIS_API/api/v6/nodes" 2>/dev/null || echo "000")
         RESP=$(cat "$REG_TMP" 2>/dev/null || echo '{}'); rm -f "$REG_TMP"
-        NODE_KEY=$(echo "$RESP" | jq -r '.node_key // empty' 2>/dev/null || \
-                   echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
-                   echo "$RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        NODE_KEY=$(echo "$RESP" | jq -r '.credentials.api_key // .node_key // empty' 2>/dev/null || \
+                   echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('credentials',{}).get('api_key','') or d.get('node_key',''))" 2>/dev/null || \
+                   echo "$RESP" | sed -n 's/.*"api_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
         if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
-            mkdir -p "$HOME/.iris"
-            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "${USER_ID:-0}" > "$IRIS_CONFIG"
-            chmod 600 "$IRIS_CONFIG"
+            save_node_key "$NODE_KEY"
             echo "Registered! Node key saved to ~/.iris/config.json"
             echo "Start with: iris-daemon start"
         else
@@ -1146,9 +1182,9 @@ case "${1:-status}" in
                 *)   echo "Registration failed (HTTP $HTTP_CODE)."
                      echo "$RESP" | head -c 200 ;;
             esac
-            echo "  Manual setup: https://app.heyiris.io/dashboard/hive"
+            echo "  Manual setup: https://web.freelabel.net/iris?tab=machines"
         fi ;;
-    *) echo "Usage: iris-daemon {start|stop|restart|status|register|logs}" ;;
+    *) echo "Usage: iris-daemon {start|stop|restart|status|register|logs} [--node-key <key>]" ;;
 esac
 DCTL
     chmod 755 "$bridge_dir/daemonctl"
@@ -1211,7 +1247,7 @@ CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; MUTED='\033[0;2m'; NC='
 IRIS_DIR="$HOME/.iris"
 SDK_ENV="$IRIS_DIR/sdk/.env"
 CONFIG_JSON="$IRIS_DIR/config.json"
-API_BASE="https://raichu.heyiris.io"
+API_BASE="https://raichu.heyiris.io"  # fl-api (auth endpoints live here)
 
 # Parse flags
 PRE_TOKEN="" ; PRE_USER_ID=""
@@ -1257,13 +1293,14 @@ register_hive() {
     local http_code; http_code=$(curl -sL --max-time 10 -o "$tmpfile" -w "%{http_code}" \
         -H "Authorization: Bearer $token" \
         -H "Content-Type: application/json" \
-        -d "{\"name\": \"$(echo "$hostname_label" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $has_docker}}" \
-        "$API_BASE/api/v1/hive/register-node" 2>/dev/null || echo "000")
+        -d "{\"user_id\": ${user_id:-0}, \"name\": \"$(echo "$hostname_label" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $has_docker}}" \
+        "https://main.heyiris.io/api/v6/nodes" 2>/dev/null || echo "000")
     local resp; resp=$(cat "$tmpfile" 2>/dev/null || echo '{}'); rm -f "$tmpfile"
-    local node_key; node_key=$(json_field "$resp" "node_key")
+    local node_key; node_key=$(json_nested "$resp" "credentials.api_key")
+    [ -z "$node_key" ] || [ "$node_key" = "null" ] && node_key=$(json_field "$resp" "node_key")
     if [ -n "$node_key" ] && [ "$node_key" != "null" ]; then
         mkdir -p "$IRIS_DIR"
-        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$node_key" "${user_id:-0}" > "$CONFIG_JSON"
+        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://main.heyiris.io"}\n' "$node_key" "${user_id:-0}" > "$CONFIG_JSON"
         chmod 600 "$CONFIG_JSON"
         echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
         return 0
@@ -2070,12 +2107,13 @@ ENVFILE
     NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
         -H "Authorization: Bearer $SDK_TOKEN" \
         -H "Content-Type: application/json" \
-        --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
-    NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
+        --data-raw "{\"user_id\": ${USER_ID:-0}, \"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+        "https://main.heyiris.io/api/v6/nodes" 2>/dev/null || echo '{}')
+    NODE_KEY=$(json_nested "$NODE_RESPONSE" "credentials.api_key")
+    [ -z "$NODE_KEY" ] || [ "$NODE_KEY" = "null" ] && NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
     if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
         mkdir -p "$HOME/.iris"
-        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
+        printf '{"node_api_key":"%s","node_key":"%s","user_id":%s,"api_url":"https://main.heyiris.io"}\n' "$NODE_KEY" "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
         chmod 600 "$HOME/.iris/config.json"
         echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
     else
@@ -2179,12 +2217,13 @@ ENVFILE
                         NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
                             -H "Authorization: Bearer $SDK_TOKEN" \
                             -H "Content-Type: application/json" \
-                            --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-                            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
-                        NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
+                            --data-raw "{\"user_id\": ${USER_ID:-0}, \"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+                            "https://main.heyiris.io/api/v6/nodes" 2>/dev/null || echo '{}')
+                        NODE_KEY=$(json_nested "$NODE_RESPONSE" "credentials.api_key")
+                        [ -z "$NODE_KEY" ] || [ "$NODE_KEY" = "null" ] && NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
                         if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
                             mkdir -p "$HOME/.iris"
-                            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
+                            printf '{"node_api_key":"%s","node_key":"%s","user_id":%s,"api_url":"https://main.heyiris.io"}\n' "$NODE_KEY" "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
                             chmod 600 "$HOME/.iris/config.json"
                             echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
                         else
