@@ -375,15 +375,216 @@ function getChecklist(lead: any): CheckItem[] {
   ]
 }
 
+// ── PULSE ────────────────────────────────────────────────────
+// Unified activity check: Apple Mail + iMessage + Calendar + Notes
+
+const BRIDGE_URL = "http://localhost:3200"
+
+async function bridgeAvailable(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(2000) })
+    return res.ok
+  } catch { return false }
+}
+
+async function searchMail(query: string, days: number): Promise<any[]> {
+  try {
+    const params = new URLSearchParams({ from: query, days: String(days), limit: "5", include_body: "0" })
+    const res = await fetch(`${BRIDGE_URL}/api/mail/search?${params}`, { signal: AbortSignal.timeout(8000) })
+    if (!res.ok) return []
+    const data = (await res.json()) as any
+    return data?.emails ?? data?.results ?? []
+  } catch { return [] }
+}
+
+function queryMessagesDb(sql: string): string {
+  const { execSync } = require("child_process") as typeof import("child_process")
+  const db = `${process.env.HOME}/Library/Messages/chat.db`
+  try {
+    return execSync(`sqlite3 "${db}" "${sql.replace(/"/g, '\\"')}"`, { encoding: "utf-8", timeout: 5000 }).trim()
+  } catch { return "" }
+}
+
+function searchIMessages(query: string, days: number): Array<{ date: string; from: string; text: string }> {
+  const digits = query.replace(/\D/g, "")
+  const isPhone = digits.length >= 7
+  const where = isPhone
+    ? `c.chat_identifier LIKE '%${digits.slice(-10)}%'`
+    : `c.chat_identifier LIKE '%${query}%'`
+  const sql = `SELECT datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as dt, CASE WHEN m.is_from_me = 1 THEN 'me' ELSE 'them' END as sender, COALESCE(m.text,'') as txt FROM message m JOIN chat_message_join cmj ON m.ROWID = cmj.message_id JOIN chat c ON cmj.chat_id = c.ROWID WHERE ${where} AND m.date > (strftime('%s','now','-${days} days') - 978307200) * 1000000000 ORDER BY m.date DESC LIMIT 5`
+  const raw = queryMessagesDb(sql)
+  if (!raw) return []
+  return raw.split("\n").filter(Boolean).map((line) => {
+    const [date, from, ...rest] = line.split("|")
+    return { date: date ?? "", from: from ?? "", text: rest.join("|").slice(0, 120) }
+  })
+}
+
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const d = Math.floor(hrs / 24)
+  return `${d}d ago`
+}
+
+const CustomerPulseCommand = cmd({
+  command: "pulse <lead-id>",
+  describe: "check recent activity for a customer across email, iMessage, calendar, and notes",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { type: "string", demandOption: true })
+      .option("days", { type: "number", default: 7, describe: "look back N days" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+
+    const leadId = (args.leadId ?? args["lead-id"]) as string
+    const days = args.days as number
+
+    // 1. Fetch lead
+    const lead = await fetchLead(leadId)
+    if (!lead) {
+      prompts.log.error("Lead not found")
+      return
+    }
+
+    const company = lead.company || lead.name || `Lead #${leadId}`
+    const email = lead.email || ""
+    const phone = lead.phone || (lead.contact_info?.phone) || ""
+    const ci = lead.contact_info || {}
+
+    prompts.intro(`◈  Pulse — ${bold(company)}`)
+    printKV("Email", email || dim("none"))
+    printKV("Phone", phone || dim("none"))
+    printKV("Status", lead.status)
+    if (lead.price) printKV("MRR", `$${lead.price}`)
+    console.log()
+
+    if (args.json) {
+      const results: any = { lead: { id: lead.id, name: company, email, phone, status: lead.status } }
+
+      // Collect all data for JSON
+      const bridge = await bridgeAvailable()
+      if (bridge && email) {
+        results.emails = await searchMail(email, days)
+      }
+      if (process.platform === "darwin" && phone) {
+        results.imessages = searchIMessages(phone, days)
+      }
+      // Notes from lead
+      results.notes = (lead.notes || []).slice(0, 5).map((n: any) => ({
+        id: n.id, type: n.activity_type, date: n.created_at, preview: (n.content || "").slice(0, 200),
+      }))
+      console.log(JSON.stringify(results, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    // 2. Apple Mail
+    const bridge = await bridgeAvailable()
+    if (bridge && email) {
+      const spinner = prompts.spinner()
+      spinner.start("Checking Apple Mail...")
+      const emails = await searchMail(email, days)
+      if (emails.length > 0) {
+        spinner.stop(`${success("✓")} ${emails.length} email${emails.length > 1 ? "s" : ""} in last ${days}d`)
+        for (const e of emails.slice(0, 5)) {
+          const date = e.date || e.received_at || e.created_at || ""
+          const subj = e.subject || "(no subject)"
+          const from = e.from || e.sender || "?"
+          console.log(`    ${dim(relativeTime(date))}  ${subj}  ${dim("from " + from)}`)
+        }
+      } else {
+        spinner.stop(`${dim("✗")} No emails from ${email} in last ${days}d`)
+      }
+    } else if (!bridge) {
+      console.log(`  ${dim("✗ Mail")}  ${dim("Bridge not running (iris bridge start)")}`)
+    } else {
+      console.log(`  ${dim("✗ Mail")}  ${dim("No email on file")}`)
+    }
+
+    // 3. iMessage
+    if (process.platform === "darwin" && phone) {
+      const msgs = searchIMessages(phone, days)
+      if (msgs.length > 0) {
+        console.log(`  ${success("✓")} ${msgs.length} iMessage${msgs.length > 1 ? "s" : ""} in last ${days}d`)
+        for (const m of msgs.slice(0, 5)) {
+          const who = m.from === "me" ? bold("→") : dim("←")
+          console.log(`    ${dim(m.date)}  ${who}  ${m.text}`)
+        }
+      } else {
+        console.log(`  ${dim("✗ iMessage")}  ${dim(`No messages with ${phone} in last ${days}d`)}`)
+      }
+    } else if (!phone) {
+      console.log(`  ${dim("✗ iMessage")}  ${dim("No phone on file")}`)
+    }
+
+    // 4. Recent notes (from lead data)
+    const notes = (lead.notes || []).slice(0, 5)
+    if (notes.length > 0) {
+      console.log(`  ${success("✓")} ${lead.note_count ?? notes.length} notes`)
+      for (const n of notes) {
+        const date = relativeTime(n.created_at || n.updated_at || "")
+        const icon = n.activity_type === "outreach" ? "📣" : n.activity_type === "note" ? "📝" : "📋"
+        const preview = (n.content || "").replace(/\n/g, " ").slice(0, 80)
+        console.log(`    ${dim(date)}  ${icon}  ${preview}`)
+      }
+    } else {
+      console.log(`  ${dim("✗ Notes")}  ${dim("No notes on lead")}`)
+    }
+
+    // 5. Pending tasks
+    const tasks = lead.tasks || []
+    const pending = tasks.filter((t: any) => t.status !== "completed" && t.status !== "done")
+    if (pending.length > 0) {
+      console.log(`  ${success("✓")} ${pending.length} pending task${pending.length > 1 ? "s" : ""}`)
+      for (const t of pending.slice(0, 3)) {
+        const due = t.due_date ? dim(` due ${t.due_date}`) : ""
+        console.log(`    ${dim("○")}  ${t.title || t.description || "?"}${due}`)
+      }
+    }
+
+    // 6. Outreach steps
+    const outreachTotal = lead.outreach_total_count ?? 0
+    const outreachDone = lead.outreach_completed_count ?? 0
+    if (outreachTotal > 0) {
+      console.log(`  ${outreachDone > 0 ? success("✓") : dim("○")} Outreach: ${outreachDone}/${outreachTotal} steps done`)
+    }
+
+    // 7. Summary
+    console.log()
+    printDivider()
+    const signals = [
+      bridge && email ? (await searchMail(email, days)).length : 0,
+      process.platform === "darwin" && phone ? searchIMessages(phone, days).length : 0,
+      notes.length,
+    ]
+    const totalSignals = signals.reduce((a, b) => a + b, 0)
+    const lastContact = notes[0]?.created_at ? relativeTime(notes[0].created_at) : "unknown"
+    console.log(`  ${bold("Activity:")} ${totalSignals} signals in last ${days}d`)
+    console.log(`  ${bold("Last contact:")} ${lastContact}`)
+    if (totalSignals === 0) {
+      console.log(`  ${bold("⚠")} No recent activity — consider reaching out`)
+    }
+
+    prompts.outro("Done")
+  },
+})
+
 // ── ROOT ──────────────────────────────────────────────────────
 export const PlatformCustomerCommand = cmd({
   command: "customer",
   aliases: ["onboard"],
-  describe: "customer onboarding — setup, status, and delivery tracking",
+  describe: "customer onboarding — setup, status, pulse, and delivery tracking",
   builder: (yargs) =>
     yargs
       .command(CustomerSetupCommand)
       .command(CustomerStatusCommand)
+      .command(CustomerPulseCommand)
       .demandCommand(),
   async handler() {},
 })
