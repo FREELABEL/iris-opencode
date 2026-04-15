@@ -290,7 +290,7 @@ $ErrorActionPreference = "Stop"
 $IRIS_DIR = "$env:USERPROFILE\.iris"
 $SDK_ENV = "$IRIS_DIR\sdk\.env"
 $CONFIG_JSON = "$IRIS_DIR\config.json"
-$API_BASE = "https://apiv2.heyiris.io"
+$API_BASE = "https://raichu.heyiris.io"
 
 function Get-JsonField {
     param([string]$Json, [string]$Field)

@@ -222,7 +222,7 @@ export const AuthListCommand = cmd({
 
 const IRIS_DIR = path.join(os.homedir(), ".iris")
 const SDK_ENV_PATH = path.join(IRIS_DIR, "sdk", ".env")
-const IRIS_AUTH_API = process.env.IRIS_AUTH_API_URL ?? "https://apiv2.heyiris.io"
+const IRIS_AUTH_API = process.env.IRIS_AUTH_API_URL ?? "https://raichu.heyiris.io"
 
 async function irisLoginStatus(): Promise<{ authenticated: boolean; token?: string; userId?: string }> {
   try {
