@@ -110,13 +110,26 @@ const DaemonRestartCommand = cmd({
 })
 
 const DaemonLogsCommand = cmd({
-  command: "logs",
-  describe: "show daemon logs",
-  async handler() {
+  command: "logs [lines]",
+  describe: "show daemon logs (default: last 100 lines + follow)",
+  builder: (yargs) =>
+    yargs
+      .positional("lines", { describe: "number of lines to show", type: "number", default: 100 })
+      .option("no-follow", { alias: "n", describe: "don't follow (just print and exit)", type: "boolean", default: false }),
+  async handler(args) {
     const ctl = getDaemonCtl()
     if (!ctl) { prompts.log.error("Daemon not installed"); return }
-    const out = runCtl(ctl, "logs")
-    if (out) console.log(out)
+    const logFile = join(homedir(), ".iris", "bridge", "daemon.log")
+    if (!existsSync(logFile)) { prompts.log.error("No log file found"); return }
+    const lines = (args as any).lines ?? 100
+    const noFollow = (args as any).noFollow ?? false
+    if (noFollow) {
+      const out = execSync(`tail -n ${lines} "${logFile}"`, { timeout: 5000 }).toString()
+      if (out) console.log(out)
+    } else {
+      const child = spawn("tail", ["-n", String(lines), "-f", logFile], { stdio: "inherit" })
+      process.on("SIGINT", () => { child.kill(); process.exit(0) })
+    }
   },
 })
 
