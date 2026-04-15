@@ -431,7 +431,14 @@ print_message() {
 
 check_version() {
     if [ -f "$INSTALL_DIR/iris" ]; then
-        print_message info "${MUTED}Updating IRIS CLI to ${NC}$specific_version${MUTED}...${NC}"
+        local current_ver=""
+        current_ver=$("$INSTALL_DIR/iris" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+        if [ -n "$current_ver" ] && [ "$current_ver" = "$specific_version" ]; then
+            print_message info "${GREEN}[1/7]${NC} IRIS CLI ${MUTED}..........................${NC} ${GREEN}v${current_ver} (up to date)${NC}"
+            SKIP_CLI_DOWNLOAD=true
+            return 0
+        fi
+        print_message info "${MUTED}Updating IRIS CLI from ${NC}${current_ver:-unknown}${MUTED} to ${NC}$specific_version${MUTED}...${NC}"
     fi
 }
 
@@ -565,8 +572,11 @@ if [ "$only_docs_mode" = "true" ]; then
 elif [ -n "$binary_path" ]; then
     install_from_binary
 else
+    SKIP_CLI_DOWNLOAD=false
     check_version
-    download_and_install
+    if [ "$SKIP_CLI_DOWNLOAD" != "true" ]; then
+        download_and_install
+    fi
 fi
 
 
@@ -1676,7 +1686,13 @@ install_docker_sandbox() {
         chmod 600 "$key_file"
     fi
 
-    # Pull the pre-built Docker image (show progress)
+    # Pull the pre-built Docker image (skip if already present and up-to-date)
+    local _existing_digest=""
+    _existing_digest=$(docker image inspect ghcr.io/freelabel/iris-agent:latest --format '{{.Id}}' 2>/dev/null || echo "")
+    if [ -n "$_existing_digest" ] && [ -f "$sandbox_dir/docker-compose.yml" ]; then
+        print_message info "${GREEN}[6/7]${NC} Docker Sandbox ${MUTED}.....................${NC} ${GREEN}already installed${NC}"
+        return 0
+    fi
     print_message info "${MUTED}  Pulling agent sandbox image...${NC}"
     if ! docker pull ghcr.io/freelabel/iris-agent:latest; then
         print_message info "${MUTED}[6/7] Docker Sandbox ........................ image not yet available${NC}"
@@ -2126,7 +2142,18 @@ if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
     tty_available=true
 fi
 
-if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
+# Skip auth if already authenticated (has SDK token)
+_EXISTING_TOKEN=""
+if [ -f "$HOME/.iris/sdk/.env" ]; then
+    _EXISTING_TOKEN=$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
+fi
+if [ -n "$_EXISTING_TOKEN" ]; then
+    echo -e ""
+    echo -e "  ${GREEN}Already authenticated.${NC} ${MUTED}(~/.iris/sdk/.env)${NC}"
+    AUTH_SUCCESS=true
+    SDK_TOKEN="$_EXISTING_TOKEN"
+    USER_ID=$(grep IRIS_USER_ID "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
+elif [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
     echo -e ""
     echo -e "${CYAN}Let's get you set up!${NC}"
     echo -e ""
