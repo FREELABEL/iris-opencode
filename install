@@ -661,7 +661,9 @@ fi
 # Add to PATH for current session
 export PATH="$INSTALL_DIR:$PATH"
 
-print_message info "\n${GREEN}[1/7]${NC} IRIS CLI ${MUTED}..........................${NC} ${GREEN}installed${NC}"
+if [ "${SKIP_CLI_DOWNLOAD:-}" != "true" ]; then
+    print_message info "\n${GREEN}[1/7]${NC} IRIS CLI ${MUTED}..........................${NC} ${GREEN}installed${NC}"
+fi
 
 # ─── Component 2: IRIS SDK / CLI ─────────────────────────────────────────────
 
