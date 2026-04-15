@@ -139,7 +139,7 @@ iris schedules list --agent-id <new-agent-id>
 |----------|---------|
 | `IRIS_API_KEY` | Authentication token (or use `iris auth login`) |
 | `IRIS_USER_ID` | Your numeric user ID (needed for agents, bloqs, workflows) |
-| `IRIS_FL_API_URL` | Override API base (default: `https://apiv2.heyiris.io`) |
+| `IRIS_FL_API_URL` | Override API base (default: `https://raichu.heyiris.io`) |
 | `IRIS_API_URL` | Override IRIS API URL (default: `https://iris-api.heyiris.io`) |
 
 ---

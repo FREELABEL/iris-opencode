@@ -1049,7 +1049,7 @@ case "${1:-status}" in
                         -H "Authorization: Bearer $_TOKEN" \
                         -H "Content-Type: application/json" \
                         -d "{\"name\": \"$_HLABEL\", \"capabilities\": {\"docker\": $_HDOCK}}" \
-                        "https://apiv2.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+                        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
                     _NKEY=$(echo "$_RESP" | jq -r '.node_key // empty' 2>/dev/null || \
                             echo "$_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
                             echo "$_RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
@@ -1126,7 +1126,7 @@ case "${1:-status}" in
             -H "Authorization: Bearer $SDK_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"name\": \"$HOSTNAME_LABEL\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-            "https://apiv2.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo "000")
+            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo "000")
         RESP=$(cat "$REG_TMP" 2>/dev/null || echo '{}'); rm -f "$REG_TMP"
         NODE_KEY=$(echo "$RESP" | jq -r '.node_key // empty' 2>/dev/null || \
                    echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
@@ -1211,7 +1211,7 @@ CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; MUTED='\033[0;2m'; NC='
 IRIS_DIR="$HOME/.iris"
 SDK_ENV="$IRIS_DIR/sdk/.env"
 CONFIG_JSON="$IRIS_DIR/config.json"
-API_BASE="https://apiv2.heyiris.io"
+API_BASE="https://raichu.heyiris.io"
 
 # Parse flags
 PRE_TOKEN="" ; PRE_USER_ID=""
@@ -2071,7 +2071,7 @@ ENVFILE
         -H "Authorization: Bearer $SDK_TOKEN" \
         -H "Content-Type: application/json" \
         --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-        "https://apiv2.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
     NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
     if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
         mkdir -p "$HOME/.iris"
@@ -2106,7 +2106,7 @@ if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
         echo -e ""
         echo -e "${MUTED}  Sending verification code to ${NC}${USER_EMAIL}${MUTED}...${NC}"
 
-        SEND_RESPONSE=$(curl -s --max-time 15 -X POST https://apiv2.heyiris.io/api/v1/auth/send-login-code \
+        SEND_RESPONSE=$(curl -s --max-time 15 -X POST https://raichu.heyiris.io/api/v1/auth/send-login-code \
             -H "Content-Type: application/json" \
             -H "Accept: application/json" \
             --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false,"error":"Network error"}')
@@ -2134,7 +2134,7 @@ if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
                 echo -e ""
                 echo -e "${MUTED}  Verifying...${NC}"
 
-                LOGIN_RESPONSE=$(curl -s --max-time 15 -X POST https://apiv2.heyiris.io/api/v1/auth/login-with-code \
+                LOGIN_RESPONSE=$(curl -s --max-time 15 -X POST https://raichu.heyiris.io/api/v1/auth/login-with-code \
                     -H "Content-Type: application/json" \
                     -H "Accept: application/json" \
                     --data-raw "{
@@ -2180,7 +2180,7 @@ ENVFILE
                             -H "Authorization: Bearer $SDK_TOKEN" \
                             -H "Content-Type: application/json" \
                             --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-                            "https://apiv2.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+                            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
                         NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
                         if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
                             mkdir -p "$HOME/.iris"
