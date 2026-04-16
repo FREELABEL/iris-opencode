@@ -13,9 +13,9 @@ export const PLATFORM_URLS = {
   /** fl-api (Laravel backend — users, bloqs, leads, workflows) */
   flApi: process.env.IRIS_FL_API_URL ?? "https://raichu.heyiris.io",
   /** iris-api (V6 engine — chat, integrations exec, tools, monitor) */
-  irisApi: process.env.IRIS_API_URL ?? "https://main.heyiris.io",
+  irisApi: process.env.IRIS_API_URL ?? "https://heyiris.io",
   /** Fallback URLs for iris-api (tried in order when primary fails) */
-  irisApiFallbacks: ["https://heyiris.io", "https://iris-api.freelabel.net"],
+  irisApiFallbacks: ["https://main.heyiris.io", "https://iris-api.freelabel.net"],
 } as const
 
 // Aliases for backward compat — prefer PLATFORM_URLS in new code

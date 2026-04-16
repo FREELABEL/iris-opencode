@@ -4,7 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
 
 // Use iris-api base for Hive endpoints
-const IRIS_API = process.env.IRIS_API_URL ?? "https://main.heyiris.io"
+const IRIS_API = process.env.IRIS_API_URL ?? "https://heyiris.io"
 
 async function hiveFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
