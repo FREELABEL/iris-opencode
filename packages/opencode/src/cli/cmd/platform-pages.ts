@@ -111,7 +111,7 @@ const ListCmd = cmd({
     const sp = prompts.spinner()
     sp.start("Loading pages…")
     try {
-      const res = await pagesFetch("/api/v1/pages")
+      const res = await pagesFetch("/api/v1/pages?per_page=200&include_json=0")
       if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const json = (await res.json()) as any
       // Handle both direct array and Laravel paginator ({ data: { data: [...] } })
