@@ -31,8 +31,8 @@ const INTEGRATION_TYPES = [
   "canva", "buffer",
   // CRM / Lead enrichment
   "apollo", "hubspot", "pipedrive",
-  // Accounting (Phase 2 — auto-sync coming soon)
-  "quickbooks", "xero",
+  // Accounting / Banking
+  "quickbooks", "xero", "mercury",
   // Payments
   "stripe",
   // Secrets
@@ -73,6 +73,16 @@ const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string 
     { name: "create_post", description: "Schedule a social post (text, profile_ids)" },
     { name: "list_profiles", description: "List connected social profiles" },
   ],
+  "mercury": [
+    { name: "list_accounts", description: "List all bank accounts with balances" },
+    { name: "get_account", description: "Get account details (account_id)" },
+    { name: "get_transactions", description: "Get transactions (account_id, start, end, search, limit)" },
+    { name: "get_transaction", description: "Get single transaction detail (transaction_id)" },
+    { name: "get_recipients", description: "List saved payment recipients" },
+    { name: "generate_tax_summary", description: "Yearly P&L breakdown for tax prep (account_id, year)" },
+    { name: "categorize_expenses", description: "AI-categorize expenses by tax category (account_id, start, end)" },
+    { name: "find_1099_payments", description: "Find payments >$600 per recipient for 1099s (account_id, year)" },
+  ],
 }
 
 const OAUTH_TYPES = [
@@ -83,7 +93,7 @@ const OAUTH_TYPES = [
   "quickbooks", "xero",
   "1password",
 ]
-const APIKEY_TYPES = ["vapi", "servis-ai", "smtp-email", "mailjet", "google-gemini", "savelife-ai"]
+const APIKEY_TYPES = ["vapi", "servis-ai", "smtp-email", "mailjet", "google-gemini", "savelife-ai", "mercury"]
 
 // Composio toolkits that use API key auth (use `iris integrations setup <type>-api-key --api-key <key>`)
 const COMPOSIO_APIKEY_TOOLKITS: Record<string, string> = {

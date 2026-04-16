@@ -42,7 +42,7 @@ export const CATEGORIES: Record<string, CommandCategory> = {
   },
   communication: {
     name: "Communication",
-    description: "Phone numbers, voice agents, transcription",
+    description: "Phone, voice, email (Apple Mail), iMessage, calendar, transcription",
     order: 8,
   },
   finance: {
@@ -138,6 +138,9 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   phone: "communication",
   voice: "communication",
   transcribe: "communication",
+  mail: "communication",
+  imessage: "communication",
+  calendar: "communication",
 
   // Finance
   wallet: "finance",

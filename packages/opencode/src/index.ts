@@ -91,9 +91,8 @@ import { PlatformToolsCommand } from "./cli/cmd/platform-tools"
 import { PlatformUsersCommand } from "./cli/cmd/platform-users"
 import { PlatformPhoneCommand } from "./cli/cmd/platform-phone"
 import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
-// TODO: platform-mail and platform-imessage commands (not yet implemented)
-// import { PlatformMailCommand } from "./cli/cmd/platform-mail"
-// import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
+import { PlatformMailCommand } from "./cli/cmd/platform-mail"
+import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
 import { PlatformWalletCommand } from "./cli/cmd/platform-wallet"
 import { PlatformConfigCommand } from "./cli/cmd/platform-config"
@@ -255,8 +254,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformUsersCommand))
   .command(reg(PlatformPhoneCommand))
   .command(reg(PlatformVoiceCommand))
-  // .command(reg(PlatformMailCommand))     // TODO: not yet implemented
-  // .command(reg(PlatformImessageCommand)) // TODO: not yet implemented
+  .command(reg(PlatformMailCommand))
+  .command(reg(PlatformImessageCommand))
   .command(reg(PlatformCalendarCommand))
   .command(reg(PlatformWalletCommand))
   // PHP-port commands — config, app, automation, automation:test
