@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive, PLATFORM_URLS } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -55,11 +55,18 @@ function statusColor(status: string): string {
 }
 
 function printLead(l: Record<string, unknown>): void {
+  const id = dim(`#${l.id}`)
   const name = bold(String(l.name ?? l.first_name ?? `Lead #${l.id}`))
   const company = l.company ? `  ${dim(String(l.company))}` : ""
   const status = l.status ? `  ${statusColor(String(l.status))}` : ""
   const email = l.email ? `  ${dim(String(l.email))}` : ""
-  console.log(`  ${name}${company}${status}`)
+  // Show bloq associations (project/CRM the lead belongs to)
+  const bloqIds = Array.isArray(l.bloq_ids) ? l.bloq_ids : []
+  const bloqNames = Array.isArray(l.bloq_names) ? l.bloq_names : []
+  const bloqLabel = bloqIds.length > 0
+    ? `  ${dim(bloqIds.map((id: unknown, i: number) => `bloq:${id}${bloqNames[i] ? ` (${bloqNames[i]})` : ""}`).join(", "))}`
+    : ""
+  console.log(`  ${id}  ${name}${company}${status}${bloqLabel}`)
   if (l.email) console.log(`    ${dim("✉")} ${email}`)
 }
 
@@ -128,21 +135,68 @@ const LeadsListCommand = cmd({
 
 const LeadsGetCommand = cmd({
   command: "get <id>",
-  describe: "show lead details",
+  describe: "show lead details (accepts numeric ID or name/email to search)",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "lead ID", type: "number", demandOption: true }),
+    yargs.positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Lead #${args.id}`)
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
+
+    let leadId = Number(args.id)
+
+    // If not a numeric ID, search by name/email and resolve to an ID
+    if (isNaN(leadId)) {
+      prompts.intro(`◈  Looking up "${args.id}"`)
+      const spinner = prompts.spinner()
+      spinner.start("Searching…")
+      try {
+        const params = new URLSearchParams({ search: String(args.id), per_page: "5" })
+        const searchRes = await irisFetch(`/api/v1/leads?${params}`)
+        if (!searchRes.ok) {
+          spinner.stop("Search failed", 1)
+          prompts.outro("Done")
+          return
+        }
+        const searchData = (await searchRes.json()) as { data?: any[] }
+        const matches: any[] = searchData?.data ?? []
+        if (matches.length === 0) {
+          spinner.stop("No leads found", 1)
+          prompts.log.warn(`No leads matching "${args.id}". Use a numeric ID from: ${dim("iris leads search")}`)
+          prompts.outro("Done")
+          return
+        }
+        if (matches.length === 1) {
+          leadId = matches[0].id
+          spinner.stop(`Found: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
+        } else {
+          spinner.stop(`${matches.length} matches`)
+          const choice = await prompts.select({
+            message: "Which lead?",
+            options: matches.map((l: any) => ({
+              value: l.id,
+              label: `#${l.id}  ${l.name ?? l.email ?? "Unknown"}${l.company ? `  ${l.company}` : ""}  ${l.status ?? ""}`,
+            })),
+          })
+          if (prompts.isCancel(choice)) { prompts.cancel("Cancelled"); return }
+          leadId = choice as number
+        }
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+        return
+      }
+    }
+
+    prompts.intro(`◈  Lead #${leadId}`)
 
     const spinner = prompts.spinner()
     spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/v1/leads/${args.id}`)
+      const res = await irisFetch(`/api/v1/leads/${leadId}`)
       const ok = await handleApiError(res, "Get lead")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
@@ -198,7 +252,7 @@ const LeadsGetCommand = cmd({
       printDivider()
 
       prompts.outro(
-        `${dim("iris leads note " + args.id + ' "follow up scheduled"')}  Add a note`,
+        `${dim("iris leads note " + leadId + ' "follow up scheduled"')}  Add a note`,
       )
     } catch (err) {
       spinner.stop("Error", 1)
@@ -742,6 +796,357 @@ const LeadsDeleteCommand = cmd({
 })
 
 // ============================================================================
+// Merge — combine duplicate leads into one
+// ============================================================================
+
+const LeadsMergeCommand = cmd({
+  command: "merge <keep> <remove..>",
+  describe: "merge duplicate leads (keep one, delete the rest)",
+  builder: (yargs) =>
+    yargs
+      .positional("keep", { describe: "lead ID to keep (primary)", type: "number", demandOption: true })
+      .positional("remove", { describe: "lead ID(s) to merge into the primary and delete", type: "number", array: true, demandOption: true })
+      .option("yes", { describe: "skip confirmation prompt", type: "boolean", alias: "y", default: false }),
+  async handler(args) {
+    UI.empty()
+    const removeIds: number[] = (args.remove as number[]) ?? []
+    prompts.intro(`◈  Merge Leads → keep #${args.keep}, remove ${removeIds.map((id) => `#${id}`).join(", ")}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading leads…")
+
+    try {
+      // Fetch all leads to show what will be merged
+      const allIds = [args.keep, ...removeIds]
+      const leads: Record<number, any> = {}
+      for (const id of allIds) {
+        const res = await irisFetch(`/api/v1/leads/${id}`)
+        if (!res.ok) {
+          spinner.stop(`Failed to load lead #${id}`, 1)
+          prompts.outro("Done")
+          return
+        }
+        const data = (await res.json()) as { data?: any }
+        leads[id] = data?.data ?? data
+      }
+      spinner.stop("Loaded")
+
+      const primary = leads[args.keep]
+      printDivider()
+      console.log(`  ${bold("Keep")} → #${args.keep}  ${primary.name ?? "Unknown"}  ${dim(primary.email ?? "")}  ${primary.status ?? ""}`)
+      for (const rid of removeIds) {
+        const r = leads[rid]
+        console.log(`  ${dim("Remove")} → #${rid}  ${r.name ?? "Unknown"}  ${dim(r.email ?? "")}  ${r.status ?? ""}`)
+      }
+      printDivider()
+
+      // Show what notes/data will be merged
+      const notesToMerge: string[] = []
+      for (const rid of removeIds) {
+        const r = leads[rid]
+        const notes: any[] = Array.isArray(r.notes) ? r.notes : []
+        for (const n of notes) {
+          notesToMerge.push(typeof n === "object" ? (n.content ?? JSON.stringify(n)) : String(n))
+        }
+      }
+      if (notesToMerge.length > 0) {
+        console.log(`  ${dim(`${notesToMerge.length} note(s) will be copied to #${args.keep}`)}`)
+      }
+
+      // Confirm
+      let confirmed: boolean | symbol = args.yes
+      if (!confirmed) {
+        if (isNonInteractive()) {
+          prompts.log.error("Refusing to merge without --yes in non-interactive mode.")
+          prompts.outro("Done")
+          process.exitCode = 2
+          return
+        }
+        confirmed = await prompts.confirm({ message: `Merge ${removeIds.length} lead(s) into #${args.keep} and delete them?` })
+      }
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+
+      const mergeSpinner = prompts.spinner()
+      mergeSpinner.start("Merging…")
+
+      // Copy notes from removed leads to the primary
+      for (const rid of removeIds) {
+        const r = leads[rid]
+        const notes: any[] = Array.isArray(r.notes) ? r.notes : []
+        for (const n of notes) {
+          const content = typeof n === "object" ? (n.content ?? JSON.stringify(n)) : String(n)
+          await irisFetch(`/api/v1/leads/${args.keep}/notes`, {
+            method: "POST",
+            body: JSON.stringify({ content: `[Merged from #${rid}] ${content}` }),
+          })
+        }
+
+        // If primary is missing fields, fill from the removed lead
+        const updates: Record<string, unknown> = {}
+        for (const field of ["company", "phone", "website", "city", "state", "country"]) {
+          if (!primary[field] && r[field]) updates[field] = r[field]
+        }
+        if (Object.keys(updates).length > 0) {
+          await irisFetch(`/api/v1/leads/${args.keep}`, {
+            method: "PATCH",
+            body: JSON.stringify(updates),
+          })
+        }
+
+        // Delete the removed lead
+        await irisFetch(`/api/v1/leads/${rid}`, { method: "DELETE" })
+      }
+
+      mergeSpinner.stop(`${success("✓")} Merged ${removeIds.length} lead(s) into #${args.keep}`)
+      prompts.outro(dim(`iris leads get ${args.keep}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Pulse — cross-channel activity check for a lead
+// ============================================================================
+
+const BRIDGE_BASE = "http://localhost:3200"
+
+const LeadsPulseCommand = cmd({
+  command: "pulse <id>",
+  aliases: ["inbox", "incoming"],
+  describe: "check recent activity across all channels (CRM, Gmail, iMessage, Apple Mail)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
+      .option("days", { describe: "look-back window in days", type: "number", default: 30 })
+      .option("limit", { describe: "max messages per channel", type: "number", default: 50 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    let leadId = Number(args.id)
+
+    // Resolve name/email → ID (same logic as leads get)
+    if (isNaN(leadId)) {
+      const spinner = prompts.spinner()
+      spinner.start(`Looking up "${args.id}"…`)
+      try {
+        const params = new URLSearchParams({ search: String(args.id), per_page: "5" })
+        const searchRes = await irisFetch(`/api/v1/leads?${params}`)
+        if (!searchRes.ok) { spinner.stop("Search failed", 1); prompts.outro("Done"); return }
+        const searchData = (await searchRes.json()) as { data?: any[] }
+        const matches: any[] = searchData?.data ?? []
+        if (matches.length === 0) {
+          spinner.stop("No leads found", 1)
+          prompts.outro("Done")
+          return
+        }
+        if (matches.length === 1) {
+          leadId = matches[0].id
+          spinner.stop(`Found: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
+        } else {
+          spinner.stop(`${matches.length} matches`)
+          const choice = await prompts.select({
+            message: "Which lead?",
+            options: matches.map((l: any) => ({
+              value: l.id,
+              label: `#${l.id}  ${l.name ?? l.email ?? "Unknown"}${l.company ? `  ${l.company}` : ""}  ${l.status ?? ""}`,
+            })),
+          })
+          if (prompts.isCancel(choice)) { prompts.cancel("Cancelled"); return }
+          leadId = choice as number
+        }
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+        return
+      }
+    }
+
+    prompts.intro(`◈  Lead #${leadId} — Pulse Check`)
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading lead…")
+
+    try {
+      // Step 1: Fetch lead details
+      const res = await irisFetch(`/api/v1/leads/${leadId}`)
+      const ok = await handleApiError(res, "Get lead")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as { data?: any }
+      const lead = data?.data ?? data
+      const email = lead.email ?? ""
+      const phone = lead.phone ?? ""
+      const name = lead.name ?? lead.first_name ?? `Lead #${leadId}`
+
+      spinner.stop(bold(name))
+      printDivider()
+      printKV("ID", lead.id)
+      printKV("Email", email || dim("(none)"))
+      printKV("Phone", phone || dim("(none)"))
+      printKV("Status", lead.status)
+      printKV("Company", lead.company)
+
+      // CRM notes summary
+      const notes: any[] = Array.isArray(lead.notes) ? lead.notes : []
+      if (notes.length > 0) {
+        console.log()
+        console.log(`  ${bold("CRM Notes")}  ${dim(`(${notes.length})`)}`)
+        // Show latest 3 note previews
+        for (const n of notes.slice(0, 3)) {
+          const content = typeof n === "object" ? (n.content ?? "") : String(n)
+          const firstLine = content.split("\n").find((l: string) => l.trim()) ?? ""
+          console.log(`    ${dim("•")} ${firstLine.trim().slice(0, 100)}${firstLine.length > 100 ? "…" : ""}`)
+        }
+        if (notes.length > 3) {
+          console.log(`    ${dim(`…and ${notes.length - 3} more`)}`)
+        }
+      }
+
+      // Step 2: Search channels in parallel
+      console.log()
+      const channelSpinner = prompts.spinner()
+      channelSpinner.start("Scanning channels…")
+
+      const days = args.days as number
+      const channels: { name: string; messages: any[]; error?: string }[] = []
+
+      // Build parallel fetches
+      const fetches: Promise<void>[] = []
+
+      const msgLimit = args.limit as number
+
+      // Gmail (via fl-api MCP endpoint — field is "parameters" not "params")
+      if (email) {
+        fetches.push(
+          irisFetch(`/api/v1/mcp/gmail/execute`, {
+            method: "POST",
+            body: JSON.stringify({
+              function: "search_emails",
+              parameters: { query: `from:${email} OR to:${email}`, max_results: Math.min(msgLimit, 20) },
+            }),
+          })
+            .then(async (r) => {
+              if (r.ok) {
+                const d = (await r.json()) as any
+                const msgs = d?.results ?? d?.data?.results ?? []
+                channels.push({ name: "Gmail", messages: Array.isArray(msgs) ? msgs : [] })
+              } else {
+                const body = await r.text().catch(() => "")
+                channels.push({ name: "Gmail", messages: [], error: body ? JSON.parse(body)?.error ?? `HTTP ${r.status}` : `HTTP ${r.status}` })
+              }
+            })
+            .catch((e) => { channels.push({ name: "Gmail", messages: [], error: e.message }) }),
+        )
+      }
+
+      // iMessage (via local bridge daemon)
+      const handle = phone || email
+      if (handle) {
+        fetches.push(
+          fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=${msgLimit}`)
+            .then(async (r) => {
+              if (r.ok) {
+                const d = (await r.json()) as any
+                channels.push({ name: "iMessage", messages: d?.messages ?? [] })
+              } else {
+                const body = await r.text().catch(() => "")
+                channels.push({ name: "iMessage", messages: [], error: body || `HTTP ${r.status}` })
+              }
+            })
+            .catch((e) => { channels.push({ name: "iMessage", messages: [], error: e.message }) }),
+        )
+      }
+
+      // Apple Mail (via local bridge daemon)
+      if (email) {
+        fetches.push(
+          fetch(`${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=${Math.min(msgLimit, 100)}&include_body=0`)
+            .then(async (r) => {
+              if (r.ok) {
+                const d = (await r.json()) as any
+                channels.push({ name: "Apple Mail", messages: d?.messages ?? [] })
+              } else {
+                const body = await r.text().catch(() => "")
+                channels.push({ name: "Apple Mail", messages: [], error: body || `HTTP ${r.status}` })
+              }
+            })
+            .catch((e) => { channels.push({ name: "Apple Mail", messages: [], error: e.message }) }),
+        )
+      }
+
+      await Promise.allSettled(fetches)
+
+      const totalMessages = channels.reduce((sum, ch) => sum + ch.messages.length, 0)
+      channelSpinner.stop(`${totalMessages} message(s) across ${channels.length} channel(s)`)
+
+      // JSON output
+      if (args.json) {
+        console.log(JSON.stringify({ lead, channels }, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      // Step 3: Display channel results
+      for (const ch of channels) {
+        console.log()
+        const count = ch.messages.length
+        const label = ch.error
+          ? `${ch.name}  ${dim(`⚠ ${ch.error}`)}`
+          : `${ch.name}  ${dim(`(${count})`)}`
+        console.log(`  ${bold(label)}`)
+
+        if (count === 0 && !ch.error) {
+          console.log(`    ${dim("No messages in last " + days + " days")}`)
+          continue
+        }
+
+        const displayLimit = Math.min(10, ch.messages.length)
+        for (const msg of ch.messages.slice(0, displayLimit)) {
+          if (ch.name === "iMessage") {
+            const dir = msg.from_me ? "→" : "←"
+            const text = (msg.text ?? "").slice(0, 120)
+            console.log(`    ${dim(msg.ts ?? "")}  ${dir}  ${text}`)
+          } else if (ch.name === "Gmail") {
+            const subj = msg.subject ?? msg.snippet ?? "(no subject)"
+            const from = msg.from ?? ""
+            console.log(`    ${dim(msg.date ?? "")}  ${dim(from)}`)
+            console.log(`      ${subj.slice(0, 120)}`)
+          } else if (ch.name === "Apple Mail") {
+            const subj = msg.subject ?? "(no subject)"
+            const ts = msg.date ?? msg.ts ?? ""
+            console.log(`    ${dim(ts)}  ${subj.slice(0, 120)}`)
+          }
+        }
+        if (count > displayLimit) {
+          console.log(`    ${dim(`…and ${count - displayLimit} more`)}`)
+        }
+      }
+
+      console.log()
+      printDivider()
+      prompts.outro(
+        `${dim(`iris leads note ${leadId} "…"`)}  ·  ${dim(`iris leads get ${leadId}`)}`,
+      )
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Payment Gate — create contract + Stripe checkout + proposal page
 // ============================================================================
 
@@ -992,6 +1397,8 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsPushCommand)
       .command(LeadsDiffCommand)
       .command(LeadsDeleteCommand)
+      .command(LeadsMergeCommand)
+      .command(LeadsPulseCommand)
       .command(LeadsNoteCommand)
       .command(LeadsPaymentGateCommand)
       .command(LeadsDealStatusCommand)

@@ -548,6 +548,10 @@ download_and_install() {
 
     mv "$tmp_dir/iris" "$INSTALL_DIR"
     chmod 755 "${INSTALL_DIR}/iris"
+    # Ad-hoc sign on macOS so Gatekeeper doesn't SIGKILL the binary (exit 137)
+    if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+        codesign --force --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
+    fi
     rm -rf "$tmp_dir"
 }
 
@@ -555,6 +559,10 @@ install_from_binary() {
     print_message info "\n${MUTED}Installing ${NC}IRIS CLI ${MUTED}from: ${NC}$binary_path"
     cp "$binary_path" "${INSTALL_DIR}/iris"
     chmod 755 "${INSTALL_DIR}/iris"
+    # Ad-hoc sign on macOS so Gatekeeper doesn't SIGKILL the binary (exit 137)
+    if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+        codesign --force --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
+    fi
 }
 
 if [ "$only_docs_mode" = "true" ]; then

@@ -148,6 +148,11 @@ for (const item of targets) {
     },
   })
 
+  // Ad-hoc sign macOS binaries so Gatekeeper doesn't SIGKILL them (exit 137)
+  if (item.os === "darwin") {
+    await $`codesign --force --sign - dist/${name}/bin/iris`
+  }
+
   await $`rm -rf ./dist/${name}/bin/tui`
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
