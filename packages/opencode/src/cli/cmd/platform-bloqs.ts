@@ -47,7 +47,7 @@ const BloqsListCommand = cmd({
       const params = new URLSearchParams({ per_page: String(args.limit) })
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs?${params}`)
       const ok = await handleApiError(res, "List bloqs")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[] }
       const bloqs: any[] = data?.data ?? []
@@ -101,7 +101,7 @@ const BloqsGetCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/${args.id}`)
       const ok = await handleApiError(res, "Get bloq")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const b = data?.data ?? data

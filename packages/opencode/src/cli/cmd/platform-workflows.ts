@@ -120,7 +120,7 @@ const WorkflowsListCommand = cmd({
       const params = new URLSearchParams({ per_page: String(args.limit) })
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflows?${params}`)
       const ok = await handleApiError(res, "List workflows")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const raw = await res.json()
       const workflows: any[] = Array.isArray(raw) ? raw : (raw as any)?.data ?? []
@@ -144,6 +144,7 @@ const WorkflowsListCommand = cmd({
       )
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -191,7 +192,7 @@ const WorkflowsRunCommand = cmd({
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Execute workflow")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any; run_id?: string; id?: string }
       const run = data?.data ?? data
@@ -226,6 +227,7 @@ const WorkflowsRunCommand = cmd({
       prompts.outro(dim(`iris workflows status ${runId}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -255,10 +257,13 @@ const WorkflowsStatusCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflow-runs/${args["run-id"]}`)
       const ok = await handleApiError(res, "Get run status")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const run = data?.data ?? data
+
+      if (!run || !run.id) { spinner.stop("Run not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+
       spinner.stop(statusColor(String(run.status ?? "unknown")))
 
       printDivider()
@@ -278,6 +283,7 @@ const WorkflowsStatusCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -308,7 +314,7 @@ const WorkflowsRunsCommand = cmd({
       const params = new URLSearchParams({ per_page: String(args.limit) })
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflow-runs?${params}`)
       const ok = await handleApiError(res, "List runs")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[] }
       const runs: any[] = data?.data ?? []
@@ -330,6 +336,7 @@ const WorkflowsRunsCommand = cmd({
       prompts.outro(dim("iris workflows status <run-id>"))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -359,10 +366,13 @@ const WorkflowsGetCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflows/${args.id}`)
       const ok = await handleApiError(res, "Get workflow")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const w = data?.data ?? data
+
+      if (!w || !w.id) { spinner.stop("Workflow not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+
       spinner.stop(String(w.name ?? `Workflow #${w.id}`))
 
       printDivider()
@@ -382,6 +392,7 @@ const WorkflowsGetCommand = cmd({
       prompts.outro(dim(`iris workflows pull ${args.id}  |  iris workflows run ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -459,7 +470,7 @@ const WorkflowsCreateCommand = cmd({
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Create workflow")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const w = data?.data ?? data
@@ -481,6 +492,7 @@ const WorkflowsCreateCommand = cmd({
       prompts.outro(dim(`iris workflows get ${w.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -527,7 +539,7 @@ const WorkflowsUpdateCommand = cmd({
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Update workflow")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const w = data?.data ?? data
@@ -542,6 +554,7 @@ const WorkflowsUpdateCommand = cmd({
       prompts.outro(dim(`iris workflows get ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -572,7 +585,7 @@ const WorkflowsPullCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflows/${args.id}`)
       const ok = await handleApiError(res, "Pull workflow")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const workflow = data?.data ?? data
@@ -599,6 +612,7 @@ const WorkflowsPullCommand = cmd({
       prompts.outro(dim(`iris workflows push ${args.id}  |  iris workflows diff ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -633,6 +647,7 @@ const WorkflowsPushCommand = cmd({
       if (!filepath || !existsSync(filepath)) {
         spinner.start("")
         spinner.stop("Failed", 1)
+        process.exitCode = 1
         prompts.log.error(`Local file not found. Run: ${highlight(`iris workflows pull ${args.id}`)}`)
         prompts.outro("Done")
         return
@@ -659,7 +674,7 @@ const WorkflowsPushCommand = cmd({
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Push workflow")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const result = data?.data ?? data
@@ -675,6 +690,7 @@ const WorkflowsPushCommand = cmd({
       prompts.outro(dim(`iris workflows diff ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -705,7 +721,7 @@ const WorkflowsDiffCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflows/${args.id}`)
       const ok = await handleApiError(res, "Fetch workflow")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const live = data?.data ?? data
@@ -716,6 +732,7 @@ const WorkflowsDiffCommand = cmd({
 
       if (!filepath || !existsSync(filepath)) {
         spinner.stop("Failed", 1)
+        process.exitCode = 1
         prompts.log.error(`Local file not found. Run: ${highlight(`iris workflows pull ${args.id}`)}`)
         prompts.outro("Done")
         return
@@ -779,6 +796,7 @@ const WorkflowsDiffCommand = cmd({
       }
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -813,12 +831,13 @@ const WorkflowsDeleteCommand = cmd({
         method: "DELETE",
       })
       const ok = await handleApiError(res, "Delete workflow")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       spinner.stop(`${success("✓")} Workflow #${args.id} deleted`)
       prompts.outro(dim("iris workflows list"))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }

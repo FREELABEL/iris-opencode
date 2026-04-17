@@ -35,7 +35,7 @@ Options:
         --skip-bridge       Skip Coding Agent Bridge installation
         --skip-sandbox      Skip Docker Sandbox installation
         --skip-remotion     Skip Remotion video framework installation
-        --api-url <url>     Set IRIS API URL (default: https://app.heyiris.io)
+        --api-url <url>     Set IRIS API URL (default: https://web.heyiris.io)
         --token <token>     Pre-seed SDK token (skip interactive auth)
         --user-id <id>      Pre-seed user ID (used with --token)
         --only-code         Only install IRIS CLI (skip SDK, app, MCP, bridge, sandbox)
@@ -61,7 +61,7 @@ only_docs_mode=false
 skip_bridge=false
 skip_sandbox=false
 skip_remotion=false
-iris_api_url="https://app.heyiris.io"
+iris_api_url="https://web.heyiris.io"
 pre_token="${IRIS_SDK_TOKEN:-}"
 pre_user_id="${IRIS_USER_ID:-}"
 
@@ -568,7 +568,7 @@ download_and_install() {
     chmod 755 "${INSTALL_DIR}/iris"
     # Ad-hoc sign on macOS so Gatekeeper doesn't SIGKILL the binary (exit 137)
     if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
-        codesign --force --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
+        codesign --force --deep --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
     fi
     rm -rf "$tmp_dir"
 }
@@ -579,7 +579,7 @@ install_from_binary() {
     chmod 755 "${INSTALL_DIR}/iris"
     # Ad-hoc sign on macOS so Gatekeeper doesn't SIGKILL the binary (exit 137)
     if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
-        codesign --force --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
+        codesign --force --deep --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
     fi
 }
 
@@ -1172,7 +1172,7 @@ case "${1:-status}" in
                 *)   echo "Registration failed (HTTP $HTTP_CODE)."
                      echo "$RESP" | head -c 200 ;;
             esac
-            echo "  Manual setup: https://app.heyiris.io/dashboard/hive"
+            echo "  Manual setup: https://web.heyiris.io/dashboard/hive"
         fi ;;
     *) echo "Usage: iris-daemon {start|stop|restart|status|register|logs}" ;;
 esac
@@ -1349,7 +1349,7 @@ SEND_RESP=$(curl -s --max-time 15 -X POST "$API_BASE/api/v1/auth/send-login-code
     --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false}')
 SEND_OK=$(json_field "$SEND_RESP" "success")
 if [ "$SEND_OK" != "True" ] && [ "$SEND_OK" != "true" ]; then
-    echo -e "${RED}  Failed to send code.${NC} Sign up at: ${CYAN}https://app.heyiris.io/login/register${NC}"
+    echo -e "${RED}  Failed to send code.${NC} Sign up at: ${CYAN}https://web.heyiris.io/login/register${NC}"
     exit 1
 fi
 IS_NEW=$(json_nested "$SEND_RESP" "data.new_account")
@@ -1384,7 +1384,7 @@ USER_ID=$(json_nested "$LOGIN_RESP" "data.user.id")
 DASHBOARD=$(json_nested "$LOGIN_RESP" "data.dashboard_url")
 
 if [ -z "$SDK_TOKEN" ] || [ -z "$USER_ID" ]; then
-    echo -e "${RED}  Auth succeeded but token wasn't generated. Try again or visit ${CYAN}https://app.heyiris.io${NC}"
+    echo -e "${RED}  Auth succeeded but token wasn't generated. Try again or visit ${CYAN}https://web.heyiris.io${NC}"
     exit 1
 fi
 
@@ -2231,7 +2231,7 @@ ENVFILE
         else
             ERROR_MSG=$(json_field "$SEND_RESPONSE" "error")
             echo -e "${RED}  Could not send code: ${ERROR_MSG:-Unknown error}${NC}"
-            echo -e "${MUTED}  If this persists, sign up at: ${NC}${CYAN}https://app.heyiris.io/login/register${NC}"
+            echo -e "${MUTED}  If this persists, sign up at: ${NC}${CYAN}https://web.heyiris.io/login/register${NC}"
         fi
     fi
     echo -e ""
@@ -2239,7 +2239,7 @@ fi
 
 # ─── Build post-auth prompt ──────────────────────────────────────────────────
 
-DASHBOARD="${DASHBOARD_URL:-https://app.heyiris.io}"
+DASHBOARD="${DASHBOARD_URL:-https://web.heyiris.io}"
 
 if [ "$AUTH_SUCCESS" = "true" ]; then
     ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user is authenticated as $USER_EMAIL (user ID: $USER_ID). Auth is DONE -- do NOT run auth steps, do NOT read .env files, do NOT use curl. Use the IRIS CLI (the 'iris' command).
@@ -2252,7 +2252,7 @@ RULES:
 
   ┌──────────────────────────────────────────────────────────────┐
   │  Dashboard   $DASHBOARD
-  │  Discover    https://app.heyiris.io/discover
+  │  Discover    https://web.heyiris.io/discover
   │  Discord     https://discord.com/invite/Vmfrqmdkps
   │  Docs        https://heyiris.io/developer
   │  Desktop     ~/Applications/IRIS.app (run: open ~/Applications/IRIS.app)
@@ -2360,8 +2360,8 @@ Once you've run iris-login, come back here and tell me what you'd like to build:
 Already have a token? You can also run: iris-login --token YOUR_TOKEN --user-id YOUR_ID
 
   ┌──────────────────────────────────────────────────────────────┐
-  │  Dashboard   https://app.heyiris.io                         │
-  │  Discover    https://app.heyiris.io/discover                │
+  │  Dashboard   https://web.heyiris.io                         │
+  │  Discover    https://web.heyiris.io/discover                │
   │  Discord     https://discord.com/invite/Vmfrqmdkps          │
   │  Docs        https://heyiris.io/developer                   │
   │  Desktop     ~/Applications/IRIS.app                        │

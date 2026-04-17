@@ -109,6 +109,7 @@ export async function handleApiError(res: Response, action: string): Promise<boo
     prompts.log.info(
       `Re-authenticate:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login --force${UI.Style.TEXT_NORMAL}`,
     )
+    process.exitCode = 1
     return false
   }
   if (res.status === 403) {
@@ -118,10 +119,11 @@ export async function handleApiError(res: Response, action: string): Promise<boo
       msg = body.error ?? body.message ?? msg
     } catch {}
     prompts.log.warn(msg)
+    process.exitCode = 1
     return false
   }
   if (!res.ok) {
-    let msg = `HTTP ${res.status}`
+    let msg = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`
     try {
       const body = (await res.json()) as { error?: string; message?: string; errors?: Record<string, string[]> }
       msg = body.error ?? body.message ?? msg
@@ -134,6 +136,7 @@ export async function handleApiError(res: Response, action: string): Promise<boo
       }
     } catch {}
     prompts.log.error(`${action} failed: ${msg}`)
+    process.exitCode = 1
     return false
   }
   return true
