@@ -540,6 +540,24 @@ download_and_install() {
         fi
     fi
 
+    # Verify the download succeeded and isn't an HTML error page
+    if [ ! -s "$tmp_dir/$filename" ]; then
+        echo -e "${RED}Error: Download failed — file is empty${NC}"
+        echo -e "${MUTED}The binary for your platform (${target}) may not be available in this release.${NC}"
+        echo -e "${MUTED}Check available assets: https://github.com/FREELABEL/iris-opencode/releases/tag/v${specific_version}${NC}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    # Check if we got an HTML error page instead of a real binary
+    if head -c 15 "$tmp_dir/$filename" | grep -qi '<!doctype\|<html'; then
+        echo -e "${RED}Error: Download returned an error page instead of the binary${NC}"
+        echo -e "${MUTED}The binary for your platform (${target}) is not available in release v${specific_version}.${NC}"
+        echo -e "${MUTED}Check available assets: https://github.com/FREELABEL/iris-opencode/releases/tag/v${specific_version}${NC}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
     if [ "$os" = "linux" ]; then
         tar -xzf "$tmp_dir/$filename" -C "$tmp_dir"
     else
