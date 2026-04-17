@@ -398,6 +398,15 @@ const LeadsSearchCommand = cmd({
       .option("limit", { describe: "max results", type: "number", default: 10 }),
   async handler(args) {
     UI.empty()
+
+    // Bug #4: validate non-empty query
+    if (!args.query || !args.query.trim()) {
+      prompts.log.error("Search query cannot be empty")
+      prompts.log.info(dim(`iris leads search "haroon"`))
+      process.exitCode = 1
+      return
+    }
+
     prompts.intro(`◈  Lead Search: ${args.query}`)
 
     const token = await requireAuth()
@@ -485,42 +494,38 @@ const LeadsCreateCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
+    // Bug #6: In non-interactive mode, require --name flag. Don't prompt.
     let name = args.name
     if (!name) {
-      try {
-        name = (await promptOrFail("name", () =>
-          prompts.text({
-            message: "Full name",
-            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
-          }),
-        )) as string
-      } catch (err) {
-        if (err instanceof MissingFlagError) {
-          prompts.log.error(err.message)
-          prompts.outro("Done")
-          process.exitCode = 2
-          return
-        }
-        throw err
+      if (isNonInteractive()) {
+        prompts.log.error("Missing required --name flag.")
+        prompts.log.info(dim(`iris leads create --name "Jane Doe" --email jane@co.com`))
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
       }
-      if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
+      const result = await prompts.text({
+        message: "Full name",
+        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+      })
+      if (prompts.isCancel(result)) { prompts.outro("Cancelled"); return }
+      name = result as string
     }
 
+    // Bug #6: In non-interactive mode, skip email prompt entirely — use flag or nothing.
     let email = args.email
-    if (email === undefined) {
-      if (isNonInteractive()) {
+    if (email === undefined && !isNonInteractive()) {
+      const result = await prompts.text({
+        message: "Email address (optional, press Enter to skip)",
+        placeholder: "e.g. jane@company.com",
+      })
+      if (prompts.isCancel(result)) {
         email = undefined
       } else {
-        email = (await prompts.text({
-          message: "Email address",
-          placeholder: "e.g. jane@company.com",
-        })) as string
-        if (prompts.isCancel(email)) email = undefined
+        email = (result as string) || undefined
       }
     }
 
-    // Default bloq-id: try to auto-detect from existing leads, fallback to 38.
-    // (Replaces the old non-TTY-hanging prompt entirely — keeping main's UX win.)
     let bloqId = args["bloq-id"] ?? 38
 
     const spinner = prompts.spinner()
@@ -666,56 +671,25 @@ const LeadsNoteCommand = cmd({
       .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
       .positional("message", { describe: "note content (optional if --file used)", type: "string" })
       .option("file", { alias: "f", describe: "read note content from a file (.md, .txt)", type: "string" })
-      .option("type", { describe: "note type tag", type: "string", choices: ["note", "meeting_intel", "call_log", "email_log", "system"] })
-      .check((argv) => {
-        if (!argv.message && !argv.file) {
-          throw new Error("Provide a message or --file <path>")
-        }
-        return true
-      }),
+      .option("type", { describe: "note type tag", type: "string", choices: ["note", "meeting_intel", "call_log", "email_log", "system"] }),
   async handler(args) {
     UI.empty()
+
+    // ── Validate: need a message or --file ── (Bug #2)
+    if (!args.message && !args.file) {
+      prompts.log.error("Provide a message or --file <path>")
+      prompts.log.info(dim(`iris leads note <id> "your note"`) + "  or  " + dim(`iris leads note <id> --file notes.md`))
+      process.exitCode = 1
+      return
+    }
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
     // ── Resolve lead ID from name/email if not numeric ──
-    let leadId = Number(args.id)
-    if (isNaN(leadId)) {
-      const spinner = prompts.spinner()
-      spinner.start(`Looking up "${args.id}"…`)
-      try {
-        const params = new URLSearchParams({ search: String(args.id), per_page: "5" })
-        const searchRes = await irisFetch(`/api/v1/leads?${params}`)
-        if (!searchRes.ok) { spinner.stop("Search failed", 1); prompts.outro("Done"); return }
-        const searchData = (await searchRes.json()) as { data?: any[] }
-        const matches: any[] = searchData?.data ?? []
-        if (matches.length === 0) {
-          spinner.stop("Not found", 1)
-          prompts.log.warn(`No leads matching "${args.id}"`)
-          prompts.outro("Done"); return
-        }
-        if (matches.length === 1 || isNonInteractive()) {
-          leadId = matches[0].id
-          spinner.stop(`Found: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
-        } else {
-          spinner.stop(`${matches.length} matches`)
-          const choice = await prompts.select({
-            message: "Which lead?",
-            options: matches.map((l: any) => ({
-              value: l.id,
-              label: `#${l.id}  ${l.name ?? l.email ?? "Unknown"}${l.company ? `  ${l.company}` : ""}`,
-            })),
-          })
-          if (prompts.isCancel(choice)) { prompts.cancel("Cancelled"); return }
-          leadId = choice as number
-        }
-      } catch (err) {
-        spinner.stop("Error", 1)
-        prompts.log.error(err instanceof Error ? err.message : String(err))
-        prompts.outro("Done"); return
-      }
-    }
+    const resolved = await resolveLeadId(String(args.id))
+    if (!resolved) { process.exitCode = 1; prompts.outro("Done"); return }
+    const { leadId } = resolved
 
     prompts.intro(`◈  Note — Lead #${leadId}`)
 
@@ -725,11 +699,13 @@ const LeadsNoteCommand = cmd({
       const filePath = isAbsolute(String(args.file)) ? String(args.file) : join(process.cwd(), String(args.file))
       if (!existsSync(filePath)) {
         prompts.log.error(`File not found: ${filePath}`)
+        process.exitCode = 1  // Bug #5: exit 1 not 0
         prompts.outro("Done"); return
       }
       content = readFileSync(filePath, "utf-8")
       if (!content.trim()) {
         prompts.log.error("File is empty")
+        process.exitCode = 1
         prompts.outro("Done"); return
       }
       prompts.log.info(dim(`Read ${content.length.toLocaleString()} chars from ${basename(filePath)}`))
@@ -767,7 +743,7 @@ const LeadsUpdateCommand = cmd({
   describe: "update a lead",
   builder: (yargs) =>
     yargs
-      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
       .option("name", { describe: "new name", type: "string" })
       .option("email", { describe: "new email", type: "string" })
       .option("phone", { describe: "new phone", type: "string" })
@@ -780,10 +756,16 @@ const LeadsUpdateCommand = cmd({
       .option("bid", { describe: "price bid amount", type: "number" }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Update Lead #${args.id}`)
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
+
+    // ── Resolve lead ID from name/email if not numeric ── (Bug #3)
+    const resolved = await resolveLeadId(String(args.id))
+    if (!resolved) { process.exitCode = 1; prompts.outro("Done"); return }
+    const { leadId } = resolved
+
+    prompts.intro(`◈  Update Lead #${leadId}`)
 
     const payload: Record<string, unknown> = {}
     if (args.name) payload.name = args.name
@@ -807,7 +789,7 @@ const LeadsUpdateCommand = cmd({
     spinner.start("Updating…")
 
     try {
-      const res = await irisFetch(`/api/v1/leads/${args.id}`, {
+      const res = await irisFetch(`/api/v1/leads/${leadId}`, {
         method: "PUT",
         body: JSON.stringify(payload),
       })
@@ -824,7 +806,7 @@ const LeadsUpdateCommand = cmd({
       printKV("Status", l.status)
       printDivider()
 
-      prompts.outro(dim(`iris leads get ${args.id}`))
+      prompts.outro(dim(`iris leads get ${leadId}`))
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
