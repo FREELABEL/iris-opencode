@@ -875,6 +875,15 @@ const TicketsPullCommand = cmd({
         price: t.price,
         description: t.description ?? null,
         url: t.url ?? null,
+        sale_start_date: t.sale_start_date ?? null,
+        sale_end_date: t.sale_end_date ?? null,
+        quantity_total: t.quantity_total ?? null,
+        quantity_sold: t.quantity_sold ?? 0,
+        max_per_order: t.max_per_order ?? 10,
+        min_per_order: t.min_per_order ?? 1,
+        is_visible: t.is_visible ?? true,
+        sort_order: t.sort_order ?? 0,
+        status: t.status ?? "active",
       }))
 
       const dir = resolveSyncDir()
@@ -961,7 +970,7 @@ const TicketsPushCommand = cmd({
           const changes: string[] = []
           const payload: Record<string, unknown> = {}
 
-          for (const field of ["title", "price", "description", "url"]) {
+          for (const field of ["title", "price", "description", "url", "sale_start_date", "sale_end_date", "quantity_total", "max_per_order", "min_per_order", "is_visible", "sort_order", "status"]) {
             const lv = String(live[field] ?? "")
             const ll = String(local[field] ?? "")
             if (lv !== ll) {
@@ -1032,9 +1041,9 @@ const TicketsPushCommand = cmd({
       // Create new tickets
       for (const t of toCreate) {
         const payload: Record<string, unknown> = { title: t.title }
-        if (t.price) payload.price = t.price
-        if (t.description) payload.description = t.description
-        if (t.url) payload.url = t.url
+        for (const f of ["price", "description", "url", "sale_start_date", "sale_end_date", "quantity_total", "max_per_order", "min_per_order", "is_visible", "sort_order", "status"]) {
+          if (t[f] !== undefined && t[f] !== null) payload[f] = t[f]
+        }
         const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets`, { method: "POST", body: JSON.stringify(payload) })
         await handleApiError(res, `Create ${t.title}`)
         ops++
@@ -1129,7 +1138,7 @@ const TicketsDiffCommand = cmd({
           diffs++
         } else {
           const live = liveMap.get(local.id)!
-          for (const field of ["title", "price", "description", "url"]) {
+          for (const field of ["title", "price", "description", "url", "sale_start_date", "sale_end_date", "quantity_total", "max_per_order", "min_per_order", "is_visible", "sort_order", "status"]) {
             if (String(live[field] ?? "") !== String(local[field] ?? "")) {
               lines.push(`  ${UI.Style.TEXT_WARNING}~ #${local.id} ${field}:${UI.Style.TEXT_NORMAL}`)
               lines.push(`    ${UI.Style.TEXT_DANGER}- live:  ${String(live[field] ?? "(empty)").slice(0, 100)}${UI.Style.TEXT_NORMAL}`)
