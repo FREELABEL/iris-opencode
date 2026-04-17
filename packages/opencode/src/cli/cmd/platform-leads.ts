@@ -161,8 +161,13 @@ async function resolveLeadId(idOrQuery: string): Promise<{ leadId: number; lead:
         leadId = matches[0].id
         spinner.stop(`Found: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
       } else if (isNonInteractive()) {
-        leadId = matches[0].id
-        spinner.stop(`${matches.length} matches — auto-selected: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
+        spinner.stop(`${matches.length} matches — ambiguous`)
+        prompts.log.warn("Multiple leads match. Specify by ID or use a more precise query:")
+        for (const m of matches) {
+          prompts.log.info(`  #${m.id}  ${m.name ?? m.email ?? "Unknown"}${m.company ? `  ${m.company}` : ""}  ${m.status ?? ""}`)
+        }
+        process.exitCode = 1
+        return null
       } else {
         spinner.stop(`${matches.length} matches`)
         const choice = await prompts.select({
@@ -358,21 +363,28 @@ const LeadsGetCommand = cmd({
         )
       }
 
-      // Notes — show all, expanded
+      // Notes — show truncated previews (full content via `iris leads notes <id>`)
       const notes: any[] = Array.isArray(l.notes) ? l.notes : []
       if (notes.length > 0) {
         console.log()
         console.log(`  ${dim("Notes")}  ${dim(`(${notes.length})`)}`)
         for (const note of notes) {
-          const content =
+          const rawContent =
             typeof note === "object"
               ? (note.content ?? JSON.stringify(note)).replace(/\\n/g, "\n")
               : String(note)
-          const lines = content.split("\n")
+          const truncated = rawContent.length > 200 ? rawContent.slice(0, 200) + "..." : rawContent
+          const lines = truncated.split("\n")
           for (const line of lines) {
             if (line.trim()) console.log(`    ${line.trim()}`)
           }
           console.log()
+        }
+        if (notes.some((n: any) => {
+          const c = typeof n === "object" ? (n.content ?? JSON.stringify(n)) : String(n)
+          return c.length > 200
+        })) {
+          console.log(`    ${dim(`Run ${highlight(`iris leads notes ${l.id}`)} for full content`)}`)
         }
       }
 
@@ -1249,9 +1261,13 @@ const LeadsPulseCommand = cmd({
           leadId = matches[0].id
           spinner.stop(`Found: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
         } else if (isNonInteractive()) {
-          // Non-TTY / parallel context — auto-pick first match to avoid hanging (#55719)
+          // Non-TTY / parallel context — auto-pick first match with warning (#55742)
           leadId = matches[0].id
           spinner.stop(`${matches.length} matches — auto-selected: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
+          prompts.log.warn("Multiple matches found. Using first result. Other matches:")
+          for (const m of matches.slice(1)) {
+            prompts.log.info(`  #${m.id}  ${m.name ?? m.email ?? "Unknown"}${m.company ? `  ${m.company}` : ""}  ${m.status ?? ""}`)
+          }
         } else {
           spinner.stop(`${matches.length} matches`)
           const choice = await prompts.select({
@@ -1286,6 +1302,12 @@ const LeadsPulseCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const lead = data?.data ?? data
+      if (!lead || !lead.id) {
+        spinner.stop("Lead not found", 1)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
       const email = lead.email ?? ""
       const phone = lead.phone ?? ""
       const name = lead.name ?? lead.first_name ?? `Lead #${leadId}`
