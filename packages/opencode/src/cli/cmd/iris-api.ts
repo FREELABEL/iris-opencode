@@ -9,6 +9,21 @@ import { join } from "path"
 // Override with env vars for local dev or custom deployments.
 // ============================================================================
 
+// Pre-load SDK env vars before setting constants (sync read at module load)
+// This ensures IRIS_API_URL from ~/.iris/sdk/.env is picked up
+{
+  try {
+    const _fs = require("fs"), _path = require("path")
+    const _envPath = _path.join(require("os").homedir(), ".iris", "sdk", ".env")
+    if (_fs.existsSync(_envPath)) {
+      for (const line of _fs.readFileSync(_envPath, "utf-8").split("\n")) {
+        const m = line.match(/^(IRIS_API_URL|IRIS_FL_API_URL)\s*=\s*(.+)/)
+        if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim()
+      }
+    }
+  } catch {}
+}
+
 export const PLATFORM_URLS = {
   /** fl-api (Laravel backend — users, bloqs, leads, workflows) */
   flApi: process.env.IRIS_FL_API_URL ?? "https://raichu.heyiris.io",
