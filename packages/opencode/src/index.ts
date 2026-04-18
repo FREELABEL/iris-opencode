@@ -66,6 +66,7 @@ import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
+import { PlatformAtlasCommsCommand } from "./cli/cmd/platform-atlas-comms"
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
 import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
@@ -230,6 +231,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformBugCommand))
   .command(reg(PlatformAtlasMeetingsCommand))
   .command(reg(PlatformAtlasBrandKitCommand))
+  .command(reg(PlatformAtlasCommsCommand))
   .command(reg(PlatformLeadsMeetingCommand))
   .command(reg(PlatformCampaignCommand))
   .command(reg(PlatformDaemonCommand))
