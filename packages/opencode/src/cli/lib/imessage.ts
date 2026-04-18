@@ -141,3 +141,77 @@ export function listChats(days = 30, limit = 50): Chat[] {
     return []
   }
 }
+
+// ── Contact Card (vCard) Support (#58893) ──
+
+export interface ContactCard {
+  filename: string
+  full_name: string
+  phones: string[]
+  emails: string[]
+  company?: string
+  sent_by: string
+  date: string
+  raw_vcard: string
+}
+
+/**
+ * Find contact cards (vCards) shared via iMessage.
+ * Reads attachment metadata from SQLite + parses the .vcf files.
+ */
+export function getContactCards(options: { days?: number; limit?: number; chat?: string } = {}): ContactCard[] {
+  if (!isAvailable()) return []
+  const days = options.days ?? 90
+  const limit = options.limit ?? 20
+  const cutoff = days * 86400
+
+  try {
+    let where = `(a.mime_type LIKE '%vcard%' OR a.uti LIKE '%vcard%' OR a.filename LIKE '%.vcf')
+      AND m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoff}`
+    if (options.chat) {
+      where += ` AND c.chat_identifier LIKE '%${options.chat.replace(/'/g, "''")}%'`
+    }
+
+    const sql = `SELECT a.filename, a.transfer_name,
+        datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
+        c.chat_identifier
+      FROM attachment a
+      JOIN message_attachment_join maj ON a.ROWID = maj.attachment_id
+      JOIN message m ON maj.message_id = m.ROWID
+      JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+      JOIN chat c ON cmj.chat_id = c.ROWID
+      WHERE ${where}
+      ORDER BY m.date DESC LIMIT ${limit};`.replace(/\n/g, " ").trim()
+
+    const raw = query(sql)
+    if (!raw) return []
+
+    const { readFileSync } = require("fs")
+    return raw.split("\n").map((line): ContactCard | null => {
+      const [filepath, transferName, date, chatId] = line.split("|")
+      if (!filepath) return null
+
+      const fullPath = filepath.replace(/^~/, homedir())
+      let rawVcard = ""
+      try { rawVcard = readFileSync(fullPath, "utf-8") } catch { return null }
+
+      const getName = (vc: string) => vc.match(/^FN:(.+)$/m)?.[1]?.trim() ?? transferName?.replace(".vcf", "") ?? "Unknown"
+      const getPhones = (vc: string) => [...vc.matchAll(/TEL[^:]*:([+\d() -]+)/gm)].map(m => m[1].replace(/[^+\d]/g, ""))
+      const getEmails = (vc: string) => [...vc.matchAll(/EMAIL[^:]*:(.+)$/gm)].map(m => m[1].trim())
+      const getOrg = (vc: string) => vc.match(/^ORG:(.+)$/m)?.[1]?.trim()
+
+      return {
+        filename: transferName ?? filepath.split("/").pop() ?? "",
+        full_name: getName(rawVcard),
+        phones: getPhones(rawVcard),
+        emails: getEmails(rawVcard),
+        company: getOrg(rawVcard),
+        sent_by: chatId,
+        date,
+        raw_vcard: rawVcard,
+      }
+    }).filter(Boolean) as ContactCard[]
+  } catch {
+    return []
+  }
+}

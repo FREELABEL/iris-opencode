@@ -3,7 +3,7 @@ import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success } from "./iris-api"
 import { execSync } from "child_process"
-import { isAvailable, query as queryMessages, normalizeHandle } from "../lib/imessage"
+import { isAvailable, query as queryMessages, normalizeHandle, getContactCards } from "../lib/imessage"
 import { resolveContactName, resolveContactNames } from "../lib/contacts"
 
 const ImessageSearchCommand = cmd({
@@ -343,6 +343,63 @@ end tell`
   },
 })
 
+const ImessageContactsCommand = cmd({
+  command: "contacts",
+  aliases: ["vcards", "cards"],
+  describe: "list contact cards (vCards) shared via iMessage",
+  builder: (yargs) =>
+    yargs
+      .option("days", { type: "number", default: 90, describe: "look back N days" })
+      .option("chat", { type: "string", describe: "filter by chat/phone number" })
+      .option("limit", { type: "number", default: 20 })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  iMessage Contact Cards")
+
+    if (!isAvailable()) {
+      prompts.log.error("iMessage not available. Requires macOS + Full Disk Access.")
+      prompts.outro("Done")
+      return
+    }
+
+    const sp = prompts.spinner()
+    sp.start("Scanning attachments…")
+
+    const cards = getContactCards({
+      days: args.days as number,
+      limit: args.limit as number,
+      chat: args.chat as string | undefined,
+    })
+
+    sp.stop(`${cards.length} contact card(s)`)
+
+    if (args.json) {
+      console.log(JSON.stringify(cards, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    if (cards.length === 0) {
+      prompts.log.info("No contact cards found in recent messages")
+      prompts.outro("Done")
+      return
+    }
+
+    printDivider()
+    for (const card of cards) {
+      console.log(`  ${bold(card.full_name)}  ${dim(card.date)}`)
+      if (card.phones.length > 0) console.log(`    ${dim("Phone:")} ${card.phones.join(", ")}`)
+      if (card.emails.length > 0) console.log(`    ${dim("Email:")} ${card.emails.join(", ")}`)
+      if (card.company) console.log(`    ${dim("Org:")}   ${card.company}`)
+      console.log(`    ${dim("From:")}  ${card.sent_by}`)
+      console.log()
+    }
+    printDivider()
+    prompts.outro(dim("iris leads create --name \"...\" --phone \"...\" --email \"...\""))
+  },
+})
+
 export const PlatformImessageCommand = cmd({
   command: "imessage",
   aliases: ["sms", "messages"],
@@ -353,6 +410,7 @@ export const PlatformImessageCommand = cmd({
       .command(ImessageReadCommand)
       .command(ImessageChatsCommand)
       .command(ImessageSendCommand)
+      .command(ImessageContactsCommand)
       .demandCommand(),
   async handler() {},
 })
