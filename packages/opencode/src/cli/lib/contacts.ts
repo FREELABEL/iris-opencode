@@ -11,10 +11,14 @@ const cache = new Map<string, string | null>()
 
 /**
  * Normalize a phone/email/handle for search.
+ * Handles E.164 (+14695633672), parens ((469) 563-3672), and raw digits.
  */
 function normalizeForSearch(identifier: string): string {
+  // Strip + prefix and all non-digits
   const digits = identifier.replace(/[^0-9]/g, "")
-  return digits.length >= 10 ? digits.slice(-10) : identifier
+  // If it looks like a phone (7+ digits), take last 10 (strip country code)
+  if (digits.length >= 7) return digits.slice(-10)
+  return identifier
 }
 
 /**

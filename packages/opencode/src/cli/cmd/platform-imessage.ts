@@ -29,10 +29,39 @@ const ImessageSearchCommand = cmd({
 
     // Normalize phone number — strip everything except digits
     const digits = args.query.replace(/\D/g, "")
-    const isPhone = digits.length >= 7
-    const normalized = isPhone ? normalizeHandle(args.query) : args.query
+    let isPhone = digits.length >= 7
+    let normalized = isPhone ? normalizeHandle(args.query) : args.query
 
-    // Build WHERE clause — match chat_identifier by phone digits or name
+    // If not a phone number, try to resolve as lead name → phone or email (#58890)
+    if (!isPhone) {
+      try {
+        const { irisFetch: _fetch } = await import("./iris-api")
+        const leadRes = await _fetch(`/api/v1/leads?search=${encodeURIComponent(args.query)}&per_page=5`)
+        if (leadRes.ok) {
+          const leadData = (await leadRes.json()) as any
+          const leads = leadData?.data?.data ?? leadData?.data ?? []
+          if (Array.isArray(leads)) {
+            // Try phone first, then email as iMessage handle
+            const withPhone = leads.find((l: any) => l.phone)
+            const withEmail = leads.find((l: any) => l.email)
+            if (withPhone) {
+              const resolvedDigits = withPhone.phone.replace(/\D/g, "")
+              if (resolvedDigits.length >= 7) {
+                normalized = normalizeHandle(withPhone.phone)
+                isPhone = true
+                prompts.log.info(`Resolved "${args.query}" → ${withPhone.name || "?"} (${withPhone.phone})`)
+              }
+            } else if (withEmail) {
+              // iMessage can use email as Apple ID handle
+              normalized = withEmail.email
+              prompts.log.info(`Resolved "${args.query}" → ${withEmail.name || "?"} (${withEmail.email})`)
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // Build WHERE clause — match chat_identifier by phone digits or email
     const whereClause = isPhone
       ? `c.chat_identifier LIKE '%${normalized}%'`
       : `c.chat_identifier LIKE '%${args.query.replace(/'/g, "''")}%'`
