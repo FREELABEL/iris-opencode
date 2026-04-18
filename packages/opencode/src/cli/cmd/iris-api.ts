@@ -9,13 +9,28 @@ import { join } from "path"
 // Override with env vars for local dev or custom deployments.
 // ============================================================================
 
+// Pre-load SDK env vars before setting constants (sync read at module load)
+// This ensures IRIS_API_URL from ~/.iris/sdk/.env is picked up
+{
+  try {
+    const _fs = require("fs"), _path = require("path")
+    const _envPath = _path.join(require("os").homedir(), ".iris", "sdk", ".env")
+    if (_fs.existsSync(_envPath)) {
+      for (const line of _fs.readFileSync(_envPath, "utf-8").split("\n")) {
+        const m = line.match(/^(IRIS_API_URL|IRIS_FL_API_URL)\s*=\s*(.+)/)
+        if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim()
+      }
+    }
+  } catch {}
+}
+
 export const PLATFORM_URLS = {
   /** fl-api (Laravel backend — users, bloqs, leads, workflows) */
   flApi: process.env.IRIS_FL_API_URL ?? "https://raichu.heyiris.io",
   /** iris-api (V6 engine — chat, integrations exec, tools, monitor) */
-  irisApi: process.env.IRIS_API_URL ?? "https://main.heyiris.io",
+  irisApi: process.env.IRIS_API_URL ?? "https://freelabel.net",
   /** Fallback URLs for iris-api (tried in order when primary fails) */
-  irisApiFallbacks: ["https://heyiris.io", "https://iris-api.freelabel.net"],
+  irisApiFallbacks: ["https://main.heyiris.io", "https://iris-api.freelabel.net"],
 } as const
 
 // Aliases for backward compat — prefer PLATFORM_URLS in new code
@@ -80,7 +95,18 @@ export async function irisFetch(
     ...(options.headers as Record<string, string>),
   }
   if (token) headers["Authorization"] = `Bearer ${token}`
-  return fetch(`${base}${path}`, { ...options, headers })
+  const url = `${base}${path}`
+  // Debug: stderr trace for diagnosing auth failures (only with --print-logs)
+  if (process.argv.includes("--print-logs")) {
+    console.error(`[irisFetch] ${options.method ?? "GET"} ${url}`)
+    console.error(`[irisFetch] token: ${token ? token.slice(0, 12) + "..." : "(none)"}`)
+    console.error(`[irisFetch] body keys: ${options.body ? Object.keys(JSON.parse(String(options.body))).join(", ") : "(none)"}`)
+  }
+  const res = await fetch(url, { ...options, headers })
+  if (process.argv.includes("--print-logs")) {
+    console.error(`[irisFetch] → ${res.status} ${res.statusText}`)
+  }
+  return res
 }
 
 // ============================================================================
@@ -109,22 +135,31 @@ export async function handleApiError(res: Response, action: string): Promise<boo
     prompts.log.info(
       `Re-authenticate:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login --force${UI.Style.TEXT_NORMAL}`,
     )
+    process.exitCode = 1
     return false
   }
   if (res.status === 403) {
     let msg = "Access denied"
     try {
       const body = (await res.json()) as { error?: string; message?: string }
-      msg = body.error ?? body.message ?? msg
+      msg = body.error || body.message || msg
     } catch {}
     prompts.log.warn(msg)
+    process.exitCode = 1
     return false
   }
   if (!res.ok) {
-    let msg = `HTTP ${res.status}`
+    let msg = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`
     try {
       const body = (await res.json()) as { error?: string; message?: string; errors?: Record<string, string[]> }
-      msg = body.error ?? body.message ?? msg
+      // Bug #57643/#57647: use || not ?? — API returns {"message":""} which ?? doesn't fall through
+      const rawMsg = body.error || body.message || ""
+      // Bug #57646: sanitize raw Laravel model errors (e.g. "No query results for model [App\Models\Bloq\ScheduledJob]")
+      if (rawMsg) {
+        msg = rawMsg.includes("No query results for model")
+          ? "Resource not found"
+          : rawMsg.replace(/\[App\\Models\\[^\]]+\]/g, "").trim()
+      }
       // Laravel validation returns { errors: { field: ["msg", ...] } }
       if (body.errors && typeof body.errors === "object") {
         const details = Object.entries(body.errors)
@@ -134,6 +169,7 @@ export async function handleApiError(res: Response, action: string): Promise<boo
       }
     } catch {}
     prompts.log.error(`${action} failed: ${msg}`)
+    process.exitCode = 1
     return false
   }
   return true

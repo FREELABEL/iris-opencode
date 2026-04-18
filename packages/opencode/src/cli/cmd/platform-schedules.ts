@@ -577,6 +577,7 @@ const SchedulesInspectCommand = cmd({
       const schedule = (allData?.data ?? []).find((s: any) => s.id === args.id)
       if (!schedule) {
         spinner.stop("Not found", 1)
+        process.exitCode = 1
         prompts.log.error(`Schedule #${args.id} not found`)
         prompts.outro("Done")
         return
@@ -703,7 +704,7 @@ const SchedulesToggleCommand = cmd({
     if (!userId) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
-    spinner.start(`${action}ing…`)
+    spinner.start(`${action === "Enable" ? "Enabling" : "Disabling"}…`)
 
     try {
       // toggle via PUT update with is_active flag
@@ -1075,6 +1076,53 @@ const SchedulesDiagnoseCommand = cmd({
   },
 })
 
+const SchedulesFrequencyCommand = cmd({
+  command: "frequency <agent-id> <freq>",
+  aliases: ["freq"],
+  describe: "update heartbeat frequency for an agent",
+  builder: (yargs) =>
+    yargs
+      .positional("agent-id", { describe: "agent ID", type: "number", demandOption: true })
+      .positional("freq", {
+        describe: "frequency",
+        type: "string",
+        demandOption: true,
+        choices: ["every_5_minutes", "every_10_minutes", "every_15_minutes", "every_30_minutes", "hourly", "every_2_hours", "every_4_hours", "every_6_hours", "every_12_hours", "daily", "weekly"],
+      }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Set frequency → ${args.freq}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const res = await irisFetch(`/api/v1/monitor/enable-heartbeat`, {
+        method: "POST",
+        body: JSON.stringify({ agent_id: args["agent-id"], frequency: args.freq }),
+      }, IRIS_API)
+
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`HTTP ${res.status}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as any
+      spinner.stop(`${success("✓")} ${data?.data?.agent_name ?? `Agent #${args["agent-id"]}`} → ${args.freq}`)
+      prompts.outro(dim("iris schedules list --latest"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformSchedulesCommand = cmd({
   command: "schedules",
   aliases: ["schedule"],
@@ -1090,6 +1138,7 @@ export const PlatformSchedulesCommand = cmd({
       .command(SchedulesToggleCommand)
       .command(SchedulesDeleteCommand)
       .command(SchedulesDiagnoseCommand)
+      .command(SchedulesFrequencyCommand)
       .demandCommand(),
   async handler() {},
 })

@@ -144,9 +144,26 @@ const ReportCommand = cmd({
       })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    let title = Array.isArray(args.title) ? args.title.join(" ").trim() : (args.title as string | undefined)
+    // Combine positional title words + any passthrough args (after --)
+    // This handles cases like: iris bug report "--something broke" where yargs
+    // would otherwise treat --something as a flag
+    const titleParts: string[] = []
+    if (Array.isArray(args.title)) titleParts.push(...args.title.map(String))
+    if (Array.isArray(args["--"])) titleParts.push(...args["--"].map(String))
+    let title = titleParts.join(" ").trim() || undefined
     let description = args.description
     let severity = args.severity as string
+
+    // Guard: catch known subcommand names passed as titles (e.g. "iris bug report list")
+    const subcommands = ["list", "ls", "close", "done", "resolve", "complete"]
+    if (title && subcommands.includes(title.toLowerCase())) {
+      console.error(`\n  Unknown subcommand: ${title}`)
+      console.error(`  Did you mean: ${dim(`iris bug ${title}`)}`)
+      console.error(`  To submit a report: ${dim(`iris bug report "your bug title here"`)}`)
+      console.error("")
+      process.exitCode = 1
+      return
+    }
 
     // Interactive mode if no title provided
     if (!title || title.length === 0) {
@@ -275,6 +292,50 @@ const ListCommand = cmd({
   },
 })
 
+const CloseCommand = cmd({
+  command: "close <id>",
+  aliases: ["done", "resolve", "complete"],
+  describe: "mark a bug report as completed/resolved",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bug item ID", type: "number", demandOption: true })
+      .option("note", { alias: "n", describe: "resolution note", type: "string" }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const userId = await resolveUserId()
+    if (!userId) {
+      console.error("Could not resolve user ID.")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start(`Closing bug #${args.id}…`)
+
+    try {
+      // Update item status to "done" via the bloq item status endpoint
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/item/${args.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "done" }),
+      })
+
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        const text = await res.text().catch(() => "")
+        prompts.log.error(`HTTP ${res.status}: ${text}`)
+        return
+      }
+
+      spinner.stop(`${success("✓")} Bug #${args.id} marked as done`)
+      console.log(dim("  iris bug list  — view all bugs"))
+    } catch (e: any) {
+      spinner.stop("Error", 1)
+      prompts.log.error(e.message)
+    }
+  },
+})
+
 // ============================================================================
 // Root command
 // ============================================================================
@@ -283,6 +344,6 @@ export const PlatformBugCommand = cmd({
   command: "bug",
   aliases: ["bugs", "report"],
   describe: "report bugs and view your submissions",
-  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).demandCommand(),
+  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(CloseCommand).demandCommand(),
   async handler() {},
 })

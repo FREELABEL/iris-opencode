@@ -780,8 +780,32 @@ const VendorDeleteCommand = cmd({
 })
 
 // ============================================================================
-// TICKETS subcommands
+// TICKETS subcommands — pull/push/diff pattern
 // ============================================================================
+
+function ticketsFilename(eventId: number): string {
+  return `${eventId}-tickets.json`
+}
+
+function findTicketsFile(dir: string, eventId: number): string | undefined {
+  const filepath = join(dir, ticketsFilename(eventId))
+  return existsSync(filepath) ? filepath : undefined
+}
+
+function printTicket(t: Record<string, unknown>): void {
+  const price = t.price ? `  ${UI.Style.TEXT_SUCCESS}$${t.price}${UI.Style.TEXT_NORMAL}` : ""
+  console.log(`  ${bold(String(t.title ?? `Ticket #${t.id}`))}  ${dim(`#${t.id}`)}${price}`)
+  if (t.description) console.log(`    ${dim(String(t.description))}`)
+  if (t.url) console.log(`    ${dim(String(t.url))}`)
+}
+
+async function fetchTickets(eventId: number): Promise<any[] | null> {
+  const res = await irisFetch(`/api/v1/events/${eventId}/tickets`)
+  const ok = await handleApiError(res, "Fetch tickets")
+  if (!ok) return null
+  const data = (await res.json()) as any
+  return data?.data ?? (Array.isArray(data) ? data : [])
+}
 
 const TicketsListCommand = cmd({
   command: "tickets <event-id>",
@@ -799,27 +823,263 @@ const TicketsListCommand = cmd({
     spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets`)
-      const ok = await handleApiError(res, "List tickets")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const items = await fetchTickets(args["event-id"])
+      if (!items) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      const data = (await res.json()) as any
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
       spinner.stop(`${items.length} ticket(s)`)
 
-      if (items.length === 0) { prompts.log.warn("No tickets found"); prompts.outro("Done"); return }
+      if (items.length === 0) {
+        prompts.log.warn("No tickets. Run: iris events tickets-pull <id>  →  edit JSON  →  iris events tickets-push <id>")
+        prompts.outro("Done")
+        return
+      }
 
       printDivider()
-      for (const t of items) {
-        const price = t.price ? `  ${UI.Style.TEXT_SUCCESS}$${t.price}${UI.Style.TEXT_NORMAL}` : ""
-        console.log(`  ${bold(String(t.title ?? `Ticket #${t.id}`))}  ${dim(`#${t.id}`)}${price}`)
-        if (t.description) console.log(`    ${dim(t.description)}`)
-        if (t.url) console.log(`    ${dim(t.url)}`)
+      for (const t of items) { printTicket(t); console.log() }
+      printDivider()
+
+      prompts.outro(dim(`iris events tickets-pull ${args["event-id"]}  |  iris events ticket-checkout ${args["event-id"]}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const TicketsPullCommand = cmd({
+  command: "tickets-pull <event-id>",
+  describe: "download all tickets for an event to local JSON",
+  builder: (yargs) =>
+    yargs
+      .positional("event-id", { describe: "event ID", type: "number", demandOption: true })
+      .option("output", { alias: "o", describe: "output file path", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Pull Tickets — Event #${args["event-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching…")
+
+    try {
+      const items = await fetchTickets(args["event-id"])
+      if (!items) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      // Normalize to clean ticket objects for local editing
+      const tickets = items.map((t: any) => ({
+        id: t.id,
+        title: t.title,
+        price: t.price,
+        description: t.description ?? null,
+        url: t.url ?? null,
+        sale_start_date: t.sale_start_date ?? null,
+        sale_end_date: t.sale_end_date ?? null,
+        quantity_total: t.quantity_total ?? null,
+        quantity_sold: t.quantity_sold ?? 0,
+        max_per_order: t.max_per_order ?? 10,
+        min_per_order: t.min_per_order ?? 1,
+        is_visible: t.is_visible ?? true,
+        sort_order: t.sort_order ?? 0,
+        status: t.status ?? "active",
+      }))
+
+      const dir = resolveSyncDir()
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+
+      const filename = args.output ?? ticketsFilename(args["event-id"])
+      const filepath = filename.startsWith("/") ? filename : join(dir, filename)
+
+      writeFileSync(filepath, JSON.stringify({ event_id: args["event-id"], tickets }, null, 2))
+      spinner.stop(success("Pulled"))
+
+      printDivider()
+      printKV("Event", `#${args["event-id"]}`)
+      printKV("Tickets", String(tickets.length))
+      printKV("Saved to", filepath)
+      console.log()
+      for (const t of tickets) { printTicket(t) }
+      printDivider()
+
+      prompts.log.info("Edit the JSON to add, remove, or update tickets, then push:")
+      prompts.outro(dim(`iris events tickets-push ${args["event-id"]}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const TicketsPushCommand = cmd({
+  command: "tickets-push <event-id>",
+  describe: "sync local ticket JSON to API (creates new, updates existing, deletes removed)",
+  builder: (yargs) =>
+    yargs
+      .positional("event-id", { describe: "event ID", type: "number", demandOption: true })
+      .option("file", { alias: "f", describe: "local JSON file path", type: "string" })
+      .option("dry-run", { describe: "show what would change without applying", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Push Tickets — Event #${args["event-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+
+    try {
+      // 1. Load local file
+      const dir = resolveSyncDir()
+      let filepath = args.file
+      if (!filepath) filepath = findTicketsFile(dir, args["event-id"])
+
+      if (!filepath || !existsSync(filepath)) {
+        spinner.start("")
+        spinner.stop("Failed", 1)
+        prompts.log.error(`Local file not found. Run: ${highlight(`iris events tickets-pull ${args["event-id"]}`)}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const localData = JSON.parse(readFileSync(filepath, "utf-8"))
+      const localTickets: any[] = localData.tickets ?? localData
+
+      // 2. Fetch live tickets
+      spinner.start("Comparing local vs live…")
+      const liveTickets = await fetchTickets(args["event-id"])
+      if (!liveTickets) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const liveMap = new Map<number, any>()
+      for (const t of liveTickets) liveMap.set(t.id, t)
+
+      // 3. Compute diff
+      const toCreate: any[] = []
+      const toUpdate: Array<{ id: number; payload: Record<string, unknown>; changes: string[] }> = []
+      const toDelete: any[] = []
+
+      for (const local of localTickets) {
+        if (!local.id || !liveMap.has(local.id)) {
+          // New ticket (no ID or ID doesn't exist on server)
+          toCreate.push(local)
+        } else {
+          // Existing — check for changes
+          const live = liveMap.get(local.id)!
+          const changes: string[] = []
+          const payload: Record<string, unknown> = {}
+
+          for (const field of ["title", "price", "description", "url", "sale_start_date", "sale_end_date", "quantity_total", "max_per_order", "min_per_order", "is_visible", "sort_order", "status"]) {
+            const lv = String(live[field] ?? "")
+            const ll = String(local[field] ?? "")
+            if (lv !== ll) {
+              changes.push(field)
+              payload[field] = local[field]
+            }
+          }
+
+          if (changes.length > 0) {
+            toUpdate.push({ id: local.id, payload, changes })
+          }
+          liveMap.delete(local.id)
+        }
+      }
+
+      // Remaining in liveMap are tickets removed locally
+      for (const [id, t] of liveMap) {
+        toDelete.push(t)
+      }
+
+      spinner.stop(`${toCreate.length} new, ${toUpdate.length} updated, ${toDelete.length} deleted`)
+
+      // 4. Show diff
+      printDivider()
+      if (toCreate.length > 0) {
+        console.log(`  ${UI.Style.TEXT_SUCCESS}+ New tickets:${UI.Style.TEXT_NORMAL}`)
+        for (const t of toCreate) {
+          console.log(`    ${bold(t.title)} — $${t.price ?? "0"}`)
+        }
         console.log()
+      }
+      if (toUpdate.length > 0) {
+        console.log(`  ${UI.Style.TEXT_WARNING}~ Updated tickets:${UI.Style.TEXT_NORMAL}`)
+        for (const t of toUpdate) {
+          console.log(`    ${bold(`#${t.id}`)} — ${t.changes.join(", ")}`)
+        }
+        console.log()
+      }
+      if (toDelete.length > 0) {
+        console.log(`  ${UI.Style.TEXT_DANGER}- Deleted tickets:${UI.Style.TEXT_NORMAL}`)
+        for (const t of toDelete) {
+          console.log(`    ${bold(String(t.title ?? `#${t.id}`))} — $${t.price ?? "0"}`)
+        }
+        console.log()
+      }
+      if (toCreate.length === 0 && toUpdate.length === 0 && toDelete.length === 0) {
+        console.log(`  ${success("Already in sync")}`)
+        printDivider()
+        prompts.outro("Done")
+        return
       }
       printDivider()
 
-      prompts.outro(dim(`iris events ticket-create ${args["event-id"]}`))
+      if (args["dry-run"]) {
+        prompts.log.info("Dry run — no changes applied")
+        prompts.outro(dim("Remove --dry-run to apply"))
+        return
+      }
+
+      // 5. Confirm and apply
+      const confirmed = await prompts.confirm({ message: "Apply these changes?" })
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+
+      const applySpinner = prompts.spinner()
+      applySpinner.start("Applying…")
+      let ops = 0
+
+      // Create new tickets
+      for (const t of toCreate) {
+        const payload: Record<string, unknown> = { title: t.title }
+        for (const f of ["price", "description", "url", "sale_start_date", "sale_end_date", "quantity_total", "max_per_order", "min_per_order", "is_visible", "sort_order", "status"]) {
+          if (t[f] !== undefined && t[f] !== null) payload[f] = t[f]
+        }
+        const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets`, { method: "POST", body: JSON.stringify(payload) })
+        await handleApiError(res, `Create ${t.title}`)
+        ops++
+      }
+
+      // Update existing tickets
+      for (const t of toUpdate) {
+        const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets/${t.id}`, { method: "PUT", body: JSON.stringify(t.payload) })
+        await handleApiError(res, `Update #${t.id}`)
+        ops++
+      }
+
+      // Delete removed tickets
+      for (const t of toDelete) {
+        const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets/${t.id}`, { method: "DELETE" })
+        await handleApiError(res, `Delete #${t.id}`)
+        ops++
+      }
+
+      applySpinner.stop(`${success("✓")} ${ops} operation(s) applied`)
+
+      // 6. Re-pull to get fresh IDs for newly created tickets
+      prompts.log.info("Re-pulling to sync local file with new IDs…")
+      const fresh = await fetchTickets(args["event-id"])
+      if (fresh) {
+        const freshTickets = fresh.map((t: any) => ({
+          id: t.id,
+          title: t.title,
+          price: t.price,
+          description: t.description ?? null,
+          url: t.url ?? null,
+        }))
+        writeFileSync(filepath, JSON.stringify({ event_id: args["event-id"], tickets: freshTickets }, null, 2))
+      }
+
+      prompts.outro(dim(`iris events tickets ${args["event-id"]}`))
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -828,86 +1088,195 @@ const TicketsListCommand = cmd({
   },
 })
 
-const TicketCreateCommand = cmd({
-  command: "ticket-create <event-id>",
-  describe: "add a ticket tier to an event",
+const TicketsDiffCommand = cmd({
+  command: "tickets-diff <event-id>",
+  describe: "compare local ticket JSON vs live API",
   builder: (yargs) =>
     yargs
       .positional("event-id", { describe: "event ID", type: "number", demandOption: true })
-      .option("title", { describe: "ticket title (e.g. GA, VIP)", type: "string" })
-      .option("price", { describe: "price", type: "string" })
-      .option("description", { describe: "description", type: "string" })
-      .option("url", { describe: "purchase URL", type: "string" }),
+      .option("file", { alias: "f", describe: "local JSON file path", type: "string" }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Add Ticket — Event #${args["event-id"]}`)
+    prompts.intro(`◈  Diff Tickets — Event #${args["event-id"]}`)
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    let title = args.title
-    if (!title) {
-      title = (await prompts.text({ message: "Ticket title (e.g. GA, VIP)", validate: (x) => (x && x.length > 0 ? undefined : "Required") })) as string
-      if (prompts.isCancel(title)) { prompts.outro("Cancelled"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Comparing…")
+
+    try {
+      // Load local
+      const dir = resolveSyncDir()
+      let filepath = args.file
+      if (!filepath) filepath = findTicketsFile(dir, args["event-id"])
+
+      if (!filepath || !existsSync(filepath)) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`Local file not found. Run: ${highlight(`iris events tickets-pull ${args["event-id"]}`)}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const localData = JSON.parse(readFileSync(filepath, "utf-8"))
+      const localTickets: any[] = localData.tickets ?? localData
+
+      // Fetch live
+      const liveTickets = await fetchTickets(args["event-id"])
+      if (!liveTickets) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const liveMap = new Map<number, any>()
+      for (const t of liveTickets) liveMap.set(t.id, t)
+
+      let diffs = 0
+      const lines: string[] = []
+
+      // Check local tickets against live
+      for (const local of localTickets) {
+        if (!local.id || !liveMap.has(local.id)) {
+          lines.push(`  ${UI.Style.TEXT_SUCCESS}+ NEW: ${local.title} — $${local.price ?? "0"}${UI.Style.TEXT_NORMAL}`)
+          diffs++
+        } else {
+          const live = liveMap.get(local.id)!
+          for (const field of ["title", "price", "description", "url", "sale_start_date", "sale_end_date", "quantity_total", "max_per_order", "min_per_order", "is_visible", "sort_order", "status"]) {
+            if (String(live[field] ?? "") !== String(local[field] ?? "")) {
+              lines.push(`  ${UI.Style.TEXT_WARNING}~ #${local.id} ${field}:${UI.Style.TEXT_NORMAL}`)
+              lines.push(`    ${UI.Style.TEXT_DANGER}- live:  ${String(live[field] ?? "(empty)").slice(0, 100)}${UI.Style.TEXT_NORMAL}`)
+              lines.push(`    ${UI.Style.TEXT_SUCCESS}+ local: ${String(local[field] ?? "(empty)").slice(0, 100)}${UI.Style.TEXT_NORMAL}`)
+              diffs++
+            }
+          }
+          liveMap.delete(local.id)
+        }
+      }
+
+      // Remaining live tickets = deleted locally
+      for (const [id, t] of liveMap) {
+        lines.push(`  ${UI.Style.TEXT_DANGER}- DELETED: ${t.title ?? `#${id}`} — $${t.price ?? "0"}${UI.Style.TEXT_NORMAL}`)
+        diffs++
+      }
+
+      spinner.stop(diffs === 0 ? success("In sync") : `${diffs} difference(s)`)
+
+      printDivider()
+      if (diffs === 0) {
+        console.log(`  ${success("No differences")}`)
+      } else {
+        for (const line of lines) console.log(line)
+      }
+      console.log()
+      printDivider()
+
+      prompts.outro(diffs > 0 ? dim(`iris events tickets-push ${args["event-id"]}`) : "Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const TicketCheckoutCommand = cmd({
+  command: "ticket-checkout <event-id>",
+  describe: "generate a Stripe checkout link for a ticket (door sales, sharing)",
+  builder: (yargs) =>
+    yargs
+      .positional("event-id", { describe: "event ID", type: "number", demandOption: true })
+      .option("ticket", { alias: "t", describe: "ticket ID", type: "number" })
+      .option("email", { alias: "e", describe: "buyer email", type: "string" })
+      .option("qty", { alias: "q", describe: "quantity", type: "number", default: 1 })
+      .option("open", { describe: "open checkout URL in browser", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Ticket Checkout — Event #${args["event-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    let ticketId = args.ticket
+    let email = args.email
+
+    // If no ticket specified, list them and let user pick
+    if (!ticketId) {
+      const spinner = prompts.spinner()
+      spinner.start("Loading tickets…")
+
+      const items = await fetchTickets(args["event-id"])
+      if (!items) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop(`${items.length} ticket(s)`)
+
+      if (items.length === 0) {
+        prompts.log.warn("No tickets found. Run: iris events tickets-pull " + args["event-id"])
+        prompts.outro("Done")
+        return
+      }
+
+      const choice = (await prompts.select({
+        message: "Select ticket",
+        options: items.map((t: any) => ({
+          value: t.id,
+          label: `${t.title ?? "Ticket"} — $${t.price ?? "0"}`,
+          hint: `#${t.id}`,
+        })),
+      })) as number
+      if (prompts.isCancel(choice)) { prompts.outro("Cancelled"); return }
+      ticketId = choice
+    }
+
+    // Get email if not provided
+    if (!email) {
+      email = (await prompts.text({
+        message: "Buyer email",
+        placeholder: "door@venue.com",
+        validate: (x) => {
+          if (!x || !x.includes("@")) return "Valid email required"
+          return undefined
+        },
+      })) as string
+      if (prompts.isCancel(email)) { prompts.outro("Cancelled"); return }
     }
 
     const spinner = prompts.spinner()
-    spinner.start("Creating…")
+    spinner.start("Creating checkout session…")
 
     try {
-      const payload: Record<string, unknown> = { title }
-      if (args.price) payload.price = args.price
-      if (args.description) payload.description = args.description
-      if (args.url) payload.url = args.url
-
-      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets`, { method: "POST", body: JSON.stringify(payload) })
-      const ok = await handleApiError(res, "Create ticket")
+      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets/${ticketId}/checkout`, {
+        method: "POST",
+        body: JSON.stringify({
+          buyerEmail: email,
+          quantity: args.qty ?? 1,
+        }),
+      })
+      const ok = await handleApiError(res, "Create checkout")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const t = data?.data ?? data
-      spinner.stop(`${success("✓")} Ticket created: ${bold(String(t.title ?? t.id))}`)
+      const url = data?.checkout_url
+
+      if (!url) {
+        spinner.stop("No checkout URL returned", 1)
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Checkout link ready`)
 
       printDivider()
-      printKV("ID", t.id)
-      printKV("Title", t.title)
-      printKV("Price", t.price)
+      console.log()
+      console.log(`  ${bold("Checkout URL:")}`)
+      console.log(`  ${highlight(url)}`)
+      console.log()
+      printKV("Email", email)
+      printKV("Quantity", String(args.qty ?? 1))
       printDivider()
 
-      prompts.outro(dim(`iris events tickets ${args["event-id"]}`))
-    } catch (err) {
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
-    }
-  },
-})
+      if (args.open) {
+        const { exec } = await import("child_process")
+        exec(`open "${url}"`)
+        prompts.log.info("Opened in browser")
+      }
 
-const TicketDeleteCommand = cmd({
-  command: "ticket-delete <event-id> <ticket-id>",
-  describe: "remove a ticket from an event",
-  builder: (yargs) =>
-    yargs
-      .positional("event-id", { describe: "event ID", type: "number", demandOption: true })
-      .positional("ticket-id", { describe: "ticket ID", type: "number", demandOption: true }),
-  async handler(args) {
-    UI.empty()
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
-
-    const confirmed = await prompts.confirm({ message: `Delete ticket #${args["ticket-id"]}?` })
-    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
-
-    const spinner = prompts.spinner()
-    spinner.start("Deleting…")
-
-    try {
-      const res = await irisFetch(`/api/v1/events/${args["event-id"]}/tickets/${args["ticket-id"]}`, { method: "DELETE" })
-      const ok = await handleApiError(res, "Delete ticket")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-
-      spinner.stop(`${success("✓")} Ticket deleted`)
-      prompts.outro(dim(`iris events tickets ${args["event-id"]}`))
+      prompts.outro(dim("Share this link or open on a phone for door sales"))
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -941,10 +1310,12 @@ export const PlatformEventsCommand = cmd({
       .command(VendorsListCommand)
       .command(VendorCreateCommand)
       .command(VendorDeleteCommand)
-      // Tickets
+      // Tickets — pull/push/diff pattern
       .command(TicketsListCommand)
-      .command(TicketCreateCommand)
-      .command(TicketDeleteCommand)
+      .command(TicketsPullCommand)
+      .command(TicketsPushCommand)
+      .command(TicketsDiffCommand)
+      .command(TicketCheckoutCommand)
       .demandCommand(),
   async handler() {},
 })

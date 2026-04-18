@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API, resolveUserId } from "./iris-api"
 
 // ============================================================================
 // Polling helper
@@ -140,8 +140,7 @@ async function executeChat(args: {
     return
   }
 
-  const envUserId = parseInt(process.env.IRIS_USER_ID ?? "", 10)
-  const userId = args["user-id"] ?? (isNaN(envUserId) ? undefined : envUserId)
+  const userId = await resolveUserId()
 
   if (!isJson) {
     prompts.log.info(

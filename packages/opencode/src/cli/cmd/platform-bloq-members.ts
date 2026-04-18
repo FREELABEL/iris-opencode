@@ -26,7 +26,8 @@ const ListMembersCommand = cmd({
     const ok = await handleApiError(res, "List members")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const users: any[] = data?.data ?? data?.users ?? (Array.isArray(data) ? data : [])
+    const raw = data?.data ?? data?.users ?? data
+    const users: any[] = Array.isArray(raw) ? raw : []
     if (args.json) { console.log(JSON.stringify(users, null, 2)); prompts.outro("Done"); return }
     printDivider()
     if (users.length === 0) console.log(`  ${dim("(no members)")}`)

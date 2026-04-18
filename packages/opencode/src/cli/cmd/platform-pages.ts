@@ -21,7 +21,7 @@ function publicUrl(slugOrPage: string | { public_url?: string; slug?: string }):
   const env = process.env.IRIS_ENV ?? "production"
   return env === "local"
     ? `http://local.iris.freelabel.net:9300/p/${slug}`
-    : `https://main.heyiris.io/p/${slug}`
+    : `https://heyiris.io/p/${slug}`
 }
 
 // Pages CRUD routes through iris-api (which proxies to fl-api with service token).
@@ -111,8 +111,8 @@ const ListCmd = cmd({
     const sp = prompts.spinner()
     sp.start("Loading pages…")
     try {
-      const res = await pagesFetch("/api/v1/pages")
-      if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      const res = await pagesFetch("/api/v1/pages?per_page=50&include_json=0&slim=1")
+      if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const json = (await res.json()) as any
       // Handle both direct array and Laravel paginator ({ data: { data: [...] } })
       let pages: any[] = []
@@ -170,7 +170,7 @@ const ViewCmd = cmd({
     sp.start("Loading…")
     try {
       const page = await getBySlug(args.slug, true)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
       sp.stop(String(page.title ?? page.slug))
 
       if (args.json) {
@@ -619,11 +619,13 @@ const VersionsCmd = cmd({
     sp.start("Loading…")
     try {
       const page = await getBySlug(args.slug, false)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const res = await pagesFetch(`/api/v1/pages/${page.id}/versions`)
-      if (!(await handleApiError(res, "Versions"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const data = (await res.json()) as { data?: any[] }
-      const versions = data?.data ?? []
+      if (!(await handleApiError(res, "Versions"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const data = (await res.json()) as { data?: any }
+      // Bug #57236: API may return {} or {data: {}} instead of an array — normalize
+      const raw = data?.data
+      const versions: any[] = Array.isArray(raw) ? raw : (typeof raw === "object" && raw !== null ? Object.values(raw) : [])
       sp.stop(`${versions.length} version(s)`)
       if (versions.length === 0) { prompts.outro("None"); return }
       printDivider()
@@ -656,9 +658,15 @@ const RollbackCmd = cmd({
     sp.start("Rolling back…")
     try {
       const page = await getBySlug(args.slug, false)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const res = await pagesFetch(`/api/v1/pages/${page.id}/rollback/${args.version}`, { method: "POST" })
-      if (!(await handleApiError(res, "Rollback"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!(await handleApiError(res, "Rollback"))) {
+        sp.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.log.error(`Version ${args.version} not found for page "${args.slug}". Run: iris pages versions ${args.slug}`)
+        prompts.outro("Done")
+        return
+      }
       sp.stop(success(`Rolled back to v${args.version}`))
       prompts.outro("Done")
     } catch (err) {
@@ -856,13 +864,74 @@ const ComponentRegistryCmd = cmd({
 })
 
 // ============================================================================
+// QR Code — generate short URL + QR for any page
+// ============================================================================
+
+const QrCmd = cmd({
+  command: "qr <slug>",
+  describe: "get short URL + QR code for a page",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true })
+      .option("size", { type: "number", default: 400, describe: "QR image size in pixels" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  QR Code: ${args.slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Generating short URL + QR…")
+    try {
+      const { FL_API } = await import("./iris-api")
+      const res = await irisFetch(`/api/v1/pages/${encodeURIComponent(String(args.slug))}/short-url`, {
+        method: "POST",
+        body: JSON.stringify({ size: args.size }),
+      }, FL_API)
+
+      if (!res.ok) {
+        const err = await res.text().catch(() => "")
+        sp.stop("Failed")
+        prompts.log.error(`Failed: ${err || `HTTP ${res.status}`}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const data = ((await res.json()) as any)?.data ?? {}
+      sp.stop(success("Ready"))
+
+      if (args.json) {
+        console.log(JSON.stringify(data, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      console.log()
+      console.log(`  ${bold("Page")}:       ${publicUrl(String(args.slug))}`)
+      console.log(`  ${bold("Short URL")}: ${highlight(data.short_url)}`)
+      console.log(`  ${bold("QR Image")}:  ${dim(data.qr_url)}`)
+      console.log(`  ${bold("QR Download")}: ${dim(data.qr_download)}`)
+      console.log()
+      prompts.log.info(`Open QR in browser: ${dim(data.qr_url)}`)
+      prompts.log.info(`Download PNG:       ${dim(data.qr_download)}`)
+
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp.stop("Error")
+      prompts.log.error(e.message ?? String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
 export const PlatformPagesCommand = cmd({
   command: "pages",
   aliases: ["genesis"],
-  describe: "manage composable pages — list, view, get/set, pull/push/diff, publish, versions",
+  describe: "manage composable pages — list, view, get/set, pull/push/diff, publish, versions, qr",
   builder: (y) =>
     y
       .command(ListCmd)
@@ -880,6 +949,7 @@ export const PlatformPagesCommand = cmd({
       .command(ComponentRegistryCmd)
       .command(VersionsCmd)
       .command(RollbackCmd)
+      .command(QrCmd)
       .demandCommand(),
   async handler() {},
 })

@@ -662,7 +662,8 @@ describe("endpoint URL contracts: leads", () => {
 
   test("leads note: POST /api/v1/leads/{id}/notes", () => {
     const source = readSource("platform-leads.ts")
-    expect(source).toContain("/api/v1/leads/${args.id}/notes")
+    // Note command resolves lead ID first, then uses ${leadId} not ${args.id}
+    expect(source).toContain("/api/v1/leads/${leadId}/notes")
   })
 
   test("leads create: POST /api/v1/leads", () => {
@@ -693,5 +694,83 @@ describe("model safety", () => {
     expect(source).toContain('gpt-4.1-nano')
     expect(source).not.toContain("gpt-3.5-turbo")
     expect(source).not.toContain("gpt-3.5")
+  })
+})
+
+// ============================================================================
+// Bug #57638: --json flag must exist on all list commands
+// ============================================================================
+
+describe("--json flag on list commands (#57638)", () => {
+  test("leads list has --json option", () => {
+    const source = readSource("platform-leads.ts")
+    // The list command builder must define a json option
+    expect(source).toMatch(/command:\s*"list"[\s\S]{0,500}\.option\("json"/)
+  })
+
+  test("agents list has --json option", () => {
+    const source = readSource("platform-agents.ts")
+    expect(source).toMatch(/command:\s*"list"[\s\S]{0,500}\.option\("json"/)
+  })
+
+  test("workflows list has --json option", () => {
+    const source = readSource("platform-workflows.ts")
+    expect(source).toMatch(/command:\s*"list"[\s\S]{0,500}\.option\("json"/)
+  })
+
+  test("bloqs list has --json option", () => {
+    const source = readSource("platform-bloqs.ts")
+    expect(source).toMatch(/command:\s*"list"[\s\S]{0,500}\.option\("json"/)
+  })
+
+  test("pages list has --json option", () => {
+    const source = readSource("platform-pages.ts")
+    expect(source).toMatch(/command:\s*"list"[\s\S]{0,500}\.option\("json"/)
+  })
+
+  test("leads list handler outputs JSON when flag is set", () => {
+    const source = readSource("platform-leads.ts")
+    expect(source).toContain("if (args.json)")
+    expect(source).toContain("JSON.stringify(leads")
+  })
+
+  test("agents list handler outputs JSON when flag is set", () => {
+    const source = readSource("platform-agents.ts")
+    expect(source).toContain("JSON.stringify(agents")
+  })
+
+  test("bloqs list handler outputs JSON when flag is set", () => {
+    const source = readSource("platform-bloqs.ts")
+    expect(source).toContain("JSON.stringify(bloqs")
+  })
+})
+
+// ============================================================================
+// Bug #57642: whitespace-only name validation in leads create
+// ============================================================================
+
+describe("leads create name validation (#57642)", () => {
+  test("leads create trims name before validation", () => {
+    const source = readSource("platform-leads.ts")
+    expect(source).toContain("args.name.trim()")
+  })
+})
+
+// ============================================================================
+// Bug #57639: leads search error handling
+// ============================================================================
+
+describe("leads search error handling (#57639)", () => {
+  test("leads search shows error message on API failure", () => {
+    const source = readSource("platform-leads.ts")
+    // Should extract error message from response body
+    expect(source).toContain("Search leads failed:")
+  })
+
+  test("leads search sets exit code on failure", () => {
+    const source = readSource("platform-leads.ts")
+    // The search error handler must set process.exitCode = 1
+    expect(source).toContain("Search leads failed:")
+    expect(source).toContain("process.exitCode = 1")
   })
 })

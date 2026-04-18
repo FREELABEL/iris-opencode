@@ -35,7 +35,7 @@ Options:
         --skip-bridge       Skip Coding Agent Bridge installation
         --skip-sandbox      Skip Docker Sandbox installation
         --skip-remotion     Skip Remotion video framework installation
-        --api-url <url>     Set IRIS API URL (default: https://app.heyiris.io)
+        --api-url <url>     Set IRIS API URL (default: https://web.heyiris.io)
         --token <token>     Pre-seed SDK token (skip interactive auth)
         --user-id <id>      Pre-seed user ID (used with --token)
         --only-code         Only install IRIS CLI (skip SDK, app, MCP, bridge, sandbox)
@@ -61,7 +61,7 @@ only_docs_mode=false
 skip_bridge=false
 skip_sandbox=false
 skip_remotion=false
-iris_api_url="https://app.heyiris.io"
+iris_api_url="https://web.heyiris.io"
 pre_token="${IRIS_SDK_TOKEN:-}"
 pre_user_id="${IRIS_USER_ID:-}"
 
@@ -431,14 +431,7 @@ print_message() {
 
 check_version() {
     if [ -f "$INSTALL_DIR/iris" ]; then
-        local current_ver=""
-        current_ver=$("$INSTALL_DIR/iris" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
-        if [ -n "$current_ver" ] && [ "$current_ver" = "$specific_version" ]; then
-            print_message info "${GREEN}[1/7]${NC} IRIS CLI ${MUTED}..........................${NC} ${GREEN}v${current_ver} (up to date)${NC}"
-            SKIP_CLI_DOWNLOAD=true
-            return 0
-        fi
-        print_message info "${MUTED}Updating IRIS CLI from ${NC}${current_ver:-unknown}${MUTED} to ${NC}$specific_version${MUTED}...${NC}"
+        print_message info "${MUTED}Updating IRIS CLI to ${NC}$specific_version${MUTED}...${NC}"
     fi
 }
 
@@ -547,6 +540,24 @@ download_and_install() {
         fi
     fi
 
+    # Verify the download succeeded and isn't an HTML error page
+    if [ ! -s "$tmp_dir/$filename" ]; then
+        echo -e "${RED}Error: Download failed — file is empty${NC}"
+        echo -e "${MUTED}The binary for your platform (${target}) may not be available in this release.${NC}"
+        echo -e "${MUTED}Check available assets: https://github.com/FREELABEL/iris-opencode/releases/tag/v${specific_version}${NC}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    # Check if we got an HTML error page instead of a real binary
+    if head -c 15 "$tmp_dir/$filename" | grep -qi '<!doctype\|<html'; then
+        echo -e "${RED}Error: Download returned an error page instead of the binary${NC}"
+        echo -e "${MUTED}The binary for your platform (${target}) is not available in release v${specific_version}.${NC}"
+        echo -e "${MUTED}Check available assets: https://github.com/FREELABEL/iris-opencode/releases/tag/v${specific_version}${NC}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
     if [ "$os" = "linux" ]; then
         tar -xzf "$tmp_dir/$filename" -C "$tmp_dir"
     else
@@ -555,6 +566,10 @@ download_and_install() {
 
     mv "$tmp_dir/iris" "$INSTALL_DIR"
     chmod 755 "${INSTALL_DIR}/iris"
+    # Ad-hoc sign on macOS so Gatekeeper doesn't SIGKILL the binary (exit 137)
+    if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+        codesign --force --deep --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
+    fi
     rm -rf "$tmp_dir"
 }
 
@@ -562,6 +577,10 @@ install_from_binary() {
     print_message info "\n${MUTED}Installing ${NC}IRIS CLI ${MUTED}from: ${NC}$binary_path"
     cp "$binary_path" "${INSTALL_DIR}/iris"
     chmod 755 "${INSTALL_DIR}/iris"
+    # Ad-hoc sign on macOS so Gatekeeper doesn't SIGKILL the binary (exit 137)
+    if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+        codesign --force --deep --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
+    fi
 }
 
 if [ "$only_docs_mode" = "true" ]; then
@@ -572,11 +591,8 @@ if [ "$only_docs_mode" = "true" ]; then
 elif [ -n "$binary_path" ]; then
     install_from_binary
 else
-    SKIP_CLI_DOWNLOAD=false
     check_version
-    if [ "$SKIP_CLI_DOWNLOAD" != "true" ]; then
-        download_and_install
-    fi
+    download_and_install
 fi
 
 
@@ -661,9 +677,7 @@ fi
 # Add to PATH for current session
 export PATH="$INSTALL_DIR:$PATH"
 
-if [ "${SKIP_CLI_DOWNLOAD:-}" != "true" ]; then
-    print_message info "\n${GREEN}[1/7]${NC} IRIS CLI ${MUTED}..........................${NC} ${GREEN}installed${NC}"
-fi
+print_message info "\n${GREEN}[1/7]${NC} IRIS CLI ${MUTED}..........................${NC} ${GREEN}installed${NC}"
 
 # ─── Component 2: IRIS SDK / CLI ─────────────────────────────────────────────
 
@@ -1038,7 +1052,6 @@ REAL_SCRIPT="$0"
 [ -L "$REAL_SCRIPT" ] && REAL_SCRIPT="$(readlink "$REAL_SCRIPT")"
 BRIDGE_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 IRIS_CONFIG="$HOME/.iris/config.json"
-IRIS_API="https://main.heyiris.io"
 
 has_node_key() {
     [ -n "${IRIS_API_KEY:-}" ] && return 0
@@ -1047,46 +1060,8 @@ has_node_key() {
     return 1
 }
 
-save_node_key() {
-    local key="$1"
-    mkdir -p "$HOME/.iris"
-    if [ -f "$IRIS_CONFIG" ] && command -v jq >/dev/null 2>&1; then
-        local tmp; tmp=$(mktemp 2>/dev/null || echo "/tmp/iris-cfg-$$")
-        jq --arg k "$key" --arg api "$IRIS_API" '.node_api_key=$k | .node_key=$k | .api_url=$api' "$IRIS_CONFIG" > "$tmp" 2>/dev/null && mv "$tmp" "$IRIS_CONFIG"
-    elif [ -f "$IRIS_CONFIG" ] && command -v python3 >/dev/null 2>&1; then
-        local tmp; tmp=$(mktemp 2>/dev/null || echo "/tmp/iris-cfg-$$")
-        python3 -c "
-import json
-with open('$IRIS_CONFIG') as f: d=json.load(f)
-d['node_api_key']='$key'; d['node_key']='$key'; d['api_url']='$IRIS_API'
-with open('$tmp','w') as f: json.dump(d,f,indent=2)
-" 2>/dev/null && mv "$tmp" "$IRIS_CONFIG"
-    else
-        printf '{"node_api_key":"%s","node_key":"%s","api_url":"%s"}\n' "$key" "$key" "$IRIS_API" > "$IRIS_CONFIG"
-    fi
-    chmod 600 "$IRIS_CONFIG"
-}
-
-# Parse --node-key from any position
-NODE_KEY_ARG=""
-ARGS=()
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --node-key|--key) NODE_KEY_ARG="$2"; shift 2 ;;
-        --node-key=*|--key=*) NODE_KEY_ARG="${1#*=}"; shift ;;
-        *) ARGS+=("$1"); shift ;;
-    esac
-done
-set -- "${ARGS[@]}"
-
 case "${1:-status}" in
     start)
-        # If --node-key was passed, save it immediately (skip all auth)
-        if [ -n "$NODE_KEY_ARG" ]; then
-            save_node_key "$NODE_KEY_ARG"
-            echo "Node key saved."
-        fi
-
         if ! has_node_key; then
             # Self-heal: auto-register if SDK token exists
             if [ -f "$HOME/.iris/sdk/.env" ]; then
@@ -1099,13 +1074,14 @@ case "${1:-status}" in
                     _RESP=$(curl -sL --max-time 10 \
                         -H "Authorization: Bearer $_TOKEN" \
                         -H "Content-Type: application/json" \
-                        -d "{\"user_id\": ${_UID:-0}, \"name\": \"$_HLABEL\", \"capabilities\": {\"docker\": $_HDOCK}}" \
-                        "$IRIS_API/api/v6/nodes" 2>/dev/null || echo '{}')
-                    _NKEY=$(echo "$_RESP" | jq -r '.credentials.api_key // .node_key // empty' 2>/dev/null || \
-                            echo "$_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('credentials',{}).get('api_key','') or d.get('node_key',''))" 2>/dev/null || \
-                            echo "$_RESP" | sed -n 's/.*"api_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                        -d "{\"name\": \"$_HLABEL\", \"capabilities\": {\"docker\": $_HDOCK}}" \
+                        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+                    _NKEY=$(echo "$_RESP" | jq -r '.node_key // empty' 2>/dev/null || \
+                            echo "$_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
+                            echo "$_RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
                     if [ -n "$_NKEY" ] && [ "$_NKEY" != "null" ]; then
-                        save_node_key "$_NKEY"
+                        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$_NKEY" "${_UID:-0}" > "$IRIS_CONFIG"
+                        chmod 600 "$IRIS_CONFIG"
                         echo "Registered! Continuing to start daemon..."
                     else
                         echo "Auto-registration failed. Register manually:"
@@ -1114,10 +1090,11 @@ case "${1:-status}" in
                     fi
                 fi
             fi
+            # Re-check after auto-registration attempt
             if ! has_node_key; then
                 echo "No API key configured."
-                echo "  Pass directly: iris-daemon start --node-key node_live_xxx"
-                echo "  Or authenticate: iris-login && iris-daemon register"
+                echo "  Authenticate:  iris-login"
+                echo "  Then register: iris-daemon register"
                 exit 1
             fi
         fi
@@ -1150,15 +1127,11 @@ case "${1:-status}" in
         else echo "Not running. Start with: iris-daemon start"; fi ;;
     logs) tail -f "$BRIDGE_DIR/daemon.log" ;;
     register)
-        if [ -n "$NODE_KEY_ARG" ]; then
-            save_node_key "$NODE_KEY_ARG"
-            echo "Node key saved. Start with: iris-daemon start"
-            exit 0
-        fi
         if [ ! -f "$HOME/.iris/sdk/.env" ] || [ -z "$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)" ]; then
             if command -v iris-login >/dev/null 2>&1; then
                 echo "Not authenticated. Running iris-login..."
                 iris-login
+                # Re-check after login
                 if [ ! -f "$HOME/.iris/sdk/.env" ]; then echo "Auth failed."; exit 1; fi
             else
                 echo "Not authenticated. Run 'iris-login' first."
@@ -1166,7 +1139,10 @@ case "${1:-status}" in
             fi
         fi
         SDK_TOKEN=$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" | cut -d= -f2)
-        if [ -z "$SDK_TOKEN" ]; then echo "SDK token not found. Run 'iris-login' first."; exit 1; fi
+        if [ -z "$SDK_TOKEN" ]; then
+            echo "SDK token not found. Run 'iris-login' first."
+            exit 1
+        fi
         HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My Machine")
         HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
         USER_ID=$(grep IRIS_USER_ID "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
@@ -1175,14 +1151,16 @@ case "${1:-status}" in
         HTTP_CODE=$(curl -sL --max-time 10 -o "$REG_TMP" -w "%{http_code}" \
             -H "Authorization: Bearer $SDK_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"user_id\": ${USER_ID:-0}, \"name\": \"$HOSTNAME_LABEL\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-            "$IRIS_API/api/v6/nodes" 2>/dev/null || echo "000")
+            -d "{\"name\": \"$HOSTNAME_LABEL\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo "000")
         RESP=$(cat "$REG_TMP" 2>/dev/null || echo '{}'); rm -f "$REG_TMP"
-        NODE_KEY=$(echo "$RESP" | jq -r '.credentials.api_key // .node_key // empty' 2>/dev/null || \
-                   echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('credentials',{}).get('api_key','') or d.get('node_key',''))" 2>/dev/null || \
-                   echo "$RESP" | sed -n 's/.*"api_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        NODE_KEY=$(echo "$RESP" | jq -r '.node_key // empty' 2>/dev/null || \
+                   echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
+                   echo "$RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
         if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
-            save_node_key "$NODE_KEY"
+            mkdir -p "$HOME/.iris"
+            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "${USER_ID:-0}" > "$IRIS_CONFIG"
+            chmod 600 "$IRIS_CONFIG"
             echo "Registered! Node key saved to ~/.iris/config.json"
             echo "Start with: iris-daemon start"
         else
@@ -1194,9 +1172,9 @@ case "${1:-status}" in
                 *)   echo "Registration failed (HTTP $HTTP_CODE)."
                      echo "$RESP" | head -c 200 ;;
             esac
-            echo "  Manual setup: https://web.freelabel.net/iris?tab=machines"
+            echo "  Manual setup: https://web.heyiris.io/dashboard/hive"
         fi ;;
-    *) echo "Usage: iris-daemon {start|stop|restart|status|register|logs} [--node-key <key>]" ;;
+    *) echo "Usage: iris-daemon {start|stop|restart|status|register|logs}" ;;
 esac
 DCTL
     chmod 755 "$bridge_dir/daemonctl"
@@ -1259,7 +1237,7 @@ CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; MUTED='\033[0;2m'; NC='
 IRIS_DIR="$HOME/.iris"
 SDK_ENV="$IRIS_DIR/sdk/.env"
 CONFIG_JSON="$IRIS_DIR/config.json"
-API_BASE="https://raichu.heyiris.io"  # fl-api (auth endpoints live here)
+API_BASE="https://raichu.heyiris.io"
 
 # Parse flags
 PRE_TOKEN="" ; PRE_USER_ID=""
@@ -1305,14 +1283,13 @@ register_hive() {
     local http_code; http_code=$(curl -sL --max-time 10 -o "$tmpfile" -w "%{http_code}" \
         -H "Authorization: Bearer $token" \
         -H "Content-Type: application/json" \
-        -d "{\"user_id\": ${user_id:-0}, \"name\": \"$(echo "$hostname_label" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $has_docker}}" \
-        "https://main.heyiris.io/api/v6/nodes" 2>/dev/null || echo "000")
+        -d "{\"name\": \"$(echo "$hostname_label" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $has_docker}}" \
+        "$API_BASE/api/v1/hive/register-node" 2>/dev/null || echo "000")
     local resp; resp=$(cat "$tmpfile" 2>/dev/null || echo '{}'); rm -f "$tmpfile"
-    local node_key; node_key=$(json_nested "$resp" "credentials.api_key")
-    [ -z "$node_key" ] || [ "$node_key" = "null" ] && node_key=$(json_field "$resp" "node_key")
+    local node_key; node_key=$(json_field "$resp" "node_key")
     if [ -n "$node_key" ] && [ "$node_key" != "null" ]; then
         mkdir -p "$IRIS_DIR"
-        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://main.heyiris.io"}\n' "$node_key" "${user_id:-0}" > "$CONFIG_JSON"
+        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$node_key" "${user_id:-0}" > "$CONFIG_JSON"
         chmod 600 "$CONFIG_JSON"
         echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
         return 0
@@ -1372,7 +1349,7 @@ SEND_RESP=$(curl -s --max-time 15 -X POST "$API_BASE/api/v1/auth/send-login-code
     --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false}')
 SEND_OK=$(json_field "$SEND_RESP" "success")
 if [ "$SEND_OK" != "True" ] && [ "$SEND_OK" != "true" ]; then
-    echo -e "${RED}  Failed to send code.${NC} Sign up at: ${CYAN}https://app.heyiris.io/login/register${NC}"
+    echo -e "${RED}  Failed to send code.${NC} Sign up at: ${CYAN}https://web.heyiris.io/login/register${NC}"
     exit 1
 fi
 IS_NEW=$(json_nested "$SEND_RESP" "data.new_account")
@@ -1407,7 +1384,7 @@ USER_ID=$(json_nested "$LOGIN_RESP" "data.user.id")
 DASHBOARD=$(json_nested "$LOGIN_RESP" "data.dashboard_url")
 
 if [ -z "$SDK_TOKEN" ] || [ -z "$USER_ID" ]; then
-    echo -e "${RED}  Auth succeeded but token wasn't generated. Try again or visit ${CYAN}https://app.heyiris.io${NC}"
+    echo -e "${RED}  Auth succeeded but token wasn't generated. Try again or visit ${CYAN}https://web.heyiris.io${NC}"
     exit 1
 fi
 
@@ -1688,13 +1665,7 @@ install_docker_sandbox() {
         chmod 600 "$key_file"
     fi
 
-    # Pull the pre-built Docker image (skip if already present and up-to-date)
-    local _existing_digest=""
-    _existing_digest=$(docker image inspect ghcr.io/freelabel/iris-agent:latest --format '{{.Id}}' 2>/dev/null || echo "")
-    if [ -n "$_existing_digest" ] && [ -f "$sandbox_dir/docker-compose.yml" ]; then
-        print_message info "${GREEN}[6/7]${NC} Docker Sandbox ${MUTED}.....................${NC} ${GREEN}already installed${NC}"
-        return 0
-    fi
+    # Pull the pre-built Docker image (show progress)
     print_message info "${MUTED}  Pulling agent sandbox image...${NC}"
     if ! docker pull ghcr.io/freelabel/iris-agent:latest; then
         print_message info "${MUTED}[6/7] Docker Sandbox ........................ image not yet available${NC}"
@@ -2125,13 +2096,12 @@ ENVFILE
     NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
         -H "Authorization: Bearer $SDK_TOKEN" \
         -H "Content-Type: application/json" \
-        --data-raw "{\"user_id\": ${USER_ID:-0}, \"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-        "https://main.heyiris.io/api/v6/nodes" 2>/dev/null || echo '{}')
-    NODE_KEY=$(json_nested "$NODE_RESPONSE" "credentials.api_key")
-    [ -z "$NODE_KEY" ] || [ "$NODE_KEY" = "null" ] && NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
+        --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+    NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
     if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
         mkdir -p "$HOME/.iris"
-        printf '{"node_api_key":"%s","node_key":"%s","user_id":%s,"api_url":"https://main.heyiris.io"}\n' "$NODE_KEY" "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
+        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
         chmod 600 "$HOME/.iris/config.json"
         echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
     else
@@ -2144,18 +2114,7 @@ if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
     tty_available=true
 fi
 
-# Skip auth if already authenticated (has SDK token)
-_EXISTING_TOKEN=""
-if [ -f "$HOME/.iris/sdk/.env" ]; then
-    _EXISTING_TOKEN=$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
-fi
-if [ -n "$_EXISTING_TOKEN" ]; then
-    echo -e ""
-    echo -e "  ${GREEN}Already authenticated.${NC} ${MUTED}(~/.iris/sdk/.env)${NC}"
-    AUTH_SUCCESS=true
-    SDK_TOKEN="$_EXISTING_TOKEN"
-    USER_ID=$(grep IRIS_USER_ID "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
-elif [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
+if [ "$tty_available" = "true" ] && [ -z "$pre_token" ]; then
     echo -e ""
     echo -e "${CYAN}Let's get you set up!${NC}"
     echo -e ""
@@ -2246,13 +2205,12 @@ ENVFILE
                         NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
                             -H "Authorization: Bearer $SDK_TOKEN" \
                             -H "Content-Type: application/json" \
-                            --data-raw "{\"user_id\": ${USER_ID:-0}, \"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
-                            "https://main.heyiris.io/api/v6/nodes" 2>/dev/null || echo '{}')
-                        NODE_KEY=$(json_nested "$NODE_RESPONSE" "credentials.api_key")
-                        [ -z "$NODE_KEY" ] || [ "$NODE_KEY" = "null" ] && NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
+                            --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+                            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+                        NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
                         if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
                             mkdir -p "$HOME/.iris"
-                            printf '{"node_api_key":"%s","node_key":"%s","user_id":%s,"api_url":"https://main.heyiris.io"}\n' "$NODE_KEY" "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
+                            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
                             chmod 600 "$HOME/.iris/config.json"
                             echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
                         else
@@ -2273,7 +2231,7 @@ ENVFILE
         else
             ERROR_MSG=$(json_field "$SEND_RESPONSE" "error")
             echo -e "${RED}  Could not send code: ${ERROR_MSG:-Unknown error}${NC}"
-            echo -e "${MUTED}  If this persists, sign up at: ${NC}${CYAN}https://app.heyiris.io/login/register${NC}"
+            echo -e "${MUTED}  If this persists, sign up at: ${NC}${CYAN}https://web.heyiris.io/login/register${NC}"
         fi
     fi
     echo -e ""
@@ -2281,7 +2239,7 @@ fi
 
 # ─── Build post-auth prompt ──────────────────────────────────────────────────
 
-DASHBOARD="${DASHBOARD_URL:-https://app.heyiris.io}"
+DASHBOARD="${DASHBOARD_URL:-https://web.heyiris.io}"
 
 if [ "$AUTH_SUCCESS" = "true" ]; then
     ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user is authenticated as $USER_EMAIL (user ID: $USER_ID). Auth is DONE -- do NOT run auth steps, do NOT read .env files, do NOT use curl. Use the IRIS CLI (the 'iris' command).
@@ -2294,7 +2252,7 @@ RULES:
 
   ┌──────────────────────────────────────────────────────────────┐
   │  Dashboard   $DASHBOARD
-  │  Discover    https://app.heyiris.io/discover
+  │  Discover    https://web.heyiris.io/discover
   │  Discord     https://discord.com/invite/Vmfrqmdkps
   │  Docs        https://heyiris.io/developer
   │  Desktop     ~/Applications/IRIS.app (run: open ~/Applications/IRIS.app)
@@ -2402,8 +2360,8 @@ Once you've run iris-login, come back here and tell me what you'd like to build:
 Already have a token? You can also run: iris-login --token YOUR_TOKEN --user-id YOUR_ID
 
   ┌──────────────────────────────────────────────────────────────┐
-  │  Dashboard   https://app.heyiris.io                         │
-  │  Discover    https://app.heyiris.io/discover                │
+  │  Dashboard   https://web.heyiris.io                         │
+  │  Discover    https://web.heyiris.io/discover                │
   │  Discord     https://discord.com/invite/Vmfrqmdkps          │
   │  Docs        https://heyiris.io/developer                   │
   │  Desktop     ~/Applications/IRIS.app                        │

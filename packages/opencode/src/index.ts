@@ -66,13 +66,16 @@ import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
+import { PlatformAtlasCommsCommand } from "./cli/cmd/platform-atlas-comms"
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
 import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
+import { PlatformDoctorCommand } from "./cli/cmd/platform-doctor"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
 import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
 import { PlatformContractsCommand } from "./cli/cmd/platform-contracts"
 import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
+import { PlatformDomainsCommand } from "./cli/cmd/platform-domains"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
@@ -91,9 +94,8 @@ import { PlatformToolsCommand } from "./cli/cmd/platform-tools"
 import { PlatformUsersCommand } from "./cli/cmd/platform-users"
 import { PlatformPhoneCommand } from "./cli/cmd/platform-phone"
 import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
-// TODO: platform-mail and platform-imessage commands (not yet implemented)
-// import { PlatformMailCommand } from "./cli/cmd/platform-mail"
-// import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
+import { PlatformMailCommand } from "./cli/cmd/platform-mail"
+import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
 import { PlatformWalletCommand } from "./cli/cmd/platform-wallet"
 import { PlatformConfigCommand } from "./cli/cmd/platform-config"
@@ -230,13 +232,16 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformBugCommand))
   .command(reg(PlatformAtlasMeetingsCommand))
   .command(reg(PlatformAtlasBrandKitCommand))
+  .command(reg(PlatformAtlasCommsCommand))
   .command(reg(PlatformLeadsMeetingCommand))
   .command(reg(PlatformCampaignCommand))
   .command(reg(PlatformDaemonCommand))
+  .command(reg(PlatformDoctorCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformProposalsCommand))
   .command(reg(PlatformContractsCommand))
   .command(reg(PlatformPagesCommand))
+  .command(reg(PlatformDomainsCommand))
   .command(reg(PlatformPagesBatchCommand))
   .command(reg(PlatformPartialsCommand))
   .command(reg(PlatformCloudUploadCommand))
@@ -255,8 +260,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformUsersCommand))
   .command(reg(PlatformPhoneCommand))
   .command(reg(PlatformVoiceCommand))
-  // .command(reg(PlatformMailCommand))     // TODO: not yet implemented
-  // .command(reg(PlatformImessageCommand)) // TODO: not yet implemented
+  .command(reg(PlatformMailCommand))
+  .command(reg(PlatformImessageCommand))
   .command(reg(PlatformCalendarCommand))
   .command(reg(PlatformWalletCommand))
   // PHP-port commands — config, app, automation, automation:test

@@ -12,6 +12,7 @@ import {
   success,
   highlight,
   IRIS_API,
+  FL_API,
   PLATFORM_URLS,
 } from "./iris-api"
 import { exec } from "child_process"
@@ -31,8 +32,8 @@ const INTEGRATION_TYPES = [
   "canva", "buffer",
   // CRM / Lead enrichment
   "apollo", "hubspot", "pipedrive",
-  // Accounting (Phase 2 — auto-sync coming soon)
-  "quickbooks", "xero",
+  // Accounting / Banking
+  "quickbooks", "xero", "mercury",
   // Payments
   "stripe",
   // Secrets
@@ -73,6 +74,16 @@ const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string 
     { name: "create_post", description: "Schedule a social post (text, profile_ids)" },
     { name: "list_profiles", description: "List connected social profiles" },
   ],
+  "mercury": [
+    { name: "list_accounts", description: "List all bank accounts with balances" },
+    { name: "get_account", description: "Get account details (account_id)" },
+    { name: "get_transactions", description: "Get transactions (account_id, start, end, search, limit)" },
+    { name: "get_transaction", description: "Get single transaction detail (transaction_id)" },
+    { name: "get_recipients", description: "List saved payment recipients" },
+    { name: "generate_tax_summary", description: "Yearly P&L breakdown for tax prep (account_id, year)" },
+    { name: "categorize_expenses", description: "AI-categorize expenses by tax category (account_id, start, end)" },
+    { name: "find_1099_payments", description: "Find payments >$600 per recipient for 1099s (account_id, year)" },
+  ],
 }
 
 const OAUTH_TYPES = [
@@ -83,7 +94,7 @@ const OAUTH_TYPES = [
   "quickbooks", "xero",
   "1password",
 ]
-const APIKEY_TYPES = ["vapi", "servis-ai", "smtp-email", "mailjet", "google-gemini", "savelife-ai"]
+const APIKEY_TYPES = ["vapi", "servis-ai", "smtp-email", "mailjet", "google-gemini", "savelife-ai", "mercury"]
 
 // Composio toolkits that use API key auth (use `iris integrations setup <type>-api-key --api-key <key>`)
 const COMPOSIO_APIKEY_TOOLKITS: Record<string, string> = {
@@ -266,6 +277,24 @@ export async function executeIntegrationCall(
   const normalized = SLUG_ALIASES[type] ?? type
   const userId = await requireUserId()
   if (!userId) throw new Error("user_id required")
+
+  // Canva uses native service on fl-api (Composio has 0 actions)
+  if (normalized === "canva") {
+    const res = await irisFetch(
+      `/api/v1/integrations/execute`,
+      {
+        method: "POST",
+        body: JSON.stringify({ integration: "canva", action: fn, parameters: params }),
+      },
+      FL_API,
+    )
+    if (!res.ok) {
+      const text = await res.text().catch(() => "")
+      throw new Error(`HTTP ${res.status}: ${text}`)
+    }
+    return res.json()
+  }
+
   const res = await irisFetch(
     `/api/v1/users/${userId}/integrations/execute-direct?user_id=${userId}`,
     {
@@ -281,6 +310,20 @@ export async function executeIntegrationCall(
   return await res.json()
 }
 
+function displayArrayItems(items: any[], indent = "    "): void {
+  for (const item of items.slice(0, 25)) {
+    if (typeof item === "object" && item !== null) {
+      const label = item.name ?? item.title ?? item.subject ?? item.filename ?? item.email ?? item.id ?? ""
+      const id = item.id && label !== item.id ? dim(` #${item.id}`) : ""
+      const type = item.mimeType ?? item.type ?? ""
+      console.log(`${indent}${bold(String(label))}${id}${type ? `  ${dim(type)}` : ""}`)
+    } else {
+      console.log(`${indent}${item}`)
+    }
+  }
+  if (items.length > 25) console.log(`${indent}${dim(`…and ${items.length - 25} more`)}`)
+}
+
 function displayResult(result: any, name: string): void {
   const ok = result?.success ?? !result?.error
   if (!ok) {
@@ -292,10 +335,36 @@ function displayResult(result: any, name: string): void {
     if (k === "success" || k === "status") continue
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
       console.log(`  ${dim(k + ":")} ${v}`)
-    } else if (Array.isArray(v) || typeof v === "object") {
-      const enc = JSON.stringify(v, null, 2)
-      if (enc.length < 500) console.log(`  ${dim(k + ":")} ${enc}`)
-      else console.log(`  ${dim(k + ":")} [${Array.isArray(v) ? v.length + " items" : "object"}]`)
+    } else if (Array.isArray(v)) {
+      console.log(`  ${dim(k + ":")} ${dim(`(${v.length} items)`)}`)
+      displayArrayItems(v)
+    } else if (typeof v === "object" && v !== null) {
+      // Drill into nested objects — find arrays inside (e.g. data.files) (#55730)
+      const nestedArrays = Object.entries(v).filter(([, val]) => Array.isArray(val))
+      const nestedPrimitives = Object.entries(v).filter(([, val]) => typeof val === "string" || typeof val === "number" || typeof val === "boolean")
+
+      if (nestedArrays.length > 0) {
+        // Show primitives first (e.g. kind, incompleteSearch)
+        for (const [nk, nv] of nestedPrimitives) {
+          console.log(`  ${dim(nk + ":")} ${nv}`)
+        }
+        // Expand each nested array
+        for (const [nk, nv] of nestedArrays) {
+          const arr = nv as any[]
+          console.log(`  ${dim(nk + ":")} ${dim(`(${arr.length} items)`)}`)
+          displayArrayItems(arr)
+        }
+      } else {
+        const enc = JSON.stringify(v, null, 2)
+        if (enc.length < 2000) {
+          const lines = enc.split("\n")
+          console.log(`  ${dim(k + ":")}`)
+          for (const line of lines) console.log(`    ${line}`)
+        } else {
+          const keys = Object.keys(v)
+          console.log(`  ${dim(k + ":")} {${keys.slice(0, 10).join(", ")}${keys.length > 10 ? ", …" : ""}}`)
+        }
+      }
     }
   }
 }
@@ -447,10 +516,53 @@ const ListConnectedCommand = cmd({
       return
     }
 
+    // Verify tokens in parallel (#57679) — probe each integration
+    const verifySpinner = prompts.spinner()
+    verifySpinner.start("Verifying tokens…")
+
+    const verifyFns: Record<string, () => Promise<"verified" | "expired" | "error">> = {
+      gmail: async () => {
+        const r = await irisFetch(`/api/v1/leads/0/gmail-threads`).catch(() => null)
+        if (!r) return "error"
+        return (r.status === 401 || r.status === 403) ? "expired" : "verified"
+      },
+      "google-calendar": async () => {
+        const r = await fetch(`http://localhost:3200/api/calendar/events?days=1&limit=1`, { signal: AbortSignal.timeout(3000) }).catch(() => null)
+        return r?.ok ? "verified" : "error"
+      },
+      "google-drive": async () => {
+        const r = await irisFetch("/api/v1/integrations/exec", { method: "POST", body: JSON.stringify({ type: "google-drive", function: "list_files", params: { maxResults: 1 } }) }).catch(() => null)
+        if (!r) return "error"
+        return (r.status === 401 || r.status === 403) ? "expired" : r.ok ? "verified" : "error"
+      },
+    }
+
+    const verified = new Map<string, "verified" | "expired" | "error">()
+    await Promise.allSettled(
+      items.map(async (i) => {
+        const fn = verifyFns[i.type]
+        if (fn) {
+          verified.set(i.type, await fn().catch(() => "error" as const))
+        }
+      })
+    )
+    verifySpinner.stop("Done")
+
     printDivider()
     for (const i of items) {
-      const statusColor = i.status === "active" ? success(`[${i.status}]`) : dim(`[${i.status}]`)
-      console.log(`  ${highlight(i.type)}  ${statusColor}`)
+      const v = verified.get(i.type)
+      let statusLabel: string
+      if (v === "verified") {
+        statusLabel = success("[verified]")
+      } else if (v === "expired") {
+        statusLabel = `${UI.Style.TEXT_DANGER}[expired]${UI.Style.TEXT_NORMAL} ${dim(`— reconnect: iris connect ${i.type}`)}`
+      } else if (v === "error") {
+        statusLabel = `${UI.Style.TEXT_WARNING}[unverified]${UI.Style.TEXT_NORMAL} ${dim("— could not probe")}`
+      } else {
+        // No verify function for this type — show active as before
+        statusLabel = i.status === "active" ? dim("[active]") : dim(`[${i.status}]`)
+      }
+      console.log(`  ${highlight(i.type)}  ${statusLabel}`)
     }
     printDivider()
     prompts.outro(dim("iris integrations <type> <function> key=value …"))
@@ -712,9 +824,12 @@ const ExecCommand = cmd({
         describe: "load params from a JSON file (merged with key=value params; key=value wins on conflict)",
       }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Run: ${args.target}`)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    // Suppress all UI chrome when --json for clean pipeable output (#55735)
+    if (!args.json) {
+      UI.empty()
+      prompts.intro(`◈  Run: ${args.target}`)
+    }
+    if (!(await requireAuth())) { if (!args.json) prompts.outro("Done"); return }
 
     const target = String(args.target)
     let fn = args.function ? String(args.function) : undefined
@@ -761,12 +876,17 @@ const ExecCommand = cmd({
           }
           return
         }
+        // Skip spinner/ANSI when --json to keep output parseable (#55735)
+        if (args.json) {
+          const result = await executeIntegrationCall(target, fn, params)
+          console.log(JSON.stringify(result, null, 2))
+          return
+        }
         const spinner = prompts.spinner()
         spinner.start(`Executing ${target}.${fn}…`)
         const result = await executeIntegrationCall(target, fn, params)
         spinner.stop(`${target}.${fn}`)
-        if (args.json) console.log(JSON.stringify(result, null, 2))
-        else displayResult(result, `${target}.${fn}`)
+        displayResult(result, `${target}.${fn}`)
         prompts.outro("Done")
         return
       }
@@ -778,6 +898,20 @@ const ExecCommand = cmd({
       }
 
       const userId = await requireUserId()
+      if (args.json) {
+        // Clean JSON output — no spinner/ANSI (#55735)
+        const res = await irisFetch(`/api/v1/tools/execute`, {
+          method: "POST",
+          body: JSON.stringify({ tool: target, params, user_id: userId }),
+        }, IRIS_API)
+        if (!res.ok) {
+          console.log(JSON.stringify({ error: `HTTP ${res.status}`, success: false }))
+          process.exitCode = 1
+          return
+        }
+        console.log(JSON.stringify(await res.json(), null, 2))
+        return
+      }
       const spinner = prompts.spinner()
       spinner.start(`Executing tool ${target}…`)
       const res = await irisFetch(`/api/v1/tools/execute`, {
@@ -792,8 +926,7 @@ const ExecCommand = cmd({
       }
       const result = await res.json()
       spinner.stop(target)
-      if (args.json) console.log(JSON.stringify(result, null, 2))
-      else displayResult(result, target)
+      displayResult(result, target)
       prompts.outro("Done")
     } catch (e) {
       prompts.log.error(e instanceof Error ? e.message : String(e))

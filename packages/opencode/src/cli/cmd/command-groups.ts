@@ -42,7 +42,7 @@ export const CATEGORIES: Record<string, CommandCategory> = {
   },
   communication: {
     name: "Communication",
-    description: "Phone numbers, voice agents, transcription",
+    description: "Phone, voice, email (Apple Mail), iMessage, calendar, transcription",
     order: 8,
   },
   finance: {
@@ -86,6 +86,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "atlas:inventory": "atlas",
   "atlas:meetings": "atlas",
   "atlas:brand-kit": "atlas",
+  "atlas:comms": "atlas",
   "good-deals": "atlas",
 
   // Knowledge & Content
@@ -98,6 +99,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "how-to": "knowledge",
 
   // Pages & Publishing
+  domains: "pages",
   pages: "pages",
   "pages:batch": "pages",
   partials: "pages",
@@ -139,6 +141,9 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   phone: "communication",
   voice: "communication",
   transcribe: "communication",
+  mail: "communication",
+  imessage: "communication",
+  calendar: "communication",
 
   // Finance
   wallet: "finance",
@@ -152,6 +157,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   users: "system",
   config: "system",
   bug: "system",
+  doctor: "system",
   "sdk:call": "system",
   eval: "system",
   diary: "system",

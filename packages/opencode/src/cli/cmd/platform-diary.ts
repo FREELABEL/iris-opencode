@@ -29,7 +29,7 @@ const DiaryTodayCommand = cmd({
     UI.empty()
     prompts.intro("◈  Diary — Today")
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
-    if (!args.agentId && !args.bloq) { prompts.log.error("agent_id or --bloq required"); prompts.outro("Done"); return }
+    if (!args.agentId && !args.bloq) { prompts.log.error("agent_id or --bloq required"); process.exitCode = 1; prompts.outro("Done"); return }
     const params = buildParams(args.agentId, args.bloq)
     const res = await irisFetch(`/api/v6/diary?${params}`)
     const ok = await handleApiError(res, "Today's diary")
@@ -62,7 +62,7 @@ const DiaryListCommand = cmd({
     UI.empty()
     prompts.intro("◈  Diary — List")
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
-    if (!args.agentId && !args.bloq) { prompts.log.error("agent_id or --bloq required"); prompts.outro("Done"); return }
+    if (!args.agentId && !args.bloq) { prompts.log.error("agent_id or --bloq required"); process.exitCode = 1; prompts.outro("Done"); return }
     const params = buildParams(args.agentId, args.bloq, { days: args.days })
     const res = await irisFetch(`/api/v6/diary/list?${params}`)
     const ok = await handleApiError(res, "List diary")

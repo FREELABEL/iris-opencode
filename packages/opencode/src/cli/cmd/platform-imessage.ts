@@ -25,7 +25,7 @@ const ImessageSearchCommand = cmd({
     yargs
       .positional("query", { type: "string", demandOption: true, describe: "phone number (last 10 digits) or chat identifier" })
       .option("days", { type: "number", default: 7, describe: "search last N days" })
-      .option("limit", { type: "number", default: 20, describe: "max messages" })
+      .option("limit", { type: "number", default: 50, describe: "max messages" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -195,7 +195,7 @@ const ImessageChatsCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("days", { type: "number", default: 7, describe: "recent conversations in last N days" })
-      .option("limit", { type: "number", default: 20, describe: "max conversations" })
+      .option("limit", { type: "number", default: 50, describe: "max conversations" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -254,15 +254,71 @@ const ImessageChatsCommand = cmd({
   },
 })
 
+const ImessageSendCommand = cmd({
+  command: "send <handle> <message>",
+  aliases: ["text", "msg"],
+  describe: "send an iMessage to a phone number or contact",
+  builder: (yargs) =>
+    yargs
+      .positional("handle", { type: "string", demandOption: true, describe: "phone number or Apple ID email" })
+      .positional("message", { type: "string", demandOption: true, describe: "message text to send" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  iMessage Send → ${args.handle}`)
+
+    if (process.platform !== "darwin") {
+      prompts.log.error("iMessage is only available on macOS")
+      prompts.outro("Done")
+      return
+    }
+
+    // Normalize phone — prepend +1 if 10 digits
+    let handle = args.handle.trim()
+    const digits = handle.replace(/\D/g, "")
+    if (digits.length === 10) handle = `+1${digits}`
+    else if (digits.length === 11 && digits.startsWith("1")) handle = `+${digits}`
+
+    // Escape message for AppleScript — replace backslashes and double quotes
+    const escapedMessage = args.message
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+
+    const script = `
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set theBuddy to participant "${handle}" of targetService
+    send "${escapedMessage}" to theBuddy
+end tell`
+
+    const sp = prompts.spinner()
+    sp.start(`Sending to ${handle}…`)
+
+    try {
+      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
+        encoding: "utf-8",
+        timeout: 15000,
+      })
+      sp.stop(success(`Sent to ${handle}`))
+      console.log(`  ${dim(args.message.length > 100 ? args.message.slice(0, 100) + "…" : args.message)}`)
+      prompts.outro("Done")
+    } catch (err: any) {
+      sp.stop("Failed", 1)
+      prompts.log.error(`Send failed: ${err.message?.slice(0, 200)}`)
+      prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformImessageCommand = cmd({
   command: "imessage",
   aliases: ["sms", "messages"],
-  describe: "read iMessages from macOS Messages.app (requires Full Disk Access)",
+  describe: "read and send iMessages via macOS Messages.app (requires Full Disk Access)",
   builder: (yargs) =>
     yargs
       .command(ImessageSearchCommand)
       .command(ImessageReadCommand)
       .command(ImessageChatsCommand)
+      .command(ImessageSendCommand)
       .demandCommand(),
   async handler() {},
 })

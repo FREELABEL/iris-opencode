@@ -30,7 +30,8 @@ const ListCmd = cmd({
     const res = await irisFetch(`/api/v1/leads/${args.leadId}/invoices`)
     if (!(await handleApiError(res, "List invoices"))) return
     const body = await getJson(res)
-    const invoices: any[] = body.data ?? body.invoices ?? body ?? []
+    const raw = body.data ?? body.invoices ?? body
+    const invoices: any[] = Array.isArray(raw) ? raw : []
 
     if (args.json) { console.log(JSON.stringify(invoices, null, 2)); return }
     if (invoices.length === 0) { prompts.log.info(`No invoices for lead #${args.leadId}`); return }

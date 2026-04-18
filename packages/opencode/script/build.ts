@@ -148,6 +148,14 @@ for (const item of targets) {
     },
   })
 
+  // Ad-hoc sign macOS binaries so Gatekeeper doesn't SIGKILL them (exit 137)
+  // xattr -cr strips com.apple.provenance + quarantine BEFORE signing.
+  // Without this, macOS taskgated rejects the binary even with a valid adhoc signature.
+  if (item.os === "darwin") {
+    await $`xattr -cr dist/${name}/bin/iris`.quiet()
+    await $`codesign --force --deep --sign - dist/${name}/bin/iris`
+  }
+
   await $`rm -rf ./dist/${name}/bin/tui`
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
@@ -162,6 +170,23 @@ for (const item of targets) {
     ),
   )
   binaries[name] = Script.version
+}
+
+// Auto-install to ~/.iris/bin/ on macOS when --install flag is passed
+// Handles xattr + codesign to prevent SIGKILL (exit 137) on copy
+const installFlag = process.argv.includes("--install")
+if (installFlag && process.platform === "darwin") {
+  const home = process.env.HOME ?? ""
+  const target = `${home}/.iris/bin/iris`
+  const arch = process.arch === "arm64" ? "arm64" : "x64"
+  const source = `dist/opencode-darwin-${arch}/bin/iris`
+  if (fs.existsSync(source)) {
+    await $`mkdir -p ${home}/.iris/bin`
+    await $`cp -f ${source} ${target}`
+    await $`xattr -cr ${target}`.quiet()
+    await $`codesign --force --deep --sign - ${target}`
+    console.log(`\nInstalled to ${target} (signed)`)
+  }
 }
 
 export { binaries }
