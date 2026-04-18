@@ -313,10 +313,13 @@ export async function executeIntegrationCall(
 function displayArrayItems(items: any[], indent = "    "): void {
   for (const item of items.slice(0, 25)) {
     if (typeof item === "object" && item !== null) {
-      const label = item.name ?? item.title ?? item.subject ?? item.filename ?? item.email ?? item.id ?? ""
-      const id = item.id && label !== item.id ? dim(` #${item.id}`) : ""
+      const label = item.name ?? item.title ?? item.summary ?? item.subject ?? item.filename ?? item.email ?? item.id ?? ""
+      const id = item.id && label !== item.id ? dim(` #${String(item.id).slice(0, 12)}`) : ""
       const type = item.mimeType ?? item.type ?? ""
-      console.log(`${indent}${bold(String(label))}${id}${type ? `  ${dim(type)}` : ""}`)
+      // Calendar events: show start/end time
+      const startTime = item.start?.dateTime ?? item.start?.date ?? item.start_time ?? ""
+      const timeLabel = startTime ? dim(` ${startTime}`) : ""
+      console.log(`${indent}${bold(String(label))}${id}${timeLabel}${type ? `  ${dim(type)}` : ""}`)
     } else {
       console.log(`${indent}${item}`)
     }
