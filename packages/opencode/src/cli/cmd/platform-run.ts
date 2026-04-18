@@ -317,7 +317,9 @@ function displayArrayItems(items: any[], indent = "    "): void {
       const id = item.id && label !== item.id ? dim(` #${String(item.id).slice(0, 12)}`) : ""
       const type = item.mimeType ?? item.type ?? ""
       // Calendar events: show start/end time
-      const startTime = item.start?.dateTime ?? item.start?.date ?? item.start_time ?? ""
+      // start may be a string ("2026-04-18T09:00:00") or object ({ dateTime: "..." })
+      const rawStart = item.start
+      const startTime = typeof rawStart === "string" ? rawStart : (rawStart?.dateTime ?? rawStart?.date ?? item.start_time ?? "")
       const timeLabel = startTime ? dim(` ${startTime}`) : ""
       console.log(`${indent}${bold(String(label))}${id}${timeLabel}${type ? `  ${dim(type)}` : ""}`)
     } else {
