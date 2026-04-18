@@ -128,12 +128,15 @@ export const PlatformDoctorCommand = cmd({
     // ── 5. macOS Permissions ──
     sp.start("Checking macOS permissions…")
     // Full Disk Access (needed for iMessage SQLite)
-    try {
-      const db = `${homedir()}/Library/Messages/chat.db`
-      execSync(`sqlite3 "${db}" "SELECT 1 FROM message LIMIT 1" 2>&1`, { encoding: "utf-8", timeout: 3000 })
-      allResults.push({ name: "Full Disk Access", ok: true, detail: "Messages.app readable" })
-    } catch {
-      allResults.push({ name: "Full Disk Access", ok: false, detail: "cannot read Messages.app", hint: "System Settings → Privacy → Full Disk Access" })
+    {
+      const { isAvailable } = await import("../lib/imessage")
+      const ok = isAvailable()
+      allResults.push({
+        name: "Full Disk Access",
+        ok,
+        detail: ok ? "Messages.app readable" : "cannot read Messages.app",
+        hint: ok ? undefined : "System Settings → Privacy → Full Disk Access",
+      })
     }
 
     // Contacts access (needed for address book matching)
