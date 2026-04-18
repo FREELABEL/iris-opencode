@@ -864,13 +864,74 @@ const ComponentRegistryCmd = cmd({
 })
 
 // ============================================================================
+// QR Code — generate short URL + QR for any page
+// ============================================================================
+
+const QrCmd = cmd({
+  command: "qr <slug>",
+  describe: "get short URL + QR code for a page",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true })
+      .option("size", { type: "number", default: 400, describe: "QR image size in pixels" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  QR Code: ${args.slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Generating short URL + QR…")
+    try {
+      const { FL_API } = await import("./iris-api")
+      const res = await irisFetch(`/api/v1/pages/${encodeURIComponent(String(args.slug))}/short-url`, {
+        method: "POST",
+        body: JSON.stringify({ size: args.size }),
+      }, FL_API)
+
+      if (!res.ok) {
+        const err = await res.text().catch(() => "")
+        sp.stop("Failed")
+        prompts.log.error(`Failed: ${err || `HTTP ${res.status}`}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const data = ((await res.json()) as any)?.data ?? {}
+      sp.stop(success("Ready"))
+
+      if (args.json) {
+        console.log(JSON.stringify(data, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      console.log()
+      console.log(`  ${bold("Page")}:       ${publicUrl(String(args.slug))}`)
+      console.log(`  ${bold("Short URL")}: ${highlight(data.short_url)}`)
+      console.log(`  ${bold("QR Image")}:  ${dim(data.qr_url)}`)
+      console.log(`  ${bold("QR Download")}: ${dim(data.qr_download)}`)
+      console.log()
+      prompts.log.info(`Open QR in browser: ${dim(data.qr_url)}`)
+      prompts.log.info(`Download PNG:       ${dim(data.qr_download)}`)
+
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp.stop("Error")
+      prompts.log.error(e.message ?? String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
 export const PlatformPagesCommand = cmd({
   command: "pages",
   aliases: ["genesis"],
-  describe: "manage composable pages — list, view, get/set, pull/push/diff, publish, versions",
+  describe: "manage composable pages — list, view, get/set, pull/push/diff, publish, versions, qr",
   builder: (y) =>
     y
       .command(ListCmd)
@@ -888,6 +949,7 @@ export const PlatformPagesCommand = cmd({
       .command(ComponentRegistryCmd)
       .command(VersionsCmd)
       .command(RollbackCmd)
+      .command(QrCmd)
       .demandCommand(),
   async handler() {},
 })
