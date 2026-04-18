@@ -920,7 +920,8 @@ const TicketsPushCommand = cmd({
     yargs
       .positional("event-id", { describe: "event ID", type: "number", demandOption: true })
       .option("file", { alias: "f", describe: "local JSON file path", type: "string" })
-      .option("dry-run", { describe: "show what would change without applying", type: "boolean", default: false }),
+      .option("dry-run", { describe: "show what would change without applying", type: "boolean", default: false })
+      .option("force", { alias: "y", describe: "skip confirmation prompt (for automation)", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Push Tickets — Event #${args["event-id"]}`)
@@ -1030,9 +1031,11 @@ const TicketsPushCommand = cmd({
         return
       }
 
-      // 5. Confirm and apply
-      const confirmed = await prompts.confirm({ message: "Apply these changes?" })
-      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+      // 5. Confirm and apply (skip with --force for automation)
+      if (!args.force) {
+        const confirmed = await prompts.confirm({ message: "Apply these changes?" })
+        if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+      }
 
       const applySpinner = prompts.spinner()
       applySpinner.start("Applying…")
