@@ -418,9 +418,11 @@ const DashboardCmd = cmd({
     if (urls.public) console.log(`  ${bold("Public:")}  ${success(urls.public)}  ${dim("(works anywhere)")}`)
     console.log()
 
+    // Open best available URL — prefer public > phone > local
+    const openUrl = urls.public || urls.phone || urls.local
     try {
       const { exec } = await import("child_process")
-      exec(`open "${urls.local}"`)
+      exec(`open "${openUrl}"`)
       console.log(`  ${success("✓")} Opened in browser`)
     } catch {}
   },
