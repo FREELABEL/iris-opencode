@@ -73,6 +73,7 @@ import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
 import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
 import { PlatformContractsCommand } from "./cli/cmd/platform-contracts"
 import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
+import { PlatformDomainsCommand } from "./cli/cmd/platform-domains"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
@@ -236,6 +237,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformProposalsCommand))
   .command(reg(PlatformContractsCommand))
   .command(reg(PlatformPagesCommand))
+  .command(reg(PlatformDomainsCommand))
   .command(reg(PlatformPagesBatchCommand))
   .command(reg(PlatformPartialsCommand))
   .command(reg(PlatformCloudUploadCommand))

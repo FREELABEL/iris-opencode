@@ -97,6 +97,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "how-to": "knowledge",
 
   // Pages & Publishing
+  domains: "pages",
   pages: "pages",
   "pages:batch": "pages",
   partials: "pages",
