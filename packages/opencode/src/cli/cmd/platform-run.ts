@@ -61,6 +61,8 @@ const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string 
   "google-calendar": [
     { name: "get_events", description: "Get calendar events (max_results, time_min, time_max)" },
     { name: "create_event", description: "Create a calendar event" },
+    { name: "update_event", description: "Update an event (event_id, title, start_time, end_time, description, location)" },
+    { name: "delete_event", description: "Delete an event (event_id)" },
   ],
   "slack": [
     { name: "send_message", description: "Send a message to a channel (channel, text)" },
