@@ -1628,7 +1628,7 @@ const LeadsPulseCommand = cmd({
           const activeSubs = subs.filter((sub: any) => sub.status === "active" || sub.status === "trialing")
           if (activeSubs.length > 0) {
             for (const sub of activeSubs) {
-              const amt = sub.amount ? `$${(sub.amount / 100).toFixed(2)}` : sub.plan_name ?? "active"
+              const amt = sub.amount ? `$${Number(sub.amount).toFixed(2)}` : sub.plan_name ?? "active"
               const interval = sub.interval ? `/${sub.interval}` : ""
               const nextBill = sub.current_period_end ? dim(` · next: ${sub.current_period_end}`) : ""
               printKV("  Subscription", `${success(amt + interval)}${nextBill}`)
