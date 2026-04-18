@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { ProductionCommand } from "./platform-events-production"
 
 // ============================================================================
 // Sync helpers
@@ -1668,6 +1669,7 @@ export const PlatformEventsCommand = cmd({
       // Production QA
       .command(PreflightCommand)
       .command(AuditCommand)
+      .command(ProductionCommand)
       .demandCommand(),
   async handler() {},
 })
