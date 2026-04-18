@@ -1289,12 +1289,337 @@ const TicketCheckoutCommand = cmd({
 })
 
 // ============================================================================
+// Preflight — live system checks before going live
+// ============================================================================
+
+const BRIDGE = "http://localhost:3200"
+
+interface PCheck { name: string; ok: boolean; detail?: string; hint?: string; category: string }
+
+const PreflightCommand = cmd({
+  command: "preflight <event-id>",
+  aliases: ["pre", "go-check"],
+  describe: "production readiness check — verify OBS, stream, tickets, bridge before going live",
+  builder: (y) =>
+    y.positional("event-id", { type: "number", demandOption: true })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Event #${args["event-id"]} — Preflight Check`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Loading event…")
+
+    // Fetch event data
+    const eventRes = await irisFetch(`/api/v1/events/${args["event-id"]}`)
+    if (!eventRes.ok) { await handleApiError(eventRes, "Get event"); sp.stop("Failed", 1); prompts.outro("Done"); return }
+    const event = ((await eventRes.json()) as any)?.data ?? {}
+    sp.stop(bold(event.title || `Event #${args["event-id"]}`))
+
+    // Fetch sub-resources in parallel
+    const [stagesRes, ticketsRes, vendorsRes] = await Promise.all([
+      irisFetch(`/api/v1/events/${args["event-id"]}/stages`).catch(() => null),
+      irisFetch(`/api/v1/events/${args["event-id"]}/tickets`).catch(() => null),
+      irisFetch(`/api/v1/events/${args["event-id"]}/vendors`).catch(() => null),
+    ])
+    const stages: any[] = stagesRes?.ok ? ((await stagesRes.json()) as any)?.data ?? [] : []
+    const tickets: any[] = ticketsRes?.ok ? ((await ticketsRes.json()) as any)?.data ?? [] : []
+    const vendors: any[] = vendorsRes?.ok ? ((await vendorsRes.json()) as any)?.data ?? [] : []
+
+    sp.start("Running checks…")
+
+    const checks: PCheck[] = []
+
+    // ── Production checks (OBS + Bridge) ──
+    let obsConnected = false
+    let obsScenes: string[] = []
+    let obsStreamActive = false
+    let obsRecordActive = false
+    let obsInputs: any[] = []
+
+    try {
+      const health = await fetch(`${BRIDGE}/health`, { signal: AbortSignal.timeout(3000) }).then(r => r.json())
+      checks.push({ name: "IRIS Bridge", ok: true, detail: "running", category: "Production" })
+
+      const obs = health?.messaging?.obs ?? health?.obs ?? {}
+      obsConnected = obs?.status === "running"
+      checks.push({
+        name: "OBS connected",
+        ok: obsConnected,
+        detail: obsConnected ? obs.host : "not connected",
+        hint: obsConnected ? undefined : "iris obs connect",
+        category: "Production",
+      })
+    } catch {
+      checks.push({ name: "IRIS Bridge", ok: false, hint: "iris hive start", category: "Production" })
+      checks.push({ name: "OBS connected", ok: false, hint: "start bridge first", category: "Production" })
+    }
+
+    if (obsConnected) {
+      try {
+        const scenes = await fetch(`${BRIDGE}/api/obs/scenes`, { signal: AbortSignal.timeout(3000) }).then(r => r.json())
+        obsScenes = (scenes.scenes || []).map((s: any) => s.name)
+        const matched = stages.filter(s => obsScenes.some(os => os.toLowerCase().includes(s.title?.toLowerCase() || "___")))
+        checks.push({
+          name: "Scenes match stages",
+          ok: matched.length > 0 || stages.length === 0,
+          detail: `${obsScenes.length} scenes, ${matched.length}/${stages.length} stages matched`,
+          hint: matched.length === 0 && stages.length > 0 ? "iris obs scenes — map stages to OBS scenes" : undefined,
+          category: "Production",
+        })
+        checks.push({ name: "Current scene", ok: true, detail: scenes.current || "?", category: "Production" })
+      } catch {}
+
+      try {
+        const stream = await fetch(`${BRIDGE}/api/obs/stream/status`, { signal: AbortSignal.timeout(3000) }).then(r => r.json())
+        obsStreamActive = stream.active
+        checks.push({
+          name: "Streaming",
+          ok: true,
+          detail: stream.active ? `LIVE — ${stream.timecode}` : "not streaming (ready)",
+          category: "Production",
+        })
+      } catch {}
+
+      try {
+        const rec = await fetch(`${BRIDGE}/api/obs/record/status`, { signal: AbortSignal.timeout(3000) }).then(r => r.json())
+        obsRecordActive = rec.active
+        checks.push({
+          name: "Recording",
+          ok: true,
+          detail: rec.active ? `recording — ${rec.timecode}` : "not recording (ready)",
+          category: "Production",
+        })
+      } catch {}
+
+      try {
+        obsInputs = await fetch(`${BRIDGE}/api/obs/inputs`, { signal: AbortSignal.timeout(3000) }).then(r => r.json())
+        const cameras = obsInputs.filter((i: any) => i.kind?.includes("capture") && !i.kind?.includes("audio") && !i.kind?.includes("screen"))
+        const mics = obsInputs.filter((i: any) => i.kind?.includes("audio"))
+        checks.push({ name: "Cameras detected", ok: cameras.length > 0, detail: `${cameras.length} camera(s)`, category: "Production" })
+        checks.push({ name: "Audio inputs", ok: mics.length > 0, detail: `${mics.length} mic(s)`, category: "Production" })
+      } catch {}
+    }
+
+    // ── Tickets ──
+    checks.push({
+      name: "Tickets created",
+      ok: tickets.length > 0,
+      detail: tickets.length > 0 ? `${tickets.length} tier(s): ${tickets.map((t: any) => `$${t.price}`).join(" / ")}` : "none",
+      hint: tickets.length === 0 ? `iris events ticket-create ${args["event-id"]}` : undefined,
+      category: "Tickets",
+    })
+
+    const onSale = tickets.filter((t: any) => t.status === "active" && t.is_visible)
+    checks.push({
+      name: "Tickets on sale",
+      ok: onSale.length > 0,
+      detail: `${onSale.length}/${tickets.length} on sale`,
+      hint: onSale.length === 0 ? "activate tickets in admin" : undefined,
+      category: "Tickets",
+    })
+
+    // Check checkout URLs
+    for (const t of tickets.slice(0, 3)) {
+      if (t.checkout_url) {
+        try {
+          const r = await fetch(t.checkout_url, { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(5000) })
+          checks.push({ name: `Checkout: ${t.title}`, ok: r.status < 400, detail: `${r.status}`, category: "Tickets" })
+        } catch {
+          checks.push({ name: `Checkout: ${t.title}`, ok: false, detail: "unreachable", category: "Tickets" })
+        }
+      }
+    }
+
+    // ── Content ──
+    const slug = event.slug || event.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-")
+    if (slug) {
+      try {
+        const pageRes = await fetch(`https://heyiris.io/p/${slug}`, { method: "HEAD", signal: AbortSignal.timeout(5000) })
+        checks.push({ name: "Event page", ok: pageRes.status === 200, detail: pageRes.status === 200 ? `heyiris.io/p/${slug}` : `HTTP ${pageRes.status}`, hint: pageRes.status !== 200 ? `iris pages create --slug=${slug}` : undefined, category: "Content" })
+      } catch {
+        checks.push({ name: "Event page", ok: false, hint: `iris pages create --slug=${slug}`, category: "Content" })
+      }
+    }
+
+    // ── Logistics ──
+    checks.push({
+      name: "Stages defined",
+      ok: stages.length > 0,
+      detail: `${stages.length} stage(s)`,
+      hint: stages.length === 0 ? `iris events stage-create ${args["event-id"]}` : undefined,
+      category: "Logistics",
+    })
+    checks.push({
+      name: "Vendors confirmed",
+      ok: vendors.length > 0,
+      detail: `${vendors.length} vendor(s)`,
+      hint: vendors.length === 0 ? `iris events vendor-create ${args["event-id"]}` : undefined,
+      category: "Logistics",
+    })
+    checks.push({
+      name: "Venue set",
+      ok: !!(event.venue_name && event.city),
+      detail: event.venue_name ? `${event.venue_name}, ${event.city}` : "missing",
+      hint: !event.venue_name ? `iris events update ${args["event-id"]} --venue="..."` : undefined,
+      category: "Logistics",
+    })
+
+    sp.stop("Done")
+
+    // ── Render ──
+    if (args.json) {
+      console.log(JSON.stringify(checks, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    const categories = [...new Set(checks.map(c => c.category))]
+    const passing = checks.filter(c => c.ok).length
+    const total = checks.length
+    const pct = Math.round((passing / total) * 100)
+
+    for (const cat of categories) {
+      const catChecks = checks.filter(c => c.category === cat)
+      const catPass = catChecks.filter(c => c.ok).length
+      console.log()
+      console.log(`  ${bold(cat)}  ${dim(`(${catPass}/${catChecks.length})`)}`)
+      for (const c of catChecks) {
+        const icon = c.ok ? success("✓") : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+        const detail = c.detail ? dim(` ${c.detail}`) : ""
+        const hint = (!c.ok && c.hint) ? `  ${dim(`→ ${c.hint}`)}` : ""
+        console.log(`  ${icon} ${c.name.padEnd(22)}${detail}${hint}`)
+      }
+    }
+
+    printDivider()
+    const color = pct >= 80 ? success : pct >= 50 ? (s: string) => `${UI.Style.TEXT_WARNING}${s}${UI.Style.TEXT_NORMAL}` : (s: string) => `${UI.Style.TEXT_DANGER}${s}${UI.Style.TEXT_NORMAL}`
+    console.log(`  Readiness: ${color(`${pct}%`)} (${passing}/${total})`)
+
+    if (pct < 100) process.exitCode = 1
+    prompts.outro("Done")
+  },
+})
+
+// ============================================================================
+// Audit — data completeness + professional quality checks
+// ============================================================================
+
+const AuditCommand = cmd({
+  command: "audit <event-id>",
+  aliases: ["qa", "check"],
+  describe: "data completeness audit — check all fields, stages, tickets, staff, content quality",
+  builder: (y) =>
+    y.positional("event-id", { type: "number", demandOption: true })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Event #${args["event-id"]} — Audit`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Loading event…")
+
+    const eventRes = await irisFetch(`/api/v1/events/${args["event-id"]}`)
+    if (!eventRes.ok) { await handleApiError(eventRes, "Get event"); sp.stop("Failed", 1); prompts.outro("Done"); return }
+    const event = ((await eventRes.json()) as any)?.data ?? {}
+
+    const [stagesRes, ticketsRes, vendorsRes] = await Promise.all([
+      irisFetch(`/api/v1/events/${args["event-id"]}/stages`).catch(() => null),
+      irisFetch(`/api/v1/events/${args["event-id"]}/tickets`).catch(() => null),
+      irisFetch(`/api/v1/events/${args["event-id"]}/vendors`).catch(() => null),
+    ])
+    const stages: any[] = stagesRes?.ok ? ((await stagesRes.json()) as any)?.data ?? [] : []
+    const tickets: any[] = ticketsRes?.ok ? ((await ticketsRes.json()) as any)?.data ?? [] : []
+    const vendors: any[] = vendorsRes?.ok ? ((await vendorsRes.json()) as any)?.data ?? [] : []
+
+    sp.stop(bold(event.title || `Event #${args["event-id"]}`))
+
+    const checks: PCheck[] = []
+    const eid = args["event-id"]
+
+    // ── Event Details ──
+    checks.push({ name: "Title", ok: !!event.title, detail: event.title || "missing", hint: `iris events update ${eid} --title="..."`, category: "Details" })
+    checks.push({ name: "Description", ok: !!(event.description && event.description.length > 20), detail: event.description ? `${event.description.length} chars` : "missing", hint: `iris events update ${eid} --description="..."`, category: "Details" })
+    checks.push({ name: "Date set", ok: !!event.start_date, detail: event.start_date || "missing", hint: `iris events update ${eid} --date=YYYY-MM-DD`, category: "Details" })
+    checks.push({ name: "Time set", ok: !!event.start_time, detail: event.start_time || "missing", category: "Details" })
+    checks.push({ name: "Venue", ok: !!event.venue_name, detail: event.venue_name || "missing", hint: `iris events update ${eid} --venue="..."`, category: "Details" })
+    checks.push({ name: "Address", ok: !!(event.city && event.state), detail: event.city ? `${event.city}, ${event.state}` : "missing", category: "Details" })
+    checks.push({ name: "Photo/banner", ok: !!event.photo, detail: event.photo ? "set" : "missing", category: "Details" })
+
+    // ── Stages & Lineup ──
+    checks.push({ name: "Stages defined", ok: stages.length > 0, detail: `${stages.length} stage(s)`, hint: `iris events stage-create ${eid}`, category: "Stages & Lineup" })
+    const stagesWithSetTimes = stages.filter((s: any) => (s.set_times?.length || s.event_stage_set_times?.length || 0) > 0)
+    checks.push({ name: "Performers scheduled", ok: stagesWithSetTimes.length > 0 || stages.length === 0, detail: `${stagesWithSetTimes.length}/${stages.length} stages have lineup`, category: "Stages & Lineup" })
+
+    // ── Tickets & Sales ──
+    checks.push({ name: "Tickets created", ok: tickets.length > 0, detail: `${tickets.length} tier(s)`, hint: "create ticket tiers", category: "Tickets & Sales" })
+    const priced = tickets.filter((t: any) => t.price && parseFloat(t.price) > 0)
+    checks.push({ name: "All priced", ok: priced.length === tickets.length && tickets.length > 0, detail: priced.length > 0 ? priced.map((t: any) => `${t.title}: $${t.price}`).join(", ") : "none", category: "Tickets & Sales" })
+    const active = tickets.filter((t: any) => t.status === "active")
+    checks.push({ name: "Tickets active", ok: active.length > 0, detail: `${active.length}/${tickets.length} active`, category: "Tickets & Sales" })
+    const withCheckout = tickets.filter((t: any) => t.checkout_url)
+    checks.push({ name: "Checkout URLs", ok: withCheckout.length === tickets.length && tickets.length > 0, detail: `${withCheckout.length}/${tickets.length} have URLs`, hint: `iris events ticket-checkout ${eid}`, category: "Tickets & Sales" })
+    const withQR = tickets.filter((t: any) => t.qr_url)
+    checks.push({ name: "QR codes", ok: withQR.length > 0, detail: `${withQR.length}/${tickets.length} have QR`, hint: "QR auto-generated from checkout_url", category: "Tickets & Sales" })
+
+    // ── Vendors & Partners ──
+    checks.push({ name: "Vendors listed", ok: vendors.length > 0, detail: `${vendors.length} vendor(s)`, hint: `iris events vendor-create ${eid}`, category: "Vendors & Partners" })
+
+    // ── Content & Marketing ──
+    const slug = event.slug || event.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-")
+    if (slug) {
+      try {
+        const pageRes = await fetch(`https://heyiris.io/p/${slug}`, { method: "HEAD", signal: AbortSignal.timeout(5000) })
+        checks.push({ name: "Landing page", ok: pageRes.status === 200, detail: pageRes.status === 200 ? `heyiris.io/p/${slug}` : "not found", hint: `iris pages create --slug=${slug}`, category: "Content" })
+      } catch {
+        checks.push({ name: "Landing page", ok: false, hint: `iris pages create --slug=${slug}`, category: "Content" })
+      }
+    }
+    checks.push({ name: "Ticket URL on event", ok: !!event.purchase_ticket_url, detail: event.purchase_ticket_url ? "set" : "missing", category: "Content" })
+
+    // ── Render ──
+    if (args.json) {
+      console.log(JSON.stringify(checks, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    const categories = [...new Set(checks.map(c => c.category))]
+    const passing = checks.filter(c => c.ok).length
+    const total = checks.length
+    const pct = Math.round((passing / total) * 100)
+
+    for (const cat of categories) {
+      const catChecks = checks.filter(c => c.category === cat)
+      const catPass = catChecks.filter(c => c.ok).length
+      console.log()
+      console.log(`  ${bold(cat)}  ${dim(`(${catPass}/${catChecks.length})`)}`)
+      for (const c of catChecks) {
+        const icon = c.ok ? success("✓") : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+        const detail = c.detail ? dim(` ${c.detail}`) : ""
+        const hint = (!c.ok && c.hint) ? `  ${dim(`→ ${c.hint}`)}` : ""
+        console.log(`  ${icon} ${c.name.padEnd(22)}${detail}${hint}`)
+      }
+    }
+
+    printDivider()
+    const color = pct >= 80 ? success : pct >= 50 ? (s: string) => `${UI.Style.TEXT_WARNING}${s}${UI.Style.TEXT_NORMAL}` : (s: string) => `${UI.Style.TEXT_DANGER}${s}${UI.Style.TEXT_NORMAL}`
+    console.log(`  Completeness: ${color(`${pct}%`)} (${passing}/${total})`)
+
+    if (pct < 100) process.exitCode = 1
+    prompts.outro("Done")
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
 export const PlatformEventsCommand = cmd({
   command: "events",
-  describe: "manage events, stages, vendors, tickets — pull, push, diff, CRUD",
+  describe: "manage events, stages, vendors, tickets — pull, push, diff, CRUD, preflight, audit",
   builder: (yargs) =>
     yargs
       .command(ListCommand)
@@ -1319,6 +1644,9 @@ export const PlatformEventsCommand = cmd({
       .command(TicketsPushCommand)
       .command(TicketsDiffCommand)
       .command(TicketCheckoutCommand)
+      // Production QA
+      .command(PreflightCommand)
+      .command(AuditCommand)
       .demandCommand(),
   async handler() {},
 })
