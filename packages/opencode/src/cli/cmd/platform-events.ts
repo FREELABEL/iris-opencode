@@ -384,7 +384,8 @@ const PushCommand = cmd({
         }
       }
       // Merge extra fields into metadata so they're preserved
-      if (Object.keys(extraMetadata).length > 0) {
+      const metaKeys = Object.keys(extraMetadata)
+      if (metaKeys.length > 0) {
         payload.metadata = { ...(entity.metadata ?? {}), ...extraMetadata }
       }
 
@@ -397,6 +398,11 @@ const PushCommand = cmd({
       printDivider()
       printKV("ID", args.id)
       printKV("From", filepath)
+      // Warn about fields saved to metadata (not schema-validated)
+      if (metaKeys.length > 0) {
+        console.log(`  ${dim("Saved to metadata:")} ${metaKeys.join(", ")}`)
+        console.log(`  ${dim("These fields are preserved but not schema-validated.")}`)
+      }
       printDivider()
 
       prompts.outro(dim(`iris events diff ${args.id}`))
