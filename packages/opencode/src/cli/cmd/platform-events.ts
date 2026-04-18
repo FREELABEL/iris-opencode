@@ -364,17 +364,29 @@ const PushCommand = cmd({
       spinner.start(`Pushing ${basename(filepath)}…`)
 
       const entity = JSON.parse(readFileSync(filepath, "utf-8"))
-      const payload: Record<string, unknown> = {
-        title: entity.title, description: entity.description,
-        start_date: entity.start_date, start_time: entity.start_time,
-        end_date: entity.end_date, end_time: entity.end_time,
-        venue_name: entity.venue_name, street: entity.street,
-        city: entity.city, state: entity.state, zip: entity.zip,
-        pricing: entity.pricing, purchase_ticket_url: entity.purchase_ticket_url,
-        tags: entity.tags, event_type: entity.event_type, status: entity.status,
-        url: entity.url, photo: entity.photo,
+      // Pass-through: send all fields. API validates known fields,
+      // unknown fields are saved to metadata so nothing is lost (#58785)
+      const READONLY = new Set(["id", "created_at", "updated_at", "creator", "tickets", "stages", "vendors", "staff", "bloq"])
+      const payload: Record<string, unknown> = {}
+      const extraMetadata: Record<string, unknown> = {}
+      const KNOWN_FIELDS = new Set([
+        "title", "description", "start_date", "start_time", "end_date", "end_time",
+        "venue_name", "street", "city", "state", "zip", "pricing",
+        "purchase_ticket_url", "tags", "event_type", "status", "url", "photo",
+        "metadata", "profile_id", "bloq_id",
+      ])
+      for (const [k, v] of Object.entries(entity)) {
+        if (READONLY.has(k) || v === undefined || v === null) continue
+        if (KNOWN_FIELDS.has(k)) {
+          payload[k] = v
+        } else {
+          extraMetadata[k] = v
+        }
       }
-      for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
+      // Merge extra fields into metadata so they're preserved
+      if (Object.keys(extraMetadata).length > 0) {
+        payload.metadata = { ...(entity.metadata ?? {}), ...extraMetadata }
+      }
 
       const res = await irisFetch(`/api/v1/events/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Push event")
