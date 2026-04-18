@@ -93,11 +93,26 @@ const ImessageSearchCommand = cmd({
         return
       }
 
+      // Resolve contact name from leads (#58888)
+      let contactName = "Them"
+      try {
+        const { irisFetch: _fetch } = await import("./iris-api")
+        const searchQ = digits || String(args.query)
+        const leadRes = await _fetch(`/api/v1/leads?search=${encodeURIComponent(searchQ)}&per_page=1`)
+        if (leadRes.ok) {
+          const leadData = (await leadRes.json()) as any
+          const leads = leadData?.data ?? []
+          if (Array.isArray(leads) && leads.length > 0) {
+            contactName = leads[0].name ?? leads[0].first_name ?? "Them"
+          }
+        }
+      } catch {}
+
       // Display in chronological order (oldest first)
       const reversed = [...messages].reverse()
       printDivider()
       for (const msg of reversed) {
-        const direction = msg.from_me ? bold("You →") : bold("← Them")
+        const direction = msg.from_me ? bold("You →") : bold(`← ${contactName}`)
         const dateStr = dim(msg.date)
         console.log(`  ${dateStr}  ${direction}  ${msg.text}`)
       }
@@ -252,9 +267,29 @@ const ImessageChatsCommand = cmd({
         return
       }
 
+      // Resolve phone numbers → lead names in bulk (#58888)
+      const phoneMap = new Map<string, string>()
+      try {
+        const { irisFetch: _fetch } = await import("./iris-api")
+        const phones = chats.filter(c => /^\+?\d{10,}$/.test(c.identifier.replace(/[^+\d]/g, "")))
+        for (const c of phones.slice(0, 10)) {
+          const digits = c.identifier.replace(/[^0-9]/g, "").slice(-10)
+          const r = await _fetch(`/api/v1/leads?search=${digits}&per_page=1`)
+          if (r.ok) {
+            const d = (await r.json()) as any
+            const leads = d?.data ?? []
+            if (Array.isArray(leads) && leads.length > 0) {
+              phoneMap.set(c.identifier, leads[0].name ?? leads[0].first_name ?? c.identifier)
+            }
+          }
+        }
+      } catch {}
+
       printDivider()
       for (const chat of chats) {
-        console.log(`  ${bold(chat.identifier)}  ${dim(`${chat.message_count} msgs`)}  ${dim(chat.last_message)}`)
+        const name = phoneMap.get(chat.identifier)
+        const label = name ? `${bold(name)} ${dim(chat.identifier)}` : bold(chat.identifier)
+        console.log(`  ${label}  ${dim(`${chat.message_count} msgs`)}  ${dim(chat.last_message)}`)
       }
       printDivider()
       prompts.outro(`${success("✓")} ${chats.length} conversation${chats.length === 1 ? "" : "s"}`)
