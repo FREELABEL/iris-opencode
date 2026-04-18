@@ -65,10 +65,16 @@ const OverviewCmd = cmd({
   describe: "full production dashboard — readiness, runsheet, tickets, staff, budget",
   builder: (y) => y,
   async handler(args: any) {
-    const eventId = args._parentEventId
+    const eventId = args["event-id"] ?? args._parentEventId ?? args.eventId
     UI.empty()
     prompts.intro(`◈  Production: Event #${eventId}`)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    if (!eventId) {
+      prompts.log.error("No event ID. Usage: iris events production <event-id> overview")
+      prompts.outro("Done")
+      return
+    }
 
     const sp = prompts.spinner()
     sp.start("Loading…")
@@ -191,7 +197,7 @@ const RunsheetCmd = cmd({
       .option("done", { type: "number", describe: "mark item # as done" })
       .option("json", { type: "boolean", default: false }),
   async handler(args: any) {
-    const eventId = args._parentEventId
+    const eventId = args["event-id"] ?? args._parentEventId ?? args.eventId
     UI.empty()
     prompts.intro(`◈  Runsheet — Event #${eventId}`)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
@@ -317,7 +323,7 @@ const ChecklistCmd = cmd({
       .option("undo", { type: "number", describe: "mark item # as not done" })
       .option("json", { type: "boolean", default: false }),
   async handler(args: any) {
-    const eventId = args._parentEventId
+    const eventId = args["event-id"] ?? args._parentEventId ?? args.eventId
     UI.empty()
     prompts.intro(`◈  Checklist — Event #${eventId}`)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
@@ -416,7 +422,7 @@ const BudgetCmd = cmd({
       .option("add-expense", { type: "string", describe: 'add expense: "PA rental 200 pending"' })
       .option("json", { type: "boolean", default: false }),
   async handler(args: any) {
-    const eventId = args._parentEventId
+    const eventId = args["event-id"] ?? args._parentEventId ?? args.eventId
     UI.empty()
     prompts.intro(`◈  Budget — Event #${eventId}`)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
@@ -499,14 +505,16 @@ const BudgetCmd = cmd({
 // Root — registered as subcommand of `iris events`
 // ============================================================================
 
+// Shared event ID — set by parent command, read by subcommands
+let _productionEventId = 0
+
 export const ProductionCommand = cmd({
-  command: "production <event-id>",
+  command: "production",
   aliases: ["prod"],
   describe: "event production management — runsheet, checklist, budget, overview",
-  builder: (y) =>
+  builder: (y: any) =>
     y
-      .positional("event-id", { type: "number", demandOption: true })
-      .middleware([(argv: any) => { argv._parentEventId = argv["event-id"] }])
+      .option("event-id", { type: "number", alias: "e", demandOption: true, describe: "event ID" })
       .command(OverviewCmd)
       .command(RunsheetCmd)
       .command(ChecklistCmd)
@@ -514,3 +522,8 @@ export const ProductionCommand = cmd({
       .demandCommand(1, "specify: overview, runsheet, checklist, budget"),
   async handler() {},
 })
+
+// Re-export for subcommand access
+export function getProductionEventId(args: any): number {
+  return args["event-id"] ?? _productionEventId ?? 0
+}
