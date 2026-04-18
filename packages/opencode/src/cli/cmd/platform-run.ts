@@ -12,6 +12,7 @@ import {
   success,
   highlight,
   IRIS_API,
+  FL_API,
   PLATFORM_URLS,
 } from "./iris-api"
 import { exec } from "child_process"
@@ -276,6 +277,24 @@ export async function executeIntegrationCall(
   const normalized = SLUG_ALIASES[type] ?? type
   const userId = await requireUserId()
   if (!userId) throw new Error("user_id required")
+
+  // Canva uses native service on fl-api (Composio has 0 actions)
+  if (normalized === "canva") {
+    const res = await irisFetch(
+      `/api/v1/integrations/execute`,
+      {
+        method: "POST",
+        body: JSON.stringify({ integration: "canva", action: fn, parameters: params }),
+      },
+      FL_API,
+    )
+    if (!res.ok) {
+      const text = await res.text().catch(() => "")
+      throw new Error(`HTTP ${res.status}: ${text}`)
+    }
+    return res.json()
+  }
+
   const res = await irisFetch(
     `/api/v1/users/${userId}/integrations/execute-direct?user_id=${userId}`,
     {
