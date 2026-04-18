@@ -1310,6 +1310,7 @@ const HiveScriptPushCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("file", { type: "string", describe: "local file path" })
+      .option("project", { alias: "p", type: "string", describe: "inject env vars from a hive project" })
       .option("persist", { type: "boolean", default: true, describe: "keep script on node after execution" })
       .option("args", { type: "array", string: true, default: [], describe: "arguments to pass to the script" }),
   async handler(args) {
@@ -1332,6 +1333,24 @@ const HiveScriptPushCommand = cmd({
     spinner.start(`Pushing ${bold(filename)} to node...`)
 
     try {
+      // #58002: Fetch project env vars if --project specified
+      let projectEnv: Record<string, string> = {}
+      if (args.project) {
+        try {
+          const userId = await requireUserId()
+          if (userId) {
+            const envRes = await hiveFetch(`/api/v6/nodes/projects/${args.project}/env?user_id=${userId}&include_values=true`)
+            if (envRes.ok) {
+              const envData = await envRes.json() as Record<string, unknown>
+              const envVals = envData.data as any
+              if (envVals && typeof envVals === "object" && !Array.isArray(envVals)) {
+                projectEnv = envVals
+              }
+            }
+          }
+        } catch {}
+      }
+
       const res = await fetch(`${BRIDGE_URL}/execute-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1340,6 +1359,7 @@ const HiveScriptPushCommand = cmd({
           content,
           persist: args.persist,
           args: args.args,
+          env: Object.keys(projectEnv).length > 0 ? projectEnv : undefined,
         }),
       })
 
@@ -1390,6 +1410,7 @@ const HiveScriptExecCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("filename", { type: "string", describe: "script name (in /scripts/)" })
+      .option("project", { alias: "p", type: "string", describe: "inject env vars from a hive project" })
       .option("args", { type: "array", string: true, default: [], describe: "arguments to pass" })
       .option("timeout", { type: "number", default: 30000, describe: "timeout in ms" }),
   async handler(args) {
@@ -1418,6 +1439,25 @@ const HiveScriptExecCommand = cmd({
         return
       }
 
+      // #58002: Fetch project env vars if --project specified
+      let projectEnv: Record<string, string> = {}
+      if (args.project) {
+        try {
+          const userId = await requireUserId()
+          if (userId) {
+            const envRes = await hiveFetch(`/api/v6/nodes/projects/${args.project}/env?user_id=${userId}&include_values=true`)
+            if (envRes.ok) {
+              const envData = await envRes.json() as Record<string, unknown>
+              // Server returns { data: { KEY: "value", ... } } or { data: ["KEY1", "KEY2"] }
+              const envVals = envData.data as any
+              if (envVals && typeof envVals === "object" && !Array.isArray(envVals)) {
+                projectEnv = envVals
+              }
+            }
+          }
+        } catch { /* non-fatal — script still runs without env */ }
+      }
+
       const res = await fetch(`${BRIDGE_URL}/execute-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1427,6 +1467,7 @@ const HiveScriptExecCommand = cmd({
           persist: true,
           args: args.args,
           timeout_ms: args.timeout,
+          env: Object.keys(projectEnv).length > 0 ? projectEnv : undefined,
         }),
       })
 
