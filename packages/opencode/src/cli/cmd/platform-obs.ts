@@ -301,42 +301,128 @@ const DashboardCmd = cmd({
   builder: (y) =>
     y
       .positional("event-id", { type: "number", describe: "event ID for timeline" })
-      .option("phone", { type: "boolean", default: false, describe: "show the phone URL instead" }),
+      .option("phone", { type: "boolean", default: false, describe: "show the local network URL (same WiFi)" })
+      .option("public", { type: "boolean", default: false, describe: "show the public ngrok URL (works anywhere)" })
+      .option("share", { type: "string", describe: "send the URL to a phone number or email via iMessage" }),
   async handler(args) {
     const eventId = args["event-id"]
-    const baseUrl = `${BRIDGE}/obs-dashboard`
-    const url = eventId ? `${baseUrl}?event=${eventId}` : baseUrl
+    const qs = eventId ? `?event=${eventId}` : ""
 
-    if (args.phone) {
-      // Get local IP for phone access
-      try {
-        const { networkInterfaces } = await import("os")
-        const nets = networkInterfaces()
-        for (const name of Object.keys(nets)) {
-          for (const net of nets[name] ?? []) {
-            if (net.family === "IPv4" && !net.internal) {
-              const phoneUrl = `http://${net.address}:3200/obs-dashboard${eventId ? `?event=${eventId}` : ""}`
-              console.log()
-              console.log(`  ${bold("Phone URL:")} ${highlight(phoneUrl)}`)
-              console.log(`  ${dim("Open this on your phone (same WiFi)")}`)
-              console.log()
-              return
-            }
+    // Detect all available URLs
+    const urls: { local: string; phone?: string; public?: string } = {
+      local: `${BRIDGE}/obs-dashboard${qs}`,
+    }
+
+    // Local network IP
+    try {
+      const { networkInterfaces } = await import("os")
+      const nets = networkInterfaces()
+      for (const name of Object.keys(nets)) {
+        for (const net of nets[name] ?? []) {
+          if (net.family === "IPv4" && !net.internal) {
+            urls.phone = `http://${net.address}:3200/obs-dashboard${qs}`
+            break
           }
         }
-      } catch {}
-      console.log(`  ${dim("Could not detect local IP")}`)
+        if (urls.phone) break
+      }
+    } catch {}
+
+    // Ngrok public URL
+    try {
+      const res = await fetch("http://localhost:4040/api/tunnels", { signal: AbortSignal.timeout(2000) })
+      if (res.ok) {
+        const data = (await res.json()) as any
+        const tunnel = (data.tunnels ?? []).find((t: any) => t.public_url?.startsWith("https"))
+        if (tunnel) {
+          urls.public = `${tunnel.public_url}/obs-dashboard${qs}`
+        }
+      }
+    } catch {}
+
+    // --public: just print the public URL
+    if (args.public) {
+      if (urls.public) {
+        console.log()
+        console.log(`  ${bold("Public URL:")} ${highlight(urls.public)}`)
+        console.log(`  ${dim("Works from anywhere — share with anyone")}`)
+      } else {
+        console.log(`  ${dim("No ngrok tunnel detected. Start one:")} ngrok http 3200`)
+      }
+      console.log()
       return
     }
 
-    // Open in browser
+    // --phone: just print the LAN URL
+    if (args.phone) {
+      if (urls.phone) {
+        console.log()
+        console.log(`  ${bold("Phone URL:")} ${highlight(urls.phone)}`)
+        console.log(`  ${dim("Open on your phone (same WiFi)")}`)
+      } else {
+        console.log(`  ${dim("Could not detect local IP")}`)
+      }
+      console.log()
+      return
+    }
+
+    // --share: send via iMessage
+    if (args.share) {
+      const shareUrl = urls.public || urls.phone || urls.local
+      try {
+        const { execSync } = await import("child_process")
+        const handle = String(args.share)
+        const msg = `🎬 Stream Control Dashboard — open this link:\n\n${shareUrl}\n\nTap scenes to switch cameras. Timeline tab for run-of-show.`
+        execSync(`osascript -e 'tell application "Messages" to send "${msg.replace(/"/g, '\\"')}" to participant "${handle}" of (1st account whose service type = iMessage)'`, { timeout: 10000 })
+        console.log(`  ${success("✓")} Sent to ${handle}`)
+      } catch (e: any) {
+        console.log(`  ${dim("Failed to send:")} ${e.message?.slice(0, 80)}`)
+        console.log(`  ${bold("URL:")} ${highlight(shareUrl)}`)
+      }
+      return
+    }
+
+    // Auto-start ngrok if not running and ngrok is installed
+    if (!urls.public) {
+      try {
+        const { execSync, spawn } = await import("child_process")
+        const ngrokPath = execSync("which ngrok", { encoding: "utf-8" }).trim()
+        if (ngrokPath) {
+          const sp2 = prompts.spinner()
+          sp2.start("Starting ngrok tunnel…")
+          spawn(ngrokPath, ["http", "3200"], { detached: true, stdio: "ignore" }).unref()
+          // Wait for tunnel to come up
+          for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 1000))
+            try {
+              const res = await fetch("http://localhost:4040/api/tunnels", { signal: AbortSignal.timeout(1000) })
+              if (res.ok) {
+                const data = (await res.json()) as any
+                const tunnel = (data.tunnels ?? []).find((t: any) => t.public_url?.startsWith("https"))
+                if (tunnel) {
+                  urls.public = `${tunnel.public_url}/obs-dashboard${qs}`
+                  break
+                }
+              }
+            } catch {}
+          }
+          sp2.stop(urls.public ? success("Tunnel ready") : "Tunnel failed")
+        }
+      } catch {}
+    }
+
+    // Show all URLs
+    console.log()
+    console.log(`  ${bold("Local:")}   ${dim(urls.local)}`)
+    if (urls.phone) console.log(`  ${bold("Phone:")}   ${highlight(urls.phone)}  ${dim("(same WiFi)")}`)
+    if (urls.public) console.log(`  ${bold("Public:")}  ${success(urls.public)}  ${dim("(works anywhere)")}`)
+    console.log()
+
     try {
       const { exec } = await import("child_process")
-      exec(`open "${url}"`)
-      console.log(`  ${success("✓")} Dashboard opened: ${dim(url)}`)
-    } catch {
-      console.log(`  ${bold("URL:")} ${highlight(url)}`)
-    }
+      exec(`open "${urls.local}"`)
+      console.log(`  ${success("✓")} Opened in browser`)
+    } catch {}
   },
 })
 
