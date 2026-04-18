@@ -24,7 +24,8 @@ const ImessageSearchCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("query", { type: "string", demandOption: true, describe: "phone number (last 10 digits) or chat identifier" })
-      .option("days", { type: "number", default: 7, describe: "search last N days" })
+      .option("days", { type: "number", default: 30, describe: "search last N days" })
+      .option("since", { type: "string", describe: "search from date (YYYY-MM-DD)" })
       .option("limit", { type: "number", default: 50, describe: "max messages" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -52,7 +53,10 @@ const ImessageSearchCommand = cmd({
       ? `c.chat_identifier LIKE '%${digits.slice(-10)}%'`
       : `c.chat_identifier LIKE '%${args.query.replace(/'/g, "''")}%'`
 
-    const cutoffSeconds = args.days * 86400
+    // --since takes priority over --days (#58884)
+    const cutoffSeconds = args.since
+      ? Math.max(0, Math.floor((Date.now() - new Date(String(args.since)).getTime()) / 1000))
+      : (args.days as number) * 86400
     const sql = `
       SELECT
         m.rowid,
@@ -135,7 +139,10 @@ const ImessageReadCommand = cmd({
       ? `c.chat_identifier LIKE '%${digits.slice(-10)}%'`
       : `c.chat_identifier LIKE '%${args.query.replace(/'/g, "''")}%'`
 
-    const cutoffSeconds = args.days * 86400
+    // --since takes priority over --days (#58884)
+    const cutoffSeconds = args.since
+      ? Math.max(0, Math.floor((Date.now() - new Date(String(args.since)).getTime()) / 1000))
+      : (args.days as number) * 86400
     const sql = `
       SELECT
         m.rowid,
@@ -194,7 +201,8 @@ const ImessageChatsCommand = cmd({
   describe: "list recent iMessage conversations",
   builder: (yargs) =>
     yargs
-      .option("days", { type: "number", default: 7, describe: "recent conversations in last N days" })
+      .option("days", { type: "number", default: 30, describe: "recent conversations in last N days" })
+      .option("since", { type: "string", describe: "from date (YYYY-MM-DD)" })
       .option("limit", { type: "number", default: 50, describe: "max conversations" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -207,7 +215,10 @@ const ImessageChatsCommand = cmd({
       return
     }
 
-    const cutoffSeconds = args.days * 86400
+    // --since takes priority over --days (#58884)
+    const cutoffSeconds = args.since
+      ? Math.max(0, Math.floor((Date.now() - new Date(String(args.since)).getTime()) / 1000))
+      : (args.days as number) * 86400
     const sql = `
       SELECT
         c.chat_identifier,
