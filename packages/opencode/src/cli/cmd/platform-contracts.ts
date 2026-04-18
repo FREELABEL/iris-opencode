@@ -157,17 +157,16 @@ const ContractsTemplatesCommand = cmd({
   async handler(args) {
     if (!(await requireAuth())) return
 
-    const res = await irisFetch(`/api/v1/bloq-packages?type=contract_template`)
+    const res = await irisFetch(`/api/v1/atlas/contract-templates`)
     if (!(await handleApiError(res, "List templates"))) return
 
-    const result = await res.json().catch(() => ({}))
+    const result = (await res.json().catch(() => ({}))) as any
     const templates = result?.data ?? result ?? []
 
     if (args.json) { console.log(JSON.stringify(templates, null, 2)); return }
 
     if (!Array.isArray(templates) || templates.length === 0) {
       prompts.log.info("No contract templates found")
-      console.log(dim("Templates are created as service packages with type=contract_template"))
       return
     }
 
@@ -177,9 +176,10 @@ const ContractsTemplatesCommand = cmd({
 
     for (const tpl of templates) {
       const name = tpl.name ?? "Untitled"
-      const price = tpl.price ? `$${Number(tpl.price).toFixed(2)}` : dim("—")
-      console.log(`  ${highlight(`#${tpl.id}`)} ${name.padEnd(30)} ${price}`)
-      if (tpl.description) console.log(`     ${dim(tpl.description.slice(0, 60))}`)
+      const cat = dim(`[${tpl.category ?? "standard"}]`)
+      console.log(`  ${highlight(tpl.slug ?? `#${tpl.id}`)}  ${name}  ${cat}`)
+      if (tpl.description) console.log(`     ${dim(tpl.description.slice(0, 80))}`)
+      if (tpl.merge_fields?.length) console.log(`     ${dim(`fields: ${tpl.merge_fields.join(", ")}`)}`)
     }
 
     printDivider()

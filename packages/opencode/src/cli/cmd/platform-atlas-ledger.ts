@@ -89,12 +89,15 @@ const TxAddCommand = cmd({
   describe: "add a transaction",
   builder: (y) =>
     y
-      .option("type", { type: "string", demandOption: true, describe: "expense|revenue|transfer|journal" })
+      .option("type", { type: "string", demandOption: true, describe: "expense|revenue|transfer|journal|barter|credit" })
       .option("description", { type: "string", demandOption: true })
       .option("amount", { type: "number", demandOption: true, describe: "amount in dollars (converted to cents)" })
       .option("date", { type: "string", demandOption: true, describe: "YYYY-MM-DD" })
       .option("category", { type: "string" })
       .option("source", { type: "string", default: "manual" })
+      .option("lead-id", { type: "number", describe: "link to a lead for deal tracking" })
+      .option("counterparty", { type: "string", describe: "counterparty name (for barter/credit)" })
+      .option("fair-value", { type: "number", describe: "fair market value in dollars (for barter)" })
       .option("bloq", { type: "number" })
       .option("account-id", { type: "number" })
       .option("user-id", { type: "number" }),
@@ -111,6 +114,9 @@ const TxAddCommand = cmd({
       source: args.source ?? "manual",
     }
     if (args.category) body.category = args.category
+    if (args["lead-id"] != null) body.lead_id = args["lead-id"]
+    if (args.counterparty) body.counterparty_name = args.counterparty
+    if (args["fair-value"] != null) body.fair_value_cents = Math.round(Number(args["fair-value"]) * 100)
     if (args.bloq != null) body.bloq_id = args.bloq
     if (args["account-id"] != null) body.account_id = args["account-id"]
 
