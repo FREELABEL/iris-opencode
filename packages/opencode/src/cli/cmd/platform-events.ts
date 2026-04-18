@@ -33,7 +33,10 @@ function entityFilename(e: Record<string, unknown>): string {
 function findLocalFile(dir: string, id: number): string | undefined {
   if (!existsSync(dir)) return undefined
   const prefix = `${id}-`
-  const files = require("fs").readdirSync(dir).filter((f: string) => f.startsWith(prefix) && f.endsWith(".json"))
+  // Exclude tickets files — those are managed by tickets-pull/push
+  const files = require("fs").readdirSync(dir).filter((f: string) =>
+    f.startsWith(prefix) && f.endsWith(".json") && !f.includes("tickets")
+  )
   return files.length > 0 ? join(dir, files[0]) : undefined
 }
 
