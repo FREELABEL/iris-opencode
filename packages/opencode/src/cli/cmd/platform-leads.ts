@@ -361,6 +361,27 @@ const LeadsGetCommand = cmd({
       printKV("Bid", l.price_bid ? `$${l.price_bid}` : undefined)
       printKV("Created", l.created_at)
 
+      // #57686: Completeness score in leads get (same logic as pulse)
+      {
+        const gFields = [
+          { name: "email", has: !!l.email },
+          { name: "phone", has: !!l.phone },
+          { name: "company", has: !!l.company },
+          { name: "stage", has: !!l.stage },
+          { name: "source", has: !!(l.source ?? l.keywords?.source) },
+          { name: "bloq", has: Array.isArray(l.bloq_ids) ? l.bloq_ids.length > 0 : !!l.bloq_id },
+          { name: "notes", has: Array.isArray(l.notes) && l.notes.length > 0 },
+        ]
+        const gScore = Math.round((gFields.filter((f) => f.has).length / gFields.length) * 100)
+        const gMissing = gFields.filter((f) => !f.has).map((f) => f.name)
+        const gColor = gScore >= 80 ? success(`${gScore}%`) : gScore >= 50 ? `${UI.Style.TEXT_WARNING}${gScore}%${UI.Style.TEXT_NORMAL}` : `${UI.Style.TEXT_DANGER}${gScore}%${UI.Style.TEXT_NORMAL}`
+        if (gMissing.length > 0) {
+          printKV("Completeness", `${gColor}  ${dim(`missing: ${gMissing.join(", ")}`)}`)
+        } else {
+          printKV("Completeness", gColor)
+        }
+      }
+
       // Tags
       const tags: any[] = Array.isArray(l.tags) ? l.tags : []
       if (tags.length > 0) {
@@ -1483,12 +1504,31 @@ const LeadsPulseCommand = cmd({
           if (!seen.has(m.id)) { seen.add(m.id); duplicateLeadIds.push(m.id) }
         }
         if (duplicateLeadIds.length > 0) {
+          // #57685: Rank duplicates by data richness to suggest best master record
+          const uniqueDups = allMatches.filter((v: any, i: number, a: any[]) => a.findIndex((x: any) => x.id === v.id) === i)
+          const scoreLead = (l: any) => {
+            let s = 0
+            if (l.email) s += 2
+            if (l.phone) s += 2
+            if (l.company) s += 1
+            if (l.notes?.length) s += Math.min(l.notes.length, 5)
+            if (l.status === "Active" || l.status === "Converted" || l.status === "Won") s += 3
+            if (l.outreach_steps_count) s += 1
+            return s
+          }
+          // Score current lead vs duplicates to pick best master
+          const currentScore = scoreLead(lead)
+          const bestDup = uniqueDups.sort((a: any, b: any) => scoreLead(b) - scoreLead(a))[0]
+          const bestDupScore = bestDup ? scoreLead(bestDup) : 0
+          const masterId = bestDupScore > currentScore ? bestDup.id : leadId
+          const mergeId = masterId === leadId ? (bestDup?.id ?? duplicateLeadIds[0]) : leadId
+
           console.log()
           console.log(`  ${UI.Style.TEXT_WARNING}⚠ Possible duplicates${UI.Style.TEXT_NORMAL}  ${dim(`(${duplicateLeadIds.length})`)}`)
-          for (const m of allMatches.filter((v: any, i: number, a: any[]) => a.findIndex((x: any) => x.id === v.id) === i).slice(0, 3)) {
+          for (const m of uniqueDups.slice(0, 3)) {
             console.log(`    ${dim(`#${m.id}`)}  ${m.name ?? "Unknown"}  ${dim(m.email ?? "")}  ${dim(m.status ?? "")}`)
           }
-          console.log(`    ${dim(`Merge: iris leads merge ${leadId} ${duplicateLeadIds[0]}`)}`)
+          console.log(`    ${dim(`Merge: iris leads merge ${masterId} ${mergeId}`)}`)
         }
       } catch { /* non-fatal */ }
 
@@ -1497,11 +1537,18 @@ const LeadsPulseCommand = cmd({
       if (notes.length > 0) {
         console.log()
         console.log(`  ${bold("CRM Notes")}  ${dim(`(${notes.length})`)}`)
+        // #57684: Mask credentials/tokens/passwords in note previews
+        const maskSecrets = (text: string): string =>
+          text
+            .replace(/(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\s*[:=]\s*\S+/gi, (m) => m.split(/[:=]/)[0] + ": ●●●●●●●●")
+            .replace(/(?:sk|pk|rk|Bearer|eyJ)[_-]?[A-Za-z0-9\-_.]{20,}/g, "●●●●●●●●")
+            .replace(/(?:ghp|gho|github_pat)_[A-Za-z0-9]{20,}/g, "●●●●●●●●")
         // Show latest 3 note previews
         for (const n of notes.slice(0, 3)) {
           const content = typeof n === "object" ? (n.content ?? "") : String(n)
           const firstLine = content.split("\n").find((l: string) => l.trim()) ?? ""
-          console.log(`    ${dim("•")} ${firstLine.trim().slice(0, 100)}${firstLine.length > 100 ? "…" : ""}`)
+          const masked = maskSecrets(firstLine.trim().slice(0, 100))
+          console.log(`    ${dim("•")} ${masked}${firstLine.length > 100 ? "…" : ""}`)
         }
         if (notes.length > 3) {
           console.log(`    ${dim(`…and ${notes.length - 3} more`)}`)
@@ -1575,7 +1622,22 @@ const LeadsPulseCommand = cmd({
         } else {
           printKV("  Stripe Invoices", dim("None"))
         }
-        if (s.active_subscriptions > 0) printKV("  Subscriptions", `${s.active_subscriptions} active`)
+        // #57691: Show subscription details (MRR + next billing)
+        if (s.active_subscriptions > 0) {
+          const subs = stripeData.subscriptions ?? []
+          const activeSubs = subs.filter((sub: any) => sub.status === "active" || sub.status === "trialing")
+          if (activeSubs.length > 0) {
+            for (const sub of activeSubs) {
+              const amt = sub.amount ? `$${(sub.amount / 100).toFixed(2)}` : sub.plan_name ?? "active"
+              const interval = sub.interval ? `/${sub.interval}` : ""
+              const nextBill = sub.current_period_end ? dim(` · next: ${sub.current_period_end}`) : ""
+              printKV("  Subscription", `${success(amt + interval)}${nextBill}`)
+            }
+          } else {
+            printKV("  Subscriptions", `${s.active_subscriptions} active`)
+          }
+        }
+        if (s.past_due_subscriptions > 0) printKV("  Past Due", `${UI.Style.TEXT_DANGER}${s.past_due_subscriptions} subscription(s)${UI.Style.TEXT_NORMAL}`)
         if (s.pending_sessions > 0) printKV("  Checkout", dim(`${s.pending_sessions} pending session(s)`))
       } else if (!stripeData?.has_stripe_customer) {
         printKV("  Stripe", dim("No Stripe customer"))
@@ -1595,16 +1657,27 @@ const LeadsPulseCommand = cmd({
       if (leadTasks.length === 0) {
         console.log(`    ${dim("No tasks — create with: iris leads tasks create " + leadId + ' --title "..."')}`)
       } else {
-        const overdue = leadTasks.filter((t: any) => !t.is_completed && t.due_date && new Date(t.due_date) < new Date())
+        const now = new Date()
         const pending = leadTasks.filter((t: any) => !t.is_completed)
         const completed = leadTasks.filter((t: any) => t.is_completed)
+        // #57689: Sort pending tasks — overdue first, then by due date asc, no-date last
+        pending.sort((a: any, b: any) => {
+          const aOverdue = a.due_date && new Date(a.due_date) < now ? 1 : 0
+          const bOverdue = b.due_date && new Date(b.due_date) < now ? 1 : 0
+          if (aOverdue !== bOverdue) return bOverdue - aOverdue // overdue first
+          if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
+          if (a.due_date) return -1 // has date before no-date
+          if (b.due_date) return 1
+          return 0
+        })
+        const overdue = pending.filter((t: any) => t.due_date && new Date(t.due_date) < now)
         if (overdue.length > 0) printKV("  Overdue", `${UI.Style.TEXT_DANGER}${overdue.length}${UI.Style.TEXT_NORMAL}`)
         printKV("  Pending", `${pending.length}`)
         printKV("  Completed", `${completed.length}`)
-        // Show top 5 pending tasks
+        // Show top 5 pending tasks (already sorted: overdue first, then by due date)
         for (const t of pending.slice(0, 5)) {
           const due = t.due_date ? dim(` due ${t.due_date.split("T")[0]}`) : ""
-          const overdueMark = t.due_date && new Date(t.due_date) < new Date() ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}` : ""
+          const overdueMark = t.due_date && new Date(t.due_date) < now ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}` : ""
           console.log(`    ${dim("○")} ${t.title}${due}${overdueMark}`)
         }
         if (pending.length > 5) console.log(`    ${dim(`…and ${pending.length - 5} more`)}`)

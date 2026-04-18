@@ -112,7 +112,7 @@ const ListCmd = cmd({
     sp.start("Loading pages…")
     try {
       const res = await pagesFetch("/api/v1/pages?per_page=200&include_json=0")
-      if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const json = (await res.json()) as any
       // Handle both direct array and Laravel paginator ({ data: { data: [...] } })
       let pages: any[] = []
@@ -170,7 +170,7 @@ const ViewCmd = cmd({
     sp.start("Loading…")
     try {
       const page = await getBySlug(args.slug, true)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
       sp.stop(String(page.title ?? page.slug))
 
       if (args.json) {
@@ -619,11 +619,13 @@ const VersionsCmd = cmd({
     sp.start("Loading…")
     try {
       const page = await getBySlug(args.slug, false)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const res = await pagesFetch(`/api/v1/pages/${page.id}/versions`)
-      if (!(await handleApiError(res, "Versions"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const data = (await res.json()) as { data?: any[] }
-      const versions = data?.data ?? []
+      if (!(await handleApiError(res, "Versions"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const data = (await res.json()) as { data?: any }
+      // Bug #57236: API may return {} or {data: {}} instead of an array — normalize
+      const raw = data?.data
+      const versions: any[] = Array.isArray(raw) ? raw : (typeof raw === "object" && raw !== null ? Object.values(raw) : [])
       sp.stop(`${versions.length} version(s)`)
       if (versions.length === 0) { prompts.outro("None"); return }
       printDivider()
@@ -656,9 +658,15 @@ const RollbackCmd = cmd({
     sp.start("Rolling back…")
     try {
       const page = await getBySlug(args.slug, false)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const res = await pagesFetch(`/api/v1/pages/${page.id}/rollback/${args.version}`, { method: "POST" })
-      if (!(await handleApiError(res, "Rollback"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!(await handleApiError(res, "Rollback"))) {
+        sp.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.log.error(`Version ${args.version} not found for page "${args.slug}". Run: iris pages versions ${args.slug}`)
+        prompts.outro("Done")
+        return
+      }
       sp.stop(success(`Rolled back to v${args.version}`))
       prompts.outro("Done")
     } catch (err) {

@@ -80,7 +80,18 @@ export async function irisFetch(
     ...(options.headers as Record<string, string>),
   }
   if (token) headers["Authorization"] = `Bearer ${token}`
-  return fetch(`${base}${path}`, { ...options, headers })
+  const url = `${base}${path}`
+  // Debug: stderr trace for diagnosing auth failures (only with --print-logs)
+  if (process.argv.includes("--print-logs")) {
+    console.error(`[irisFetch] ${options.method ?? "GET"} ${url}`)
+    console.error(`[irisFetch] token: ${token ? token.slice(0, 12) + "..." : "(none)"}`)
+    console.error(`[irisFetch] body keys: ${options.body ? Object.keys(JSON.parse(String(options.body))).join(", ") : "(none)"}`)
+  }
+  const res = await fetch(url, { ...options, headers })
+  if (process.argv.includes("--print-logs")) {
+    console.error(`[irisFetch] → ${res.status} ${res.statusText}`)
+  }
+  return res
 }
 
 // ============================================================================
@@ -116,7 +127,7 @@ export async function handleApiError(res: Response, action: string): Promise<boo
     let msg = "Access denied"
     try {
       const body = (await res.json()) as { error?: string; message?: string }
-      msg = body.error ?? body.message ?? msg
+      msg = body.error || body.message || msg
     } catch {}
     prompts.log.warn(msg)
     process.exitCode = 1
@@ -126,7 +137,14 @@ export async function handleApiError(res: Response, action: string): Promise<boo
     let msg = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`
     try {
       const body = (await res.json()) as { error?: string; message?: string; errors?: Record<string, string[]> }
-      msg = body.error ?? body.message ?? msg
+      // Bug #57643/#57647: use || not ?? — API returns {"message":""} which ?? doesn't fall through
+      const rawMsg = body.error || body.message || ""
+      // Bug #57646: sanitize raw Laravel model errors (e.g. "No query results for model [App\Models\Bloq\ScheduledJob]")
+      if (rawMsg) {
+        msg = rawMsg.includes("No query results for model")
+          ? "Resource not found"
+          : rawMsg.replace(/\[App\\Models\\[^\]]+\]/g, "").trim()
+      }
       // Laravel validation returns { errors: { field: ["msg", ...] } }
       if (body.errors && typeof body.errors === "object") {
         const details = Object.entries(body.errors)

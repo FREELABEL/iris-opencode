@@ -29,7 +29,8 @@ const BloqsListCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("limit", { describe: "max results", type: "number", default: 20 })
-      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  IRIS Bloqs")
@@ -52,6 +53,11 @@ const BloqsListCommand = cmd({
       const data = (await res.json()) as { data?: any[] }
       const bloqs: any[] = data?.data ?? []
       spinner.stop(`${bloqs.length} bloq(s)`)
+
+      if (args.json) {
+        console.log(JSON.stringify(bloqs, null, 2))
+        return
+      }
 
       if (bloqs.length === 0) {
         prompts.log.warn("No bloqs found")

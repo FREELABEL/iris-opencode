@@ -64,7 +64,10 @@ function printWorkflow(w: Record<string, unknown>): void {
 }
 
 function printRun(r: Record<string, unknown>): void {
-  const id = bold(String(r.id))
+  // Bug #57347: Display run_id (UUID) which is what the status endpoint expects,
+  // falling back to id for backward compatibility
+  const displayId = r.run_id ?? r.id
+  const id = bold(String(displayId))
   const status = statusColor(String(r.status ?? "unknown"))
   const created = r.created_at ? `  ${dim(String(r.created_at))}` : ""
   console.log(`  ${id}  ${status}${created}`)
@@ -102,7 +105,8 @@ const WorkflowsListCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("limit", { describe: "max results", type: "number", default: 15 })
-      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  IRIS Workflows")
@@ -125,6 +129,11 @@ const WorkflowsListCommand = cmd({
       const raw = await res.json()
       const workflows: any[] = Array.isArray(raw) ? raw : (raw as any)?.data ?? []
       spinner.stop(`${workflows.length} workflow(s)`)
+
+      if (args.json) {
+        console.log(JSON.stringify(workflows, null, 2))
+        return
+      }
 
       if (workflows.length === 0) {
         prompts.log.warn("No workflows found")
@@ -191,8 +200,26 @@ const WorkflowsRunCommand = cmd({
         method: "POST",
         body: JSON.stringify(payload),
       })
-      const ok = await handleApiError(res, "Execute workflow")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!res.ok) {
+        // Bug #57344: Provide actionable guidance when execution_mode doesn't match
+        const errBody = await res.json().catch(() => ({})) as Record<string, unknown>
+        const msg = String(errBody?.message ?? "")
+        if (res.status === 400 && msg.includes("execution_mode")) {
+          spinner.stop("Incompatible workflow", 1)
+          process.exitCode = 1
+          prompts.log.error(`Workflow #${args.id} cannot be executed via this endpoint.`)
+          prompts.log.info(dim("This workflow's execution_mode is not 'agentic_v6'."))
+          prompts.log.info(dim("Agent-type workflows run through the agent chat system instead."))
+          prompts.log.info(dim(`Try: iris agents chat ${args.id} --query "${query ?? "..."}"`))
+          prompts.outro("Done")
+          return
+        }
+        spinner.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.log.error(msg || `HTTP ${res.status}`)
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any; run_id?: string; id?: string }
       const run = data?.data ?? data

@@ -577,6 +577,7 @@ const SchedulesInspectCommand = cmd({
       const schedule = (allData?.data ?? []).find((s: any) => s.id === args.id)
       if (!schedule) {
         spinner.stop("Not found", 1)
+        process.exitCode = 1
         prompts.log.error(`Schedule #${args.id} not found`)
         prompts.outro("Done")
         return
@@ -703,7 +704,7 @@ const SchedulesToggleCommand = cmd({
     if (!userId) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
-    spinner.start(`${action}ing…`)
+    spinner.start(`${action === "Enable" ? "Enabling" : "Disabling"}…`)
 
     try {
       // toggle via PUT update with is_active flag

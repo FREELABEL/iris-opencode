@@ -72,6 +72,12 @@ const OutreachListCommand = cmd({
       .option("category", { describe: "filter by category", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
+    if (!args.bloqId) {
+      prompts.log.error("Missing required argument: bloq-id")
+      prompts.log.info(dim("Usage: iris outreach list <bloq-id>"))
+      process.exitCode = 1
+      return
+    }
     await requireAuth()
     const templates = await fetchStrategies(args.bloqId, args.category as string | undefined)
 

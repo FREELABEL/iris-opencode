@@ -144,9 +144,26 @@ const ReportCommand = cmd({
       })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    let title = Array.isArray(args.title) ? args.title.join(" ").trim() : (args.title as string | undefined)
+    // Combine positional title words + any passthrough args (after --)
+    // This handles cases like: iris bug report "--something broke" where yargs
+    // would otherwise treat --something as a flag
+    const titleParts: string[] = []
+    if (Array.isArray(args.title)) titleParts.push(...args.title.map(String))
+    if (Array.isArray(args["--"])) titleParts.push(...args["--"].map(String))
+    let title = titleParts.join(" ").trim() || undefined
     let description = args.description
     let severity = args.severity as string
+
+    // Guard: catch known subcommand names passed as titles (e.g. "iris bug report list")
+    const subcommands = ["list", "ls", "close", "done", "resolve", "complete"]
+    if (title && subcommands.includes(title.toLowerCase())) {
+      console.error(`\n  Unknown subcommand: ${title}`)
+      console.error(`  Did you mean: ${dim(`iris bug ${title}`)}`)
+      console.error(`  To submit a report: ${dim(`iris bug report "your bug title here"`)}`)
+      console.error("")
+      process.exitCode = 1
+      return
+    }
 
     // Interactive mode if no title provided
     if (!title || title.length === 0) {

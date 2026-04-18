@@ -63,7 +63,8 @@ const AgentsListCommand = cmd({
     yargs
       .option("search", { alias: "s", describe: "search query", type: "string" })
       .option("limit", { describe: "max results", type: "number", default: 20 })
-      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  IRIS Agents")
@@ -83,11 +84,16 @@ const AgentsListCommand = cmd({
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?${params}`)
       const ok = await handleApiError(res, "List agents")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[]; total?: number }
       const agents: any[] = data?.data ?? []
       spinner.stop(`${agents.length} agent(s)`)
+
+      if (args.json) {
+        console.log(JSON.stringify(agents, null, 2))
+        return
+      }
 
       if (agents.length === 0) {
         prompts.log.warn("No agents found")
@@ -107,6 +113,7 @@ const AgentsListCommand = cmd({
       )
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -136,10 +143,13 @@ const AgentsGetCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
       const ok = await handleApiError(res, "Get agent")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const a = data?.data ?? data
+
+      if (!a || !a.id) { spinner.stop("Agent not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+
       spinner.stop(String(a.name ?? `Agent #${a.id}`))
 
       printDivider()
@@ -157,6 +167,7 @@ const AgentsGetCommand = cmd({
       )
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -172,6 +183,7 @@ const AgentsCreateCommand = cmd({
       .option("description", { describe: "agent description", type: "string" })
       .option("prompt", { describe: "system prompt / instructions", type: "string" })
       .option("model", { describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
+      .option("type", { describe: "agent type (content, chat, assistant, support)", type: "string", default: "content" })
       .option("bloq-id", { describe: "knowledge base bloq ID", type: "number" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -218,7 +230,7 @@ const AgentsCreateCommand = cmd({
     spinner.start("Creating agent…")
 
     try {
-      const payload: Record<string, unknown> = { name, description, prompt, model }
+      const payload: Record<string, unknown> = { name, description, prompt, model, type: args.type ?? "content" }
       if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents`, {
@@ -226,7 +238,7 @@ const AgentsCreateCommand = cmd({
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Create agent")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const a = data?.data ?? data
@@ -243,6 +255,7 @@ const AgentsCreateCommand = cmd({
       )
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -284,10 +297,10 @@ const AgentsChatCommand = cmd({
         body: JSON.stringify(payload),
       }, IRIS_API)
       const ok = await handleApiError(startRes, "Chat")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const { workflow_id } = (await startRes.json()) as { workflow_id?: string }
-      if (!workflow_id) { spinner.stop("No workflow ID", 1); prompts.outro("Done"); return }
+      if (!workflow_id) { spinner.stop("No workflow ID", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       // Poll
       const maxSecs = 180
@@ -315,6 +328,7 @@ const AgentsChatCommand = cmd({
       prompts.outro(dim(`iris chat --agent=${args.id} "follow up"`))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -361,7 +375,7 @@ const AgentsUpdateCommand = cmd({
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Update agent")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const a = data?.data ?? data
@@ -376,6 +390,7 @@ const AgentsUpdateCommand = cmd({
       prompts.outro(dim(`iris agents get ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -406,7 +421,7 @@ const AgentsPullCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
       const ok = await handleApiError(res, "Pull agent")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const agent = data?.data ?? data
@@ -431,6 +446,7 @@ const AgentsPullCommand = cmd({
       prompts.outro(dim(`iris agents push ${args.id}  |  iris agents diff ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -468,6 +484,7 @@ const AgentsPushCommand = cmd({
       if (!filepath || !existsSync(filepath)) {
         spinner.start("")
         spinner.stop("Failed", 1)
+        process.exitCode = 1
         prompts.log.error(`Local file not found. Run: ${highlight(`iris agents pull ${args.id}`)}`)
         prompts.outro("Done")
         return
@@ -498,7 +515,7 @@ const AgentsPushCommand = cmd({
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Push agent")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const result = data?.data ?? data
@@ -514,6 +531,7 @@ const AgentsPushCommand = cmd({
       prompts.outro(dim(`iris agents diff ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -544,7 +562,7 @@ const AgentsDiffCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
       const ok = await handleApiError(res, "Fetch agent")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const live = data?.data ?? data
@@ -555,6 +573,7 @@ const AgentsDiffCommand = cmd({
 
       if (!filepath || !existsSync(filepath)) {
         spinner.stop("Failed", 1)
+        process.exitCode = 1
         prompts.log.error(`Local file not found. Run: ${highlight(`iris agents pull ${args.id}`)}`)
         prompts.outro("Done")
         return
@@ -611,6 +630,7 @@ const AgentsDiffCommand = cmd({
       }
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -645,12 +665,13 @@ const AgentsDeleteCommand = cmd({
         method: "DELETE",
       })
       const ok = await handleApiError(res, "Delete agent")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       spinner.stop(`${success("✓")} Agent #${args.id} deleted`)
       prompts.outro(dim("iris agents list"))
     } catch (err) {
       spinner.stop("Error", 1)
+      process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
