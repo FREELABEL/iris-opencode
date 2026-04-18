@@ -125,7 +125,9 @@ const GetCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const p = data?.data ?? data
+      const raw = data?.data ?? data
+      const p = raw?.program ?? raw
+      if (!p || !p.id) { spinner.stop("Program not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
       spinner.stop(String(p.name ?? `#${p.id}`))
 
       printDivider()
