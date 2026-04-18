@@ -292,13 +292,61 @@ const StatusCmd = cmd({
   },
 })
 
+// ── dashboard ──
+
+const DashboardCmd = cmd({
+  command: "dashboard [event-id]",
+  aliases: ["dash", "ui", "open"],
+  describe: "open the production dashboard in your browser",
+  builder: (y) =>
+    y
+      .positional("event-id", { type: "number", describe: "event ID for timeline" })
+      .option("phone", { type: "boolean", default: false, describe: "show the phone URL instead" }),
+  async handler(args) {
+    const eventId = args["event-id"]
+    const baseUrl = `${BRIDGE}/obs-dashboard`
+    const url = eventId ? `${baseUrl}?event=${eventId}` : baseUrl
+
+    if (args.phone) {
+      // Get local IP for phone access
+      try {
+        const { networkInterfaces } = await import("os")
+        const nets = networkInterfaces()
+        for (const name of Object.keys(nets)) {
+          for (const net of nets[name] ?? []) {
+            if (net.family === "IPv4" && !net.internal) {
+              const phoneUrl = `http://${net.address}:3200/obs-dashboard${eventId ? `?event=${eventId}` : ""}`
+              console.log()
+              console.log(`  ${bold("Phone URL:")} ${highlight(phoneUrl)}`)
+              console.log(`  ${dim("Open this on your phone (same WiFi)")}`)
+              console.log()
+              return
+            }
+          }
+        }
+      } catch {}
+      console.log(`  ${dim("Could not detect local IP")}`)
+      return
+    }
+
+    // Open in browser
+    try {
+      const { exec } = await import("child_process")
+      exec(`open "${url}"`)
+      console.log(`  ${success("✓")} Dashboard opened: ${dim(url)}`)
+    } catch {
+      console.log(`  ${bold("URL:")} ${highlight(url)}`)
+    }
+  },
+})
+
 // ============================================================================
 // Root
 // ============================================================================
 
 export const PlatformObsCommand = cmd({
   command: "obs",
-  describe: "control OBS Studio — scenes, streaming, recording, markers, audio",
+  describe: "control OBS Studio — scenes, streaming, recording, markers, audio, dashboard",
   builder: (y) =>
     y
       .command(ConnectCmd)
@@ -311,6 +359,7 @@ export const PlatformObsCommand = cmd({
       .command(MuteCmd)
       .command(InputsCmd)
       .command(StatusCmd)
-      .demandCommand(1, "specify: connect, scenes, scene, stream, record, marker, mute, inputs, status"),
+      .command(DashboardCmd)
+      .demandCommand(1, "specify: connect, scenes, scene, stream, record, marker, mute, inputs, status, dashboard"),
   async handler() {},
 })
