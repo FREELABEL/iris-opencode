@@ -186,9 +186,13 @@ async function resolveLeadId(idOrQuery: string): Promise<{ leadId: number; lead:
     }
   }
 
-  // Fetch full lead
+  // Fetch full lead — Bug #57345: show error when lead not found
   const res = await irisFetch(`/api/v1/leads/${leadId}`)
-  if (!res.ok) return null
+  if (!res.ok) {
+    prompts.log.error(`Lead not found: #${leadId}`)
+    process.exitCode = 1
+    return null
+  }
   const data = (await res.json()) as { data?: any }
   const lead = data?.data ?? data
   return { leadId, lead }
@@ -207,7 +211,8 @@ const LeadsListCommand = cmd({
       .option("status", { describe: "filter by status", type: "string" })
       .option("search", { alias: "s", describe: "search query", type: "string" })
       .option("limit", { describe: "max results", type: "number", default: 20 })
-      .option("bloq-id", { describe: "filter by bloq (CRM)", type: "number" }),
+      .option("bloq-id", { describe: "filter by bloq (CRM)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  IRIS Leads")
@@ -226,12 +231,17 @@ const LeadsListCommand = cmd({
 
       const res = await irisFetch(`/api/v1/leads?${params}`)
       const ok = await handleApiError(res, "List leads")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
       const leads: any[] = data?.data ?? []
       const total = data?.meta?.total ?? leads.length
       spinner.stop(`${total} lead(s)`)
+
+      if (args.json) {
+        console.log(JSON.stringify(leads, null, 2))
+        return
+      }
 
       if (leads.length === 0) {
         prompts.log.warn("No leads found")
@@ -261,7 +271,9 @@ const LeadsGetCommand = cmd({
   command: "get <id>",
   describe: "show lead details (accepts numeric ID or name/email to search)",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true }),
+    yargs
+      .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
+      .option("notes", { describe: "show full note content inline", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
 
@@ -363,9 +375,10 @@ const LeadsGetCommand = cmd({
         )
       }
 
-      // Notes — show truncated previews (full content via `iris leads notes <id>`)
+      // Notes — truncated by default, full with --notes flag (#57652)
       const notes: any[] = Array.isArray(l.notes) ? l.notes : []
       if (notes.length > 0) {
+        const showFull = args.notes as boolean
         console.log()
         console.log(`  ${dim("Notes")}  ${dim(`(${notes.length})`)}`)
         for (const note of notes) {
@@ -373,18 +386,20 @@ const LeadsGetCommand = cmd({
             typeof note === "object"
               ? (note.content ?? JSON.stringify(note)).replace(/\\n/g, "\n")
               : String(note)
-          const truncated = rawContent.length > 200 ? rawContent.slice(0, 200) + "..." : rawContent
-          const lines = truncated.split("\n")
+          const display = showFull ? rawContent : (rawContent.length > 200 ? rawContent.slice(0, 200) + "..." : rawContent)
+          const date = typeof note === "object" ? (note.created_at ?? "") : ""
+          if (date) console.log(`    ${dim(date)}`)
+          const lines = display.split("\n")
           for (const line of lines) {
             if (line.trim()) console.log(`    ${line.trim()}`)
           }
           console.log()
         }
-        if (notes.some((n: any) => {
+        if (!showFull && notes.some((n: any) => {
           const c = typeof n === "object" ? (n.content ?? JSON.stringify(n)) : String(n)
           return c.length > 200
         })) {
-          console.log(`    ${dim(`Run ${highlight(`iris leads notes ${l.id}`)} for full content`)}`)
+          console.log(`    ${dim(`Use ${highlight(`--notes`)} for full content`)}`)
         }
       }
 
@@ -430,8 +445,15 @@ const LeadsSearchCommand = cmd({
     try {
       const params = new URLSearchParams({ search: args.query, per_page: String(args.limit) })
       const res = await irisFetch(`/api/v1/leads?${params}`)
-      const ok = await handleApiError(res, "Search leads")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({})) as Record<string, unknown>
+        const errMsg = String(errBody?.message || errBody?.error || `HTTP ${res.status}`)
+        spinner.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.log.error(`Search leads failed: ${errMsg}`)
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any[]; meta?: { total?: number } }
       let leads: any[] = data?.data ?? []
@@ -496,7 +518,7 @@ const LeadsCreateCommand = cmd({
       .option("phone", { describe: "phone number", type: "string" })
       .option("company", { describe: "company name", type: "string" })
       .option("source", { describe: "lead source (e.g. referral, inbound, outreach)", type: "string" })
-      .option("status", { describe: "initial status (e.g. New, Prospected)", type: "string" })
+      .option("status", { describe: "initial status", type: "string", choices: ["Prospected", "Contacted", "Interested", "Converted", "Archived"] })
       .option("notes", { describe: "initial note to attach", type: "string" })
       .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" }),
   async handler(args) {
@@ -506,8 +528,8 @@ const LeadsCreateCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    // Bug #6: In non-interactive mode, require --name flag. Don't prompt.
-    let name = args.name
+    // Bug #6/#57642: Require non-empty name. Trim whitespace before checking.
+    let name = typeof args.name === "string" ? args.name.trim() : args.name
     if (!name) {
       if (isNonInteractive()) {
         prompts.log.error("Missing required --name flag.")
@@ -765,7 +787,8 @@ const LeadsUpdateCommand = cmd({
       .option("website", { describe: "website URL", type: "string" })
       .option("source", { describe: "lead source", type: "string" })
       .option("stage", { describe: "pipeline stage", type: "string" })
-      .option("bid", { describe: "price bid amount", type: "number" }),
+      .option("bid", { describe: "price bid amount", type: "number" })
+      .option("chat-id", { describe: "link an iMessage chat ID (e.g. chat713220476491386040)", type: "string" }),
   async handler(args) {
     UI.empty()
 
@@ -790,6 +813,10 @@ const LeadsUpdateCommand = cmd({
     if (args.source) payload.source = args.source
     if (args.stage) payload.stage = args.stage
     if (args.bid) payload.price_bid = args.bid
+    // #57668: --chat-id merges into contact_info.chat_ids array
+    if (args["chat-id"]) {
+      payload.contact_info = { chat_ids: [args["chat-id"]] }
+    }
 
     if (Object.keys(payload).length === 0) {
       prompts.log.warn("Nothing to update. Use --name, --email, --status, --bloq-id, etc.")
@@ -1226,7 +1253,7 @@ const BRIDGE_BASE = "http://localhost:3200"
 const LeadsPulseCommand = cmd({
   command: "pulse <id>",
   aliases: ["inbox", "incoming"],
-  describe: "check recent activity across all channels (CRM, Gmail, iMessage, Apple Mail)",
+  describe: "check recent activity across all channels (CRM, Gmail, iMessage, Apple Mail, Meetings)",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
@@ -1334,6 +1361,90 @@ const LeadsPulseCommand = cmd({
         if (notes.length > 3) {
           console.log(`    ${dim(`…and ${notes.length - 3} more`)}`)
         }
+      }
+
+      // Deal Health section (#57649/#57665) — fetch deal-status + stripe-payments in parallel
+      let dealHealth: any = null
+      let stripeData: any = null
+      let leadTasks: any[] = []
+      {
+        const [dealRes, stripeRes, tasksRes] = await Promise.allSettled([
+          irisFetch(`/api/v1/leads/${leadId}/deal-status`),
+          irisFetch(`/api/v1/leads/${leadId}/stripe-payments`),
+          irisFetch(`/api/v1/leads/${leadId}/tasks`),
+        ])
+
+        // Parse deal-status
+        if (dealRes.status === "fulfilled" && dealRes.value.ok) {
+          dealHealth = ((await dealRes.value.json()) as any)?.data ?? {}
+        }
+        // Parse stripe-payments (#57665)
+        if (stripeRes.status === "fulfilled" && stripeRes.value.ok) {
+          stripeData = ((await stripeRes.value.json()) as any)?.data ?? {}
+        }
+        // Parse tasks (#57666)
+        if (tasksRes.status === "fulfilled" && tasksRes.value.ok) {
+          const td = ((await tasksRes.value.json()) as any)?.data
+          leadTasks = td?.tasks ?? td ?? []
+          if (!Array.isArray(leadTasks)) leadTasks = []
+        }
+      }
+
+      // Render Deal Health — always show (#57659)
+      console.log()
+      console.log(`  ${bold("Deal Health")}`)
+      if (dealHealth?.payment_gate) {
+        const gate = dealHealth.payment_gate
+        const gateStatus = gate.paid ? success("Paid") : (gate.sent ? dim("Sent — awaiting payment") : dim("Draft"))
+        printKV("  Payment Gate", gateStatus)
+        if (gate.amount) printKV("  Amount", `$${(gate.amount / 100).toFixed(2)}`)
+      } else {
+        printKV("  Payment Gate", dim("None — create with: iris leads payment-gate " + leadId + " -a 500"))
+      }
+
+      // Stripe payments (#57665) — unified financial picture
+      if (stripeData?.summary) {
+        const s = stripeData.summary
+        const totalPaid = stripeData.total_paid ?? 0 // API returns dollars, NOT cents
+        printKV("  Stripe Received", totalPaid > 0 ? success(`$${Number(totalPaid).toFixed(2)}`) : dim("$0"))
+        if (s.total_invoices > 0) {
+          printKV("  Stripe Invoices", `${s.total_invoices} (${s.paid_invoices} paid${s.pending_invoices > 0 ? `, ${s.pending_invoices} pending` : ""})`)
+        } else {
+          printKV("  Stripe Invoices", dim("None"))
+        }
+        if (s.active_subscriptions > 0) printKV("  Subscriptions", `${s.active_subscriptions} active`)
+        if (s.pending_sessions > 0) printKV("  Checkout", dim(`${s.pending_sessions} pending session(s)`))
+      } else if (!stripeData?.has_stripe_customer) {
+        printKV("  Stripe", dim("No Stripe customer"))
+      } else {
+        printKV("  Stripe", dim("Connected — no payments yet"))
+      }
+
+      // Deal-status extras (contracts, proposals)
+      const contracts = dealHealth?.contracts ?? []
+      printKV("  Contracts", contracts.length > 0 ? `${contracts.length} (${contracts.filter((c: any) => c.signed_at).length} signed)` : dim("None"))
+      const proposals = dealHealth?.proposals ?? []
+      printKV("  Proposals", proposals.length > 0 ? `${proposals.length}` : dim("None"))
+
+      // Tasks section (#57666)
+      console.log()
+      console.log(`  ${bold("Tasks")}  ${dim(`(${leadTasks.length})`)}`)
+      if (leadTasks.length === 0) {
+        console.log(`    ${dim("No tasks — create with: iris leads tasks create " + leadId + ' --title "..."')}`)
+      } else {
+        const overdue = leadTasks.filter((t: any) => !t.is_completed && t.due_date && new Date(t.due_date) < new Date())
+        const pending = leadTasks.filter((t: any) => !t.is_completed)
+        const completed = leadTasks.filter((t: any) => t.is_completed)
+        if (overdue.length > 0) printKV("  Overdue", `${UI.Style.TEXT_DANGER}${overdue.length}${UI.Style.TEXT_NORMAL}`)
+        printKV("  Pending", `${pending.length}`)
+        printKV("  Completed", `${completed.length}`)
+        // Show top 5 pending tasks
+        for (const t of pending.slice(0, 5)) {
+          const due = t.due_date ? dim(` due ${t.due_date.split("T")[0]}`) : ""
+          const overdueMark = t.due_date && new Date(t.due_date) < new Date() ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}` : ""
+          console.log(`    ${dim("○")} ${t.title}${due}${overdueMark}`)
+        }
+        if (pending.length > 5) console.log(`    ${dim(`…and ${pending.length - 5} more`)}`)
       }
 
       // Step 2: Search channels in parallel
@@ -1445,11 +1556,37 @@ const LeadsPulseCommand = cmd({
 
         const totalMessages = channels.reduce((sum, ch) => sum + ch.messages.length, 0)
         channelSpinner.stop(`${totalMessages} message(s) across ${channels.length} channel(s)`)
+
+        // Persist-after: fire-and-forget write to lead_comms for history (#57657)
+        // Maps live-scan results → atlas:comms ingest format. Dedup hash prevents duplicates.
+        const channelMap: Record<string, string> = { "Gmail": "gmail", "iMessage": "imessage", "Apple Mail": "apple_mail", "Meetings": "calendar" }
+        for (const ch of channels) {
+          const channelKey = channelMap[ch.name]
+          if (!channelKey || ch.messages.length === 0) continue
+          const items = ch.messages.map((msg: any) => {
+            if (ch.name === "iMessage") {
+              return { direction: msg.from_me ? "outbound" : "inbound", from_identifier: msg.from_me ? "me" : (phone || email), body: msg.text ?? "", sent_at: msg.ts ?? msg.date ?? null, metadata: { source: "pulse_scan" } }
+            } else if (ch.name === "Gmail") {
+              return { direction: (msg.from ?? "").toLowerCase().includes(email.toLowerCase()) ? "inbound" : "outbound", from_identifier: msg.from ?? "", subject: msg.subject ?? "", body: msg.snippet ?? msg.subject ?? "", sent_at: msg.date ?? null, metadata: { gmail_thread_id: msg.thread_id, source: "pulse_scan" } }
+            } else if (ch.name === "Apple Mail") {
+              return { direction: "inbound", from_identifier: email, subject: msg.subject ?? "", body: msg.body ?? msg.subject ?? "", sent_at: msg.date ?? msg.ts ?? null, metadata: { source: "pulse_scan" } }
+            } else if (ch.name === "Meetings") {
+              return { direction: "outbound", from_identifier: "me", subject: msg.summary ?? "", body: `Meeting: ${msg.summary ?? ""}${msg.location ? ` @ ${msg.location}` : ""}`, sent_at: msg.date ?? null, metadata: { event_status: msg.status, source: "pulse_scan" } }
+            }
+            return null
+          }).filter(Boolean)
+          if (items.length > 0) {
+            irisFetch("/api/v1/atlas/comms/ingest", {
+              method: "POST",
+              body: JSON.stringify({ lead_id: leadId, channel: channelKey, items }),
+            }).catch(() => {}) // fire-and-forget — dedup makes next run safe
+          }
+        }
       }
 
       // JSON output
       if (args.json) {
-        console.log(JSON.stringify({ lead, channels }, null, 2))
+        console.log(JSON.stringify({ lead, dealHealth, stripeData, tasks: leadTasks, channels }, null, 2))
         prompts.outro("Done")
         return
       }
@@ -1562,9 +1699,20 @@ const LeadsMeetCommand = cmd({
     const leadName = lead.name ?? lead.first_name ?? `Lead #${leadId}`
 
     const title = args.title || `Meeting with ${leadName}`
-    const startTime = args.at as string
+    const rawAt = args.at as string
+    // Bug #57346: Validate date before using — crash on Invalid Date with helpful message
+    const parsedStart = new Date(rawAt)
+    if (isNaN(parsedStart.getTime())) {
+      prompts.log.error(`Invalid date: "${rawAt}"`)
+      prompts.log.info(dim("Use ISO format: 2026-04-21T10:00:00"))
+      prompts.log.info(dim("Examples: 2026-04-21T14:30:00, 2026-04-21"))
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+    const startTime = parsedStart.toISOString()
     const durationMs = (args.duration as number) * 60000
-    const endTime = new Date(new Date(startTime).getTime() + durationMs).toISOString()
+    const endTime = new Date(parsedStart.getTime() + durationMs).toISOString()
     const description = [
       args.notes ?? "",
       "",
@@ -1947,6 +2095,155 @@ const LeadsRegenCheckoutCommand = cmd({
 })
 
 // ============================================================================
+// Tasks (#57667)
+// ============================================================================
+
+const LeadsTasksListCommand = cmd({
+  command: "list <id>",
+  aliases: ["ls"],
+  describe: "list tasks for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Loading tasks…")
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args.id}/tasks`)
+      const ok = await handleApiError(res, "List tasks")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = ((await res.json()) as any)?.data
+      const tasks: any[] = data?.tasks ?? data ?? []
+      spinner.stop(`${tasks.length} task(s)`)
+      if (args.json) { console.log(JSON.stringify(tasks, null, 2)); return }
+      if (tasks.length === 0) {
+        prompts.log.info("No tasks yet")
+        prompts.outro(dim(`iris leads tasks create ${args.id} --title "Follow up"`))
+        return
+      }
+      printDivider()
+      for (const t of tasks) {
+        const check = t.is_completed ? success("✓") : "○"
+        const due = t.due_date ? dim(` due ${String(t.due_date).split("T")[0]}`) : ""
+        const overdue = !t.is_completed && t.due_date && new Date(t.due_date) < new Date() ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}` : ""
+        console.log(`  ${check} ${bold(t.title)}  ${dim(`#${t.id}`)}${due}${overdue}`)
+        if (t.description) console.log(`    ${dim(t.description.slice(0, 120))}`)
+      }
+      printDivider()
+      prompts.outro(dim(`iris leads tasks create ${args.id} --title "..."`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+const LeadsTasksCreateCommand = cmd({
+  command: "create <id>",
+  aliases: ["add"],
+  describe: "create a task for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("title", { type: "string", demandOption: true, describe: "task title" })
+      .option("description", { alias: "d", type: "string" })
+      .option("due", { type: "string", describe: "due date (YYYY-MM-DD)" })
+      .option("agent-id", { type: "number", describe: "assign to agent" }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Creating task…")
+    try {
+      const body: Record<string, unknown> = { title: args.title }
+      if (args.description) body.description = args.description
+      if (args.due) body.due_date = args.due
+      if (args["agent-id"]) body.agent_id = args["agent-id"]
+      const res = await irisFetch(`/api/v1/leads/${args.id}/tasks`, { method: "POST", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Create task")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = ((await res.json()) as any)?.data
+      const task = data?.task ?? data
+      spinner.stop(`${success("✓")} Task created: ${task.title} (#${task.id})`)
+      prompts.outro(dim(`iris leads tasks list ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+const LeadsTasksCompleteCommand = cmd({
+  command: "complete <lead-id> <task-id>",
+  aliases: ["done"],
+  describe: "mark a task as completed",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { type: "number", demandOption: true })
+      .positional("task-id", { type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Completing…")
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/tasks/${args["task-id"]}`, {
+        method: "PUT",
+        body: JSON.stringify({ is_completed: true }),
+      })
+      const ok = await handleApiError(res, "Complete task")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop(success("✓ Task completed"))
+      prompts.outro(dim(`iris leads tasks list ${args["lead-id"]}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+const LeadsTasksDeleteCommand = cmd({
+  command: "delete <lead-id> <task-id>",
+  aliases: ["rm"],
+  describe: "delete a task",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { type: "number", demandOption: true })
+      .positional("task-id", { type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Deleting…")
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/tasks/${args["task-id"]}`, { method: "DELETE" })
+      const ok = await handleApiError(res, "Delete task")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop(success("✓ Task deleted"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+const LeadsTasksCommand = cmd({
+  command: "tasks",
+  describe: "manage tasks for leads — list, create, complete, delete",
+  builder: (yargs) =>
+    yargs
+      .command(LeadsTasksListCommand)
+      .command(LeadsTasksCreateCommand)
+      .command(LeadsTasksCompleteCommand)
+      .command(LeadsTasksDeleteCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -1971,6 +2268,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsMeetingsCommand)
       .command(LeadsNotesCommand)
       .command(LeadsNoteCommand)
+      .command(LeadsTasksCommand)
       .command(LeadsPaymentGateCommand)
       .command(LeadsDealStatusCommand)
       .command(LeadsPackagesCommand)
