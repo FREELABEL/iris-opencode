@@ -291,6 +291,20 @@ export async function executeIntegrationCall(
   return await res.json()
 }
 
+function displayArrayItems(items: any[], indent = "    "): void {
+  for (const item of items.slice(0, 25)) {
+    if (typeof item === "object" && item !== null) {
+      const label = item.name ?? item.title ?? item.subject ?? item.filename ?? item.email ?? item.id ?? ""
+      const id = item.id && label !== item.id ? dim(` #${item.id}`) : ""
+      const type = item.mimeType ?? item.type ?? ""
+      console.log(`${indent}${bold(String(label))}${id}${type ? `  ${dim(type)}` : ""}`)
+    } else {
+      console.log(`${indent}${item}`)
+    }
+  }
+  if (items.length > 25) console.log(`${indent}${dim(`…and ${items.length - 25} more`)}`)
+}
+
 function displayResult(result: any, name: string): void {
   const ok = result?.success ?? !result?.error
   if (!ok) {
@@ -302,10 +316,36 @@ function displayResult(result: any, name: string): void {
     if (k === "success" || k === "status") continue
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
       console.log(`  ${dim(k + ":")} ${v}`)
-    } else if (Array.isArray(v) || typeof v === "object") {
-      const enc = JSON.stringify(v, null, 2)
-      if (enc.length < 500) console.log(`  ${dim(k + ":")} ${enc}`)
-      else console.log(`  ${dim(k + ":")} [${Array.isArray(v) ? v.length + " items" : "object"}]`)
+    } else if (Array.isArray(v)) {
+      console.log(`  ${dim(k + ":")} ${dim(`(${v.length} items)`)}`)
+      displayArrayItems(v)
+    } else if (typeof v === "object" && v !== null) {
+      // Drill into nested objects — find arrays inside (e.g. data.files) (#55730)
+      const nestedArrays = Object.entries(v).filter(([, val]) => Array.isArray(val))
+      const nestedPrimitives = Object.entries(v).filter(([, val]) => typeof val === "string" || typeof val === "number" || typeof val === "boolean")
+
+      if (nestedArrays.length > 0) {
+        // Show primitives first (e.g. kind, incompleteSearch)
+        for (const [nk, nv] of nestedPrimitives) {
+          console.log(`  ${dim(nk + ":")} ${nv}`)
+        }
+        // Expand each nested array
+        for (const [nk, nv] of nestedArrays) {
+          const arr = nv as any[]
+          console.log(`  ${dim(nk + ":")} ${dim(`(${arr.length} items)`)}`)
+          displayArrayItems(arr)
+        }
+      } else {
+        const enc = JSON.stringify(v, null, 2)
+        if (enc.length < 2000) {
+          const lines = enc.split("\n")
+          console.log(`  ${dim(k + ":")}`)
+          for (const line of lines) console.log(`    ${line}`)
+        } else {
+          const keys = Object.keys(v)
+          console.log(`  ${dim(k + ":")} {${keys.slice(0, 10).join(", ")}${keys.length > 10 ? ", …" : ""}}`)
+        }
+      }
     }
   }
 }
@@ -457,10 +497,53 @@ const ListConnectedCommand = cmd({
       return
     }
 
+    // Verify tokens in parallel (#57679) — probe each integration
+    const verifySpinner = prompts.spinner()
+    verifySpinner.start("Verifying tokens…")
+
+    const verifyFns: Record<string, () => Promise<"verified" | "expired" | "error">> = {
+      gmail: async () => {
+        const r = await irisFetch(`/api/v1/leads/0/gmail-threads`).catch(() => null)
+        if (!r) return "error"
+        return (r.status === 401 || r.status === 403) ? "expired" : "verified"
+      },
+      "google-calendar": async () => {
+        const r = await fetch(`http://localhost:3200/api/calendar/events?days=1&limit=1`, { signal: AbortSignal.timeout(3000) }).catch(() => null)
+        return r?.ok ? "verified" : "error"
+      },
+      "google-drive": async () => {
+        const r = await irisFetch("/api/v1/integrations/exec", { method: "POST", body: JSON.stringify({ type: "google-drive", function: "list_files", params: { maxResults: 1 } }) }).catch(() => null)
+        if (!r) return "error"
+        return (r.status === 401 || r.status === 403) ? "expired" : r.ok ? "verified" : "error"
+      },
+    }
+
+    const verified = new Map<string, "verified" | "expired" | "error">()
+    await Promise.allSettled(
+      items.map(async (i) => {
+        const fn = verifyFns[i.type]
+        if (fn) {
+          verified.set(i.type, await fn().catch(() => "error" as const))
+        }
+      })
+    )
+    verifySpinner.stop("Done")
+
     printDivider()
     for (const i of items) {
-      const statusColor = i.status === "active" ? success(`[${i.status}]`) : dim(`[${i.status}]`)
-      console.log(`  ${highlight(i.type)}  ${statusColor}`)
+      const v = verified.get(i.type)
+      let statusLabel: string
+      if (v === "verified") {
+        statusLabel = success("[verified]")
+      } else if (v === "expired") {
+        statusLabel = `${UI.Style.TEXT_DANGER}[expired]${UI.Style.TEXT_NORMAL} ${dim(`— reconnect: iris connect ${i.type}`)}`
+      } else if (v === "error") {
+        statusLabel = `${UI.Style.TEXT_WARNING}[unverified]${UI.Style.TEXT_NORMAL} ${dim("— could not probe")}`
+      } else {
+        // No verify function for this type — show active as before
+        statusLabel = i.status === "active" ? dim("[active]") : dim(`[${i.status}]`)
+      }
+      console.log(`  ${highlight(i.type)}  ${statusLabel}`)
     }
     printDivider()
     prompts.outro(dim("iris integrations <type> <function> key=value …"))
@@ -722,9 +805,12 @@ const ExecCommand = cmd({
         describe: "load params from a JSON file (merged with key=value params; key=value wins on conflict)",
       }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Run: ${args.target}`)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    // Suppress all UI chrome when --json for clean pipeable output (#55735)
+    if (!args.json) {
+      UI.empty()
+      prompts.intro(`◈  Run: ${args.target}`)
+    }
+    if (!(await requireAuth())) { if (!args.json) prompts.outro("Done"); return }
 
     const target = String(args.target)
     let fn = args.function ? String(args.function) : undefined
@@ -771,12 +857,17 @@ const ExecCommand = cmd({
           }
           return
         }
+        // Skip spinner/ANSI when --json to keep output parseable (#55735)
+        if (args.json) {
+          const result = await executeIntegrationCall(target, fn, params)
+          console.log(JSON.stringify(result, null, 2))
+          return
+        }
         const spinner = prompts.spinner()
         spinner.start(`Executing ${target}.${fn}…`)
         const result = await executeIntegrationCall(target, fn, params)
         spinner.stop(`${target}.${fn}`)
-        if (args.json) console.log(JSON.stringify(result, null, 2))
-        else displayResult(result, `${target}.${fn}`)
+        displayResult(result, `${target}.${fn}`)
         prompts.outro("Done")
         return
       }
@@ -788,6 +879,20 @@ const ExecCommand = cmd({
       }
 
       const userId = await requireUserId()
+      if (args.json) {
+        // Clean JSON output — no spinner/ANSI (#55735)
+        const res = await irisFetch(`/api/v1/tools/execute`, {
+          method: "POST",
+          body: JSON.stringify({ tool: target, params, user_id: userId }),
+        }, IRIS_API)
+        if (!res.ok) {
+          console.log(JSON.stringify({ error: `HTTP ${res.status}`, success: false }))
+          process.exitCode = 1
+          return
+        }
+        console.log(JSON.stringify(await res.json(), null, 2))
+        return
+      }
       const spinner = prompts.spinner()
       spinner.start(`Executing tool ${target}…`)
       const res = await irisFetch(`/api/v1/tools/execute`, {
@@ -802,8 +907,7 @@ const ExecCommand = cmd({
       }
       const result = await res.json()
       spinner.stop(target)
-      if (args.json) console.log(JSON.stringify(result, null, 2))
-      else displayResult(result, target)
+      displayResult(result, target)
       prompts.outro("Done")
     } catch (e) {
       prompts.log.error(e instanceof Error ? e.message : String(e))

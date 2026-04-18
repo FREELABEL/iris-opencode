@@ -813,9 +813,17 @@ const LeadsUpdateCommand = cmd({
     if (args.source) payload.source = args.source
     if (args.stage) payload.stage = args.stage
     if (args.bid) payload.price_bid = args.bid
-    // #57668: --chat-id merges into contact_info.chat_ids array
+    // #57668: --chat-id appends to contact_info.chat_ids (fetches existing to avoid overwrite)
     if (args["chat-id"]) {
-      payload.contact_info = { chat_ids: [args["chat-id"]] }
+      try {
+        const lr = await irisFetch(`/api/v1/leads/${leadId}`)
+        const ci = lr.ok ? (((await lr.json()) as any)?.data?.contact_info ?? {}) : {}
+        const ids: string[] = Array.isArray(ci.chat_ids) ? ci.chat_ids : []
+        if (!ids.includes(String(args["chat-id"]))) ids.push(String(args["chat-id"]))
+        payload.contact_info = { chat_ids: ids }
+      } catch {
+        payload.contact_info = { chat_ids: [String(args["chat-id"])] }
+      }
     }
 
     if (Object.keys(payload).length === 0) {
@@ -1245,10 +1253,104 @@ const LeadsMergeCommand = cmd({
 })
 
 // ============================================================================
-// Pulse — cross-channel activity check for a lead
+// Integration Health Checks (#57677) — pre-flight validation for pulse + doctor
 // ============================================================================
 
 const BRIDGE_BASE = "http://localhost:3200"
+
+interface ChannelHealth {
+  name: string
+  ok: boolean
+  status: "verified" | "expired" | "error" | "not_connected" | "no_permission"
+  error?: string
+  hint?: string
+}
+
+/**
+ * Run health checks on all channels pulse uses.
+ * Each check is non-blocking — one failure doesn't stop others.
+ * Exported so iris doctor can reuse it.
+ */
+export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
+  const results: ChannelHealth[] = []
+
+  const checks = await Promise.allSettled([
+    // Gmail — verify via fl-api integration endpoint
+    (async (): Promise<ChannelHealth> => {
+      try {
+        const res = await irisFetch("/api/v1/leads/0/gmail-threads")
+        // 401/403 = token expired; 404 = lead not found but integration works; 200 = ok
+        if (res.status === 401 || res.status === 403) {
+          return { name: "Gmail", ok: false, status: "expired", error: "token expired", hint: "run: iris connect gmail" }
+        }
+        // Any response (even 404 for lead 0) means the integration is reachable
+        return { name: "Gmail", ok: true, status: "verified" }
+      } catch {
+        return { name: "Gmail", ok: false, status: "not_connected", hint: "run: iris connect gmail" }
+      }
+    })(),
+
+    // Google Calendar — verify via bridge
+    (async (): Promise<ChannelHealth> => {
+      try {
+        const res = await fetch(`${BRIDGE_BASE}/api/calendar/events?days=1&limit=1`, { signal: AbortSignal.timeout(3000) })
+        if (res.ok) return { name: "Google Calendar", ok: true, status: "verified" }
+        return { name: "Google Calendar", ok: false, status: "error", error: `HTTP ${res.status}`, hint: "check bridge: iris hive doctor" }
+      } catch {
+        return { name: "Google Calendar", ok: false, status: "not_connected", hint: "bridge not running — iris hive start" }
+      }
+    })(),
+
+    // iMessage — verify macOS Messages.app SQLite access
+    (async (): Promise<ChannelHealth> => {
+      try {
+        const { execSync } = await import("child_process")
+        const { homedir } = await import("os")
+        const db = `${homedir()}/Library/Messages/chat.db`
+        execSync(`sqlite3 "${db}" "SELECT count(*) FROM message LIMIT 1"`, { encoding: "utf-8", timeout: 3000 })
+        return { name: "iMessage", ok: true, status: "verified" }
+      } catch (e: any) {
+        const msg = e?.message ?? ""
+        if (msg.includes("not authorized") || msg.includes("permission denied")) {
+          return { name: "iMessage", ok: false, status: "no_permission", error: "Full Disk Access required", hint: "System Settings → Privacy → Full Disk Access → enable terminal" }
+        }
+        return { name: "iMessage", ok: false, status: "error", error: "SQLite access failed", hint: "check macOS Messages.app" }
+      }
+    })(),
+
+    // Apple Mail — verify via bridge
+    (async (): Promise<ChannelHealth> => {
+      try {
+        const res = await fetch(`${BRIDGE_BASE}/api/mail/search?from=test&days=1&limit=1`, { signal: AbortSignal.timeout(3000) })
+        if (res.ok) return { name: "Apple Mail", ok: true, status: "verified" }
+        return { name: "Apple Mail", ok: false, status: "error", error: `HTTP ${res.status}`, hint: "check bridge: iris hive doctor" }
+      } catch {
+        return { name: "Apple Mail", ok: false, status: "not_connected", hint: "bridge not running — iris hive start" }
+      }
+    })(),
+
+    // Bridge health (covers iMessage bridge + Apple Mail)
+    (async (): Promise<ChannelHealth> => {
+      try {
+        const res = await fetch(`${BRIDGE_BASE}/health`, { signal: AbortSignal.timeout(2000) })
+        if (res.ok) return { name: "IRIS Bridge", ok: true, status: "verified" }
+        return { name: "IRIS Bridge", ok: false, status: "error", error: `HTTP ${res.status}` }
+      } catch {
+        return { name: "IRIS Bridge", ok: false, status: "not_connected", hint: "run: iris hive start" }
+      }
+    })(),
+  ])
+
+  for (const result of checks) {
+    if (result.status === "fulfilled") results.push(result.value)
+  }
+
+  return results
+}
+
+// ============================================================================
+// Pulse — cross-channel activity check for a lead
+// ============================================================================
 
 const LeadsPulseCommand = cmd({
   command: "pulse <id>",
@@ -1347,6 +1449,49 @@ const LeadsPulseCommand = cmd({
       printKV("Status", lead.status)
       printKV("Company", lead.company)
 
+      // Lead completeness score — surface gaps proactively
+      const fields = [
+        { name: "email", has: !!email },
+        { name: "phone", has: !!phone },
+        { name: "company", has: !!lead.company },
+        { name: "stage", has: !!lead.stage },
+        { name: "source", has: !!(lead.source ?? lead.keywords?.source) },
+        { name: "bloq", has: Array.isArray(lead.bloq_ids) ? lead.bloq_ids.length > 0 : !!lead.bloq_id },
+        { name: "notes", has: Array.isArray(lead.notes) && lead.notes.length > 0 },
+      ]
+      const score = Math.round((fields.filter((f) => f.has).length / fields.length) * 100)
+      const missing = fields.filter((f) => !f.has).map((f) => f.name)
+      const scoreColor = score >= 80 ? success(`${score}%`) : score >= 50 ? `${UI.Style.TEXT_WARNING}${score}%${UI.Style.TEXT_NORMAL}` : `${UI.Style.TEXT_DANGER}${score}%${UI.Style.TEXT_NORMAL}`
+      if (missing.length > 0) {
+        printKV("Completeness", `${scoreColor}  ${dim(`missing: ${missing.join(", ")}`)}`)
+      } else {
+        printKV("Completeness", scoreColor)
+      }
+
+      // Duplicate detection — search for leads with same email/phone/name
+      let duplicateLeadIds: number[] = []
+      try {
+        const dupSearches: Promise<any[]>[] = []
+        if (email) dupSearches.push(irisFetch(`/api/v1/leads?search=${encodeURIComponent(email)}&per_page=5`).then(async (r) => r.ok ? ((await r.json()) as any)?.data ?? [] : []).catch(() => []))
+        if (phone) dupSearches.push(irisFetch(`/api/v1/leads?search=${encodeURIComponent(phone)}&per_page=5`).then(async (r) => r.ok ? ((await r.json()) as any)?.data ?? [] : []).catch(() => []))
+        if (name && name !== `Lead #${leadId}`) dupSearches.push(irisFetch(`/api/v1/leads?search=${encodeURIComponent(name)}&per_page=5`).then(async (r) => r.ok ? ((await r.json()) as any)?.data ?? [] : []).catch(() => []))
+        const results = await Promise.all(dupSearches)
+        const allMatches = results.flat().filter((l: any) => l.id !== leadId)
+        // Deduplicate by ID
+        const seen = new Set<number>()
+        for (const m of allMatches) {
+          if (!seen.has(m.id)) { seen.add(m.id); duplicateLeadIds.push(m.id) }
+        }
+        if (duplicateLeadIds.length > 0) {
+          console.log()
+          console.log(`  ${UI.Style.TEXT_WARNING}⚠ Possible duplicates${UI.Style.TEXT_NORMAL}  ${dim(`(${duplicateLeadIds.length})`)}`)
+          for (const m of allMatches.filter((v: any, i: number, a: any[]) => a.findIndex((x: any) => x.id === v.id) === i).slice(0, 3)) {
+            console.log(`    ${dim(`#${m.id}`)}  ${m.name ?? "Unknown"}  ${dim(m.email ?? "")}  ${dim(m.status ?? "")}`)
+          }
+          console.log(`    ${dim(`Merge: iris leads merge ${leadId} ${duplicateLeadIds[0]}`)}`)
+        }
+      } catch { /* non-fatal */ }
+
       // CRM notes summary
       const notes: any[] = Array.isArray(lead.notes) ? lead.notes : []
       if (notes.length > 0) {
@@ -1390,6 +1535,23 @@ const LeadsPulseCommand = cmd({
         }
       }
 
+      // If duplicates found and primary has no Stripe data, check duplicates for payments
+      if (duplicateLeadIds.length > 0 && (!stripeData?.total_paid || stripeData.total_paid === 0)) {
+        for (const dupId of duplicateLeadIds.slice(0, 3)) {
+          try {
+            const dupRes = await irisFetch(`/api/v1/leads/${dupId}/stripe-payments`)
+            if (dupRes.ok) {
+              const dupStripe = ((await dupRes.json()) as any)?.data ?? {}
+              if (dupStripe.total_paid > 0) {
+                stripeData = dupStripe
+                stripeData._from_duplicate = dupId
+                break // use first duplicate with payment data
+              }
+            }
+          } catch { /* non-fatal */ }
+        }
+      }
+
       // Render Deal Health — always show (#57659)
       console.log()
       console.log(`  ${bold("Deal Health")}`)
@@ -1402,11 +1564,12 @@ const LeadsPulseCommand = cmd({
         printKV("  Payment Gate", dim("None — create with: iris leads payment-gate " + leadId + " -a 500"))
       }
 
-      // Stripe payments (#57665) — unified financial picture
+      // Stripe payments (#57665) — unified financial picture (may include duplicate lead data)
+      const stripeDupNote = stripeData?._from_duplicate ? dim(` (from lead #${stripeData._from_duplicate})`) : ""
       if (stripeData?.summary) {
         const s = stripeData.summary
         const totalPaid = stripeData.total_paid ?? 0 // API returns dollars, NOT cents
-        printKV("  Stripe Received", totalPaid > 0 ? success(`$${Number(totalPaid).toFixed(2)}`) : dim("$0"))
+        printKV("  Stripe Received", totalPaid > 0 ? success(`$${Number(totalPaid).toFixed(2)}`) + stripeDupNote : dim("$0"))
         if (s.total_invoices > 0) {
           printKV("  Stripe Invoices", `${s.total_invoices} (${s.paid_invoices} paid${s.pending_invoices > 0 ? `, ${s.pending_invoices} pending` : ""})`)
         } else {
@@ -1447,7 +1610,22 @@ const LeadsPulseCommand = cmd({
         if (pending.length > 5) console.log(`    ${dim(`…and ${pending.length - 5} more`)}`)
       }
 
-      // Step 2: Search channels in parallel
+      // Step 2: Integration pre-flight checks (#57677)
+      console.log()
+      console.log(`  ${bold("Integration Health")}`)
+      const healthChecks = await runChannelHealthChecks()
+      for (const hc of healthChecks) {
+        const icon = hc.ok ? success("✓") : (hc.status === "not_connected" ? dim("—") : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`)
+        const statusText = hc.ok
+          ? success("connected + verified")
+          : hc.status === "not_connected"
+            ? dim("not connected")
+            : `${UI.Style.TEXT_DANGER}${hc.error}${UI.Style.TEXT_NORMAL}`
+        const hint = (!hc.ok && hc.hint) ? dim(` — ${hc.hint}`) : ""
+        console.log(`  ${icon} ${highlight(hc.name.padEnd(18))}${statusText}${hint}`)
+      }
+
+      // Step 3: Search channels in parallel
       console.log()
       const channelSpinner = prompts.spinner()
       channelSpinner.start("Scanning channels…")
@@ -1502,7 +1680,7 @@ const LeadsPulseCommand = cmd({
           )
         }
 
-        // iMessage (via local bridge daemon)
+        // iMessage (via local bridge daemon) — 1:1 by phone/email handle
         const handle = phone || email
         if (handle) {
           fetches.push(
@@ -1517,6 +1695,26 @@ const LeadsPulseCommand = cmd({
                 }
               })
               .catch((e) => { channels.push({ name: "iMessage", messages: [], error: e.message }) }),
+          )
+        } else {
+          // #57669: Warn when iMessage scan is skipped due to missing phone
+          channels.push({ name: "iMessage", messages: [], error: `No phone number — add with: iris leads update ${leadId} --phone "..."` })
+        }
+
+        // #57668: iMessage group chats — scan linked chat IDs from contact_info.chat_ids
+        const chatIds: string[] = Array.isArray(lead.contact_info?.chat_ids) ? lead.contact_info.chat_ids : []
+        for (const chatId of chatIds) {
+          fetches.push(
+            fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`)
+              .then(async (r) => {
+                if (r.ok) {
+                  const d = (await r.json()) as any
+                  channels.push({ name: `iMessage Group (${chatId.slice(0, 12)}…)`, messages: d?.messages ?? [] })
+                } else {
+                  channels.push({ name: `iMessage Group`, messages: [], error: `Chat ${chatId.slice(0, 20)} — HTTP ${r.status}` })
+                }
+              })
+              .catch((e) => { channels.push({ name: `iMessage Group`, messages: [], error: e.message }) }),
           )
         }
 

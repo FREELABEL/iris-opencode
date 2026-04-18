@@ -70,6 +70,7 @@ import { PlatformAtlasCommsCommand } from "./cli/cmd/platform-atlas-comms"
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
 import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
+import { PlatformDoctorCommand } from "./cli/cmd/platform-doctor"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
 import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
 import { PlatformContractsCommand } from "./cli/cmd/platform-contracts"
@@ -235,6 +236,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformLeadsMeetingCommand))
   .command(reg(PlatformCampaignCommand))
   .command(reg(PlatformDaemonCommand))
+  .command(reg(PlatformDoctorCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformProposalsCommand))
   .command(reg(PlatformContractsCommand))

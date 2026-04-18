@@ -156,6 +156,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   users: "system",
   config: "system",
   bug: "system",
+  doctor: "system",
   "sdk:call": "system",
   eval: "system",
   diary: "system",
