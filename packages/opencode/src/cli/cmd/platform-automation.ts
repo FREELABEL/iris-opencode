@@ -134,7 +134,9 @@ const CreateCommand = cmd({
     }
 
     try {
-      const res = await irisFetch("/api/v1/workflows/templates", {
+      const userId = await requireUserId()
+      if (!userId) { prompts.outro("Done"); return }
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflow-templates`, {
         method: "POST",
         body: JSON.stringify({
           name: args.name,
@@ -447,7 +449,7 @@ const ListCommand = cmd({
     const qs = params.toString() ? `?${params.toString()}` : ""
 
     try {
-      const res = await irisFetch(`/api/v1/users/${userId}/workflows${qs}`)
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflow-templates${qs}`)
       if (!res.ok) {
         const text = await res.text()
         if (args.json) console.log(JSON.stringify({ ok: false, status: res.status, error: text.slice(0, 200) }))
