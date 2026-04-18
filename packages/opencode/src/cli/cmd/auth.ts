@@ -277,7 +277,7 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
     const ok = sendData?.success === true || sendData?.success === "True"
     if (!ok) {
       spinner.stop("Failed", 1)
-      prompts.log.error("Could not send code. Sign up at: https://app.heyiris.io/login/register")
+      prompts.log.error("Could not send code. Sign up at: https://web.heyiris.io/login/register")
       return false
     }
     const isNew = sendData?.data?.new_account === true || sendData?.data?.new_account === "true"
@@ -328,7 +328,7 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
 
     if (!sdkToken || !userId) {
       verifySpinner.stop("Failed", 1)
-      prompts.log.error("Auth succeeded but token wasn't generated. Try again or visit https://app.heyiris.io")
+      prompts.log.error("Auth succeeded but token wasn't generated. Try again or visit https://web.heyiris.io")
       return false
     }
 

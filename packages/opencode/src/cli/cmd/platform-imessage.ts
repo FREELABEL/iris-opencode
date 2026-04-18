@@ -25,7 +25,7 @@ const ImessageSearchCommand = cmd({
     yargs
       .positional("query", { type: "string", demandOption: true, describe: "phone number (last 10 digits) or chat identifier" })
       .option("days", { type: "number", default: 7, describe: "search last N days" })
-      .option("limit", { type: "number", default: 20, describe: "max messages" })
+      .option("limit", { type: "number", default: 50, describe: "max messages" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -195,7 +195,7 @@ const ImessageChatsCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("days", { type: "number", default: 7, describe: "recent conversations in last N days" })
-      .option("limit", { type: "number", default: 20, describe: "max conversations" })
+      .option("limit", { type: "number", default: 50, describe: "max conversations" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()

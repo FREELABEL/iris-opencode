@@ -8,7 +8,7 @@ $IRIS_DIR = "$env:USERPROFILE\.iris"
 
 # ─── Parse environment overrides ──────────────────────────────────────────────
 $RequestedVersion = if ($env:VERSION) { $env:VERSION } else { "" }
-$IrisApiUrl = if ($env:IRIS_API_URL) { $env:IRIS_API_URL } else { "https://app.heyiris.io" }
+$IrisApiUrl = if ($env:IRIS_API_URL) { $env:IRIS_API_URL } else { "https://web.heyiris.io" }
 
 # ─── Helper: colored output ──────────────────────────────────────────────────
 function Write-Step {
@@ -370,7 +370,7 @@ try {
         -Headers @{ "Content-Type" = "application/json"; Accept = "application/json" } `
         -Body $SendBody -TimeoutSec 15 -ErrorAction Stop
 } catch {
-    Write-Host "  Failed to send code. Sign up at: https://app.heyiris.io/login/register" -ForegroundColor Red
+    Write-Host "  Failed to send code. Sign up at: https://web.heyiris.io/login/register" -ForegroundColor Red
     exit 1
 }
 
