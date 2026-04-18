@@ -149,8 +149,10 @@ for (const item of targets) {
   })
 
   // Ad-hoc sign macOS binaries so Gatekeeper doesn't SIGKILL them (exit 137)
-  // --deep is required to clear com.apple.provenance xattr on newer macOS versions
+  // xattr -cr strips com.apple.provenance + quarantine BEFORE signing.
+  // Without this, macOS taskgated rejects the binary even with a valid adhoc signature.
   if (item.os === "darwin") {
+    await $`xattr -cr dist/${name}/bin/iris`.quiet()
     await $`codesign --force --deep --sign - dist/${name}/bin/iris`
   }
 
