@@ -3,19 +3,8 @@ import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success } from "./iris-api"
 import { execSync } from "child_process"
-import { existsSync } from "fs"
-
-// macOS iMessage integration — reads directly from ~/Library/Messages/chat.db (SQLite)
-// No bridge dependency needed — just macOS + Full Disk Access permission
-
-const MESSAGES_DB = `${process.env.HOME}/Library/Messages/chat.db`
-
-function queryMessages(sql: string): string {
-  return execSync(`sqlite3 "${MESSAGES_DB}" "${sql.replace(/"/g, '\\"')}"`, {
-    encoding: "utf-8",
-    timeout: 10000,
-  }).trim()
-}
+import { isAvailable, query as queryMessages, normalizeHandle } from "../lib/imessage"
+import { resolveContactName, resolveContactNames } from "../lib/contacts"
 
 const ImessageSearchCommand = cmd({
   command: "search <query>",
@@ -32,14 +21,8 @@ const ImessageSearchCommand = cmd({
     UI.empty()
     prompts.intro(`◈  iMessage Search — "${args.query}"`)
 
-    if (process.platform !== "darwin") {
-      prompts.log.error("iMessage is only available on macOS")
-      prompts.outro("Done")
-      return
-    }
-
-    if (!existsSync(MESSAGES_DB)) {
-      prompts.log.error(`Messages database not found at ${MESSAGES_DB}. Grant Full Disk Access in System Settings.`)
+    if (!isAvailable()) {
+      prompts.log.error("iMessage not available. Requires macOS + Full Disk Access in System Settings.")
       prompts.outro("Done")
       return
     }
@@ -47,10 +30,11 @@ const ImessageSearchCommand = cmd({
     // Normalize phone number — strip everything except digits
     const digits = args.query.replace(/\D/g, "")
     const isPhone = digits.length >= 7
+    const normalized = isPhone ? normalizeHandle(args.query) : args.query
 
     // Build WHERE clause — match chat_identifier by phone digits or name
     const whereClause = isPhone
-      ? `c.chat_identifier LIKE '%${digits.slice(-10)}%'`
+      ? `c.chat_identifier LIKE '%${normalized}%'`
       : `c.chat_identifier LIKE '%${args.query.replace(/'/g, "''")}%'`
 
     // --since takes priority over --days (#58884)
@@ -94,19 +78,7 @@ const ImessageSearchCommand = cmd({
       }
 
       // Resolve contact name from leads (#58888)
-      let contactName = "Them"
-      try {
-        const { irisFetch: _fetch } = await import("./iris-api")
-        const searchQ = digits || String(args.query)
-        const leadRes = await _fetch(`/api/v1/leads?search=${encodeURIComponent(searchQ)}&per_page=1`)
-        if (leadRes.ok) {
-          const leadData = (await leadRes.json()) as any
-          const leads = leadData?.data ?? []
-          if (Array.isArray(leads) && leads.length > 0) {
-            contactName = leads[0].name ?? leads[0].first_name ?? "Them"
-          }
-        }
-      } catch {}
+      const contactName = await resolveContactName(digits || String(args.query)) ?? "Them"
 
       // Display in chronological order (oldest first)
       const reversed = [...messages].reverse()
@@ -142,16 +114,17 @@ const ImessageReadCommand = cmd({
     UI.empty()
     prompts.intro(`◈  iMessage Read — "${args.query}"`)
 
-    if (process.platform !== "darwin" || !existsSync(MESSAGES_DB)) {
-      prompts.log.error("iMessage database not available")
+    if (!isAvailable()) {
+      prompts.log.error("iMessage not available. Requires macOS + Full Disk Access.")
       prompts.outro("Done")
       return
     }
 
     const digits = args.query.replace(/\D/g, "")
     const isPhone = digits.length >= 7
+    const normalized = isPhone ? normalizeHandle(args.query) : args.query
     const whereClause = isPhone
-      ? `c.chat_identifier LIKE '%${digits.slice(-10)}%'`
+      ? `c.chat_identifier LIKE '%${normalized}%'`
       : `c.chat_identifier LIKE '%${args.query.replace(/'/g, "''")}%'`
 
     // --since takes priority over --days (#58884)
@@ -224,8 +197,8 @@ const ImessageChatsCommand = cmd({
     UI.empty()
     prompts.intro("◈  Recent iMessage Chats")
 
-    if (process.platform !== "darwin" || !existsSync(MESSAGES_DB)) {
-      prompts.log.error("iMessage database not available")
+    if (!isAvailable()) {
+      prompts.log.error("iMessage not available. Requires macOS + Full Disk Access.")
       prompts.outro("Done")
       return
     }
@@ -268,22 +241,8 @@ const ImessageChatsCommand = cmd({
       }
 
       // Resolve phone numbers → lead names in bulk (#58888)
-      const phoneMap = new Map<string, string>()
-      try {
-        const { irisFetch: _fetch } = await import("./iris-api")
-        const phones = chats.filter(c => /^\+?\d{10,}$/.test(c.identifier.replace(/[^+\d]/g, "")))
-        for (const c of phones.slice(0, 10)) {
-          const digits = c.identifier.replace(/[^0-9]/g, "").slice(-10)
-          const r = await _fetch(`/api/v1/leads?search=${digits}&per_page=1`)
-          if (r.ok) {
-            const d = (await r.json()) as any
-            const leads = d?.data ?? []
-            if (Array.isArray(leads) && leads.length > 0) {
-              phoneMap.set(c.identifier, leads[0].name ?? leads[0].first_name ?? c.identifier)
-            }
-          }
-        }
-      } catch {}
+      const phones = chats.filter(c => /^\+?\d{10,}$/.test(c.identifier.replace(/[^+\d]/g, "")))
+      const phoneMap = await resolveContactNames(phones.map(c => c.identifier))
 
       printDivider()
       for (const chat of chats) {
