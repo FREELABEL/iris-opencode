@@ -2031,6 +2031,50 @@ echo -e ""
 echo -e "${MUTED}For more information visit ${NC}https://heyiris.io/developer"
 echo -e ""
 
+# ─── macOS: Homebrew + iTerm2 ────────────────────────────────────────────────
+# IRIS renders best in iTerm2. Auto-install the full terminal stack so new
+# users get a great experience without multiple prompts.
+if [ "$(uname)" = "Darwin" ] && [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    _needs_brew=false
+    _needs_iterm=false
+    if ! command -v brew >/dev/null 2>&1; then _needs_brew=true; fi
+    if ! [ -d "/Applications/iTerm.app" ]; then _needs_iterm=true; fi
+
+    if [ "$_needs_brew" = "true" ] || [ "$_needs_iterm" = "true" ]; then
+        echo -e "${CYAN}→${NC} Setting up the recommended terminal environment..."
+        if [ "$_needs_brew" = "true" ] && [ "$_needs_iterm" = "true" ]; then
+            echo -e "${MUTED}  This will install Homebrew + iTerm2 for the best IRIS experience.${NC}"
+        elif [ "$_needs_brew" = "true" ]; then
+            echo -e "${MUTED}  This will install Homebrew (package manager for macOS tools).${NC}"
+        else
+            echo -e "${MUTED}  This will install iTerm2 (Apple Terminal has rendering issues with IRIS).${NC}"
+        fi
+        echo -n "  Continue? [Y/n] "
+        read -r _env_answer < /dev/tty || _env_answer=""
+
+        if [ "$_env_answer" != "n" ] && [ "$_env_answer" != "N" ]; then
+            # Step 1: Homebrew
+            if [ "$_needs_brew" = "true" ]; then
+                echo -e "${CYAN}→${NC} Installing Homebrew..."
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true
+                if [ -f /opt/homebrew/bin/brew ]; then
+                    eval "$(/opt/homebrew/bin/brew shellenv)"
+                elif [ -f /usr/local/bin/brew ]; then
+                    eval "$(/usr/local/bin/brew shellenv)"
+                fi
+            fi
+
+            # Step 2: iTerm2
+            if [ "$_needs_iterm" = "true" ] && command -v brew >/dev/null 2>&1; then
+                echo -e "${CYAN}→${NC} Installing iTerm2..."
+                brew install --cask iterm2 2>/dev/null && \
+                    echo -e "${GREEN}✓${NC} iTerm2 installed — launch it from Applications for the best experience" || \
+                    echo -e "${ORANGE}⚠${NC} iTerm2 install failed — install later: brew install --cask iterm2"
+            fi
+        fi
+    fi
+fi
+
 # ─── Authentication ───────────────────────────────────────────────────────────
 # Handle ALL auth in bash (where keyboard works via /dev/tty).
 # Then force-launch the agent post-auth — no user input needed in the TUI.
