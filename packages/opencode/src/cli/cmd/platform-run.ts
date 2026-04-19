@@ -61,6 +61,8 @@ const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string 
   "google-calendar": [
     { name: "get_events", description: "Get calendar events (max_results, time_min, time_max)" },
     { name: "create_event", description: "Create a calendar event" },
+    { name: "update_event", description: "Update an event (event_id, title, start_time, end_time, description, location)" },
+    { name: "delete_event", description: "Delete an event (event_id)" },
   ],
   "slack": [
     { name: "send_message", description: "Send a message to a channel (channel, text)" },
@@ -313,10 +315,15 @@ export async function executeIntegrationCall(
 function displayArrayItems(items: any[], indent = "    "): void {
   for (const item of items.slice(0, 25)) {
     if (typeof item === "object" && item !== null) {
-      const label = item.name ?? item.title ?? item.subject ?? item.filename ?? item.email ?? item.id ?? ""
-      const id = item.id && label !== item.id ? dim(` #${item.id}`) : ""
+      const label = item.name ?? item.title ?? item.summary ?? item.subject ?? item.filename ?? item.email ?? item.id ?? ""
+      const id = item.id && label !== item.id ? dim(` #${String(item.id).slice(0, 12)}`) : ""
       const type = item.mimeType ?? item.type ?? ""
-      console.log(`${indent}${bold(String(label))}${id}${type ? `  ${dim(type)}` : ""}`)
+      // Calendar events: show start/end time
+      // start may be a string ("2026-04-18T09:00:00") or object ({ dateTime: "..." })
+      const rawStart = item.start
+      const startTime = typeof rawStart === "string" ? rawStart : (rawStart?.dateTime ?? rawStart?.date ?? item.start_time ?? "")
+      const timeLabel = startTime ? dim(` ${startTime}`) : ""
+      console.log(`${indent}${bold(String(label))}${id}${timeLabel}${type ? `  ${dim(type)}` : ""}`)
     } else {
       console.log(`${indent}${item}`)
     }

@@ -2,8 +2,6 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight } from "./iris-api"
-import { execSync } from "child_process"
-import { homedir } from "os"
 
 // ============================================================================
 // Atlas Comms CLI — Unified cross-channel lead communications log
@@ -53,12 +51,12 @@ async function resolveLead(idOrQuery: string): Promise<{ id: number; lead: any }
   return { id: leadId, lead: data?.data ?? data }
 }
 
-// ── iMessage ingestion (local SQLite) ──
+// ── iMessage ingestion (via shared lib) ──
 
 function ingestImessage(lead: any): any[] {
-  const MESSAGES_DB = `${homedir()}/Library/Messages/chat.db`
+  const { searchByHandle, normalizeHandle } = require("../lib/imessage")
   const identifiers: string[] = []
-  if (lead.phone) identifiers.push(lead.phone.replace(/\D/g, "").slice(-10))
+  if (lead.phone) identifiers.push(normalizeHandle(lead.phone))
   if (lead.email) identifiers.push(lead.email)
   if (lead.instagram) identifiers.push(lead.instagram.replace("@", ""))
 
@@ -67,28 +65,15 @@ function ingestImessage(lead: any): any[] {
   const items: any[] = []
   for (const ident of identifiers) {
     try {
-      const sql = `SELECT
-        m.rowid, m.text, m.is_from_me, m.date,
-        datetime(m.date/1000000000 + strftime('%s','2001-01-01'), 'unixepoch', 'localtime') as sent_dt,
-        c.chat_identifier
-      FROM message m
-      JOIN chat_message_join cmj ON m.rowid = cmj.message_id
-      JOIN chat c ON cmj.chat_id = c.rowid
-      WHERE c.chat_identifier LIKE '%${ident}%'
-      AND m.text IS NOT NULL AND m.text != ''
-      ORDER BY m.date DESC LIMIT 100`
-      const raw = execSync(`sqlite3 "${MESSAGES_DB}" "${sql}"`, { encoding: "utf-8", timeout: 10000 }).trim()
-      if (!raw) continue
-      for (const line of raw.split("\n")) {
-        const parts = line.split("|")
-        if (parts.length < 5) continue
+      const messages = searchByHandle(ident, 90, 100)
+      for (const m of messages) {
         items.push({
-          direction: parts[2] === "1" ? "outbound" : "inbound",
-          from_identifier: parts[2] === "1" ? "me" : (parts[5] || ident),
-          body: parts[1],
-          sent_at: parts[4],
-          external_message_id: `imessage_${parts[0]}`,
-          metadata: { chat_identifier: parts[5] || ident },
+          direction: m.from_me ? "outbound" : "inbound",
+          from_identifier: m.from_me ? "me" : (m.chat_identifier || ident),
+          body: m.text,
+          sent_at: m.date,
+          external_message_id: `imessage_${m.id}`,
+          metadata: { chat_identifier: m.chat_identifier || ident },
         })
       }
     } catch { /* SQLite access may fail — skip silently */ }

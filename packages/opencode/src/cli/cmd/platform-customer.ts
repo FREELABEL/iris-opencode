@@ -398,10 +398,9 @@ async function searchMail(query: string, days: number): Promise<any[]> {
 }
 
 function queryMessagesDb(sql: string): string {
-  const { execSync } = require("child_process") as typeof import("child_process")
-  const db = `${process.env.HOME}/Library/Messages/chat.db`
   try {
-    return execSync(`sqlite3 "${db}" "${sql.replace(/"/g, '\\"')}"`, { encoding: "utf-8", timeout: 5000 }).trim()
+    const { query } = require("../lib/imessage")
+    return query(sql)
   } catch { return "" }
 }
 

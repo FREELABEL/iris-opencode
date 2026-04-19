@@ -385,3 +385,44 @@ describe("completeness score in source (#57686)", () => {
     expect(source).toContain("maskSecrets")
   })
 })
+
+// ============================================================================
+// #58778/#58779: Calendar event display — summary + start time
+// ============================================================================
+
+describe("calendar event display (#58778, #58779)", () => {
+  // Replicate displayArrayItems logic for calendar events
+  function getEventLabel(item: Record<string, unknown>): string {
+    return String(item.name ?? item.title ?? item.summary ?? item.subject ?? item.id ?? "")
+  }
+
+  function getStartTime(item: Record<string, unknown>): string {
+    const rawStart = item.start
+    return typeof rawStart === "string" ? rawStart : ((rawStart as any)?.dateTime ?? (rawStart as any)?.date ?? "")
+  }
+
+  test("uses summary field for Google Calendar events", () => {
+    const event = { id: "abc123", summary: "Song Wars Ep.1", start: "2026-04-18T19:00:00-05:00" }
+    expect(getEventLabel(event)).toBe("Song Wars Ep.1")
+  })
+
+  test("extracts start time from flat string", () => {
+    const event = { summary: "Test", start: "2026-04-18T09:00:00-05:00" }
+    expect(getStartTime(event)).toBe("2026-04-18T09:00:00-05:00")
+  })
+
+  test("extracts start time from nested object", () => {
+    const event = { summary: "Test", start: { dateTime: "2026-04-18T09:00:00Z" } }
+    expect(getStartTime(event)).toBe("2026-04-18T09:00:00Z")
+  })
+
+  test("handles missing start gracefully", () => {
+    const event = { summary: "Test" }
+    expect(getStartTime(event)).toBe("")
+  })
+
+  test("falls back to id when no summary/title/name", () => {
+    const event = { id: "7d4kh6431gmu" }
+    expect(getEventLabel(event)).toBe("7d4kh6431gmu")
+  })
+})

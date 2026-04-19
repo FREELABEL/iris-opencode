@@ -47,8 +47,12 @@ const BloqsListCommand = cmd({
     try {
       const params = new URLSearchParams({ per_page: String(args.limit) })
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs?${params}`)
-      const ok = await handleApiError(res, "List bloqs")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "List bloqs")
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any[] }
       const bloqs: any[] = data?.data ?? []
@@ -105,9 +109,13 @@ const BloqsGetCommand = cmd({
     spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/${args.id}`)
-      const ok = await handleApiError(res, "Get bloq")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`)
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Get bloq")
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any }
       const b = data?.data ?? data
@@ -122,7 +130,7 @@ const BloqsGetCommand = cmd({
       console.log()
 
       // Load lists
-      const listsRes = await irisFetch(`/api/v1/users/${userId}/bloqs/${args.id}/lists`)
+      const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
       if (listsRes.ok) {
         const listsData = (await listsRes.json()) as { data?: any[] }
         const lists: any[] = listsData?.data ?? []
@@ -137,7 +145,7 @@ const BloqsGetCommand = cmd({
 
       // Load files if requested
       if (args.files) {
-        const filesRes = await irisFetch(`/api/v1/users/${userId}/bloqs/${args.id}/files`)
+        const filesRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/files`)
         if (filesRes.ok) {
           const filesData = (await filesRes.json()) as { data?: any[] }
           const files: any[] = filesData?.data ?? []
@@ -228,15 +236,19 @@ const BloqsCreateCommand = cmd({
     spinner.start("Creating bloq…")
 
     try {
-      const res = await irisFetch(`/api/v1/users/${userId}/bloqs`, {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs`, {
         method: "POST",
         body: JSON.stringify({ name, description }),
       })
-      const ok = await handleApiError(res, "Create bloq")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Create bloq")
+        prompts.outro("Done")
+        return
+      }
 
-      const data = (await res.json()) as { data?: any }
-      const b = data?.data ?? data
+      const data = (await res.json()) as { data?: { bloq?: any } }
+      const b = data?.data?.bloq ?? data?.data ?? data
       spinner.stop(`${success("✓")} Bloq created: ${bold(String(b.name ?? b.id))}`)
 
       printDivider()
@@ -292,14 +304,18 @@ const BloqsIngestCommand = cmd({
       const formData = new FormData()
       formData.append("file", new Blob([blob]), filename)
 
-      const res = await fetch(`${FL_API}/api/v1/users/${userId}/bloqs/${args.id}/files`, {
+      const res = await fetch(`${FL_API}/api/v1/user/${userId}/bloqs/${args.id}/files`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         body: formData,
       })
 
-      const ok = await handleApiError(res, "Ingest file")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Ingest file")
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any; message?: string }
       spinner.stop(`${success("✓")} ${filename} ingested`)
@@ -380,11 +396,15 @@ const BloqsAddItemCommand = cmd({
       if (title) payload.title = title
 
       const res = await irisFetch(
-        `/api/v1/users/${userId}/bloqs/${args["bloq-id"]}/lists/${args["list-id"]}/items`,
+        `/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists/${args["list-id"]}/items`,
         { method: "POST", body: JSON.stringify(payload) },
       )
-      const ok = await handleApiError(res, "Add item")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Add item")
+        prompts.outro("Done")
+        return
+      }
 
       spinner.stop(`${success("✓")} Item added`)
       prompts.outro(dim(`iris bloqs get ${args["bloq-id"]}`))
@@ -480,21 +500,25 @@ const BloqsComposeCommand = cmd({
     spinner.start("Creating knowledge base…")
 
     try {
-      const res = await irisFetch(`/api/v1/users/${userId}/bloqs`, {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs`, {
         method: "POST",
         body: JSON.stringify({ name, description }),
       })
-      const ok = await handleApiError(res, "Create bloq")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Create bloq")
+        prompts.outro("Done")
+        return
+      }
 
-      const data = (await res.json()) as { data?: any }
-      const bloq = data?.data ?? data
+      const data = (await res.json()) as { data?: { bloq?: any } }
+      const bloq = data?.data?.bloq ?? data?.data ?? data
       const bloqId = bloq.id
 
       // Step 5: Create lists
       let listsCreated = 0
       for (const listName of suggestedLists) {
-        const listRes = await irisFetch(`/api/v1/users/${userId}/bloqs/${bloqId}/lists`, {
+        const listRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists`, {
           method: "POST",
           body: JSON.stringify({ name: listName }),
         })

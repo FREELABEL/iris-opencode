@@ -535,7 +535,8 @@ const LeadsCreateCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("name", { describe: "lead name", type: "string" })
-      .option("email", { describe: "email address", type: "string" })
+      .option("email", { describe: "primary email address", type: "string" })
+      .option("emails", { describe: "additional emails (comma-separated)", type: "string" })
       .option("phone", { describe: "phone number", type: "string" })
       .option("company", { describe: "company name", type: "string" })
       .option("source", { describe: "lead source (e.g. referral, inbound, outreach)", type: "string" })
@@ -596,6 +597,13 @@ const LeadsCreateCommand = cmd({
       if (args.company) payload.company = args.company
       if (args.source) payload.source = args.source
       if (args.status) payload.status = args.status
+      // Store additional emails in contact_info.emails array
+      if (args.emails) {
+        const extras = String(args.emails).split(",").map((e: string) => e.trim()).filter(Boolean)
+        if (extras.length > 0) {
+          payload.contact_info = { emails: extras }
+        }
+      }
 
       const res = await irisFetch("/api/v1/leads", {
         method: "POST",
@@ -612,6 +620,7 @@ const LeadsCreateCommand = cmd({
       printKV("ID", l.id)
       printKV("Name", l.name)
       printKV("Email", l.email ?? dim("none"))
+      if (args.emails) printKV("Alt Emails", String(args.emails))
       printKV("Company", l.company ?? dim("none"))
       printKV("Source", l.source ?? args.source ?? dim("none"))
       printKV("Status", l.status)
@@ -1325,17 +1334,13 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
     // iMessage — verify macOS Messages.app SQLite access
     (async (): Promise<ChannelHealth> => {
       try {
-        const { execSync } = await import("child_process")
-        const { homedir } = await import("os")
-        const db = `${homedir()}/Library/Messages/chat.db`
-        execSync(`sqlite3 "${db}" "SELECT count(*) FROM message LIMIT 1"`, { encoding: "utf-8", timeout: 3000 })
-        return { name: "iMessage", ok: true, status: "verified" }
-      } catch (e: any) {
-        const msg = e?.message ?? ""
-        if (msg.includes("not authorized") || msg.includes("permission denied")) {
-          return { name: "iMessage", ok: false, status: "no_permission", error: "Full Disk Access required", hint: "System Settings → Privacy → Full Disk Access → enable terminal" }
+        const { isAvailable } = await import("../lib/imessage")
+        if (isAvailable()) {
+          return { name: "iMessage", ok: true, status: "verified" }
         }
-        return { name: "iMessage", ok: false, status: "error", error: "SQLite access failed", hint: "check macOS Messages.app" }
+        return { name: "iMessage", ok: false, status: "no_permission", error: "Full Disk Access required", hint: "System Settings → Privacy → Full Disk Access → enable terminal" }
+      } catch {
+        return { name: "iMessage", ok: false, status: "error", error: "check failed", hint: "check macOS Messages.app" }
       }
     })(),
 
