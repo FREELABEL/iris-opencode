@@ -846,7 +846,7 @@ const LeadsUpdateCommand = cmd({
       .option("phone", { describe: "new phone", type: "string" })
       .option("company", { describe: "new company", type: "string" })
       .option("status", { describe: "new status", type: "string" })
-      .option("bloq-id", { describe: "CRM bloq ID to associate", type: "number" })
+      .option("bloq-id", { alias: "bloq", describe: "CRM bloq ID to associate", type: "number" })
       .option("website", { describe: "website URL", type: "string" })
       .option("source", { describe: "lead source", type: "string" })
       .option("stage", { describe: "pipeline stage", type: "string" })
