@@ -273,13 +273,53 @@ const BloqsCreateCommand = cmd({
   },
 })
 
+/**
+ * Parse CSV text into an array of objects using the first row as headers.
+ */
+function parseCsv(text: string): { headers: string[]; rows: Record<string, string>[] } {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean)
+  if (lines.length < 2) return { headers: [], rows: [] }
+
+  // Simple CSV parser — handles quoted fields with commas
+  const parseLine = (line: string): string[] => {
+    const fields: string[] = []
+    let current = ""
+    let inQuotes = false
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { current += '"'; i++ }
+        else inQuotes = !inQuotes
+      } else if (ch === "," && !inQuotes) {
+        fields.push(current.trim())
+        current = ""
+      } else {
+        current += ch
+      }
+    }
+    fields.push(current.trim())
+    return fields
+  }
+
+  const headers = parseLine(lines[0])
+  const rows = lines.slice(1).map((line) => {
+    const vals = parseLine(line)
+    const obj: Record<string, string> = {}
+    headers.forEach((h, i) => { obj[h] = vals[i] ?? "" })
+    return obj
+  })
+
+  return { headers, rows }
+}
+
 const BloqsIngestCommand = cmd({
   command: "ingest <id> <file>",
-  describe: "upload a file into a bloq",
+  describe: "upload a file into a bloq (CSV files are parsed into a dataset item)",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
       .positional("file", { describe: "path to file", type: "string", demandOption: true })
+      .option("list", { alias: "l", describe: "target list name", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -291,11 +331,10 @@ const BloqsIngestCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
-    // Read file
     const filename = path.basename(args.file)
+    const ext = path.extname(args.file).toLowerCase()
 
     const spinner = prompts.spinner()
-    spinner.start(`Uploading ${dim(filename)}…`)
 
     try {
       const file = Bun.file(args.file)
@@ -305,6 +344,104 @@ const BloqsIngestCommand = cmd({
         prompts.outro("Done")
         return
       }
+
+      // CSV files: parse rows into a structured dataset bloq item
+      if (ext === ".csv") {
+        spinner.start(`Parsing ${dim(filename)}…`)
+        const text = await file.text()
+        const { headers, rows } = parseCsv(text)
+
+        if (rows.length === 0) {
+          spinner.stop("Empty CSV", 1)
+          prompts.log.error("No data rows found in CSV")
+          prompts.outro("Done")
+          return
+        }
+
+        spinner.stop(`${success("✓")} Parsed ${rows.length} rows × ${headers.length} columns`)
+
+        // Preview first 3 rows
+        for (const row of rows.slice(0, 3)) {
+          const preview = headers.slice(0, 4).map((h) => `${dim(h)}=${row[h] ?? ""}`).join("  ")
+          console.log(`    ${preview}`)
+        }
+        if (rows.length > 3) console.log(`    ${dim(`…and ${rows.length - 3} more`)}`)
+        console.log()
+
+        // Store as a single bloq item with type "dataset"
+        spinner.start(`Saving dataset to Bloq #${args.id}…`)
+
+        const dataset = {
+          type: "dataset",
+          source_file: filename,
+          headers,
+          row_count: rows.length,
+          rows,
+        }
+
+        // Find or use target list
+        let listId: number | null = null
+        if (args.list) {
+          const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
+          if (listsRes.ok) {
+            const listsData = (await listsRes.json()) as { data?: any[] }
+            const lists: any[] = listsData?.data ?? []
+            const match = lists.find((l: any) => (l.name ?? "").toLowerCase() === args.list!.toLowerCase())
+            if (match) listId = match.id
+          }
+        }
+
+        // Get first list if none specified
+        if (!listId) {
+          const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
+          if (listsRes.ok) {
+            const listsData = (await listsRes.json()) as { data?: any[] }
+            const lists: any[] = listsData?.data ?? []
+            if (lists.length > 0) listId = lists[0].id
+          }
+        }
+
+        if (!listId) {
+          spinner.stop("No list found", 1)
+          prompts.log.error("Bloq has no lists. Create one first.")
+          prompts.outro("Done")
+          return
+        }
+
+        const itemRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items`, {
+          method: "POST",
+          body: JSON.stringify({
+            title: filename.replace(/\.csv$/i, ""),
+            content: JSON.stringify(dataset),
+            type: "default",
+            bloq_list_id: listId,
+          }),
+        })
+
+        if (!itemRes.ok) {
+          spinner.stop("Failed", 1)
+          await handleApiError(itemRes, "Create dataset item")
+          prompts.outro("Done")
+          return
+        }
+
+        const itemData = (await itemRes.json()) as { data?: any }
+        const item = itemData?.data ?? itemData
+        spinner.stop(`${success("✓")} Dataset saved — ${rows.length} rows`)
+
+        printDivider()
+        printKV("Item ID", item?.id ?? "(unknown)")
+        printKV("Type", "dataset")
+        printKV("Rows", rows.length)
+        printKV("Columns", headers.join(", "))
+        printDivider()
+
+        prompts.outro(dim(`iris bloqs get ${args.id}`))
+        return
+      }
+
+      // Non-CSV files: upload as cloud file attachment (existing behavior)
+      spinner.start(`Uploading ${dim(filename)}…`)
 
       const blob = await file.arrayBuffer()
       const formData = new FormData()
