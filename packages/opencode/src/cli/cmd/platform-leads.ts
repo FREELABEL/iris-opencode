@@ -212,6 +212,7 @@ const LeadsListCommand = cmd({
       .option("search", { alias: "s", describe: "search query", type: "string" })
       .option("limit", { describe: "max results", type: "number", default: 20 })
       .option("bloq-id", { describe: "filter by bloq (CRM)", type: "number" })
+      .option("all", { describe: "include Prospected leads (hidden by default)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -224,7 +225,9 @@ const LeadsListCommand = cmd({
     spinner.start("Loading leads…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit) })
+      // Fetch more than requested so we can filter + sort client-side
+      const fetchLimit = args.all || args.status || args.search ? args.limit : Math.max(args.limit * 5, 100)
+      const params = new URLSearchParams({ per_page: String(fetchLimit) })
       if (args.status) params.set("status", args.status)
       if (args.search) params.set("search", args.search)
       if (args["bloq-id"]) params.set("bloq_id", String(args["bloq-id"]))
@@ -234,9 +237,39 @@ const LeadsListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
-      const leads: any[] = data?.data ?? []
+      let leads: any[] = data?.data ?? []
+
+      // Default: hide Prospected leads (mass-scraped venue/SOM leads)
+      // Use --all or --status to see everything
+      if (!args.all && !args.status && !args.search) {
+        leads = leads.filter((l: any) => {
+          const s = (l.status ?? "").toLowerCase()
+          return s !== "prospected"
+        })
+      }
+
+      // Sort by status priority: active clients first
+      const statusPriority: Record<string, number> = {
+        won: 0,
+        "in negotiation": 1,
+        interested: 2,
+        contacted: 3,
+        qualified: 4,
+        new: 5,
+        prospected: 6,
+        lost: 7,
+        unresponsive: 8,
+      }
+      leads.sort((a: any, b: any) => {
+        const pa = statusPriority[(a.status ?? "").toLowerCase()] ?? 5
+        const pb = statusPriority[(b.status ?? "").toLowerCase()] ?? 5
+        return pa - pb
+      })
+
+      // Trim to requested limit
+      leads = leads.slice(0, args.limit)
       const total = data?.meta?.total ?? leads.length
-      spinner.stop(`${total} lead(s)`)
+      spinner.stop(`${leads.length} lead(s)${!args.all && !args.status ? dim(` (${total} total — use --all to see Prospected)`) : ""}`)
 
       if (args.json) {
         console.log(JSON.stringify(leads, null, 2))
@@ -1758,7 +1791,7 @@ const LeadsPulseCommand = cmd({
           )
         }
 
-        // iMessage (via local bridge daemon) — 1:1 by phone/email handle
+        // iMessage (via local bridge daemon) — 1:1 by phone/email handle or contact name
         const handle = phone || email
         if (handle) {
           fetches.push(
@@ -1774,9 +1807,23 @@ const LeadsPulseCommand = cmd({
               })
               .catch((e) => { channels.push({ name: "iMessage", messages: [], error: e.message }) }),
           )
+        } else if (name) {
+          // Fallback: search by contact name via Contacts.app resolution
+          fetches.push(
+            fetch(`${BRIDGE_BASE}/api/imessage/search?name=${encodeURIComponent(name)}&days=${days}&limit=${msgLimit}`)
+              .then(async (r) => {
+                if (r.ok) {
+                  const d = (await r.json()) as any
+                  channels.push({ name: "iMessage", messages: d?.messages ?? [] })
+                } else {
+                  const body = await r.text().catch(() => "")
+                  channels.push({ name: "iMessage", messages: [], error: body || `HTTP ${r.status}` })
+                }
+              })
+              .catch((e) => { channels.push({ name: "iMessage", messages: [], error: e.message }) }),
+          )
         } else {
-          // #57669: Warn when iMessage scan is skipped due to missing phone
-          channels.push({ name: "iMessage", messages: [], error: `No phone number — add with: iris leads update ${leadId} --phone "..."` })
+          channels.push({ name: "iMessage", messages: [], error: `No phone, email, or name — add with: iris leads update ${leadId} --phone "..."` })
         }
 
         // #57668: iMessage group chats — scan linked chat IDs from contact_info.chat_ids
@@ -2202,6 +2249,80 @@ const LeadsPaymentGateCommand = cmd({
 })
 
 // ============================================================================
+// Update Payment Gate
+// ============================================================================
+
+const LeadsUpdatePaymentGateCommand = cmd({
+  command: "update-gate <id>",
+  aliases: ["update-invoice"],
+  describe: "update an existing payment gate (amount, scope)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("amount", { alias: "a", describe: "new amount", type: "number" })
+      .option("scope", { alias: "s", describe: "new scope of work", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    if (!args.amount && !args.scope) {
+      prompts.log.error("Provide at least --amount or --scope to update")
+      return
+    }
+
+    const body: Record<string, unknown> = {}
+    if (args.amount) body.amount = args.amount
+    if (args.scope) body.scope = args.scope
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    })
+    if (!(await handleApiError(res, "Update payment gate"))) return
+
+    const data = await res.json().catch(() => ({}))
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    if (data.success) {
+      console.log(success("Payment gate updated"))
+    } else {
+      prompts.log.error(data.message || "Failed to update payment gate")
+    }
+  },
+})
+
+// ============================================================================
+// Delete Payment Gate
+// ============================================================================
+
+const LeadsDeletePaymentGateCommand = cmd({
+  command: "delete-gate <id>",
+  aliases: ["delete-invoice", "rm-gate"],
+  describe: "delete a lead's payment gate",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
+      method: "DELETE",
+    })
+    if (!(await handleApiError(res, "Delete payment gate"))) return
+
+    const data = await res.json().catch(() => ({}))
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    if (data.success) {
+      console.log(success(data.message || "Payment gate deleted"))
+    } else {
+      prompts.log.error(data.message || "Failed to delete payment gate")
+    }
+  },
+})
+
+// ============================================================================
 // Deal Status — show payment gate progress
 // ============================================================================
 
@@ -2546,6 +2667,8 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsNoteCommand)
       .command(LeadsTasksCommand)
       .command(LeadsPaymentGateCommand)
+      .command(LeadsUpdatePaymentGateCommand)
+      .command(LeadsDeletePaymentGateCommand)
       .command(LeadsDealStatusCommand)
       .command(LeadsPackagesCommand)
       .command(LeadsRegenCheckoutCommand)

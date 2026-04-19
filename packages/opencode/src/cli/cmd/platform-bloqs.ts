@@ -119,6 +119,12 @@ const BloqsGetCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const b = data?.data ?? data
+      if (!b || (!b.name && !b.id)) {
+        spinner.stop("Empty response", 1)
+        prompts.log.error("API returned no bloq data. The server may not support this endpoint yet.")
+        prompts.outro("Done")
+        return
+      }
       spinner.stop(String(b.name ?? `Bloq #${b.id}`))
 
       printDivider()
