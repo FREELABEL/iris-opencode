@@ -274,6 +274,26 @@ const BloqsCreateCommand = cmd({
 })
 
 /**
+ * Auto-detect which CSV column should be used as the bloq item title.
+ */
+function detectTitleColumn(headers: string[], rows: Record<string, string>[]): string {
+  const namePatterns = ["name", "title", "item", "product", "subject", "label", "horse", "rider"]
+  for (const pattern of namePatterns) {
+    const match = headers.find((h) => h.toLowerCase().includes(pattern))
+    if (match) return match
+  }
+  // Fallback: first column with unique string values
+  for (const h of headers) {
+    const vals = rows.map((r) => r[h]).filter(Boolean)
+    const unique = new Set(vals)
+    if (unique.size === vals.length && vals.every((v) => typeof v === "string" && !/^\d+(\.\d+)?$/.test(v))) {
+      return h
+    }
+  }
+  return headers[0]
+}
+
+/**
  * Parse CSV text into an array of objects using the first row as headers.
  */
 function parseCsv(text: string): { headers: string[]; rows: Record<string, string>[] } {
@@ -320,6 +340,9 @@ const BloqsIngestCommand = cmd({
       .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
       .positional("file", { describe: "path to file", type: "string", demandOption: true })
       .option("list", { alias: "l", describe: "target list name", type: "string" })
+      .option("as", { describe: "CSV mode: dataset (single item, default) or items (one item per row)", type: "string", choices: ["dataset", "items"], default: "dataset" })
+      .option("key", { describe: "column name for upsert dedup on re-import (--as items only)", type: "string" })
+      .option("title-column", { describe: "column to use as item title (auto-detected if omitted)", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -368,7 +391,120 @@ const BloqsIngestCommand = cmd({
         if (rows.length > 3) console.log(`    ${dim(`…and ${rows.length - 3} more`)}`)
         console.log()
 
-        // Store as a single bloq item with type "dataset"
+        // Resolve target list
+        let listId: number | null = null
+        const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
+        if (listsRes.ok) {
+          const listsData = (await listsRes.json()) as { data?: any[] }
+          const lists: any[] = listsData?.data ?? []
+          if (args.list) {
+            const match = lists.find((l: any) => (l.name ?? "").toLowerCase() === args.list!.toLowerCase())
+            if (match) listId = match.id
+          }
+          if (!listId && lists.length > 0) listId = lists[0].id
+        }
+
+        if (!listId) {
+          spinner.stop("No list found", 1)
+          prompts.log.error("Bloq has no lists. Create one first.")
+          prompts.outro("Done")
+          return
+        }
+
+        const mode = args.as as string
+
+        // ── Mode: items — one bloq item per CSV row ──
+        if (mode === "items") {
+          const titleCol = args["title-column"] ?? detectTitleColumn(headers, rows)
+          const keyCol = args.key ?? null
+
+          // Fetch existing items for dedup if --key is specified
+          let existingItems: any[] = []
+          if (keyCol) {
+            spinner.start(`Checking for existing items (dedup by ${dim(keyCol)})…`)
+            const existRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items?per_page=500`)
+            if (existRes.ok) {
+              const existData = (await existRes.json()) as { data?: any }
+              const raw = existData?.data?.items ?? existData?.data?.data ?? existData?.data ?? []
+              existingItems = Array.isArray(raw) ? raw : Object.values(raw)
+            }
+            spinner.stop(`${existingItems.length} existing item(s)`)
+          }
+
+          // Dedup
+          let toCreate = rows
+          let toUpdate: { item: any; row: Record<string, string> }[] = []
+          if (keyCol && existingItems.length > 0) {
+            for (const row of rows) {
+              const keyVal = row[keyCol]
+              if (!keyVal) { toCreate.push(row); continue }
+              const match = existingItems.find((item: any) => {
+                if (item.title === keyVal) return true
+                try {
+                  const c = typeof item.content === "string" ? JSON.parse(item.content) : item.content
+                  if (c?.type === "dataset") return false
+                  return c?.[keyCol] === keyVal
+                } catch { return false }
+              })
+              if (match) toUpdate.push({ item: match, row })
+            }
+            // Remove matched rows from toCreate
+            const matchedKeys = new Set(toUpdate.map((u) => u.row[keyCol]))
+            toCreate = rows.filter((r) => !matchedKeys.has(r[keyCol]) || !r[keyCol])
+          }
+
+          spinner.start(`Creating ${toCreate.length} item(s)${toUpdate.length > 0 ? `, updating ${toUpdate.length}` : ""}…`)
+
+          let created = 0
+          let updated = 0
+          let failed = 0
+
+          // Create new items
+          for (const row of toCreate) {
+            const title = row[titleCol] || `Row ${created + 1}`
+            const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items`, {
+              method: "POST",
+              body: JSON.stringify({
+                title,
+                content: JSON.stringify(row),
+                type: "default",
+                bloq_list_id: listId,
+              }),
+            })
+            if (res.ok) created++
+            else failed++
+          }
+
+          // Update existing items
+          for (const { item, row } of toUpdate) {
+            const title = row[titleCol] || item.title
+            const res = await irisFetch(`/api/v1/user/bloqs/list/item/${item.id}`, {
+              method: "PUT",
+              body: JSON.stringify({
+                title,
+                content: JSON.stringify(row),
+              }),
+            })
+            if (res.ok) updated++
+            else failed++
+          }
+
+          spinner.stop(`${success("✓")} ${created} created, ${updated} updated${failed > 0 ? `, ${failed} failed` : ""}`)
+
+          printDivider()
+          printKV("Mode", "items (one per row)")
+          printKV("Title Column", titleCol)
+          if (keyCol) printKV("Dedup Key", keyCol)
+          printKV("Created", created)
+          if (updated > 0) printKV("Updated", updated)
+          if (failed > 0) printKV("Failed", failed)
+          printDivider()
+
+          prompts.outro(dim(`iris bloqs get ${args.id}`))
+          return
+        }
+
+        // ── Mode: dataset (default) — single bloq item with all rows ──
         spinner.start(`Saving dataset to Bloq #${args.id}…`)
 
         const dataset = {
@@ -377,35 +513,6 @@ const BloqsIngestCommand = cmd({
           headers,
           row_count: rows.length,
           rows,
-        }
-
-        // Find or use target list
-        let listId: number | null = null
-        if (args.list) {
-          const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
-          if (listsRes.ok) {
-            const listsData = (await listsRes.json()) as { data?: any[] }
-            const lists: any[] = listsData?.data ?? []
-            const match = lists.find((l: any) => (l.name ?? "").toLowerCase() === args.list!.toLowerCase())
-            if (match) listId = match.id
-          }
-        }
-
-        // Get first list if none specified
-        if (!listId) {
-          const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
-          if (listsRes.ok) {
-            const listsData = (await listsRes.json()) as { data?: any[] }
-            const lists: any[] = listsData?.data ?? []
-            if (lists.length > 0) listId = lists[0].id
-          }
-        }
-
-        if (!listId) {
-          spinner.stop("No list found", 1)
-          prompts.log.error("Bloq has no lists. Create one first.")
-          prompts.outro("Done")
-          return
         }
 
         const itemRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items`, {
