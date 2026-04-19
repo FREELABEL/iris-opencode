@@ -303,8 +303,10 @@ const BloqsIngestCommand = cmd({
       const blob = await file.arrayBuffer()
       const formData = new FormData()
       formData.append("file", new Blob([blob]), filename)
+      formData.append("user_id", String(userId))
+      formData.append("bloq_id", String(args.id))
 
-      const res = await fetch(`${FL_API}/api/v1/user/${userId}/bloqs/${args.id}/files`, {
+      const res = await fetch(`${FL_API}/api/v1/cloud-files/upload`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
         body: formData,
