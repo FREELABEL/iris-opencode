@@ -137,21 +137,36 @@ export namespace Installation {
       const ext = platform === "linux" ? "tar.gz" : "zip"
       const assetName = `iris-${platform}-${arch}.${ext}`
       const releaseUrl = `https://github.com/FREELABEL/iris-opencode/releases/download/v${target}/${assetName}`
-      const binDir = path.dirname(process.execPath)
+      // Resolve symlinks to get the real binary path
+      const realExecPath = await import("fs").then(fs => fs.realpathSync(process.execPath))
+      const binDir = path.dirname(realExecPath)
       const tmpDir = path.join(binDir, ".iris-update-tmp")
 
-      cmd = $`set -e
-mkdir -p ${tmpDir}
-cd ${tmpDir}
-curl -fsSL -o ${assetName} ${releaseUrl}
+      // Use a script file to avoid Bun template literal interpolation issues
+      const script = `#!/bin/bash
+set -e
+mkdir -p "${tmpDir}"
+cd "${tmpDir}"
+curl -fsSL -o "${assetName}" "${releaseUrl}"
 if [ "${ext}" = "tar.gz" ]; then
-  tar -xzf ${assetName}
+  tar -xzf "${assetName}"
 else
-  unzip -o ${assetName}
+  unzip -o "${assetName}"
 fi
-cp -f iris ${binDir}/iris
-rm -rf ${tmpDir}
-echo "Updated to v${target}"`.env({ ...process.env })
+chmod +x iris
+# Remove old binary first (avoids overwriting a running executable)
+rm -f "${binDir}/iris"
+mv iris "${binDir}/iris"
+rm -rf "${tmpDir}"
+# Verify the new binary works
+"${binDir}/iris" --version
+`
+      const scriptPath = path.join(tmpDir + "-script.sh")
+      await import("fs").then(fs => {
+        fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
+        fs.writeFileSync(scriptPath, script, { mode: 0o755 })
+      })
+      cmd = $`bash ${scriptPath} && rm -f ${scriptPath}`.env({ ...process.env })
     } else {
       switch (method) {
         case "curl":

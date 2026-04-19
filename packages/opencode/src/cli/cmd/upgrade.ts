@@ -68,8 +68,18 @@ export const UpgradeCommand = {
     spinner.stop(Installation.isIris() ? "IRIS CLI updated" : "Upgrade complete")
 
     if (Installation.isIris()) {
-      // Also update SDK and bridge if present
+      // Verify the update actually took effect
       const { $ } = await import("bun")
+      const verifyResult = await $`${process.execPath} --version`.nothrow().quiet().text()
+      const installedVersion = verifyResult.trim()
+      if (installedVersion && installedVersion !== target) {
+        prompts.log.warn(`Expected v${target} but binary reports v${installedVersion}`)
+        prompts.log.info(`Try: curl -fsSL https://heyiris.io/install-iris.sh | bash`)
+      } else {
+        prompts.log.success(`Verified: v${installedVersion}`)
+      }
+
+      // Also update SDK and bridge if present
       const home = process.env.HOME || ""
 
       const sdkDir = `${home}/.iris/sdk`
