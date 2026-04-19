@@ -2031,6 +2031,42 @@ echo -e ""
 echo -e "${MUTED}For more information visit ${NC}https://heyiris.io/developer"
 echo -e ""
 
+# ─── macOS: Homebrew + iTerm2 ────────────────────────────────────────────────
+# IRIS renders best in iTerm2. Offer to install it if user is on Apple Terminal.
+if [ "$(uname)" = "Darwin" ] && [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    # Install Homebrew if missing (needed for iTerm2 and other deps)
+    if ! command -v brew >/dev/null 2>&1; then
+        echo -e "${CYAN}→${NC} Homebrew is required for additional tools."
+        echo -n "  Install Homebrew? [Y/n] "
+        read -r _brew_answer < /dev/tty || _brew_answer=""
+        if [ "$_brew_answer" != "n" ] && [ "$_brew_answer" != "N" ]; then
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true
+            # Add to PATH for current session
+            if [ -f /opt/homebrew/bin/brew ]; then
+                eval "$(/opt/homebrew/bin/brew shellenv)"
+            elif [ -f /usr/local/bin/brew ]; then
+                eval "$(/usr/local/bin/brew shellenv)"
+            fi
+        fi
+    fi
+
+    # Offer iTerm2 if on Apple Terminal
+    if [ "${TERM_PROGRAM:-}" = "Apple_Terminal" ] && ! [ -d "/Applications/iTerm.app" ]; then
+        if command -v brew >/dev/null 2>&1; then
+            echo -e ""
+            echo -e "${CYAN}→${NC} iTerm2 is recommended for the best IRIS experience."
+            echo -e "${MUTED}  (Apple Terminal has rendering issues with IRIS CLI)${NC}"
+            echo -n "  Install iTerm2? [Y/n] "
+            read -r _iterm_answer < /dev/tty || _iterm_answer=""
+            if [ "$_iterm_answer" != "n" ] && [ "$_iterm_answer" != "N" ]; then
+                brew install --cask iterm2 && \
+                    echo -e "${GREEN}✓${NC} iTerm2 installed — open it from Applications to use IRIS" || \
+                    echo -e "${ORANGE}⚠${NC} iTerm2 install failed — you can install it later: brew install --cask iterm2"
+            fi
+        fi
+    fi
+fi
+
 # ─── Authentication ───────────────────────────────────────────────────────────
 # Handle ALL auth in bash (where keyboard works via /dev/tty).
 # Then force-launch the agent post-auth — no user input needed in the TUI.
