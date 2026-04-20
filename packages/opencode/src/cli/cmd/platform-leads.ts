@@ -2200,6 +2200,12 @@ const LeadsPaymentGateCommand = cmd({
       .option("scope", { alias: "s", describe: "scope of work", type: "string", demandOption: true })
       .option("bloq", { alias: "b", describe: "bloq ID", type: "number" })
       .option("package", { alias: "p", describe: "service package ID (auto-fills amount + scope)", type: "number" })
+      .option("packages", { describe: "multiple package IDs for selectable tiers (comma-separated)", type: "string" })
+      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one-time", "month", "quarter", "year"] })
+      .option("term", { alias: "t", describe: "duration in months (for recurring)", type: "number" })
+      .option("deposit", { describe: "deposit percentage (0-100)", type: "number" })
+      .option("list-price", { describe: "original list price (shows strikethrough discount)", type: "number" })
+      .option("discount", { describe: "discount percentage (0-100)", type: "number" })
       .option("no-auto-remind", { describe: "disable D+1/D+3/D+7 auto-reminders", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
@@ -2212,6 +2218,12 @@ const LeadsPaymentGateCommand = cmd({
     }
     if (args.bloq) body.bloq_id = args.bloq
     if (args.package) body.package_id = args.package
+    if (args.packages) body.package_ids = args.packages.split(",").map(Number)
+    if (args.interval) body.interval = args.interval
+    if (args.term) body.duration_months = args.term
+    if (args.deposit != null) body.deposit_percent = args.deposit
+    if (args["list-price"]) body.list_price = args["list-price"]
+    if (args.discount != null) body.discount_percent = args.discount
 
     const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
       method: "POST",
