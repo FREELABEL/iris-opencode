@@ -2467,7 +2467,7 @@ const LeadsCreatePackageCommand = cmd({
     }
     if (args.scope) body.scope_template = args.scope
     if (args.description) body.description = args.description
-    if (args.features) body.features = args.features.split(",").map((f: string) => f.trim())
+    if (args.features) body.features = args.features.split(/,(?!\d)/).map((f: string) => f.trim())
 
     const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/packages`, {
       method: "POST",
