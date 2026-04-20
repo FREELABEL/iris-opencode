@@ -122,6 +122,7 @@ const DomainsConnectCommand = cmd({
       .option("site", { describe: "site slug to serve", type: "string" })
       .option("site-id", { describe: "site ID to serve", type: "number" })
       .option("provider", { describe: "DNS provider: cloudflare (full proxy) or godaddy (CNAME only)", type: "string", default: "cloudflare" })
+      .option("yes", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
       .check((argv) => {
         if (!argv.page && !argv["page-id"] && !argv.site && !argv["site-id"]) {
           throw new Error("Provide at least one target: --page <slug>, --page-id <id>, --site <slug>, or --site-id <id>")
@@ -158,13 +159,15 @@ const DomainsConnectCommand = cmd({
       sp.stop(`Found page: ${bold(page?.title ?? pageSlug)} (#${pageId})`)
     }
 
-    // Confirm before proceeding
-    const confirm = await prompts.confirm({
-      message: `Connect ${bold(domain)} → ${pageSlug ? `/p/${pageSlug}` : siteSlug ? `/s/${siteSlug}` : `#${pageId ?? siteId}`} via ${provider}?`,
-    })
-    if (!confirm || prompts.isCancel(confirm)) {
-      prompts.outro("Cancelled")
-      return
+    // Confirm before proceeding (skip with --yes)
+    if (!args.yes) {
+      const confirm = await prompts.confirm({
+        message: `Connect ${bold(domain)} → ${pageSlug ? `/p/${pageSlug}` : siteSlug ? `/s/${siteSlug}` : `#${pageId ?? siteId}`} via ${provider}?`,
+      })
+      if (!confirm || prompts.isCancel(confirm)) {
+        prompts.outro("Cancelled")
+        return
+      }
     }
 
     const sp = prompts.spinner()
@@ -317,7 +320,8 @@ const DomainsRemoveCommand = cmd({
   describe: "disconnect a custom domain and remove DNS records",
   builder: (yargs) =>
     yargs
-      .positional("domain", { describe: "the domain to remove", type: "string", demandOption: true }),
+      .positional("domain", { describe: "the domain to remove", type: "string", demandOption: true })
+      .option("yes", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Remove Domain")
@@ -350,12 +354,14 @@ const DomainsRemoveCommand = cmd({
 
       sp.stop(`Found: ${bold(domain)} (${providerBadge(match.provider)})`)
 
-      const confirm = await prompts.confirm({
-        message: `Remove ${bold(domain)}? This will delete DNS records and the domain mapping.`,
-      })
-      if (!confirm || prompts.isCancel(confirm)) {
-        prompts.outro("Cancelled")
-        return
+      if (!args.yes) {
+        const confirm = await prompts.confirm({
+          message: `Remove ${bold(domain)}? This will delete DNS records and the domain mapping.`,
+        })
+        if (!confirm || prompts.isCancel(confirm)) {
+          prompts.outro("Cancelled")
+          return
+        }
       }
 
       const sp2 = prompts.spinner()
