@@ -2506,6 +2506,70 @@ const LeadsCreatePackageCommand = cmd({
 })
 
 // ============================================================================
+// Update Package — update an existing service package
+// ============================================================================
+
+const LeadsUpdatePackageCommand = cmd({
+  command: "update-package <bloq> <packageId>",
+  aliases: ["edit-package"],
+  describe: "update a service package (name, price, billing, features, scope)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq", { describe: "bloq ID", type: "number", demandOption: true })
+      .positional("packageId", { describe: "package ID", type: "number", demandOption: true })
+      .option("name", { alias: "n", describe: "package name", type: "string" })
+      .option("price", { alias: "a", describe: "price", type: "number" })
+      .option("billing", { alias: "b", describe: "billing type", type: "string", choices: ["one_time", "monthly", "yearly", "milestone"] })
+      .option("scope", { alias: "s", describe: "scope of work template", type: "string" })
+      .option("features", { alias: "f", describe: "features (comma-separated)", type: "string" })
+      .option("description", { alias: "d", describe: "package description", type: "string" })
+      .option("active", { describe: "set active/inactive", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const body: Record<string, unknown> = {}
+    if (args.name) body.name = args.name
+    if (args.price != null) body.price = args.price
+    if (args.billing) body.billing_type = args.billing
+    if (args.scope) body.scope_template = args.scope
+    if (args.description) body.description = args.description
+    if (args.active != null) body.is_active = args.active
+    if (args.features) body.features = args.features.split(/,(?!\d)/).map((f: string) => f.trim())
+
+    if (Object.keys(body).length === 0) {
+      prompts.log.error("Nothing to update — provide at least one flag (--name, --price, --billing, etc.)")
+      return
+    }
+
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/packages/${args.packageId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    })
+
+    const data = await res.json().catch(() => ({}))
+
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    if (!res.ok || !data.success) {
+      prompts.log.error(data.message || "Failed to update package")
+      return
+    }
+
+    const pkg = data.data
+    console.log("")
+    console.log(success(`Package #${pkg.id} updated`))
+    printDivider()
+    printKV("Name", pkg.name)
+    printKV("Price", `$${Number(pkg.price).toFixed(2)}`)
+    printKV("Billing", `${pkg.billing_type} (interval: ${pkg.billing_interval})`)
+    if (pkg.scope_template) printKV("Scope", pkg.scope_template.slice(0, 80))
+    if (pkg.features?.length) printKV("Features", pkg.features.join(", "))
+    printDivider()
+  },
+})
+
+// ============================================================================
 // Regenerate Checkout — force-refresh a stale Stripe session
 // ============================================================================
 
@@ -2750,6 +2814,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsDealStatusCommand)
       .command(LeadsPackagesCommand)
       .command(LeadsCreatePackageCommand)
+      .command(LeadsUpdatePackageCommand)
       .command(LeadsRegenCheckoutCommand)
       .demandCommand(),
   async handler() {},
