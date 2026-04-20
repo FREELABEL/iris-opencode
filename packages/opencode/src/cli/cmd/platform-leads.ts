@@ -2440,6 +2440,72 @@ const LeadsPackagesCommand = cmd({
 })
 
 // ============================================================================
+// Create Package — create a service package for a bloq
+// ============================================================================
+
+const LeadsCreatePackageCommand = cmd({
+  command: "create-package <bloq>",
+  aliases: ["add-package", "new-package"],
+  describe: "create a service package for a bloq (used in multi-tier proposals)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("name", { alias: "n", describe: "package name", type: "string", demandOption: true })
+      .option("price", { alias: "a", describe: "price (or use --amount)", type: "number", demandOption: true })
+      .option("billing", { alias: "b", describe: "billing type", type: "string", choices: ["one_time", "monthly", "yearly", "milestone"], default: "monthly" })
+      .option("scope", { alias: "s", describe: "scope of work template", type: "string" })
+      .option("features", { alias: "f", describe: "features (comma-separated)", type: "string" })
+      .option("description", { alias: "d", describe: "package description", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const body: Record<string, unknown> = {
+      name: args.name,
+      price: args.price,
+      billing_type: args.billing,
+    }
+    if (args.scope) body.scope_template = args.scope
+    if (args.description) body.description = args.description
+    if (args.features) body.features = args.features.split(",").map((f: string) => f.trim())
+
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/packages`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+
+    const data = await res.json().catch(() => ({}))
+
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    if (!res.ok || !data.success) {
+      prompts.log.error(data.message || "Failed to create package")
+      if (data.errors) {
+        for (const [field, msgs] of Object.entries(data.errors)) {
+          console.log(`  ${dim(field)}: ${(msgs as string[]).join(", ")}`)
+        }
+      }
+      if (data.hint) {
+        console.log("")
+        console.log(dim("Required: " + (data.hint as any).required?.join(", ")))
+      }
+      return
+    }
+
+    const pkg = data.data
+    console.log("")
+    console.log(success(`Package created: #${pkg.id}`))
+    printDivider()
+    printKV("Name", pkg.name)
+    printKV("Price", `$${Number(pkg.price).toFixed(2)}`)
+    printKV("Billing", pkg.billing_type)
+    if (pkg.scope_template) printKV("Scope", pkg.scope_template.slice(0, 80))
+    if (pkg.features?.length) printKV("Features", pkg.features.join(", "))
+    printDivider()
+  },
+})
+
+// ============================================================================
 // Regenerate Checkout — force-refresh a stale Stripe session
 // ============================================================================
 
@@ -2683,6 +2749,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsDeletePaymentGateCommand)
       .command(LeadsDealStatusCommand)
       .command(LeadsPackagesCommand)
+      .command(LeadsCreatePackageCommand)
       .command(LeadsRegenCheckoutCommand)
       .demandCommand(),
   async handler() {},
