@@ -2467,7 +2467,7 @@ const LeadsCreatePackageCommand = cmd({
     }
     if (args.scope) body.scope_template = args.scope
     if (args.description) body.description = args.description
-    if (args.features) body.features = args.features.split(/,(?!\d)/).map((f: string) => f.trim())
+    if (args.features) body.features = args.features.split(/,(?!\d{3}(?!\d))/).map((f: string) => f.trim())
 
     const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/packages`, {
       method: "POST",
@@ -2535,7 +2535,7 @@ const LeadsUpdatePackageCommand = cmd({
     if (args.scope) body.scope_template = args.scope
     if (args.description) body.description = args.description
     if (args.active != null) body.is_active = args.active
-    if (args.features) body.features = args.features.split(/,(?!\d)/).map((f: string) => f.trim())
+    if (args.features) body.features = args.features.split(/,(?!\d{3}(?!\d))/).map((f: string) => f.trim())
 
     if (Object.keys(body).length === 0) {
       prompts.log.error("Nothing to update — provide at least one flag (--name, --price, --billing, etc.)")
