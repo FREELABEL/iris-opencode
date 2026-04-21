@@ -179,22 +179,30 @@ const AgentsCreateCommand = cmd({
   describe: "create a new agent",
   builder: (yargs) =>
     yargs
-      .option("name", { describe: "agent name", type: "string" })
-      .option("description", { describe: "agent description", type: "string" })
-      .option("prompt", { describe: "system prompt / instructions", type: "string" })
-      .option("model", { describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
+      .option("name", { alias: "n", describe: "agent name", type: "string" })
+      .option("description", { alias: "d", describe: "agent description", type: "string" })
+      .option("prompt", { alias: "p", describe: "system prompt / instructions", type: "string" })
+      .option("system-prompt", { describe: "system prompt (alias of --prompt)", type: "string" })
+      .option("initial-prompt", { describe: "initial prompt sent on first heartbeat", type: "string" })
+      .option("model", { alias: "m", describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
       .option("type", { describe: "agent type (content, chat, assistant, support)", type: "string", default: "content" })
-      .option("bloq-id", { describe: "knowledge base bloq ID", type: "number" })
+      .option("bloq-id", { alias: "b", describe: "knowledge base bloq ID", type: "number" })
+      .option("heartbeat-mode", { describe: "heartbeat mode (enabled, disabled, briefing)", type: "string", choices: ["enabled", "disabled", "briefing"] })
+      .option("heartbeat-tools", { describe: "comma-separated tool names for heartbeat", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Create Agent")
+    // Non-interactive mode: skip prompts when --name and --prompt are provided
+    const nonInteractive = !!(args.name && (args.prompt || args["system-prompt"]))
+
+    if (!nonInteractive) UI.empty()
+    if (!nonInteractive) prompts.intro("◈  Create Agent")
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!nonInteractive) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!nonInteractive) prompts.outro("Done"); return }
 
     let name = args.name
     if (!name) {
@@ -206,7 +214,7 @@ const AgentsCreateCommand = cmd({
     }
 
     let description = args.description
-    if (!description) {
+    if (!description && !nonInteractive) {
       description = (await prompts.text({
         message: "Description (optional)",
         placeholder: "e.g. Helps with lead research and follow-ups",
@@ -214,7 +222,7 @@ const AgentsCreateCommand = cmd({
       if (prompts.isCancel(description)) description = ""
     }
 
-    let prompt = args.prompt
+    let prompt = args.prompt ?? args["system-prompt"]
     if (!prompt) {
       prompt = (await prompts.text({
         message: "System prompt / instructions",
@@ -226,38 +234,52 @@ const AgentsCreateCommand = cmd({
 
     const model = args.model ?? "gpt-4.1-nano"
 
-    const spinner = prompts.spinner()
-    spinner.start("Creating agent…")
+    const spinner = nonInteractive ? null : prompts.spinner()
+    if (spinner) spinner.start("Creating agent…")
 
     try {
-      const payload: Record<string, unknown> = { name, description, prompt, model, type: args.type ?? "content" }
+      const payload: Record<string, unknown> = { name, description: description ?? "", prompt, model, type: args.type ?? "content" }
       if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
+      if (args["initial-prompt"]) payload.initial_prompt = args["initial-prompt"]
+      if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
+      if (args["heartbeat-tools"]) {
+        payload.heartbeat_tools = args["heartbeat-tools"].split(",").map((t: string) => t.trim())
+      }
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents`, {
         method: "POST",
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Create agent")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
 
       const data = (await res.json()) as { data?: any }
       const a = data?.data ?? data
-      spinner.stop(`${success("✓")} Agent created: ${bold(String(a.name ?? a.id))}`)
+
+      if (args.json) {
+        console.log(JSON.stringify(a, null, 2))
+        return
+      }
+
+      if (spinner) spinner.stop(`${success("✓")} Agent created: ${bold(String(a.name ?? a.id))}`)
 
       printDivider()
       printKV("ID", a.id)
       printKV("Name", a.name)
       printKV("Model", a.model)
+      if (a.bloq_id) printKV("Bloq", a.bloq_id)
+      if (args["heartbeat-mode"]) printKV("Heartbeat", args["heartbeat-mode"])
       printDivider()
 
-      prompts.outro(
-        `${dim("iris chat --agent=" + a.id + ' "hello"')}  Start chatting`,
-      )
+      if (!nonInteractive) {
+        prompts.outro(
+          `${dim("iris chat --agent=" + a.id + ' "hello"')}  Start chatting`,
+        )
+      }
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
     }
   },
 })

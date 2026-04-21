@@ -143,7 +143,7 @@ const BloqsGetCommand = cmd({
         if (lists.length > 0) {
           console.log(`  ${dim("Lists:")}`)
           for (const l of lists) {
-            console.log(`    ${dim("—")} ${bold(String(l.name ?? l.id))} ${dim(`(${l.items_count ?? 0} items)`)}`)
+            console.log(`    ${dim("—")} ${bold(String(l.name ?? l.id))} ${dim(`#${l.id}`)} ${dim(`(${l.items_count ?? 0} items)`)}`)
           }
           console.log()
         }
