@@ -212,6 +212,7 @@ const LeadsListCommand = cmd({
       .option("search", { alias: "s", describe: "search query", type: "string" })
       .option("limit", { describe: "max results", type: "number", default: 20 })
       .option("bloq-id", { describe: "filter by bloq (CRM)", type: "number" })
+      .option("all", { describe: "include Prospected leads (hidden by default)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -224,7 +225,9 @@ const LeadsListCommand = cmd({
     spinner.start("Loading leads…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit) })
+      // Fetch more than requested so we can filter + sort client-side
+      const fetchLimit = args.all || args.status || args.search ? args.limit : Math.max(args.limit * 5, 100)
+      const params = new URLSearchParams({ per_page: String(fetchLimit) })
       if (args.status) params.set("status", args.status)
       if (args.search) params.set("search", args.search)
       if (args["bloq-id"]) params.set("bloq_id", String(args["bloq-id"]))
@@ -234,9 +237,39 @@ const LeadsListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
-      const leads: any[] = data?.data ?? []
+      let leads: any[] = data?.data ?? []
+
+      // Default: hide Prospected leads (mass-scraped venue/SOM leads)
+      // Use --all or --status to see everything
+      if (!args.all && !args.status && !args.search) {
+        leads = leads.filter((l: any) => {
+          const s = (l.status ?? "").toLowerCase()
+          return s !== "prospected"
+        })
+      }
+
+      // Sort by status priority: active clients first
+      const statusPriority: Record<string, number> = {
+        won: 0,
+        "in negotiation": 1,
+        interested: 2,
+        contacted: 3,
+        qualified: 4,
+        new: 5,
+        prospected: 6,
+        lost: 7,
+        unresponsive: 8,
+      }
+      leads.sort((a: any, b: any) => {
+        const pa = statusPriority[(a.status ?? "").toLowerCase()] ?? 5
+        const pb = statusPriority[(b.status ?? "").toLowerCase()] ?? 5
+        return pa - pb
+      })
+
+      // Trim to requested limit
+      leads = leads.slice(0, args.limit)
       const total = data?.meta?.total ?? leads.length
-      spinner.stop(`${total} lead(s)`)
+      spinner.stop(`${leads.length} lead(s)${!args.all && !args.status ? dim(` (${total} total — use --all to see Prospected)`) : ""}`)
 
       if (args.json) {
         console.log(JSON.stringify(leads, null, 2))
@@ -813,7 +846,7 @@ const LeadsUpdateCommand = cmd({
       .option("phone", { describe: "new phone", type: "string" })
       .option("company", { describe: "new company", type: "string" })
       .option("status", { describe: "new status", type: "string" })
-      .option("bloq-id", { describe: "CRM bloq ID to associate", type: "number" })
+      .option("bloq-id", { alias: "bloq", describe: "CRM bloq ID to associate", type: "number" })
       .option("website", { describe: "website URL", type: "string" })
       .option("source", { describe: "lead source", type: "string" })
       .option("stage", { describe: "pipeline stage", type: "string" })
@@ -1758,7 +1791,7 @@ const LeadsPulseCommand = cmd({
           )
         }
 
-        // iMessage (via local bridge daemon) — 1:1 by phone/email handle
+        // iMessage (via local bridge daemon) — 1:1 by phone/email handle or contact name
         const handle = phone || email
         if (handle) {
           fetches.push(
@@ -1774,9 +1807,23 @@ const LeadsPulseCommand = cmd({
               })
               .catch((e) => { channels.push({ name: "iMessage", messages: [], error: e.message }) }),
           )
+        } else if (name) {
+          // Fallback: search by contact name via Contacts.app resolution
+          fetches.push(
+            fetch(`${BRIDGE_BASE}/api/imessage/search?name=${encodeURIComponent(name)}&days=${days}&limit=${msgLimit}`)
+              .then(async (r) => {
+                if (r.ok) {
+                  const d = (await r.json()) as any
+                  channels.push({ name: "iMessage", messages: d?.messages ?? [] })
+                } else {
+                  const body = await r.text().catch(() => "")
+                  channels.push({ name: "iMessage", messages: [], error: body || `HTTP ${r.status}` })
+                }
+              })
+              .catch((e) => { channels.push({ name: "iMessage", messages: [], error: e.message }) }),
+          )
         } else {
-          // #57669: Warn when iMessage scan is skipped due to missing phone
-          channels.push({ name: "iMessage", messages: [], error: `No phone number — add with: iris leads update ${leadId} --phone "..."` })
+          channels.push({ name: "iMessage", messages: [], error: `No phone, email, or name — add with: iris leads update ${leadId} --phone "..."` })
         }
 
         // #57668: iMessage group chats — scan linked chat IDs from contact_info.chat_ids
@@ -2153,6 +2200,12 @@ const LeadsPaymentGateCommand = cmd({
       .option("scope", { alias: "s", describe: "scope of work", type: "string", demandOption: true })
       .option("bloq", { alias: "b", describe: "bloq ID", type: "number" })
       .option("package", { alias: "p", describe: "service package ID (auto-fills amount + scope)", type: "number" })
+      .option("packages", { describe: "multiple package IDs for selectable tiers (comma-separated)", type: "string" })
+      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one-time", "month", "quarter", "year"] })
+      .option("term", { alias: "t", describe: "duration in months (for recurring)", type: "number" })
+      .option("deposit", { describe: "deposit percentage (0-100)", type: "number" })
+      .option("list-price", { describe: "original list price (shows strikethrough discount)", type: "number" })
+      .option("discount", { describe: "discount percentage (0-100)", type: "number" })
       .option("no-auto-remind", { describe: "disable D+1/D+3/D+7 auto-reminders", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
@@ -2165,6 +2218,12 @@ const LeadsPaymentGateCommand = cmd({
     }
     if (args.bloq) body.bloq_id = args.bloq
     if (args.package) body.package_id = args.package
+    if (args.packages) body.package_ids = args.packages.split(",").map(Number)
+    if (args.interval) body.interval = args.interval
+    if (args.term) body.duration_months = args.term
+    if (args.deposit != null) body.deposit_percent = args.deposit
+    if (args["list-price"]) body.list_price = args["list-price"]
+    if (args.discount != null) body.discount_percent = args.discount
 
     const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
       method: "POST",
@@ -2198,6 +2257,80 @@ const LeadsPaymentGateCommand = cmd({
     printKV("Stripe URL", data.stripe_checkout_url ?? dim("(not configured)"))
     printKV("Custom Request", `#${data.custom_request_id}`)
     printDivider()
+  },
+})
+
+// ============================================================================
+// Update Payment Gate
+// ============================================================================
+
+const LeadsUpdatePaymentGateCommand = cmd({
+  command: "update-gate <id>",
+  aliases: ["update-invoice"],
+  describe: "update an existing payment gate (amount, scope)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("amount", { alias: "a", describe: "new amount", type: "number" })
+      .option("scope", { alias: "s", describe: "new scope of work", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    if (!args.amount && !args.scope) {
+      prompts.log.error("Provide at least --amount or --scope to update")
+      return
+    }
+
+    const body: Record<string, unknown> = {}
+    if (args.amount) body.amount = args.amount
+    if (args.scope) body.scope = args.scope
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    })
+    if (!(await handleApiError(res, "Update payment gate"))) return
+
+    const data = await res.json().catch(() => ({}))
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    if (data.success) {
+      console.log(success("Payment gate updated"))
+    } else {
+      prompts.log.error(data.message || "Failed to update payment gate")
+    }
+  },
+})
+
+// ============================================================================
+// Delete Payment Gate
+// ============================================================================
+
+const LeadsDeletePaymentGateCommand = cmd({
+  command: "delete-gate <id>",
+  aliases: ["delete-invoice", "rm-gate"],
+  describe: "delete a lead's payment gate",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
+      method: "DELETE",
+    })
+    if (!(await handleApiError(res, "Delete payment gate"))) return
+
+    const data = await res.json().catch(() => ({}))
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    if (data.success) {
+      console.log(success(data.message || "Payment gate deleted"))
+    } else {
+      prompts.log.error(data.message || "Failed to delete payment gate")
+    }
   },
 })
 
@@ -2302,6 +2435,136 @@ const LeadsPackagesCommand = cmd({
         console.log(`       ${dim(String(pkg.scope_template).slice(0, 70))}`)
       }
     }
+    printDivider()
+  },
+})
+
+// ============================================================================
+// Create Package — create a service package for a bloq
+// ============================================================================
+
+const LeadsCreatePackageCommand = cmd({
+  command: "create-package <bloq>",
+  aliases: ["add-package", "new-package"],
+  describe: "create a service package for a bloq (used in multi-tier proposals)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("name", { alias: "n", describe: "package name", type: "string", demandOption: true })
+      .option("price", { alias: "a", describe: "price (or use --amount)", type: "number", demandOption: true })
+      .option("billing", { alias: "b", describe: "billing type", type: "string", choices: ["one_time", "monthly", "yearly", "milestone"], default: "monthly" })
+      .option("scope", { alias: "s", describe: "scope of work template", type: "string" })
+      .option("features", { alias: "f", describe: "features (comma-separated)", type: "string" })
+      .option("description", { alias: "d", describe: "package description", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const body: Record<string, unknown> = {
+      name: args.name,
+      price: args.price,
+      billing_type: args.billing,
+    }
+    if (args.scope) body.scope_template = args.scope
+    if (args.description) body.description = args.description
+    if (args.features) body.features = args.features.split(/,(?!\d{3}(?!\d))/).map((f: string) => f.trim())
+
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/packages`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+
+    const data = await res.json().catch(() => ({}))
+
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    if (!res.ok || !data.success) {
+      prompts.log.error(data.message || "Failed to create package")
+      if (data.errors) {
+        for (const [field, msgs] of Object.entries(data.errors)) {
+          console.log(`  ${dim(field)}: ${(msgs as string[]).join(", ")}`)
+        }
+      }
+      if (data.hint) {
+        console.log("")
+        console.log(dim("Required: " + (data.hint as any).required?.join(", ")))
+      }
+      return
+    }
+
+    const pkg = data.data
+    console.log("")
+    console.log(success(`Package created: #${pkg.id}`))
+    printDivider()
+    printKV("Name", pkg.name)
+    printKV("Price", `$${Number(pkg.price).toFixed(2)}`)
+    printKV("Billing", pkg.billing_type)
+    if (pkg.scope_template) printKV("Scope", pkg.scope_template.slice(0, 80))
+    if (pkg.features?.length) printKV("Features", pkg.features.join(", "))
+    printDivider()
+  },
+})
+
+// ============================================================================
+// Update Package — update an existing service package
+// ============================================================================
+
+const LeadsUpdatePackageCommand = cmd({
+  command: "update-package <bloq> <packageId>",
+  aliases: ["edit-package"],
+  describe: "update a service package (name, price, billing, features, scope)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq", { describe: "bloq ID", type: "number", demandOption: true })
+      .positional("packageId", { describe: "package ID", type: "number", demandOption: true })
+      .option("name", { alias: "n", describe: "package name", type: "string" })
+      .option("price", { alias: "a", describe: "price", type: "number" })
+      .option("billing", { alias: "b", describe: "billing type", type: "string", choices: ["one_time", "monthly", "yearly", "milestone"] })
+      .option("scope", { alias: "s", describe: "scope of work template", type: "string" })
+      .option("features", { alias: "f", describe: "features (comma-separated)", type: "string" })
+      .option("description", { alias: "d", describe: "package description", type: "string" })
+      .option("active", { describe: "set active/inactive", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const body: Record<string, unknown> = {}
+    if (args.name) body.name = args.name
+    if (args.price != null) body.price = args.price
+    if (args.billing) body.billing_type = args.billing
+    if (args.scope) body.scope_template = args.scope
+    if (args.description) body.description = args.description
+    if (args.active != null) body.is_active = args.active
+    if (args.features) body.features = args.features.split(/,(?!\d{3}(?!\d))/).map((f: string) => f.trim())
+
+    if (Object.keys(body).length === 0) {
+      prompts.log.error("Nothing to update — provide at least one flag (--name, --price, --billing, etc.)")
+      return
+    }
+
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/packages/${args.packageId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    })
+
+    const data = await res.json().catch(() => ({}))
+
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    if (!res.ok || !data.success) {
+      prompts.log.error(data.message || "Failed to update package")
+      return
+    }
+
+    const pkg = data.data
+    console.log("")
+    console.log(success(`Package #${pkg.id} updated`))
+    printDivider()
+    printKV("Name", pkg.name)
+    printKV("Price", `$${Number(pkg.price).toFixed(2)}`)
+    printKV("Billing", `${pkg.billing_type} (interval: ${pkg.billing_interval})`)
+    if (pkg.scope_template) printKV("Scope", pkg.scope_template.slice(0, 80))
+    if (pkg.features?.length) printKV("Features", pkg.features.join(", "))
     printDivider()
   },
 })
@@ -2546,8 +2809,12 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsNoteCommand)
       .command(LeadsTasksCommand)
       .command(LeadsPaymentGateCommand)
+      .command(LeadsUpdatePaymentGateCommand)
+      .command(LeadsDeletePaymentGateCommand)
       .command(LeadsDealStatusCommand)
       .command(LeadsPackagesCommand)
+      .command(LeadsCreatePackageCommand)
+      .command(LeadsUpdatePackageCommand)
       .command(LeadsRegenCheckoutCommand)
       .demandCommand(),
   async handler() {},

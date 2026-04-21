@@ -216,7 +216,7 @@ const ReportCommand = cmd({
       await submitBug({
         title: title!,
         description,
-        severity,
+        severity: severity.toLowerCase(),
         command: args.command,
         error: args.error,
         json: args.json,

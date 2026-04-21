@@ -361,6 +361,127 @@ const SomHelpCommand = cmd({
   },
 })
 
+// ── Toggle command ──
+
+function findSomConfig(): string | null {
+  const { existsSync } = require("fs")
+  const { join, resolve } = require("path")
+  let dir = process.cwd()
+  for (let i = 0; i < 10; i++) {
+    const candidate = join(dir, "tests", "e2e", "som-config.js")
+    if (existsSync(candidate)) return candidate
+    const parent = resolve(dir, "..")
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+const SomToggleCommand = cmd({
+  command: "toggle <campaign> [state]",
+  describe: "turn a campaign on or off",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "campaign name (courses, creators, beatbox, mayo, venues, atxbeauty, gooddeals)", type: "string", demandOption: true })
+      .positional("state", { describe: "on or off (toggles if omitted)", type: "string" }),
+  async handler(args) {
+    const { readFileSync, writeFileSync } = require("fs")
+    UI.empty()
+    prompts.intro("◈  SOM Toggle")
+
+    const configPath = findSomConfig()
+    if (!configPath) {
+      prompts.log.error("som-config.js not found. Run from the freelabel project root.")
+      prompts.outro("Done")
+      return
+    }
+
+    const content = readFileSync(configPath, "utf-8")
+    const campaign = (args.campaign as string).toLowerCase()
+
+    // Find the campaign line
+    const regex = new RegExp(`(${campaign}:\\s*\\{[^}]*active:\\s*)(true|false)`, "i")
+    const match = content.match(regex)
+
+    if (!match) {
+      prompts.log.error(`Campaign "${campaign}" not found in som-config.js`)
+      const available = content.match(/^\s+(\w+):\s*\{/gm)?.map((m: string) => m.trim().replace(/:\s*\{/, "")) ?? []
+      prompts.log.info(`Available: ${available.join(", ")}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const currentState = match[2] === "true"
+    let newState: boolean
+
+    if (args.state === "on") newState = true
+    else if (args.state === "off") newState = false
+    else newState = !currentState // toggle
+
+    if (currentState === newState) {
+      prompts.log.info(`${campaign} is already ${newState ? "ON" : "OFF"}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const updated = content.replace(regex, `$1${newState}`)
+    writeFileSync(configPath, updated)
+
+    prompts.log.info(`${bold(campaign)} ${currentState ? "ON → OFF" : "OFF → ON"}`)
+
+    // Show all campaign states
+    const allCampaigns = updated.match(/(\w+):\s*\{[^}]*active:\s*(true|false)/gi) ?? []
+    console.log("")
+    for (const line of allCampaigns) {
+      const nameMatch = line.match(/^(\w+):/)
+      const activeMatch = line.match(/active:\s*(true|false)/)
+      if (nameMatch && activeMatch) {
+        const n = nameMatch[1]
+        const a = activeMatch[1] === "true"
+        console.log(`  ${a ? "✅" : "❌"} ${n}`)
+      }
+    }
+    console.log("")
+
+    prompts.outro(dim("Changes take effect on next som:all run"))
+  },
+})
+
+const SomStatusCommand = cmd({
+  command: "status",
+  describe: "show which campaigns are on/off",
+  builder: (yargs) => yargs,
+  async handler() {
+    const { readFileSync } = require("fs")
+    UI.empty()
+    prompts.intro("◈  SOM Status")
+
+    const configPath = findSomConfig()
+    if (!configPath) {
+      prompts.log.error("som-config.js not found")
+      prompts.outro("Done")
+      return
+    }
+
+    const content = readFileSync(configPath, "utf-8")
+    const allCampaigns = content.match(/(\w+):\s*\{[^}]*active:\s*(true|false)/gi) ?? []
+
+    let on = 0, off = 0
+    for (const line of allCampaigns) {
+      const nameMatch = line.match(/^(\w+):/)
+      const activeMatch = line.match(/active:\s*(true|false)/)
+      if (nameMatch && activeMatch) {
+        const n = nameMatch[1]
+        const a = activeMatch[1] === "true"
+        console.log(`  ${a ? "✅" : "❌"} ${n}`)
+        a ? on++ : off++
+      }
+    }
+    console.log("")
+    prompts.outro(`${on} active, ${off} off`)
+  },
+})
+
 // ── Parent command ──
 
 export const PlatformSomCommand = cmd({
@@ -370,6 +491,8 @@ export const PlatformSomCommand = cmd({
     yargs
       .command(SomOverviewCommand)
       .command(SomEditCommand)
+      .command(SomToggleCommand)
+      .command(SomStatusCommand)
       .command(SomHelpCommand)
       // Default to overview when no subcommand
       .option("campaign", { alias: "c", describe: "show only one campaign", type: "string" })

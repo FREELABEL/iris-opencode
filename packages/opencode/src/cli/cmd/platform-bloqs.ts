@@ -119,6 +119,12 @@ const BloqsGetCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const b = data?.data ?? data
+      if (!b || (!b.name && !b.id)) {
+        spinner.stop("Empty response", 1)
+        prompts.log.error("API returned no bloq data. The server may not support this endpoint yet.")
+        prompts.outro("Done")
+        return
+      }
       spinner.stop(String(b.name ?? `Bloq #${b.id}`))
 
       printDivider()
@@ -267,13 +273,76 @@ const BloqsCreateCommand = cmd({
   },
 })
 
+/**
+ * Auto-detect which CSV column should be used as the bloq item title.
+ */
+function detectTitleColumn(headers: string[], rows: Record<string, string>[]): string {
+  const namePatterns = ["name", "title", "item", "product", "subject", "label", "horse", "rider"]
+  for (const pattern of namePatterns) {
+    const match = headers.find((h) => h.toLowerCase().includes(pattern))
+    if (match) return match
+  }
+  // Fallback: first column with unique string values
+  for (const h of headers) {
+    const vals = rows.map((r) => r[h]).filter(Boolean)
+    const unique = new Set(vals)
+    if (unique.size === vals.length && vals.every((v) => typeof v === "string" && !/^\d+(\.\d+)?$/.test(v))) {
+      return h
+    }
+  }
+  return headers[0]
+}
+
+/**
+ * Parse CSV text into an array of objects using the first row as headers.
+ */
+function parseCsv(text: string): { headers: string[]; rows: Record<string, string>[] } {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean)
+  if (lines.length < 2) return { headers: [], rows: [] }
+
+  // Simple CSV parser — handles quoted fields with commas
+  const parseLine = (line: string): string[] => {
+    const fields: string[] = []
+    let current = ""
+    let inQuotes = false
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { current += '"'; i++ }
+        else inQuotes = !inQuotes
+      } else if (ch === "," && !inQuotes) {
+        fields.push(current.trim())
+        current = ""
+      } else {
+        current += ch
+      }
+    }
+    fields.push(current.trim())
+    return fields
+  }
+
+  const headers = parseLine(lines[0])
+  const rows = lines.slice(1).map((line) => {
+    const vals = parseLine(line)
+    const obj: Record<string, string> = {}
+    headers.forEach((h, i) => { obj[h] = vals[i] ?? "" })
+    return obj
+  })
+
+  return { headers, rows }
+}
+
 const BloqsIngestCommand = cmd({
   command: "ingest <id> <file>",
-  describe: "upload a file into a bloq",
+  describe: "upload a file into a bloq (CSV files are parsed into a dataset item)",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
       .positional("file", { describe: "path to file", type: "string", demandOption: true })
+      .option("list", { alias: "l", describe: "target list name", type: "string" })
+      .option("as", { describe: "CSV mode: dataset (single item, default) or items (one item per row)", type: "string", choices: ["dataset", "items"], default: "dataset" })
+      .option("key", { describe: "column name for upsert dedup on re-import (--as items only)", type: "string" })
+      .option("title-column", { describe: "column to use as item title (auto-detected if omitted)", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -285,11 +354,10 @@ const BloqsIngestCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
-    // Read file
     const filename = path.basename(args.file)
+    const ext = path.extname(args.file).toLowerCase()
 
     const spinner = prompts.spinner()
-    spinner.start(`Uploading ${dim(filename)}…`)
 
     try {
       const file = Bun.file(args.file)
@@ -299,6 +367,188 @@ const BloqsIngestCommand = cmd({
         prompts.outro("Done")
         return
       }
+
+      // CSV files: parse rows into a structured dataset bloq item
+      if (ext === ".csv") {
+        spinner.start(`Parsing ${dim(filename)}…`)
+        const text = await file.text()
+        const { headers, rows } = parseCsv(text)
+
+        if (rows.length === 0) {
+          spinner.stop("Empty CSV", 1)
+          prompts.log.error("No data rows found in CSV")
+          prompts.outro("Done")
+          return
+        }
+
+        spinner.stop(`${success("✓")} Parsed ${rows.length} rows × ${headers.length} columns`)
+
+        // Preview first 3 rows
+        for (const row of rows.slice(0, 3)) {
+          const preview = headers.slice(0, 4).map((h) => `${dim(h)}=${row[h] ?? ""}`).join("  ")
+          console.log(`    ${preview}`)
+        }
+        if (rows.length > 3) console.log(`    ${dim(`…and ${rows.length - 3} more`)}`)
+        console.log()
+
+        // Resolve target list
+        let listId: number | null = null
+        const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
+        if (listsRes.ok) {
+          const listsData = (await listsRes.json()) as { data?: any[] }
+          const lists: any[] = listsData?.data ?? []
+          if (args.list) {
+            const match = lists.find((l: any) => (l.name ?? "").toLowerCase() === args.list!.toLowerCase())
+            if (match) listId = match.id
+          }
+          if (!listId && lists.length > 0) listId = lists[0].id
+        }
+
+        if (!listId) {
+          spinner.stop("No list found", 1)
+          prompts.log.error("Bloq has no lists. Create one first.")
+          prompts.outro("Done")
+          return
+        }
+
+        const mode = args.as as string
+
+        // ── Mode: items — one bloq item per CSV row ──
+        if (mode === "items") {
+          const titleCol = args["title-column"] ?? detectTitleColumn(headers, rows)
+          const keyCol = args.key ?? null
+
+          // Fetch existing items for dedup if --key is specified
+          let existingItems: any[] = []
+          if (keyCol) {
+            spinner.start(`Checking for existing items (dedup by ${dim(keyCol)})…`)
+            const existRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items?per_page=500`)
+            if (existRes.ok) {
+              const existData = (await existRes.json()) as { data?: any }
+              const raw = existData?.data?.items ?? existData?.data?.data ?? existData?.data ?? []
+              existingItems = Array.isArray(raw) ? raw : Object.values(raw)
+            }
+            spinner.stop(`${existingItems.length} existing item(s)`)
+          }
+
+          // Dedup
+          let toCreate = rows
+          let toUpdate: { item: any; row: Record<string, string> }[] = []
+          if (keyCol && existingItems.length > 0) {
+            for (const row of rows) {
+              const keyVal = row[keyCol]
+              if (!keyVal) { toCreate.push(row); continue }
+              const match = existingItems.find((item: any) => {
+                if (item.title === keyVal) return true
+                try {
+                  const c = typeof item.content === "string" ? JSON.parse(item.content) : item.content
+                  if (c?.type === "dataset") return false
+                  return c?.[keyCol] === keyVal
+                } catch { return false }
+              })
+              if (match) toUpdate.push({ item: match, row })
+            }
+            // Remove matched rows from toCreate
+            const matchedKeys = new Set(toUpdate.map((u) => u.row[keyCol]))
+            toCreate = rows.filter((r) => !matchedKeys.has(r[keyCol]) || !r[keyCol])
+          }
+
+          spinner.start(`Creating ${toCreate.length} item(s)${toUpdate.length > 0 ? `, updating ${toUpdate.length}` : ""}…`)
+
+          let created = 0
+          let updated = 0
+          let failed = 0
+
+          // Create new items
+          for (const row of toCreate) {
+            const title = row[titleCol] || `Row ${created + 1}`
+            const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items`, {
+              method: "POST",
+              body: JSON.stringify({
+                title,
+                content: JSON.stringify(row),
+                type: "default",
+                bloq_list_id: listId,
+              }),
+            })
+            if (res.ok) created++
+            else failed++
+          }
+
+          // Update existing items
+          for (const { item, row } of toUpdate) {
+            const title = row[titleCol] || item.title
+            const res = await irisFetch(`/api/v1/user/bloqs/list/item/${item.id}`, {
+              method: "PUT",
+              body: JSON.stringify({
+                title,
+                content: JSON.stringify(row),
+              }),
+            })
+            if (res.ok) updated++
+            else failed++
+          }
+
+          spinner.stop(`${success("✓")} ${created} created, ${updated} updated${failed > 0 ? `, ${failed} failed` : ""}`)
+
+          printDivider()
+          printKV("Mode", "items (one per row)")
+          printKV("Title Column", titleCol)
+          if (keyCol) printKV("Dedup Key", keyCol)
+          printKV("Created", created)
+          if (updated > 0) printKV("Updated", updated)
+          if (failed > 0) printKV("Failed", failed)
+          printDivider()
+
+          prompts.outro(dim(`iris bloqs get ${args.id}`))
+          return
+        }
+
+        // ── Mode: dataset (default) — single bloq item with all rows ──
+        spinner.start(`Saving dataset to Bloq #${args.id}…`)
+
+        const dataset = {
+          type: "dataset",
+          source_file: filename,
+          headers,
+          row_count: rows.length,
+          rows,
+        }
+
+        const itemRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items`, {
+          method: "POST",
+          body: JSON.stringify({
+            title: filename.replace(/\.csv$/i, ""),
+            content: JSON.stringify(dataset),
+            type: "default",
+            bloq_list_id: listId,
+          }),
+        })
+
+        if (!itemRes.ok) {
+          spinner.stop("Failed", 1)
+          await handleApiError(itemRes, "Create dataset item")
+          prompts.outro("Done")
+          return
+        }
+
+        const itemData = (await itemRes.json()) as { data?: any }
+        const item = itemData?.data ?? itemData
+        spinner.stop(`${success("✓")} Dataset saved — ${rows.length} rows`)
+
+        printDivider()
+        printKV("Item ID", item?.id ?? "(unknown)")
+        printKV("Type", "dataset")
+        printKV("Rows", rows.length)
+        printKV("Columns", headers.join(", "))
+        printDivider()
+
+        prompts.outro(dim(`iris bloqs get ${args.id}`))
+        return
+      }
+
+      // Non-CSV files: upload as cloud file attachment (existing behavior)
+      spinner.start(`Uploading ${dim(filename)}…`)
 
       const blob = await file.arrayBuffer()
       const formData = new FormData()

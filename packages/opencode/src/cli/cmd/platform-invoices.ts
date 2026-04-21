@@ -235,6 +235,55 @@ const SendCmd = cmd({
   },
 })
 
+// ── mark-paid (offline/cash) ──
+
+const MarkPaidCmd = cmd({
+  command: "mark-paid <lead-id>",
+  aliases: ["paid"],
+  describe: "record an offline/cash payment for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("amount", { describe: "amount in dollars", type: "number", demandOption: true })
+      .option("method", {
+        describe: "payment method",
+        type: "string",
+        choices: ["cash", "check", "wire", "ach", "zelle", "venmo", "paypal", "crypto", "barter", "other"],
+        default: "cash",
+      })
+      .option("date", { describe: "payment date (YYYY-MM-DD)", type: "string" })
+      .option("notes", { describe: "optional notes", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const payload: Record<string, unknown> = {
+      amount: args.amount,
+      method: args.method,
+    }
+    if (args.date) payload.paid_at = args.date
+    if (args.notes) payload.notes = args.notes
+
+    const res = await irisFetch(`/api/v1/leads/${args.leadId}/invoice/mark-paid`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+    if (!(await handleApiError(res, "Mark paid"))) return
+    const body = await getJson(res)
+
+    if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+
+    if (body.success) {
+      prompts.log.success(`${success("✓")} Offline payment recorded`)
+      printKV("Amount", fmtMoney(args.amount))
+      printKV("Method", String(args.method))
+      printKV("Total Received", fmtMoney(body.total_received))
+      if (args.notes) printKV("Notes", args.notes)
+    } else {
+      prompts.log.error(`Failed: ${body.error ?? body.message ?? "Unknown error"}`)
+    }
+  },
+})
+
 export const PlatformInvoicesCommand = cmd({
   command: "invoices",
   describe: "create, view, and send invoices for leads",
@@ -246,6 +295,7 @@ export const PlatformInvoicesCommand = cmd({
       .command(ShowCmd)
       .command(CheckoutCmd)
       .command(SendCmd)
+      .command(MarkPaidCmd)
       .demandCommand(),
   async handler() {},
 })

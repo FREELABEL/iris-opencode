@@ -74,10 +74,12 @@ export const UpgradeCommand = {
       const installedVersion = verifyResult.trim()
       if (installedVersion && installedVersion !== target) {
         prompts.log.warn(`Expected v${target} but binary reports v${installedVersion}`)
-        prompts.log.info(`Try: curl -fsSL https://heyiris.io/install-iris.sh | bash`)
+        prompts.log.info(`Your shell may cache the old binary path. Run: hash -r && iris --version`)
+        prompts.log.info(`Or try: curl -fsSL https://heyiris.io/install-iris.sh | bash`)
       } else {
         prompts.log.success(`Verified: v${installedVersion}`)
       }
+      prompts.log.info(`If iris --version still shows old, run: hash -r`)
 
       // Also update SDK and bridge if present
       const home = process.env.HOME || ""
