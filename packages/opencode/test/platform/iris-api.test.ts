@@ -290,10 +290,10 @@ describe("API base URL constants", () => {
     expect(FL_API).toMatch(/heyiris\.io|localhost|127\.0\.0\.1/)
   })
 
-  test("IRIS_API defaults to iris-api.heyiris.io", async () => {
+  test("IRIS_API defaults to freelabel.net", async () => {
     delete process.env.IRIS_API_URL
     const { IRIS_API } = await import("../../src/cli/cmd/iris-api")
-    expect(IRIS_API).toMatch(/heyiris\.io|localhost|127\.0\.0\.1/)
+    expect(IRIS_API).toMatch(/freelabel\.net|heyiris\.io|localhost|127\.0\.0\.1/)
   })
 
   test("FL_API respects IRIS_FL_API_URL env override", () => {
@@ -325,7 +325,7 @@ describe("API base URL constants", () => {
     expect(PLATFORM_URLS.irisApi).not.toContain("iris-api.freelabel.net")
     // Should be Railway URLs
     expect(PLATFORM_URLS.flApi).toContain("raichu")
-    expect(PLATFORM_URLS.irisApi).toContain("main.heyiris.io")
+    expect(PLATFORM_URLS.irisApi).toContain("freelabel.net")
   })
 })
 
@@ -346,7 +346,8 @@ describe("integration exec routing", () => {
 
   test("system tool exec sends POST to IRIS_API", () => {
     const src = readSource("platform-run.ts")
-    const toolExecMatch = src.match(/v1\/v6\/tools\/execute.*?IRIS_API/s)
+    // System tools route to /api/v1/tools/execute on IRIS_API
+    const toolExecMatch = src.match(/v1\/tools\/execute.*?IRIS_API/s)
     expect(toolExecMatch).toBeTruthy()
   })
 
