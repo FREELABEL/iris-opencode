@@ -482,6 +482,124 @@ const SomStatusCommand = cmd({
   },
 })
 
+// ── Update script (non-interactive) ──
+
+const SomUpdateScriptCommand = cmd({
+  command: "script <campaign> <text>",
+  describe: "update a step's script for a campaign (non-interactive)",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "campaign name", type: "string", demandOption: true })
+      .positional("text", { describe: "new script text (quote it)", type: "string", demandOption: true })
+      .option("step", { describe: "step number (default: 1)", type: "number", default: 1 }),
+  async handler(args) {
+    await requireAuth()
+    UI.empty()
+    prompts.intro(`◈  Update Script — ${args.campaign}`)
+
+    const camp = CAMPAIGNS[args.campaign as string]
+    if (!camp) {
+      prompts.log.error(`Unknown campaign: ${args.campaign}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const strategy = await fetchStrategyByName(camp.board, camp.strategy)
+    if (!strategy) {
+      prompts.log.error(`Strategy "${camp.strategy}" not found on board ${camp.board}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const steps = ((strategy.steps ?? []) as any[]).sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+    const stepIdx = (args.step as number) - 1
+    if (stepIdx < 0 || stepIdx >= steps.length) {
+      prompts.log.error(`Step ${args.step} doesn't exist (${steps.length} steps total)`)
+      prompts.outro("Done")
+      return
+    }
+
+    const oldScript = steps[stepIdx].instructions ?? ""
+    steps[stepIdx].instructions = args.text as string
+
+    const resp = await irisFetch(
+      `/api/v1/bloqs/${camp.board}/outreach-strategy-templates/${(strategy as any).id}`,
+      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ steps }) },
+      RAICHU
+    )
+
+    if (resp.ok) {
+      prompts.log.info(`${bold(args.campaign as string)} Step ${args.step} updated`)
+      console.log(dim(`  Old: ${oldScript.slice(0, 80)}...`))
+      console.log(`  New: ${(args.text as string).slice(0, 80)}...`)
+    } else {
+      prompts.log.error(`Failed: HTTP ${resp.status}`)
+    }
+    prompts.outro("Done")
+  },
+})
+
+// ── Clear AI prompt ──
+
+const SomClearAiCommand = cmd({
+  command: "clearai <campaign>",
+  describe: "clear ai_prompt from all steps (lightweight variation instead)",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { type: "string" })
+      .option("step", { type: "number" }),
+  async handler(args) {
+    await requireAuth()
+    UI.empty()
+    prompts.intro(`◈  Clear AI Prompt — ${args.campaign}`)
+
+    const camp = CAMPAIGNS[args.campaign as string]
+    if (!camp) {
+      prompts.log.error(`Unknown campaign: ${args.campaign}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const strategy = await fetchStrategyByName(camp.board, camp.strategy)
+    if (!strategy) {
+      prompts.log.error(`Strategy "${camp.strategy}" not found`)
+      prompts.outro("Done")
+      return
+    }
+
+    const steps = ((strategy.steps ?? []) as any[]).sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+    let cleared = 0
+
+    for (let i = 0; i < steps.length; i++) {
+      if (args.step && (args.step as number) !== i + 1) continue
+      if (steps[i].ai_prompt) {
+        steps[i].ai_prompt = null
+        cleared++
+        console.log(`  Step ${i + 1}: ${steps[i].title} — ai_prompt cleared`)
+      }
+    }
+
+    if (cleared === 0) {
+      prompts.log.info("No steps had ai_prompt set")
+      prompts.outro("Done")
+      return
+    }
+
+    const resp = await irisFetch(
+      `/api/v1/bloqs/${camp.board}/outreach-strategy-templates/${(strategy as any).id}`,
+      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ steps }) },
+      RAICHU
+    )
+
+    if (resp.ok) {
+      prompts.log.info(`Cleared ai_prompt on ${cleared} step(s)`)
+    } else {
+      prompts.log.error(`Failed: HTTP ${resp.status}`)
+    }
+    prompts.outro(dim("Vary It will now do word swaps instead of full rewrites"))
+  },
+})
+
 // ── Parent command ──
 
 export const PlatformSomCommand = cmd({
@@ -497,7 +615,8 @@ export const PlatformSomCommand = cmd({
       // Default to overview when no subcommand
       .option("campaign", { alias: "c", describe: "show only one campaign", type: "string" })
       .option("scripts", { alias: "s", describe: "show full script text", type: "boolean" })
-      .option("json", { describe: "JSON output", type: "boolean" }),
+      .option("json", { describe: "JSON output", type: "boolean" })
+      .demandCommand(0),
   async handler(args) {
     // Default behavior: run overview
     await SomOverviewCommand.handler(args as any)
