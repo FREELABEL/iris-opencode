@@ -43,7 +43,7 @@ const INTEGRATION_TYPES = [
   // Internal
   "atlas-os", "beatbox-showcase", "copycat-ai", "fal-ai", "fl-api",
   "genesis", "github-copilot", "google-gemini", "macos", "savelife-ai",
-  "servis-ai", "vagaro", "vapi", "workflow-composer",
+  "servis-ai", "twitch", "vagaro", "vapi", "workflow-composer",
 ]
 
 // Known functions per integration — shown when user runs `exec <type>` without a function
@@ -86,6 +86,24 @@ const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string 
     { name: "categorize_expenses", description: "AI-categorize expenses by tax category (account_id, start, end)" },
     { name: "find_1099_payments", description: "Find payments >$600 per recipient for 1099s (account_id, year)" },
   ],
+  "twitch": [
+    { name: "get_users", description: "Get your Twitch profile (username, email, broadcaster type)" },
+    { name: "get_streams", description: "Get live streams (user_id, game_id, language, first)" },
+    { name: "get_channel_information", description: "Get channel details (broadcaster_id)" },
+    { name: "modify_channel_information", description: "Update title/game/tags (broadcaster_id, title, game_id)" },
+    { name: "search_channels", description: "Search channels by name (query, live_only)" },
+    { name: "get_channel_followers", description: "Get followers (broadcaster_id, first)" },
+    { name: "get_user_subscriptions", description: "Get subscribers (broadcaster_id)" },
+    { name: "get_clips", description: "Get clips (broadcaster_id, first, started_at, ended_at)" },
+    { name: "get_videos", description: "Get VODs/highlights (user_id, type, first)" },
+    { name: "get_chatters", description: "Get chatters in chat (broadcaster_id, moderator_id)" },
+    { name: "send_chat_message", description: "Send chat message (broadcaster_id, sender_id, message)" },
+    { name: "get_top_games", description: "Get trending games/categories (first)" },
+    { name: "search_categories", description: "Search game categories (query)" },
+    { name: "get_stream_schedule", description: "Get stream schedule (broadcaster_id)" },
+    { name: "get_followed_streams", description: "Get live streams you follow (user_id)" },
+    { name: "create_stream_marker", description: "Bookmark a stream moment (user_id, description)" },
+  ],
 }
 
 const OAUTH_TYPES = [
@@ -95,6 +113,8 @@ const OAUTH_TYPES = [
   "canva", "dropbox", "apollo", "hubspot", "pipedrive",
   "quickbooks", "xero",
   "1password",
+  "twitch",
+  "whatsapp",
 ]
 const APIKEY_TYPES = ["vapi", "servis-ai", "smtp-email", "mailjet", "google-gemini", "savelife-ai", "mercury"]
 
@@ -626,6 +646,75 @@ const ConnectCommand = cmd({
       console.log(`  ${type} uses API key authentication.`)
       if (hints[type]) console.log(`  Get credentials: ${highlight(hints[type])}`)
       console.log(`  Run: ${highlight("iris integrations <type> ...")} once stored.`)
+      prompts.outro("Done")
+      return
+    }
+
+    // WhatsApp requires WABA ID before OAuth — prompt then connect directly via Composio
+    if (type === "whatsapp") {
+      console.log()
+      console.log(`  WhatsApp Business requires a ${highlight("WABA ID")} (WhatsApp Business Account ID).`)
+      console.log(`  ${dim("Find it in Meta Business Suite → Business Settings → WhatsApp Accounts")}`)
+      console.log()
+      const wabaId = await prompts.text({ message: "Paste your WABA ID:" })
+      if (prompts.isCancel(wabaId) || !wabaId) { prompts.outro("Cancelled"); return }
+
+      const sp = prompts.spinner()
+      sp.start("Connecting WhatsApp…")
+      try {
+        const userId = await requireUserId()
+        // Find existing auth_config for whatsapp
+        const acRes = await composioFetch(`/v3/auth_configs?toolkit_slug=whatsapp&limit=5`)
+        const acData = (await acRes.json()) as any
+        const items: any[] = acData?.items ?? []
+        const authConfig = items.find((c: any) => String(c?.status ?? "").toUpperCase() === "ENABLED")
+        if (!authConfig?.id) {
+          sp.stop("Failed", 1)
+          prompts.log.error("No WhatsApp auth config found on Composio. Run: iris integrations setup whatsapp")
+          prompts.outro("Done")
+          return
+        }
+
+        // Create connected_account with WABA ID in state
+        const caRes = await composioFetch("/v3/connected_accounts", {
+          method: "POST",
+          body: JSON.stringify({
+            auth_config: { id: authConfig.id },
+            connection: {
+              user_id: `user-${userId}`,
+              callback_url: `${PLATFORM_URLS.irisApi}/api/v1/integrations-temp/oauth-callback/whatsapp?state=${encodeURIComponent(btoa(JSON.stringify({ type: "whatsapp", provider: "composio", user_id: userId, timestamp: Date.now() })))}`,
+              state: { authScheme: "OAUTH2", val: { generic_id: String(wabaId) } },
+            },
+          }),
+        })
+        const caData = (await caRes.json()) as any
+        if (!caRes.ok) {
+          sp.stop("Failed", 1)
+          prompts.log.error(`Connection failed (HTTP ${caRes.status})`)
+          console.log(dim(JSON.stringify(caData?.error ?? caData, null, 2).slice(0, 500)))
+          prompts.outro("Done")
+          return
+        }
+        const oauthUrl = caData?.redirectUrl ?? caData?.connectionData?.redirectUrl ?? caData?.url
+        const connId = caData?.id ?? caData?.connectedAccountId
+        if (oauthUrl) {
+          sp.stop("OAuth URL ready")
+          if (args["print-url"]) {
+            console.log(`\n  ${highlight(oauthUrl)}\n`)
+          } else {
+            console.log(`\n  ${dim("Opening browser…")}`)
+            openBrowser(oauthUrl)
+            console.log(`\n  ${dim("If it didn't open:")} ${highlight(oauthUrl)}\n`)
+          }
+          if (connId) console.log(`  ${dim("Connection ID:")} ${connId}`)
+        } else {
+          sp.stop("Connected", 0)
+          console.log(`  ${success("WhatsApp connected directly")} ${dim(`(${connId})`)}`)
+        }
+      } catch (e) {
+        sp.stop("Failed", 1)
+        prompts.log.error(e instanceof Error ? e.message : String(e))
+      }
       prompts.outro("Done")
       return
     }
