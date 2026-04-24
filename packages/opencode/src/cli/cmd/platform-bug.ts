@@ -231,10 +231,14 @@ const ReportCommand = cmd({
 const ListCommand = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "list all bug reports",
+  describe: "list bug reports (with pagination and filtering)",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("limit", { describe: "results per page", type: "number", default: 20 })
+      .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
+      .option("status", { describe: "filter by status", choices: ["todo", "in_progress", "done", "all"] as const, default: "all" as const })
+      .option("severity", { describe: "filter by severity", choices: ["low", "medium", "high", "critical"] as const })
+      .option("search", { alias: "q", describe: "search bug titles", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const token = await requireAuth()
@@ -246,27 +250,59 @@ const ListCommand = cmd({
       return
     }
 
-    const params = new URLSearchParams({ per_page: String(args.limit) })
+    const params = new URLSearchParams({
+      per_page: String(args.limit),
+      page: String(args.page),
+    })
+    if (args.status && args.status !== "all") params.set("status", args.status)
+    if (args.search) params.set("search", args.search)
+
     const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${BUG_BLOQ_ID}/items?${params}`)
     const ok = await handleApiError(res, "List bug reports")
     if (!ok) return
 
     const data = (await res.json()) as any
     const rawItems = data?.data?.items ?? data?.data?.data ?? data?.data ?? []
-    const items: any[] = Array.isArray(rawItems) ? rawItems : Object.values(rawItems)
+    let items: any[] = Array.isArray(rawItems) ? rawItems : Object.values(rawItems)
+
+    // Extract pagination info from response
+    const pagination = data?.data?.pagination ?? data?.meta ?? null
+    const totalItems = pagination?.total ?? items.length
+    const currentPage = pagination?.current_page ?? args.page
+    const lastPage = pagination?.last_page ?? Math.ceil(totalItems / args.limit)
+
+    // Client-side severity filter (API may not support this param)
+    if (args.severity) {
+      const sev = args.severity.toLowerCase()
+      items = items.filter((item: any) => {
+        const contentStr = item.content ?? item.description ?? ""
+        const itemSev = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1]?.toLowerCase() ?? ""
+        return itemSev === sev
+      })
+    }
 
     if (args.json) {
-      console.log(JSON.stringify(items, null, 2))
+      console.log(JSON.stringify({ items, page: currentPage, total: totalItems, last_page: lastPage }, null, 2))
       return
     }
 
+    // Build header with active filters
+    const filters: string[] = []
+    if (args.status && args.status !== "all") filters.push(`status=${args.status}`)
+    if (args.severity) filters.push(`severity=${args.severity}`)
+    if (args.search) filters.push(`search="${args.search}"`)
+    const filterStr = filters.length > 0 ? ` (${filters.join(", ")})` : ""
+
     console.log("")
     console.log(bold("📋 Bug Reports"))
-    console.log(`  ${dim(`Bloq #${BUG_BLOQ_ID} — ${items.length} item(s)`)}`)
+    console.log(`  ${dim(`Bloq #${BUG_BLOQ_ID} — ${items.length} item(s)${filterStr} — Page ${currentPage}/${lastPage}`)}`)
     printDivider()
 
     if (items.length === 0) {
       console.log(`  ${dim("No bug reports found")}`)
+      if (filters.length > 0) {
+        console.log(`  ${dim("Try: iris bug list --status=all")}`)
+      }
     } else {
       for (const item of items) {
         const contentStr = item.content ?? item.description ?? ""
@@ -286,8 +322,16 @@ const ListCommand = cmd({
     }
 
     printDivider()
+    if (currentPage < lastPage) {
+      console.log(dim(`  iris bug list --page=${currentPage + 1} — next page`))
+    }
+    if (currentPage > 1) {
+      console.log(dim(`  iris bug list --page=${currentPage - 1} — previous page`))
+    }
+    console.log(dim("  iris bug list --status=todo — open bugs only"))
+    console.log(dim("  iris bug list --severity=critical — critical bugs only"))
+    console.log(dim("  iris bug list --search=\"invoice\" — search titles"))
     console.log(dim("  iris bug report — submit a new bug"))
-    console.log(dim("  iris boards get <id> — view full details"))
     console.log("")
   },
 })
