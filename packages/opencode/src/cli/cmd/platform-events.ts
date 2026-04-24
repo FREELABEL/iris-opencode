@@ -702,6 +702,130 @@ const StageCreateCommand = cmd({
   },
 })
 
+// ============================================================================
+// Set Times — artist slots on stages
+// ============================================================================
+
+const SetTimesListCommand = cmd({
+  command: "set-times <event-id> <stage-id>",
+  aliases: ["lineup"],
+  describe: "list set times (artist lineup) for a stage",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const stageId = String(args.stageId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Loading lineup…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/stages/${stageId}/set-times`)
+      const ok = await handleApiError(res, "List set times")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const setTimes = data.data || []
+      spinner.stop(success(`${setTimes.length} artist(s) on stage`))
+      if (args.json) { console.log(JSON.stringify(setTimes, null, 2)); return }
+      if (setTimes.length === 0) { prompts.log.info(dim("No set times. Use: iris events add-set-time <event-id> <stage-id> --profile <pk>")); return }
+      printDivider()
+      for (const st of setTimes) {
+        const name = st.profile?.name || st.profile_name || "TBA"
+        const time = [st.start_time, st.end_time].filter(Boolean).join(" - ") || "no time set"
+        const headliner = st.is_headliner ? " ⭐" : ""
+        console.log(`  ${bold(name)}  ${dim(time)}${headliner}`)
+      }
+      printDivider()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("stage-id", { describe: "stage ID", type: "string", demandOption: true })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+const AddSetTimeCommand = cmd({
+  command: "add-set-time <event-id> <stage-id>",
+  aliases: ["add-artist"],
+  describe: "add an artist to a stage lineup",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const stageId = String(args.stageId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Adding artist to lineup…")
+    try {
+      const body: Record<string, unknown> = {}
+      if (args.profile) body.profile_id = String(args.profile)
+      if (args.name) body.profile_name = String(args.name)
+      if (args.start) body.start_time = String(args.start)
+      if (args.end) body.end_time = String(args.end)
+      if (args.date) body.start_date = String(args.date)
+      if (args.headliner) body.is_headliner = true
+
+      const res = await irisFetch(`/api/v1/events/${eventId}/stages/${stageId}/set-times`, { method: "POST", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Add set time")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const st = data.data || data
+      const name = st.profile?.name || st.profile_name || "Artist"
+      spinner.stop(success(`${name} added to lineup`))
+      if (args.json) { console.log(JSON.stringify(st, null, 2)); return }
+      printDivider()
+      printKV("Artist", name)
+      if (st.profile?.id) printKV("Profile", `@${st.profile.id}`)
+      if (st.start_time) printKV("Time", [st.start_time, st.end_time].filter(Boolean).join(" - "))
+      if (st.is_headliner) printKV("Headliner", "⭐ Yes")
+      printDivider()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("stage-id", { describe: "stage ID", type: "string", demandOption: true })
+    .option("profile", { alias: "p", describe: "profile PK (integer)", type: "string" })
+    .option("name", { alias: "n", describe: "artist name (if no profile)", type: "string" })
+    .option("start", { describe: "start time (e.g. 8:00 PM)", type: "string" })
+    .option("end", { describe: "end time (e.g. 8:30 PM)", type: "string" })
+    .option("date", { describe: "date (YYYY-MM-DD)", type: "string" })
+    .option("headliner", { describe: "mark as headliner", type: "boolean" })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+const RemoveSetTimeCommand = cmd({
+  command: "remove-set-time <event-id> <stage-id> <set-time-id>",
+  aliases: ["remove-artist"],
+  describe: "remove an artist from a stage lineup",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const stageId = String(args.stageId)
+    const setTimeId = String(args.setTimeId)
+    await requireAuth()
+    if (!args.force) {
+      const confirm = await prompts.confirm({ message: `Remove set time #${setTimeId}?` })
+      if (!confirm || prompts.isCancel(confirm)) { prompts.outro(dim("Cancelled")); return }
+    }
+    const spinner = prompts.spinner()
+    spinner.start("Removing…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/stages/${stageId}/set-times/${setTimeId}`, { method: "DELETE" })
+      const ok = await handleApiError(res, "Remove set time")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      spinner.stop(success("Artist removed from lineup"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("stage-id", { describe: "stage ID", type: "string", demandOption: true })
+    .positional("set-time-id", { describe: "set time ID", type: "string", demandOption: true })
+    .option("force", { alias: "y", describe: "skip confirmation", type: "boolean" }),
+})
+
 const StageDeleteCommand = cmd({
   command: "stage-delete <event-id> <stage-id>",
   describe: "remove a stage from an event",
@@ -1972,6 +2096,10 @@ export const PlatformEventsCommand = cmd({
       .command(StagesListCommand)
       .command(StageCreateCommand)
       .command(StageDeleteCommand)
+      // Set Times (artist lineup)
+      .command(SetTimesListCommand)
+      .command(AddSetTimeCommand)
+      .command(RemoveSetTimeCommand)
       // Vendors
       .command(VendorsListCommand)
       .command(VendorCreateCommand)
