@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { readFileSync } from "fs"
 
 // Helper: GET /api/v1/profile/{slugOrPk}
 async function fetchProfile(slugOrPk: string): Promise<any | null> {
@@ -483,6 +484,124 @@ const ProfileReassignArticlesCommand = cmd({
   },
 })
 
+// ============================================================================
+// profile batch-create — bulk create profiles from JSON file
+// ============================================================================
+
+const ProfileBatchCreateCommand = cmd({
+  command: "batch-create <file>",
+  aliases: ["bulk-create", "batch"],
+  describe: "bulk create profiles from a JSON file",
+  builder: (yargs) =>
+    yargs
+      .positional("file", { describe: "path to JSON file with profile array", type: "string", demandOption: true })
+      .option("dry-run", { describe: "preview without creating", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    await requireAuth()
+    const filePath = args.file as string
+    const dryRun = args["dry-run"] as boolean
+
+    // Read and parse JSON file
+    let profiles: any[]
+    try {
+      const raw = readFileSync(filePath, "utf-8")
+      const parsed = JSON.parse(raw)
+      profiles = Array.isArray(parsed) ? parsed : (parsed.profiles || parsed.artists || [parsed])
+    } catch (err: any) {
+      prompts.log.error(`Failed to read ${filePath}: ${err.message}`)
+      return
+    }
+
+    if (profiles.length === 0) {
+      prompts.log.warn("No profiles found in file")
+      return
+    }
+
+    prompts.intro(`◈  Batch Create — ${profiles.length} profile(s)`)
+
+    if (dryRun) {
+      printDivider()
+      for (const p of profiles) {
+        const name = p.name || p.profile?.name || "?"
+        const ig = p.instagram || p.profile?.instagram || ""
+        const leadId = p.lead_id || p.leadId || ""
+        console.log(`  📋 ${bold(name)}${ig ? "  @" + ig : ""}${leadId ? dim("  → Lead #" + leadId) : ""}`)
+      }
+      printDivider()
+      prompts.outro(dim(`Dry run — ${profiles.length} profiles would be created`))
+      return
+    }
+
+    const results: any[] = []
+    let created = 0
+    let failed = 0
+
+    for (const entry of profiles) {
+      // Support both flat format and nested { profile: {}, lead_id } format
+      const profileData = entry.profile || entry
+      const leadId = entry.lead_id || entry.leadId
+      const name = profileData.name
+
+      if (!name) {
+        console.log(`  ⚠ Skipped entry — no name`)
+        failed++
+        continue
+      }
+
+      const body: Record<string, any> = {}
+      const fields = ["name", "bio", "city", "state", "email", "phone", "instagram", "twitter",
+                       "youtube", "spotify", "tiktok", "twitch", "website_url", "tags", "category"]
+      for (const f of fields) {
+        if (profileData[f]) body[f] = profileData[f]
+      }
+      // Handle website alias
+      if (profileData.website && !body.website_url) body.website_url = profileData.website
+
+      try {
+        const res = await irisFetch("/api/v1/profile/create", {
+          method: "POST",
+          body: JSON.stringify(body),
+        })
+
+        if (!res.ok) {
+          const errData = await res.text()
+          console.log(`  ❌ ${name} — ${res.status}: ${errData.slice(0, 100)}`)
+          failed++
+          continue
+        }
+
+        const data = (await res.json()) as any
+        const profile = data?.data ?? data
+
+        // Link to lead if lead_id provided
+        if (leadId && profile.pk) {
+          try {
+            await irisFetch(`/api/v1/leads/${leadId}`, {
+              method: "PUT",
+              body: JSON.stringify({ profile_id: profile.pk }),
+            })
+          } catch { /* best effort */ }
+        }
+
+        const slug = profile.id ?? profile.slug ?? "?"
+        console.log(`  ✅ ${bold(name)} → @${slug}${leadId ? dim("  → Lead #" + leadId) : ""}`)
+        results.push({ ...profile, lead_id: leadId })
+        created++
+      } catch (err: any) {
+        console.log(`  ❌ ${name} — ${err.message}`)
+        failed++
+      }
+    }
+
+    printDivider()
+    if (args.json) {
+      console.log(JSON.stringify(results, null, 2))
+    }
+    prompts.outro(success(`${created} created, ${failed} failed`))
+  },
+})
+
 export const PlatformProfileCommand = cmd({
   command: "profile",
   describe: "manage profiles (show, get, set, create, links, memberships, reassign-articles)",
@@ -494,6 +613,7 @@ export const PlatformProfileCommand = cmd({
       .command(ProfileLinksCommand)
       .command(ProfileMembershipsCommand)
       .command(ProfileCreateCommand)
+      .command(ProfileBatchCreateCommand)
       .command(ProfileReassignArticlesCommand)
       .demandCommand(),
   async handler() {},
