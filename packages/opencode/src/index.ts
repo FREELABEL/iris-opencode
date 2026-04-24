@@ -31,7 +31,7 @@ import { SessionCommand } from "./cli/cmd/session"
 // IRIS Platform commands
 import { PlatformChatCommand } from "./cli/cmd/platform-chat"
 import { PlatformAgentsCommand } from "./cli/cmd/platform-agents"
-import { PlatformLeadsCommand } from "./cli/cmd/platform-leads"
+import { PlatformLeadsCommand, PlatformDealsCommand } from "./cli/cmd/platform-leads"
 import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
 import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
@@ -195,6 +195,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformChatCommand))
   .command(reg(PlatformAgentsCommand))
   .command(reg(PlatformLeadsCommand))
+  .command(reg(PlatformDealsCommand))
   .command(reg(PlatformWorkflowsCommand))
   .command(reg(PlatformBloqsCommand))
   .command(reg(PlatformBrandsCommand))

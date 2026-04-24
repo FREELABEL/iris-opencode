@@ -71,6 +71,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   // CRM & Sales
   leads: "crm",
   "leads:meeting": "crm",
+  deals: "crm",
   outreach: "crm",
   "outreach-campaign": "crm",
   "outreach-send": "crm",

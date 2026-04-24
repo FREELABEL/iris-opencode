@@ -173,10 +173,20 @@ const CreateCommand = cmd({
       .option("description", { describe: "description", type: "string" })
       .option("date", { describe: "start date (YYYY-MM-DD)", type: "string" })
       .option("time", { describe: "start time (HH:MM)", type: "string" })
+      .option("end-date", { describe: "end date (YYYY-MM-DD)", type: "string" })
+      .option("end-time", { describe: "end time (HH:MM)", type: "string" })
       .option("venue", { describe: "venue name", type: "string" })
       .option("city", { describe: "city", type: "string" })
       .option("state", { describe: "state", type: "string" })
-      .option("profile-id", { describe: "profile ID/slug", type: "string" }),
+      .option("zip", { describe: "zip code", type: "string" })
+      .option("street", { describe: "street address", type: "string" })
+      .option("type", { describe: "event type (showcase/concert/workshop/meetup/conference)", type: "string" })
+      .option("pricing", { describe: "pricing info", type: "string" })
+      .option("ticket-url", { describe: "ticket purchase URL", type: "string" })
+      .option("tags", { describe: "tags (comma-separated)", type: "string" })
+      .option("bloq-id", { describe: "associated bloq ID", type: "number" })
+      .option("profile-id", { describe: "profile ID/slug", type: "string" })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Event")
@@ -198,9 +208,18 @@ const CreateCommand = cmd({
       if (args.description) payload.description = args.description
       if (args.date) payload.start_date = args.date
       if (args.time) payload.start_time = args.time
+      if (args["end-date"]) payload.end_date = args["end-date"]
+      if (args["end-time"]) payload.end_time = args["end-time"]
       if (args.venue) payload.venue_name = args.venue
       if (args.city) payload.city = args.city
       if (args.state) payload.state = args.state
+      if (args.zip) payload.zip = args.zip
+      if (args.street) payload.street = args.street
+      if (args.type) payload.event_type = args.type
+      if (args.pricing) payload.pricing = args.pricing
+      if (args["ticket-url"]) payload.purchase_ticket_url = args["ticket-url"]
+      if (args.tags) payload.tags = args.tags
+      if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
       if (args["profile-id"]) payload.profile_id = args["profile-id"]
 
       const res = await irisFetch("/api/v1/events", { method: "POST", body: JSON.stringify(payload) })
@@ -211,9 +230,21 @@ const CreateCommand = cmd({
       const e = data?.event ?? data?.data ?? data
       spinner.stop(`${success("✓")} Created: ${bold(String(e.title ?? e.id))}`)
 
+      if (args.json) {
+        console.log(JSON.stringify(e, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
       printDivider()
       printKV("ID", e.id)
       printKV("Title", e.title)
+      printKV("Date", e.start_date)
+      printKV("Time", e.start_time)
+      printKV("Venue", e.venue_name)
+      if (e.city || e.state) printKV("Location", [e.city, e.state].filter(Boolean).join(", "))
+      printKV("Type", e.event_type)
+      if (e.slug) printKV("URL", `https://heyiris.io/p/${e.slug}`)
       printDivider()
 
       prompts.outro(dim(`iris events get ${e.id}`))
@@ -233,9 +264,22 @@ const UpdateCommand = cmd({
       .positional("id", { describe: "event ID", type: "number", demandOption: true })
       .option("title", { describe: "new title", type: "string" })
       .option("description", { describe: "new description", type: "string" })
-      .option("date", { describe: "new start date", type: "string" })
-      .option("venue", { describe: "new venue", type: "string" })
-      .option("city", { describe: "new city", type: "string" }),
+      .option("date", { describe: "new start date (YYYY-MM-DD)", type: "string" })
+      .option("time", { describe: "new start time (HH:MM)", type: "string" })
+      .option("end-date", { describe: "new end date (YYYY-MM-DD)", type: "string" })
+      .option("end-time", { describe: "new end time (HH:MM)", type: "string" })
+      .option("venue", { describe: "new venue name", type: "string" })
+      .option("city", { describe: "new city", type: "string" })
+      .option("state", { describe: "new state", type: "string" })
+      .option("zip", { describe: "new zip code", type: "string" })
+      .option("street", { describe: "new street address", type: "string" })
+      .option("type", { describe: "new event type (showcase/concert/workshop/meetup/conference)", type: "string" })
+      .option("pricing", { describe: "new pricing info", type: "string" })
+      .option("ticket-url", { describe: "ticket purchase URL", type: "string" })
+      .option("tags", { describe: "tags (comma-separated)", type: "string" })
+      .option("bloq-id", { describe: "associated bloq ID", type: "number" })
+      .option("status", { describe: "event status", type: "string" })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Event #${args.id}`)
@@ -247,11 +291,23 @@ const UpdateCommand = cmd({
     if (args.title) payload.title = args.title
     if (args.description) payload.description = args.description
     if (args.date) payload.start_date = args.date
+    if (args.time) payload.start_time = args.time
+    if (args["end-date"]) payload.end_date = args["end-date"]
+    if (args["end-time"]) payload.end_time = args["end-time"]
     if (args.venue) payload.venue_name = args.venue
     if (args.city) payload.city = args.city
+    if (args.state) payload.state = args.state
+    if (args.zip) payload.zip = args.zip
+    if (args.street) payload.street = args.street
+    if (args.type) payload.event_type = args.type
+    if (args.pricing) payload.pricing = args.pricing
+    if (args["ticket-url"]) payload.purchase_ticket_url = args["ticket-url"]
+    if (args.tags) payload.tags = args.tags
+    if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
+    if (args.status) payload.status = args.status
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --description, --date, --venue, or --city")
+      prompts.log.warn("Nothing to update. Use --title, --description, --date, --time, --venue, --city, --state, --type, etc.")
       prompts.outro("Done")
       return
     }
@@ -268,9 +324,20 @@ const UpdateCommand = cmd({
       const e = data?.event ?? data?.data ?? data
       spinner.stop(`${success("✓")} Updated: ${bold(String(e.title ?? e.id))}`)
 
+      if (args.json) {
+        console.log(JSON.stringify(e, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
       printDivider()
       printKV("ID", e.id)
       printKV("Title", e.title)
+      printKV("Date", e.start_date)
+      printKV("Venue", e.venue_name)
+      if (e.city || e.state) printKV("Location", [e.city, e.state].filter(Boolean).join(", "))
+      printKV("Type", e.event_type)
+      printKV("Status", e.status)
       printDivider()
 
       prompts.outro(dim(`iris events get ${args.id}`))
@@ -501,7 +568,9 @@ const DeleteCommand = cmd({
   command: "delete <id>",
   describe: "delete an event",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "event ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "event ID", type: "number", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Event #${args.id}`)
@@ -509,8 +578,10 @@ const DeleteCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const confirmed = await prompts.confirm({ message: `Delete event #${args.id}?` })
-    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Delete event #${args.id}? This cannot be undone.` })
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")
@@ -520,7 +591,7 @@ const DeleteCommand = cmd({
       const ok = await handleApiError(res, "Delete event")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      spinner.stop(`${success("✓")} Deleted`)
+      spinner.stop(`${success("✓")} Deleted event #${args.id}`)
       prompts.outro(dim("iris events list"))
     } catch (err) {
       spinner.stop("Error", 1)

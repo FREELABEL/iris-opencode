@@ -55,6 +55,12 @@
       "dest": "how-to/pages.md",
       "managed": true,
       "purpose": "Genesis page builder: create pages, valid component types, pull/edit/push workflow, component-showcase reference."
+    },
+    {
+      "src": "how-to/deals.md",
+      "dest": "how-to/deals.md",
+      "managed": true,
+      "purpose": "Deal pipeline management: list active deals, check status, send reminders, win-back stale deals, heartbeat autonomous recovery."
     }
   ]
 }

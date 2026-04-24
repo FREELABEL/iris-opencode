@@ -86,25 +86,32 @@ To send a standalone contract (without a proposal):
 $ iris contracts send --lead-id=12345 --template=mutual-nda
 ```
 
-To check signing status:
+To check signing and payment status:
 
 ```bash
-$ iris leads deal-status --deal-id=67890
+$ iris deals status 12345
 ```
 
-Output shows: lead state, deal stage, proposal sent date, contract signing status, payment gate status.
+Output shows: contract signing status, payment status, reminders sent, all URLs. See `deals.md` for the full deal pipeline management guide.
 
 ### 5. Payment gate (collect payment)
 
-Payment gates are automatic outreach steps that block further pipeline progress until the lead pays. They were built April 6 2026 with D+1 / D+3 / D+7 auto-reminders.
+Payment gates are automatic outreach steps that block further pipeline progress until the lead pays. They include D+1 / D+3 / D+7 auto-reminders.
 
-To manually create a payment gate (when not using a proposal):
+To create a payment gate:
 
 ```bash
-$ iris leads invoice send --deal-id=67890 --amount=2500 --due-days=7
+$ iris deals create 12345 -a 2500 -s "Website Development Phase 2" -b 42
 ```
 
-The lead gets an email with a payment link. After D+1, D+3, and D+7 they get reminder emails. Once paid, the deal advances to the next stage automatically.
+The lead gets a proposal with contract + Stripe checkout. Reminders send at D+1, D+3, D+7. Once paid, the gate auto-completes.
+
+To send a reminder manually or recover a stale deal:
+
+```bash
+$ iris deals remind 12345       # send next pending reminder
+$ iris deals recover 12345      # fire all remaining reminders (win-back)
+```
 
 ## Expected output (full happy path)
 
@@ -119,14 +126,20 @@ $ iris leads invoice send --deal-id=67890 --proposal
 ✓ Proposal sent to jane@example.com
 ✓ Sign URL: https://app.heyiris.io/sign/tok_xyz789
 
-$ iris leads deal-status --deal-id=67890
-Deal:        deal_67890 ($2500)
-Lead:        Jane Doe (jane@example.com)
-Stage:       proposal_sent
-Proposal:    sent 2026-04-08 15:42 UTC
-Contract:    awaiting signature
-Payment:     pending (gate active, 7d window)
-Reminders:   D+1 ✗  D+3 ✗  D+7 ✗
+$ iris deals status 12345
+Deal Status — Lead #12345
+  ────────────────────────────────────────────────────────────
+  Status:     PENDING
+  Amount:     $2,500.00
+  Scope:      Genesis page launch — homepage + services + portal
+  Contract:   Pending
+  Payment:    Pending
+  Reminders:  0/3 sent
+  Auto-send:  Yes
+
+  Proposal URL:  https://heyiris.io/proposal/tok_xyz789...
+  Contract URL:  https://heyiris.io/sign/tok_abc123...
+  ────────────────────────────────────────────────────────────
 ```
 
 ## Common errors
@@ -161,5 +174,7 @@ Reminders:   D+1 ✗  D+3 ✗  D+7 ✗
 ## Related recipes
 
 - `iris-login.md` — must be done first
+- `deals.md` — manage the deal pipeline after creation: track status, send reminders, win-back stale deals
+- `payment-gate-contracts.md` — deep dive on contracts, line items, deliverables
 - `outreach-campaign.md` — where most leads come from
 - `hive-dispatch.md` — to schedule recurring follow-up reminders across machines

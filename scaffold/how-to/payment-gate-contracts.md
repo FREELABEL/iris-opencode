@@ -103,16 +103,27 @@ Share the URLs with the client. Options:
 
 ```bash
 # Check if they've signed and paid
+$ iris deals status <lead_id>
+```
+
+Or via API:
+```bash
 curl "https://raichu.heyiris.io/api/v1/leads/<lead_id>/deal-status" \
   -H "Authorization: Bearer $IRIS_SDK_TOKEN"
 ```
 
-Response shows:
-- `contract_signed`: true/false (+ timestamp)
-- `payment_received`: true/false (+ timestamp)
-- Reminder status (sent count, next due)
+Shows: contract signed/pending, payment received/pending, reminders sent/total, auto-send on/off, and all URLs.
 
 When BOTH `contract_signed` AND `payment_received` are true, the payment gate step auto-completes and remaining reminders are cancelled.
+
+To send a reminder or recover a stale deal:
+```bash
+$ iris deals remind <lead_id>     # next pending D+1/D+3/D+7 reminder
+$ iris deals recover <lead_id>    # fire all remaining reminders (win-back)
+$ iris deals list                  # see all active deals at a glance
+```
+
+See `deals.md` for the full deal pipeline management guide.
 
 ## What the client sees
 
@@ -190,8 +201,10 @@ iris integrations connect stripe
 ## Key API endpoints (reference)
 
 ```
+GET    /api/v1/deals/active                                # List all active payment gates (batch overview)
 POST   /api/v1/leads/{id}/payment-gate                    # Create payment gate (the orchestrator)
 GET    /api/v1/leads/{id}/deal-status                      # Check signing + payment status
+POST   /api/v1/leads/{id}/payment-gate/send-next-reminder  # Trigger next pending D+1/D+3/D+7 reminder
 POST   /api/v1/leads/{id}/payment-gate/{stepId}/toggle-reminders  # Enable/disable auto-reminders
 
 POST   /api/v1/leads/{id}/invoice/create                   # Create invoice (without payment gate)
@@ -216,5 +229,6 @@ POST   /proposal/{token}                                    # Accept proposal
 ## Related recipes
 
 - `iris-login.md` — must be authenticated first
+- `deals.md` — manage deals after creation: list pipeline, send reminders, win-back stale deals, heartbeat recovery
 - `lead-to-proposal.md` — the Atlas OS overview of the lead→deal flow
 - `outreach-campaign.md` — where most leads come from before they get invoiced
