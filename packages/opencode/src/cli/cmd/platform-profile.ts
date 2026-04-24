@@ -305,36 +305,84 @@ const ProfileCreateCommand = cmd({
     yargs
       .option("name", { describe: "profile name", type: "string", demandOption: true })
       .option("bio", { describe: "profile bio", type: "string" })
-      .option("category", { describe: "profile category", type: "string" })
+      .option("city", { describe: "city", type: "string" })
+      .option("state", { describe: "state", type: "string" })
+      .option("email", { describe: "email", type: "string" })
+      .option("phone", { describe: "phone", type: "string" })
       .option("instagram", { describe: "Instagram handle", type: "string" })
-      .option("twitter", { describe: "Twitter handle", type: "string" })
-      .option("website", { describe: "website URL", type: "string" }),
+      .option("twitter", { describe: "Twitter/X handle", type: "string" })
+      .option("youtube", { describe: "YouTube channel", type: "string" })
+      .option("spotify", { describe: "Spotify artist ID/URL", type: "string" })
+      .option("tiktok", { describe: "TikTok handle", type: "string" })
+      .option("twitch", { describe: "Twitch handle", type: "string" })
+      .option("website", { describe: "website URL", type: "string" })
+      .option("tags", { describe: "tags (comma-separated)", type: "string" })
+      .option("category", { describe: "profile category", type: "string" })
+      .option("lead-id", { describe: "link to lead ID after creation", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
     await requireAuth()
     const name = args.name as string
+    const spinner = prompts.spinner()
+    spinner.start("Creating profile…")
+
     const body: Record<string, any> = { name }
     if (args.bio) body.bio = args.bio
-    if (args.category) body.category = args.category
+    if (args.city) body.city = args.city
+    if (args.state) body.state = args.state
+    if (args.email) body.email = args.email
+    if (args.phone) body.phone = args.phone
     if (args.instagram) body.instagram = args.instagram
     if (args.twitter) body.twitter = args.twitter
+    if (args.youtube) body.youtube = args.youtube
+    if (args.spotify) body.spotify = args.spotify
+    if (args.tiktok) body.tiktok = args.tiktok
+    if (args.twitch) body.twitch = args.twitch
     if (args.website) body.website_url = args.website
+    if (args.tags) body.tags = args.tags
+    if (args.category) body.category = args.category
 
     const res = await irisFetch("/api/v1/profile/create", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     })
     const ok = await handleApiError(res, "Create profile")
-    if (!ok) { prompts.outro("Failed"); return }
+    if (!ok) { spinner.stop("Failed", 1); return }
     const data = (await res.json()) as any
     const profile = data?.data ?? data
+
+    // Link to lead if --lead-id provided
+    const leadId = args["lead-id"] as number | undefined
+    if (leadId && profile.pk) {
+      try {
+        const linkRes = await irisFetch(`/api/v1/leads/${leadId}`, {
+          method: "PUT",
+          body: JSON.stringify({ profile_id: profile.pk }),
+        })
+        if (linkRes.ok) {
+          spinner.stop(success(`${name} created + linked to lead #${leadId}`))
+        } else {
+          spinner.stop(success(`${name} created (lead link failed — update lead manually)`))
+        }
+      } catch {
+        spinner.stop(success(`${name} created (lead link failed)`))
+      }
+    } else {
+      spinner.stop(success(`${name} created`))
+    }
+
+    if (args.json) { console.log(JSON.stringify(profile, null, 2)); return }
+
     printDivider()
     printKV("PK", profile.pk ?? profile.id ?? "?")
     printKV("Slug", profile.id ?? profile.slug ?? "?")
     printKV("Name", profile.name ?? name)
-    if (profile.bio) printKV("Bio", profile.bio)
+    printKV("URL", `freelabel.net/@${profile.id ?? profile.slug ?? "?"}`)
+    if (profile.city) printKV("Location", [profile.city, profile.state].filter(Boolean).join(", "))
+    if (profile.instagram) printKV("Instagram", profile.instagram)
+    if (profile.email) printKV("Email", profile.email)
+    if (leadId) printKV("Lead", `#${leadId}`)
     printDivider()
-    prompts.outro(success("Profile created"))
   },
 })
 
