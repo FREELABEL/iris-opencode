@@ -193,7 +193,7 @@ const CreateCommand = cmd({
       if (args.website) payload.website_url = args.website
       if (args["hourly-rate"]) payload.hourly_rate = args["hourly-rate"]
 
-      const res = await irisFetch("/api/venues", { method: "POST", body: JSON.stringify(payload) })
+      const res = await irisFetch("/api/v1/venues", { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create venue")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
