@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, BRIDGE_URL, getBridgeToken } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
@@ -1314,7 +1314,14 @@ const TicketCheckoutCommand = cmd({
 // Preflight — live system checks before going live
 // ============================================================================
 
-const BRIDGE = "http://localhost:3200"
+const BRIDGE = BRIDGE_URL
+
+function bHeaders(): Record<string, string> {
+  const t = getBridgeToken()
+  const h: Record<string, string> = { Accept: "application/json" }
+  if (t) h["X-Bridge-Key"] = t
+  return h
+}
 
 interface PCheck { name: string; ok: boolean; detail?: string; hint?: string; category: string }
 
@@ -1361,7 +1368,7 @@ const PreflightCommand = cmd({
     let obsInputs: any[] = []
 
     try {
-      const health = await fetch(`${BRIDGE}/health`, { signal: AbortSignal.timeout(3000) }).then(r => r.json())
+      const health = await fetch(`${BRIDGE}/health`, { signal: AbortSignal.timeout(3000), headers: bHeaders() }).then(r => r.json())
       checks.push({ name: "IRIS Bridge", ok: true, detail: "running", category: "Production" })
 
       const obs = health?.messaging?.obs ?? health?.obs ?? {}
@@ -1380,7 +1387,7 @@ const PreflightCommand = cmd({
 
     if (obsConnected) {
       try {
-        const scenes = await fetch(`${BRIDGE}/api/obs/scenes`, { signal: AbortSignal.timeout(3000) }).then(r => r.json())
+        const scenes = await fetch(`${BRIDGE}/api/obs/scenes`, { signal: AbortSignal.timeout(3000), headers: bHeaders() }).then(r => r.json())
         obsScenes = (scenes.scenes || []).map((s: any) => s.name)
         const matched = stages.filter(s => obsScenes.some(os => os.toLowerCase().includes(s.title?.toLowerCase() || "___")))
         checks.push({
@@ -1394,7 +1401,7 @@ const PreflightCommand = cmd({
       } catch {}
 
       try {
-        const stream = await fetch(`${BRIDGE}/api/obs/stream/status`, { signal: AbortSignal.timeout(3000) }).then(r => r.json())
+        const stream = await fetch(`${BRIDGE}/api/obs/stream/status`, { signal: AbortSignal.timeout(3000), headers: bHeaders() }).then(r => r.json())
         obsStreamActive = stream.active
         checks.push({
           name: "Streaming",
@@ -1405,7 +1412,7 @@ const PreflightCommand = cmd({
       } catch {}
 
       try {
-        const rec = await fetch(`${BRIDGE}/api/obs/record/status`, { signal: AbortSignal.timeout(3000) }).then(r => r.json())
+        const rec = await fetch(`${BRIDGE}/api/obs/record/status`, { signal: AbortSignal.timeout(3000), headers: bHeaders() }).then(r => r.json())
         obsRecordActive = rec.active
         checks.push({
           name: "Recording",
@@ -1416,7 +1423,7 @@ const PreflightCommand = cmd({
       } catch {}
 
       try {
-        obsInputs = await fetch(`${BRIDGE}/api/obs/inputs`, { signal: AbortSignal.timeout(3000) }).then(r => r.json())
+        obsInputs = await fetch(`${BRIDGE}/api/obs/inputs`, { signal: AbortSignal.timeout(3000), headers: bHeaders() }).then(r => r.json())
         const cameras = obsInputs.filter((i: any) => i.kind?.includes("capture") && !i.kind?.includes("audio") && !i.kind?.includes("screen"))
         const mics = obsInputs.filter((i: any) => i.kind?.includes("audio"))
         checks.push({ name: "Cameras detected", ok: cameras.length > 0, detail: `${cameras.length} camera(s)`, category: "Production" })

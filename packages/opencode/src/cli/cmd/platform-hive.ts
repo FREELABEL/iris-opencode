@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, getBridgeToken } from "./iris-api"
 
 // Use iris-api base for Hive endpoints
 const IRIS_API = process.env.IRIS_API_URL ?? "https://heyiris.io"
@@ -827,6 +827,14 @@ const HiveStatusCommand = cmd({
 
 const BRIDGE_URL = process.env.BRIDGE_URL ?? "http://localhost:3200"
 
+/** Build headers with bridge auth token for direct fetch calls */
+function bridgeHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const token = getBridgeToken()
+  const h: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json", ...extra }
+  if (token) h["X-Bridge-Key"] = token
+  return h
+}
+
 function readNodeKey(): string | null {
   try {
     const fs = require("fs")
@@ -878,11 +886,14 @@ async function detectBridgePrefix(): Promise<string> {
   return _bridgePrefix
 }
 
-async function bridgeFetch(path: string) {
+async function bridgeFetch(path: string, opts: RequestInit = {}) {
   const prefix = await detectBridgePrefix()
   // path comes in as "/daemon/queue" — strip the /daemon prefix and re-add the detected one
   const cleanPath = path.replace(/^\/daemon/, "")
-  return fetch(`${BRIDGE_URL}${prefix}${cleanPath}`, { headers: { Accept: "application/json" } })
+  const token = getBridgeToken()
+  const headers: Record<string, string> = { Accept: "application/json", ...(opts.headers as Record<string, string> || {}) }
+  if (token) headers["X-Bridge-Key"] = token
+  return fetch(`${BRIDGE_URL}${prefix}${cleanPath}`, { ...opts, headers })
 }
 
 // ── iris hive tasks ─────────────────────────────────────────────────────
@@ -1121,7 +1132,7 @@ const HivePauseCommand = cmd({
     UI.empty()
     try {
       const prefix = await detectBridgePrefix()
-      const res = await fetch(`${BRIDGE_URL}${prefix}/pause`, { method: "POST" })
+      const res = await fetch(`${BRIDGE_URL}${prefix}/pause`, { method: "POST", headers: bridgeHeaders() })
       if (res.ok) {
         prompts.log.success("Daemon paused — no new tasks will be accepted")
       } else {
@@ -1141,7 +1152,7 @@ const HiveResumeCommand = cmd({
     UI.empty()
     try {
       const prefix = await detectBridgePrefix()
-      const res = await fetch(`${BRIDGE_URL}${prefix}/resume`, { method: "POST" })
+      const res = await fetch(`${BRIDGE_URL}${prefix}/resume`, { method: "POST", headers: bridgeHeaders() })
       if (res.ok) {
         prompts.log.success("Daemon resumed — accepting tasks")
       } else {
@@ -1190,7 +1201,7 @@ const HivePurgeCommand = cmd({
       // Also try to pause the daemon to prevent re-dispatch
       try {
         const purgePrefix = await detectBridgePrefix()
-        await fetch(`${BRIDGE_URL}${purgePrefix}/pause`, { method: "POST" })
+        await fetch(`${BRIDGE_URL}${purgePrefix}/pause`, { method: "POST", headers: bridgeHeaders() })
         prompts.log.info("Daemon paused to prevent re-dispatch. Resume with: iris hive resume")
       } catch {
         prompts.log.warn("Daemon not reachable — tasks may be re-dispatched on next heartbeat")
@@ -1353,7 +1364,7 @@ const HiveScriptPushCommand = cmd({
 
       const res = await fetch(`${BRIDGE_URL}/execute-script`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: bridgeHeaders(),
         body: JSON.stringify({
           filename,
           content,
@@ -1460,7 +1471,7 @@ const HiveScriptExecCommand = cmd({
 
       const res = await fetch(`${BRIDGE_URL}/execute-script`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: bridgeHeaders(),
         body: JSON.stringify({
           filename,
           content,
@@ -1563,7 +1574,7 @@ const HiveScriptRmCommand = cmd({
     try {
       const res = await fetch(`${BRIDGE_URL}/files?path=/scripts/${encodeURIComponent(filename)}`, {
         method: "DELETE",
-        headers: { Accept: "application/json" },
+        headers: bridgeHeaders(),
       })
 
       if (!res.ok) {
@@ -1635,7 +1646,7 @@ echo "=== Report Complete ==="
     try {
       const res = await fetch(`${BRIDGE_URL}/execute-script`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: bridgeHeaders(),
         body: JSON.stringify({
           filename: "iris-hive-demo.sh",
           content: DEMO_SCRIPT,
@@ -1669,7 +1680,7 @@ echo "=== Report Complete ==="
       if (args.schedule) {
         const schedRes = await fetch(`${BRIDGE_URL}/schedules`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: bridgeHeaders(),
           body: JSON.stringify({
             filename: "iris-hive-demo.sh",
             cron: args.schedule,
@@ -1777,7 +1788,7 @@ const HiveScheduleAddCommand = cmd({
     try {
       const res = await fetch(`${BRIDGE_URL}/schedules`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: bridgeHeaders(),
         body: JSON.stringify({
           filename: args.filename,
           cron: args.cron,
@@ -1821,7 +1832,7 @@ const HiveScheduleRmCommand = cmd({
     try {
       const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}`, {
         method: "DELETE",
-        headers: { Accept: "application/json" },
+        headers: bridgeHeaders(),
       })
 
       if (!res.ok) {
@@ -1849,7 +1860,7 @@ const HiveSchedulePauseCommand = cmd({
     try {
       const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/pause`, {
         method: "POST",
-        headers: { Accept: "application/json" },
+        headers: bridgeHeaders(),
       })
       if (res.ok) {
         prompts.log.success("Schedule paused")
@@ -1873,7 +1884,7 @@ const HiveScheduleResumeCommand = cmd({
     try {
       const res = await fetch(`${BRIDGE_URL}/schedules/${encodeURIComponent(args.id as string)}/resume`, {
         method: "POST",
-        headers: { Accept: "application/json" },
+        headers: bridgeHeaders(),
       })
       if (res.ok) {
         prompts.log.success("Schedule resumed")

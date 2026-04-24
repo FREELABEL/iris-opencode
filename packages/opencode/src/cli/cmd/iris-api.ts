@@ -305,3 +305,33 @@ export async function promptOrFail<T>(
   }
   return promptFn()
 }
+
+// ============================================================================
+// Bridge (local daemon) — authenticated HTTP client
+// ============================================================================
+
+const BRIDGE_TOKEN_PATH = join(homedir(), ".iris", "bridge-token")
+
+export const BRIDGE_URL = process.env.BRIDGE_URL ?? `http://localhost:${process.env.BRIDGE_PORT ?? "3200"}`
+
+/** Read the auto-generated bridge auth token from ~/.iris/bridge-token */
+export function getBridgeToken(): string | null {
+  try {
+    const fs = require("fs")
+    if (fs.existsSync(BRIDGE_TOKEN_PATH)) {
+      return fs.readFileSync(BRIDGE_TOKEN_PATH, "utf-8").trim() || null
+    }
+  } catch {}
+  return null
+}
+
+/** Fetch from the local bridge with auth header. Open endpoints work without token too. */
+export async function bridgeFetch(path: string, opts: RequestInit = {}): Promise<Response> {
+  const token = getBridgeToken()
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    ...(opts.headers as Record<string, string> || {}),
+  }
+  if (token) headers["X-Bridge-Key"] = token
+  return fetch(`${BRIDGE_URL}${path}`, { ...opts, headers })
+}

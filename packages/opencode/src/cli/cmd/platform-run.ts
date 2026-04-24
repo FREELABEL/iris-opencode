@@ -14,6 +14,7 @@ import {
   IRIS_API,
   FL_API,
   PLATFORM_URLS,
+  getBridgeToken,
 } from "./iris-api"
 import { exec } from "child_process"
 
@@ -554,7 +555,9 @@ const ListConnectedCommand = cmd({
         return (r.status === 401 || r.status === 403) ? "expired" : "verified"
       },
       "google-calendar": async () => {
-        const r = await fetch(`http://localhost:3200/api/calendar/events?days=1&limit=1`, { signal: AbortSignal.timeout(3000) }).catch(() => null)
+        const _bh: Record<string, string> = { Accept: "application/json" }
+        const _bt = getBridgeToken(); if (_bt) _bh["X-Bridge-Key"] = _bt
+        const r = await fetch(`http://localhost:3200/api/calendar/events?days=1&limit=1`, { signal: AbortSignal.timeout(3000), headers: _bh }).catch(() => null)
         return r?.ok ? "verified" : "error"
       },
       "google-drive": async () => {

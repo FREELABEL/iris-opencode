@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, BRIDGE_URL as SHARED_BRIDGE_URL, getBridgeToken } from "./iris-api"
 
 // Customer onboarding pipeline — one command to create bloq + agent + heartbeat + page
 
@@ -378,7 +378,14 @@ function getChecklist(lead: any): CheckItem[] {
 // ── PULSE ────────────────────────────────────────────────────
 // Unified activity check: Apple Mail + iMessage + Calendar + Notes
 
-const BRIDGE_URL = "http://localhost:3200"
+const BRIDGE_URL = SHARED_BRIDGE_URL
+
+function custBridgeHeaders(): Record<string, string> {
+  const t = getBridgeToken()
+  const h: Record<string, string> = { Accept: "application/json" }
+  if (t) h["X-Bridge-Key"] = t
+  return h
+}
 
 async function bridgeAvailable(): Promise<boolean> {
   try {
@@ -390,7 +397,7 @@ async function bridgeAvailable(): Promise<boolean> {
 async function searchMail(query: string, days: number): Promise<any[]> {
   try {
     const params = new URLSearchParams({ from: query, days: String(days), limit: "5", include_body: "0" })
-    const res = await fetch(`${BRIDGE_URL}/api/mail/search?${params}`, { signal: AbortSignal.timeout(8000) })
+    const res = await fetch(`${BRIDGE_URL}/api/mail/search?${params}`, { signal: AbortSignal.timeout(8000), headers: custBridgeHeaders() })
     if (!res.ok) return []
     const data = (await res.json()) as any
     return data?.emails ?? data?.results ?? []

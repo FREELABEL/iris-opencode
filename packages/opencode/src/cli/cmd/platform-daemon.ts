@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { dim, bold, success } from "./iris-api"
+import { dim, bold, success, getBridgeToken } from "./iris-api"
 import { join } from "path"
 import { homedir } from "os"
 import { existsSync } from "fs"
@@ -150,7 +150,9 @@ const DaemonRunsCommand = cmd({
     const showCode = args.all || args.code
 
     try {
-      const res = await fetch("http://localhost:3200/daemon/schedules", { signal: AbortSignal.timeout(3000) })
+      const _dh: Record<string, string> = { Accept: "application/json" }
+      const _dt = getBridgeToken(); if (_dt) _dh["X-Bridge-Key"] = _dt
+      const res = await fetch("http://localhost:3200/daemon/schedules", { signal: AbortSignal.timeout(3000), headers: _dh })
       if (!res.ok) { prompts.log.error(`HTTP ${res.status}`); prompts.outro("Done"); return }
       const data = await res.json() as { schedules?: any[] }
       const schedules = data.schedules ?? []

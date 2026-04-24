@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive, PLATFORM_URLS } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive, PLATFORM_URLS, BRIDGE_URL, getBridgeToken } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename, isAbsolute } from "path"
@@ -1319,7 +1319,15 @@ const LeadsMergeCommand = cmd({
 // Integration Health Checks (#57677) — pre-flight validation for pulse + doctor
 // ============================================================================
 
-const BRIDGE_BASE = "http://localhost:3200"
+const BRIDGE_BASE = BRIDGE_URL
+
+/** Helper to add auth token to bridge fetch calls */
+function bridgeHeaders(): Record<string, string> {
+  const token = getBridgeToken()
+  const h: Record<string, string> = { Accept: "application/json" }
+  if (token) h["X-Bridge-Key"] = token
+  return h
+}
 
 interface ChannelHealth {
   name: string
@@ -1356,7 +1364,7 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
     // Google Calendar — verify via bridge
     (async (): Promise<ChannelHealth> => {
       try {
-        const res = await fetch(`${BRIDGE_BASE}/api/calendar/events?days=1&limit=1`, { signal: AbortSignal.timeout(3000) })
+        const res = await fetch(`${BRIDGE_BASE}/api/calendar/events?days=1&limit=1`, { signal: AbortSignal.timeout(3000), headers: bridgeHeaders() })
         if (res.ok) return { name: "Google Calendar", ok: true, status: "verified" }
         return { name: "Google Calendar", ok: false, status: "error", error: `HTTP ${res.status}`, hint: "check bridge: iris hive doctor" }
       } catch {
@@ -1380,7 +1388,7 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
     // Apple Mail — verify via bridge
     (async (): Promise<ChannelHealth> => {
       try {
-        const res = await fetch(`${BRIDGE_BASE}/api/mail/search?from=test&days=1&limit=1`, { signal: AbortSignal.timeout(3000) })
+        const res = await fetch(`${BRIDGE_BASE}/api/mail/search?from=test&days=1&limit=1`, { signal: AbortSignal.timeout(3000), headers: bridgeHeaders() })
         if (res.ok) return { name: "Apple Mail", ok: true, status: "verified" }
         return { name: "Apple Mail", ok: false, status: "error", error: `HTTP ${res.status}`, hint: "check bridge: iris hive doctor" }
       } catch {
@@ -1795,7 +1803,7 @@ const LeadsPulseCommand = cmd({
         const handle = phone || email
         if (handle) {
           fetches.push(
-            fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=${msgLimit}`)
+            fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=${msgLimit}`, { headers: bridgeHeaders() })
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
@@ -1810,7 +1818,7 @@ const LeadsPulseCommand = cmd({
         } else if (name) {
           // Fallback: search by contact name via Contacts.app resolution
           fetches.push(
-            fetch(`${BRIDGE_BASE}/api/imessage/search?name=${encodeURIComponent(name)}&days=${days}&limit=${msgLimit}`)
+            fetch(`${BRIDGE_BASE}/api/imessage/search?name=${encodeURIComponent(name)}&days=${days}&limit=${msgLimit}`, { headers: bridgeHeaders() })
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
@@ -1846,7 +1854,7 @@ const LeadsPulseCommand = cmd({
         // Apple Mail (via local bridge daemon)
         if (email) {
           fetches.push(
-            fetch(`${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=${msgLimit}&include_body=0`)
+            fetch(`${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=${msgLimit}&include_body=0`, { headers: bridgeHeaders() })
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
@@ -2816,6 +2824,278 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsCreatePackageCommand)
       .command(LeadsUpdatePackageCommand)
       .command(LeadsRegenCheckoutCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
+// Deals command group — discoverable surface for payment pipeline
+// ============================================================================
+
+const DealsListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list all leads with active payment gates",
+  builder: (yargs) =>
+    yargs
+      .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const params = new URLSearchParams()
+    if (args.bloq) params.set("bloq_id", String(args.bloq))
+
+    const res = await irisFetch(`/api/v1/deals/active?${params}`)
+    if (!(await handleApiError(res, "List active deals"))) return
+
+    const result = await res.json().catch(() => ({}))
+    const data = result?.data ?? {}
+    const deals: any[] = data?.deals ?? []
+
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    if (!deals.length) {
+      prompts.log.info("No active deals found")
+      console.log(dim("Create one: iris leads payment-gate <lead-id> -a 500 -s \"Scope\""))
+      return
+    }
+
+    console.log("")
+    console.log(bold(`Active Deals — ${deals.length} total | Pipeline: $${Number(data.pipeline_value ?? 0).toFixed(2)}`))
+    printDivider()
+
+    const statusLabels: Record<string, string> = {
+      deal_closed: success("CLOSED"),
+      awaiting_payment: highlight("AWAITING PAYMENT"),
+      awaiting_contract: highlight("AWAITING CONTRACT"),
+      awaiting_both: dim("PENDING"),
+    }
+
+    for (const d of deals) {
+      const label = statusLabels[d.deal_status] ?? d.deal_status
+      const amount = `$${Number(d.amount ?? 0).toFixed(2)}`
+      const age = `${d.days_open}d`
+      const reminders = `${d.reminders_sent}/${d.reminders_total}`
+      console.log(`  ${dim(`#${d.lead_id}`)}  ${bold(d.name ?? "Unknown")}${d.company ? dim(` @ ${d.company}`) : ""}`)
+      console.log(`       ${label}  ${success(amount)}  ${dim(age + " open")}  reminders: ${reminders}`)
+      if (d.proposal_url) console.log(`       ${dim(d.proposal_url)}`)
+      console.log("")
+    }
+    printDivider()
+  },
+})
+
+const DealsStatusCommand = cmd({
+  command: "status <id>",
+  aliases: ["info"],
+  describe: "show deal status for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    // Reuse same logic as LeadsDealStatusCommand
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/deal-status`)
+    if (!(await handleApiError(res, "Get deal status"))) return
+
+    const result = await res.json().catch(() => ({}))
+    const status = result?.data ?? result
+
+    if (args.json) { console.log(JSON.stringify(status, null, 2)); return }
+
+    if (!status?.has_payment_gate) {
+      prompts.log.info(`No payment gate for lead #${args.id}`)
+      console.log(dim(`Create one: iris deals create ${args.id} -a 500 -s "Description"`))
+      return
+    }
+
+    const statusLabels: Record<string, string> = {
+      deal_closed: success("CLOSED"),
+      awaiting_payment: highlight("AWAITING PAYMENT"),
+      awaiting_contract: highlight("AWAITING CONTRACT"),
+      awaiting_both: dim("PENDING"),
+    }
+
+    console.log("")
+    console.log(bold(`Deal Status — Lead #${args.id}`))
+    printDivider()
+    printKV("Status", statusLabels[status.status] ?? status.status)
+    printKV("Amount", `$${Number(status.amount ?? 0).toFixed(2)}`)
+    printKV("Scope", status.scope ?? dim("��"))
+    printKV("Contract", status.contract_signed ? success("Signed") : highlight("Pending"))
+    printKV("Payment", status.payment_received ? success("Received") : highlight("Pending"))
+    printKV("Reminders", `${status.reminders_sent ?? 0}/${status.reminders_total ?? 0} sent`)
+    printKV("Auto-send", status.auto_send_reminders ? success("Yes") : dim("No"))
+
+    if (status.proposal_url) {
+      console.log("")
+      printKV("Proposal URL", status.proposal_url)
+    }
+    if (status.contract_signing_url) {
+      printKV("Contract URL", status.contract_signing_url)
+    }
+    if (status.stripe_checkout_url) {
+      printKV("Payment URL", status.stripe_checkout_url)
+    }
+    printDivider()
+  },
+})
+
+const DealsRemindCommand = cmd({
+  command: "remind <id>",
+  aliases: ["nudge"],
+  describe: "send the next pending reminder for a deal",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate/send-next-reminder`, {
+      method: "POST",
+    })
+    if (!(await handleApiError(res, "Send next reminder"))) return
+
+    const result = await res.json().catch(() => ({}))
+
+    if (args.json) { console.log(JSON.stringify(result, null, 2)); return }
+
+    if (result?.success) {
+      prompts.log.success(result.message ?? "Reminder sent")
+      if (result.data?.title) {
+        printKV("Step", result.data.title)
+        printKV("Lead", `${result.data.lead_name} (#${result.data.lead_id})`)
+      }
+    } else {
+      prompts.log.error(result?.message ?? "Failed to send reminder")
+    }
+  },
+})
+
+const DealsRecoverCommand = cmd({
+  command: "recover <id>",
+  aliases: ["winback"],
+  describe: "trigger win-back sequence for a stale or lost deal",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    // First check the deal status
+    const statusRes = await irisFetch(`/api/v1/leads/${args.id}/deal-status`)
+    if (!(await handleApiError(statusRes, "Get deal status"))) return
+
+    const statusResult = await statusRes.json().catch(() => ({}))
+    const status = statusResult?.data ?? statusResult
+
+    if (!status?.has_payment_gate) {
+      prompts.log.error(`No payment gate for lead #${args.id} — nothing to recover`)
+      return
+    }
+
+    if (status.payment_received) {
+      prompts.log.info(`Lead #${args.id} already paid — no recovery needed`)
+      return
+    }
+
+    // Send all remaining reminders in sequence
+    let sent = 0
+    const maxReminders = 3
+    for (let i = 0; i < maxReminders; i++) {
+      const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate/send-next-reminder`, {
+        method: "POST",
+      })
+      const result = await res.json().catch(() => ({}))
+      if (!result?.success) break
+      sent++
+      if (!args.json) {
+        prompts.log.success(`Reminder ${sent}: ${result.data?.title ?? "sent"}`)
+      }
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify({ lead_id: args.id, reminders_triggered: sent, status: status.status }, null, 2))
+      return
+    }
+
+    if (sent === 0) {
+      prompts.log.info("All reminders already sent — consider a manual follow-up")
+      console.log(dim(`View deal: iris deals status ${args.id}`))
+    } else {
+      console.log("")
+      prompts.log.success(`Recovery sequence triggered: ${sent} reminder(s) scheduled for lead #${args.id}`)
+      console.log(dim(`Track progress: iris deals status ${args.id}`))
+    }
+  },
+})
+
+const DealsCreateCommand = cmd({
+  command: "create <id>",
+  aliases: ["gate", "invoice"],
+  describe: "create a payment gate for a lead (alias for leads payment-gate)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("amount", { alias: "a", describe: "amount in dollars", type: "number" })
+      .option("scope", { alias: "s", describe: "scope of work", type: "string" })
+      .option("bloq", { alias: "b", describe: "bloq ID", type: "number" })
+      .option("package", { alias: "p", describe: "package ID", type: "number" })
+      .option("packages", { describe: "comma-separated package IDs for multi-tier", type: "string" })
+      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one_time", "monthly", "quarterly", "yearly"] })
+      .option("no-auto-remind", { describe: "disable auto-send reminders", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const body: Record<string, unknown> = {}
+    if (args.amount) body.amount = args.amount
+    if (args.scope) body.scope = args.scope
+    if (args.bloq) body.bloq_id = args.bloq
+    if (args.package) body.package_id = args.package
+    if (args.packages) body.package_ids = args.packages.split(",").map(Number)
+    if (args.interval) body.billing_interval = args.interval
+    if (args["no-auto-remind"]) body.auto_send_reminders = false
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    if (!(await handleApiError(res, "Create payment gate"))) return
+
+    const result = await res.json().catch(() => ({}))
+
+    if (args.json) { console.log(JSON.stringify(result, null, 2)); return }
+
+    if (result?.success || result?.data) {
+      const data = result?.data ?? result
+      prompts.log.success(`Payment gate created for lead #${args.id}`)
+      if (data.proposal_url) printKV("Proposal", data.proposal_url)
+      if (data.contract_url) printKV("Contract", data.contract_url)
+      if (data.checkout_url) printKV("Checkout", data.checkout_url)
+      console.log(dim(`\nTrack: iris deals status ${args.id}`))
+    } else {
+      prompts.log.error(result?.message ?? "Failed to create payment gate")
+    }
+  },
+})
+
+export const PlatformDealsCommand = cmd({
+  command: "deals",
+  aliases: ["deal", "pipeline"],
+  describe: "manage deals — active payment gates, status, reminders, recovery",
+  builder: (yargs) =>
+    yargs
+      .command(DealsListCommand)
+      .command(DealsStatusCommand)
+      .command(DealsCreateCommand)
+      .command(DealsRemindCommand)
+      .command(DealsRecoverCommand)
       .demandCommand(),
   async handler() {},
 })
