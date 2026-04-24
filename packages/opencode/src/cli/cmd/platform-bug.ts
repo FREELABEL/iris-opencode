@@ -236,7 +236,7 @@ const ListCommand = cmd({
     yargs
       .option("limit", { describe: "results per page", type: "number", default: 20 })
       .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
-      .option("status", { describe: "filter by status", choices: ["todo", "in_progress", "done", "all"] as const, default: "all" as const })
+      .option("status", { describe: "filter by status (default: open bugs only)", choices: ["todo", "in_progress", "done", "all"] as const, default: "todo" as const })
       .option("severity", { describe: "filter by severity", choices: ["low", "medium", "high", "critical"] as const })
       .option("search", { alias: "q", describe: "search bug titles", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
@@ -328,7 +328,7 @@ const ListCommand = cmd({
     if (currentPage > 1) {
       console.log(dim(`  iris bug list --page=${currentPage - 1} — previous page`))
     }
-    console.log(dim("  iris bug list --status=todo — open bugs only"))
+    console.log(dim("  iris bug list --status=all — include completed bugs"))
     console.log(dim("  iris bug list --severity=critical — critical bugs only"))
     console.log(dim("  iris bug list --search=\"invoice\" — search titles"))
     console.log(dim("  iris bug report — submit a new bug"))
