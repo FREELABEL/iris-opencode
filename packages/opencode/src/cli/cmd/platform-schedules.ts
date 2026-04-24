@@ -353,16 +353,21 @@ const SchedulesGetCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const s = data?.data ?? data
-      spinner.stop(String(s.name ?? s.title ?? `Schedule #${s.id}`))
+      const name = s.task_name ?? s.name ?? s.title ?? `Schedule #${s.id}`
+      const agentName = s.agent?.name ?? `Agent #${s.agent_id}`
+      spinner.stop(String(name))
 
       printDivider()
       printKV("ID", s.id)
-      printKV("Name", s.name ?? s.title)
+      printKV("Name", name)
+      printKV("Agent", agentName)
       printKV("Status", s.status)
       printKV("Frequency", s.frequency ?? s.cron_expression ?? s.interval)
-      printKV("Agent ID", s.agent_id)
+      printKV("Model", s.agent?.config?.model ?? s.agent?.settings?.model)
+      printKV("Run Count", s.run_count)
       printKV("Last Run", s.last_run_at)
       printKV("Next Run", s.next_run_at)
+      printKV("Emails", s.data?.report_emails?.join(", "))
       printKV("Created", s.created_at)
       console.log()
       printDivider()
