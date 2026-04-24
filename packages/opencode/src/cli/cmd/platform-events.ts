@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, BRIDGE_URL, getBridgeToken } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
@@ -1382,15 +1382,101 @@ const TicketCheckoutCommand = cmd({
 })
 
 // ============================================================================
+// Venue Deal — link/unlink a venue to an event
+// ============================================================================
+
+const LinkVenueCommand = cmd({
+  command: "link-venue <event-id> <venue-id>",
+  aliases: ["venue-deal", "attach-venue"],
+  describe: "link a venue to an event with deal terms",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const venueId = String(args.venueId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Linking venue to event…")
+    try {
+      const body: Record<string, unknown> = {
+        venue_id: Number(venueId),
+        deal_type: String(args.type || "flat_fee"),
+        deal_value_cents: args.amount ? Number(args.amount) * 100 : 0,
+      }
+      if (args.share) body.revenue_share_percent = Number(args.share)
+      if (args.contact) body.contact_name = String(args.contact)
+      if (args.phone) body.contact_phone = String(args.phone)
+      if (args.email) body.contact_email = String(args.email)
+      if (args.notes) body.notes = String(args.notes)
+
+      const res = await irisFetch(`/api/v1/events/${eventId}/venue-deal`, { method: "POST", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Link venue")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const deal = data.data || data
+      spinner.stop(success("Venue linked to event"))
+      if (args.json) { console.log(JSON.stringify(deal, null, 2)); return }
+      printDivider()
+      printKV("Event", `#${eventId}`)
+      printKV("Venue ID", venueId)
+      printKV("Deal Type", deal.deal_type || args.type || "flat_fee")
+      if (deal.deal_value_cents) printKV("Amount", `$${(deal.deal_value_cents / 100).toLocaleString()}`)
+      if (deal.contact_name) printKV("Contact", deal.contact_name)
+      printDivider()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("venue-id", { describe: "venue ID", type: "string", demandOption: true })
+    .option("type", { describe: "deal type (flat_fee or revenue_share)", type: "string", default: "flat_fee" })
+    .option("amount", { describe: "deal amount in dollars", type: "number" })
+    .option("share", { describe: "revenue share %", type: "number" })
+    .option("contact", { describe: "contact name", type: "string" })
+    .option("phone", { describe: "contact phone", type: "string" })
+    .option("email", { describe: "contact email", type: "string" })
+    .option("notes", { describe: "deal notes", type: "string" })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+const UnlinkVenueCommand = cmd({
+  command: "unlink-venue <event-id>",
+  aliases: ["remove-venue"],
+  describe: "remove venue deal from an event",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    await requireAuth()
+    if (!args.force) {
+      const confirm = await prompts.confirm({ message: `Remove venue deal from event #${eventId}?` })
+      if (!confirm || prompts.isCancel(confirm)) { prompts.outro(dim("Cancelled")); return }
+    }
+    const spinner = prompts.spinner()
+    spinner.start("Removing venue deal…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/venue-deal`, { method: "DELETE" })
+      const ok = await handleApiError(res, "Unlink venue")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      spinner.stop(success(`Venue deal removed from event #${eventId}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .option("force", { alias: "y", describe: "skip confirmation", type: "boolean" }),
+})
+
+// ============================================================================
 // Preflight — live system checks before going live
 // ============================================================================
 
-const BRIDGE = BRIDGE_URL
+const BRIDGE = process.env.BRIDGE_URL ?? "http://localhost:3200"
 
 function bHeaders(): Record<string, string> {
-  const t = getBridgeToken()
+  const key = process.env.BRIDGE_KEY || process.env.HIVE_API_KEY || ""
   const h: Record<string, string> = { Accept: "application/json" }
-  if (t) h["X-Bridge-Key"] = t
+  if (key) h["X-Bridge-Key"] = key
   return h
 }
 
@@ -1744,6 +1830,9 @@ export const PlatformEventsCommand = cmd({
       .command(TicketsPushCommand)
       .command(TicketsDiffCommand)
       .command(TicketCheckoutCommand)
+      // Venue Deals
+      .command(LinkVenueCommand)
+      .command(UnlinkVenueCommand)
       // Production QA
       .command(PreflightCommand)
       .command(AuditCommand)
