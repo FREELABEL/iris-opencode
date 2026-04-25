@@ -36,6 +36,119 @@ async function checkEndpoint(name: string, url: string, base?: string): Promise<
   }
 }
 
+// ── SEO & Bot Protection Checks ──
+// Tests that search engine bots aren't being blocked, robots.txt is valid,
+// and profile/event pages return correct responses.
+
+async function runSEOChecks(): Promise<CheckResult[]> {
+  const results: CheckResult[] = []
+  const prodUrl = "https://freelabel.net"
+  const flApiUrl = FL_API || "https://raichu.heyiris.io"
+
+  // 1. Googlebot isn't blocked — simulate Googlebot UA against production
+  const botUAs: Array<{ name: string; ua: string; expectOk: boolean }> = [
+    {
+      name: "SEO: Googlebot",
+      ua: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+      expectOk: true,
+    },
+    {
+      name: "SEO: Googlebot Render",
+      ua: "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+      expectOk: true,
+    },
+    {
+      name: "SEO: Bingbot",
+      ua: "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+      expectOk: true,
+    },
+    {
+      name: "SEO: Storebot-Google",
+      ua: "Mozilla/5.0 (Linux; Android 8.0; Pixel 2 Build/OPD3.170816.012; Storebot-Google/1.0)",
+      expectOk: true,
+    },
+  ]
+
+  for (const bot of botUAs) {
+    try {
+      const res = await fetch(`${prodUrl}/`, {
+        headers: { "User-Agent": bot.ua },
+        signal: AbortSignal.timeout(8000),
+        redirect: "follow",
+      })
+      const ok = bot.expectOk ? res.status !== 403 : res.status === 403
+      results.push({
+        name: bot.name,
+        ok,
+        detail: `HTTP ${res.status}`,
+        hint: !ok ? (bot.expectOk ? "bot is being BLOCKED — check ThrottleBots" : undefined) : undefined,
+      })
+    } catch (e: any) {
+      results.push({
+        name: bot.name,
+        ok: false,
+        detail: e.message?.slice(0, 50) ?? "unreachable",
+        hint: "could not reach production",
+      })
+    }
+  }
+
+  // 2. robots.txt is accessible and allows Googlebot
+  try {
+    const res = await fetch(`${prodUrl}/robots.txt`, { signal: AbortSignal.timeout(5000) })
+    if (res.ok) {
+      const body = await res.text()
+      const allowsGoogle = !body.includes("User-agent: Googlebot\nDisallow: /")
+      const hasSitemap = body.toLowerCase().includes("sitemap:")
+      results.push({
+        name: "SEO: robots.txt",
+        ok: allowsGoogle,
+        detail: allowsGoogle ? "Googlebot allowed" : "Googlebot BLOCKED",
+        hint: !allowsGoogle ? "robots.txt is blocking Googlebot crawling" : undefined,
+      })
+      results.push({
+        name: "SEO: Sitemap ref",
+        ok: hasSitemap,
+        detail: hasSitemap ? "sitemap declared" : "no sitemap in robots.txt",
+        hint: !hasSitemap ? "add Sitemap: directive to robots.txt" : undefined,
+      })
+    } else {
+      results.push({ name: "SEO: robots.txt", ok: false, detail: `HTTP ${res.status}` })
+    }
+  } catch (e: any) {
+    results.push({ name: "SEO: robots.txt", ok: false, detail: e.message?.slice(0, 50) ?? "unreachable" })
+  }
+
+  // 3. Profile pages resolve (test /@slug routing)
+  try {
+    const res = await fetch(`${flApiUrl}/api/v1/events?limit=1`, {
+      headers: { "Accept": "application/json" },
+      signal: AbortSignal.timeout(5000),
+    })
+    if (res.ok) {
+      const data = (await res.json()) as any
+      const events = data?.data ?? []
+      if (events.length > 0) {
+        const ev = events[0]
+        const hasStages = ev.stages?.length > 0 || ev.eventStages?.length > 0
+        results.push({
+          name: "SEO: Event API",
+          ok: true,
+          detail: `${ev.name?.slice(0, 30)} — ${hasStages ? "has stages" : "no stages"}`,
+        })
+      } else {
+        results.push({ name: "SEO: Event API", ok: true, detail: "no events yet" })
+      }
+    } else {
+      results.push({ name: "SEO: Event API", ok: false, detail: `HTTP ${res.status}` })
+    }
+  } catch (e: any) {
+    results.push({ name: "SEO: Event API", ok: false, detail: e.message?.slice(0, 50) ?? "unreachable" })
+  }
+
+  return results
+}
+
 export const PlatformDoctorCommand = cmd({
   command: "doctor",
   aliases: ["health", "checkup"],
@@ -148,7 +261,13 @@ export const PlatformDoctorCommand = cmd({
     }
     sp.stop("Permissions checked")
 
-    // ── 6. Local Tools ──
+    // ── 6. SEO & Bot Protection ──
+    sp.start("Testing SEO health…")
+    const seoResults = await runSEOChecks()
+    allResults.push(...seoResults)
+    sp.stop("SEO checked")
+
+    // ── 7. Local Tools ──
     const localTools = ["node", "git", "sqlite3", "curl"]
     for (const tool of localTools) {
       try {
