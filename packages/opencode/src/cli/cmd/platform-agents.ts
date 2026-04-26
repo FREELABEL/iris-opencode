@@ -192,8 +192,8 @@ const AgentsCreateCommand = cmd({
       .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    // Non-interactive mode: skip prompts when --name and --prompt are provided
-    const nonInteractive = !!(args.name && (args.prompt || args["system-prompt"]))
+    // Non-interactive mode: skip prompts when --json is set OR all required params provided
+    const nonInteractive = !!(args.json || (args.name && (args.prompt || args["system-prompt"])))
 
     if (!nonInteractive) UI.empty()
     if (!nonInteractive) prompts.intro("◈  Create Agent")
@@ -205,13 +205,14 @@ const AgentsCreateCommand = cmd({
     if (!userId) { if (!nonInteractive) prompts.outro("Done"); return }
 
     let name = args.name
-    if (!name) {
+    if (!name && !nonInteractive) {
       name = (await prompts.text({
         message: "Agent name",
         validate: (x) => (x && x.length > 0 ? undefined : "Required"),
       })) as string
       if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
     }
+    if (!name) { if (args.json) console.log(JSON.stringify({ error: "--name is required" })); else prompts.log.error("--name is required"); process.exitCode = 1; return }
 
     let description = args.description
     if (!description && !nonInteractive) {
@@ -223,7 +224,7 @@ const AgentsCreateCommand = cmd({
     }
 
     let prompt = args.prompt ?? args["system-prompt"]
-    if (!prompt) {
+    if (!prompt && !nonInteractive) {
       prompt = (await prompts.text({
         message: "System prompt / instructions",
         placeholder: "e.g. You are a helpful assistant that specializes in...",
@@ -231,6 +232,7 @@ const AgentsCreateCommand = cmd({
       })) as string
       if (prompts.isCancel(prompt)) { prompts.outro("Cancelled"); return }
     }
+    if (!prompt) prompt = ""
 
     const model = args.model ?? "gpt-4.1-nano"
 
