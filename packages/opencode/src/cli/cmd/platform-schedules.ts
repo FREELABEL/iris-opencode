@@ -360,32 +360,36 @@ const SchedulesGetCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Schedule #${args.id}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Schedule #${args.id}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
 
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`)
       const ok = await handleApiError(res, "Get schedule")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
 
       const raw = (await res.json()) as Record<string, any>
-      // API returns job directly (not wrapped in {data:...}), but the job has a .data JSON field
-      // so raw.data is the metadata, NOT a wrapper — use raw as the schedule object
       const s = raw.task_name ? raw : (raw.data ?? raw)
+
+      if (args.json) {
+        console.log(JSON.stringify(s, null, 2))
+        return
+      }
+
       const name = s.task_name ?? s.name ?? s.title ?? `Schedule #${s.id}`
       const agentName = s.agent?.name ?? `Agent #${s.agent_id}`
-      spinner.stop(String(name))
+      spinner!.stop(String(name))
 
       printDivider()
       printKV("ID", s.id)
@@ -404,9 +408,9 @@ const SchedulesGetCommand = cmd({
 
       prompts.outro(dim(`iris schedules run ${args.id}`))
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      if (!args.json) prompts.outro("Done")
     }
   },
 })
@@ -899,6 +903,8 @@ const SchedulesDeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
+      .option("dry-run", { describe: "show what would be deleted without deleting", type: "boolean", default: false })
+      .option("force", { alias: "f", describe: "skip confirmation", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -910,17 +916,49 @@ const SchedulesDeleteCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
+    // Fetch schedule details first (for dry-run preview and confirmation)
     const spinner = prompts.spinner()
-    spinner.start("Deleting…")
+    spinner.start("Loading…")
 
     try {
+      const getRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`)
+      if (getRes.ok) {
+        const raw = (await getRes.json()) as Record<string, any>
+        const s = raw.task_name ? raw : (raw.data ?? raw)
+        const name = s.task_name ?? s.name ?? `Schedule #${s.id}`
+        spinner.stop(String(name))
+        printDivider()
+        printKV("ID", s.id)
+        printKV("Name", name)
+        printKV("Agent", s.agent?.name ?? `#${s.agent_id}`)
+        printKV("Status", s.status)
+        printKV("Frequency", s.frequency)
+        printDivider()
+      } else {
+        spinner.stop(`Schedule #${args.id}`)
+      }
+
+      if (args["dry-run"]) {
+        console.log(`\n  ${dim("Dry run — schedule not deleted.")}`)
+        prompts.outro("Done")
+        return
+      }
+
+      if (!args.force) {
+        const confirmed = await prompts.confirm({ message: `Delete schedule #${args.id}? This cannot be undone.` })
+        if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+      }
+
+      const delSpinner = prompts.spinner()
+      delSpinner.start("Deleting…")
+
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`, {
         method: "DELETE",
       })
       const ok = await handleApiError(res, "Delete schedule")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { delSpinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      spinner.stop(success("Deleted"))
+      delSpinner.stop(success("Deleted"))
       prompts.outro("Done")
     } catch (err) {
       spinner.stop("Error", 1)

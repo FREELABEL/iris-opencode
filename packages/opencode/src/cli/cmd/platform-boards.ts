@@ -133,26 +133,32 @@ const BoardsGetCommand = cmd({
   command: "get <id>",
   describe: "show board item details",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "item ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "item ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Board Item #${args.id}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Board Item #${args.id}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
 
     try {
-      // Use the update endpoint path pattern to get an item
       const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`)
       const ok = await handleApiError(res, "Get item")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
 
       const data = (await res.json()) as { data?: any }
       const item = data?.data ?? data
-      spinner.stop(String(item.title ?? `Item #${item.id}`))
+
+      if (args.json) {
+        console.log(JSON.stringify(item, null, 2))
+        return
+      }
+
+      spinner!.stop(String(item.title ?? `Item #${item.id}`))
 
       printDivider()
       printKV("ID", item.id)
@@ -179,9 +185,9 @@ const BoardsGetCommand = cmd({
 
       prompts.outro(dim(`iris boards pull ${args.id}  |  iris boards diff ${args.id}`))
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      if (!args.json) prompts.outro("Done")
     }
   },
 })
