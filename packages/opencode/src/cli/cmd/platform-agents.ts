@@ -240,7 +240,7 @@ const AgentsCreateCommand = cmd({
     if (spinner) spinner.start("Creating agent…")
 
     try {
-      const payload: Record<string, unknown> = { name, description: description ?? "", prompt, model, type: args.type ?? "content" }
+      const payload: Record<string, unknown> = { name, description: description ?? "", initial_prompt: prompt, model, type: args.type ?? "content" }
       if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
       if (args["initial-prompt"]) payload.initial_prompt = args["initial-prompt"]
       if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]

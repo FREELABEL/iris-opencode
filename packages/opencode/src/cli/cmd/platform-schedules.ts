@@ -351,8 +351,10 @@ const SchedulesGetCommand = cmd({
       const ok = await handleApiError(res, "Get schedule")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      const data = (await res.json()) as { data?: any }
-      const s = data?.data ?? data
+      const raw = (await res.json()) as Record<string, any>
+      // API returns job directly (not wrapped in {data:...}), but the job has a .data JSON field
+      // so raw.data is the metadata, NOT a wrapper — use raw as the schedule object
+      const s = raw.task_name ? raw : (raw.data ?? raw)
       const name = s.task_name ?? s.name ?? s.title ?? `Schedule #${s.id}`
       const agentName = s.agent?.name ?? `Agent #${s.agent_id}`
       spinner.stop(String(name))
