@@ -63,6 +63,7 @@ const AgentsListCommand = cmd({
     yargs
       .option("search", { alias: "s", describe: "search query", type: "string" })
       .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("group", { alias: "g", describe: "group by bloq", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
@@ -101,10 +102,28 @@ const AgentsListCommand = cmd({
         return
       }
 
-      printDivider()
-      for (const a of agents) {
-        printAgent(a)
-        console.log()
+      if (args.group) {
+        // Group agents by bloq
+        const groups = new Map<string, any[]>()
+        for (const a of agents) {
+          const key = a.bloq_id ? `Bloq #${a.bloq_id}` : "(no bloq)"
+          if (!groups.has(key)) groups.set(key, [])
+          groups.get(key)!.push(a)
+        }
+        for (const [bloqLabel, groupAgents] of groups) {
+          console.log()
+          console.log(`  ${bold(bloqLabel)}`)
+          printDivider()
+          for (const a of groupAgents) {
+            printAgent(a)
+          }
+        }
+      } else {
+        printDivider()
+        for (const a of agents) {
+          printAgent(a)
+          console.log()
+        }
       }
       printDivider()
 
