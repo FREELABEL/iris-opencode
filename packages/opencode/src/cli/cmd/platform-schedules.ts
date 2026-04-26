@@ -1128,6 +1128,176 @@ const SchedulesFrequencyCommand = cmd({
   },
 })
 
+const VALID_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const
+
+const SchedulesHoursCommand = cmd({
+  command: "hours <agent-id>",
+  describe: "set working days and active hours for an agent's heartbeat schedule",
+  builder: (yargs) =>
+    yargs
+      .positional("agent-id", { describe: "agent ID", type: "number", demandOption: true })
+      .option("days", {
+        alias: "d",
+        describe: "working days (comma-separated: mon,tue,wed or monday,tuesday,wednesday)",
+        type: "string",
+      })
+      .option("start", {
+        alias: "s",
+        describe: "active hours start (HH:MM, 24h format)",
+        type: "string",
+      })
+      .option("end", {
+        alias: "e",
+        describe: "active hours end (HH:MM, 24h format)",
+        type: "string",
+      })
+      .option("timezone", {
+        alias: "tz",
+        describe: "timezone (e.g. America/New_York)",
+        type: "string",
+        default: "America/New_York",
+      })
+      .option("clear", {
+        describe: "remove all schedule constraints (run 24/7)",
+        type: "boolean",
+        default: false,
+      })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .example("iris schedules hours 604 --days mon,tue,wed --start 09:00 --end 16:00", "Market hours Mon-Wed")
+      .example("iris schedules hours 604 --days weekdays --start 09:00 --end 17:00", "Business hours M-F")
+      .example("iris schedules hours 604 --clear", "Remove constraints, run 24/7"),
+  async handler(args) {
+    UI.empty()
+    const agentId = args["agent-id"]!
+    prompts.intro(`◈  Set Working Hours — Agent #${agentId}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+
+    // Step 1: Fetch current agent settings
+    spinner.start("Fetching agent…")
+    let agent: Record<string, any>
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${agentId}`, { method: "GET" })
+      const ok = await handleApiError(res, "Fetch agent")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const json = (await res.json()) as { data?: any }
+      agent = json?.data ?? json
+      spinner.stop(`${success("✓")} ${bold(String(agent.name ?? `Agent #${agentId}`))}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+      return
+    }
+
+    // Step 2: Build schedule config
+    const currentSettings = agent.settings ?? {}
+    const currentSchedule = currentSettings.schedule ?? {}
+
+    if (args.clear) {
+      // Remove schedule constraints
+      currentSettings.schedule = { enabled: false }
+      prompts.log.info("Clearing schedule constraints — agent will run 24/7")
+    } else {
+      if (!args.days && !args.start && !args.end) {
+        // Show current schedule
+        const sched = currentSchedule
+        printDivider()
+        printKV("Enabled", sched.enabled ? "yes" : "no")
+        printKV("Working Days", sched.working_days?.join(", ") || "(all days)")
+        printKV("Active Hours", sched.active_hours ? `${sched.active_hours.start} – ${sched.active_hours.end}` : "(24h)")
+        printKV("Timezone", sched.timezone || "UTC")
+        printDivider()
+        prompts.outro(dim("Use --days, --start, --end to update"))
+        return
+      }
+
+      // Parse days
+      let workingDays: string[] = currentSchedule.working_days ?? []
+      if (args.days) {
+        const dayAbbrevs: Record<string, string> = {
+          mon: "monday", tue: "tuesday", wed: "wednesday", thu: "thursday",
+          fri: "friday", sat: "saturday", sun: "sunday",
+        }
+        if (args.days === "weekdays") {
+          workingDays = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        } else if (args.days === "all") {
+          workingDays = []
+        } else {
+          workingDays = args.days.split(",").map((d: string) => {
+            const lower = d.trim().toLowerCase()
+            return dayAbbrevs[lower] ?? lower
+          })
+          const invalid = workingDays.filter(d => !(VALID_DAYS as readonly string[]).includes(d))
+          if (invalid.length > 0) {
+            prompts.log.error(`Invalid days: ${invalid.join(", ")}. Use: ${VALID_DAYS.join(", ")} or abbreviations (mon,tue,wed...)`)
+            prompts.outro("Done")
+            return
+          }
+        }
+      }
+
+      // Validate time format
+      const timeRegex = /^\d{2}:\d{2}$/
+      if (args.start && !timeRegex.test(args.start)) {
+        prompts.log.error(`Invalid start time: ${args.start}. Use HH:MM format (e.g., 09:00)`)
+        prompts.outro("Done")
+        return
+      }
+      if (args.end && !timeRegex.test(args.end)) {
+        prompts.log.error(`Invalid end time: ${args.end}. Use HH:MM format (e.g., 16:00)`)
+        prompts.outro("Done")
+        return
+      }
+
+      const activeHours = (args.start || args.end) ? {
+        start: args.start ?? currentSchedule.active_hours?.start ?? "09:00",
+        end: args.end ?? currentSchedule.active_hours?.end ?? "17:00",
+      } : currentSchedule.active_hours ?? null
+
+      currentSettings.schedule = {
+        enabled: true,
+        working_days: workingDays.length > 0 ? workingDays : undefined,
+        active_hours: activeHours ?? undefined,
+        timezone: args.timezone ?? currentSchedule.timezone ?? "America/New_York",
+      }
+    }
+
+    // Step 3: Update agent
+    spinner.start("Updating…")
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${agentId}`, {
+        method: "PUT",
+        body: JSON.stringify({ settings: currentSettings }),
+      })
+      const ok = await handleApiError(res, "Update agent")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Schedule updated`)
+
+      const sched = currentSettings.schedule
+      printDivider()
+      printKV("Enabled", sched.enabled ? "yes" : "no")
+      if (sched.working_days) printKV("Working Days", sched.working_days.join(", "))
+      if (sched.active_hours) printKV("Active Hours", `${sched.active_hours.start} – ${sched.active_hours.end}`)
+      if (sched.timezone) printKV("Timezone", sched.timezone)
+      printDivider()
+
+      prompts.outro(dim("Heartbeats will only fire during these windows"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformSchedulesCommand = cmd({
   command: "schedules",
   aliases: ["schedule"],
@@ -1144,6 +1314,7 @@ export const PlatformSchedulesCommand = cmd({
       .command(SchedulesDeleteCommand)
       .command(SchedulesDiagnoseCommand)
       .command(SchedulesFrequencyCommand)
+      .command(SchedulesHoursCommand)
       .demandCommand(),
   async handler() {},
 })
