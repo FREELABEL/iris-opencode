@@ -228,9 +228,25 @@ const N8nPushCommand = cmd({
         return
       }
 
-      spinner.start(`Pushing ${basename(filepath)}…`)
+      spinner.start(`Validating ${basename(filepath)}…`)
 
       const workflow = JSON.parse(readFileSync(filepath, "utf-8"))
+
+      // Validate before pushing — prevent corruption
+      const issues = validateWorkflowNodes(workflow.nodes ?? [])
+      const errors = issues.filter((i: ValidationIssue) => i.severity === "error")
+      if (errors.length > 0) {
+        spinner.stop("Validation failed", 1)
+        for (const issue of errors) {
+          prompts.log.error(`${bold(issue.node)}.${issue.field}: ${issue.message}`)
+        }
+        prompts.log.error("Fix these issues before pushing. Use the n8n UI for complex edits.")
+        prompts.outro("Aborted")
+        return
+      }
+
+      spinner.message(`Pushing ${basename(filepath)}…`)
+
       const payload: Record<string, unknown> = {
         name: workflow.name,
         nodes: workflow.nodes,
@@ -584,12 +600,450 @@ const N8nDispatchCommand = cmd({
 })
 
 // ============================================================================
+// Validate — check workflow JSON can load without crashing n8n
+// ============================================================================
+
+const SAFE_NODE_KEYS = new Set([
+  "id", "name", "type", "typeVersion", "position", "parameters", "disabled",
+  "onError", "notes", "notesInFlow", "credentials", "webhookId", "continueOnFail",
+  "retryOnFail", "maxTries", "waitBetweenTries", "alwaysOutputData", "executeOnce",
+  "extendsCredential", "color",
+])
+
+interface ValidationIssue {
+  node: string
+  field: string
+  message: string
+  severity: "error" | "warning"
+}
+
+function validateWorkflowNodes(nodes: any[]): ValidationIssue[] {
+  const issues: ValidationIssue[] = []
+
+  for (const node of nodes) {
+    const name = node.name ?? "unknown"
+
+    // Check for unknown top-level keys
+    for (const key of Object.keys(node)) {
+      if (!SAFE_NODE_KEYS.has(key)) {
+        issues.push({ node: name, field: key, message: `Unknown top-level property "${key}"`, severity: "warning" })
+      }
+    }
+
+    // Check null values on numeric fields (n8n crashes on these)
+    if ("waitBetweenTries" in node && node.waitBetweenTries === null) {
+      issues.push({ node: name, field: "waitBetweenTries", message: "null value (n8n expects number or omitted)", severity: "error" })
+    }
+    if ("maxTries" in node && node.maxTries === null) {
+      issues.push({ node: name, field: "maxTries", message: "null value (n8n expects number or omitted)", severity: "error" })
+    }
+
+    // Check parameters
+    const params = node.parameters ?? {}
+
+    // headerParameters/bodyParameters should be objects with .parameters array
+    for (const arrayField of ["headerParameters", "bodyParameters", "queryParameters"]) {
+      const val = params[arrayField]
+      if (val !== undefined) {
+        if (typeof val === "boolean" || typeof val === "string") {
+          issues.push({ node: name, field: `parameters.${arrayField}`, message: `Should be object with .parameters array, got ${typeof val}`, severity: "error" })
+        } else if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+          const inner = val.parameters
+          if (inner !== undefined && !Array.isArray(inner)) {
+            issues.push({ node: name, field: `parameters.${arrayField}.parameters`, message: `Should be array, got ${typeof inner}`, severity: "error" })
+          }
+        }
+      }
+    }
+
+    // Check for duplicate parameter names in body/header params
+    for (const arrayField of ["headerParameters", "bodyParameters"]) {
+      const val = params[arrayField]
+      if (val?.parameters && Array.isArray(val.parameters)) {
+        const names = val.parameters.map((p: any) => p.name).filter(Boolean)
+        const dupes = names.filter((n: string, i: number) => names.indexOf(n) !== i)
+        if (dupes.length > 0) {
+          issues.push({ node: name, field: `parameters.${arrayField}`, message: `Duplicate parameter names: ${[...new Set(dupes)].join(", ")}`, severity: "warning" })
+        }
+      }
+    }
+  }
+
+  return issues
+}
+
+const N8nValidateCommand = cmd({
+  command: "validate [id]",
+  describe: "validate workflow JSON — catch corruption before it breaks n8n",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "workflow ID (validates live) or omit to validate local file", type: "string" })
+      .option("file", { alias: "f", describe: "local JSON file to validate", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Validate Workflow")
+
+    const spinner = prompts.spinner()
+    let nodes: any[]
+    let source: string
+
+    try {
+      if (args.id) {
+        // Validate live workflow
+        spinner.start("Fetching live workflow…")
+        const res = await n8nFetch(`/workflows/${args.id}`)
+        if (!res.ok) {
+          spinner.stop("Failed", 1)
+          prompts.log.error(`HTTP ${res.status}`)
+          prompts.outro("Done")
+          return
+        }
+        const wf = (await res.json()) as any
+        nodes = wf.nodes ?? []
+        source = `live n8n (${args.id})`
+      } else {
+        // Validate local file
+        const dir = resolveWorkflowsDir()
+        let filepath = args.file
+        if (!filepath) {
+          const files = existsSync(dir)
+            ? require("fs").readdirSync(dir).filter((f: string) => f.endsWith(".json"))
+            : []
+          if (files.length === 0) {
+            spinner.start("")
+            spinner.stop("No files", 1)
+            prompts.log.error(`No .json files in ${dir}`)
+            prompts.outro("Done")
+            return
+          }
+          filepath = join(dir, files[0])
+        }
+        spinner.start(`Validating ${basename(filepath!)}…`)
+        const wf = JSON.parse(readFileSync(filepath!, "utf-8"))
+        nodes = wf.nodes ?? []
+        source = filepath!
+      }
+
+      const issues = validateWorkflowNodes(nodes)
+      const errors = issues.filter(i => i.severity === "error")
+      const warnings = issues.filter(i => i.severity === "warning")
+
+      if (issues.length === 0) {
+        spinner.stop(`${success("✓")} Valid — ${nodes.length} nodes, 0 issues`)
+      } else {
+        spinner.stop(`${errors.length} errors, ${warnings.length} warnings`)
+      }
+
+      printDivider()
+      printKV("Source", source)
+      printKV("Nodes", nodes.length)
+
+      for (const issue of errors) {
+        prompts.log.error(`${bold(issue.node)}.${issue.field}: ${issue.message}`)
+      }
+      for (const issue of warnings) {
+        prompts.log.warn(`${bold(issue.node)}.${issue.field}: ${issue.message}`)
+      }
+
+      if (errors.length > 0) {
+        printDivider()
+        prompts.log.error("DO NOT push this workflow — it will break n8n's UI")
+        process.exitCode = 1
+      } else {
+        printDivider()
+        prompts.log.info(dim("Safe to push"))
+      }
+
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Patch — safe, targeted field updates with validation
+// ============================================================================
+
+const SAFE_PATCH_FIELDS = new Set([
+  "onError", "disabled", "retryOnFail", "maxTries", "waitBetweenTries",
+  "parameters.url", "parameters.method",
+])
+
+const N8nPatchCommand = cmd({
+  command: "patch <id> <node-name> <field> <value>",
+  describe: "safely update a single field on a workflow node",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "workflow ID", type: "string", demandOption: true })
+      .positional("node-name", { describe: "node name (exact match)", type: "string", demandOption: true })
+      .positional("field", { describe: "field to update", type: "string", demandOption: true })
+      .positional("value", { describe: "new value", type: "string", demandOption: true })
+      .example("iris n8n patch IeiQ... 'Buffer Twitter Post' onError continueRegularOutput", "")
+      .example("iris n8n patch IeiQ... 'START CREATE CLIP' parameters.url http://api-nginx:80/api/v1/labs/queue/youtube-to-clip", "")
+      .example("iris n8n patch IeiQ... 'My Node' disabled true", ""),
+  async handler(args) {
+    UI.empty()
+    const nodeName = args["node-name"] as string
+    const field = args.field as string
+    const rawValue = args.value as string
+    prompts.intro(`◈  Patch: ${bold(nodeName)}.${field}`)
+
+    // Validate field is safe
+    if (!SAFE_PATCH_FIELDS.has(field)) {
+      prompts.log.error(`Field "${field}" is not in the safe-patch allowlist.`)
+      prompts.log.info(`Allowed fields: ${[...SAFE_PATCH_FIELDS].join(", ")}`)
+      prompts.log.info(dim("For complex edits, use the n8n UI then 'iris n8n pull'"))
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching workflow…")
+
+    try {
+      // Fetch current workflow
+      const res = await n8nFetch(`/workflows/${args.id}`)
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`HTTP ${res.status}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const wf = (await res.json()) as any
+      const nodes: any[] = wf.nodes ?? []
+
+      // Find the node
+      const node = nodes.find((n: any) => n.name === nodeName)
+      if (!node) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`Node "${nodeName}" not found. Available: ${nodes.map((n: any) => n.name).slice(0, 10).join(", ")}...`)
+        prompts.outro("Done")
+        return
+      }
+
+      // Parse value (handle booleans and numbers)
+      let value: any = rawValue
+      if (rawValue === "true") value = true
+      else if (rawValue === "false") value = false
+      else if (/^\d+$/.test(rawValue)) value = parseInt(rawValue, 10)
+
+      // Apply the field
+      const oldValue = field.startsWith("parameters.")
+        ? node.parameters?.[field.replace("parameters.", "")]
+        : node[field]
+
+      if (field.startsWith("parameters.")) {
+        const paramKey = field.replace("parameters.", "")
+        node.parameters = node.parameters ?? {}
+        node.parameters[paramKey] = value
+      } else {
+        node[field] = value
+      }
+
+      // Validate before pushing
+      const issues = validateWorkflowNodes(nodes)
+      const errors = issues.filter(i => i.severity === "error")
+      if (errors.length > 0) {
+        spinner.stop("Validation failed", 1)
+        for (const issue of errors) {
+          prompts.log.error(`${issue.node}.${issue.field}: ${issue.message}`)
+        }
+        prompts.outro("Aborted — would corrupt n8n")
+        return
+      }
+
+      // Push the full workflow back
+      spinner.message("Pushing…")
+      const pushRes = await n8nFetch(`/workflows/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name: wf.name, nodes, connections: wf.connections, settings: wf.settings ?? {} }),
+      })
+
+      if (!pushRes.ok) {
+        spinner.stop("Push failed", 1)
+        let msg = `HTTP ${pushRes.status}`
+        try { const b = await pushRes.json() as any; msg = b.message ?? msg } catch {}
+        prompts.log.error(msg)
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(success("Patched"))
+
+      printDivider()
+      printKV("Node", nodeName)
+      printKV("Field", field)
+      printKV("Old", String(oldValue ?? "(not set)"))
+      printKV("New", String(value))
+      printDivider()
+
+      prompts.outro(dim("iris n8n pull to sync to git"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Restore — emergency restore from git JSON to n8n DB
+// ============================================================================
+
+const N8nRestoreCommand = cmd({
+  command: "restore <id>",
+  describe: "emergency restore workflow from git JSON to live n8n",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "workflow ID", type: "string", demandOption: true })
+      .option("file", { alias: "f", describe: "local JSON file path", type: "string" })
+      .option("force", { describe: "skip confirmation", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Restore Workflow ${args.id}`)
+
+    const spinner = prompts.spinner()
+
+    try {
+      // Find local file
+      const dir = resolveWorkflowsDir()
+      let filepath = args.file
+
+      if (!filepath) {
+        const files = existsSync(dir)
+          ? require("fs").readdirSync(dir).filter((f: string) => f.endsWith(".json"))
+          : []
+        if (files.length === 0) {
+          spinner.start("")
+          spinner.stop("No files", 1)
+          prompts.log.error(`No .json files in ${dir}`)
+          prompts.outro("Done")
+          return
+        }
+        filepath = files.length === 1 ? join(dir, files[0]) : join(dir, files[0])
+      }
+
+      if (!filepath || !existsSync(filepath)) {
+        spinner.start("")
+        spinner.stop("Failed", 1)
+        prompts.log.error(`File not found: ${filepath}`)
+        prompts.outro("Done")
+        return
+      }
+
+      // Read and validate
+      const workflow = JSON.parse(readFileSync(filepath, "utf-8"))
+      const nodes = workflow.nodes ?? []
+
+      // Validate first
+      const issues = validateWorkflowNodes(nodes)
+      const errors = issues.filter(i => i.severity === "error")
+      if (errors.length > 0) {
+        prompts.log.error("Local file has validation errors — fix before restoring:")
+        for (const issue of errors) {
+          prompts.log.error(`  ${issue.node}.${issue.field}: ${issue.message}`)
+        }
+        prompts.outro("Aborted")
+        return
+      }
+
+      // Check for redacted secrets
+      const content = readFileSync(filepath, "utf-8")
+      const hasRedacted = content.includes("REDACTED_TOKEN") || content.includes("WEBHOOK_PLACEHOLDER")
+      if (hasRedacted) {
+        prompts.log.warn("File contains redacted secrets (REDACTED_TOKEN / WEBHOOK_PLACEHOLDER)")
+        prompts.log.warn("Credentials will be overwritten with placeholders!")
+
+        if (!args.force) {
+          const confirm = await prompts.confirm({ message: "Continue anyway? Credentials in affected nodes will break." })
+          if (prompts.isCancel(confirm) || !confirm) {
+            prompts.outro("Cancelled")
+            return
+          }
+        }
+      } else if (!args.force) {
+        const confirm = await prompts.confirm({
+          message: `Restore ${nodes.length} nodes from ${basename(filepath)} to live n8n? This overwrites the current workflow.`,
+        })
+        if (prompts.isCancel(confirm) || !confirm) {
+          prompts.outro("Cancelled")
+          return
+        }
+      }
+
+      spinner.start(`Restoring from ${basename(filepath)}…`)
+
+      const payload: Record<string, unknown> = {
+        name: workflow.name,
+        nodes: workflow.nodes,
+        connections: workflow.connections,
+        settings: workflow.settings ?? {},
+      }
+
+      const res = await n8nFetch(`/workflows/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+
+      if (!res.ok) {
+        spinner.stop("API restore failed — trying direct DB…", 1)
+
+        // Fallback: write directly to postgres via docker exec
+        prompts.log.warn("Attempting direct DB restore (docker exec)…")
+
+        const nodesJson = JSON.stringify(workflow.nodes)
+        const connsJson = JSON.stringify(workflow.connections)
+
+        const { execSync } = require("child_process")
+        try {
+          // Write JSON to temp files inside the postgres container
+          const escapedNodes = nodesJson.replace(/'/g, "''")
+          const escapedConns = connsJson.replace(/'/g, "''")
+
+          execSync(
+            `docker exec fl-n8n-postgres psql -U n8n -d n8n -c "UPDATE workflow_entity SET nodes = '${escapedNodes}'::jsonb, connections = '${escapedConns}'::jsonb WHERE id = '${args.id}';"`,
+            { stdio: "pipe", timeout: 10000 }
+          )
+
+          prompts.log.info(success("Direct DB restore successful"))
+          prompts.log.warn("Restart n8n container: docker restart fl-n8n")
+        } catch (dbErr) {
+          prompts.log.error(`DB restore also failed: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`)
+          prompts.outro("Failed")
+          return
+        }
+      } else {
+        spinner.stop(success("Restored"))
+      }
+
+      printDivider()
+      printKV("Workflow", workflow.name)
+      printKV("ID", args.id)
+      printKV("Nodes", nodes.length)
+      printKV("From", filepath)
+      if (hasRedacted) printKV("Warning", "Contains redacted secrets")
+      printDivider()
+
+      prompts.outro(dim("Verify in n8n UI: http://localhost:5678/workflow/" + args.id))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
 export const PlatformN8nCommand = cmd({
   command: "n8n",
-  describe: "manage n8n workflows — pull, push, diff, dispatch",
+  describe: "manage n8n workflows — pull, push, diff, validate, patch, restore",
   builder: (yargs) =>
     yargs
       .command(N8nListCommand)
@@ -599,6 +1053,9 @@ export const PlatformN8nCommand = cmd({
       .command(N8nActivateCommand)
       .command(N8nDeactivateCommand)
       .command(N8nDispatchCommand)
+      .command(N8nValidateCommand)
+      .command(N8nPatchCommand)
+      .command(N8nRestoreCommand)
       .demandCommand(),
   async handler() {},
 })
