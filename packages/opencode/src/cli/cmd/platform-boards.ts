@@ -278,7 +278,7 @@ const BoardsUpdateCommand = cmd({
 
     try {
       const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`, {
-        method: "PATCH",
+        method: "PUT",
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Update item")
@@ -413,7 +413,7 @@ const BoardsPushCommand = cmd({
       }
 
       const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`, {
-        method: "PATCH",
+        method: "PUT",
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Push item")
