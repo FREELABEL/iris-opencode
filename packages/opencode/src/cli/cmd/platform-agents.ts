@@ -721,6 +721,7 @@ const AgentsDeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "agent ID", type: "number", demandOption: true })
+      .option("force", { alias: "f", describe: "skip confirmation", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -732,8 +733,10 @@ const AgentsDeleteCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
-    const confirmed = await prompts.confirm({ message: `Delete agent #${args.id}? This cannot be undone.` })
-    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Delete agent #${args.id}? This cannot be undone.` })
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")
@@ -746,6 +749,121 @@ const AgentsDeleteCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       spinner.stop(`${success("✓")} Agent #${args.id} deleted`)
+      prompts.outro(dim("iris agents list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const AgentsBulkDeleteCommand = cmd({
+  command: "bulk-delete",
+  aliases: ["cleanup"],
+  describe: "delete multiple agents by filter (with preview)",
+  builder: (yargs) =>
+    yargs
+      .option("ids", { describe: "comma-separated agent IDs", type: "string" })
+      .option("bloq", { alias: "b", describe: "delete all agents in this bloq", type: "number" })
+      .option("orphaned", { describe: "delete all agents with no bloq", type: "boolean" })
+      .option("search", { alias: "s", describe: "delete agents matching search term", type: "string" })
+      .option("inactive", { describe: "delete only inactive agents", type: "boolean" })
+      .option("dry-run", { describe: "preview what would be deleted without deleting", type: "boolean", default: false })
+      .option("force", { alias: "f", describe: "skip confirmation prompt", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .check((argv) => {
+        if (!argv.ids && !argv.bloq && !argv.orphaned && !argv.search) {
+          throw new Error("Specify at least one filter: --ids, --bloq, --orphaned, or --search")
+        }
+        return true
+      }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Bulk Delete Agents")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Finding agents…")
+
+    try {
+      // If --ids provided, use those directly
+      let targetIds: number[] = []
+
+      if (args.ids) {
+        targetIds = args.ids.split(",").map((s: string) => parseInt(s.trim(), 10)).filter((n: number) => !isNaN(n))
+      } else {
+        // Fetch agents and filter
+        const params = new URLSearchParams({ per_page: "500" })
+        if (args.search) params.set("search", args.search)
+        const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?${params}`)
+        const ok = await handleApiError(res, "List agents")
+        if (!ok) { spinner.stop("Failed", 1); return }
+
+        const raw = (await res.json()) as Record<string, any>
+        let agents: any[] = raw?.data ?? []
+
+        if (args.bloq) agents = agents.filter((a: any) => a.bloq_id === args.bloq)
+        if (args.orphaned) agents = agents.filter((a: any) => !a.bloq_id)
+        if (args.inactive) agents = agents.filter((a: any) => !a.active)
+
+        targetIds = agents.map((a: any) => a.id)
+
+        // Show preview
+        spinner.stop(`${agents.length} agent(s) matched`)
+        if (agents.length === 0) {
+          prompts.log.warn("No agents match the filter")
+          prompts.outro("Done")
+          return
+        }
+
+        printDivider()
+        for (const a of agents.slice(0, 20)) {
+          console.log(`  ${dim(`#${a.id}`)}  ${bold(String(a.name))}  ${dim(a.bloq_id ? `bloq:${a.bloq_id}` : "(no bloq)")}`)
+        }
+        if (agents.length > 20) console.log(`  ${dim(`... and ${agents.length - 20} more`)}`)
+        printDivider()
+      }
+
+      if (args["dry-run"]) {
+        console.log(`\n  ${dim("Dry run — no agents deleted.")} Would delete ${targetIds.length} agent(s): ${targetIds.join(", ")}`)
+        prompts.outro("Done")
+        return
+      }
+
+      if (!args.force) {
+        const confirmed = await prompts.confirm({
+          message: `Delete ${targetIds.length} agent(s)? This cannot be undone.`,
+        })
+        if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+      }
+
+      // Delete in parallel (batches of 5)
+      const deleteSpinner = prompts.spinner()
+      deleteSpinner.start(`Deleting ${targetIds.length} agents…`)
+      let deleted = 0
+      let failed = 0
+
+      for (let i = 0; i < targetIds.length; i += 5) {
+        const batch = targetIds.slice(i, i + 5)
+        const results = await Promise.allSettled(
+          batch.map((id) =>
+            irisFetch(`/api/v1/users/${userId}/bloqs/agents/${id}`, { method: "DELETE" })
+          ),
+        )
+        for (const r of results) {
+          if (r.status === "fulfilled" && r.value.ok) deleted++
+          else failed++
+        }
+      }
+
+      deleteSpinner.stop(`${success("✓")} Deleted ${deleted}${failed > 0 ? `, ${failed} failed` : ""}`)
       prompts.outro(dim("iris agents list"))
     } catch (err) {
       spinner.stop("Error", 1)
@@ -773,6 +891,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsPushCommand)
       .command(AgentsDiffCommand)
       .command(AgentsDeleteCommand)
+      .command(AgentsBulkDeleteCommand)
       .command(AgentsChatCommand)
       .demandCommand(),
   async handler() {},
