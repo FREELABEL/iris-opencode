@@ -109,8 +109,10 @@ const SchedulesListCommand = cmd({
   describe: "list scheduled jobs",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "max results", type: "number", default: 50 })
+      .option("limit", { describe: "results per page", type: "number", default: 50 })
+      .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
       .option("active", { describe: "show only active/scheduled/running jobs (hide completed one-offs)", type: "boolean", default: false })
+      .option("overdue", { describe: "show only overdue schedules", type: "boolean", default: false })
       .option("latest", { describe: "include latest execution result for each job", type: "boolean", default: false })
       .option("agent-id", { describe: "filter by agent ID", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean" })
@@ -129,14 +131,14 @@ const SchedulesListCommand = cmd({
     spinner.start("Loading schedules…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit) })
+      const params = new URLSearchParams({ per_page: String(args.limit), page: String(args.page) })
       if (args["agent-id"]) params.set("agent_id", String(args["agent-id"]))
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?${params}`)
       const ok = await handleApiError(res, "List schedules")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      const data = (await res.json()) as { data?: any[]; total?: number }
+      const data = (await res.json()) as Record<string, any>
       let schedules: any[] = data?.data ?? []
 
       // --active: filter to scheduled/running/paused only (skip completed/cancelled one-offs)
@@ -144,6 +146,15 @@ const SchedulesListCommand = cmd({
         schedules = schedules.filter((s: any) => {
           const status = String(s.status ?? "").toLowerCase()
           return ["scheduled", "running", "paused", "active", "enabled"].includes(status)
+        })
+      }
+
+      // --overdue: only show schedules past their next_run_at
+      if (args.overdue) {
+        const now = Date.now()
+        schedules = schedules.filter((s: any) => {
+          if (!s.next_run_at) return false
+          return new Date(String(s.next_run_at)).getTime() < now
         })
       }
 
@@ -180,7 +191,10 @@ const SchedulesListCommand = cmd({
         await Promise.all(execPromises)
       }
 
-      spinner.stop(`${schedules.length} schedule(s)${args.active ? " (active)" : ""}`)
+      const totalCount = data?.total ?? data?.meta?.total ?? schedules.length
+      const filterLabel = [args.active && "active", args.overdue && "overdue"].filter(Boolean).join(", ")
+      const pageLabel = totalCount > schedules.length ? ` — page ${args.page}/${Math.ceil(totalCount / args.limit)}` : ""
+      spinner.stop(`${schedules.length} schedule(s)${filterLabel ? ` (${filterLabel})` : ""}${pageLabel}`)
 
       if (args.json) {
         console.log(JSON.stringify(schedules.map((s: any) => ({
@@ -250,9 +264,15 @@ const SchedulesListCommand = cmd({
             badge = `${UI.Style.TEXT_WARNING}paused${UI.Style.TEXT_NORMAL}`
           } else if (status === "scheduled") {
             const until = timeUntil(s.next_run_at)
-            badge = until === "overdue"
-              ? `${UI.Style.TEXT_DANGER}⚠ overdue${UI.Style.TEXT_NORMAL}`
-              : `${UI.Style.TEXT_HIGHLIGHT}⏱ ${until}${UI.Style.TEXT_NORMAL}`
+            if (until === "overdue") {
+              // Show how long overdue
+              const overdueMs = s.next_run_at ? Date.now() - new Date(String(s.next_run_at)).getTime() : 0
+              const overdueH = Math.floor(overdueMs / 3600_000)
+              const overdueStr = overdueH > 24 ? `${Math.floor(overdueH / 24)}d` : overdueH > 0 ? `${overdueH}h` : `${Math.floor(overdueMs / 60_000)}m`
+              badge = `${UI.Style.TEXT_DANGER}⚠ overdue ${overdueStr}${UI.Style.TEXT_NORMAL}`
+            } else {
+              badge = `${UI.Style.TEXT_HIGHLIGHT}⏱ ${until}${UI.Style.TEXT_NORMAL}`
+            }
           } else {
             badge = statusColor(status)
           }
@@ -314,7 +334,15 @@ const SchedulesListCommand = cmd({
         }
       }
 
+      // Pagination hints
+      const total = data?.total ?? data?.meta?.total ?? schedules.length
+      const lastPage = Math.ceil(total / args.limit)
       console.log()
+      if (lastPage > 1) {
+        console.log(`  ${dim(`Page ${args.page}/${lastPage} (${total} total)`)}`)
+        if (args.page < lastPage) console.log(`  ${dim(`iris schedules list --page=${args.page + 1} — next page`)}`)
+        if (args.page > 1) console.log(`  ${dim(`iris schedules list --page=${args.page - 1} — previous page`)}`)
+      }
       prompts.outro(
         `${dim("iris schedules get <id>")}  ·  ${dim("iris schedules history <id>")}`,
       )

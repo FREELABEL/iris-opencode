@@ -61,38 +61,51 @@ const AgentsListCommand = cmd({
   describe: "list your agents",
   builder: (yargs) =>
     yargs
-      .option("search", { alias: "s", describe: "search query", type: "string" })
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("search", { alias: "s", describe: "search by name/description", type: "string" })
+      .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
+      .option("active", { describe: "show only active agents", type: "boolean" })
+      .option("orphaned", { describe: "show agents with no bloq", type: "boolean" })
+      .option("limit", { describe: "results per page", type: "number", default: 30 })
+      .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
       .option("group", { alias: "g", describe: "group by bloq", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  IRIS Agents")
+    if (!args.json) { UI.empty(); prompts.intro("◈  IRIS Agents") }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading agents…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading agents…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit) })
+      const params = new URLSearchParams({ per_page: String(args.limit), page: String(args.page) })
       if (args.search) params.set("search", args.search)
+      if (args.bloq) params.set("bloq_id", String(args.bloq))
+      if (args.active) params.set("active", "1")
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?${params}`)
       const ok = await handleApiError(res, "List agents")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
 
-      const data = (await res.json()) as { data?: any[]; total?: number }
-      const agents: any[] = data?.data ?? []
-      spinner.stop(`${agents.length} agent(s)`)
+      const raw = (await res.json()) as Record<string, any>
+      let agents: any[] = raw?.data ?? []
+      const total = raw?.total ?? raw?.meta?.total ?? agents.length
+      const currentPage = args.page
+      const lastPage = Math.ceil(total / args.limit)
+
+      // Client-side filters (for fields the API may not support)
+      if (args.orphaned) agents = agents.filter((a: any) => !a.bloq_id)
+      if (args.bloq && !params.has("bloq_id")) agents = agents.filter((a: any) => a.bloq_id === args.bloq)
+
+      if (spinner) spinner.stop(`${agents.length} agent(s)${total > agents.length ? ` (${total} total — page ${currentPage}/${lastPage})` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify(agents, null, 2))
+        console.log(JSON.stringify({ agents, page: currentPage, total, last_page: lastPage }, null, 2))
         return
       }
 
@@ -102,8 +115,15 @@ const AgentsListCommand = cmd({
         return
       }
 
+      // Show active filters
+      const filters: string[] = []
+      if (args.search) filters.push(`search="${args.search}"`)
+      if (args.bloq) filters.push(`bloq=${args.bloq}`)
+      if (args.active) filters.push("active")
+      if (args.orphaned) filters.push("orphaned")
+      if (filters.length > 0) console.log(`  ${dim(`Filters: ${filters.join(", ")}`)}`)
+
       if (args.group) {
-        // Group agents by bloq
         const groups = new Map<string, any[]>()
         for (const a of agents) {
           const key = a.bloq_id ? `Bloq #${a.bloq_id}` : "(no bloq)"
@@ -127,14 +147,22 @@ const AgentsListCommand = cmd({
       }
       printDivider()
 
+      // Pagination hints
+      if (lastPage > 1) {
+        const hints: string[] = []
+        if (currentPage < lastPage) hints.push(dim(`iris agents list --page=${currentPage + 1} — next page`))
+        if (currentPage > 1) hints.push(dim(`iris agents list --page=${currentPage - 1} — previous page`))
+        hints.forEach((h) => console.log(`  ${h}`))
+      }
+
       prompts.outro(
         `${dim("iris agents get <id>")}  ·  ${dim("iris chat --agent=<id> \"hello\"")}`,
       )
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      if (!args.json) prompts.outro("Done")
     }
   },
 })
@@ -145,38 +173,45 @@ const AgentsGetCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "agent ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Agent #${args.id}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Agent #${args.id}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
 
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
       const ok = await handleApiError(res, "Get agent")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
 
       const data = (await res.json()) as { data?: any }
       const a = data?.data ?? data
 
-      if (!a || !a.id) { spinner.stop("Agent not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!a || !a.id) { if (spinner) spinner.stop("Agent not found", 1); process.exitCode = 1; return }
 
-      spinner.stop(String(a.name ?? `Agent #${a.id}`))
+      if (args.json) {
+        console.log(JSON.stringify(a, null, 2))
+        return
+      }
+
+      spinner!.stop(String(a.name ?? `Agent #${a.id}`))
 
       printDivider()
       printKV("ID", a.id)
       printKV("Name", a.name)
-      printKV("Model", a.model)
+      printKV("Model", a.model ?? ((a.settings as Record<string, unknown>)?.model as string))
       printKV("Description", a.description)
       printKV("Bloq ID", a.bloq_id)
+      printKV("Heartbeat", a.heartbeat_mode)
+      printKV("Active", a.active)
       printKV("Created", a.created_at)
       console.log()
       printDivider()
@@ -185,10 +220,10 @@ const AgentsGetCommand = cmd({
         `${dim("iris chat --agent=" + args.id + ' "hello"')}  Chat with this agent`,
       )
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       process.exitCode = 1
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      if (!args.json) prompts.outro("Done")
     }
   },
 })
