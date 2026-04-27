@@ -321,12 +321,27 @@ const WorkflowsStatusCommand = cmd({
     spinner.start("Checking…")
 
     try {
+      // Try fl-api workflow-runs endpoint first
+      let run: Record<string, any> | null = null
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflow-runs/${args["run-id"]}`)
-      const ok = await handleApiError(res, "Get run status")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (res.ok) {
+        const data = (await res.json()) as { data?: any }
+        run = data?.data ?? data
+        if (run && !run.id) run = null
+      }
 
-      const data = (await res.json()) as { data?: any }
-      const run = data?.data ?? data
+      // Fallback: try iris-api workspace result endpoint (V6 agentic workflows store results here)
+      if (!run) {
+        const irisRes = await irisFetch(`/api/v6/workspace/${args["run-id"]}/result`)
+        if (irisRes.ok) {
+          const irisData = (await irisRes.json()) as Record<string, any>
+          if (irisData?.data || irisData?.final_response || irisData?.status) {
+            run = irisData?.data ?? irisData
+            run!.id = run!.run_id ?? args["run-id"]
+            run!.status = run!.status ?? (run!.all_success ? "complete" : "failed")
+          }
+        }
+      }
 
       if (!run || !run.id) { spinner.stop("Run not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
