@@ -58,6 +58,8 @@ function formatBytes(bytes: number): string {
 async function resolveToken(): Promise<string> {
   const stored = await Auth.get("iris")
   if (stored?.type === "api" && stored.key) return stored.key
+  // Prefer FL_API_TOKEN (JWT) for cloud-files endpoint, fall back to IRIS_API_KEY
+  if (process.env.FL_API_TOKEN) return process.env.FL_API_TOKEN
   if (process.env.IRIS_API_KEY) return process.env.IRIS_API_KEY
   return ""
 }
@@ -140,6 +142,9 @@ export const PlatformCloudUploadCommand = cmd({
       if (args.description) form.append("description", args.description)
       if (args.bloq) form.append("bloq_id", String(args.bloq))
       if (expiration.days > 0) form.append("expires_days", String(expiration.days))
+      // user_id required by cloud-files endpoint
+      const userId = process.env.IRIS_USER_ID ?? "193"
+      form.append("user_id", userId)
 
       const token = await resolveToken()
       const headers: Record<string, string> = { Accept: "application/json" }
