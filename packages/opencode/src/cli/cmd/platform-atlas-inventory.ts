@@ -233,6 +233,7 @@ const SyncFromProductsCommand = cmd({
   builder: (y) =>
     y
       .option("profile-id", { type: "number", demandOption: true, describe: "profile pk to sync from" })
+      .option("bloq", { type: "number", describe: "bloq ID for inventory (auto-creates if omitted)" })
       .option("category", { type: "string", default: "beverage", describe: "category for new items" })
       .option("units-per-case", { type: "number", default: 1, describe: "units per case" })
       .option("dry-run", { type: "boolean", default: false, describe: "preview without creating" })
@@ -247,14 +248,16 @@ const SyncFromProductsCommand = cmd({
 
     try {
       // First do a dry run to show what will be created
+      const syncBody: Record<string, any> = {
+        profile_id: args.profileId,
+        category: args.category,
+        units_per_case: args.unitsPerCase,
+        dry_run: true,
+      }
+      if (args.bloq != null) syncBody.bloq_id = args.bloq
       const previewRes = await irisFetch(`/api/v1/atlas/inventory/sync-from-products`, {
         method: "POST",
-        body: JSON.stringify({
-          profile_id: args.profileId,
-          category: args.category,
-          units_per_case: args.unitsPerCase,
-          dry_run: true,
-        }),
+        body: JSON.stringify(syncBody),
       })
       const previewOk = await handleApiError(previewRes, "Preview")
       if (!previewOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
@@ -308,20 +311,18 @@ const SyncFromProductsCommand = cmd({
       const execSpinner = prompts.spinner()
       execSpinner.start("Creating inventory items…")
 
+      syncBody.dry_run = false
       const execRes = await irisFetch(`/api/v1/atlas/inventory/sync-from-products`, {
         method: "POST",
-        body: JSON.stringify({
-          profile_id: args.profileId,
-          category: args.category,
-          units_per_case: args.unitsPerCase,
-          dry_run: false,
-        }),
+        body: JSON.stringify(syncBody),
       })
       const execOk = await handleApiError(execRes, "Sync")
       if (!execOk) { execSpinner.stop("Failed", 1); prompts.outro("Done"); return }
       const result = ((await execRes.json()) as any)?.data
 
       execSpinner.stop(`${result?.total_created ?? 0} created, ${result?.total_skipped ?? 0} skipped`)
+
+      if (result?.bloq_id) console.log(`  ${dim("Bloq:")} #${result.bloq_id}`)
 
       // Show created items
       for (const item of (result?.created ?? [])) {
