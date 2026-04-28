@@ -41,6 +41,7 @@ import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
 import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
 import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
 import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventory"
+import { PlatformIntegrationsCommand } from "./cli/cmd/platform-integrations"
 import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
 import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
 import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
@@ -206,6 +207,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAtlasLedgerCommand))
   .command(reg(PlatformAtlasStaffCommand))
   .command(reg(PlatformAtlasInventoryCommand))
+  .command(reg(PlatformIntegrationsCommand))
   .command(reg(PlatformSchedulesCommand))
   .command(reg(PlatformN8nCommand))
   .command(reg(PlatformBoardsCommand))
