@@ -98,7 +98,11 @@ const AddCommand = cmd({
       .option("category", { type: "string" })
       .option("supplier", { type: "string" })
       .option("reorder", { type: "number", describe: "reorder point" })
-      .option("bloq", { type: "number" }),
+      .option("bloq", { type: "number" })
+      .option("units-per-case", { type: "number", describe: "units per case (default 1)" })
+      .option("retail", { type: "number", describe: "retail price in dollars" })
+      .option("description", { type: "string" })
+      .option("photo", { type: "string", describe: "CDN photo URL" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Add Inventory Item")
@@ -110,6 +114,10 @@ const AddCommand = cmd({
     if (args.supplier) body.supplier = args.supplier
     if (args.reorder != null) body.reorder_point = args.reorder
     if (args.bloq != null) body.bloq_id = args.bloq
+    if (args.unitsPerCase != null) body.units_per_case = args.unitsPerCase
+    if (args.retail != null) body.retail_price_cents = Math.round(Number(args.retail) * 100)
+    if (args.description) body.description = args.description
+    if (args.photo) body.photo = args.photo
 
     const res = await irisFetch(`/api/v1/atlas/inventory`, { method: "POST", body: JSON.stringify(body) })
     const ok = await handleApiError(res, "Create"); if (!ok) { prompts.outro("Done"); return }
@@ -129,7 +137,11 @@ const UpdateCommand = cmd({
       .option("sku", { type: "string" })
       .option("category", { type: "string" })
       .option("supplier", { type: "string" })
-      .option("reorder", { type: "number" }),
+      .option("reorder", { type: "number" })
+      .option("units-per-case", { type: "number" })
+      .option("retail", { type: "number", describe: "retail price in dollars" })
+      .option("description", { type: "string" })
+      .option("photo", { type: "string" }),
   async handler(args) {
     const token = await requireAuth(); if (!token) return
     const body: Record<string, any> = {}
@@ -139,6 +151,10 @@ const UpdateCommand = cmd({
     if (args.category) body.category = args.category
     if (args.supplier) body.supplier = args.supplier
     if (args.reorder != null) body.reorder_point = args.reorder
+    if (args.unitsPerCase != null) body.units_per_case = args.unitsPerCase
+    if (args.retail != null) body.retail_price_cents = Math.round(Number(args.retail) * 100)
+    if (args.description) body.description = args.description
+    if (args.photo) body.photo = args.photo
     if (Object.keys(body).length === 0) { console.log("Nothing to update"); return }
 
     const res = await irisFetch(`/api/v1/atlas/inventory/${args.id}`, { method: "PATCH", body: JSON.stringify(body) })
@@ -207,6 +223,58 @@ const LowStockCommand = cmd({
   },
 })
 
+const PublishCommand = cmd({
+  command: "publish <id>",
+  describe: "publish inventory item as a product on a profile",
+  builder: (y) =>
+    y
+      .positional("id", { type: "number", demandOption: true })
+      .option("profile-id", { type: "number", demandOption: true, describe: "profile pk to publish to" })
+      .option("active", { type: "boolean", default: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Publish Inventory #${args.id} → Profile ${args.profileId}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const body: Record<string, any> = { profile_id: args.profileId }
+    if (!args.active) body.is_active = 0
+
+    const spinner = prompts.spinner()
+    spinner.start("Publishing…")
+    try {
+      const res = await irisFetch(`/api/v1/atlas/inventory/${args.id}/publish`, { method: "POST", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Publish"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = ((await res.json()) as any)?.data
+      const product = data?.product
+      spinner.stop("Published")
+      if (product) {
+        console.log(`  Product ${bold("#" + product.id)} — ${product.title}`)
+        console.log(`  Price: $${product.price}  Qty: ${product.quantity}`)
+        if (product.public_url) console.log(`  URL: ${dim(product.public_url)}`)
+      }
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const UnpublishCommand = cmd({
+  command: "unpublish <id>",
+  describe: "deactivate the linked product (keeps product record)",
+  builder: (y) => y.positional("id", { type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Unpublish Inventory #${args.id}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const res = await irisFetch(`/api/v1/atlas/inventory/${args.id}/unpublish`, { method: "POST" })
+    const ok = await handleApiError(res, "Unpublish"); if (!ok) { prompts.outro("Done"); return }
+    prompts.outro("Product deactivated")
+  },
+})
+
 export const PlatformAtlasInventoryCommand = cmd({
   command: "atlas:inventory",
   aliases: ["atlas-inventory", "inventory"],
@@ -220,6 +288,8 @@ export const PlatformAtlasInventoryCommand = cmd({
       .command(RemoveCommand)
       .command(AdjustCommand)
       .command(LowStockCommand)
+      .command(PublishCommand)
+      .command(UnpublishCommand)
       .demandCommand(),
   async handler() {},
 })
