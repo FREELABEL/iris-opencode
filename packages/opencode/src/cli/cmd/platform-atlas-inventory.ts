@@ -51,7 +51,10 @@ const ListCommand = cmd({
         const qty = item.quantity ?? 0
         const low = item.reorder_point != null && qty <= item.reorder_point
         const warn = low ? " ⚠ LOW" : ""
-        console.log(`  ${bold(item.name)}  ${dim(`#${item.id}`)}  qty=${qty}${warn}  ${fmtCents(item.unit_cost_cents)}/ea`)
+        const published = item.product_id ? ` → Product #${item.product_id} ✓` : ""
+        const retail = item.retail_price_cents ? `  retail=${fmtCents(item.retail_price_cents)}` : ""
+        const upc = item.units_per_case > 1 ? `  (${item.units_per_case}/case)` : ""
+        console.log(`  ${bold(item.name)}  ${dim(`#${item.id}`)}  qty=${qty}${upc}${warn}  ${fmtCents(item.unit_cost_cents)}/ea${retail}${published}`)
         const meta: string[] = []
         if (item.sku) meta.push(`sku=${item.sku}`)
         if (item.category) meta.push(item.category)
@@ -223,6 +226,117 @@ const LowStockCommand = cmd({
   },
 })
 
+const SyncFromProductsCommand = cmd({
+  command: "sync-from-products",
+  aliases: ["sync"],
+  describe: "create inventory items from existing profile products",
+  builder: (y) =>
+    y
+      .option("profile-id", { type: "number", demandOption: true, describe: "profile pk to sync from" })
+      .option("category", { type: "string", default: "beverage", describe: "category for new items" })
+      .option("units-per-case", { type: "number", default: 1, describe: "units per case" })
+      .option("dry-run", { type: "boolean", default: false, describe: "preview without creating" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Sync Inventory from Products — Profile ${args.profileId}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Scanning products…")
+
+    try {
+      // First do a dry run to show what will be created
+      const previewRes = await irisFetch(`/api/v1/atlas/inventory/sync-from-products`, {
+        method: "POST",
+        body: JSON.stringify({
+          profile_id: args.profileId,
+          category: args.category,
+          units_per_case: args.unitsPerCase,
+          dry_run: true,
+        }),
+      })
+      const previewOk = await handleApiError(previewRes, "Preview")
+      if (!previewOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const preview = ((await previewRes.json()) as any)?.data
+
+      const willCreate = preview?.will_create ?? []
+      const willSkip = preview?.will_skip ?? []
+      spinner.stop(`Found ${preview?.total_products ?? 0} products`)
+
+      if (willCreate.length === 0) {
+        prompts.log.info("All products already have linked inventory items.")
+        if (willSkip.length) {
+          for (const s of willSkip) console.log(`  ${dim("skip")} ${s.title} ${dim(`(${s.reason})`)}`)
+        }
+        prompts.outro("Done"); return
+      }
+
+      // Show preview
+      console.log("")
+      console.log(`  ${bold("Will create:")}`)
+      for (const item of willCreate) {
+        const price = item.price ? `$${Number(item.price).toFixed(2)}` : dim("no price")
+        const photo = item.photo ? "📷" : ""
+        console.log(`  ${bold("+")} ${item.title}  ${price}  ${photo}  ${dim(`product #${item.product_id}`)}`)
+      }
+      if (willSkip.length) {
+        console.log(`\n  ${dim("Skipping " + willSkip.length + " already-linked:")}`)
+        for (const s of willSkip) console.log(`    ${dim(s.title)}`)
+      }
+      console.log("")
+
+      if (args.json) {
+        console.log(JSON.stringify(preview, null, 2))
+        prompts.outro("Done"); return
+      }
+
+      if (args.dryRun) {
+        prompts.outro(`Dry run: ${willCreate.length} would be created, ${willSkip.length} skipped`)
+        return
+      }
+
+      // Confirm
+      const confirmed = await prompts.confirm({
+        message: `Create ${willCreate.length} inventory items? (category=${args.category}, ${args.unitsPerCase}/case)`,
+      })
+      if (prompts.isCancel(confirmed) || !confirmed) {
+        prompts.outro("Cancelled"); return
+      }
+
+      // Execute
+      const execSpinner = prompts.spinner()
+      execSpinner.start("Creating inventory items…")
+
+      const execRes = await irisFetch(`/api/v1/atlas/inventory/sync-from-products`, {
+        method: "POST",
+        body: JSON.stringify({
+          profile_id: args.profileId,
+          category: args.category,
+          units_per_case: args.unitsPerCase,
+          dry_run: false,
+        }),
+      })
+      const execOk = await handleApiError(execRes, "Sync")
+      if (!execOk) { execSpinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const result = ((await execRes.json()) as any)?.data
+
+      execSpinner.stop(`${result?.total_created ?? 0} created, ${result?.total_skipped ?? 0} skipped`)
+
+      // Show created items
+      for (const item of (result?.created ?? [])) {
+        console.log(`  ${bold("#" + item.id)} ${item.name}  ${fmtCents(item.retail_price_cents)}  → Product #${item.product_id}`)
+      }
+
+      prompts.outro("Sync complete")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const PublishCommand = cmd({
   command: "publish <id>",
   describe: "publish inventory item as a product on a profile",
@@ -288,6 +402,7 @@ export const PlatformAtlasInventoryCommand = cmd({
       .command(RemoveCommand)
       .command(AdjustCommand)
       .command(LowStockCommand)
+      .command(SyncFromProductsCommand)
       .command(PublishCommand)
       .command(UnpublishCommand)
       .demandCommand(),
