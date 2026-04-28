@@ -27,10 +27,8 @@ function collectSystemInfo(): Record<string, string> {
     iris_version: "unknown",
   }
 
-  try {
-    const v = execSync("iris --version", { encoding: "utf-8", timeout: 3000 }).trim()
-    info.iris_version = v
-  } catch {}
+  // Don't call "iris --version" — causes recursive hang in compiled binary
+  info.iris_version = process.env.npm_package_version || "compiled"
 
   // Get last 20 lines of bash history if available
   try {
