@@ -851,6 +851,9 @@ const LeadsUpdateCommand = cmd({
       .option("source", { describe: "lead source", type: "string" })
       .option("stage", { describe: "pipeline stage", type: "string" })
       .option("bid", { describe: "price bid amount", type: "number" })
+      .option("mrr", { describe: "monthly recurring revenue amount", type: "number" })
+      .option("revenue-type", { describe: "revenue type", type: "string", choices: ["retainer", "performance", "one_time"] as const })
+      .option("payment-method", { describe: "how they pay", type: "string", choices: ["stripe", "mercury", "offline", "mixed"] as const })
       .option("chat-id", { describe: "link an iMessage chat ID (e.g. chat713220476491386040)", type: "string" }),
   async handler(args) {
     UI.empty()
@@ -876,6 +879,9 @@ const LeadsUpdateCommand = cmd({
     if (args.source) payload.source = args.source
     if (args.stage) payload.stage = args.stage
     if (args.bid) payload.price_bid = args.bid
+    if (args.mrr) payload.mrr_amount = args.mrr
+    if (args["revenue-type"]) payload.revenue_type = args["revenue-type"]
+    if (args["payment-method"]) payload.payment_method = args["payment-method"]
     // #57668: --chat-id appends to contact_info.chat_ids (fetches existing to avoid overwrite)
     if (args["chat-id"]) {
       try {
@@ -2963,6 +2969,8 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsCreatePackageCommand)
       .command(LeadsUpdatePackageCommand)
       .command(LeadsRegenCheckoutCommand)
+      .command(LeadsCollectCommand)
+      .command(LeadsSegmentCommand)
       .demandCommand(),
   async handler() {},
 })
@@ -3235,6 +3243,359 @@ export const PlatformDealsCommand = cmd({
       .command(DealsCreateCommand)
       .command(DealsRemindCommand)
       .command(DealsRecoverCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
+// Collect — one-shot payment collection: invoice → checkout → send → mark-paid
+// ============================================================================
+
+const LeadsCollectCommand = cmd({
+  command: "collect <lead-id>",
+  aliases: ["bill"],
+  describe: "collect payment — create invoice, send link, or record offline payment",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("amount", { alias: "a", describe: "amount in dollars", type: "number", demandOption: true })
+      .option("title", { alias: "t", describe: "invoice title/description", type: "string" })
+      .option("method", {
+        alias: "m",
+        describe: "if already paid offline, record it (skip Stripe)",
+        type: "string",
+        choices: ["cash", "check", "wire", "ach", "zelle", "venmo", "paypal", "crypto", "barter", "other"] as const,
+      })
+      .option("date", { describe: "payment date if marking paid (YYYY-MM-DD)", type: "string" })
+      .option("notes", { describe: "notes about the payment", type: "string" })
+      .option("send", { describe: "send payment link via email", type: "boolean", default: true })
+      .option("subscribe", { describe: "create recurring subscription instead of one-time", type: "boolean" })
+      .option("interval", { describe: "subscription interval", type: "string", choices: ["month", "year"] as const, default: "month" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const leadId = args.leadId as number
+    const results: Record<string, unknown> = { lead_id: leadId, steps: [] }
+    const steps = results.steps as string[]
+
+    // Get lead info
+    const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
+    const leadData = await leadRes.json().catch(() => ({}))
+    const lead = leadData?.data ?? leadData?.lead ?? leadData
+    const leadName = lead?.name ?? `Lead #${leadId}`
+
+    if (!args.json) {
+      console.log("")
+      console.log(bold(`Collecting from ${leadName} (#${leadId})`))
+      printDivider()
+    }
+
+    // Offline payment flow — record and done
+    if (args.method) {
+      if (!args.json) console.log(dim(`  Recording offline payment: $${args.amount} via ${args.method}...`))
+
+      // Ensure invoice exists
+      const listRes = await irisFetch(`/api/v1/leads/${leadId}/invoices`)
+      const listBody = await listRes.json().catch(() => ({}))
+      const invoices = listBody?.data ?? listBody?.invoices ?? []
+
+      if (!Array.isArray(invoices) || invoices.length === 0) {
+        const createRes = await irisFetch(`/api/v1/leads/${leadId}/invoice/create`, {
+          method: "POST",
+          body: JSON.stringify({ price: args.amount, title: args.title ?? `Payment from ${leadName}` }),
+        })
+        const createBody = await createRes.json().catch(() => ({}))
+        steps.push("invoice_created")
+        if (!args.json) console.log(success(`  ✓ Invoice created (#${createBody?.data?.id ?? createBody?.id ?? "?"})`))
+      }
+
+      const payload: Record<string, unknown> = { amount: args.amount, method: args.method }
+      if (args.date) payload.paid_at = args.date
+      if (args.notes) payload.notes = args.notes
+
+      const markRes = await irisFetch(`/api/v1/leads/${leadId}/invoice/mark-paid`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+      const markBody = await markRes.json().catch(() => ({}))
+
+      if (markBody?.success) {
+        steps.push("marked_paid")
+        results.total_received = markBody.total_received
+        if (!args.json) {
+          console.log(success(`  ✓ Payment recorded: $${args.amount} via ${args.method}`))
+          printKV("Total Received", `$${Number(markBody.total_received ?? 0).toFixed(2)}`)
+        }
+      } else {
+        steps.push("mark_paid_failed")
+        if (!args.json) console.log(highlight(`  ⚠ Mark paid failed: ${markBody?.error ?? markBody?.message ?? "unknown"}`))
+      }
+
+      if (args.json) { console.log(JSON.stringify(results, null, 2)); return }
+      printDivider()
+      return
+    }
+
+    // Online flow: create invoice → checkout → send email
+    let invoiceId: number | null = null
+
+    if (args.subscribe) {
+      if (!args.json) console.log(dim(`  Creating $${args.amount}/${args.interval} subscription...`))
+      const subRes = await irisFetch(`/api/v1/leads/${leadId}/subscription/create`, {
+        method: "POST",
+        body: JSON.stringify({
+          price: args.amount,
+          title: args.title ?? `${leadName} — Monthly Retainer`,
+          interval: args.interval ?? "month",
+        }),
+      })
+      const subBody = await subRes.json().catch(() => ({}))
+      invoiceId = subBody?.data?.id ?? subBody?.invoice?.id
+      results.checkout_url = subBody?.data?.checkout_url ?? subBody?.checkout_url
+      steps.push("subscription_created")
+      if (!args.json) console.log(success(`  ✓ Subscription created (#${invoiceId})`))
+    } else {
+      if (!args.json) console.log(dim(`  Creating $${args.amount} invoice...`))
+      const createRes = await irisFetch(`/api/v1/leads/${leadId}/invoice/create`, {
+        method: "POST",
+        body: JSON.stringify({ price: args.amount, title: args.title ?? `Payment from ${leadName}` }),
+      })
+      const createBody = await createRes.json().catch(() => ({}))
+      invoiceId = createBody?.data?.id ?? createBody?.invoice?.id ?? createBody?.id
+      steps.push("invoice_created")
+      if (!args.json) console.log(success(`  ✓ Invoice created (#${invoiceId})`))
+    }
+
+    if (!invoiceId) {
+      if (args.json) console.log(JSON.stringify({ ...results, error: "invoice_creation_failed" }, null, 2))
+      else console.log(highlight("  ⚠ Failed to create invoice"))
+      return
+    }
+
+    // Generate checkout URL
+    if (!results.checkout_url) {
+      if (!args.json) console.log(dim("  Generating Stripe checkout link..."))
+      const checkoutRes = await irisFetch(`/api/v1/custom-requests/${invoiceId}/generate-checkout`, { method: "POST" })
+      const checkoutBody = await checkoutRes.json().catch(() => ({}))
+      results.checkout_url = checkoutBody?.data?.checkout_url ?? checkoutBody?.checkout_url ?? checkoutBody?.url
+      steps.push("checkout_generated")
+      if (!args.json && results.checkout_url) console.log(success("  ✓ Checkout link ready"))
+    }
+
+    // Send email
+    if (args.send) {
+      if (!args.json) console.log(dim("  Sending payment email..."))
+      const sendRes = await irisFetch(`/api/v1/custom-requests/${invoiceId}/send-reminder`, { method: "POST" })
+      const sendBody = await sendRes.json().catch(() => ({}))
+      if (sendBody?.success !== false) {
+        steps.push("email_sent")
+        if (!args.json) console.log(success(`  ✓ Payment email sent to ${lead?.email ?? "lead"}`))
+      } else {
+        steps.push("email_failed")
+        if (!args.json) console.log(highlight(`  ⚠ Email failed: ${sendBody?.message ?? "unknown"}`))
+      }
+    }
+
+    if (args.json) { console.log(JSON.stringify({ ...results, invoice_id: invoiceId }, null, 2)); return }
+    printDivider()
+    if (results.checkout_url) printKV("Payment Link", String(results.checkout_url))
+    console.log(dim(`  Track: iris deals status ${leadId}`))
+  },
+})
+
+// ============================================================================
+// Segment — saved filters for lead groups
+// ============================================================================
+
+const SEGMENT_FILE = ".iris/lead-segments.json"
+
+function resolveSegmentFile(): string {
+  let dir = process.cwd()
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(dir, "fl-docker-dev"))) return join(dir, SEGMENT_FILE)
+    const parent = join(dir, "..")
+    if (parent === dir) break
+    dir = parent
+  }
+  return join(process.cwd(), SEGMENT_FILE)
+}
+
+interface LeadSegment {
+  name: string
+  filters: Record<string, string>
+  created: string
+}
+
+function loadSegments(): LeadSegment[] {
+  const path = resolveSegmentFile()
+  if (!existsSync(path)) return []
+  try { return JSON.parse(readFileSync(path, "utf-8")) } catch { return [] }
+}
+
+function saveSegments(segments: LeadSegment[]): void {
+  const path = resolveSegmentFile()
+  const dir = join(path, "..")
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  writeFileSync(path, JSON.stringify(segments, null, 2))
+}
+
+const SegmentListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list saved segments",
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    const segments = loadSegments()
+    if ((args as any).json) { console.log(JSON.stringify(segments, null, 2)); return }
+    if (segments.length === 0) {
+      prompts.log.info("No segments saved yet")
+      console.log(dim("Create one: iris leads segment create \"Won Retainers\" --status=Won"))
+      return
+    }
+    console.log("")
+    console.log(bold(`Lead Segments (${segments.length})`))
+    printDivider()
+    for (const seg of segments) {
+      const filters = Object.entries(seg.filters).map(([k, v]) => `${k}=${v}`).join(", ")
+      console.log(`  ${bold(seg.name)}  ${dim(filters)}  ${dim(seg.created)}`)
+    }
+    printDivider()
+  },
+})
+
+const SegmentCreateCommand = cmd({
+  command: "create <name>",
+  aliases: ["add", "save"],
+  describe: "create a named segment with filters",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { describe: "segment name", type: "string", demandOption: true })
+      .option("status", { describe: "filter by status (Won, Active, In Negotiation, etc.)", type: "string" })
+      .option("search", { describe: "search query (name/email/company)", type: "string" })
+      .option("bloq-id", { describe: "filter by bloq/project ID", type: "number" })
+      .option("min-price", { describe: "minimum price_bid", type: "number" })
+      .option("max-price", { describe: "maximum price_bid", type: "number" })
+      .option("tag", { describe: "filter by tag", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    const filters: Record<string, string> = {}
+    if (args.status) filters.status = String(args.status)
+    if (args.search) filters.search = String(args.search)
+    if (args["bloq-id"]) filters.bloq_id = String(args["bloq-id"])
+    if (args["min-price"]) filters.min_price = String(args["min-price"])
+    if (args["max-price"]) filters.max_price = String(args["max-price"])
+    if (args.tag) filters.tag = String(args.tag)
+
+    if (Object.keys(filters).length === 0) {
+      prompts.log.error("At least one filter required (--status, --search, --bloq-id, --min-price, --tag)")
+      return
+    }
+
+    const segments = loadSegments()
+    const existing = segments.findIndex((s) => s.name === args.name)
+    const seg: LeadSegment = { name: String(args.name), filters, created: new Date().toISOString().split("T")[0] }
+
+    if (existing >= 0) segments[existing] = seg
+    else segments.push(seg)
+
+    saveSegments(segments)
+
+    if ((args as any).json) { console.log(JSON.stringify(seg, null, 2)); return }
+    prompts.log.success(`Segment "${args.name}" ${existing >= 0 ? "updated" : "created"}`)
+    console.log(dim(`  Filters: ${Object.entries(filters).map(([k, v]) => `${k}=${v}`).join(", ")}`))
+    console.log(dim(`  View: iris leads segment view "${args.name}"`))
+  },
+})
+
+const SegmentViewCommand = cmd({
+  command: "view <name>",
+  aliases: ["show", "run"],
+  describe: "run a saved segment and show matching leads",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { describe: "segment name", type: "string", demandOption: true })
+      .option("limit", { describe: "max results", type: "number", default: 50 })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const segments = loadSegments()
+    const seg = segments.find((s) => s.name === args.name)
+    if (!seg) {
+      prompts.log.error(`Segment "${args.name}" not found`)
+      const names = segments.map((s) => s.name).join(", ")
+      if (names) console.log(dim(`  Available: ${names}`))
+      return
+    }
+
+    const params = new URLSearchParams({ per_page: String(args.limit) })
+    for (const [k, v] of Object.entries(seg.filters)) {
+      if (!["min_price", "max_price", "tag"].includes(k)) params.set(k, v)
+    }
+
+    const res = await irisFetch(`/api/v1/leads?${params}`)
+    if (!(await handleApiError(res, "Fetch segment"))) return
+
+    const data = await res.json().catch(() => ({}))
+    let leads: any[] = data?.data ?? []
+
+    // Client-side filters the API doesn't support natively
+    if (seg.filters.min_price) {
+      const min = Number(seg.filters.min_price)
+      leads = leads.filter((l: any) => Number(l.price_bid ?? 0) >= min)
+    }
+    if (seg.filters.max_price) {
+      const max = Number(seg.filters.max_price)
+      leads = leads.filter((l: any) => Number(l.price_bid ?? 0) <= max)
+    }
+    if (seg.filters.tag) {
+      const tag = seg.filters.tag.toLowerCase()
+      leads = leads.filter((l: any) => {
+        const tags = Array.isArray(l.tags) ? l.tags : (typeof l.tags === "string" ? l.tags.split(",") : [])
+        return tags.some((t: string) => t.toLowerCase().includes(tag))
+      })
+    }
+
+    if ((args as any).json) { console.log(JSON.stringify({ segment: seg, leads, count: leads.length }, null, 2)); return }
+
+    console.log("")
+    console.log(bold(`Segment: ${seg.name} — ${leads.length} leads`))
+    console.log(dim(`  Filters: ${Object.entries(seg.filters).map(([k, v]) => `${k}=${v}`).join(", ")}`))
+    printDivider()
+
+    if (leads.length === 0) { prompts.log.info("No leads match this segment"); return }
+    for (const l of leads) printLead(l)
+    printDivider()
+  },
+})
+
+const SegmentDeleteCommand = cmd({
+  command: "delete <name>",
+  aliases: ["rm", "remove"],
+  describe: "delete a saved segment",
+  builder: (yargs) =>
+    yargs.positional("name", { describe: "segment name", type: "string", demandOption: true }),
+  async handler(args) {
+    const segments = loadSegments()
+    const idx = segments.findIndex((s) => s.name === args.name)
+    if (idx < 0) { prompts.log.error(`Segment "${args.name}" not found`); return }
+    segments.splice(idx, 1)
+    saveSegments(segments)
+    prompts.log.success(`Segment "${args.name}" deleted`)
+  },
+})
+
+export const LeadsSegmentCommand = cmd({
+  command: "segment",
+  aliases: ["segments", "seg"],
+  describe: "manage saved lead segments — named filters for quick access",
+  builder: (yargs) =>
+    yargs
+      .command(SegmentListCommand)
+      .command(SegmentCreateCommand)
+      .command(SegmentViewCommand)
+      .command(SegmentDeleteCommand)
       .demandCommand(),
   async handler() {},
 })
