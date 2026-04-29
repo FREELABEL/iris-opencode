@@ -1080,7 +1080,7 @@ case "${1:-status}" in
                             echo "$_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
                             echo "$_RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
                     if [ -n "$_NKEY" ] && [ "$_NKEY" != "null" ]; then
-                        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$_NKEY" "${_UID:-0}" > "$IRIS_CONFIG"
+                        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$_NKEY" "${_UID:-0}" > "$IRIS_CONFIG"
                         chmod 600 "$IRIS_CONFIG"
                         echo "Registered! Continuing to start daemon..."
                     else
@@ -1159,7 +1159,7 @@ case "${1:-status}" in
                    echo "$RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
         if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
             mkdir -p "$HOME/.iris"
-            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "${USER_ID:-0}" > "$IRIS_CONFIG"
+            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "${USER_ID:-0}" > "$IRIS_CONFIG"
             chmod 600 "$IRIS_CONFIG"
             echo "Registered! Node key saved to ~/.iris/config.json"
             echo "Start with: iris-daemon start"
@@ -1289,7 +1289,7 @@ register_hive() {
     local node_key; node_key=$(json_field "$resp" "node_key")
     if [ -n "$node_key" ] && [ "$node_key" != "null" ]; then
         mkdir -p "$IRIS_DIR"
-        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$node_key" "${user_id:-0}" > "$CONFIG_JSON"
+        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$node_key" "${user_id:-0}" > "$CONFIG_JSON"
         chmod 600 "$CONFIG_JSON"
         echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
         return 0
@@ -2145,7 +2145,7 @@ ENVFILE
     NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
     if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
         mkdir -p "$HOME/.iris"
-        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
+        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
         chmod 600 "$HOME/.iris/config.json"
         echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
     else
@@ -2254,7 +2254,7 @@ ENVFILE
                         NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
                         if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
                             mkdir -p "$HOME/.iris"
-                            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://fl-iris-api-v5-mnmol.ondigitalocean.app"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
+                            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
                             chmod 600 "$HOME/.iris/config.json"
                             echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
                         else
