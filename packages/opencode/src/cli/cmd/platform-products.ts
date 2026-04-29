@@ -221,7 +221,9 @@ const UpdateCommand = cmd({
       .positional("id", { describe: "product ID", type: "number", demandOption: true })
       .option("title", { describe: "new title", type: "string" })
       .option("description", { describe: "new description", type: "string" })
-      .option("price", { describe: "new price", type: "number" }),
+      .option("price", { describe: "new price", type: "number" })
+      .option("photo", { describe: "photo URL", type: "string" })
+      .option("quantity", { describe: "stock quantity", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Product #${args.id}`)
@@ -233,9 +235,11 @@ const UpdateCommand = cmd({
     if (args.title) payload.title = args.title
     if (args.description) payload.description = args.description
     if (args.price) payload.price = args.price
+    if (args.photo) payload.photo = args.photo
+    if (args.quantity !== undefined) payload.quantity = args.quantity
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --description, or --price")
+      prompts.log.warn("Nothing to update. Use --title, --description, --price, --photo, or --quantity")
       prompts.outro("Done")
       return
     }

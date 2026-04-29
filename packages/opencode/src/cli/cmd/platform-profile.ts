@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { readFileSync } from "fs"
 
 // Helper: GET /api/v1/profile/{slugOrPk}
 async function fetchProfile(slugOrPk: string): Promise<any | null> {
@@ -305,36 +306,84 @@ const ProfileCreateCommand = cmd({
     yargs
       .option("name", { describe: "profile name", type: "string", demandOption: true })
       .option("bio", { describe: "profile bio", type: "string" })
-      .option("category", { describe: "profile category", type: "string" })
+      .option("city", { describe: "city", type: "string" })
+      .option("state", { describe: "state", type: "string" })
+      .option("email", { describe: "email", type: "string" })
+      .option("phone", { describe: "phone", type: "string" })
       .option("instagram", { describe: "Instagram handle", type: "string" })
-      .option("twitter", { describe: "Twitter handle", type: "string" })
-      .option("website", { describe: "website URL", type: "string" }),
+      .option("twitter", { describe: "Twitter/X handle", type: "string" })
+      .option("youtube", { describe: "YouTube channel", type: "string" })
+      .option("spotify", { describe: "Spotify artist ID/URL", type: "string" })
+      .option("tiktok", { describe: "TikTok handle", type: "string" })
+      .option("twitch", { describe: "Twitch handle", type: "string" })
+      .option("website", { describe: "website URL", type: "string" })
+      .option("tags", { describe: "tags (comma-separated)", type: "string" })
+      .option("category", { describe: "profile category", type: "string" })
+      .option("lead-id", { describe: "link to lead ID after creation", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
     await requireAuth()
     const name = args.name as string
+    const spinner = prompts.spinner()
+    spinner.start("Creating profile…")
+
     const body: Record<string, any> = { name }
     if (args.bio) body.bio = args.bio
-    if (args.category) body.category = args.category
+    if (args.city) body.city = args.city
+    if (args.state) body.state = args.state
+    if (args.email) body.email = args.email
+    if (args.phone) body.phone = args.phone
     if (args.instagram) body.instagram = args.instagram
     if (args.twitter) body.twitter = args.twitter
+    if (args.youtube) body.youtube = args.youtube
+    if (args.spotify) body.spotify = args.spotify
+    if (args.tiktok) body.tiktok = args.tiktok
+    if (args.twitch) body.twitch = args.twitch
     if (args.website) body.website_url = args.website
+    if (args.tags) body.tags = args.tags
+    if (args.category) body.category = args.category
 
     const res = await irisFetch("/api/v1/profile/create", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     })
     const ok = await handleApiError(res, "Create profile")
-    if (!ok) { prompts.outro("Failed"); return }
+    if (!ok) { spinner.stop("Failed", 1); return }
     const data = (await res.json()) as any
     const profile = data?.data ?? data
+
+    // Link to lead if --lead-id provided
+    const leadId = args["lead-id"] as number | undefined
+    if (leadId && profile.pk) {
+      try {
+        const linkRes = await irisFetch(`/api/v1/leads/${leadId}`, {
+          method: "PUT",
+          body: JSON.stringify({ profile_id: profile.pk }),
+        })
+        if (linkRes.ok) {
+          spinner.stop(success(`${name} created + linked to lead #${leadId}`))
+        } else {
+          spinner.stop(success(`${name} created (lead link failed — update lead manually)`))
+        }
+      } catch {
+        spinner.stop(success(`${name} created (lead link failed)`))
+      }
+    } else {
+      spinner.stop(success(`${name} created`))
+    }
+
+    if (args.json) { console.log(JSON.stringify(profile, null, 2)); return }
+
     printDivider()
     printKV("PK", profile.pk ?? profile.id ?? "?")
     printKV("Slug", profile.id ?? profile.slug ?? "?")
     printKV("Name", profile.name ?? name)
-    if (profile.bio) printKV("Bio", profile.bio)
+    printKV("URL", `freelabel.net/@${profile.id ?? profile.slug ?? "?"}`)
+    if (profile.city) printKV("Location", [profile.city, profile.state].filter(Boolean).join(", "))
+    if (profile.instagram) printKV("Instagram", profile.instagram)
+    if (profile.email) printKV("Email", profile.email)
+    if (leadId) printKV("Lead", `#${leadId}`)
     printDivider()
-    prompts.outro(success("Profile created"))
   },
 })
 
@@ -435,6 +484,124 @@ const ProfileReassignArticlesCommand = cmd({
   },
 })
 
+// ============================================================================
+// profile batch-create — bulk create profiles from JSON file
+// ============================================================================
+
+const ProfileBatchCreateCommand = cmd({
+  command: "batch-create <file>",
+  aliases: ["bulk-create", "batch"],
+  describe: "bulk create profiles from a JSON file",
+  builder: (yargs) =>
+    yargs
+      .positional("file", { describe: "path to JSON file with profile array", type: "string", demandOption: true })
+      .option("dry-run", { describe: "preview without creating", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    await requireAuth()
+    const filePath = args.file as string
+    const dryRun = args["dry-run"] as boolean
+
+    // Read and parse JSON file
+    let profiles: any[]
+    try {
+      const raw = readFileSync(filePath, "utf-8")
+      const parsed = JSON.parse(raw)
+      profiles = Array.isArray(parsed) ? parsed : (parsed.profiles || parsed.artists || [parsed])
+    } catch (err: any) {
+      prompts.log.error(`Failed to read ${filePath}: ${err.message}`)
+      return
+    }
+
+    if (profiles.length === 0) {
+      prompts.log.warn("No profiles found in file")
+      return
+    }
+
+    prompts.intro(`◈  Batch Create — ${profiles.length} profile(s)`)
+
+    if (dryRun) {
+      printDivider()
+      for (const p of profiles) {
+        const name = p.name || p.profile?.name || "?"
+        const ig = p.instagram || p.profile?.instagram || ""
+        const leadId = p.lead_id || p.leadId || ""
+        console.log(`  📋 ${bold(name)}${ig ? "  @" + ig : ""}${leadId ? dim("  → Lead #" + leadId) : ""}`)
+      }
+      printDivider()
+      prompts.outro(dim(`Dry run — ${profiles.length} profiles would be created`))
+      return
+    }
+
+    const results: any[] = []
+    let created = 0
+    let failed = 0
+
+    for (const entry of profiles) {
+      // Support both flat format and nested { profile: {}, lead_id } format
+      const profileData = entry.profile || entry
+      const leadId = entry.lead_id || entry.leadId
+      const name = profileData.name
+
+      if (!name) {
+        console.log(`  ⚠ Skipped entry — no name`)
+        failed++
+        continue
+      }
+
+      const body: Record<string, any> = {}
+      const fields = ["name", "bio", "city", "state", "email", "phone", "instagram", "twitter",
+                       "youtube", "spotify", "tiktok", "twitch", "website_url", "tags", "category"]
+      for (const f of fields) {
+        if (profileData[f]) body[f] = profileData[f]
+      }
+      // Handle website alias
+      if (profileData.website && !body.website_url) body.website_url = profileData.website
+
+      try {
+        const res = await irisFetch("/api/v1/profile/create", {
+          method: "POST",
+          body: JSON.stringify(body),
+        })
+
+        if (!res.ok) {
+          const errData = await res.text()
+          console.log(`  ❌ ${name} — ${res.status}: ${errData.slice(0, 100)}`)
+          failed++
+          continue
+        }
+
+        const data = (await res.json()) as any
+        const profile = data?.data ?? data
+
+        // Link to lead if lead_id provided
+        if (leadId && profile.pk) {
+          try {
+            await irisFetch(`/api/v1/leads/${leadId}`, {
+              method: "PUT",
+              body: JSON.stringify({ profile_id: profile.pk }),
+            })
+          } catch { /* best effort */ }
+        }
+
+        const slug = profile.id ?? profile.slug ?? "?"
+        console.log(`  ✅ ${bold(name)} → @${slug}${leadId ? dim("  → Lead #" + leadId) : ""}`)
+        results.push({ ...profile, lead_id: leadId })
+        created++
+      } catch (err: any) {
+        console.log(`  ❌ ${name} — ${err.message}`)
+        failed++
+      }
+    }
+
+    printDivider()
+    if (args.json) {
+      console.log(JSON.stringify(results, null, 2))
+    }
+    prompts.outro(success(`${created} created, ${failed} failed`))
+  },
+})
+
 export const PlatformProfileCommand = cmd({
   command: "profile",
   describe: "manage profiles (show, get, set, create, links, memberships, reassign-articles)",
@@ -446,6 +613,7 @@ export const PlatformProfileCommand = cmd({
       .command(ProfileLinksCommand)
       .command(ProfileMembershipsCommand)
       .command(ProfileCreateCommand)
+      .command(ProfileBatchCreateCommand)
       .command(ProfileReassignArticlesCommand)
       .demandCommand(),
   async handler() {},

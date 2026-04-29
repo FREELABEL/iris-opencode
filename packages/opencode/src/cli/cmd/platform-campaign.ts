@@ -299,15 +299,51 @@ const CampaignCreateCommand = cmd({
         }
       }
 
-      // 6. Offer to add to som-config.js
-      prompts.log.info("")
-      prompts.log.info(dim(`To add to campaign registry:`))
-      prompts.log.info(dim(`  Edit tests/e2e/som-config.js and add:`))
-      prompts.log.info(dim(`  ${slug}: { boardId: '${boardId}', strategy: '${strategyName}', igAccount: '${igAccount}', active: true, label: '${campaignName}', color: '\\x1b[36m' }`))
+      // 6. Register as HiveCampaignTemplate in DB (replaces manual som-config.js edit)
+      spinner.start("Registering campaign in database...")
+      try {
+        const templateRes = await irisFetch(`/api/v1/campaign-templates?user_id=${userId}`, {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: userId,
+            category: "SOM",
+            label: campaignName,
+            subtitle: `@${igAccount} ${location || ""}`.trim(),
+            badge_class: "bg-purple-500 bg-opacity-20 text-purple-400",
+            type: "som",
+            title: `SOM: ${campaignName}`,
+            prompt_base: slug,
+            inputs: [
+              { key: "ig", label: "Send as", kind: "ig_account", default: igAccount },
+              { key: "limit", label: "Limit", kind: "number", default: 15, min: 1, max: 50 },
+              { key: "dry", label: "Dry Run", kind: "toggle", default: false },
+            ],
+            config: {
+              igAccount,
+              strategy: strategyName,
+              boardId: String(boardId),
+              location: location || null,
+              keywords: keywords || null,
+              channel,
+            },
+          }),
+        })
+        if (templateRes.ok) {
+          spinner.stop(success("Campaign registered in DB"))
+        } else {
+          spinner.stop(dim("DB registration skipped (API returned " + templateRes.status + ")"))
+          // Fallback: show manual instructions
+          prompts.log.info(dim(`  Fallback: edit tests/e2e/som-config.js and add:`))
+          prompts.log.info(dim(`  ${slug}: { boardId: '${boardId}', strategy: '${strategyName}', igAccount: '${igAccount}', active: true, label: '${campaignName}', color: '\\x1b[36m' }`))
+        }
+      } catch {
+        spinner.stop(dim("DB registration skipped"))
+      }
 
       prompts.log.info("")
       prompts.log.info(dim("Monitor: iris bridge runs"))
       prompts.log.info(dim(`Leads:   iris leads list --bloq-id ${boardId}`))
+      prompts.log.info(dim(`Config:  iris campaigns list`))
       prompts.outro(success("Campaign created"))
 
     } catch (err) {
@@ -325,42 +361,85 @@ const CampaignCreateCommand = cmd({
 const CampaignListCommand = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "list all outreach campaigns",
-  async handler() {
+  describe: "list all outreach campaigns (DB-first, som-config.js fallback)",
+  builder: (yargs) =>
+    yargs
+      .option("user-id", { describe: "user ID", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
     UI.empty()
     prompts.intro("◈  Campaigns")
 
-    // Try to read som-config.js
-    const configPaths = [
-      join(homedir(), "Sites", "freelabel", "tests", "e2e", "som-config.js"),
-      join(process.cwd(), "tests", "e2e", "som-config.js"),
-    ]
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
-    let config: any = null
-    for (const p of configPaths) {
-      if (existsSync(p)) {
-        try {
-          delete require.cache[require.resolve(p)]
-          config = require(p)
-          break
-        } catch {}
+    const userId = await requireUserId(args["user-id"])
+
+    // Try DB first via daemon-configs API
+    let campaigns: Record<string, any> = {}
+    let source = "none"
+
+    if (userId) {
+      const spinner = prompts.spinner()
+      spinner.start("Loading campaigns...")
+      try {
+        const res = await irisFetch(`/api/v1/campaign-templates/daemon-configs?user_id=${userId}`)
+        if (res.ok) {
+          const data = (await res.json()) as any
+          if (data.configs && Object.keys(data.configs).length > 0) {
+            campaigns = data.configs
+            source = "database"
+          }
+        }
+      } catch { /* fallback below */ }
+      spinner.stop(source === "database" ? success(`Loaded from ${source}`) : dim("API unavailable — using local config"))
+    }
+
+    // Fallback to som-config.js
+    if (Object.keys(campaigns).length === 0) {
+      const configPaths = [
+        join(homedir(), "Sites", "freelabel", "tests", "e2e", "som-config.js"),
+        join(process.cwd(), "tests", "e2e", "som-config.js"),
+      ]
+      for (const p of configPaths) {
+        if (existsSync(p)) {
+          try {
+            delete require.cache[require.resolve(p)]
+            const config = require(p)
+            if (config?.campaigns) {
+              for (const [id, c] of Object.entries(config.campaigns) as [string, any][]) {
+                campaigns[id] = { boardId: c.boardId, strategy: c.strategy, igAccount: c.igAccount, label: c.label, active: c.active, type: "som" }
+              }
+              source = "som-config.js"
+            }
+            break
+          } catch {}
+        }
       }
     }
 
-    if (!config?.campaigns) {
-      prompts.log.warn("som-config.js not found. Run from the freelabel project root.")
+    if (Object.keys(campaigns).length === 0) {
+      prompts.log.warn("No campaigns found. Create one with: iris campaigns create")
       prompts.outro("Done")
       return
     }
 
+    if (args.json) {
+      console.log(JSON.stringify({ campaigns, source }, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    console.log(`  ${dim(`source: ${source}`)}`)
     printDivider()
-    for (const [id, c] of Object.entries(config.campaigns) as [string, any][]) {
-      const status = c.active
+    for (const [id, c] of Object.entries(campaigns) as [string, any][]) {
+      const status = c.active !== false
         ? `${UI.Style.TEXT_SUCCESS}● active${UI.Style.TEXT_NORMAL}`
         : dim("○ inactive")
       const ig = c.igAccount ? `@${c.igAccount}` : "—"
-      console.log(`  ${bold(c.label || id)}  ${status}  ${dim(ig)}  ${dim(`board:${c.boardId}`)}`)
-      console.log(`    ${dim(`Strategy: ${c.strategy}`)}`)
+      const typeTag = c.type ? dim(` [${c.type}]`) : ""
+      console.log(`  ${bold(c.label || id)}  ${status}  ${dim(ig)}  ${dim(`board:${c.boardId}`)}${typeTag}`)
+      console.log(`    ${dim(`Strategy: ${c.strategy || "—"}`)}`)
       console.log()
     }
     printDivider()

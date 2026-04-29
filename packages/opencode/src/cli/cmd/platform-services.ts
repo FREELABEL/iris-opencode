@@ -152,7 +152,10 @@ const CreateCommand = cmd({
       .option("title", { describe: "service title", type: "string" })
       .option("description", { describe: "description", type: "string" })
       .option("price", { describe: "price", type: "number" })
-      .option("profile-id", { describe: "profile ID", type: "number" }),
+      .option("profile-id", { describe: "profile ID", type: "number" })
+      .option("delivery-amount", { describe: "delivery amount", type: "number", default: 1 })
+      .option("delivery-frequency", { describe: "delivery frequency (one-time, months, weeks)", type: "string", default: "one-time" })
+      .option("photo", { describe: "photo URL", type: "string" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Service")
@@ -186,6 +189,9 @@ const CreateCommand = cmd({
       if (args.description) payload.description = args.description
       if (args.price) payload.price = args.price
       if (args["profile-id"]) payload.profile_id = args["profile-id"]
+      payload.delivery_amount = args["delivery-amount"] ?? 1
+      payload.delivery_frequency = args["delivery-frequency"] ?? "one-time"
+      if (args.photo) payload.photo = args.photo
 
       const res = await irisFetch("/api/v1/services", { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create service")
@@ -217,7 +223,8 @@ const UpdateCommand = cmd({
       .positional("id", { describe: "service ID", type: "number", demandOption: true })
       .option("title", { describe: "new title", type: "string" })
       .option("description", { describe: "new description", type: "string" })
-      .option("price", { describe: "new price", type: "number" }),
+      .option("price", { describe: "new price", type: "number" })
+      .option("photo", { describe: "photo URL", type: "string" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Service #${args.id}`)
@@ -229,9 +236,10 @@ const UpdateCommand = cmd({
     if (args.title) payload.title = args.title
     if (args.description) payload.description = args.description
     if (args.price) payload.price = args.price
+    if (args.photo) payload.photo = args.photo
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --description, or --price")
+      prompts.log.warn("Nothing to update. Use --title, --description, --price, or --photo")
       prompts.outro("Done")
       return
     }

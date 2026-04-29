@@ -93,39 +93,52 @@ const BloqsGetCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("files", { describe: "list files attached to this bloq", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Bloq #${args.id}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq #${args.id}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
 
     try {
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`)
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        if (spinner) spinner.stop("Failed", 1)
         await handleApiError(res, "Get bloq")
-        prompts.outro("Done")
+        if (!args.json) prompts.outro("Done")
         return
       }
 
       const data = (await res.json()) as { data?: any }
       const b = data?.data ?? data
       if (!b || (!b.name && !b.id)) {
-        spinner.stop("Empty response", 1)
-        prompts.log.error("API returned no bloq data. The server may not support this endpoint yet.")
-        prompts.outro("Done")
+        if (spinner) spinner.stop("Empty response", 1)
+        if (!args.json) prompts.outro("Done")
         return
       }
-      spinner.stop(String(b.name ?? `Bloq #${b.id}`))
+
+      // Fetch lists
+      let lists: any[] = []
+      const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
+      if (listsRes.ok) {
+        const listsData = (await listsRes.json()) as { data?: any[] }
+        lists = listsData?.data ?? []
+      }
+
+      if (args.json) {
+        console.log(JSON.stringify({ ...b, lists }, null, 2))
+        return
+      }
+
+      spinner!.stop(String(b.name ?? `Bloq #${b.id}`))
 
       printDivider()
       printKV("ID", b.id)
@@ -135,18 +148,12 @@ const BloqsGetCommand = cmd({
       printKV("Created", b.created_at)
       console.log()
 
-      // Load lists
-      const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
-      if (listsRes.ok) {
-        const listsData = (await listsRes.json()) as { data?: any[] }
-        const lists: any[] = listsData?.data ?? []
-        if (lists.length > 0) {
-          console.log(`  ${dim("Lists:")}`)
-          for (const l of lists) {
-            console.log(`    ${dim("—")} ${bold(String(l.name ?? l.id))} ${dim(`#${l.id}`)} ${dim(`(${l.items_count ?? 0} items)`)}`)
-          }
-          console.log()
+      if (lists.length > 0) {
+        console.log(`  ${dim("Lists:")}`)
+        for (const l of lists) {
+          console.log(`    ${dim("—")} ${bold(String(l.name ?? l.id))} ${dim(`#${l.id}`)} ${dim(`(${l.items_count ?? 0} items)`)}`)
         }
+        console.log()
       }
 
       // Load files if requested
@@ -176,9 +183,9 @@ const BloqsGetCommand = cmd({
         `${dim("iris bloqs ingest " + args.id + " ./document.pdf")}  Add knowledge`,
       )
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      if (!args.json) prompts.outro("Done")
     }
   },
 })

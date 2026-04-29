@@ -1574,7 +1574,35 @@ const LeadsPulseCommand = cmd({
           for (const m of uniqueDups.slice(0, 3)) {
             console.log(`    ${dim(`#${m.id}`)}  ${m.name ?? "Unknown"}  ${dim(m.email ?? "")}  ${dim(m.status ?? "")}`)
           }
-          console.log(`    ${dim(`Merge: iris leads merge ${masterId} ${mergeId}`)}`)
+
+          // #71784: Interactive merge prompt instead of just showing command
+          if (!isNonInteractive() && !args.json) {
+            const mergeAction = await prompts.select({
+              message: `Merge #${mergeId} into #${masterId}?`,
+              options: [
+                { value: "skip", label: "Skip — review later" },
+                { value: "merge", label: `Merge now (keep #${masterId}, remove #${mergeId})` },
+                { value: "view", label: `View #${mergeId} details first` },
+              ],
+            })
+            if (!prompts.isCancel(mergeAction)) {
+              if (mergeAction === "merge") {
+                const mergeRes = await irisFetch(`/api/v1/leads/${masterId}/merge`, {
+                  method: "POST",
+                  body: JSON.stringify({ merge_lead_ids: [mergeId] }),
+                }).catch(() => null)
+                if (mergeRes?.ok) {
+                  console.log(`    ${success("✓")} Merged #${mergeId} into #${masterId}`)
+                } else {
+                  console.log(`    ${dim(`Manual merge: iris leads merge ${masterId} ${mergeId}`)}`)
+                }
+              } else if (mergeAction === "view") {
+                console.log(`    ${dim(`Run: iris leads pulse ${mergeId}`)}`)
+              }
+            }
+          } else {
+            console.log(`    ${dim(`Merge: iris leads merge ${masterId} ${mergeId}`)}`)
+          }
         }
       } catch { /* non-fatal */ }
 
@@ -1601,15 +1629,19 @@ const LeadsPulseCommand = cmd({
         }
       }
 
-      // Deal Health section (#57649/#57665) — fetch deal-status + stripe-payments in parallel
+      // Deal Health section (#57649/#57665) — fetch deal-status + stripe-payments + score + activities in parallel
       let dealHealth: any = null
       let stripeData: any = null
       let leadTasks: any[] = []
+      let leadScore: any = null
+      let activities: any[] = []
       {
-        const [dealRes, stripeRes, tasksRes] = await Promise.allSettled([
+        const [dealRes, stripeRes, tasksRes, scoreRes, activityRes] = await Promise.allSettled([
           irisFetch(`/api/v1/leads/${leadId}/deal-status`),
           irisFetch(`/api/v1/leads/${leadId}/stripe-payments`),
           irisFetch(`/api/v1/leads/${leadId}/tasks`),
+          irisFetch(`/api/v1/leads/${leadId}/score`),
+          irisFetch(`/api/v1/leads/${leadId}/activities?limit=20`),
         ])
 
         // Parse deal-status
@@ -1625,6 +1657,15 @@ const LeadsPulseCommand = cmd({
           const td = ((await tasksRes.value.json()) as any)?.data
           leadTasks = td?.tasks ?? td ?? []
           if (!Array.isArray(leadTasks)) leadTasks = []
+        }
+        // #71782: Parse engagement score
+        if (scoreRes.status === "fulfilled" && scoreRes.value.ok) {
+          leadScore = ((await scoreRes.value.json()) as any)?.data ?? null
+        }
+        // #71785: Parse activity feed
+        if (activityRes.status === "fulfilled" && activityRes.value.ok) {
+          const ad = ((await activityRes.value.json()) as any)?.data
+          activities = Array.isArray(ad) ? ad : []
         }
       }
 
@@ -1645,16 +1686,36 @@ const LeadsPulseCommand = cmd({
         }
       }
 
+      // #71782: Engagement Score — composite score from backend LeadScoringService
+      if (leadScore) {
+        const s = leadScore.score ?? 0
+        const scoreLabel = s >= 70 ? success(`${s}/100`) : s >= 40 ? `${UI.Style.TEXT_WARNING}${s}/100${UI.Style.TEXT_NORMAL}` : `${UI.Style.TEXT_DANGER}${s}/100${UI.Style.TEXT_NORMAL}`
+        const hotBadge = leadScore.is_hot_lead ? `  ${success("HOT")}` : ""
+        printKV("Engagement", `${scoreLabel}${hotBadge}`)
+      }
+
       // Render Deal Health — always show (#57659)
       console.log()
       console.log(`  ${bold("Deal Health")}`)
-      if (dealHealth?.payment_gate) {
-        const gate = dealHealth.payment_gate
-        const gateStatus = gate.paid ? success("Paid") : (gate.sent ? dim("Sent — awaiting payment") : dim("Draft"))
+      if (dealHealth?.has_payment_gate) {
+        const gateStatus = dealHealth.payment_received ? success("Paid") : (dealHealth.status === "sent" || dealHealth.status === "awaiting_payment" ? dim("Sent — awaiting payment") : dim(dealHealth.status ?? "Draft"))
         printKV("  Payment Gate", gateStatus)
-        if (gate.amount) printKV("  Amount", `$${(gate.amount / 100).toFixed(2)}`)
+        if (dealHealth.amount) printKV("  Amount", `$${(dealHealth.amount / 100).toFixed(2)}`)
+        // #71783: Show total received (Stripe + offline combined)
+        if (dealHealth.total_received > 0) {
+          printKV("  Total Received", success(`$${Number(dealHealth.total_received).toFixed(2)}`))
+        }
       } else {
         printKV("  Payment Gate", dim("None — create with: iris leads payment-gate " + leadId + " -a 500"))
+      }
+
+      // #71783: Offline payments — show when present (cash, Zelle, Venmo, etc.)
+      const offlineAmt = dealHealth?.offline_received ?? 0
+      if (offlineAmt > 0) {
+        const method = dealHealth.offline_payment_method ? ` via ${dealHealth.offline_payment_method}` : ""
+        const paidAt = dealHealth.offline_paid_at ? dim(` · ${dealHealth.offline_paid_at.split(" ")[0]}`) : ""
+        printKV("  Offline Paid", success(`$${Number(offlineAmt).toFixed(2)}${method}`) + paidAt)
+        if (dealHealth.offline_notes) printKV("  Offline Notes", dim(dealHealth.offline_notes))
       }
 
       // Stripe payments (#57665) — unified financial picture (may include duplicate lead data)
@@ -1727,6 +1788,51 @@ const LeadsPulseCommand = cmd({
           console.log(`    ${dim("○")} ${t.title}${due}${overdueMark}`)
         }
         if (pending.length > 5) console.log(`    ${dim(`…and ${pending.length - 5} more`)}`)
+
+        // #71786: Make overdue tasks actionable — prompt to complete or snooze
+        if (overdue.length > 0 && !isNonInteractive() && !args.json) {
+          console.log()
+          for (const t of overdue.slice(0, 3)) {
+            const action = await prompts.select({
+              message: `Overdue: "${t.title}" (due ${t.due_date?.split("T")[0]})`,
+              options: [
+                { value: "skip", label: "Skip — deal with later" },
+                { value: "complete", label: "Mark complete" },
+                { value: "snooze7", label: "Snooze 7 days" },
+              ],
+            })
+            if (prompts.isCancel(action)) break
+            if (action === "complete") {
+              await irisFetch(`/api/v1/leads/${leadId}/tasks/${t.id}`, {
+                method: "PUT",
+                body: JSON.stringify({ is_completed: true }),
+              }).catch(() => {})
+              console.log(`    ${success("✓")} Completed: ${t.title}`)
+            } else if (action === "snooze7") {
+              const newDate = new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0]
+              await irisFetch(`/api/v1/leads/${leadId}/tasks/${t.id}`, {
+                method: "PUT",
+                body: JSON.stringify({ due_date: newDate }),
+              }).catch(() => {})
+              console.log(`    ${dim("⏰")} Snoozed to ${newDate}: ${t.title}`)
+            }
+          }
+        }
+      }
+
+      // #71785: Unified Activity Timeline — recent activity across all sources
+      if (activities.length > 0) {
+        console.log()
+        console.log(`  ${bold("Recent Activity")}  ${dim(`(${activities.length})`)}`)
+        for (const act of activities.slice(0, 8)) {
+          const icon = act.activity_icon ?? "~"
+          const type = act.activity_type ?? "note"
+          const content = (act.content ?? "").split("\n")[0].slice(0, 100)
+          const dateStr = act.created_at ? dim(` ${String(act.created_at).split("T")[0]}`) : ""
+          const who = act.is_system_generated ? dim(" [system]") : (act.user_name && act.user_name !== "Unknown User" ? dim(` [${act.user_name}]`) : "")
+          console.log(`    ${icon} ${highlight(type.padEnd(18))}${content}${dateStr}${who}`)
+        }
+        if (activities.length > 8) console.log(`    ${dim(`…and ${activities.length - 8} more — iris leads activities ${leadId}`)}`)
       }
 
       // Step 2: Integration pre-flight checks (#57677)
@@ -1834,21 +1940,54 @@ const LeadsPulseCommand = cmd({
           channels.push({ name: "iMessage", messages: [], error: `No phone, email, or name — add with: iris leads update ${leadId} --phone "..."` })
         }
 
-        // #57668: iMessage group chats — scan linked chat IDs from contact_info.chat_ids
-        const chatIds: string[] = Array.isArray(lead.contact_info?.chat_ids) ? lead.contact_info.chat_ids : []
-        for (const chatId of chatIds) {
+        // #71781: iMessage group chats — scan linked chat IDs or auto-discover via bridge
+        let chatIds: string[] = Array.isArray(lead.contact_info?.chat_ids) ? lead.contact_info.chat_ids : []
+        // Auto-discover group chats if none linked and we have a handle
+        if (chatIds.length === 0 && handle) {
           fetches.push(
-            fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`)
+            fetch(`${BRIDGE_BASE}/api/imessage/group-chats?handle=${encodeURIComponent(handle)}&days=${days}&limit=5`, { headers: bridgeHeaders() })
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
-                  channels.push({ name: `iMessage Group (${chatId.slice(0, 12)}…)`, messages: d?.messages ?? [] })
-                } else {
-                  channels.push({ name: `iMessage Group`, messages: [], error: `Chat ${chatId.slice(0, 20)} — HTTP ${r.status}` })
+                  const groups = d?.group_chats ?? []
+                  for (const gc of groups) {
+                    if (gc.recent_count > 0) {
+                      chatIds.push(gc.chat_identifier)
+                    }
+                  }
+                  // Now scan discovered group chats
+                  const gcFetches = chatIds.map((chatId: string) =>
+                    fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`, { headers: bridgeHeaders() })
+                      .then(async (r2) => {
+                        if (r2.ok) {
+                          const d2 = (await r2.json()) as any
+                          const label = groups.find((g: any) => g.chat_identifier === chatId)?.display_name || chatId.slice(0, 12)
+                          channels.push({ name: `iMessage Group (${label})`, messages: d2?.messages ?? [] })
+                        }
+                      })
+                      .catch(() => {}),
+                  )
+                  await Promise.allSettled(gcFetches)
                 }
               })
-              .catch((e) => { channels.push({ name: `iMessage Group`, messages: [], error: e.message }) }),
+              .catch(() => {}), // non-fatal — bridge may not support this yet
           )
+        } else {
+          // Scan explicitly linked chat IDs
+          for (const chatId of chatIds) {
+            fetches.push(
+              fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`, { headers: bridgeHeaders() })
+                .then(async (r) => {
+                  if (r.ok) {
+                    const d = (await r.json()) as any
+                    channels.push({ name: `iMessage Group (${chatId.slice(0, 12)}…)`, messages: d?.messages ?? [] })
+                  } else {
+                    channels.push({ name: `iMessage Group`, messages: [], error: `Chat ${chatId.slice(0, 20)} — HTTP ${r.status}` })
+                  }
+                })
+                .catch((e) => { channels.push({ name: `iMessage Group`, messages: [], error: e.message }) }),
+            )
+          }
         }
 
         // Apple Mail (via local bridge daemon)
@@ -1917,7 +2056,7 @@ const LeadsPulseCommand = cmd({
 
       // JSON output
       if (args.json) {
-        console.log(JSON.stringify({ lead, dealHealth, stripeData, tasks: leadTasks, channels }, null, 2))
+        console.log(JSON.stringify({ lead, dealHealth, stripeData, tasks: leadTasks, score: leadScore, activities, channels }, null, 2))
         prompts.outro("Done")
         return
       }

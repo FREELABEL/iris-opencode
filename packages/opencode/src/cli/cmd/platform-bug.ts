@@ -27,10 +27,8 @@ function collectSystemInfo(): Record<string, string> {
     iris_version: "unknown",
   }
 
-  try {
-    const v = execSync("iris --version", { encoding: "utf-8", timeout: 3000 }).trim()
-    info.iris_version = v
-  } catch {}
+  // Don't call "iris --version" — causes recursive hang in compiled binary
+  info.iris_version = process.env.npm_package_version || "compiled"
 
   // Get last 20 lines of bash history if available
   try {
@@ -167,9 +165,18 @@ const ReportCommand = cmd({
 
     // Interactive mode if no title provided
     if (!title || title.length === 0) {
+      // In --json mode or non-TTY, don't hang on interactive prompts
+      if (args.json || !process.stdin.isTTY) {
+        console.error("Error: --title is required in non-interactive mode")
+        console.error("Usage: iris bug report \"your bug title here\"")
+        process.exitCode = 1
+        return
+      }
+
       console.log("")
       console.log(bold("🐛 Report a Bug"))
       console.log(dim("Help us improve IRIS by reporting issues you encounter."))
+      console.log(dim("Press Ctrl+C to cancel at any time."))
       console.log("")
 
       const t = await prompts.text({

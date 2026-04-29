@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, BRIDGE_URL, getBridgeToken } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
@@ -702,6 +702,130 @@ const StageCreateCommand = cmd({
   },
 })
 
+// ============================================================================
+// Set Times — artist slots on stages
+// ============================================================================
+
+const SetTimesListCommand = cmd({
+  command: "set-times <event-id> <stage-id>",
+  aliases: ["lineup"],
+  describe: "list set times (artist lineup) for a stage",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const stageId = String(args.stageId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Loading lineup…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/stages/${stageId}/set-times`)
+      const ok = await handleApiError(res, "List set times")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const setTimes = data.data || []
+      spinner.stop(success(`${setTimes.length} artist(s) on stage`))
+      if (args.json) { console.log(JSON.stringify(setTimes, null, 2)); return }
+      if (setTimes.length === 0) { prompts.log.info(dim("No set times. Use: iris events add-set-time <event-id> <stage-id> --profile <pk>")); return }
+      printDivider()
+      for (const st of setTimes) {
+        const name = st.profile?.name || st.profile_name || "TBA"
+        const time = [st.start_time, st.end_time].filter(Boolean).join(" - ") || "no time set"
+        const headliner = st.is_headliner ? " ⭐" : ""
+        console.log(`  ${bold(name)}  ${dim(time)}${headliner}`)
+      }
+      printDivider()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("stage-id", { describe: "stage ID", type: "string", demandOption: true })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+const AddSetTimeCommand = cmd({
+  command: "add-set-time <event-id> <stage-id>",
+  aliases: ["add-artist"],
+  describe: "add an artist to a stage lineup",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const stageId = String(args.stageId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Adding artist to lineup…")
+    try {
+      const body: Record<string, unknown> = {}
+      if (args.profile) body.profile_id = String(args.profile)
+      if (args.name) body.profile_name = String(args.name)
+      if (args.start) body.start_time = String(args.start)
+      if (args.end) body.end_time = String(args.end)
+      if (args.date) body.start_date = String(args.date)
+      if (args.headliner) body.is_headliner = true
+
+      const res = await irisFetch(`/api/v1/events/${eventId}/stages/${stageId}/set-times`, { method: "POST", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Add set time")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const st = data.data || data
+      const name = st.profile?.name || st.profile_name || "Artist"
+      spinner.stop(success(`${name} added to lineup`))
+      if (args.json) { console.log(JSON.stringify(st, null, 2)); return }
+      printDivider()
+      printKV("Artist", name)
+      if (st.profile?.id) printKV("Profile", `@${st.profile.id}`)
+      if (st.start_time) printKV("Time", [st.start_time, st.end_time].filter(Boolean).join(" - "))
+      if (st.is_headliner) printKV("Headliner", "⭐ Yes")
+      printDivider()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("stage-id", { describe: "stage ID", type: "string", demandOption: true })
+    .option("profile", { alias: "p", describe: "profile PK (integer)", type: "string" })
+    .option("name", { alias: "n", describe: "artist name (if no profile)", type: "string" })
+    .option("start", { describe: "start time (e.g. 8:00 PM)", type: "string" })
+    .option("end", { describe: "end time (e.g. 8:30 PM)", type: "string" })
+    .option("date", { describe: "date (YYYY-MM-DD)", type: "string" })
+    .option("headliner", { describe: "mark as headliner", type: "boolean" })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+const RemoveSetTimeCommand = cmd({
+  command: "remove-set-time <event-id> <stage-id> <set-time-id>",
+  aliases: ["remove-artist"],
+  describe: "remove an artist from a stage lineup",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const stageId = String(args.stageId)
+    const setTimeId = String(args.setTimeId)
+    await requireAuth()
+    if (!args.force) {
+      const confirm = await prompts.confirm({ message: `Remove set time #${setTimeId}?` })
+      if (!confirm || prompts.isCancel(confirm)) { prompts.outro(dim("Cancelled")); return }
+    }
+    const spinner = prompts.spinner()
+    spinner.start("Removing…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/stages/${stageId}/set-times/${setTimeId}`, { method: "DELETE" })
+      const ok = await handleApiError(res, "Remove set time")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      spinner.stop(success("Artist removed from lineup"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("stage-id", { describe: "stage ID", type: "string", demandOption: true })
+    .positional("set-time-id", { describe: "set time ID", type: "string", demandOption: true })
+    .option("force", { alias: "y", describe: "skip confirmation", type: "boolean" }),
+})
+
 const StageDeleteCommand = cmd({
   command: "stage-delete <event-id> <stage-id>",
   describe: "remove a stage from an event",
@@ -1382,15 +1506,253 @@ const TicketCheckoutCommand = cmd({
 })
 
 // ============================================================================
+// Venue Deal — link/unlink a venue to an event
+// ============================================================================
+
+const LinkVenueCommand = cmd({
+  command: "link-venue <event-id> <venue-id>",
+  aliases: ["venue-deal", "attach-venue"],
+  describe: "link a venue to an event with deal terms",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const venueId = String(args.venueId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Linking venue to event…")
+    try {
+      const body: Record<string, unknown> = {
+        venue_id: Number(venueId),
+        deal_type: String(args.type || "flat_fee"),
+        deal_value_cents: args.amount ? Number(args.amount) * 100 : 0,
+      }
+      if (args.share) body.revenue_share_percent = Number(args.share)
+      if (args.contact) body.contact_name = String(args.contact)
+      if (args.phone) body.contact_phone = String(args.phone)
+      if (args.email) body.contact_email = String(args.email)
+      if (args.notes) body.notes = String(args.notes)
+
+      const res = await irisFetch(`/api/v1/events/${eventId}/venue-deal`, { method: "POST", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Link venue")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const deal = data.data || data
+      spinner.stop(success("Venue linked to event"))
+      if (args.json) { console.log(JSON.stringify(deal, null, 2)); return }
+      printDivider()
+      printKV("Event", `#${eventId}`)
+      printKV("Venue ID", venueId)
+      printKV("Deal Type", deal.deal_type || args.type || "flat_fee")
+      if (deal.deal_value_cents) printKV("Amount", `$${(deal.deal_value_cents / 100).toLocaleString()}`)
+      if (deal.contact_name) printKV("Contact", deal.contact_name)
+      printDivider()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("venue-id", { describe: "venue ID", type: "string", demandOption: true })
+    .option("type", { describe: "deal type (flat_fee or revenue_share)", type: "string", default: "flat_fee" })
+    .option("amount", { describe: "deal amount in dollars", type: "number" })
+    .option("share", { describe: "revenue share %", type: "number" })
+    .option("contact", { describe: "contact name", type: "string" })
+    .option("phone", { describe: "contact phone", type: "string" })
+    .option("email", { describe: "contact email", type: "string" })
+    .option("notes", { describe: "deal notes", type: "string" })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+const UnlinkVenueCommand = cmd({
+  command: "unlink-venue <event-id>",
+  aliases: ["remove-venue"],
+  describe: "remove venue deal from an event",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    await requireAuth()
+    if (!args.force) {
+      const confirm = await prompts.confirm({ message: `Remove venue deal from event #${eventId}?` })
+      if (!confirm || prompts.isCancel(confirm)) { prompts.outro(dim("Cancelled")); return }
+    }
+    const spinner = prompts.spinner()
+    spinner.start("Removing venue deal…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/venue-deal`, { method: "DELETE" })
+      const ok = await handleApiError(res, "Unlink venue")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      spinner.stop(success(`Venue deal removed from event #${eventId}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .option("force", { alias: "y", describe: "skip confirmation", type: "boolean" }),
+})
+
+// ============================================================================
+// Event Leads — attach/manage leads on events
+// ============================================================================
+
+const ListLeadsCommand = cmd({
+  command: "leads <event-id>",
+  aliases: ["people", "roster"],
+  describe: "list leads attached to an event",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Loading event leads…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/leads`)
+      const ok = await handleApiError(res, "List event leads")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const leads = data.data || []
+      spinner.stop(success(`${leads.length} lead(s) on event #${eventId}`))
+      if (args.json) { console.log(JSON.stringify(leads, null, 2)); return }
+      if (leads.length === 0) { prompts.log.info(dim("No leads attached. Use: iris events add-lead <event-id> <lead-id> --role performer")); return }
+      printDivider()
+      for (const el of leads) {
+        const lead = el.lead || {}
+        const name = lead.nickname || lead.name || `Lead #${el.lead_id}`
+        const role = el.role || "—"
+        const status = el.status || "—"
+        const statusIcon = status === "confirmed" ? "✅" : status === "attended" ? "🎯" : status === "invited" ? "📩" : "⏳"
+        console.log(`  ${statusIcon} ${bold(name)}  ${dim(role)}  ${dim(status)}${lead.phone ? "  " + dim(lead.phone) : ""}`)
+      }
+      printDivider()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+const AddLeadCommand = cmd({
+  command: "add-lead <event-id> <lead-id>",
+  aliases: ["attach-lead"],
+  describe: "attach a lead to an event with a role",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const leadId = String(args.leadId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Attaching lead to event…")
+    try {
+      const body: Record<string, unknown> = {
+        lead_id: Number(leadId),
+        role: String(args.role || "prospect"),
+        status: String(args.status || "invited"),
+      }
+      if (args.notes) body.notes = String(args.notes)
+
+      const res = await irisFetch(`/api/v1/events/${eventId}/leads`, { method: "POST", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Add lead to event")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const el = data.data || data
+      const lead = el.lead || {}
+      spinner.stop(success(`${lead.nickname || lead.name || "Lead #" + leadId} added as ${el.role}`))
+      if (args.json) { console.log(JSON.stringify(el, null, 2)); return }
+      printDivider()
+      printKV("Event", `#${eventId}`)
+      printKV("Lead", `#${leadId} — ${lead.nickname || lead.name || "?"}`)
+      printKV("Role", el.role)
+      printKV("Status", el.status)
+      printDivider()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("lead-id", { describe: "lead ID", type: "string", demandOption: true })
+    .option("role", { alias: "r", describe: "role: performer, organizer, judge, staff, vendor_contact, sponsor, speaker, vip, attendee, prospect", type: "string", default: "prospect" })
+    .option("status", { alias: "s", describe: "status: invited, confirmed, attended, no_show, cancelled, waitlisted", type: "string", default: "invited" })
+    .option("notes", { describe: "notes", type: "string" })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+const UpdateLeadCommand = cmd({
+  command: "update-lead <event-id> <lead-id>",
+  describe: "update a lead's role or status on an event",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const leadId = String(args.leadId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+    try {
+      const body: Record<string, unknown> = {}
+      if (args.role) body.role = String(args.role)
+      if (args.status) body.status = String(args.status)
+      if (args.notes) body.notes = String(args.notes)
+
+      const res = await irisFetch(`/api/v1/events/${eventId}/leads/${leadId}`, { method: "PUT", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Update event lead")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const el = data.data || data
+      spinner.stop(success(`Lead #${leadId} updated — ${el.role} / ${el.status}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("lead-id", { describe: "lead ID", type: "string", demandOption: true })
+    .option("role", { alias: "r", describe: "new role", type: "string" })
+    .option("status", { alias: "s", describe: "new status", type: "string" })
+    .option("notes", { describe: "notes", type: "string" }),
+})
+
+const RemoveLeadCommand = cmd({
+  command: "remove-lead <event-id> <lead-id>",
+  aliases: ["detach-lead"],
+  describe: "remove a lead from an event",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    const leadId = String(args.leadId)
+    await requireAuth()
+    if (!args.force) {
+      const confirm = await prompts.confirm({ message: `Remove lead #${leadId} from event #${eventId}?` })
+      if (!confirm || prompts.isCancel(confirm)) { prompts.outro(dim("Cancelled")); return }
+    }
+    const spinner = prompts.spinner()
+    spinner.start("Removing…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/leads/${leadId}`, { method: "DELETE" })
+      const ok = await handleApiError(res, "Remove lead")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      spinner.stop(success(`Lead #${leadId} removed from event #${eventId}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("lead-id", { describe: "lead ID", type: "string", demandOption: true })
+    .option("force", { alias: "y", describe: "skip confirmation", type: "boolean" }),
+})
+
+// ============================================================================
 // Preflight — live system checks before going live
 // ============================================================================
 
-const BRIDGE = BRIDGE_URL
+const BRIDGE = process.env.BRIDGE_URL ?? "http://localhost:3200"
 
 function bHeaders(): Record<string, string> {
-  const t = getBridgeToken()
+  const key = process.env.BRIDGE_KEY || process.env.HIVE_API_KEY || ""
   const h: Record<string, string> = { Accept: "application/json" }
-  if (t) h["X-Bridge-Key"] = t
+  if (key) h["X-Bridge-Key"] = key
   return h
 }
 
@@ -1734,6 +2096,10 @@ export const PlatformEventsCommand = cmd({
       .command(StagesListCommand)
       .command(StageCreateCommand)
       .command(StageDeleteCommand)
+      // Set Times (artist lineup)
+      .command(SetTimesListCommand)
+      .command(AddSetTimeCommand)
+      .command(RemoveSetTimeCommand)
       // Vendors
       .command(VendorsListCommand)
       .command(VendorCreateCommand)
@@ -1744,6 +2110,14 @@ export const PlatformEventsCommand = cmd({
       .command(TicketsPushCommand)
       .command(TicketsDiffCommand)
       .command(TicketCheckoutCommand)
+      // Venue Deals
+      .command(LinkVenueCommand)
+      .command(UnlinkVenueCommand)
+      // Event Leads
+      .command(ListLeadsCommand)
+      .command(AddLeadCommand)
+      .command(UpdateLeadCommand)
+      .command(RemoveLeadCommand)
       // Production QA
       .command(PreflightCommand)
       .command(AuditCommand)

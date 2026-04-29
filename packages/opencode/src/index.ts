@@ -41,6 +41,7 @@ import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
 import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
 import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
 import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventory"
+import { PlatformIntegrationsCommand } from "./cli/cmd/platform-integrations"
 import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
 import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
 import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
@@ -70,6 +71,7 @@ import { PlatformAtlasCommsCommand } from "./cli/cmd/platform-atlas-comms"
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
 import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
+import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
 import { PlatformDoctorCommand } from "./cli/cmd/platform-doctor"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
@@ -205,6 +207,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAtlasLedgerCommand))
   .command(reg(PlatformAtlasStaffCommand))
   .command(reg(PlatformAtlasInventoryCommand))
+  .command(reg(PlatformIntegrationsCommand))
   .command(reg(PlatformSchedulesCommand))
   .command(reg(PlatformN8nCommand))
   .command(reg(PlatformBoardsCommand))
@@ -238,6 +241,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformLeadsMeetingCommand))
   .command(reg(PlatformCampaignCommand))
   .command(reg(PlatformDaemonCommand))
+  .command(reg(PlatformChannelsCommand))
   .command(reg(PlatformDoctorCommand))
   .command(reg(PlatformObsCommand))
   .command(reg(PlatformOnboardCommand))
@@ -294,17 +298,21 @@ if (hasHelp && hasNoCommand) {
   process.exit(0)
 }
 
-// Auto-start daemon if not running (silent, non-blocking)
+// Auto-start bridge+daemon if not running (silent, non-blocking)
+// Prefers iris-bridge (full bridge: express + Discord + iMessage + embedded daemon)
+// Falls back to iris-daemon (daemon only, no messaging bots)
 try {
   const { join: pathJoin } = await import("path")
   const { homedir: osHome } = await import("os")
   const { existsSync } = await import("fs")
+  const bridgeCtl = pathJoin(osHome(), ".iris", "bin", "iris-bridge")
   const daemonCtl = pathJoin(osHome(), ".iris", "bin", "iris-daemon")
-  if (existsSync(daemonCtl)) {
+  const ctl = existsSync(bridgeCtl) ? bridgeCtl : existsSync(daemonCtl) ? daemonCtl : null
+  if (ctl) {
     const health = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(500) }).catch(() => null)
     if (!health?.ok) {
       const { spawn } = await import("child_process")
-      spawn(daemonCtl, ["start"], { detached: true, stdio: "ignore" }).unref()
+      spawn(ctl, ["start"], { detached: true, stdio: "ignore" }).unref()
     }
   }
 } catch {}
