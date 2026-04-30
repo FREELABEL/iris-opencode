@@ -1826,6 +1826,26 @@ const LeadsPulseCommand = cmd({
         }
       }
 
+      // Requirements Health — automated deliverable testing
+      try {
+        const reqRes = await irisFetch(`/api/v1/leads/${leadId}/requirements/summary`)
+        if (reqRes.ok) {
+          const rs = await reqRes.json().catch(() => ({}))
+          if (rs.total > 0) {
+            console.log()
+            console.log(`  ${bold("Requirements Health")}`)
+            const icon = rs.failing > 0 ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}` : success("✓")
+            const statusText = rs.failing > 0
+              ? `${UI.Style.TEXT_DANGER}${rs.passing}/${rs.total} passing (${rs.failing} FAILING)${UI.Style.TEXT_NORMAL}`
+              : success(`${rs.passing}/${rs.total} passing`)
+            console.log(`    ${icon} ${statusText}`)
+            if (rs.untested > 0) console.log(`    ${dim(`${rs.untested} untested`)}`)
+            console.log(`    ${dim(`Last run: ${rs.last_run ? rs.last_run.split("T")[0] : "never"}`)}`)
+            console.log(`    ${dim(`Run: iris leads requirements run ${leadId}`)}`)
+          }
+        }
+      } catch {}
+
       // #71785: Unified Activity Timeline — recent activity across all sources
       if (activities.length > 0) {
         console.log()
@@ -2971,6 +2991,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsRegenCheckoutCommand)
       .command(LeadsCollectCommand)
       .command(LeadsSegmentCommand)
+      .command(LeadsRequirementsCommand)
       .demandCommand(),
   async handler() {},
 })
@@ -3596,6 +3617,270 @@ export const LeadsSegmentCommand = cmd({
       .command(SegmentCreateCommand)
       .command(SegmentViewCommand)
       .command(SegmentDeleteCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
+// Requirements — automated deliverable testing via Hive/Playwright
+// ============================================================================
+
+function generateRequirementSpec(leadName: string, leadId: number, url: string): string {
+  return `// Auto-generated requirements for: ${leadName} (#${leadId})
+// URL: ${url}
+// Generated: ${new Date().toISOString().split("T")[0]}
+import { test, expect } from '@playwright/test';
+
+test.describe('${leadName} — Requirements', () => {
+  const URL = '${url}';
+
+  test('site loads (HTTP < 400)', async ({ page }) => {
+    const res = await page.goto(URL, { waitUntil: 'networkidle', timeout: 60000 });
+    expect(res?.status()).toBeLessThan(400);
+  });
+
+  test('page not blank (>100 chars)', async ({ page }) => {
+    await page.goto(URL, { waitUntil: 'networkidle', timeout: 60000 });
+    const text = await page.textContent('body');
+    expect(text?.trim().length).toBeGreaterThan(100);
+  });
+
+  test('SSL valid (HTTPS)', async ({ page }) => {
+    const res = await page.goto(URL);
+    expect(res?.url()).toMatch(/^https:\\/\\//);
+  });
+
+  test('no console errors', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+    await page.goto(URL, { waitUntil: 'networkidle', timeout: 60000 });
+    expect(errors).toHaveLength(0);
+  });
+
+  test('no broken assets (no 404s)', async ({ page }) => {
+    const broken: string[] = [];
+    page.on('response', r => { if (r.status() >= 400) broken.push(r.url()); });
+    await page.goto(URL, { waitUntil: 'networkidle', timeout: 60000 });
+    expect(broken).toHaveLength(0);
+  });
+});
+`
+}
+
+const ReqCreateCommand = cmd({
+  command: "create <lead-id>",
+  aliases: ["add"],
+  describe: "create a requirement test for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("name", { alias: "n", describe: "requirement name", type: "string", demandOption: true })
+      .option("url", { alias: "u", describe: "URL to test (auto-generates Playwright spec)", type: "string" })
+      .option("script-file", { alias: "f", describe: "path to custom .spec.ts file", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const leadId = args.leadId as number
+
+    // Get lead name for spec generation
+    const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
+    const leadData = await leadRes.json().catch(() => ({}))
+    const leadName = leadData?.data?.name ?? leadData?.lead?.name ?? `Lead #${leadId}`
+
+    let scriptContent: string
+    if (args["script-file"]) {
+      const filePath = isAbsolute(String(args["script-file"])) ? String(args["script-file"]) : join(process.cwd(), String(args["script-file"]))
+      if (!existsSync(filePath)) {
+        prompts.log.error(`File not found: ${filePath}`)
+        return
+      }
+      scriptContent = readFileSync(filePath, "utf-8")
+    } else if (args.url) {
+      scriptContent = generateRequirementSpec(leadName, leadId, String(args.url))
+    } else {
+      prompts.log.error("Either --url or --script-file is required")
+      return
+    }
+
+    const res = await irisFetch(`/api/v1/leads/${leadId}/requirements`, {
+      method: "POST",
+      body: JSON.stringify({ name: args.name, script_content: scriptContent }),
+    })
+    if (!(await handleApiError(res, "Create requirement"))) return
+
+    const body = await res.json().catch(() => ({}))
+
+    if ((args as any).json) { console.log(JSON.stringify(body, null, 2)); return }
+
+    if (body.success) {
+      prompts.log.success(`Requirement "${args.name}" created for ${leadName} (#${leadId})`)
+      if (args.url) console.log(dim(`  Auto-generated 5 checks for ${args.url}`))
+      console.log(dim(`  Run: iris leads requirements run ${leadId}`))
+    } else {
+      prompts.log.error(body.error ?? body.message ?? "Failed")
+    }
+  },
+})
+
+const ReqListCommand = cmd({
+  command: "list <lead-id>",
+  aliases: ["ls"],
+  describe: "list requirements for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/leads/${args.leadId}/requirements`)
+    if (!(await handleApiError(res, "List requirements"))) return
+
+    const body = await res.json().catch(() => ({}))
+    const reqs: any[] = body.data ?? []
+
+    if ((args as any).json) { console.log(JSON.stringify(reqs, null, 2)); return }
+
+    if (reqs.length === 0) {
+      prompts.log.info(`No requirements for lead #${args.leadId}`)
+      console.log(dim(`Create one: iris leads requirements create ${args.leadId} --name "QA" --url "https://..."`))
+      return
+    }
+
+    console.log("")
+    console.log(bold(`Requirements — Lead #${args.leadId} (${reqs.length})`))
+    printDivider()
+    for (const r of reqs) {
+      const statusIcon = r.last_status === "passed" || r.last_status === "completed" ? success("✓")
+        : r.last_status === "failed" ? highlight("✗")
+        : dim("○")
+      const lastRun = r.last_run_at ? dim(r.last_run_at.split("T")[0]) : dim("never run")
+      console.log(`  ${statusIcon}  ${bold(r.name)}  ${dim(`#${r.id}`)}  ${lastRun}`)
+    }
+    printDivider()
+    console.log(dim(`  Run all: iris leads requirements run ${args.leadId}`))
+  },
+})
+
+const ReqRunCommand = cmd({
+  command: "run <lead-id>",
+  aliases: ["test", "check"],
+  describe: "run requirements tests for a lead via Hive",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("name", { alias: "n", describe: "run specific requirement by name", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const leadId = args.leadId as number
+
+    if (!args.json) {
+      console.log("")
+      console.log(bold(`Running requirements for lead #${leadId}...`))
+      printDivider()
+    }
+
+    const url = args.name
+      ? (() => {
+          // Find the specific requirement first, then run it
+          return `/api/v1/leads/${leadId}/requirements/run-all`
+        })()
+      : `/api/v1/leads/${leadId}/requirements/run-all`
+
+    const res = await irisFetch(url, { method: "POST" })
+    if (!(await handleApiError(res, "Run requirements"))) return
+
+    const body = await res.json().catch(() => ({}))
+
+    if ((args as any).json) { console.log(JSON.stringify(body, null, 2)); return }
+
+    if (body.success) {
+      console.log(success(`  ✓ ${body.dispatched}/${body.total} requirements dispatched to Hive`))
+      if (body.failed > 0) console.log(highlight(`  ⚠ ${body.failed} failed to dispatch`))
+      if (body.task_ids?.length) {
+        console.log(dim(`  Task IDs: ${body.task_ids.join(", ")}`))
+      }
+      printDivider()
+      console.log(dim(`  Results will appear in: iris leads requirements list ${leadId}`))
+      console.log(dim(`  Or check pulse: iris leads pulse ${leadId}`))
+    } else {
+      prompts.log.error(body.error ?? "Failed to run requirements")
+    }
+  },
+})
+
+const ReqSummaryCommand = cmd({
+  command: "summary <lead-id>",
+  aliases: ["status", "health"],
+  describe: "show requirements health summary for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/leads/${args.leadId}/requirements/summary`)
+    if (!(await handleApiError(res, "Get summary"))) return
+
+    const s = await res.json().catch(() => ({}))
+
+    if ((args as any).json) { console.log(JSON.stringify(s, null, 2)); return }
+
+    if (s.total === 0) {
+      prompts.log.info(`No requirements for lead #${args.leadId}`)
+      return
+    }
+
+    const icon = s.failing > 0 ? "✗" : "✓"
+    const color = s.failing > 0 ? highlight : success
+
+    console.log("")
+    console.log(bold(`Requirements Health — Lead #${args.leadId}`))
+    printDivider()
+    console.log(`  ${color(`${icon} ${s.passing}/${s.total} passing`)}`)
+    if (s.failing > 0) console.log(`  ${highlight(`${s.failing} FAILING`)}`)
+    if (s.untested > 0) console.log(`  ${dim(`${s.untested} untested`)}`)
+    console.log(`  ${dim(`Last run: ${s.last_run ?? "never"}`)}`)
+    printDivider()
+  },
+})
+
+const ReqDeleteCommand = cmd({
+  command: "delete <lead-id>",
+  aliases: ["rm"],
+  describe: "delete a requirement",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("id", { describe: "requirement ID to delete", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/leads/${args.leadId}/requirements/${args.id}`, { method: "DELETE" })
+    if (!(await handleApiError(res, "Delete requirement"))) return
+
+    const body = await res.json().catch(() => ({}))
+    if ((args as any).json) { console.log(JSON.stringify(body, null, 2)); return }
+    prompts.log.success(body.message ?? "Requirement deleted")
+  },
+})
+
+const LeadsRequirementsCommand = cmd({
+  command: "requirements",
+  aliases: ["reqs", "req"],
+  describe: "manage automated deliverable tests — create, run, monitor",
+  builder: (yargs) =>
+    yargs
+      .command(ReqListCommand)
+      .command(ReqCreateCommand)
+      .command(ReqRunCommand)
+      .command(ReqSummaryCommand)
+      .command(ReqDeleteCommand)
       .demandCommand(),
   async handler() {},
 })
