@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API, resolveUserId } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, FL_API, IRIS_API, resolveUserId } from "./iris-api"
 import { homedir, platform, release, arch, hostname, userInfo } from "os"
 import { join } from "path"
 import { existsSync, readFileSync } from "fs"
@@ -30,13 +30,20 @@ function collectSystemInfo(): Record<string, string> {
   // Don't call "iris --version" — causes recursive hang in compiled binary
   info.iris_version = process.env.npm_package_version || "compiled"
 
-  // Get last 20 lines of bash history if available
+  // Get recent iris commands from bash history (cap read to avoid slow I/O on huge files)
   try {
     const histPath = join(homedir(), ".bash_history")
     if (existsSync(histPath)) {
-      const lines = readFileSync(histPath, "utf-8")
+      // Read only the last 8KB to avoid hanging on multi-MB history files
+      const fd = require("fs").openSync(histPath, "r")
+      const stat = require("fs").fstatSync(fd)
+      const readSize = Math.min(stat.size, 8192)
+      const buf = Buffer.alloc(readSize)
+      require("fs").readSync(fd, buf, 0, readSize, Math.max(0, stat.size - readSize))
+      require("fs").closeSync(fd)
+      const lines = buf.toString("utf-8")
         .split("\n")
-        .filter((l) => l.includes("iris"))
+        .filter((l: string) => l.includes("iris"))
         .slice(-10)
       info.recent_iris_commands = lines.join(" | ")
     }
@@ -61,19 +68,34 @@ async function submitBug(args: {
   const reporter = `${sysInfo.user}@${sysInfo.hostname}`
 
   // POST to public bug report endpoint — no auth required, always writes to user 193's bloq
-  const res = await fetch(`${IRIS_API}${BUG_REPORT_ENDPOINT}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      title: args.title,
-      description: args.description,
-      severity: args.severity,
-      reporter,
-      system_info: sysInfo,
-      command: args.command ?? null,
-      error: args.error ?? null,
-    }),
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15000)
+
+  let res: Response
+  try {
+    res = await fetch(`${FL_API}${BUG_REPORT_ENDPOINT}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        title: args.title,
+        description: args.description,
+        severity: args.severity,
+        reporter,
+        system_info: sysInfo,
+        command: args.command ?? null,
+        error: args.error ?? null,
+      }),
+      signal: controller.signal,
+    })
+  } catch (e: any) {
+    clearTimeout(timeout)
+    if (e.name === "AbortError") {
+      throw new Error(`Bug report timed out after 15s. Check your network connection and try again.`)
+    }
+    throw new Error(`Network error submitting bug report: ${e.message}`)
+  } finally {
+    clearTimeout(timeout)
+  }
 
   if (!res.ok) {
     const text = await res.text()
