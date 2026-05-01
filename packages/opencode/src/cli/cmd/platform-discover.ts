@@ -184,6 +184,106 @@ const SponsorsCommand = cmd({
 })
 
 // ============================================================================
+// Streamers subcommand (same pattern as sponsors, config key: discover.streamers)
+// ============================================================================
+
+const StreamersListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list featured streamers on the discover page",
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Featured Streamers")
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+    try {
+      const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
+      if (!res.ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = (await res.json()) as any
+      const streamers: string[] = data?.data?.streamers ?? []
+      spinner.stop(`${streamers.length} streamer(s)`)
+      if (args.json) { console.log(JSON.stringify({ streamers }, null, 2)); prompts.outro("Done"); return }
+      printDivider()
+      if (streamers.length === 0) { console.log(`  ${dim("No streamers configured")}`) }
+      else { for (const s of streamers) console.log(`  ${bold(s)}  ${dim(`→ /@${s}`)}`) }
+      console.log()
+      printDivider()
+      prompts.outro(dim("iris discover streamers add <username>  |  iris discover streamers remove <username>"))
+    } catch (err) { spinner.stop("Error", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done") }
+  },
+})
+
+const StreamersAddCommand = cmd({
+  command: "add <username>",
+  describe: "add a featured streamer to the discover page",
+  builder: (yargs) => yargs.positional("username", { describe: "profile username", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Add Streamer: ${args.username}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+    try {
+      const getRes = await irisFetch("/api/v1/platform-config/discover.streamers")
+      let streamers: string[] = getRes.ok ? ((await getRes.json()) as any)?.data?.value ?? [] : []
+      if (streamers.includes(args.username)) { spinner.stop(`${args.username} is already a streamer`); prompts.outro("Done"); return }
+      streamers.push(args.username)
+      const putRes = await irisFetch("/api/v1/platform-config/discover.streamers", { method: "PUT", body: JSON.stringify({ value: streamers }) })
+      const ok = await handleApiError(putRes, "Add streamer")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop(`${success("✓")} Added ${bold(args.username)}`)
+      printDivider()
+      console.log(`  ${dim("Current streamers:")} ${streamers.join(", ")}`)
+      printDivider()
+      prompts.outro(dim("iris discover streamers list"))
+    } catch (err) { spinner.stop("Error", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done") }
+  },
+})
+
+const StreamersRemoveCommand = cmd({
+  command: "remove <username>",
+  aliases: ["rm", "delete"],
+  describe: "remove a featured streamer from the discover page",
+  builder: (yargs) => yargs.positional("username", { describe: "profile username to remove", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Remove Streamer: ${args.username}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+    try {
+      const getRes = await irisFetch("/api/v1/platform-config/discover.streamers")
+      let streamers: string[] = getRes.ok ? ((await getRes.json()) as any)?.data?.value ?? [] : []
+      if (!streamers.includes(args.username)) { spinner.stop(`${args.username} is not a streamer`); prompts.outro("Done"); return }
+      streamers = streamers.filter((s) => s !== args.username)
+      const putRes = await irisFetch("/api/v1/platform-config/discover.streamers", { method: "PUT", body: JSON.stringify({ value: streamers }) })
+      const ok = await handleApiError(putRes, "Remove streamer")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop(`${success("✓")} Removed ${bold(args.username)}`)
+      printDivider()
+      console.log(`  ${dim("Remaining streamers:")} ${streamers.length > 0 ? streamers.join(", ") : "(none)"}`)
+      printDivider()
+      prompts.outro(dim("iris discover streamers list"))
+    } catch (err) { spinner.stop("Error", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done") }
+  },
+})
+
+const StreamersCommand = cmd({
+  command: "streamers",
+  describe: "manage featured streamers on the discover page",
+  builder: (yargs) =>
+    yargs
+      .command(StreamersListCommand)
+      .command(StreamersAddCommand)
+      .command(StreamersRemoveCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root discover command
 // ============================================================================
 
@@ -193,6 +293,7 @@ export const PlatformDiscoverCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(SponsorsCommand)
+      .command(StreamersCommand)
       .demandCommand(),
   async handler() {},
 })
