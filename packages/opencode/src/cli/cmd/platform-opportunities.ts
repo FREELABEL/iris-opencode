@@ -163,16 +163,28 @@ const CreateCommand = cmd({
       if (prompts.isCancel(title)) { prompts.outro("Cancelled"); return }
     }
 
+    let description = args.description
+    if (!description) {
+      description = (await prompts.text({ message: "Description", validate: (x) => (x && x.length > 0 ? undefined : "Required") })) as string
+      if (prompts.isCancel(description)) { prompts.outro("Cancelled"); return }
+    }
+
+    let skills = args.skills
+    if (!skills) {
+      const skillsInput = (await prompts.text({ message: "Skills (comma-separated, or leave empty)", defaultValue: "" })) as string
+      if (prompts.isCancel(skillsInput)) { prompts.outro("Cancelled"); return }
+      skills = skillsInput || undefined
+    }
+
     const spinner = prompts.spinner()
     spinner.start("Creating…")
 
     try {
-      const payload: Record<string, unknown> = { title }
-      if (args.description) payload.description = args.description
-      if (args.skills) payload.skills = args.skills.split(",").map((s: string) => s.trim())
-      if (args["min-budget"]) payload.min_budget = args["min-budget"]
-      if (args["max-budget"]) payload.max_budget = args["max-budget"]
-      if (args.deadline) payload.deadline = args.deadline
+      const payload: Record<string, unknown> = { title, description }
+      if (skills) payload.skills_required = skills.split(",").map((s: string) => s.trim())
+      if (args["min-budget"]) payload.price_min = args["min-budget"]
+      if (args["max-budget"]) payload.price_max = args["max-budget"]
+      if (args.deadline) payload.application_deadline = args.deadline
 
       const res = await irisFetch("/api/v1/marketplace/opportunities", { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create opportunity")
@@ -278,8 +290,8 @@ const PushCommand = cmd({
 
       const entity = JSON.parse(readFileSync(filepath, "utf-8"))
       const payload: Record<string, unknown> = {
-        title: entity.title, description: entity.description, skills: entity.skills,
-        min_budget: entity.min_budget, max_budget: entity.max_budget, deadline: entity.deadline,
+        title: entity.title, description: entity.description, skills_required: entity.skills_required ?? entity.skills,
+        price_min: entity.price_min ?? entity.min_budget, price_max: entity.price_max ?? entity.max_budget, application_deadline: entity.application_deadline ?? entity.deadline,
       }
       for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
 

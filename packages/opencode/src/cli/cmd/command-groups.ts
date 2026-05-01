@@ -134,6 +134,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   events: "entities",
   venues: "entities",
   programs: "entities",
+  discover: "entities",
   opportunities: "entities",
   packages: "entities",
   profile: "entities",

@@ -518,7 +518,7 @@ const N8nDispatchCommand = cmd({
       return
     }
 
-    const IRIS_API_URL = process.env.IRIS_API_URL ?? "https://fl-iris-api-v5-mnmol.ondigitalocean.app"
+    const IRIS_API_URL = process.env.IRIS_API_URL ?? "https://freelabel.net"
     const nodeId = args["node-id"] ?? process.env.IRIS_NODE_ID ?? ""
 
     const payload = {
