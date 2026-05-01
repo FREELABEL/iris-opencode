@@ -43,47 +43,47 @@ const RevenueDashboardCommand = cmd({
     // Goal vs Reality
     printKV("  Target", `${fmtMoney(g.target_mrr)}/mo  (${fmtMoney(g.target_arr)}/yr)`)
     printKV("  Stripe (confirmed)", `${success(fmtMoney(r.stripe_mrr) + "/mo")}  ${dim(`${r.stripe_active_subscriptions ?? 0} subscriptions`)}`)
-    printKV("  Stripe total paid", fmtMoney(r.stripe_total_paid))
+    printKV("  Gap", highlight(fmtMoney(s.gap) + "/mo"))
     console.log("")
 
-    // Pipeline
-    console.log(bold("  Pipeline"))
-    if (p.won?.count > 0) console.log(`    ${highlight(fmtMoney(p.won.total) + "/mo")}  ${p.won.count} Won clients  ${dim("(not yet on Stripe)")}`)
-    if (p.negotiation?.count > 0) console.log(`    ${dim(fmtMoney(p.negotiation.total) + "/mo")}  ${p.negotiation.count} In Negotiation`)
-    printKV("  Pipeline total", fmtMoney(p.total))
-    printKV("  If all converts", `${fmtMoney(s.total_if_converts)}/mo  (${fmtMoney((s.total_if_converts ?? 0) * 12)}/yr)`)
-    console.log("")
+    // Pipeline as lead list
+    const clients = p.clients ?? []
+    const won = clients.filter((c: any) => ["won", "active"].includes((c.status ?? "").toLowerCase()))
+    const neg = clients.filter((c: any) => !["won", "active"].includes((c.status ?? "").toLowerCase()))
 
-    // Gap + Recommendations
-    const pricing = data.pricing ?? {}
-    console.log(bold("  Gap Analysis"))
-    if (s.gap > 0) {
-      printKV("    Gap to goal", highlight(fmtMoney(s.gap) + "/mo"))
-      if (pricing.starter) printKV(`    Need at Starter (${fmtMoney(pricing.starter)})`, `${rec.clients_needed_at_starter} more clients`)
-      if (pricing.growth) printKV(`    Need at Growth (${fmtMoney(pricing.growth)})`, `${rec.clients_needed_at_growth} more clients`)
-      if (pricing.platform) printKV(`    Need at Platform (${fmtMoney(pricing.platform)})`, `${rec.clients_needed_at_platform} more clients`)
-      if (rec.avg_deal_size > 0) {
-        printKV(`    Need at avg deal (${fmtMoney(rec.avg_deal_size)})`, `${rec.clients_needed_at_avg} more clients`)
+    console.log(bold(`  Pipeline — ${won.length} Won, ${neg.length} In Negotiation`))
+    printDivider()
+    if (won.length > 0) {
+      console.log(dim("  Won (get on Stripe):"))
+      for (const c of won.slice(0, 10)) {
+        console.log(`    ${dim(`#${c.id}`)}  ${c.name}${c.company ? `  ${dim(c.company)}` : ""}`)
       }
+      if (won.length > 10) console.log(`    ${dim(`…and ${won.length - 10} more`)}`)
+    }
+    if (neg.length > 0) {
+      console.log(dim("  In Negotiation (close these):"))
+      for (const c of neg.slice(0, 10)) {
+        console.log(`    ${dim(`#${c.id}`)}  ${c.name}${c.company ? `  ${dim(c.company)}` : ""}`)
+      }
+      if (neg.length > 10) console.log(`    ${dim(`…and ${neg.length - 10} more`)}`)
+    }
+    console.log("")
+
+    // Recommendations
+    const pricing = data.pricing ?? {}
+    if (s.gap > 0) {
+      console.log(bold("  To close the gap:"))
+      printDivider()
+      if (pricing.starter) printKV(`    Starter ($${pricing.starter})`, `${rec.clients_needed_at_starter} clients`)
+      if (pricing.growth) printKV(`    Growth ($${pricing.growth})`, `${rec.clients_needed_at_growth} clients`)
+      if (pricing.platform) printKV(`    Platform ($${pricing.platform})`, `${rec.clients_needed_at_platform} clients`)
+      console.log("")
+      printKV("    Conversion rate", `${rec.conversion_rate}% (${rec.won_leads} won / ${(rec.total_leads ?? 0).toLocaleString()} leads)`)
       if (rec.leads_needed_at_current_rate) {
-        console.log("")
-        printKV("    Conversion rate", `${rec.conversion_rate}% (${rec.won_leads}/${rec.total_leads})`)
-        printKV("    Leads needed at this rate", `~${rec.leads_needed_at_current_rate.toLocaleString()} prospected leads`)
+        printKV("    Leads needed", `~${rec.leads_needed_at_current_rate.toLocaleString()} at current rate`)
       }
     } else {
-      console.log(`    ${success("Goal met! Pipeline covers the target.")}`)
-    }
-
-    // Top pipeline clients
-    const clients = p.clients ?? []
-    if (clients.length > 0) {
-      console.log("")
-      console.log(bold("  Top Pipeline Clients"))
-      for (const c of clients.slice(0, 10)) {
-        const st = (c.status ?? "").toLowerCase().includes("won") ? success(c.status) : dim(c.status)
-        console.log(`    ${dim(`#${c.id}`)}  ${c.name}${c.company ? `  ${dim(c.company)}` : ""}  ${fmtMoney(c.price_bid)}  ${st}`)
-      }
-      if (clients.length > 10) console.log(`    ${dim(`…and ${clients.length - 10} more`)}`)
+      console.log(`  ${success("Goal met!")}`)
     }
 
     printDivider()
