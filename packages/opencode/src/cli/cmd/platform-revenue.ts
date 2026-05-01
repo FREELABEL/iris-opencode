@@ -55,13 +55,15 @@ const RevenueDashboardCommand = cmd({
     console.log("")
 
     // Gap + Recommendations
+    const pricing = data.pricing ?? {}
     console.log(bold("  Gap Analysis"))
     if (s.gap > 0) {
       printKV("    Gap to goal", highlight(fmtMoney(s.gap) + "/mo"))
-      printKV("    Need at $250/client", `${rec.clients_needed_at_250} more clients`)
-      printKV("    Need at $500/client", `${rec.clients_needed_at_500} more clients`)
-      if (rec.avg_deal_size > 0 && Math.round(rec.avg_deal_size) !== 250) {
-        printKV(`    Need at avg (${fmtMoney(rec.avg_deal_size)})`, `${rec.clients_needed_at_avg} more clients`)
+      if (pricing.starter) printKV(`    Need at Starter (${fmtMoney(pricing.starter)})`, `${rec.clients_needed_at_starter} more clients`)
+      if (pricing.growth) printKV(`    Need at Growth (${fmtMoney(pricing.growth)})`, `${rec.clients_needed_at_growth} more clients`)
+      if (pricing.platform) printKV(`    Need at Platform (${fmtMoney(pricing.platform)})`, `${rec.clients_needed_at_platform} more clients`)
+      if (rec.avg_deal_size > 0) {
+        printKV(`    Need at avg deal (${fmtMoney(rec.avg_deal_size)})`, `${rec.clients_needed_at_avg} more clients`)
       }
       if (rec.leads_needed_at_current_rate) {
         console.log("")
