@@ -8,7 +8,7 @@ $IRIS_DIR = "$env:USERPROFILE\.iris"
 
 # ─── Parse environment overrides ──────────────────────────────────────────────
 $RequestedVersion = if ($env:VERSION) { $env:VERSION } else { "" }
-$IrisApiUrl = if ($env:IRIS_API_URL) { $env:IRIS_API_URL } else { "https://web.heyiris.io" }
+$IrisApiUrl = if ($env:IRIS_API_URL) { $env:IRIS_API_URL } else { "https://freelabel.net" }
 
 # ─── Helper: colored output ──────────────────────────────────────────────────
 function Write-Step {
@@ -313,7 +313,7 @@ function Register-Hive {
             -Body $Body -TimeoutSec 10 -ErrorAction Stop
         if ($resp.node_key) {
             New-Item -ItemType Directory -Force -Path $IRIS_DIR | Out-Null
-            $cfg = @{ node_api_key = $resp.node_key; user_id = [int]$HiveUserId; api_url = "https://fl-iris-api-v5-mnmol.ondigitalocean.app" } | ConvertTo-Json
+            $cfg = @{ node_api_key = $resp.node_key; user_id = [int]$HiveUserId; api_url = "https://freelabel.net" } | ConvertTo-Json
             Set-Content -Path $CONFIG_JSON -Value $cfg -Encoding UTF8
             Write-Host "  Machine registered as Hive compute node" -ForegroundColor Green
             return
