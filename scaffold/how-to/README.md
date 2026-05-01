@@ -12,6 +12,12 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "send a proposal", "create a deal", "invoice a client", "contract", "payment gate" | `lead-to-proposal.md` |
 | "manage deals", "deal pipeline", "deal status", "payment reminder", "stale deals", "win-back", "recover deal" | `deals.md` |
 | "build a page", "create a landing page", "genesis", "add components", "page builder" | `pages.md` |
+| "dataset", "schema", "custom data", "store records", "atlas datasets", "create a tracker" | `atlas-datasets.md` |
+| "expose data", "REST API", "public endpoint", "serve data", "embed dataset", "dashboard API" | `expose-dataset-api.md` |
+| "pathways", "CFO", "cases", "servis ai", "quickbooks", "billing audit", "service AI sync" | `pathways-cfo-workflow.md` |
+| "track finances", "ledger", "transactions", "revenue", "expenses", "accounts" | `track-finances-atlas-ledger.md` |
+| "staff", "contractors", "team", "contracts", "signing" | `manage-staff-and-contracts.md` |
+| "events", "venue", "stages", "set times", "vendors", "tickets" | `event-production.md` |
 
 ## How to use these files
 

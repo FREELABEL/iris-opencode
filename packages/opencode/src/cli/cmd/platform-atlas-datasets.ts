@@ -95,11 +95,74 @@ const SchemaShowCommand = cmd({
   },
 })
 
+const SchemaCreateCommand = cmd({
+  command: "create",
+  aliases: ["new"],
+  describe: "create a new dataset schema",
+  builder: (y) =>
+    y
+      .option("name", { type: "string", demandOption: true, describe: "schema name" })
+      .option("slug", { type: "string", describe: "url-safe slug (auto from name if omitted)" })
+      .option("bloq", { type: "number", describe: "bloq ID to scope to" })
+      .option("fields", { type: "string", describe: "JSON fields definition or path to .json file" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Create Schema")
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    let fields: any = null
+    if (args.fields) {
+      try {
+        // Try as file path first
+        if (args.fields.endsWith(".json") && fs.existsSync(args.fields)) {
+          fields = JSON.parse(fs.readFileSync(args.fields, "utf8"))
+        } else {
+          fields = JSON.parse(args.fields)
+        }
+      } catch {
+        prompts.log.error("Invalid JSON for --fields")
+        prompts.outro("Done")
+        return
+      }
+    } else {
+      // Interactive: ask for fields
+      const fieldsDef = await prompts.text({
+        message: "Define fields as JSON (or press Enter for empty schema):",
+        placeholder: '{"fields": [{"key": "name", "label": "Name", "type": "text", "required": true}]}',
+      })
+      if (prompts.isCancel(fieldsDef)) { prompts.outro("Done"); return }
+      if (fieldsDef && String(fieldsDef).trim()) {
+        try { fields = JSON.parse(String(fieldsDef)) } catch { prompts.log.error("Invalid JSON"); prompts.outro("Done"); return }
+      } else {
+        fields = { fields: [] }
+      }
+    }
+
+    const body: Record<string, any> = { name: args.name, fields }
+    if (args.slug) body.slug = args.slug
+    if (args.bloq != null) body.bloq_id = args.bloq
+
+    const spinner = prompts.spinner()
+    spinner.start("Creating…")
+    try {
+      const res = await irisFetch("/api/v1/atlas/schemas", { method: "POST", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Create schema"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = ((await res.json()) as any)?.data
+      spinner.stop(`Created: ${bold(data?.slug ?? args.name)}`)
+      prompts.outro(`iris atlas:datasets records list --schema=${data?.slug ?? args.name}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const SchemasGroup = cmd({
   command: "schemas",
   aliases: ["schema"],
   describe: "manage dataset schemas",
-  builder: (y) => y.command(SchemaListCommand).command(SchemaShowCommand).demandCommand(),
+  builder: (y) => y.command(SchemaListCommand).command(SchemaShowCommand).command(SchemaCreateCommand).demandCommand(),
   async handler() {},
 })
 
@@ -478,6 +541,179 @@ const AuditCommand = cmd({
   },
 })
 
+// ── RECORDS WRITE COMMANDS ───────────────────────────────────────────────────
+
+const RecordsAddCommand = cmd({
+  command: "add",
+  aliases: ["create"],
+  describe: "add a record to a dataset",
+  builder: (y) =>
+    y
+      .option("schema", { type: "string", demandOption: true, alias: "s" })
+      .option("data", { type: "string", describe: "JSON data or path to .json file" })
+      .option("external-id", { type: "string", describe: "external ID for dedup" })
+      .option("bloq", { type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Add Record: ${args.schema}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    let data: any = {}
+    if (args.data) {
+      try {
+        if (args.data.endsWith(".json") && fs.existsSync(args.data)) {
+          data = JSON.parse(fs.readFileSync(args.data, "utf8"))
+        } else {
+          data = JSON.parse(args.data)
+        }
+      } catch { prompts.log.error("Invalid JSON for --data"); prompts.outro("Done"); return }
+    } else {
+      const raw = await prompts.text({ message: "Record data (JSON):", placeholder: '{"name": "value"}' })
+      if (prompts.isCancel(raw)) { prompts.outro("Done"); return }
+      try { data = JSON.parse(String(raw)) } catch { prompts.log.error("Invalid JSON"); prompts.outro("Done"); return }
+    }
+
+    const body: Record<string, any> = { data }
+    if (args["external-id"]) body.external_id = args["external-id"]
+    if (args.bloq != null) body.bloq_id = args.bloq
+
+    const spinner = prompts.spinner()
+    spinner.start("Creating…")
+    try {
+      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}`, { method: "POST", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Create record"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const result = ((await res.json()) as any)?.data
+      spinner.stop(`Created #${result?.id ?? "?"}`)
+      prompts.outro(`iris atlas:datasets records show ${result?.id ?? ""} -s ${args.schema}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const RecordsUpdateCommand = cmd({
+  command: "update <id>",
+  aliases: ["edit"],
+  describe: "update a record",
+  builder: (y) =>
+    y
+      .positional("id", { type: "number", demandOption: true })
+      .option("schema", { type: "string", demandOption: true, alias: "s" })
+      .option("data", { type: "string", describe: "JSON data to merge" })
+      .option("set", { type: "string", describe: "key=value pairs (repeatable)", array: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Update Record #${args.id}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    let data: any = {}
+    if (args.data) {
+      try { data = JSON.parse(args.data) } catch { prompts.log.error("Invalid JSON for --data"); prompts.outro("Done"); return }
+    }
+    // Parse --set key=value pairs
+    for (const s of args.set ?? []) {
+      const [key, ...rest] = s.split("=")
+      if (key && rest.length) {
+        let val: any = rest.join("=")
+        try { val = JSON.parse(val) } catch { /* keep as string */ }
+        data[key] = val
+      }
+    }
+
+    if (Object.keys(data).length === 0) {
+      prompts.log.error("No data provided. Use --data '{...}' or --set key=value")
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+    try {
+      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/${args.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ data }),
+      })
+      const ok = await handleApiError(res, "Update record"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop("Updated")
+      prompts.outro(`iris atlas:datasets records show ${args.id} -s ${args.schema}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const RecordsDeleteCommand = cmd({
+  command: "delete <id>",
+  aliases: ["rm", "remove"],
+  describe: "delete a record",
+  builder: (y) =>
+    y
+      .positional("id", { type: "number", demandOption: true })
+      .option("schema", { type: "string", demandOption: true, alias: "s" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Delete Record #${args.id}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const confirm = await prompts.confirm({ message: `Delete record #${args.id}?` })
+    if (prompts.isCancel(confirm) || !confirm) { prompts.outro("Cancelled"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Deleting…")
+    try {
+      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/${args.id}`, { method: "DELETE" })
+      const ok = await handleApiError(res, "Delete record"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop("Deleted")
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const RecordsUpsertCommand = cmd({
+  command: "upsert",
+  aliases: ["sync"],
+  describe: "create or update a record by external ID",
+  builder: (y) =>
+    y
+      .option("schema", { type: "string", demandOption: true, alias: "s" })
+      .option("external-id", { type: "string", demandOption: true, describe: "external ID for dedup" })
+      .option("data", { type: "string", demandOption: true, describe: "JSON data" })
+      .option("bloq", { type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Upsert: ${args["external-id"]}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    let data: any
+    try { data = JSON.parse(args.data) } catch { prompts.log.error("Invalid JSON"); prompts.outro("Done"); return }
+
+    const body: Record<string, any> = { external_id: args["external-id"], data }
+    if (args.bloq != null) body.bloq_id = args.bloq
+
+    const spinner = prompts.spinner()
+    spinner.start("Upserting…")
+    try {
+      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/upsert`, { method: "POST", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Upsert"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const result = ((await res.json()) as any)
+      spinner.stop(result?.message ?? "Done")
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 // ── COMMAND GROUPS ────────────────────────────────────────────────────────────
 
 const RecordsGroup = cmd({
@@ -485,7 +721,9 @@ const RecordsGroup = cmd({
   aliases: ["data", "rows"],
   describe: "manage records in a dataset",
   builder: (y) =>
-    y.command(RecordsListCommand).command(RecordsShowCommand).command(RecordsSummaryCommand).demandCommand(),
+    y.command(RecordsListCommand).command(RecordsShowCommand).command(RecordsSummaryCommand)
+     .command(RecordsAddCommand).command(RecordsUpdateCommand).command(RecordsDeleteCommand)
+     .command(RecordsUpsertCommand).demandCommand(),
   async handler() {},
 })
 

@@ -21,7 +21,7 @@ function publicUrl(slugOrPage: string | { public_url?: string; slug?: string }):
   const env = process.env.IRIS_ENV ?? "production"
   return env === "local"
     ? `http://local.iris.freelabel.net:9300/p/${slug}`
-    : `https://heyiris.io/p/${slug}`
+    : `https://freelabel.net/p/${slug}`
 }
 
 // Pages CRUD routes through iris-api (which proxies to fl-api with service token).
@@ -243,6 +243,21 @@ const SetCmd = cmd({
       const json = page.json_content ?? {}
       const parsed = parseValue(args.value)
       setNestedValue(json, args.path, parsed)
+
+      // Validate components if the update touches json_content.components
+      if (args.path.startsWith("json_content.components") || args.path === "json_content") {
+        const target = args.path === "json_content" ? parsed : json
+        const validation = await validateComponents(target)
+        if (!validation.valid) {
+          sp.stop("Validation failed", 1)
+          for (const err of validation.errors) {
+            if (err) prompts.log.error(err)
+          }
+          prompts.outro("Done")
+          return
+        }
+      }
+
       const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
         method: "PUT",
         body: JSON.stringify({ json_content: json }),
@@ -337,7 +352,7 @@ const PushCmd = cmd({
       }
 
       // Validate component types BEFORE pushing
-      const validation = validateComponents(jsonContent)
+      const validation = await validateComponents(jsonContent)
       if (!validation.valid) {
         sp.stop("Validation failed", 1)
         for (const err of validation.errors) {
@@ -679,19 +694,73 @@ const RollbackCmd = cmd({
 
 // ============================================================================
 // Component Validation — reject invalid types before push/create
+//
+// SINGLE SOURCE OF TRUTH: .schema.json files in iris-api PageBuilder directory.
+// The CLI fetches valid types from the API at /v1/pages/schema-registry.
+// Fallback to a hardcoded set if the API is unreachable.
 // ============================================================================
 
-const VALID_COMPONENT_TYPES = new Set([
-  "Hero", "SiteNavigation", "SiteFooter", "AnnouncementBanner",
-  "TestimonialsSection", "TeamSection", "ContactSection", "LogoMarquee",
-  "FeatureShowcase", "ComparisonMatrix", "ClientGrid", "CareersListing",
-  "PortfolioGallery", "ProductGrid", "ServiceMenu", "EventGrid",
-  "FundingTiers", "BeforeAfter", "MapSection", "NewsletterSignup",
-  "StepWizard", "FileUpload", "ShoppingCart", "OrderConfirmation",
-  "ProtectionPicker", "VehicleGrid",
+// Fallback list — only used when API is unreachable.
+// Auto-generated from 152 .schema.json files in PageBuilder/
+const FALLBACK_COMPONENT_TYPES = new Set([
+  "ActivityFeed", "AgencyHero", "AgentCompatibilityStrip", "AgentExamples", "AllCasesGrid", "AnnouncementBanner",
+  "ApexChart", "AppDownloadCard", "AppDownloadGrid", "ArticleAuthorBlock", "ArticleBodyBlock", "ArticleHeroBlock",
+  "BeforeAfter", "BenefitsSection", "BlogGrid", "BookingCalendar", "BookingWizard", "ButtonCTA",
+  "CareersListing", "CaseCard", "CaseEconomics", "CaseEditorChatPanel", "CaseEditorContent", "CaseEditorModal",
+  "CaseEditorSidebar", "CasePipelineBoard", "CaseSlidePanel", "CategoryFilterBar", "ChatPanel", "ClientGrid",
+  "CodeShowcase", "CommunityCTA", "ComparisonCards", "ComparisonMatrix", "ContactSection", "DataChart",
+  "DataTable", "DemandTracker", "EarningsTable", "EditorialComparison", "EditorialSection", "EnrollmentForm",
+  "EventAdminPanel", "EventCalendar", "EventGrid", "EventHeroBlock", "EventStaffBlock", "EventTicketsBlock",
+  "EventVendorsBlock", "FAQAccordion", "FeatureCardsGrid", "FeatureComparisonTable", "FeatureGrid", "FeatureIconsGrid",
+  "FeatureShowcase", "FeatureTabs", "FeedCard", "FeedFilterBar", "FeedHero", "FeedLayout",
+  "FeedSidebar", "FileUpload", "FilterTabBar", "FundingTiers", "GettingStartedSteps", "Hero",
+  "IconBlockGrid", "ImageBanner", "ImageBlock", "ImageGallery", "InstagramFeed", "InstallInstructions",
+  "IntegrationsGrid", "IrisNavigation", "JumbotronHero", "KanbanBoard", "LeadershipGrid", "LogoMarquee",
+  "LogoStrip", "MapSection", "MarketingHero", "MembershipCards", "NewsletterBodyBlock", "NewsletterHeaderBlock",
+  "NewsletterSignup", "NodeSpecsGrid", "OrderConfirmation", "PortfolioGallery", "PortfolioGrid", "PricingPlans",
+  "PricingRows", "PricingTiers", "ProcessSteps", "ProcessTimeline", "ProductCard", "ProductDetailCard",
+  "ProductGrid", "ProductQuickView", "ProductReviews", "ProductShowcase", "ProfileContent", "ProfileEvents",
+  "ProfileHeader", "ProfileMemberships", "ProfileServices", "ProfileSocialFeed", "ProfileTwitchEmbed", "ProgressTracker",
+  "ProjectTimeline", "PromoBanner", "ProtectionPicker", "QuickActions", "QuoteBlock", "RoleSelector",
+  "ScatteredImageHero", "ScrollShowcase", "Section", "ServiceDetail", "ServiceListing", "ServiceMenu",
+  "ServicesGrid", "ShopNavigation", "ShoppingCart", "SiteFooter", "SiteNavigation", "SkillsGrid",
+  "SplitAccordion", "SplitContent", "StatsCounter", "StatsSection", "StepWizard", "Survey",
+  "TaskQueueList", "TeamSection", "TestimonialBlock", "TestimonialsSection", "TextBlock", "TimelineCarousel",
+  "UnifiedCheckout", "ValuePillars", "VariantSelector", "VehicleCard", "VehicleGrid", "VideoBlock",
+  "WidgetAreaChartCard", "WidgetChecklistCard", "WidgetProjectCard", "WidgetStatsRow", "WidgetTeamGrid", "WidgetWorkspaceBanner",
+  "WorkflowTrigger", "WorkspaceStudio",
 ])
 
-function validateComponents(jsonContent: any): { valid: boolean; errors: string[] } {
+let _cachedValidTypes: Set<string> | null = null
+
+/**
+ * Fetch valid component types from the API schema registry.
+ * Falls back to hardcoded set if API is unreachable.
+ */
+async function getValidComponentTypes(): Promise<Set<string>> {
+  if (_cachedValidTypes) return _cachedValidTypes
+
+  try {
+    const { IRIS_API } = await import("./iris-api")
+    const res = await irisFetch("/api/v1/pages/schema-registry", {}, IRIS_API)
+    if (res.ok) {
+      const body = (await res.json()) as any
+      const types: string[] = body?.data?.types ?? []
+      if (types.length > 0) {
+        _cachedValidTypes = new Set(types)
+        return _cachedValidTypes
+      }
+    }
+  } catch {
+    // API unreachable — use fallback
+  }
+
+  _cachedValidTypes = FALLBACK_COMPONENT_TYPES
+  return _cachedValidTypes
+}
+
+async function validateComponents(jsonContent: any): Promise<{ valid: boolean; errors: string[] }> {
+  const validTypes = await getValidComponentTypes()
   const components = jsonContent?.components ?? []
   const errors: string[] = []
 
@@ -701,7 +770,7 @@ function validateComponents(jsonContent: any): { valid: boolean; errors: string[
       errors.push(`components[${i}]: missing "type" field`)
       continue
     }
-    if (!VALID_COMPONENT_TYPES.has(c.type)) {
+    if (!validTypes.has(c.type)) {
       errors.push(`components[${i}]: "${c.type}" is not a valid component type`)
     }
     if (!c.id) {
@@ -711,7 +780,7 @@ function validateComponents(jsonContent: any): { valid: boolean; errors: string[
 
   if (errors.length > 0) {
     errors.push("")
-    errors.push(`Valid types: ${[...VALID_COMPONENT_TYPES].join(", ")}`)
+    errors.push(`Valid types: ${[...validTypes].join(", ")}`)
     errors.push(`Run: iris pages component-registry`)
   }
 
@@ -723,30 +792,76 @@ function validateComponents(jsonContent: any): { valid: boolean; errors: string[
 // ============================================================================
 
 const COMPONENT_REGISTRY: { type: string; description: string; requiredProps: string[] }[] = [
+  // Core layout
   { type: "Hero", description: "Full-width hero banner with title, subtitle, CTA buttons", requiredProps: ["title"] },
   { type: "SiteNavigation", description: "Top navigation bar with logo, links, CTA button", requiredProps: ["logo"] },
-  { type: "SiteFooter", description: "Footer with brand name, links, copyright", requiredProps: ["brandName"] },
+  { type: "SiteFooter", description: "Footer with brand name, links, copyright", requiredProps: ["copyright"] },
+  { type: "TextBlock", description: "Markdown/rich text content block", requiredProps: ["content"] },
   { type: "AnnouncementBanner", description: "Dismissible banner strip at top of page", requiredProps: ["text"] },
-  { type: "TestimonialsSection", description: "Customer testimonials with avatars and quotes", requiredProps: ["testimonials"] },
-  { type: "TeamSection", description: "Team member grid with photos and roles", requiredProps: ["members"] },
-  { type: "ContactSection", description: "Contact form with configurable fields", requiredProps: ["heading"] },
-  { type: "LogoMarquee", description: "Auto-scrolling logo carousel (trusted by...)", requiredProps: ["logos"] },
+  // Content sections
   { type: "FeatureShowcase", description: "Feature highlights with icons and descriptions", requiredProps: ["features"] },
-  { type: "ComparisonMatrix", description: "Pricing/feature comparison table", requiredProps: ["columns", "rows"] },
-  { type: "ClientGrid", description: "Client/partner logo grid", requiredProps: ["clients"] },
-  { type: "CareersListing", description: "Job listings with department filters", requiredProps: ["jobs"] },
+  { type: "FeatureTabs", description: "Tabbed feature showcase with images", requiredProps: ["tabs"] },
+  { type: "FeatureGrid", description: "Icon grid with stat callouts", requiredProps: ["features"] },
+  { type: "FeatureIconsGrid", description: "Simple icon + text feature grid", requiredProps: [] },
+  { type: "ScrollShowcase", description: "Full-width scrolling cards with images (service pages)", requiredProps: ["items"] },
+  { type: "ProcessSteps", description: "Numbered process steps with icons and callouts", requiredProps: ["heading", "steps"] },
+  { type: "StatsSection", description: "Key metrics/stats with optional image", requiredProps: ["stats"] },
+  { type: "StatsCounter", description: "Animated stat counters", requiredProps: ["stats"] },
+  { type: "BenefitsSection", description: "Benefit cards with icons", requiredProps: [] },
+  { type: "GettingStartedSteps", description: "Numbered getting started guide", requiredProps: [] },
+  { type: "SplitContent", description: "Side-by-side text + image section", requiredProps: [] },
+  { type: "EditorialSection", description: "Long-form editorial content block", requiredProps: [] },
+  { type: "QuoteBlock", description: "Pull quote with attribution and CTA", requiredProps: ["quote"] },
+  { type: "FAQAccordion", description: "Collapsible FAQ section", requiredProps: ["items"] },
+  { type: "CommunityCTA", description: "Community join CTA (Discord, etc.)", requiredProps: [] },
+  // Media
+  { type: "ImageBlock", description: "Single image with caption", requiredProps: ["imageUrl"] },
+  { type: "VideoBlock", description: "Embedded video player", requiredProps: ["videoUrl"] },
+  { type: "BeforeAfter", description: "Before/after image slider comparison", requiredProps: ["beforeImage", "afterImage"] },
   { type: "PortfolioGallery", description: "Image/project gallery grid with lightbox", requiredProps: ["items"] },
-  { type: "ProductGrid", description: "E-commerce product cards with prices", requiredProps: ["products"] },
-  { type: "ServiceMenu", description: "Service/menu items with prices and descriptions", requiredProps: ["categories"] },
-  { type: "EventGrid", description: "Event cards with dates and venues", requiredProps: ["events"] },
-  { type: "FundingTiers", description: "Pricing/funding tier cards", requiredProps: ["tiers"] },
-  { type: "BeforeAfter", description: "Before/after image slider comparison", requiredProps: ["before", "after"] },
-  { type: "MapSection", description: "Interactive map with location markers", requiredProps: ["locations"] },
+  { type: "BlogGrid", description: "Blog post card grid", requiredProps: [] },
+  // Social proof
+  { type: "TestimonialsSection", description: "Customer testimonials (text, name, role, rating)", requiredProps: ["testimonials"] },
+  { type: "TeamSection", description: "Team member grid with photos and roles", requiredProps: ["members"] },
+  { type: "LogoMarquee", description: "Auto-scrolling logo carousel", requiredProps: ["logos"] },
+  { type: "ClientGrid", description: "Client/partner logo grid", requiredProps: ["clients"] },
+  // Conversion
+  { type: "ContactSection", description: "Contact form with configurable fields", requiredProps: ["heading"] },
   { type: "NewsletterSignup", description: "Email signup form", requiredProps: ["heading"] },
+  { type: "MapSection", description: "Interactive map with location pin", requiredProps: ["latitude", "longitude"] },
+  { type: "PricingTiers", description: "Pricing tier cards with features", requiredProps: ["tiers"] },
+  { type: "ComparisonMatrix", description: "Feature comparison table", requiredProps: ["plans", "features"] },
+  { type: "ServiceMenu", description: "Service/menu items with prices", requiredProps: ["categories"] },
+  // E-commerce
+  { type: "ProductGrid", description: "Product cards with prices", requiredProps: ["products"] },
+  { type: "ShoppingCart", description: "Shopping cart with line items", requiredProps: [] },
+  { type: "OrderConfirmation", description: "Order confirmation/receipt", requiredProps: [] },
+  { type: "ProtectionPicker", description: "Protection plan selector", requiredProps: [] },
+  { type: "VehicleGrid", description: "Vehicle inventory grid", requiredProps: [] },
+  // Events
+  { type: "EventGrid", description: "Event cards with dates and venues", requiredProps: ["events"] },
+  { type: "FundingTiers", description: "Funding/sponsorship tier cards", requiredProps: ["tiers"] },
+  { type: "CareersListing", description: "Job listings with filters", requiredProps: ["jobs"] },
+  // Interactive
   { type: "StepWizard", description: "Multi-step form wizard", requiredProps: ["steps"] },
   { type: "FileUpload", description: "File upload dropzone", requiredProps: [] },
-  { type: "ShoppingCart", description: "Shopping cart with line items", requiredProps: [] },
-  { type: "OrderConfirmation", description: "Order confirmation/receipt page", requiredProps: [] },
+  { type: "BookingWizard", description: "Appointment booking flow", requiredProps: [] },
+  { type: "Survey", description: "Survey/questionnaire form", requiredProps: [] },
+  // Dashboard widgets
+  { type: "WidgetWorkspaceBanner", description: "Dashboard workspace header", requiredProps: [] },
+  { type: "WidgetStatsRow", description: "Row of stat cards", requiredProps: ["stats"] },
+  { type: "WidgetTeamGrid", description: "Team member widget grid", requiredProps: [] },
+  { type: "FilterTabBar", description: "Tab-based filter bar", requiredProps: [] },
+  { type: "DataTable", description: "Sortable/searchable data table", requiredProps: ["columns"] },
+  { type: "DataChart", description: "Chart visualization (bar, line, pie)", requiredProps: [] },
+  { type: "ActivityFeed", description: "Chronological activity feed", requiredProps: ["items"] },
+  { type: "QuickActions", description: "Quick action button grid", requiredProps: ["actions"] },
+  { type: "CasePipelineBoard", description: "Kanban-style case pipeline", requiredProps: [] },
+  { type: "TaskQueueList", description: "Task queue with status badges", requiredProps: ["tasks"] },
+  { type: "ProgressTracker", description: "Step-by-step progress tracker", requiredProps: ["steps"] },
+  { type: "CaseCard", description: "Individual case summary card", requiredProps: [] },
+  { type: "DemandTracker", description: "Demand/settlement tracker", requiredProps: [] },
+  { type: "CaseEconomics", description: "Case financial breakdown", requiredProps: ["lineItems"] },
 ]
 
 const ComposeCmd = cmd({
@@ -832,33 +947,80 @@ const ComposeCmd = cmd({
 const ComponentRegistryCmd = cmd({
   command: "component-registry",
   aliases: ["registry", "available-components"],
-  describe: "list available component types for the page builder",
+  describe: "list available component types for the page builder (fetched from API)",
   builder: (y) => y.option("json", { type: "boolean" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Page Component Registry")
 
+    // Try to fetch from API (single source of truth)
+    let registry: { type: string; description: string; category: string; props: any }[] = []
+    let source = "api"
+
+    try {
+      const { IRIS_API } = await import("./iris-api")
+      const res = await irisFetch("/api/v1/pages/schema-registry", {}, IRIS_API)
+      if (res.ok) {
+        const body = (await res.json()) as any
+        const schemas = body?.data?.schemas ?? {}
+        registry = Object.values(schemas).map((s: any) => ({
+          type: s.type,
+          description: s.description ?? "",
+          category: s.category ?? "other",
+          props: s.props ?? {},
+        }))
+      }
+    } catch {
+      source = "fallback"
+    }
+
+    // Fallback to hardcoded COMPONENT_REGISTRY
+    if (registry.length === 0) {
+      source = "fallback"
+      registry = COMPONENT_REGISTRY.map(c => ({
+        type: c.type,
+        description: c.description,
+        category: "other",
+        props: {},
+      }))
+    }
+
     if (args.json) {
-      console.log(JSON.stringify(COMPONENT_REGISTRY, null, 2))
+      console.log(JSON.stringify(registry, null, 2))
       prompts.outro("Done")
       return
     }
 
+    // Group by category
+    const byCategory: Record<string, typeof registry> = {}
+    for (const c of registry) {
+      const cat = c.category || "other"
+      byCategory[cat] = byCategory[cat] || []
+      byCategory[cat]!.push(c)
+    }
+
     console.log()
     console.log(`  ${bold("Available components for Genesis pages:")}`)
+    console.log(`  ${dim(`Source: ${source} · ${registry.length} components`)}`)
     console.log()
-    for (const c of COMPONENT_REGISTRY) {
-      console.log(`  ${highlight(c.type)}`)
-      console.log(`    ${dim(c.description)}`)
-      if (c.requiredProps.length) {
-        console.log(`    ${dim("Required props: " + c.requiredProps.join(", "))}`)
+
+    for (const [category, components] of Object.entries(byCategory).sort()) {
+      console.log(`  ${bold(category.toUpperCase())}`)
+      for (const c of components) {
+        const requiredProps = Object.entries(c.props)
+          .filter(([, v]: [string, any]) => v?.required)
+          .map(([k]: [string, any]) => k)
+        console.log(`    ${highlight(c.type)}`)
+        console.log(`      ${dim(c.description)}`)
+        if (requiredProps.length) {
+          console.log(`      ${dim("Required: " + requiredProps.join(", "))}`)
+        }
       }
       console.log()
     }
-    console.log(`  ${dim(`${COMPONENT_REGISTRY.length} components available`)}`)
-    console.log()
-    prompts.log.info(`Example: ${dim('iris pages set my-page "components.1" \'{"type":"Hero","props":{"title":"Hello"}}\'')}`)
-    prompts.log.info(`Reference: ${dim("iris pages pull component-showcase")} — pull a working example`)
+
+    prompts.log.info(`Schema source: ${dim(".schema.json files in iris-api/PageBuilder/")}`)
+    prompts.log.info(`Add new component: ${dim("create Component.schema.json next to Component.vue")}`)
     prompts.outro("Done")
   },
 })
