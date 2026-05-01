@@ -52,14 +52,13 @@ const RevenueDashboardCommand = cmd({
     printKV("  If pipeline converts", `${fmtMoney(c.total_if_converts)}  (${fmtMoney(c.total_arr_if_converts)}/yr)`)
     console.log("")
 
-    // Tiers
+    // Tiers (now bloq-level: Stripe + overrides + pipeline)
     console.log(bold("  Revenue Tiers"))
     const tiers = [
-      { label: "Autopay (Stripe)", data: t.autopay, color: success },
-      { label: "Untracked (Mercury)", data: t.untracked, color: highlight },
-      { label: "Won — needs Stripe", data: t.needs_stripe, color: dim },
-      { label: "In Negotiation", data: t.in_negotiation, color: dim },
-      { label: "Performance-based", data: t.performance, color: dim },
+      { label: t.stripe?.label ?? "Stripe Autopay (confirmed)", data: t.stripe, color: success },
+      { label: t.overrides?.label ?? "Manual / Mercury / Offline", data: t.overrides, color: highlight },
+      { label: t.won_pipeline?.label ?? "Won — not yet on Stripe", data: t.won_pipeline, color: dim },
+      { label: t.negotiation_pipeline?.label ?? "In Negotiation", data: t.negotiation_pipeline, color: dim },
     ]
     for (const tier of tiers) {
       const d = tier.data ?? { total: 0, count: 0 }
@@ -86,12 +85,22 @@ const RevenueDashboardCommand = cmd({
     }
     console.log("")
 
+    // Confirmed breakdown
+    if (c.stripe_mrr > 0 || c.override_mrr > 0) {
+      console.log("")
+      console.log(bold("  Confirmed Breakdown"))
+      if (c.stripe_mrr > 0) printKV("    Stripe", fmtMoney(c.stripe_mrr) + "/mo")
+      if (c.override_mrr > 0) printKV("    Overrides", fmtMoney(c.override_mrr) + "/mo")
+    }
+    console.log("")
+
     // Lead Stats
     console.log(bold("  Lead Stats"))
     printKV("    Total leads", String(stats.total_leads?.toLocaleString() ?? 0))
     printKV("    Won leads", String(stats.won_leads ?? 0))
     printKV("    Conversion rate", `${stats.conversion_rate ?? 0}%`)
-    printKV("    Active clients", String(stats.total_clients ?? 0))
+    printKV("    Confirmed clients", String(stats.confirmed_clients ?? 0))
+    printKV("    Pipeline clients", String(stats.pipeline_clients ?? 0))
     printDivider()
     console.log(dim("  Set goal: iris revenue goal --mrr=10000"))
     console.log(dim("  Full data: iris revenue dashboard --json"))
@@ -161,6 +170,63 @@ const RevenueGoalCommand = cmd({
   },
 })
 
+// ── override (add/remove manual MRR entries) ──
+
+const RevenueOverrideCommand = cmd({
+  command: "override <lead-id>",
+  aliases: ["add", "manual"],
+  describe: "add/update a manual MRR override for a client (Mercury, offline, etc.)",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("mrr", { describe: "monthly recurring amount", type: "number", demandOption: true })
+      .option("method", { describe: "payment method", type: "string", default: "offline", choices: ["mercury", "wire", "cash", "zelle", "venmo", "offline", "other"] as const })
+      .option("notes", { describe: "notes about this override", type: "string" })
+      .option("remove", { describe: "remove override for this lead", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    if (args.remove) {
+      const res = await irisFetch(`/api/v1/revenue/overrides/${args.leadId}`, { method: "DELETE" })
+      if (!(await handleApiError(res, "Remove override"))) return
+      const body = await res.json().catch(() => ({}))
+      if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+      prompts.log.success(body.message ?? "Override removed")
+      return
+    }
+
+    const payload: Record<string, unknown> = {
+      lead_id: args.leadId,
+      mrr: args.mrr,
+      method: args.method,
+    }
+    if (args.notes) payload.notes = args.notes
+
+    const res = await irisFetch("/api/v1/revenue/overrides", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+    if (!(await handleApiError(res, "Set override"))) return
+
+    const body = await res.json().catch(() => ({}))
+
+    if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+
+    if (body.success) {
+      prompts.log.success(body.message ?? "Override set")
+      const o = body.override ?? {}
+      printKV("  Client", o.name ?? `Lead #${args.leadId}`)
+      printKV("  MRR", fmtMoney(o.mrr))
+      printKV("  Method", o.method ?? "offline")
+      if (o.notes) printKV("  Notes", o.notes)
+      console.log(dim("  View dashboard: iris revenue"))
+    } else {
+      prompts.log.error(body.error ?? body.message ?? "Failed")
+    }
+  },
+})
+
 // ── main export ──
 
 export const PlatformRevenueCommand = cmd({
@@ -171,6 +237,7 @@ export const PlatformRevenueCommand = cmd({
     yargs
       .command(RevenueDashboardCommand)
       .command(RevenueGoalCommand)
+      .command(RevenueOverrideCommand)
       .demandCommand(0), // default to dashboard if no subcommand
   async handler(args) {
     // Default: show dashboard
