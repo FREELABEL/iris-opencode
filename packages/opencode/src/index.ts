@@ -41,6 +41,7 @@ import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
 import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
 import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
 import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventory"
+import { PlatformAtlasDatasetsCommand } from "./cli/cmd/platform-atlas-datasets"
 import { PlatformIntegrationsCommand } from "./cli/cmd/platform-integrations"
 import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
 import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
@@ -63,6 +64,7 @@ import { PlatformSomCommand } from "./cli/cmd/platform-som"
 import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
 import { PlatformPaymentsCommand } from "./cli/cmd/platform-payments"
+import { PlatformRevenueCommand } from "./cli/cmd/platform-revenue"
 import { PlatformDeliverCommand } from "./cli/cmd/platform-deliver"
 import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedCommand, PlatformListAvailableCommand } from "./cli/cmd/platform-run"
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
@@ -102,6 +104,7 @@ import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
+import { PlatformDocsCommand } from "./cli/cmd/platform-docs"
 import { PlatformWalletCommand } from "./cli/cmd/platform-wallet"
 import { PlatformConfigCommand } from "./cli/cmd/platform-config"
 import { PlatformAppCommand } from "./cli/cmd/platform-app"
@@ -209,6 +212,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAtlasLedgerCommand))
   .command(reg(PlatformAtlasStaffCommand))
   .command(reg(PlatformAtlasInventoryCommand))
+  .command(reg(PlatformAtlasDatasetsCommand))
   .command(reg(PlatformIntegrationsCommand))
   .command(reg(PlatformSchedulesCommand))
   .command(reg(PlatformN8nCommand))
@@ -232,6 +236,7 @@ const cli = yargs(rawArgs)
 
   .command(reg(PlatformInvoicesCommand))
   .command(reg(PlatformPaymentsCommand))
+  .command(reg(PlatformRevenueCommand))
   .command(reg(PlatformDeliverCommand))
   .command(reg(PlatformRunCommand))
   .command(reg(PlatformTranscribeCommand))
@@ -274,6 +279,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformMailCommand))
   .command(reg(PlatformImessageCommand))
   .command(reg(PlatformCalendarCommand))
+  .command(reg(PlatformDocsCommand))
   .command(reg(PlatformWalletCommand))
   // PHP-port commands — config, app, automation, automation:test
   // (integrations is owned by PlatformRunCommand in platform-run.ts)
