@@ -51,9 +51,11 @@ const RenderCommand = cmd({
         describe: "JSON props for the composition",
       }),
   async handler(args) {
-    const cmdArgs = ["render", args.composition as string]
-    if (args.output) cmdArgs.push(args.output as string)
+    const comp = args.composition as string
+    const output = (args.output as string) || join(process.cwd(), "out", `${comp}.mp4`)
+    const cmdArgs = ["render", comp, output]
     if (args.props) cmdArgs.push("--props", args.props as string)
+    UI.println(`Output: ${output}`)
     runIrisRemotion(cmdArgs)
   },
 })
@@ -78,9 +80,11 @@ const StillCommand = cmd({
         describe: "JSON props for the composition",
       }),
   async handler(args) {
-    const cmdArgs = ["still", args.composition as string]
-    if (args.output) cmdArgs.push(args.output as string)
+    const comp = args.composition as string
+    const output = (args.output as string) || join(process.cwd(), "out", `${comp}.png`)
+    const cmdArgs = ["still", comp, output]
     if (args.props) cmdArgs.push("--props", args.props as string)
+    UI.println(`Output: ${output}`)
     runIrisRemotion(cmdArgs)
   },
 })
