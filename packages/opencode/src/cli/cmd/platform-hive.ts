@@ -2688,6 +2688,104 @@ async function flApiFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, FL_API)
 }
 
+// ----------------------------------------------------------------------------
+// Cloudflare REST API helpers (per-subdomain only — never zone-wide wildcards)
+// Postmortem: a `*.freelabel.net/*` Worker route caused web.freelabel.net to
+// loop redirect on May 1, 2026. This command MUST only ever provision per-
+// subdomain DNS records and per-subdomain Worker routes.
+// ----------------------------------------------------------------------------
+
+const CF_API = "https://api.cloudflare.com/client/v4"
+const CF_PROXY_SCRIPT = "iris-domain-proxy"
+
+function readWranglerToken(): string | null {
+  try {
+    const fs = require("fs")
+    const path = require("path")
+    const os = require("os")
+    const cfgPath = path.join(os.homedir(), "Library/Preferences/.wrangler/config/default.toml")
+    if (!fs.existsSync(cfgPath)) return null
+    const text = fs.readFileSync(cfgPath, "utf8") as string
+    const match = text.match(/oauth_token\s*=\s*"([^"]+)"/)
+    return match ? match[1] : null
+  } catch { return null }
+}
+
+function getCfToken(): string | null {
+  return process.env.CLOUDFLARE_API_TOKEN || process.env.CF_API_TOKEN || readWranglerToken()
+}
+
+async function cfFetch(path: string, options: RequestInit = {}): Promise<any> {
+  const token = getCfToken()
+  if (!token) throw new Error("No Cloudflare token. Set CLOUDFLARE_API_TOKEN or run: npx wrangler login")
+  const res = await fetch(`${CF_API}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  })
+  return res.json()
+}
+
+async function cfGetZoneId(domain: string): Promise<string | null> {
+  const r = await cfFetch(`/zones?name=${encodeURIComponent(domain)}`)
+  return r?.result?.[0]?.id ?? null
+}
+
+async function cfCreateDnsRecord(zoneId: string, sub: string, baseDomain: string): Promise<{ ok: boolean, msg: string }> {
+  const r = await cfFetch(`/zones/${zoneId}/dns_records`, {
+    method: "POST",
+    body: JSON.stringify({ type: "A", name: sub, content: "192.0.2.1", proxied: true }),
+  })
+  if (r?.success) return { ok: true, msg: `DNS A ${sub}.${baseDomain} → 192.0.2.1 (proxied)` }
+  const errs = (r?.errors || []) as Array<{ message: string }>
+  const msg = errs.map((e) => e.message).join("; ")
+  if (msg.toLowerCase().includes("already") || msg.toLowerCase().includes("identical")) {
+    return { ok: true, msg: "DNS record already exists" }
+  }
+  return { ok: false, msg }
+}
+
+async function cfCreateWorkerRoute(zoneId: string, fullDomain: string): Promise<{ ok: boolean, msg: string }> {
+  // CRITICAL: per-subdomain pattern only — never zone-wide wildcards.
+  const pattern = `*${fullDomain}/*`
+  const r = await cfFetch(`/zones/${zoneId}/workers/routes`, {
+    method: "POST",
+    body: JSON.stringify({ pattern, script: CF_PROXY_SCRIPT }),
+  })
+  if (r?.success) return { ok: true, msg: `Worker route ${pattern} → ${CF_PROXY_SCRIPT}` }
+  const errs = (r?.errors || []) as Array<{ message: string }>
+  const msg = errs.map((e) => e.message).join("; ")
+  if (msg.toLowerCase().includes("already") || msg.toLowerCase().includes("conflict") || msg.toLowerCase().includes("duplicate")) {
+    return { ok: true, msg: "Worker route already exists" }
+  }
+  return { ok: false, msg }
+}
+
+async function cfFindDnsRecord(zoneId: string, fullName: string): Promise<{ id: string } | null> {
+  const r = await cfFetch(`/zones/${zoneId}/dns_records?name=${encodeURIComponent(fullName)}&type=A`)
+  return r?.result?.[0] ?? null
+}
+
+async function cfFindWorkerRoute(zoneId: string, fullDomain: string): Promise<{ id: string, pattern: string } | null> {
+  const r = await cfFetch(`/zones/${zoneId}/workers/routes`)
+  const wanted = `*${fullDomain}/*`
+  const match = (r?.result || []).find((rt: any) => rt.pattern === wanted)
+  return match ?? null
+}
+
+async function cfDeleteDnsRecord(zoneId: string, recordId: string): Promise<boolean> {
+  const r = await cfFetch(`/zones/${zoneId}/dns_records/${recordId}`, { method: "DELETE" })
+  return !!r?.success
+}
+
+async function cfDeleteWorkerRoute(zoneId: string, routeId: string): Promise<boolean> {
+  const r = await cfFetch(`/zones/${zoneId}/workers/routes/${routeId}`, { method: "DELETE" })
+  return !!r?.success
+}
+
 const HiveDomainsProxyCommand = cmd({
   command: "proxy <subdomain> <target>",
   describe: "proxy a subdomain to an external URL via Cloudflare + domain mapping",
@@ -2710,51 +2808,39 @@ const HiveDomainsProxyCommand = cmd({
     const domain = sub.includes(".") ? sub : `${sub}.${baseDomain}`
     const skipCf = args["skip-cf"] as boolean
 
+    // Hard guard: never allow wildcard subdomains (caused freelabel.net redirect loop incident)
+    if (sub === "*" || sub === "@" || sub.includes("*")) {
+      prompts.log.error("Wildcard / apex subdomains are not allowed. Use a specific subdomain (e.g. 'comic').")
+      prompts.outro("Done"); return
+    }
+
     const spinner = prompts.spinner()
 
-    // Step 1: Cloudflare DNS + Worker route
+    // Step 1: Cloudflare DNS + per-subdomain Worker route via REST API
     if (!skipCf) {
-      spinner.start("Creating Cloudflare DNS record…")
+      spinner.start(`Looking up Cloudflare zone ${baseDomain}…`)
       try {
-        const { execSync } = await import("child_process")
+        const zoneId = await cfGetZoneId(baseDomain)
+        if (!zoneId) {
+          spinner.stop(`Zone not found for ${baseDomain}`, 1)
+          prompts.log.warn("Skipping Cloudflare setup — domain mapping only.")
+        } else {
+          spinner.stop(`Zone: ${baseDomain}`)
 
-        // Create DNS A record (proxied, dummy IP — Worker intercepts)
-        try {
-          execSync(
-            `npx wrangler dns create ${baseDomain} --type A --name ${sub} --content 192.0.2.1 --proxied`,
-            { stdio: "pipe", timeout: 30000 }
-          )
-          spinner.stop(success("DNS record created"))
-        } catch (dnsErr: any) {
-          const msg = dnsErr?.stderr?.toString() || dnsErr?.message || ""
-          if (msg.includes("already exists") || msg.includes("Record already")) {
-            spinner.stop(dim("DNS record already exists"))
-          } else {
-            spinner.stop("DNS failed — may need manual setup", 1)
-            prompts.log.warn(msg.slice(0, 200))
-          }
-        }
+          spinner.start("Creating DNS record…")
+          const dns = await cfCreateDnsRecord(zoneId, sub, baseDomain)
+          if (dns.ok) spinner.stop(success(dns.msg))
+          else { spinner.stop(`DNS failed: ${dns.msg}`, 1); prompts.outro("Done"); return }
 
-        // Create Worker route
-        spinner.start("Creating Cloudflare Worker route…")
-        try {
-          execSync(
-            `npx wrangler routes create ${baseDomain} --pattern "*${domain}/*" --script iris-domain-proxy`,
-            { stdio: "pipe", timeout: 30000 }
-          )
-          spinner.stop(success("Worker route created"))
-        } catch (routeErr: any) {
-          const msg = routeErr?.stderr?.toString() || routeErr?.message || ""
-          if (msg.includes("already exists") || msg.includes("duplicate")) {
-            spinner.stop(dim("Worker route already exists"))
-          } else {
-            spinner.stop("Route failed — may need manual setup", 1)
-            prompts.log.warn(msg.slice(0, 200))
-          }
+          spinner.start("Creating Worker route…")
+          const route = await cfCreateWorkerRoute(zoneId, domain)
+          if (route.ok) spinner.stop(success(route.msg))
+          else { spinner.stop(`Route failed: ${route.msg}`, 1); prompts.outro("Done"); return }
         }
       } catch (err) {
-        spinner.stop("Cloudflare setup failed", 1)
-        prompts.log.warn("Install wrangler or use --skip-cf. You can set up CF manually.")
+        spinner.stop("Cloudflare error", 1)
+        prompts.log.warn(err instanceof Error ? err.message : String(err))
+        prompts.log.warn("Continuing with domain mapping only. Set CLOUDFLARE_API_TOKEN or run: npx wrangler login")
       }
     }
 
@@ -2902,14 +2988,40 @@ const HiveDomainsRemoveCommand = cmd({
         prompts.outro("Cancelled"); return
       }
 
-      spinner.start("Deleting…")
+      spinner.start("Deleting domain mapping…")
       const res = await flApiFetch(`/api/v1/domain-mappings/${mapping.id}`, { method: "DELETE" })
       const ok = await handleApiError(res, "Delete mapping")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-
       spinner.stop(success("Domain mapping removed"))
-      console.log(dim("  Note: Cloudflare DNS record and Worker route are still active."))
-      console.log(dim("  Remove those manually in Cloudflare dashboard if needed."))
+
+      // Clean up Cloudflare resources (per-subdomain only — same scope as create)
+      const parts = domain.split(".")
+      if (parts.length >= 3) {
+        const sub = parts[0]
+        const baseDomain = parts.slice(1).join(".")
+        try {
+          spinner.start("Cleaning up Cloudflare DNS + Worker route…")
+          const zoneId = await cfGetZoneId(baseDomain)
+          if (zoneId) {
+            const dnsRecord = await cfFindDnsRecord(zoneId, domain)
+            const workerRoute = await cfFindWorkerRoute(zoneId, domain)
+            const messages: string[] = []
+            if (dnsRecord) {
+              if (await cfDeleteDnsRecord(zoneId, dnsRecord.id)) messages.push("DNS deleted")
+            }
+            if (workerRoute) {
+              if (await cfDeleteWorkerRoute(zoneId, workerRoute.id)) messages.push("Worker route deleted")
+            }
+            spinner.stop(messages.length ? success(messages.join(", ")) : dim("No CF resources found"))
+          } else {
+            spinner.stop(dim(`Zone not found for ${baseDomain} — skipped CF cleanup`))
+          }
+        } catch (err) {
+          spinner.stop(dim("CF cleanup skipped — set CLOUDFLARE_API_TOKEN or run: npx wrangler login"))
+        }
+      } else {
+        console.log(dim(`  Skipped CF cleanup (couldn't parse subdomain from ${domain})`))
+      }
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
