@@ -1876,6 +1876,33 @@ const LeadsPulseCommand = cmd({
         console.log(`  ${icon} ${highlight(hc.name.padEnd(18))}${statusText}${hint}`)
       }
 
+      // Step 2.5: Requirements (automated tests for this lead's deliverables)
+      try {
+        const reqRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
+        if (reqRes.ok) {
+          const reqBody = await reqRes.json().catch(() => ({}))
+          const reqs: any[] = reqBody.data ?? []
+          if (reqs.length > 0) {
+            const passing = reqs.filter(r => r.last_status === "passed" || r.last_status === "completed").length
+            const failing = reqs.filter(r => r.last_status === "failed").length
+            const untested = reqs.length - passing - failing
+            const headerColor = failing > 0 ? highlight : (untested === reqs.length ? dim : success)
+
+            console.log()
+            console.log(`  ${bold("Requirements")}  ${headerColor(`${passing}/${reqs.length} passing`)}${failing > 0 ? highlight(` · ${failing} FAILING`) : ""}${untested > 0 ? dim(` · ${untested} untested`) : ""}`)
+            for (const r of reqs.slice(0, 5)) {
+              const icon = r.last_status === "passed" || r.last_status === "completed" ? success("✓")
+                : r.last_status === "failed" ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+                : dim("○")
+              const lastRun = r.last_run_at ? dim(r.last_run_at.split("T")[0]) : dim("never run")
+              console.log(`  ${icon} ${highlight(r.name.padEnd(28))}${lastRun}`)
+            }
+            if (reqs.length > 5) console.log(dim(`  …and ${reqs.length - 5} more — iris leads requirements list ${leadId}`))
+            if (untested > 0) console.log(dim(`  Run all: iris leads requirements run ${leadId}`))
+          }
+        }
+      } catch (e) { /* requirements section is best-effort */ }
+
       // Step 3: Search channels in parallel
       console.log()
       const channelSpinner = prompts.spinner()
@@ -4009,12 +4036,73 @@ const ReqDeleteCommand = cmd({
   },
 })
 
+const ReqAllCommand = cmd({
+  command: "all",
+  aliases: ["everywhere", "global"],
+  describe: "list all active requirements across all leads (paginated)",
+  builder: (yargs) =>
+    yargs
+      .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
+      .option("per-page", { describe: "results per page", type: "number", default: 25 })
+      .option("status", { alias: "s", describe: "filter by status", type: "string", choices: ["passed", "failed", "untested"] })
+      .option("search", { describe: "filter by lead name/company", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const params = new URLSearchParams({
+      page: String(args.page),
+      per_page: String(args["per-page"]),
+    })
+    if (args.status) params.set("status", String(args.status))
+    if (args.search) params.set("search", String(args.search))
+
+    const res = await irisFetch(`/api/v1/requirements/all?${params}`)
+    if (!(await handleApiError(res, "List all requirements"))) return
+
+    const body = await res.json().catch(() => ({}))
+    if ((args as any).json) { console.log(JSON.stringify(body, null, 2)); return }
+
+    const items: any[] = body.data ?? []
+    const pg = body.pagination ?? {}
+
+    if (items.length === 0) {
+      prompts.log.info(`No requirements found${args.status ? ` (status=${args.status})` : ""}`)
+      return
+    }
+
+    console.log("")
+    console.log(bold(`Active Requirements — ${pg.total ?? items.length} total · page ${pg.current_page ?? 1}/${pg.last_page ?? 1}`))
+    printDivider()
+
+    for (const r of items) {
+      const status = r.last_status
+      const icon = status === "passed" || status === "completed" ? success("✓")
+        : status === "failed" ? highlight("✗")
+        : dim("○")
+      const lead = r.lead ? `${r.lead.name ?? "?"}${r.lead.company ? dim(" — " + r.lead.company) : ""}` : dim("(no lead)")
+      const lastRun = r.last_run_at ? dim(r.last_run_at.split("T")[0]) : dim("never")
+      const counts = (r.pass_count || r.fail_count) ? dim(` ${r.pass_count}✓ / ${r.fail_count}✗`) : ""
+      console.log(`  ${icon}  ${bold(r.name)}${counts}`)
+      console.log(`     ${dim(`#${r.id} · lead #${r.lead?.id ?? "?"}`)} ${lead}  ${lastRun}`)
+    }
+
+    printDivider()
+    if (pg.last_page && pg.last_page > 1) {
+      const next = (pg.current_page ?? 1) < pg.last_page ? `iris leads requirements all --page ${(pg.current_page ?? 1) + 1}` : null
+      if (next) console.log(dim(`  Next: ${next}`))
+    }
+    console.log(dim(`  Filters: --status passed|failed|untested  --search <name>  --per-page 50`))
+  },
+})
+
 const LeadsRequirementsCommand = cmd({
   command: "requirements",
   aliases: ["reqs", "req"],
   describe: "manage automated deliverable tests — create, run, monitor",
   builder: (yargs) =>
     yargs
+      .command(ReqAllCommand)
       .command(ReqListCommand)
       .command(ReqCreateCommand)
       .command(ReqRunCommand)
