@@ -4096,6 +4096,60 @@ const ReqAllCommand = cmd({
   },
 })
 
+const ReqScheduleCommand = cmd({
+  command: "schedule <lead-id>",
+  aliases: ["watch"],
+  describe: "schedule recurring requirement test runs for a lead (continuous monitoring)",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("frequency", {
+        alias: "f",
+        describe: "run frequency",
+        type: "string",
+        choices: ["hourly", "every_2_hours", "every_4_hours", "every_6_hours", "every_8_hours", "every_12_hours", "daily", "weekly"],
+        default: "hourly",
+      })
+      .option("name", { describe: "schedule name", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const leadId = args.leadId as number
+    const name = (args.name as string) || `Requirements monitor — Lead #${leadId}`
+
+    const body = {
+      type: "lead_requirements_run",
+      task_name: name,
+      data: {
+        lead_id: leadId,
+      },
+      frequency: args.frequency,
+      enabled: true,
+    }
+
+    const res = await irisFetch(`/api/v1/scheduled-jobs`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    if (!(await handleApiError(res, "Schedule requirements"))) return
+
+    const result = await res.json().catch(() => ({}))
+    if ((args as any).json) { console.log(JSON.stringify(result, null, 2)); return }
+
+    if (result?.success || result?.id || result?.data) {
+      const data = result.data ?? result
+      prompts.log.success(`Scheduled requirements run for lead #${leadId}`)
+      printKV("Frequency", String(args.frequency))
+      printKV("Schedule ID", String(data.id ?? data.scheduled_job_id ?? "?"))
+      console.log(dim(`\nView: iris schedules get ${data.id ?? "?"}`))
+      console.log(dim(`Disable: iris schedules toggle ${data.id ?? "?"}`))
+    } else {
+      prompts.log.error(result?.message ?? "Failed to schedule")
+    }
+  },
+})
+
 const LeadsRequirementsCommand = cmd({
   command: "requirements",
   aliases: ["reqs", "req"],
@@ -4106,6 +4160,7 @@ const LeadsRequirementsCommand = cmd({
       .command(ReqListCommand)
       .command(ReqCreateCommand)
       .command(ReqRunCommand)
+      .command(ReqScheduleCommand)
       .command(ReqSummaryCommand)
       .command(ReqDeleteCommand)
       .demandCommand(),
