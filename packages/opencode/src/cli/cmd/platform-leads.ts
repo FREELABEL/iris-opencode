@@ -3910,12 +3910,24 @@ const ReqRunCommand = cmd({
       printDivider()
     }
 
-    const url = args.name
-      ? (() => {
-          // Find the specific requirement first, then run it
-          return `/api/v1/leads/${leadId}/requirements/run-all`
-        })()
-      : `/api/v1/leads/${leadId}/requirements/run-all`
+    let url = `/api/v1/leads/${leadId}/requirements/run-all`
+    if (args.name) {
+      // Look up the requirement by name first
+      const listRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
+      if (listRes.ok) {
+        const listBody = await listRes.json().catch(() => ({}))
+        const reqs = listBody?.data ?? listBody?.requirements ?? listBody ?? []
+        const match = Array.isArray(reqs) ? reqs.find((r: any) =>
+          (r.name ?? r.title ?? '').toLowerCase() === String(args.name).toLowerCase()
+        ) : null
+        if (match?.id) {
+          url = `/api/v1/leads/${leadId}/requirements/${match.id}/run`
+        } else {
+          prompts.log.error(`No requirement found matching name "${args.name}"`)
+          return
+        }
+      }
+    }
 
     const res = await irisFetch(url, { method: "POST" })
     if (!(await handleApiError(res, "Run requirements"))) return
