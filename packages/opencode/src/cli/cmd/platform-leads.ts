@@ -3215,7 +3215,11 @@ const DealsCreateCommand = cmd({
       .option("bloq", { alias: "b", describe: "bloq ID", type: "number" })
       .option("package", { alias: "p", describe: "package ID", type: "number" })
       .option("packages", { describe: "comma-separated package IDs for multi-tier", type: "string" })
-      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one_time", "monthly", "quarterly", "yearly"] })
+      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one-time", "month", "quarter", "year"] })
+      .option("pass-fees", { describe: "pass Stripe processing fees to the client (default 2.9% + $0.30)", type: "boolean" })
+      .option("absorb-fees", { describe: "absorb Stripe processing fees (you pay them)", type: "boolean" })
+      .option("fee-percent", { describe: "processing fee percentage (default 2.9)", type: "number" })
+      .option("fee-flat", { describe: "processing fee flat amount (default 0.30)", type: "number" })
       .option("no-auto-remind", { describe: "disable auto-send reminders", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
@@ -3227,8 +3231,13 @@ const DealsCreateCommand = cmd({
     if (args.bloq) body.bloq_id = args.bloq
     if (args.package) body.package_id = args.package
     if (args.packages) body.package_ids = args.packages.split(",").map(Number)
-    if (args.interval) body.billing_interval = args.interval
+    if (args.interval) body.interval = args.interval
     if (args["no-auto-remind"]) body.auto_send_reminders = false
+    if (args["pass-fees"] || args["absorb-fees"] || args["fee-percent"] || args["fee-flat"]) {
+      body.processing_fee_mode = args["absorb-fees"] ? "absorb" : "pass_to_client"
+      if (args["fee-percent"] !== undefined) body.processing_fee_percent = args["fee-percent"]
+      if (args["fee-flat"] !== undefined) body.processing_fee_flat = args["fee-flat"]
+    }
 
     const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
       method: "POST",
@@ -3253,6 +3262,122 @@ const DealsCreateCommand = cmd({
   },
 })
 
+const DealsDeleteCommand = cmd({
+  command: "delete <id>",
+  aliases: ["cancel", "rm"],
+  describe: "delete/cancel an existing payment gate for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    // First check the deal exists
+    const statusRes = await irisFetch(`/api/v1/leads/${args.id}/deal-status`)
+    if (!(await handleApiError(statusRes, "Get deal status"))) return
+
+    const statusResult = await statusRes.json().catch(() => ({}))
+    const status = statusResult?.data ?? statusResult
+
+    if (!status?.has_payment_gate) {
+      prompts.log.error(`No payment gate for lead #${args.id}`)
+      return
+    }
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
+      method: "DELETE",
+    })
+    if (!(await handleApiError(res, "Delete payment gate"))) return
+
+    const result = await res.json().catch(() => ({}))
+
+    if (args.json) { console.log(JSON.stringify(result, null, 2)); return }
+
+    if (result?.success) {
+      prompts.log.success(`Payment gate deleted for lead #${args.id}`)
+    } else {
+      prompts.log.error(result?.message ?? "Failed to delete payment gate")
+    }
+  },
+})
+
+const DealsUpdateCommand = cmd({
+  command: "update <id>",
+  aliases: ["edit"],
+  describe: "update an existing payment gate (amount, scope, interval)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("amount", { alias: "a", describe: "new amount in dollars", type: "number" })
+      .option("scope", { alias: "s", describe: "new scope of work", type: "string" })
+      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one-time", "month", "quarter", "year"] })
+      .option("pass-fees", { describe: "pass Stripe processing fees to the client", type: "boolean" })
+      .option("absorb-fees", { describe: "absorb Stripe processing fees (you pay them)", type: "boolean" })
+      .option("fee-percent", { describe: "processing fee percentage (default 2.9)", type: "number" })
+      .option("fee-flat", { describe: "processing fee flat amount (default 0.30)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    if (!args.amount && !args.scope && !args.interval && !args["pass-fees"] && !args["absorb-fees"]) {
+      prompts.log.error("Provide at least one field to update: --amount, --scope, --interval, or --pass-fees")
+      return
+    }
+
+    // Get current deal to find step_id
+    const statusRes = await irisFetch(`/api/v1/leads/${args.id}/deal-status`)
+    if (!(await handleApiError(statusRes, "Get deal status"))) return
+
+    const statusResult = await statusRes.json().catch(() => ({}))
+    const status = statusResult?.data ?? statusResult
+
+    if (!status?.has_payment_gate) {
+      prompts.log.error(`No payment gate for lead #${args.id} — create one first: iris deals create ${args.id}`)
+      return
+    }
+
+    // Delete existing and recreate with updated values
+    const delRes = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, { method: "DELETE" })
+    if (!(await handleApiError(delRes, "Remove existing payment gate"))) return
+
+    const body: Record<string, unknown> = {
+      amount: args.amount ?? status.amount,
+      scope: args.scope ?? status.scope,
+    }
+    // Always preserve interval — check explicit flag first, then infer from existing billing_type
+    if (args.interval) {
+      body.interval = args.interval
+    } else if (status.billing_type) {
+      const mapped = { monthly: "month", quarterly: "quarter", yearly: "year", one_time: "one-time" } as Record<string, string>
+      body.interval = mapped[status.billing_type] ?? status.billing_type
+    }
+    if (args["pass-fees"] || args["absorb-fees"] || args["fee-percent"] || args["fee-flat"]) {
+      body.processing_fee_mode = args["absorb-fees"] ? "absorb" : "pass_to_client"
+      if (args["fee-percent"] !== undefined) body.processing_fee_percent = args["fee-percent"]
+      if (args["fee-flat"] !== undefined) body.processing_fee_flat = args["fee-flat"]
+    }
+
+    const createRes = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    if (!(await handleApiError(createRes, "Recreate payment gate"))) return
+
+    const result = await createRes.json().catch(() => ({}))
+
+    if (args.json) { console.log(JSON.stringify(result, null, 2)); return }
+
+    const data = result?.data ?? result
+    prompts.log.success(`Payment gate updated for lead #${args.id}`)
+    if (args.amount) printKV("Amount", `$${args.amount}`)
+    if (args.scope) printKV("Scope", args.scope.substring(0, 80) + (args.scope.length > 80 ? "…" : ""))
+    if (args.interval) printKV("Interval", args.interval)
+    if (data?.proposal_url) printKV("Proposal", data.proposal_url)
+    console.log(dim(`\nTrack: iris deals status ${args.id}`))
+  },
+})
+
 export const PlatformDealsCommand = cmd({
   command: "deals",
   aliases: ["deal", "pipeline"],
@@ -3262,6 +3387,8 @@ export const PlatformDealsCommand = cmd({
       .command(DealsListCommand)
       .command(DealsStatusCommand)
       .command(DealsCreateCommand)
+      .command(DealsUpdateCommand)
+      .command(DealsDeleteCommand)
       .command(DealsRemindCommand)
       .command(DealsRecoverCommand)
       .demandCommand(),
