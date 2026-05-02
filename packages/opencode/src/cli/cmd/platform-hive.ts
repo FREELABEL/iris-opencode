@@ -4,7 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, getBridgeToken } from "./iris-api"
 
 // Use iris-api base for Hive endpoints
-const IRIS_API = process.env.IRIS_API_URL ?? "https://heyiris.io"
+const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
 
 async function hiveFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
@@ -2679,6 +2679,258 @@ const HiveCredentialsCommand = cmd({
 })
 
 // ============================================================================
+// Domain Management (Cloudflare + Domain Mappings)
+// ============================================================================
+
+const FL_API = process.env.FL_API_URL ?? "https://raichu.heyiris.io"
+
+async function flApiFetch(path: string, options: RequestInit = {}) {
+  return irisFetch(path, options, FL_API)
+}
+
+const HiveDomainsProxyCommand = cmd({
+  command: "proxy <subdomain> <target>",
+  describe: "proxy a subdomain to an external URL via Cloudflare + domain mapping",
+  builder: (yargs) =>
+    yargs
+      .positional("subdomain", { describe: "subdomain (e.g. 'comic' → comic.heyiris.io)", type: "string", demandOption: true })
+      .positional("target", { describe: "target URL to proxy to (e.g. https://my-app.vercel.app)", type: "string", demandOption: true })
+      .option("base-domain", { describe: "base domain", type: "string", default: "heyiris.io" })
+      .option("skip-cf", { describe: "skip Cloudflare DNS/route setup (domain mapping only)", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Domain Proxy Setup")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const sub = args.subdomain as string
+    const target = args.target as string
+    const baseDomain = args["base-domain"] as string
+    const domain = sub.includes(".") ? sub : `${sub}.${baseDomain}`
+    const skipCf = args["skip-cf"] as boolean
+
+    const spinner = prompts.spinner()
+
+    // Step 1: Cloudflare DNS + Worker route
+    if (!skipCf) {
+      spinner.start("Creating Cloudflare DNS record…")
+      try {
+        const { execSync } = await import("child_process")
+
+        // Create DNS A record (proxied, dummy IP — Worker intercepts)
+        try {
+          execSync(
+            `npx wrangler dns create ${baseDomain} --type A --name ${sub} --content 192.0.2.1 --proxied`,
+            { stdio: "pipe", timeout: 30000 }
+          )
+          spinner.stop(success("DNS record created"))
+        } catch (dnsErr: any) {
+          const msg = dnsErr?.stderr?.toString() || dnsErr?.message || ""
+          if (msg.includes("already exists") || msg.includes("Record already")) {
+            spinner.stop(dim("DNS record already exists"))
+          } else {
+            spinner.stop("DNS failed — may need manual setup", 1)
+            prompts.log.warn(msg.slice(0, 200))
+          }
+        }
+
+        // Create Worker route
+        spinner.start("Creating Cloudflare Worker route…")
+        try {
+          execSync(
+            `npx wrangler routes create ${baseDomain} --pattern "*${domain}/*" --script iris-domain-proxy`,
+            { stdio: "pipe", timeout: 30000 }
+          )
+          spinner.stop(success("Worker route created"))
+        } catch (routeErr: any) {
+          const msg = routeErr?.stderr?.toString() || routeErr?.message || ""
+          if (msg.includes("already exists") || msg.includes("duplicate")) {
+            spinner.stop(dim("Worker route already exists"))
+          } else {
+            spinner.stop("Route failed — may need manual setup", 1)
+            prompts.log.warn(msg.slice(0, 200))
+          }
+        }
+      } catch (err) {
+        spinner.stop("Cloudflare setup failed", 1)
+        prompts.log.warn("Install wrangler or use --skip-cf. You can set up CF manually.")
+      }
+    }
+
+    // Step 2: Create domain mapping in fl-api
+    spinner.start("Creating domain mapping…")
+    try {
+      const res = await flApiFetch("/api/v1/domain-mappings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          domain,
+          mapping_type: "proxy",
+          mapping_mode: "proxy",
+          proxy_target: target,
+          status: "active",
+        }),
+      })
+
+      if (res.status === 422) {
+        const err = await res.json() as Record<string, unknown>
+        const errors = err.errors as Record<string, string[]> | undefined
+        if (errors?.domain?.[0]?.includes("already")) {
+          spinner.stop(dim("Domain mapping already exists — updating"))
+          // Fetch existing mapping and update it
+          const listRes = await flApiFetch("/api/v1/domain-mappings")
+          const listJson = await listRes.json() as Record<string, unknown>
+          const mappings = (listJson.data ?? []) as Record<string, unknown>[]
+          const existing = mappings.find((m) => m.domain === domain)
+          if (existing) {
+            await flApiFetch(`/api/v1/domain-mappings/${existing.id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ proxy_target: target, mapping_mode: "proxy", mapping_type: "proxy" }),
+            })
+            prompts.log.success("Domain mapping updated")
+          }
+        } else {
+          spinner.stop("Failed", 1)
+          prompts.log.error(JSON.stringify(errors))
+          prompts.outro("Done"); return
+        }
+      } else {
+        const ok = await handleApiError(res, "Create domain mapping")
+        if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+        spinner.stop(success("Domain mapping created"))
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done"); return
+    }
+
+    // Summary
+    printDivider()
+    printKV("Domain", bold(domain))
+    printKV("Target", target)
+    printKV("Mode", "proxy")
+    console.log()
+    console.log(dim(`  Test: curl -sI https://${domain}/`))
+    console.log(dim(`  DNS may take 1-5 min to propagate`))
+
+    prompts.outro("Done")
+  },
+})
+
+const HiveDomainsListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list all domain mappings",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Domain Mappings")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+
+    try {
+      const res = await flApiFetch("/api/v1/domain-mappings")
+      const ok = await handleApiError(res, "List domains")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const json = await res.json() as Record<string, unknown>
+      const mappings = (json.data ?? []) as Record<string, unknown>[]
+
+      spinner.stop(`${mappings.length} mapping(s)`)
+      printDivider()
+
+      if (mappings.length === 0) {
+        console.log(dim("  No domains configured. Add one with: iris hive domains proxy <subdomain> <target>"))
+      } else {
+        for (const m of mappings) {
+          const mode = String(m.mapping_mode ?? m.mapping_type ?? "?")
+          const target = m.proxy_target || (m.page_id ? `page #${m.page_id}` : m.site_id ? `site #${m.site_id}` : "?")
+          const status = m.status === "active"
+            ? `${UI.Style.TEXT_SUCCESS}● active${UI.Style.TEXT_NORMAL}`
+            : dim(String(m.status ?? "pending"))
+          console.log(`  ${bold(String(m.domain))}  ${dim(`[${mode}]`)}  → ${target}  ${status}`)
+        }
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveDomainsRemoveCommand = cmd({
+  command: "remove <domain>",
+  aliases: ["rm", "delete"],
+  describe: "remove a domain mapping",
+  builder: (yargs) =>
+    yargs.positional("domain", { describe: "domain to remove", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Remove Domain Mapping")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const domain = args.domain as string
+    const spinner = prompts.spinner()
+    spinner.start("Finding mapping…")
+
+    try {
+      const listRes = await flApiFetch("/api/v1/domain-mappings")
+      const listJson = await listRes.json() as Record<string, unknown>
+      const mappings = (listJson.data ?? []) as Record<string, unknown>[]
+      const mapping = mappings.find((m) => String(m.domain) === domain)
+
+      if (!mapping) {
+        spinner.stop("Not found", 1)
+        prompts.log.error(`No mapping found for ${domain}`)
+        prompts.outro("Done"); return
+      }
+
+      spinner.stop(`Found: ${domain} → ${mapping.proxy_target || `page #${mapping.page_id}`}`)
+
+      const confirmed = await prompts.confirm({ message: `Delete mapping for ${bold(domain)}?` })
+      if (!confirmed || prompts.isCancel(confirmed)) {
+        prompts.outro("Cancelled"); return
+      }
+
+      spinner.start("Deleting…")
+      const res = await flApiFetch(`/api/v1/domain-mappings/${mapping.id}`, { method: "DELETE" })
+      const ok = await handleApiError(res, "Delete mapping")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(success("Domain mapping removed"))
+      console.log(dim("  Note: Cloudflare DNS record and Worker route are still active."))
+      console.log(dim("  Remove those manually in Cloudflare dashboard if needed."))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const HiveDomainsCommand = cmd({
+  command: "domains",
+  describe: "manage domain mappings and proxies",
+  builder: (yargs) =>
+    yargs
+      .command(HiveDomainsProxyCommand)
+      .command(HiveDomainsListCommand)
+      .command(HiveDomainsRemoveCommand)
+      .demandCommand(1, "Specify: proxy, list, or remove"),
+  async handler() {},
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -2722,6 +2974,8 @@ export const PlatformHiveCommand = cmd({
       .command(HiveExecCommand)
       // Credentials
       .command(HiveCredentialsCommand)
+      // Domain management
+      .command(HiveDomainsCommand)
       .demandCommand(),
   async handler() {},
 })
