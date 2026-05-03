@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, IRIS_API } from "./iris-api"
 
 // Cross-source recall — search past sessions, agent memory, and diary.
 // Backed by /api/v6/recall on iris-api.
@@ -30,12 +30,14 @@ export const PlatformRecallCommand = cmd({
       process.exit(1)
     }
     const token = await requireAuth(); if (!token) return
+    const userId = await requireUserId(); if (!userId) return
 
     UI.empty()
     prompts.intro(`◈  Recall: ${bold(query)}`)
 
     const qs = new URLSearchParams({
       q: query,
+      user_id: String(userId),
       days: String(args.days),
       limit: String(args.limit),
       summarize: args.summarize ? "1" : "0",
