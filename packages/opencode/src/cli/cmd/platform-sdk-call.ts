@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, FL_API, IRIS_API } from "./iris-api"
 
 // ============================================================================
 // platform-sdk-call — generic SDK proxy
@@ -27,6 +27,8 @@ interface RouteDescriptor {
   path: string
   // params consumed by URL placeholders are removed; remaining go to body (POST/PUT/PATCH) or query (GET/DELETE)
   needsUserId?: boolean
+  // which API to call — defaults to fl-api. iris-api endpoints (e.g. /api/v6/recall) set this to "iris"
+  base?: "fl" | "iris"
 }
 
 // Endpoints sourced directly from PHP SDK Resources/* (grepped April 2026)
@@ -115,6 +117,14 @@ const ROUTES: Record<string, RouteDescriptor> = {
   // Tools
   "tools.list": { method: "GET", path: "/api/v1/tools" },
   "tools.invoke": { method: "POST", path: "/api/v1/tools/invoke" },
+
+  // Personality presets (fl-api)
+  "personalities.list": { method: "GET", path: "/api/v1/personalities" },
+  "personalities.get": { method: "GET", path: "/api/v1/personalities/{key}" },
+  "personalities.apply": { method: "POST", path: "/api/v1/users/{userId}/bloqs/agents/{agent}/apply-personality", needsUserId: true },
+
+  // Cross-source recall (iris-api)
+  "recall.search": { method: "GET", path: "/api/v6/recall", base: "iris" },
 
   // Bloq ingestion
   "bloqs.ingestFolder": { method: "POST", path: "/api/v1/bloqs/{bloqId}/ingest-folder" },
@@ -301,10 +311,11 @@ export const PlatformSdkCallCommand = cmd({
       body = JSON.stringify(remaining)
     }
 
+    const apiBase = route.base === "iris" ? IRIS_API : FL_API
     const res = await irisFetch(finalUrl, {
       method: route.method,
       ...(body ? { body } : {}),
-    })
+    }, apiBase)
     const ok = await handleApiError(res, `${route.method} ${endpoint}`)
     if (!ok) process.exit(1)
 
