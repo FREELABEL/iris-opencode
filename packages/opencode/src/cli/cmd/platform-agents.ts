@@ -241,7 +241,7 @@ const AgentsCreateCommand = cmd({
       .option("model", { alias: "m", describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
       .option("type", { describe: "agent type (content, chat, assistant, support)", type: "string", default: "content" })
       .option("bloq-id", { alias: "b", describe: "knowledge base bloq ID", type: "number" })
-      .option("heartbeat-mode", { describe: "heartbeat mode (enabled, disabled, briefing)", type: "string", choices: ["enabled", "disabled", "briefing"] })
+      .option("heartbeat-mode", { describe: "heartbeat mode (autonomous, briefing, disabled)", type: "string", choices: ["autonomous", "briefing", "disabled"] })
       .option("heartbeat-tools", { describe: "comma-separated tool names for heartbeat", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
