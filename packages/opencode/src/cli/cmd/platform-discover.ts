@@ -509,18 +509,122 @@ const InstrumentalsCommand = cmd({
 })
 
 // ============================================================================
+// Featured Artists subcommand (agent-curated, manual override only)
+// ============================================================================
+
+const ArtistsListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "show the curator's currently featured artists + last run meta",
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Featured Artists")
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+    try {
+      const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
+      if (!res.ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = (await res.json()) as any
+      const artists: any[] = data?.data?.featuredArtists ?? []
+      const meta: any = data?.data?.curator ?? {}
+      spinner.stop(`${artists.length} featured artist(s)`)
+
+      if (args.json) { console.log(JSON.stringify({ featuredArtists: artists, curator: meta }, null, 2)); prompts.outro("Done"); return }
+
+      printDivider()
+      if (meta.last_run_at) {
+        printKV("Last curated", meta.last_run_at)
+        if (meta.last_run_by) printKV("Curator", meta.last_run_by)
+        if (meta.reason) printKV("Reason", meta.reason)
+        console.log()
+      }
+      if (artists.length === 0) {
+        console.log(`  ${dim("No artists featured — curator agent has not run yet")}`)
+      } else {
+        for (const a of artists) {
+          const username = bold(`@${a.username}`)
+          const name = a.name ? dim(`(${a.name})`) : ""
+          const category = a.category ? `  ${dim(String(a.category))}` : ""
+          console.log(`  ${username}  ${name}${category}`)
+        }
+      }
+      console.log()
+      printDivider()
+      prompts.outro(dim("iris discover artists set <username...>  to manually override (curator owns the list)"))
+    } catch (err) { spinner.stop("Error", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done") }
+  },
+})
+
+const ArtistsSetCommand = cmd({
+  command: "set <usernames..>",
+  describe: "atomically replace the featured artists list (manual override or agent write)",
+  builder: (yargs) =>
+    yargs
+      .positional("usernames", { describe: "profile usernames (space-separated)", type: "string", array: true, demandOption: true })
+      .option("reason", { describe: "why this set was chosen (logged with the run)", type: "string" })
+      .option("by", { describe: "who/what made the change (defaults to 'manual')", type: "string", default: "manual" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Set Featured Artists (${(args.usernames as string[]).length})`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+    try {
+      const usernames = args.usernames as string[]
+      const putRes = await writeConfigList("discover.featured_profiles", usernames)
+      const ok = await handleApiError(putRes, "Set featured artists")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const meta = {
+        last_run_at: new Date().toISOString(),
+        last_run_by: String(args.by ?? "manual"),
+        reason: args.reason ? String(args.reason) : null,
+        count: usernames.length,
+      }
+      await irisFetch("/api/v1/platform-config/discover.featured_profiles_meta", {
+        method: "PUT",
+        body: JSON.stringify({ value: meta }),
+      })
+
+      spinner.stop(`${success("✓")} Featured ${bold(String(usernames.length))} artist(s)`)
+      printDivider()
+      console.log(`  ${dim("Featured:")} ${usernames.join(", ")}`)
+      if (args.reason) console.log(`  ${dim("Reason:")} ${args.reason}`)
+      console.log(`  ${dim("By:")} ${args.by}`)
+      printDivider()
+      prompts.outro(dim("iris discover artists list"))
+    } catch (err) { spinner.stop("Error", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done") }
+  },
+})
+
+const ArtistsCommand = cmd({
+  command: "artists",
+  aliases: ["featured"],
+  describe: "view + manually override featured artists (normally curated by an agent on heartbeat)",
+  builder: (yargs) =>
+    yargs
+      .command(ArtistsListCommand)
+      .command(ArtistsSetCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root discover command
 // ============================================================================
 
 export const PlatformDiscoverCommand = cmd({
   command: "discover",
-  describe: "manage the Discover page — sponsors, streamers, producers, instrumentals",
+  describe: "manage the Discover page — sponsors, streamers, producers, instrumentals, artists",
   builder: (yargs) =>
     yargs
       .command(SponsorsCommand)
       .command(StreamersCommand)
       .command(ProducersCommand)
       .command(InstrumentalsCommand)
+      .command(ArtistsCommand)
       .demandCommand(),
   async handler() {},
 })
