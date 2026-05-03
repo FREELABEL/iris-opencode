@@ -61,6 +61,30 @@
       "dest": "how-to/deals.md",
       "managed": true,
       "purpose": "Deal pipeline management: list active deals, check status, send reminders, win-back stale deals, heartbeat autonomous recovery."
+    },
+    {
+      "src": "how-to/discover.md",
+      "dest": "how-to/discover.md",
+      "managed": true,
+      "purpose": "Master index for curating the Discover page — all CLI surfaces (sponsors, streamers, producers, instrumentals, opportunities, tutorials, investments) with links to deeper recipes and known gaps."
+    },
+    {
+      "src": "how-to/discover-investments.md",
+      "dest": "how-to/discover-investments.md",
+      "managed": true,
+      "purpose": "Capture and manage investor interest on marketplace opportunities — the dual-sided opportunity flow (workers apply, investors fund)."
+    },
+    {
+      "src": "how-to/learning-tutorials.md",
+      "dest": "how-to/learning-tutorials.md",
+      "managed": true,
+      "purpose": "Price videos and articles as paid tutorials on the Discover Learning tab. Sets price_usd; green pill auto-renders on the card."
+    },
+    {
+      "src": "how-to/community-curation.md",
+      "dest": "how-to/community-curation.md",
+      "managed": true,
+      "purpose": "Feature producer profiles and curate instrumentals on the Discover Community tab via platform_configs."
     }
   ]
 }
