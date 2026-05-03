@@ -429,6 +429,143 @@ const DeleteCommand = cmd({
 })
 
 // ============================================================================
+// Investment interest subcommands
+// ============================================================================
+
+function formatAmount(n: unknown): string {
+  const num = Number(n)
+  if (!isFinite(num)) return "$?"
+  return `$${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function printInterest(i: Record<string, unknown>): void {
+  const name = bold(String(i.investor_name ?? "Anonymous"))
+  const id = dim(`#${i.id}`)
+  const amount = highlight(formatAmount(i.amount_usd))
+  const status = `  ${dim(String(i.status ?? "new"))}`
+  console.log(`  ${amount}  ${name}  ${id}${status}`)
+  if (i.investor_email) console.log(`    ${dim(String(i.investor_email))}`)
+  if (i.opportunity_title) console.log(`    ${dim("→ " + String(i.opportunity_title))}`)
+  if (i.note) console.log(`    ${dim('"' + String(i.note).slice(0, 120) + '"')}`)
+}
+
+const InterestListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list investment interests (all opportunities by default)",
+  builder: (yargs) =>
+    yargs
+      .option("opportunity-id", { describe: "filter by opportunity ID", type: "number" })
+      .option("status", { describe: "filter by status (new, contacted, qualified, committed, funded, declined, withdrawn)", type: "string" })
+      .option("limit", { describe: "max results per page", type: "number", default: 25 }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Investment Interests")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+
+    try {
+      const params = new URLSearchParams({ limit: String(args.limit) })
+      if (args.status) params.set("status", String(args.status))
+
+      const url = args["opportunity-id"]
+        ? `/api/v1/marketplace/opportunities/${args["opportunity-id"]}/investment-interests?${params}`
+        : `/api/v1/marketplace/investment-interests?${params}`
+
+      const res = await irisFetch(url)
+      const ok = await handleApiError(res, "List investment interests")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const raw = (await res.json()) as any
+      const items: any[] = raw?.data?.data ?? raw?.data ?? []
+      const meta: any = raw?.data?.meta ?? raw?.meta ?? {}
+      const total: number = meta.total ?? items.length
+      const totalAmount: number | undefined = meta.total_amount_usd
+
+      spinner.stop(`${total} interest(s)${totalAmount !== undefined ? `  ·  ${formatAmount(totalAmount)} total` : ""}`)
+
+      if (items.length === 0) { prompts.log.warn("No investment interests yet"); prompts.outro("Done"); return }
+
+      printDivider()
+      for (const i of items) { printInterest(i); console.log() }
+      printDivider()
+
+      prompts.outro(dim("iris opportunities interest show <id>"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const InterestShowCommand = cmd({
+  command: "show <id>",
+  describe: "show full investment interest details",
+  builder: (yargs) =>
+    yargs.positional("id", { describe: "investment interest ID", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Investment Interest #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+
+    try {
+      const res = await irisFetch(`/api/v1/marketplace/investment-interests?limit=200`)
+      const ok = await handleApiError(res, "Fetch investment interest")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const raw = (await res.json()) as any
+      const items: any[] = raw?.data?.data ?? raw?.data ?? []
+      const interest = items.find((i) => Number(i.id) === Number(args.id))
+
+      if (!interest) { spinner.stop("Not found", 1); prompts.log.error(`Interest #${args.id} not found`); prompts.outro("Done"); return }
+
+      spinner.stop(String(interest.investor_name ?? `#${interest.id}`))
+
+      printDivider()
+      printKV("ID", interest.id)
+      printKV("Opportunity", interest.opportunity_title ? `${interest.opportunity_title} (#${interest.opportunity_id})` : `#${interest.opportunity_id}`)
+      printKV("Investor", interest.investor_name)
+      printKV("Email", interest.investor_email)
+      printKV("Amount", formatAmount(interest.amount_usd))
+      printKV("Status", interest.status)
+      printKV("Submitted", interest.created_at)
+      if (interest.contacted_at) printKV("Contacted", interest.contacted_at)
+      if (interest.note) { console.log(); console.log(`  ${dim("Note:")}`); console.log(`  ${String(interest.note)}`) }
+      console.log()
+      printDivider()
+
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const InterestCommand = cmd({
+  command: "interest",
+  aliases: ["interests", "investors"],
+  describe: "view and manage investment interests on opportunities",
+  builder: (yargs) =>
+    yargs
+      .command(InterestListCommand)
+      .command(InterestShowCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -445,6 +582,7 @@ export const PlatformOpportunitiesCommand = cmd({
       .command(PushCommand)
       .command(DiffCommand)
       .command(DeleteCommand)
+      .command(InterestCommand)
       .demandCommand(),
   async handler() {},
 })

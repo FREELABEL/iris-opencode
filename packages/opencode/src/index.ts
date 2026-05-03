@@ -48,6 +48,7 @@ import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
 import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
 import { PlatformDiscoverCommand } from "./cli/cmd/platform-discover"
 import { PlatformOpportunitiesCommand } from "./cli/cmd/platform-opportunities"
+import { PlatformTutorialsCommand } from "./cli/cmd/platform-tutorials"
 import { PlatformServicesCommand } from "./cli/cmd/platform-services"
 import { PlatformProductsCommand } from "./cli/cmd/platform-products"
 import { PlatformEventsCommand } from "./cli/cmd/platform-events"
@@ -219,6 +220,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformBoardsCommand))
   .command(reg(PlatformDiscoverCommand))
   .command(reg(PlatformOpportunitiesCommand))
+  .command(reg(PlatformTutorialsCommand))
   .command(reg(PlatformServicesCommand))
   .command(reg(PlatformProductsCommand))
   .command(reg(PlatformEventsCommand))

@@ -137,6 +137,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   programs: "entities",
   discover: "entities",
   opportunities: "entities",
+  tutorials: "entities",
   packages: "entities",
   profile: "entities",
 
