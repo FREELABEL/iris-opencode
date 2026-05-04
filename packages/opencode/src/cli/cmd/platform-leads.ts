@@ -1425,6 +1425,171 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
 // Pulse — cross-channel activity check for a lead
 // ============================================================================
 
+// ============================================================================
+// LeadsSyncCommsCommand — silent batch comms ingest (used by Hive comms_sync task)
+// ============================================================================
+//
+// Fetches recent comms (Gmail / iMessage / Apple Mail) for one or more leads
+// and POSTs them to /api/v1/atlas/comms/ingest. NO TUI. NO score display.
+// Designed to be invoked by the bridge daemon when it picks up a comms_sync
+// Hive task — silent so the daily Pulse score speaks for itself.
+//
+//   iris leads sync-comms 12065 12066 12067
+//
+// Output: a single JSON line per lead on stdout: {lead_id, ingested, errors}
+// Exit code: 0 if at least one lead succeeded; non-zero only on hard failure
+// ============================================================================
+const LeadsSyncCommsCommand = cmd({
+  command: "sync-comms <ids...>",
+  describe: "silently fetch + ingest recent comms for one or more leads (used by Hive comms_sync)",
+  builder: (yargs) =>
+    yargs
+      .positional("ids", { describe: "lead IDs to sync", type: "string", array: true, demandOption: true })
+      .option("days", { describe: "look-back window in days", type: "number", default: 30 })
+      .option("limit", { describe: "max messages per channel per lead", type: "number", default: 50 }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) { process.exitCode = 1; return }
+
+    const days = args.days as number
+    const msgLimit = args.limit as number
+    const ids = (args.ids as string[]).map((s) => parseInt(s, 10)).filter((n) => !isNaN(n))
+
+    let totalIngested = 0
+    let totalErrors = 0
+
+    for (const leadId of ids) {
+      try {
+        // Load lead (need email + phone to drive the channel scan)
+        const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
+        if (!leadRes.ok) {
+          console.log(JSON.stringify({ lead_id: leadId, ingested: 0, error: `lead-fetch HTTP ${leadRes.status}` }))
+          totalErrors++
+          continue
+        }
+        const leadBody = (await leadRes.json()) as any
+        const lead = leadBody?.data ?? leadBody
+        const email = (lead?.email ?? "") as string
+        const phone = (lead?.phone ?? "") as string
+        const name = (lead?.name ?? lead?.first_name ?? "") as string
+
+        if (!email && !phone && !name) {
+          console.log(JSON.stringify({ lead_id: leadId, ingested: 0, error: "no email/phone/name" }))
+          continue
+        }
+
+        type ChannelResult = { name: string; messages: any[]; error?: string }
+        const channels: ChannelResult[] = []
+
+        // ── Gmail (server-side endpoint — no bridge needed) ──
+        if (email) {
+          try {
+            const r = await irisFetch(`/api/v1/leads/${leadId}/gmail-threads`)
+            if (r.ok) {
+              const d = (await r.json()) as any
+              const threads = d?.data ?? d?.threads ?? []
+              const msgs = Array.isArray(threads)
+                ? threads.slice(0, msgLimit).map((t: any) => ({
+                    subject: t.subject ?? t.snippet ?? "(no subject)",
+                    from: t.from ?? "",
+                    date: t.last_message_at ?? t.first_message_at ?? "",
+                    thread_id: t.gmail_thread_id ?? "",
+                  }))
+                : []
+              channels.push({ name: "Gmail", messages: msgs })
+            }
+          } catch { /* non-fatal */ }
+        }
+
+        // ── iMessage (via local bridge) ──
+        const handle = phone || email
+        if (handle) {
+          try {
+            const r = await fetch(
+              `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=${msgLimit}`,
+              { headers: bridgeHeaders(), signal: AbortSignal.timeout(10000) },
+            )
+            if (r.ok) {
+              const d = (await r.json()) as any
+              channels.push({ name: "iMessage", messages: d?.messages ?? [] })
+            }
+          } catch { /* bridge offline → silent skip */ }
+        }
+
+        // ── Apple Mail (via local bridge) ──
+        if (email) {
+          try {
+            const r = await fetch(
+              `${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=${msgLimit}`,
+              { headers: bridgeHeaders(), signal: AbortSignal.timeout(10000) },
+            )
+            if (r.ok) {
+              const d = (await r.json()) as any
+              channels.push({ name: "Apple Mail", messages: d?.messages ?? [] })
+            }
+          } catch { /* non-fatal */ }
+        }
+
+        // ── Map channel results → atlas/comms/ingest payload (same shape as pulse) ──
+        const channelMap: Record<string, string> = { Gmail: "gmail", iMessage: "imessage", "Apple Mail": "apple_mail" }
+        let leadIngested = 0
+        for (const ch of channels) {
+          const channelKey = channelMap[ch.name]
+          if (!channelKey || ch.messages.length === 0) continue
+
+          const items = ch.messages.map((msg: any) => {
+            if (ch.name === "iMessage") {
+              return {
+                direction: msg.from_me ? "outbound" : "inbound",
+                from_identifier: msg.from_me ? "me" : (phone || email),
+                body: msg.text ?? "",
+                sent_at: msg.ts ?? msg.date ?? null,
+                metadata: { source: "comms_sync_task" },
+              }
+            } else if (ch.name === "Gmail") {
+              return {
+                direction: (msg.from ?? "").toLowerCase().includes(email.toLowerCase()) ? "inbound" : "outbound",
+                from_identifier: msg.from ?? "",
+                subject: msg.subject ?? "",
+                body: msg.snippet ?? msg.subject ?? "",
+                sent_at: msg.date ?? null,
+                metadata: { gmail_thread_id: msg.thread_id, source: "comms_sync_task" },
+              }
+            } else {
+              return {
+                direction: "inbound",
+                from_identifier: email,
+                subject: msg.subject ?? "",
+                body: msg.body ?? msg.subject ?? "",
+                sent_at: msg.date ?? msg.ts ?? null,
+                metadata: { source: "comms_sync_task" },
+              }
+            }
+          })
+
+          if (items.length > 0) {
+            try {
+              const ingestRes = await irisFetch("/api/v1/atlas/comms/ingest", {
+                method: "POST",
+                body: JSON.stringify({ lead_id: leadId, channel: channelKey, items }),
+              })
+              if (ingestRes.ok) leadIngested += items.length
+            } catch { /* non-fatal */ }
+          }
+        }
+
+        totalIngested += leadIngested
+        console.log(JSON.stringify({ lead_id: leadId, ingested: leadIngested, channels: channels.length }))
+      } catch (e: any) {
+        totalErrors++
+        console.log(JSON.stringify({ lead_id: leadId, ingested: 0, error: e?.message ?? String(e) }))
+      }
+    }
+
+    if (totalIngested === 0 && totalErrors === ids.length) process.exitCode = 1
+  },
+})
+
 const LeadsPulseCommand = cmd({
   command: "pulse <id>",
   aliases: ["inbox", "incoming"],
@@ -3036,6 +3201,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsDeleteCommand)
       .command(LeadsMergeCommand)
       .command(LeadsPulseCommand)
+      .command(LeadsSyncCommsCommand)
       .command(LeadsMeetCommand)
       .command(LeadsMeetingsCommand)
       .command(LeadsNotesCommand)
