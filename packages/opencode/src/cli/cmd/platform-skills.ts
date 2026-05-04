@@ -117,6 +117,104 @@ const SkillsDeleteCommand = cmd({
   },
 })
 
+// Skill flywheel — Stage 5 review queue. Auto-generated drafts from the
+// trajectory→pattern→synthesis pipeline land in pending_review status; this
+// subcommand lets the originator approve (publish + auto-install) or reject.
+
+const SkillsReviewListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list auto-generated skill drafts pending review (originator-only)",
+  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Skill Drafts — Pending Review")
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/skills/auto-generated/pending`)
+    const ok = await handleApiError(res, "List pending drafts"); if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    const drafts: any[] = data?.data ?? []
+    if (args.json) { console.log(JSON.stringify(drafts, null, 2)); prompts.outro("Done"); return }
+    if (drafts.length === 0) {
+      printDivider()
+      console.log(`  ${dim("No drafts pending review.")}`)
+      printDivider()
+      prompts.outro("Done")
+      return
+    }
+    printDivider()
+    for (const d of drafts) {
+      console.log(`  ${bold(`#${d.id}`)} ${d.display_name}`)
+      console.log(`     ${dim(`tools: ${(d.tool_sequence ?? []).join(" → ") || "(none)"}`)}`)
+      console.log(`     ${dim(`confidence: ${d.confidence?.toFixed?.(2) ?? d.confidence}, bloq: ${d.originating_bloq_id ?? "(any)"}, examples: ${(d.trajectory_ids ?? []).length}`)}`)
+      console.log(`     ${dim(d.description ?? "")}`)
+      console.log()
+    }
+    printDivider()
+    prompts.outro(`${drafts.length} draft(s) — approve with: iris skills review approve <id>`)
+  },
+})
+
+const SkillsReviewApproveCommand = cmd({
+  command: "approve <id>",
+  describe: "approve an auto-generated skill draft (publishes + auto-installs)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { type: "number", demandOption: true })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Approve Skill Draft #${args.id}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/skills/${args.id}/approve`, { method: "POST", body: JSON.stringify({}) })
+    const ok = await handleApiError(res, "Approve skill"); if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    printDivider()
+    console.log(`  ${success("✓")} ${data?.message ?? "Approved"}`)
+    if (data?.data?.installation_id) console.log(`  ${dim(`Installation ID: ${data.data.installation_id}`)}`)
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
+const SkillsReviewRejectCommand = cmd({
+  command: "reject <id>",
+  describe: "reject an auto-generated skill draft",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { type: "number", demandOption: true })
+      .option("reason", { type: "string", describe: "optional rejection reason" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Reject Skill Draft #${args.id}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const body: Record<string, unknown> = {}
+    if (args.reason) body.reason = String(args.reason)
+    const res = await irisFetch(`/api/v1/skills/${args.id}/reject`, { method: "POST", body: JSON.stringify(body) })
+    const ok = await handleApiError(res, "Reject skill"); if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    printDivider()
+    console.log(`  ${success("✓")} ${data?.message ?? "Rejected"}`)
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
+const SkillsReviewCommand = cmd({
+  command: "review <command>",
+  describe: "review auto-generated skill drafts — list, approve, reject",
+  builder: (yargs) =>
+    yargs
+      .command(SkillsReviewListCommand)
+      .command(SkillsReviewApproveCommand)
+      .command(SkillsReviewRejectCommand)
+      .demandCommand(1, "specify a subcommand: list | approve <id> | reject <id>"),
+  handler: () => {},
+})
+
 export const PlatformSkillsCommand = cmd({
   command: "skills",
   describe: "manage agent skills (V6)",
@@ -126,6 +224,7 @@ export const PlatformSkillsCommand = cmd({
       .command(SkillsShowCommand)
       .command(SkillsCreateCommand)
       .command(SkillsDeleteCommand)
+      .command(SkillsReviewCommand)
       .demandCommand(),
   async handler() {},
 })

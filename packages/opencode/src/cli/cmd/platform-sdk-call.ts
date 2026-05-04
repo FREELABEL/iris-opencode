@@ -126,6 +126,11 @@ const ROUTES: Record<string, RouteDescriptor> = {
   // Cross-source recall (iris-api)
   "recall.search": { method: "GET", path: "/api/v6/recall", base: "iris" },
 
+  // Skill flywheel review queue (fl-api)
+  "skills.pending": { method: "GET", path: "/api/v1/skills/auto-generated/pending" },
+  "skills.approve": { method: "POST", path: "/api/v1/skills/{id}/approve" },
+  "skills.reject": { method: "POST", path: "/api/v1/skills/{id}/reject" },
+
   // Bloq ingestion
   "bloqs.ingestFolder": { method: "POST", path: "/api/v1/bloqs/{bloqId}/ingest-folder" },
   "bloqs.ingestionJobs": { method: "GET", path: "/api/v1/bloqs/{bloqId}/ingestion-jobs" },
