@@ -1522,23 +1522,56 @@ const LeadsPulseCommand = cmd({
       printKV("Status", lead.status)
       printKV("Company", lead.company)
 
-      // Lead completeness score — surface gaps proactively
-      const fields = [
-        { name: "email", has: !!email },
-        { name: "phone", has: !!phone },
-        { name: "company", has: !!lead.company },
-        { name: "stage", has: !!lead.stage },
-        { name: "source", has: !!(lead.source ?? lead.keywords?.source) },
-        { name: "bloq", has: Array.isArray(lead.bloq_ids) ? lead.bloq_ids.length > 0 : !!lead.bloq_id },
-        { name: "notes", has: Array.isArray(lead.notes) && lead.notes.length > 0 },
-      ]
-      const score = Math.round((fields.filter((f) => f.has).length / fields.length) * 100)
-      const missing = fields.filter((f) => !f.has).map((f) => f.name)
-      const scoreColor = score >= 80 ? success(`${score}%`) : score >= 50 ? `${UI.Style.TEXT_WARNING}${score}%${UI.Style.TEXT_NORMAL}` : `${UI.Style.TEXT_DANGER}${score}%${UI.Style.TEXT_NORMAL}`
-      if (missing.length > 0) {
-        printKV("Completeness", `${scoreColor}  ${dim(`missing: ${missing.join(", ")}`)}`)
-      } else {
-        printKV("Completeness", scoreColor)
+      // Pulse readiness score — single source of truth.
+      // Same number the cron snapshots and the daily digest emails.
+      // Replaces the old inline 7-field completeness % calc.
+      let pulseReadiness: any = null
+      try {
+        const rRes = await irisFetch(`/api/v1/leads/${leadId}/readiness?include=history`)
+        if (rRes.ok) {
+          const rBody = (await rRes.json()) as any
+          pulseReadiness = rBody?.data ?? null
+        }
+      } catch { /* non-fatal — render without the score */ }
+
+      if (pulseReadiness) {
+        const ps = pulseReadiness.score as number
+        const band = (pulseReadiness.band as string) ?? "failing"
+        const bandLabel: Record<string, string> = {
+          healthy: success(`${ps}/100  healthy`),
+          attention: `${UI.Style.TEXT_WARNING}${ps}/100  attention${UI.Style.TEXT_NORMAL}`,
+          at_risk: `${UI.Style.TEXT_WARNING}${ps}/100  at risk${UI.Style.TEXT_NORMAL}`,
+          failing: `${UI.Style.TEXT_DANGER}${ps}/100  failing${UI.Style.TEXT_NORMAL}`,
+        }
+        printKV("Pulse", bandLabel[band] ?? `${ps}/100  ${band}`)
+
+        // Sparkline — 8 most recent snapshots, oldest left, newest right.
+        const history: Array<{ score: number }> = pulseReadiness.history ?? []
+        if (history.length >= 2) {
+          const blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+          const chronological = [...history].reverse() // history is newest-first
+          const recent = chronological.slice(-8)
+          const sparkline = recent
+            .map((h) => blocks[Math.min(7, Math.max(0, Math.floor(h.score / 12.5)))])
+            .join("")
+          printKV("Trend", `${dim(sparkline)}  ${dim(`(${history.length} snapshots)`)}`)
+        }
+
+        // Per-signal breakdown — show what's pulling the score down/up.
+        const sigs = pulseReadiness.signals ?? {}
+        const reqS = sigs.requirements?.score
+        const liveS = sigs.liveness?.score
+        const commsS = sigs.comms_freshness?.score
+        const cfgS = sigs.config?.score
+        const fmt = (v: number | null | undefined) =>
+          v === null || v === undefined ? dim("—") : `${v}/100`
+        const sigLine = [
+          `req ${fmt(reqS)}`,
+          `live ${fmt(liveS)}`,
+          `comms ${fmt(commsS)}`,
+          `cfg ${fmt(cfgS)}`,
+        ].join(dim(" · "))
+        printKV("Signals", sigLine)
       }
 
       // Duplicate detection — search for leads with same email/phone/name
