@@ -149,7 +149,12 @@ const CreateCommand = cmd({
       .option("skills", { describe: "required skills (comma-separated)", type: "string" })
       .option("min-budget", { describe: "minimum budget", type: "number" })
       .option("max-budget", { describe: "maximum budget", type: "number" })
-      .option("deadline", { describe: "deadline (YYYY-MM-DD)", type: "string" }),
+      .option("deadline", { describe: "deadline (YYYY-MM-DD)", type: "string" })
+      .option("funding-goal", { describe: "crowdfunding goal in dollars (e.g. 100000 for $100K)", type: "number" })
+      .option("equity-pool-pct", { describe: "equity pool percentage (e.g. 5 for 5%)", type: "number" })
+      .option("roles-file", { describe: "path to roles JSON array (key/title/count/pay_type/pay_amount/equity_bps/description)", type: "string" })
+      .option("pitch-file", { describe: "path to pitch sections JSON array ({heading, body})", type: "string" })
+      .option("preview", { describe: "create in preview mode (banner shown, applications/investments disabled)", type: "boolean" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Opportunity")
@@ -185,6 +190,19 @@ const CreateCommand = cmd({
       if (args["min-budget"]) payload.price_min = args["min-budget"]
       if (args["max-budget"]) payload.price_max = args["max-budget"]
       if (args.deadline) payload.application_deadline = args.deadline
+      if (args["funding-goal"] !== undefined) payload.funding_goal_cents = Math.round(Number(args["funding-goal"]) * 100)
+      if (args["equity-pool-pct"] !== undefined) payload.equity_pool_bps = Math.round(Number(args["equity-pool-pct"]) * 100)
+      if (args["roles-file"]) {
+        const rolesPath = String(args["roles-file"])
+        if (!existsSync(rolesPath)) { spinner.stop("Failed", 1); prompts.log.error(`Roles file not found: ${rolesPath}`); prompts.outro("Done"); return }
+        payload.roles = JSON.parse(readFileSync(rolesPath, "utf-8"))
+      }
+      if (args["pitch-file"]) {
+        const pitchPath = String(args["pitch-file"])
+        if (!existsSync(pitchPath)) { spinner.stop("Failed", 1); prompts.log.error(`Pitch file not found: ${pitchPath}`); prompts.outro("Done"); return }
+        payload.pitch_sections = JSON.parse(readFileSync(pitchPath, "utf-8"))
+      }
+      if (args.preview) payload.preview_mode = true
 
       const res = await irisFetch("/api/v1/marketplace/opportunities", { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create opportunity")
@@ -292,6 +310,9 @@ const PushCommand = cmd({
       const payload: Record<string, unknown> = {
         title: entity.title, description: entity.description, skills_required: entity.skills_required ?? entity.skills,
         price_min: entity.price_min ?? entity.min_budget, price_max: entity.price_max ?? entity.max_budget, application_deadline: entity.application_deadline ?? entity.deadline,
+        funding_goal_cents: entity.funding_goal_cents, equity_pool_bps: entity.equity_pool_bps,
+        roles: entity.roles, pitch_sections: entity.pitch_sections,
+        preview_mode: entity.preview_mode, is_public: entity.is_public,
       }
       for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
 
@@ -356,7 +377,12 @@ const DiffCommand = cmd({
 
       const local = JSON.parse(readFileSync(filepath, "utf-8"))
 
-      const fields = ["title", "description", "status", "min_budget", "max_budget", "deadline"]
+      const fields = [
+        "title", "description", "status",
+        "price_min", "price_max", "application_deadline",
+        "funding_goal_cents", "equity_pool_bps", "roles", "pitch_sections",
+        "preview_mode", "is_public",
+      ]
       const changes: { field: string; live: unknown; local: unknown }[] = []
 
       for (const f of fields) {
@@ -364,8 +390,10 @@ const DiffCommand = cmd({
           changes.push({ field: f, live: live[f], local: local[f] })
         }
       }
-      if (JSON.stringify(live.skills ?? null) !== JSON.stringify(local.skills ?? null)) {
-        changes.push({ field: "skills", live: live.skills, local: local.skills })
+      const liveSkills = live.skills_required ?? live.skills
+      const localSkills = local.skills_required ?? local.skills
+      if (JSON.stringify(liveSkills ?? null) !== JSON.stringify(localSkills ?? null)) {
+        changes.push({ field: "skills_required", live: liveSkills, local: localSkills })
       }
 
       spinner.stop(changes.length === 0 ? success("In sync") : `${changes.length} difference(s)`)
@@ -387,6 +415,58 @@ const DiffCommand = cmd({
       printDivider()
 
       prompts.outro(changes.length > 0 ? dim(`iris opportunities push ${args.id}`) : "Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const PreviewCommand = cmd({
+  command: "preview <id>",
+  describe: "toggle preview_mode on an opportunity (banner shown, applications/investments disabled)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "opportunity ID", type: "number", demandOption: true })
+      .option("on", { describe: "enable preview mode", type: "boolean" })
+      .option("off", { describe: "disable preview mode (go live)", type: "boolean" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Preview Mode #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    let nextValue: boolean
+    if (args.on) nextValue = true
+    else if (args.off) nextValue = false
+    else {
+      const spinnerLookup = prompts.spinner()
+      spinnerLookup.start("Fetching current state…")
+      const liveRes = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`)
+      const liveOk = await handleApiError(liveRes, "Fetch opportunity")
+      if (!liveOk) { spinnerLookup.stop("Failed", 1); prompts.outro("Done"); return }
+      const liveData = (await liveRes.json()) as { data?: any }
+      const liveEntity = liveData?.data ?? liveData
+      const current = Boolean(liveEntity.preview_mode)
+      spinnerLookup.stop(`Currently: ${current ? bold("PREVIEW") : bold("LIVE")}`)
+      nextValue = !current
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start(`Setting preview_mode=${nextValue}…`)
+
+    try {
+      const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ preview_mode: nextValue }),
+      })
+      const ok = await handleApiError(res, "Update opportunity")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} ${nextValue ? "Preview mode ON" : "LIVE — applications & investments enabled"}`)
+      prompts.outro(dim(`iris opportunities get ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -581,6 +661,7 @@ export const PlatformOpportunitiesCommand = cmd({
       .command(PullCommand)
       .command(PushCommand)
       .command(DiffCommand)
+      .command(PreviewCommand)
       .command(DeleteCommand)
       .command(InterestCommand)
       .demandCommand(),

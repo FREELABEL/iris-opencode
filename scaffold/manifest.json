@@ -1,5 +1,5 @@
 {
-  "version": "2026.05.04",
+  "version": "2026.05.06",
   "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
   "files": [
     {

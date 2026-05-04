@@ -6,6 +6,40 @@ A marketplace opportunity isn't just a job posting — it's a **pitch page**. Ea
 
 This recipe covers authoring those rich opportunity pages from the CLI.
 
+## Canonical example
+
+The reference implementation is the **Smart Notebook — Encrypted Personal Server** opportunity (Andrew Escher / Good Deals Hardware). It exercises every field — funding goal, 4 roles with mixed pay types, 6 pitch sections, board members, 4 milestones, sample backer.
+
+Seed it locally:
+
+```bash
+docker compose exec api php artisan atlas:seed-opportunity-schemas
+docker compose exec api php artisan db:seed --class=SmartNotebookOpportunitySeeder
+```
+
+It seeds with `preview_mode=true` — the page renders fully but Apply/Invest are disabled and a yellow `PREVIEW — NOT LIVE` banner sits at the top. Flip `preview_mode=false` (via `iris opportunities push` or directly in DB) to make it live.
+
+## Preview mode
+
+Set `preview_mode=true` on any opportunity to:
+
+- Render a `PREVIEW — NOT LIVE` banner at the top of the page
+- Show a `PREVIEW` pill next to the status badge
+- Disable the per-role Apply buttons (label changes to "Preview")
+- Replace the bottom Apply/Invest tabs with a "Preview Mode" notice
+
+Use this when you want a shareable URL for founder/investor feedback before opening real applications.
+
+**Toggle preview mode from the CLI:**
+
+```bash
+$ iris opportunities preview 494           # toggle (auto-detects current state)
+$ iris opportunities preview 494 --on      # force preview
+$ iris opportunities preview 494 --off     # go live
+```
+
+Or create directly in preview mode: `iris opportunities create ... --preview`. Or set `preview_mode: true` in the JSON and `iris opportunities push <id>`.
+
 ## Prerequisites
 
 - Authenticated (`iris-login` complete)
