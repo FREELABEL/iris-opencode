@@ -1,0 +1,40 @@
+{
+  "id": 124,
+  "slug": "dent-society-dashboard",
+  "title": "Dent Society Performance",
+  "seo_title": "Dent Society \u2014 Operations Dashboard",
+  "seo_description": "Dent Society back-office dashboard \u2014 job pipeline, technician scheduling, revenue tracking, insurance claims, and real-time activity feed.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "bloq",
+  "owner_id": 174,
+  "json_content": {
+    "metadata": {
+      "title": "Dent Society Performance",
+      "themeMode": "light"
+    },
+    "components": [
+      {
+        "type": "Hero",
+        "props": {
+          "title": "Dent Society Performance",
+          "subtitle": "Live performance and conversion across all pages",
+          "textAlign": "center",
+          "minHeight": "300px",
+          "themeMode": "light"
+        }
+      },
+      {
+        "type": "AnalyticsDashboard",
+        "props": {
+          "prefix": "dent-society",
+          "title": "Performance",
+          "subtitle": "Auto-refreshes every minute",
+          "accentColor": "#dc2626",
+          "themeMode": "light",
+          "refreshInterval": 60
+        }
+      }
+    ]
+  }
+}

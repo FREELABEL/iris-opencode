@@ -1,0 +1,383 @@
+{
+  "id": 44,
+  "slug": "dent-society",
+  "title": "Dent Society — Precision Hail Repair",
+  "seo_title": "Dent Society — Precision Hail Repair",
+  "seo_description": "Precision paintless dent repair. 48-hour turnaround guaranteed. Insurance handled. Complimentary loaner. Serving Dallas-Fort Worth.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "bloq",
+  "owner_id": 279,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "light",
+      "branding": {
+        "name": "Dent Society",
+        "primaryColor": "#FF192C",
+        "description": "Precision paintless dent repair. 48-hour turnaround guaranteed. Insurance handled. Complimentary loaner. Serving Dallas-Fort Worth."
+      }
+    },
+    "components": [
+      {
+        "type": "SiteNavigation",
+        "id": "ds-nav",
+        "props": {
+          "logo": {
+            "text": "Dent Society",
+            "textStyle": {
+              "display": "none"
+            },
+            "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059693_Asset-2@4x-8.png",
+            "imageHeight": "40px",
+            "url": "/p/dent-society",
+            "accentDot": false
+          },
+          "links": [
+            {
+              "label": "Services",
+              "url": "#services"
+            },
+            {
+              "label": "Process",
+              "url": "#process"
+            },
+            {
+              "label": "About",
+              "url": "#about"
+            },
+            {
+              "label": "Reviews",
+              "url": "#reviews"
+            }
+          ],
+          "ctaButton": {
+            "text": "Start Assessment",
+            "url": "/p/dent-society-booking"
+          },
+          "ctaFilled": true,
+          "ctaColor": "#FF192C",
+          "transparent": true,
+          "themeMode": "dark"
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "ds-hero",
+        "props": {
+          "labelText": "Dallas's Trusted Name in Hail Repair",
+          "title": "48-Hour Hail Repair. $0 Out of Pocket. Lifetime Warranty.",
+          "subtitle": "Precision paintless dent restoration with complimentary pickup, loaner vehicle, and insurance coordination.",
+          "backgroundImage": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059973_hero-pdr-crop.jpg",
+          "overlayGradient": "linear-gradient(to bottom, rgba(0,0,0,0.85), rgba(0,0,0,0.6), rgba(0,0,0,0.85))",
+          "labelColor": "#FF192C",
+          "primaryButtonText": "Start 48-Hour Repair",
+          "primaryButtonUrl": "/p/dent-society-booking",
+          "primaryButtonVariant": "red",
+          "secondaryButtonText": "(214) 919-2237",
+          "secondaryButtonUrl": "tel:2149192237",
+          "secondaryButtonVariant": "ghost",
+          "textAlign": "center",
+          "fullHeight": true,
+          "showScrollIndicator": true,
+          "backgroundPattern": "grid",
+          "themeMode": "dark"
+        }
+      },
+      {
+        "type": "FeatureTabs",
+        "id": "process",
+        "props": {
+          "heading": "How It Works",
+          "subheading": "From the first call to the final detail, built around your time.",
+          "tabPosition": "left",
+          "accentColor": "#ffffff",
+          "themeMode": "dark",
+          "tabs": [
+            {
+              "label": "Claim Assistance",
+              "title": "We Handle Your Insurance",
+              "description": "We write the estimate, talk to your adjuster, and get the check.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059305_img1-tech-working.jpg",
+              "linkUrl": "/p/dent-society-booking",
+              "linkText": "Start your claim"
+            },
+            {
+              "label": "Loaner Vehicle",
+              "title": "Never Stranded",
+              "description": "We drop off a complimentary loaner so you're never without a ride. Pickup and delivery included.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059469_img10-body-shop.jpg",
+              "linkUrl": "/p/dent-society-booking",
+              "linkText": "Schedule pickup"
+            },
+            {
+              "label": "Precision Repair",
+              "title": "LED PDR Technology",
+              "description": "LED precision mapping guides our master techs to remove every dent without paint or filler. Factory finish stays intact.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059306_img3-pdr-tool.jpg",
+              "linkUrl": "/p/dent-society-booking",
+              "linkText": "See the tech"
+            },
+            {
+              "label": "QC & Detail",
+              "title": "Returned Like New",
+              "description": "Every vehicle is inspected under multi-angle lighting, then gets a full interior and exterior detail before key handoff.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059310_img8-detail-wipe.jpg",
+              "linkUrl": "/p/dent-society-booking",
+              "linkText": "Book now"
+            }
+          ]
+        }
+      },
+      {
+        "type": "ProcessSteps",
+        "id": "how-it-works",
+        "props": {
+          "label": "The Process",
+          "heading": "We Handle Everything.",
+          "subheading": "From first call to final key handoff.",
+          "accentColor": "#FF192C",
+          "themeMode": "dark",
+          "steps": [
+            {
+              "icon": "file-check",
+              "title": "Claim Coordination",
+              "description": "We contact your insurance carrier. We manage the adjuster. We document everything.",
+              "callout": "You won't need to negotiate."
+            },
+            {
+              "icon": "car",
+              "title": "Pickup & Complimentary Loaner",
+              "description": "Drop off at our facility, or we pick up your vehicle and deliver a complimentary loaner.",
+              "callout": "Your schedule stays intact.",
+              "badge": "Complimentary loaner"
+            },
+            {
+              "icon": "wrench",
+              "title": "Precision Restoration",
+              "description": "LED precision mapping. Master-level PDR technicians. No fillers. No repaint. No shortcuts.",
+              "callout": "Damage is removed. Factory finish preserved."
+            },
+            {
+              "icon": "sparkles",
+              "title": "Quality Control",
+              "description": "Every vehicle passes multi-point inspection under controlled lighting.",
+              "callout": "If it's not perfect, it doesn't leave."
+            },
+            {
+              "icon": "key-round",
+              "title": "Delivery & Key Exchange",
+              "description": "Pick up your vehicle or have it delivered back to you. Loaner retrieved at exchange.",
+              "callout": "Vehicle returned fully detailed. Warranty issued."
+            }
+          ]
+        }
+      },
+      {
+        "type": "ScrollShowcase",
+        "id": "services",
+        "props": {
+          "backgroundColor": "#0a0a0a",
+          "backgroundColors": [
+            "#0a0a0a",
+            "#080808",
+            "#0a0a0a",
+            "#080808"
+          ],
+          "maxWidth": "1100px",
+          "imageHeight": "420px",
+          "imageRadius": "12px",
+          "themeMode": "dark",
+          "items": [
+            {
+              "title": "Hail Damage Repair",
+              "description": "LED precision mapping. Master-level PDR technicians. No fillers. No repaint. No shortcuts. Your factory finish stays intact — restored in 48 hours flat.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059467_img9-hail-roof.jpg",
+              "linkUrl": "/p/dent-society-booking",
+              "linkText": "Get My Assessment",
+              "accentColor": "#ffffff"
+            },
+            {
+              "title": "Insurance Claim Help",
+              "description": "We contact your carrier. We manage the adjuster. We document everything. You won't need to negotiate. Zero paperwork, zero stress.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059306_img4-pdr-close.jpg",
+              "linkUrl": "/p/dent-society-booking",
+              "linkText": "Get My Assessment",
+              "accentColor": "#ffffff"
+            },
+            {
+              "title": "Vehicle Detailing",
+              "description": "Every vehicle is returned fully detailed — interior and exterior. From quick refreshes to full paint correction. Brand new happens again.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059781_car-detailing.jpg",
+              "linkUrl": "/p/dent-society-booking",
+              "linkText": "Get My Assessment",
+              "accentColor": "#ffffff"
+            },
+            {
+              "title": "Vinyl Wraps & PPF",
+              "description": "Custom vinyl — glossy, matte, satin, chrome, or full designs. Paint protection film that keeps your finish scratch-free for years.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059470_img11-spray-booth.jpg",
+              "linkUrl": "/p/dent-society-booking",
+              "linkText": "Get My Assessment",
+              "accentColor": "#ffffff"
+            }
+          ]
+        }
+      },
+      {
+        "type": "StatsSection",
+        "id": "guarantee",
+        "props": {
+          "heading": "The Dent Society Guarantee",
+          "subheading": "Numbers that speak for themselves.",
+          "layout": "split",
+          "accentColor": "#FF192C",
+          "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059470_img12-pdr-light.jpg",
+          "themeMode": "dark",
+          "stats": [
+            {
+              "value": "48",
+              "suffix": "hrs",
+              "label": "Average turnaround"
+            },
+            {
+              "value": "$0",
+              "label": "Out of pocket"
+            },
+            {
+              "value": "500+",
+              "label": "Vehicles restored"
+            },
+            {
+              "value": "Lifetime",
+              "label": "Warranty on all repairs"
+            }
+          ]
+        }
+      },
+      {
+        "type": "QuoteBlock",
+        "id": "reviews",
+        "props": {
+          "quote": "Dropped my truck off Monday, got it back Wednesday — zero dollars out of pocket. They handled all the insurance and my car came back looking perfect. Can't find a single dent anywhere.",
+          "attribution": "Michael R. — Dallas, TX",
+          "labelText": "What Our Customers Say",
+          "labelColor": "#FF192C",
+          "ctaText": "Read More Reviews",
+          "ctaUrl": "https://www.google.com/maps/place/Dent+Society",
+          "themeMode": "dark"
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "contact",
+        "props": {
+          "labelText": "Ready to Start?",
+          "labelColor": "#FF192C",
+          "title": "The Storm May Have Hit. But Your Car Won't Show It.",
+          "subtitle": "Schedule your free assessment and we'll handle the rest — insurance, loaner, repair, and detail.",
+          "backgroundImage": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059120_hero-hail-cropped.jpg",
+          "overlayGradient": "linear-gradient(to bottom, rgba(0,0,0,0.85), rgba(0,0,0,0.75))",
+          "primaryButtonText": "Start Assessment",
+          "primaryButtonUrl": "/p/dent-society-booking",
+          "primaryButtonVariant": "red",
+          "secondaryButtonText": "Call (214) 919-2237",
+          "secondaryButtonUrl": "tel:2149192237",
+          "secondaryButtonVariant": "ghost",
+          "textAlign": "center",
+          "fullHeight": false,
+          "themeMode": "dark"
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "ds-footer",
+        "props": {
+          "logo": {
+            "text": "Dent Society",
+            "textStyle": {
+              "display": "none"
+            },
+            "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059693_Asset-2@4x-8.png",
+            "tagline": "Dallas-Fort Worth's premier hail damage repair facility. Precision paintless dent restoration with insurance coordination.",
+            "accentDot": false
+          },
+          "columns": [
+            {
+              "title": "Services",
+              "links": [
+                {
+                  "label": "Hail Damage Repair",
+                  "url": "#services"
+                },
+                {
+                  "label": "Insurance Claims",
+                  "url": "#process"
+                },
+                {
+                  "label": "Vehicle Detailing",
+                  "url": "#services"
+                },
+                {
+                  "label": "Vinyl Wraps & PPF",
+                  "url": "#services"
+                }
+              ]
+            },
+            {
+              "title": "Company",
+              "links": [
+                {
+                  "label": "About",
+                  "url": "#about"
+                },
+                {
+                  "label": "Reviews",
+                  "url": "#reviews"
+                },
+                {
+                  "label": "Book Now",
+                  "url": "/p/dent-society-booking"
+                }
+              ]
+            },
+            {
+              "title": "Contact",
+              "links": [
+                {
+                  "label": "(214) 919-2237",
+                  "url": "tel:2149192237"
+                },
+                {
+                  "label": "sales@dentsociety.com",
+                  "url": "mailto:sales@dentsociety.com"
+                },
+                {
+                  "label": "Dallas, TX",
+                  "url": "https://www.google.com/maps/place/Dent+Society"
+                }
+              ]
+            }
+          ],
+          "copyright": "2026 Dent Society. All rights reserved.",
+          "socialLinks": [
+            {
+              "platform": "instagram",
+              "url": "https://instagram.com/dentsociety"
+            },
+            {
+              "platform": "facebook",
+              "url": "https://facebook.com/dentsociety"
+            },
+            {
+              "platform": "tiktok",
+              "url": "https://tiktok.com/@dentsociety"
+            }
+          ],
+          "themeMode": "dark"
+        }
+      }
+    ]
+  }
+}

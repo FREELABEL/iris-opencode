@@ -1,0 +1,194 @@
+{
+  "slug": "kevins-air-quality",
+  "title": "Kevin's Air Quality Services — Professional Duct Cleaning & Mold Remediation",
+  "seo_title": "Kevin's Air Quality Services — Duct Cleaning & Mold Remediation | DFW",
+  "seo_description": "Professional duct cleaning, mold remediation, UV light installation, and dryer vent cleaning. Free inspections. Serving Dallas-Fort Worth.",
+  "status": "published",
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "dark",
+      "branding": {
+        "name": "Kevin's Air Quality",
+        "primaryColor": "#0ea5e9",
+        "description": "Professional duct cleaning, mold remediation, and indoor air quality solutions."
+      }
+    },
+    "components": [
+      {
+        "type": "SiteNavigation",
+        "id": "nav",
+        "props": {
+          "logo": {
+            "text": "Kevin's Air Quality",
+            "url": "/p/kevins-air-quality",
+            "accentDot": true
+          },
+          "links": [
+            { "label": "Services", "url": "#services" },
+            { "label": "Process", "url": "#process" },
+            { "label": "Reviews", "url": "#reviews" },
+            { "label": "Contact", "url": "#contact" }
+          ],
+          "ctaButton": { "text": "Free Inspection", "url": "#contact" },
+          "ctaFilled": true,
+          "ctaColor": "#0ea5e9",
+          "transparent": true,
+          "themeMode": "dark"
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "hero",
+        "props": {
+          "labelText": "Dallas-Fort Worth's Indoor Air Quality Experts",
+          "labelColor": "#0ea5e9",
+          "title": "Breathe Clean. Live Healthy.",
+          "subtitle": "Professional mold remediation, UV light installation, and duct cleaning. Free inspections with before & after photo documentation on every job.",
+          "backgroundImage": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1777059305_img1-tech-working.jpg",
+          "overlayGradient": "linear-gradient(to bottom, rgba(0,0,0,0.85), rgba(0,0,0,0.55), rgba(0,0,0,0.85))",
+          "primaryButtonText": "Get Free Inspection",
+          "primaryButtonUrl": "#contact",
+          "primaryButtonVariant": "red",
+          "secondaryButtonText": "Our Services",
+          "secondaryButtonUrl": "#services",
+          "secondaryButtonVariant": "ghost",
+          "textAlign": "center",
+          "fullHeight": true,
+          "showScrollIndicator": true,
+          "themeMode": "dark"
+        }
+      },
+      {
+        "type": "FeatureShowcase",
+        "id": "services",
+        "props": {
+          "heading": "Our Services",
+          "subheading": "Comprehensive indoor air quality solutions for homes and businesses.",
+          "themeMode": "dark",
+          "features": [
+            {
+              "icon": "shield-check",
+              "title": "Mold Remediation",
+              "description": "We open your HVAC plenum and eliminate mold caused by condensation buildup. EPA-registered disinfectant kills existing mold. Professional mold blocker coating seals the surface. Dramatic before & after results — documented with photos."
+            },
+            {
+              "icon": "sun",
+              "title": "UV Light Installation",
+              "description": "Hospital-grade UV lights installed inside your HVAC system make it physically impossible for mold to regrow. Your air is continuously purified 24/7 — the same technology used in hospitals and clean rooms."
+            },
+            {
+              "icon": "flame",
+              "title": "Dryer Vent Cleaning",
+              "description": "Clogged dryer vents are the #1 cause of residential fires. We thoroughly clean your entire dryer exhaust line — improving energy efficiency, reducing dry times, and eliminating a serious fire hazard."
+            },
+            {
+              "icon": "wind",
+              "title": "Full Duct Cleaning",
+              "description": "Complete duct system cleaning using professional roto brush and negative air technology. We remove years of accumulated dust, debris, and allergens while keeping your home spotless during the entire process."
+            }
+          ]
+        }
+      },
+      {
+        "type": "TextBlock",
+        "id": "process",
+        "props": {
+          "heading": "How It Works",
+          "themeMode": "dark",
+          "content": "### Step 1 — Free Inspection\nWe examine your HVAC system and show you exactly what's happening inside your ducts and plenum — with photos. No obligation, no pressure.\n\n### Step 2 — Custom Treatment Plan\nBased on what we find, we recommend the right combination of cleaning, disinfection, and prevention for your home. Transparent pricing, no surprises.\n\n### Step 3 — Professional Treatment\nEPA-registered disinfectants. Professional-grade mold blocker. Hospital-grade UV lights. Your family deserves the best.\n\n### Step 4 — Before & After Proof\nWe document everything with photos so you can see exactly what we did. Your air quality improvement — verified and visible."
+        }
+      },
+      {
+        "type": "TestimonialsSection",
+        "id": "reviews",
+        "props": {
+          "heading": "What Our Customers Say",
+          "themeMode": "dark",
+          "testimonials": [
+            {
+              "text": "Kevin showed me photos of the mold growing inside my AC system — I had no idea it was that bad. After the cleaning and UV light installation, the air in our house feels completely different. My allergies have improved significantly.",
+              "name": "Homeowner",
+              "role": "Dallas, TX",
+              "rating": 5
+            },
+            {
+              "text": "Fast, professional, and honest. The before and after photos were night and day. The UV light gives me peace of mind that the mold won't come back. Highly recommend.",
+              "name": "Homeowner",
+              "role": "Fort Worth, TX",
+              "rating": 5
+            },
+            {
+              "text": "We had our dryer vent cleaned and Kevin found a massive clog that could have been a fire hazard. Dryer works twice as fast now. Great service, fair price.",
+              "name": "Homeowner",
+              "role": "Arlington, TX",
+              "rating": 5
+            }
+          ]
+        }
+      },
+      {
+        "type": "ContactSection",
+        "id": "contact",
+        "props": {
+          "heading": "Schedule Your Free Inspection",
+          "subheading": "Your family deserves to breathe clean air. Fill out the form below and we'll get back to you within 24 hours.",
+          "themeMode": "dark",
+          "fields": [
+            { "name": "name", "label": "Name", "type": "text", "required": true },
+            { "name": "phone", "label": "Phone", "type": "tel", "required": true },
+            { "name": "email", "label": "Email", "type": "email" },
+            { "name": "address", "label": "Address / City", "type": "text" },
+            { "name": "service", "label": "Service Needed", "type": "select", "options": ["Mold Remediation", "UV Light Installation", "Dryer Vent Cleaning", "Full Duct Cleaning", "Free Inspection / Not Sure"] },
+            { "name": "message", "label": "Anything else?", "type": "textarea" }
+          ],
+          "submitText": "Request Free Inspection",
+          "accentColor": "#0ea5e9"
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "footer",
+        "props": {
+          "brandName": "Kevin's Air Quality Services",
+          "logo": {
+            "text": "Kevin's Air Quality",
+            "tagline": "Professional duct cleaning, mold remediation, and indoor air quality solutions for Dallas-Fort Worth.",
+            "accentDot": true
+          },
+          "columns": [
+            {
+              "title": "Services",
+              "links": [
+                { "label": "Mold Remediation", "url": "#services" },
+                { "label": "UV Light Installation", "url": "#services" },
+                { "label": "Dryer Vent Cleaning", "url": "#services" },
+                { "label": "Full Duct Cleaning", "url": "#services" }
+              ]
+            },
+            {
+              "title": "Company",
+              "links": [
+                { "label": "How It Works", "url": "#process" },
+                { "label": "Reviews", "url": "#reviews" },
+                { "label": "Contact", "url": "#contact" }
+              ]
+            },
+            {
+              "title": "Service Area",
+              "links": [
+                { "label": "Dallas", "url": "#contact" },
+                { "label": "Fort Worth", "url": "#contact" },
+                { "label": "Arlington", "url": "#contact" },
+                { "label": "All DFW Metroplex", "url": "#contact" }
+              ]
+            }
+          ],
+          "copyright": "2026 Kevin's Air Quality Services. All rights reserved.",
+          "themeMode": "dark"
+        }
+      }
+    ]
+  }
+}

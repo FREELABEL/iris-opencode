@@ -1,0 +1,274 @@
+{
+  "id": 140,
+  "slug": "moody-beauty",
+  "title": "Moody Beauty — Lash Artistry by Lisa Martinez",
+  "seo_title": "Moody Beauty | Signature Lash Artistry by Lisa Martinez · Austin, TX",
+  "seo_description": "Moody Beauty is the signature lash studio of Lisa Martinez — handcrafted classic, volume, and mega volume lashes in Austin, TX. Slow, intentional, deeply personal.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "user",
+  "owner_id": 193,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "light",
+      "backgroundColor": "#F5EFE8",
+      "branding": {
+        "name": "Moody Beauty",
+        "primaryColor": "#6B4226",
+        "secondaryColor": "#1C1410"
+      },
+      "ogTemplate": "hero"
+    },
+    "components": [
+      {
+        "type": "SiteNavigation",
+        "id": "mb-nav",
+        "props": {
+          "themeMode": "light",
+          "logo": {
+            "text": "MOODY BEAUTY",
+            "accentDot": true,
+            "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/assets/moody-beauty/logo.png",
+            "textColor": "#6B4226"
+          },
+          "links": [
+            {
+              "label": "The Studio",
+              "url": "#about"
+            },
+            {
+              "label": "Lashes",
+              "url": "#services"
+            },
+            {
+              "label": "Story",
+              "url": "#story"
+            },
+            {
+              "label": "Contact",
+              "url": "#contact"
+            },
+            {
+              "label": "Book",
+              "url": "https://www.vagaro.com/moodybeauty"
+            }
+          ],
+          "ctaButton": {
+            "text": "Book with Lisa",
+            "url": "https://www.vagaro.com/moodybeauty"
+          },
+          "ctaColor": "#6B4226",
+          "transparent": false,
+          "ctaFilled": true,
+          "linkColor": "#1A1418",
+          "textColor": "#1A1418",
+          "backgroundColor": "#F5EFE8",
+          "hideThemeToggle": true,
+          "ctaTextColor": "#FFFFFF"
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "mb-hero",
+        "props": {
+          "title": "EFFORTLESS BEAUTY, ELEVATED",
+          "subtitle": "A private Austin studio for elevated beauty — custom lash extensions, bridal hair and makeup. Every appointment designed with intention.",
+          "backgroundImage": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1776310383_moody-hero-1920.jpg",
+          "overlayOpacity": 0.4,
+          "textAlign": "center",
+          "minHeight": "720px",
+          "fullHeight": false,
+          "themeMode": "dark",
+          "primaryButtonText": "Book an Appointment",
+          "primaryButtonUrl": "https://www.vagaro.com/moodybeauty",
+          "primaryButtonVariant": "white",
+          "secondaryButtonText": null,
+          "secondaryButtonUrl": null,
+          "headline": "EFFORTLESS BEAUTY, ELEVATED",
+          "eyebrow": "MOODY BEAUTY · EST. AUSTIN, TX",
+          "headingFont": "Playfair Display"
+        }
+      },
+      {
+        "type": "FeatureShowcase",
+        "id": "mb-features",
+        "props": {
+          "heading": "WHAT WE DO",
+          "subheading": "Elevated beauty services, one client at a time.",
+          "themeMode": "light",
+          "accentColor": "#6B4226",
+          "backgroundColor": "#F5EFE8",
+          "layout": "grid",
+          "columns": 3,
+          "features": [
+            {
+              "description": "A classic lash set is the most natural style of lash extensions, designed to enhance your lashes with subtle length and definition. Great options for first time extensions clients.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1776312683_mb-classic-lashes.jpg",
+              "heading": "Classic Lash Set"
+            },
+            {
+              "description": "Mega Volume Lashes are the boldest, fullest style of lash extensions—designed for maximum drama and density.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1776311785_mb-volume-lashes.jpg",
+              "heading": "Mega Volume Lashes"
+            },
+            {
+              "description": "Bridal upstyle is an elegant, fully styled hairstyle where the hair is lifted and secured up off the shoulders—designed to last all day while complementing your dress, face shape, and overall bridal look.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1776311786_mb-bridal-hair.jpg",
+              "heading": "Bridal Upstyle"
+            },
+            {
+              "description": "A lash lift is a low-maintenance treatment that enhances your natural lashes by lifting and curling them from the root—giving the appearance of longer, fuller lashes without extensions.",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/1776311785_mb-lash-lift.jpg",
+              "heading": "Lash Lift"
+            }
+          ]
+        }
+      },
+      {
+        "type": "InstagramFeed",
+        "id": "mb-instagram",
+        "props": {
+          "instagram": "moodybeauty.atx",
+          "maxPosts": 9,
+          "columns": 3,
+          "showStats": true,
+          "themeMode": "dark",
+          "accentColor": "#6B4226",
+          "heading": "Follow the Studio",
+          "backgroundColor": "#0A0A0A"
+        }
+      },
+      {
+        "type": "MapSection",
+        "id": "mb-map",
+        "props": {
+          "heading": "Visit the Studio",
+          "layout": "split",
+          "themeMode": "light",
+          "accentColor": "#6B4226",
+          "mapEmbedUrl": "https://www.openstreetmap.org/export/embed.html?bbox=-97.7473%2C30.3064%2C-97.7373%2C30.3124&layer=mapnik&marker=30.3093920%2C-97.7422630",
+          "locations": [
+            {
+              "name": "Moody Beauty Studio",
+              "address": [
+                "4012 Marathon Boulevard",
+                "Austin, TX 78756"
+              ],
+              "phone": "(817) 714-6864",
+              "email": "lisamartinez980@gmail.com",
+              "directionsUrl": "https://maps.google.com/?q=4012+Marathon+Boulevard+Austin+TX+78756"
+            }
+          ]
+        }
+      },
+      {
+        "type": "ContactSection",
+        "id": "mb-contact",
+        "props": {
+          "heading": "Get in Touch",
+          "subheading": "Ready to book your appointment or have questions about our services? We'd love to hear from you.",
+          "accentColor": "#6B4226",
+          "layout": "split",
+          "showForm": true,
+          "submitLabel": "Send Message",
+          "themeMode": "light",
+          "contactInfo": [
+            {
+              "type": "phone",
+              "label": "Phone",
+              "value": "(817) 714-6864",
+              "link": "tel:+18177146864"
+            },
+            {
+              "type": "email",
+              "label": "Email",
+              "value": "hello@moodybeauty.com",
+              "link": "mailto:hello@moodybeauty.com"
+            },
+            {
+              "type": "address",
+              "label": "Location",
+              "value": "Austin, TX"
+            },
+            {
+              "type": "hours",
+              "label": "Booking",
+              "value": "Book online at vagaro.com/moodybeauty"
+            }
+          ],
+          "formFields": [
+            {
+              "name": "name",
+              "label": "Full Name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "email",
+              "label": "Email Address",
+              "type": "email",
+              "required": true
+            },
+            {
+              "name": "phone",
+              "label": "Phone Number",
+              "type": "tel",
+              "required": false
+            },
+            {
+              "name": "interest",
+              "label": "Interested in",
+              "type": "select",
+              "options": [
+                "Classic Lash Set",
+                "Mega Volume Lashes",
+                "Bridal Upstyle",
+                "Lash Lift",
+                "General Inquiry"
+              ],
+              "required": true
+            },
+            {
+              "name": "message",
+              "label": "Message",
+              "type": "textarea",
+              "required": false
+            }
+          ]
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "mb-footer",
+        "props": {
+          "brandName": "Moody Beauty",
+          "tagline": "Lash artistry by Lisa Martinez · Austin, TX",
+          "themeMode": "dark",
+          "backgroundColor": "#1A1418",
+          "accentColor": "#6B4226",
+          "copyright": "© 2026 Moody Beauty · Austin, TX",
+          "links": [
+            {
+              "label": "ATX Beauty Lab",
+              "url": "https://heyiris.io/p/atx-beauty-lab"
+            }
+          ],
+          "brandMark": {
+            "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/assets/moody-beauty/logo-white.png"
+          },
+          "logo": {
+            "text": "MOODY BEAUTY",
+            "tagline": "Lash artistry by Lisa Martinez · Austin, TX",
+            "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/assets/moody-beauty/logo-white.png"
+          }
+        }
+      }
+    ],
+    "seo_title": "Moody Beauty — Lash Artistry by Lisa Martinez | Austin, TX",
+    "seo_description": "Lisa Martinez hand-crafts signature classic, volume, and mega volume lashes in Austin, TX. Slow, intentional, deeply personal — book your chair at Moody Beauty.",
+    "seo_keywords": "lash extensions austin, classic lashes austin, volume lashes austin, mega volume lashes, lash artist austin tx, moody beauty, lisa martinez lashes, atx beauty lab",
+    "og_image": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/assets/moody-beauty/hero.jpg"
+  }
+}
