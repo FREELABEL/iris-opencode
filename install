@@ -2295,7 +2295,16 @@ if [ "$AUTH_SUCCESS" = "true" ] && [ -n "$SDK_TOKEN" ] && [ "$tty_available" = "
 
     SUB_ACTIVE="unknown"
     if [ "$SUB_STATUS" = "200" ]; then
-        SUB_ACTIVE=$(json_field "$SUB_BODY" "subscription_active")
+        # subscription_active is a JSON boolean. Don't use json_field — its jq
+        # path uses `// empty` which treats `false` as missing and returns "".
+        # Extract directly so we get the literal "true"/"false" string.
+        if command -v jq >/dev/null 2>&1; then
+            SUB_ACTIVE=$(echo "$SUB_BODY" | jq -r '.subscription_active' 2>/dev/null)
+        elif command -v python3 >/dev/null 2>&1; then
+            SUB_ACTIVE=$(echo "$SUB_BODY" | python3 -c 'import sys,json;print(str(json.load(sys.stdin).get("subscription_active","unknown")).lower())' 2>/dev/null)
+        else
+            SUB_ACTIVE=$(echo "$SUB_BODY" | grep -oE '"subscription_active"[[:space:]]*:[[:space:]]*(true|false)' | grep -oE 'true|false' | head -1)
+        fi
     fi
 
     # Only paywall if we got a definitive "no". Network errors / unknown state
