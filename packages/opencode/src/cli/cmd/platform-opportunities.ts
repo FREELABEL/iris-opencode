@@ -313,6 +313,7 @@ const PushCommand = cmd({
         funding_goal_cents: entity.funding_goal_cents, equity_pool_bps: entity.equity_pool_bps,
         roles: entity.roles, pitch_sections: entity.pitch_sections,
         preview_mode: entity.preview_mode, is_public: entity.is_public,
+        lead_id: entity.lead_id,
       }
       for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
 
@@ -381,7 +382,7 @@ const DiffCommand = cmd({
         "title", "description", "status",
         "price_min", "price_max", "application_deadline",
         "funding_goal_cents", "equity_pool_bps", "roles", "pitch_sections",
-        "preview_mode", "is_public",
+        "preview_mode", "is_public", "lead_id",
       ]
       const changes: { field: string; live: unknown; local: unknown }[] = []
 
@@ -415,6 +416,42 @@ const DiffCommand = cmd({
       printDivider()
 
       prompts.outro(changes.length > 0 ? dim(`iris opportunities push ${args.id}`) : "Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LinkLeadCommand = cmd({
+  command: "link-lead <id> <leadId>",
+  describe: "link an opportunity to a CRM lead (sets opportunity.lead_id)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "opportunity ID", type: "number", demandOption: true })
+      .positional("leadId", { describe: "lead ID to link (use 0 to unlink)", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Link Opportunity #${args.id} → Lead #${args.leadId}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start(args.leadId === 0 ? "Unlinking…" : `Linking to lead ${args.leadId}…`)
+
+    try {
+      const body: Record<string, unknown> = { lead_id: args.leadId === 0 ? null : args.leadId }
+      const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      })
+      const ok = await handleApiError(res, "Update opportunity")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} ${args.leadId === 0 ? "Unlinked" : `Linked to lead #${args.leadId}`}`)
+      prompts.outro(dim(`iris leads get ${args.leadId}  |  iris opportunities get ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -662,6 +699,7 @@ export const PlatformOpportunitiesCommand = cmd({
       .command(PushCommand)
       .command(DiffCommand)
       .command(PreviewCommand)
+      .command(LinkLeadCommand)
       .command(DeleteCommand)
       .command(InterestCommand)
       .demandCommand(),
