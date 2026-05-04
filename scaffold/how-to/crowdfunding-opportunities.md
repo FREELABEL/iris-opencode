@@ -30,6 +30,16 @@ Set `preview_mode=true` on any opportunity to:
 
 Use this when you want a shareable URL for founder/investor feedback before opening real applications.
 
+**Toggle preview mode from the CLI:**
+
+```bash
+$ iris opportunities preview 494           # toggle (auto-detects current state)
+$ iris opportunities preview 494 --on      # force preview
+$ iris opportunities preview 494 --off     # go live
+```
+
+Or create directly in preview mode: `iris opportunities create ... --preview`. Or set `preview_mode: true` in the JSON and `iris opportunities push <id>`.
+
 ## Prerequisites
 
 - Authenticated (`iris-login` complete)
