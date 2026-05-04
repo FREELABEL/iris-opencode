@@ -117,6 +117,8 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   workflows: "agents",
   schedules: "agents",
   monitor: "agents",
+  personality: "agents",
+  recall: "knowledge",
 
   // Integrations & Tools
   integrations: "integrations",
@@ -137,6 +139,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   programs: "entities",
   discover: "entities",
   opportunities: "entities",
+  tutorials: "entities",
   packages: "entities",
   profile: "entities",
 

@@ -1876,6 +1876,33 @@ const LeadsPulseCommand = cmd({
         console.log(`  ${icon} ${highlight(hc.name.padEnd(18))}${statusText}${hint}`)
       }
 
+      // Step 2.5: Requirements (automated tests for this lead's deliverables)
+      try {
+        const reqRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
+        if (reqRes.ok) {
+          const reqBody = await reqRes.json().catch(() => ({}))
+          const reqs: any[] = reqBody.data ?? []
+          if (reqs.length > 0) {
+            const passing = reqs.filter(r => r.last_status === "passed" || r.last_status === "completed").length
+            const failing = reqs.filter(r => r.last_status === "failed").length
+            const untested = reqs.length - passing - failing
+            const headerColor = failing > 0 ? highlight : (untested === reqs.length ? dim : success)
+
+            console.log()
+            console.log(`  ${bold("Requirements")}  ${headerColor(`${passing}/${reqs.length} passing`)}${failing > 0 ? highlight(` · ${failing} FAILING`) : ""}${untested > 0 ? dim(` · ${untested} untested`) : ""}`)
+            for (const r of reqs.slice(0, 5)) {
+              const icon = r.last_status === "passed" || r.last_status === "completed" ? success("✓")
+                : r.last_status === "failed" ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+                : dim("○")
+              const lastRun = r.last_run_at ? dim(r.last_run_at.split("T")[0]) : dim("never run")
+              console.log(`  ${icon} ${highlight(r.name.padEnd(28))}${lastRun}`)
+            }
+            if (reqs.length > 5) console.log(dim(`  …and ${reqs.length - 5} more — iris leads requirements list ${leadId}`))
+            if (untested > 0) console.log(dim(`  Run all: iris leads requirements run ${leadId}`))
+          }
+        }
+      } catch (e) { /* requirements section is best-effort */ }
+
       // Step 3: Search channels in parallel
       console.log()
       const channelSpinner = prompts.spinner()
@@ -3910,12 +3937,24 @@ const ReqRunCommand = cmd({
       printDivider()
     }
 
-    const url = args.name
-      ? (() => {
-          // Find the specific requirement first, then run it
-          return `/api/v1/leads/${leadId}/requirements/run-all`
-        })()
-      : `/api/v1/leads/${leadId}/requirements/run-all`
+    let url = `/api/v1/leads/${leadId}/requirements/run-all`
+    if (args.name) {
+      // Look up the requirement by name first
+      const listRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
+      if (listRes.ok) {
+        const listBody = await listRes.json().catch(() => ({}))
+        const reqs = listBody?.data ?? listBody?.requirements ?? listBody ?? []
+        const match = Array.isArray(reqs) ? reqs.find((r: any) =>
+          (r.name ?? r.title ?? '').toLowerCase() === String(args.name).toLowerCase()
+        ) : null
+        if (match?.id) {
+          url = `/api/v1/leads/${leadId}/requirements/${match.id}/run`
+        } else {
+          prompts.log.error(`No requirement found matching name "${args.name}"`)
+          return
+        }
+      }
+    }
 
     const res = await irisFetch(url, { method: "POST" })
     if (!(await handleApiError(res, "Run requirements"))) return
@@ -3997,15 +4036,131 @@ const ReqDeleteCommand = cmd({
   },
 })
 
+const ReqAllCommand = cmd({
+  command: "all",
+  aliases: ["everywhere", "global"],
+  describe: "list all active requirements across all leads (paginated)",
+  builder: (yargs) =>
+    yargs
+      .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
+      .option("per-page", { describe: "results per page", type: "number", default: 25 })
+      .option("status", { alias: "s", describe: "filter by status", type: "string", choices: ["passed", "failed", "untested"] })
+      .option("search", { describe: "filter by lead name/company", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const params = new URLSearchParams({
+      page: String(args.page),
+      per_page: String(args["per-page"]),
+    })
+    if (args.status) params.set("status", String(args.status))
+    if (args.search) params.set("search", String(args.search))
+
+    const res = await irisFetch(`/api/v1/requirements/all?${params}`)
+    if (!(await handleApiError(res, "List all requirements"))) return
+
+    const body = await res.json().catch(() => ({}))
+    if ((args as any).json) { console.log(JSON.stringify(body, null, 2)); return }
+
+    const items: any[] = body.data ?? []
+    const pg = body.pagination ?? {}
+
+    if (items.length === 0) {
+      prompts.log.info(`No requirements found${args.status ? ` (status=${args.status})` : ""}`)
+      return
+    }
+
+    console.log("")
+    console.log(bold(`Active Requirements — ${pg.total ?? items.length} total · page ${pg.current_page ?? 1}/${pg.last_page ?? 1}`))
+    printDivider()
+
+    for (const r of items) {
+      const status = r.last_status
+      const icon = status === "passed" || status === "completed" ? success("✓")
+        : status === "failed" ? highlight("✗")
+        : dim("○")
+      const lead = r.lead ? `${r.lead.name ?? "?"}${r.lead.company ? dim(" — " + r.lead.company) : ""}` : dim("(no lead)")
+      const lastRun = r.last_run_at ? dim(r.last_run_at.split("T")[0]) : dim("never")
+      const counts = (r.pass_count || r.fail_count) ? dim(` ${r.pass_count}✓ / ${r.fail_count}✗`) : ""
+      console.log(`  ${icon}  ${bold(r.name)}${counts}`)
+      console.log(`     ${dim(`#${r.id} · lead #${r.lead?.id ?? "?"}`)} ${lead}  ${lastRun}`)
+    }
+
+    printDivider()
+    if (pg.last_page && pg.last_page > 1) {
+      const next = (pg.current_page ?? 1) < pg.last_page ? `iris leads requirements all --page ${(pg.current_page ?? 1) + 1}` : null
+      if (next) console.log(dim(`  Next: ${next}`))
+    }
+    console.log(dim(`  Filters: --status passed|failed|untested  --search <name>  --per-page 50`))
+  },
+})
+
+const ReqScheduleCommand = cmd({
+  command: "schedule <lead-id>",
+  aliases: ["watch"],
+  describe: "schedule recurring requirement test runs for a lead (continuous monitoring)",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("frequency", {
+        alias: "f",
+        describe: "run frequency",
+        type: "string",
+        choices: ["hourly", "every_2_hours", "every_4_hours", "every_6_hours", "every_8_hours", "every_12_hours", "daily", "weekly"],
+        default: "hourly",
+      })
+      .option("name", { describe: "schedule name", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const leadId = args.leadId as number
+    const name = (args.name as string) || `Requirements monitor — Lead #${leadId}`
+
+    const body = {
+      type: "lead_requirements_run",
+      task_name: name,
+      data: {
+        lead_id: leadId,
+      },
+      frequency: args.frequency,
+      enabled: true,
+    }
+
+    const res = await irisFetch(`/api/v1/scheduled-jobs`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    if (!(await handleApiError(res, "Schedule requirements"))) return
+
+    const result = await res.json().catch(() => ({}))
+    if ((args as any).json) { console.log(JSON.stringify(result, null, 2)); return }
+
+    if (result?.success || result?.id || result?.data) {
+      const data = result.data ?? result
+      prompts.log.success(`Scheduled requirements run for lead #${leadId}`)
+      printKV("Frequency", String(args.frequency))
+      printKV("Schedule ID", String(data.id ?? data.scheduled_job_id ?? "?"))
+      console.log(dim(`\nView: iris schedules get ${data.id ?? "?"}`))
+      console.log(dim(`Disable: iris schedules toggle ${data.id ?? "?"}`))
+    } else {
+      prompts.log.error(result?.message ?? "Failed to schedule")
+    }
+  },
+})
+
 const LeadsRequirementsCommand = cmd({
   command: "requirements",
   aliases: ["reqs", "req"],
   describe: "manage automated deliverable tests — create, run, monitor",
   builder: (yargs) =>
     yargs
+      .command(ReqAllCommand)
       .command(ReqListCommand)
       .command(ReqCreateCommand)
       .command(ReqRunCommand)
+      .command(ReqScheduleCommand)
       .command(ReqSummaryCommand)
       .command(ReqDeleteCommand)
       .demandCommand(),

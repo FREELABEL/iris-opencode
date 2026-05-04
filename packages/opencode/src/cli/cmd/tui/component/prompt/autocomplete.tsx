@@ -374,12 +374,45 @@ export function Autocomplete(props: {
       }
     }
 
+    const insertSlash = (name: string) => () => {
+      const newText = "/" + name + " "
+      const cursor = props.input().logicalCursor
+      props.input().deleteRange(0, 0, cursor.row, cursor.col)
+      props.input().insertText(newText)
+      props.input().cursorOffset = Bun.stringWidth(newText)
+    }
+
     results.push(
       {
         display: "/new",
         aliases: ["/clear"],
         description: "create a new session",
         onSelect: () => command.trigger("session.new"),
+      },
+      {
+        display: "/recall",
+        description: "search past sessions, memory, and diary",
+        onSelect: insertSlash("recall"),
+      },
+      {
+        display: "/personality",
+        description: "view or switch agent personality preset",
+        onSelect: insertSlash("personality"),
+      },
+      {
+        display: "/usage",
+        description: "show token usage and costs",
+        onSelect: insertSlash("usage"),
+      },
+      {
+        display: "/insights",
+        description: "show usage insights over time (e.g. /insights 7)",
+        onSelect: insertSlash("insights"),
+      },
+      {
+        display: "/sdk",
+        description: "invoke any SDK endpoint (e.g. /sdk leads.list search=acme)",
+        onSelect: insertSlash("sdk"),
       },
       {
         display: "/models",

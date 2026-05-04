@@ -57,6 +57,20 @@ When the user asks something that might match a recipe, **read the recipe file f
 - **NEVER invent component type names.** Run `iris pages component-registry` first. Invalid types render blank.
 - **READ CLI output carefully.** Use exact values shown — don't make up IDs, URLs, or status values.
 
+## In-chat slash commands
+
+When the user's message starts with one of these slash commands, treat it as a structured request and respond using `iris sdk:call` (preferred) or the appropriate `iris` shell command — don't ask follow-up questions if the intent is clear.
+
+| Command | What it means | How to handle |
+|---|---|---|
+| `/recall <query>` | Search past sessions, memory, and diary for the query | Use `iris sdk:call diary.list` and `iris memory show <bloq>` to gather context, then summarize matches. If no specific bloq is set, search across the user's recent diary entries. |
+| `/personality [name]` | View or switch the active agent's personality | No name → list available agents with their `personality_traits` via `iris sdk:call agents.list userId=me`. With a name → find a matching agent or update the active agent's `personality_traits` field via `iris agents push` after pulling. |
+| `/usage` | Show token usage and costs | Run `iris stats` and surface the totals. Show recent session breakdown if available. |
+| `/insights [days]` | Usage insights over a time range | Default 7 days. Use `iris stats` plus `iris sdk:call diary.list days=<N>` to show token consumption + agent activity over the window. |
+| `/sdk <resource.method> [params]` | Call any IRIS SDK endpoint directly | Run `iris sdk:call <resource.method> <key=value>...` via bash. If the user picks `/sdk` without args, show categories from `iris sdk:call --list` so they can choose. |
+
+These slash messages are user shortcuts — interpret them, do the work, return a concise result. Don't echo the slash back; just answer.
+
 ## Genesis Page Builder — Component Rules
 
 When building or editing pages with `iris pages`, follow these rules:

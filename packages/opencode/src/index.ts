@@ -48,6 +48,7 @@ import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
 import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
 import { PlatformDiscoverCommand } from "./cli/cmd/platform-discover"
 import { PlatformOpportunitiesCommand } from "./cli/cmd/platform-opportunities"
+import { PlatformTutorialsCommand } from "./cli/cmd/platform-tutorials"
 import { PlatformServicesCommand } from "./cli/cmd/platform-services"
 import { PlatformProductsCommand } from "./cli/cmd/platform-products"
 import { PlatformEventsCommand } from "./cli/cmd/platform-events"
@@ -101,6 +102,8 @@ import { PlatformToolsCommand } from "./cli/cmd/platform-tools"
 import { PlatformUsersCommand } from "./cli/cmd/platform-users"
 import { PlatformPhoneCommand } from "./cli/cmd/platform-phone"
 import { PlatformVoiceCommand } from "./cli/cmd/platform-voice"
+import { PlatformRecallCommand } from "./cli/cmd/platform-recall"
+import { PlatformPersonalityCommand } from "./cli/cmd/platform-personality"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
@@ -219,6 +222,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformBoardsCommand))
   .command(reg(PlatformDiscoverCommand))
   .command(reg(PlatformOpportunitiesCommand))
+  .command(reg(PlatformTutorialsCommand))
   .command(reg(PlatformServicesCommand))
   .command(reg(PlatformProductsCommand))
   .command(reg(PlatformEventsCommand))
@@ -276,6 +280,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformUsersCommand))
   .command(reg(PlatformPhoneCommand))
   .command(reg(PlatformVoiceCommand))
+  .command(reg(PlatformRecallCommand))
+  .command(reg(PlatformPersonalityCommand))
   .command(reg(PlatformMailCommand))
   .command(reg(PlatformImessageCommand))
   .command(reg(PlatformCalendarCommand))
