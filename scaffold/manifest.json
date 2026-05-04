@@ -1,5 +1,5 @@
 {
-  "version": "2026.04.08",
+  "version": "2026.05.04",
   "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
   "files": [
     {
@@ -73,6 +73,12 @@
       "dest": "how-to/discover-investments.md",
       "managed": true,
       "purpose": "Capture and manage investor interest on marketplace opportunities — the dual-sided opportunity flow (workers apply, investors fund)."
+    },
+    {
+      "src": "how-to/crowdfunding-opportunities.md",
+      "dest": "how-to/crowdfunding-opportunities.md",
+      "managed": true,
+      "purpose": "Turn an opportunity into a crowdfunded pitch page — roles with pay/equity, pitch sections, board members, milestones, payouts ledger, filled-vs-open tracking."
     },
     {
       "src": "how-to/learning-tutorials.md",

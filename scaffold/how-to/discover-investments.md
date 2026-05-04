@@ -4,6 +4,8 @@
 
 Every marketplace opportunity on FreeLabel is **dual-sided** — visitors can either apply to do the job (worker path) or express interest in funding it (investor path). When someone clicks **Invest in this Opportunity** on a detail page and submits the form, the platform captures their `name / email / amount USD / optional note` as a non-binding interest signal. You manage and act on those signals through the `iris opportunities interest` CLI.
 
+> **Want a richer pitch page?** This recipe covers interest capture only. To add a funding goal, multiple paid roles, board members, milestones, and an Open Books payout ledger to the opportunity, see `crowdfunding-opportunities.md`. Captured interests with status `committed` or `funded` automatically populate the **Backers** lane on the page's team panel.
+
 ## Prerequisites
 
 - A live opportunity (use `iris opportunities list` to find one or `iris opportunities create` to make a new one)

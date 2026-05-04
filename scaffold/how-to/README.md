@@ -20,6 +20,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "events", "venue", "stages", "set times", "vendors", "tickets" | `event-production.md` |
 | "discover page", "curate the discover page", "feature on discover", "what controls the homepage", "discover sections" | `discover.md` |
 | "investor interest", "invest in opportunity", "fund a gig", "shark tank", "dual-sided opportunity" | `discover-investments.md` |
+| "crowdfund a project", "add roles to opportunity", "pitch sections", "board members", "milestones", "open books", "the team", "filled vs open roles" | `crowdfunding-opportunities.md` |
 | "price a tutorial", "monetize learning", "sell a course", "paid content", "tutorial price" | `learning-tutorials.md` |
 | "feature a producer", "curate instrumentals", "community tab", "featured beats", "producer carousel" | `community-curation.md` |
 
