@@ -1,0 +1,501 @@
+{
+  "id": 123,
+  "slug": "catodrive-dashboard",
+  "title": "CatoDrive Operations Dashboard",
+  "seo_title": "CatoDrive Operations Dashboard",
+  "seo_description": "Fleet management, booking pipeline, signup tracking, and AI concierge for CatoDrive DFW.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "system",
+  "owner_id": null,
+  "json_content": {
+    "version": "2.0",
+    "type": "dashboard",
+    "theme": {
+      "mode": "dark",
+      "backgroundColor": "#0f172a",
+      "branding": {
+        "name": "CatoDrive",
+        "primaryColor": "#1e3a5f",
+        "secondaryColor": "#d97706",
+        "description": "Fleet Operations & Signup Management"
+      }
+    },
+    "layout": {
+      "type": "dashboard",
+      "pageTitle": "Operations",
+      "pageIcon": "truck",
+      "userName": "Shoaib Baig",
+      "userInitial": "S",
+      "themeMode": "dark",
+      "logo": null,
+      "navItems": [
+        {
+          "label": "Dashboard",
+          "url": "#",
+          "icon": "chart-bar",
+          "active": true
+        },
+        {
+          "label": "Signups",
+          "url": "#signups",
+          "icon": "user-plus"
+        },
+        {
+          "label": "Bookings",
+          "url": "#",
+          "icon": "calendar"
+        },
+        {
+          "label": "Fleet",
+          "url": "#",
+          "icon": "truck"
+        },
+        {
+          "label": "Partners",
+          "url": "#",
+          "icon": "users"
+        },
+        {
+          "label": "AI Concierge",
+          "url": "#",
+          "icon": "cpu-chip"
+        },
+        {
+          "label": "Analytics",
+          "url": "#",
+          "icon": "chart-pie"
+        }
+      ]
+    },
+    "dataSources": [
+      {
+        "id": "views",
+        "type": "api",
+        "endpoint": "/api/v1/app-data/catodrive-dashboard/views",
+        "refreshInterval": 30000
+      },
+      {
+        "id": "signups",
+        "type": "api",
+        "endpoint": "/api/v1/app-data/catodrive-dashboard/signups"
+      },
+      {
+        "id": "stats",
+        "type": "api",
+        "endpoint": "/api/v1/app-data/catodrive-dashboard/stats"
+      },
+      {
+        "id": "activity",
+        "type": "api",
+        "endpoint": "/api/v1/app-data/catodrive-dashboard/activity",
+        "refreshInterval": 15000
+      },
+      {
+        "id": "bookings",
+        "type": "static",
+        "data": {
+          "columns": [
+            {
+              "id": "pending",
+              "title": "Pending",
+              "color": "#f59e0b",
+              "items": [
+                {
+                  "id": "b1",
+                  "title": "Marcus T. u2014 BMW 3 Series",
+                  "subtitle": "Apr 5-8 u00b7 DFW Airport Pickup",
+                  "priority": "high",
+                  "tags": [
+                    "Premium",
+                    "Airport"
+                  ]
+                },
+                {
+                  "id": "b2",
+                  "title": "Sarah M. u2014 Tesla Model 3",
+                  "subtitle": "Apr 6-9 u00b7 Love Field Delivery",
+                  "priority": "medium",
+                  "tags": [
+                    "Electric",
+                    "Airport"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "confirmed",
+              "title": "Confirmed",
+              "color": "#3b82f6",
+              "items": [
+                {
+                  "id": "b3",
+                  "title": "James R. u2014 Range Rover Evoque",
+                  "subtitle": "Apr 4-7 u00b7 Hotel Delivery (Uptown)",
+                  "priority": "high",
+                  "tags": [
+                    "Luxury",
+                    "VIP"
+                  ]
+                },
+                {
+                  "id": "b4",
+                  "title": "Nicole W. u2014 Cadillac Escalade",
+                  "subtitle": "Apr 5-10 u00b7 DFW Airport Curbside",
+                  "priority": "medium",
+                  "tags": [
+                    "Executive",
+                    "Family"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "active",
+              "title": "Active Rentals",
+              "color": "#10b981",
+              "items": [
+                {
+                  "id": "b6",
+                  "title": "Andrea K. u2014 Mercedes C300",
+                  "subtitle": "Apr 1-4 u00b7 Returns tomorrow",
+                  "priority": "medium",
+                  "tags": [
+                    "Premium"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "completed",
+              "title": "Completed",
+              "color": "#6b7280",
+              "items": [
+                {
+                  "id": "b9",
+                  "title": "Linda S. u2014 Tesla Model Y",
+                  "subtitle": "Mar 28-31 u00b7 5-star review",
+                  "priority": "low",
+                  "tags": [
+                    "Electric",
+                    "Reviewed"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "fleet",
+        "type": "api",
+        "endpoint": "/api/v1/app-data/catodrive-dashboard/fleet"
+      },
+      {
+        "id": "tasks",
+        "type": "api",
+        "endpoint": "/api/v1/app-data/catodrive-dashboard/tasks"
+      },
+      {
+        "id": "team",
+        "type": "api",
+        "endpoint": "/api/v1/app-data/catodrive-dashboard/team"
+      }
+    ],
+    "components": [
+      {
+        "type": "WidgetWorkspaceBanner",
+        "id": "banner-1",
+        "props": {
+          "title": "CatoDrive Operations",
+          "subtitle": "7 new signups this week. 4 asset partner leads, 2 rental inquiries, 1 corporate account. People are hopping on.",
+          "avatarInitials": "SB",
+          "backgroundStyle": "gradient",
+          "showDate": true
+        }
+      },
+      {
+        "type": "WidgetStatsRow",
+        "id": "stats-signups",
+        "props": {
+          "columns": 4,
+          "stats": "{{ stats.0.summary }}"
+        }
+      },
+      {
+        "type": "TextBlock",
+        "id": "heading-signups",
+        "props": {
+          "content": "## Website Signups",
+          "themeMode": "dark",
+          "alignment": "left",
+          "padding": "pt-2 pb-1 px-0",
+          "maxWidth": "full"
+        }
+      },
+      {
+        "type": "FilterTabBar",
+        "id": "filter-signups",
+        "props": {
+          "tabs": [
+            {
+              "key": "all",
+              "label": "All Signups",
+              "count": 7,
+              "active": true
+            },
+            {
+              "key": "new",
+              "label": "New",
+              "count": 3
+            },
+            {
+              "key": "contacted",
+              "label": "Contacted",
+              "count": 2
+            },
+            {
+              "key": "qualified",
+              "label": "Qualified",
+              "count": 2
+            }
+          ]
+        }
+      },
+      {
+        "type": "DataTable",
+        "id": "signups-table",
+        "props": {
+          "title": "People Who Signed Up",
+          "columns": [
+            {
+              "key": "name",
+              "label": "Name",
+              "sortable": true
+            },
+            {
+              "key": "email",
+              "label": "Email"
+            },
+            {
+              "key": "phone",
+              "label": "Phone"
+            },
+            {
+              "key": "interest",
+              "label": "Interest",
+              "type": "badge"
+            },
+            {
+              "key": "source",
+              "label": "Source"
+            },
+            {
+              "key": "status",
+              "label": "Status",
+              "type": "badge"
+            },
+            {
+              "key": "submitted_at",
+              "label": "Signed Up",
+              "type": "date"
+            }
+          ],
+          "data": "{{ signups }}",
+          "searchable": true,
+          "sortable": true,
+          "pageSize": 20
+        }
+      },
+      {
+        "type": "ActivityFeed",
+        "id": "activity-1",
+        "props": {
+          "title": "Recent Activity",
+          "items": "{{ activity }}",
+          "maxItems": 10
+        }
+      },
+      {
+        "type": "WidgetStatsRow",
+        "id": "stats-fleet",
+        "props": {
+          "columns": 4,
+          "stats": "{{ stats.1.summary }}"
+        }
+      },
+      {
+        "type": "QuickActions",
+        "id": "actions-1",
+        "props": {
+          "title": "Quick Actions",
+          "actions": [
+            {
+              "label": "New Booking",
+              "icon": "plus-circle",
+              "color": "blue",
+              "url": "/p/catodrive-booking"
+            },
+            {
+              "label": "View Signups",
+              "icon": "user-plus",
+              "color": "green",
+              "url": "#signups"
+            },
+            {
+              "label": "Fleet Partners",
+              "icon": "users",
+              "color": "purple",
+              "url": "/p/catodrive-fleet-partners"
+            },
+            {
+              "label": "AI Concierge",
+              "icon": "cpu-chip",
+              "color": "amber",
+              "url": "#ai-chat"
+            },
+            {
+              "label": "Contact Page",
+              "icon": "envelope",
+              "color": "indigo",
+              "url": "/p/catodrive-contact"
+            },
+            {
+              "label": "Fleet Report",
+              "icon": "document-chart-bar",
+              "color": "red",
+              "url": "#reports"
+            }
+          ]
+        }
+      },
+      {
+        "type": "FilterTabBar",
+        "id": "filter-bookings",
+        "props": {
+          "tabs": [
+            {
+              "key": "all",
+              "label": "All Bookings",
+              "count": 54,
+              "active": true
+            },
+            {
+              "key": "pending",
+              "label": "Pending",
+              "count": 2
+            },
+            {
+              "key": "confirmed",
+              "label": "Confirmed",
+              "count": 2
+            },
+            {
+              "key": "active",
+              "label": "Active",
+              "count": 7
+            },
+            {
+              "key": "completed",
+              "label": "Completed",
+              "count": 41
+            }
+          ]
+        }
+      },
+      {
+        "type": "CasePipelineBoard",
+        "id": "booking-pipeline",
+        "props": {
+          "title": "Booking Pipeline",
+          "columns": "{{ bookings.columns }}"
+        }
+      },
+      {
+        "type": "TextBlock",
+        "id": "heading-fleet",
+        "props": {
+          "content": "## Fleet Management",
+          "themeMode": "dark",
+          "alignment": "left",
+          "padding": "pt-2 pb-1 px-0",
+          "maxWidth": "full"
+        }
+      },
+      {
+        "type": "DataTable",
+        "id": "fleet-table",
+        "props": {
+          "title": "Vehicle Inventory",
+          "columns": [
+            {
+              "key": "name",
+              "label": "Vehicle",
+              "sortable": true
+            },
+            {
+              "key": "plate",
+              "label": "Plate"
+            },
+            {
+              "key": "status",
+              "label": "Status",
+              "type": "badge"
+            },
+            {
+              "key": "renter",
+              "label": "Current Renter"
+            },
+            {
+              "key": "returnDate",
+              "label": "Return Date"
+            },
+            {
+              "key": "dailyRate",
+              "label": "Rate/Day",
+              "type": "currency",
+              "prefix": "$"
+            },
+            {
+              "key": "utilization",
+              "label": "Utilization",
+              "type": "progress",
+              "suffix": "%"
+            }
+          ],
+          "data": "{{ fleet }}",
+          "searchable": true,
+          "sortable": true,
+          "pageSize": 10
+        }
+      },
+      {
+        "type": "TextBlock",
+        "id": "heading-ai",
+        "props": {
+          "content": "## AI Workforce",
+          "themeMode": "dark",
+          "alignment": "left",
+          "padding": "pt-2 pb-1 px-0",
+          "maxWidth": "full"
+        }
+      },
+      {
+        "type": "TaskQueueList",
+        "id": "task-queue",
+        "props": {
+          "title": "Operations Task Queue",
+          "tasks": "{{ tasks }}"
+        }
+      },
+      {
+        "type": "WidgetTeamGrid",
+        "id": "team-ai",
+        "props": {
+          "title": "AI Operations Team",
+          "members": "{{ team }}"
+        }
+      }
+    ]
+  }
+}
