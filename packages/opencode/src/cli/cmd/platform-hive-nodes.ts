@@ -192,6 +192,8 @@ const HiveRunCommand = cmd({
       .positional("command", { describe: "shell command (quote it)", type: "string", demandOption: true })
       .option("timeout", { describe: "task timeout in seconds", type: "number", default: 60 })
       .option("title", { describe: "task title shown in the dashboard", type: "string" })
+      .option("priority", { describe: "task priority 1-10 (higher = sooner)", type: "number" })
+      .option("queue", { alias: "fire-and-forget", describe: "queue the task and exit immediately (don't wait for completion)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
       .option("json", { describe: "JSON output (full task object)", type: "boolean", default: false }),
   async handler(argv) {
@@ -225,6 +227,9 @@ const HiveRunCommand = cmd({
     const script = command.startsWith("#!") ? command : `#!/bin/bash\nset -e\n${command}`
     const title = (argv.title as string | undefined) ?? `iris hive run: ${command.slice(0, 60)}`
 
+    const priority = argv.priority as number | undefined
+    const clampedPriority = priority ? Math.max(1, Math.min(10, Math.round(priority))) : undefined
+
     const createRes = await hiveFetch(`/api/v6/nodes/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -236,6 +241,7 @@ const HiveRunCommand = cmd({
         prompt: script,
         config: { timeout_seconds: timeoutSec },
         timeout_seconds: timeoutSec,
+        ...(clampedPriority ? { priority: clampedPriority } : {}),
       }),
     })
 
@@ -249,6 +255,17 @@ const HiveRunCommand = cmd({
       dispatched: boolean
     }
     const taskId = created.task.id
+
+    // Fire-and-forget mode: print task id and exit
+    if (argv.queue) {
+      if (argv.json) {
+        console.log(JSON.stringify({ task_id: taskId, status: created.task.status, dispatched: created.dispatched }, null, 2))
+        return
+      }
+      console.log(`${success("✓")} dispatched task ${bold(taskId)}  status=${created.task.status}`)
+      console.log(dim(`  Check later:  iris hive tasks --task ${taskId}`))
+      return
+    }
 
     if (!argv.json) {
       console.log(`${dim("→")} task ${taskId.slice(0, 8)}  status=${created.task.status}`)
