@@ -43,6 +43,7 @@ function readLocalSdkEnv(): { token: string | null; userId: string | null } {
 
 interface DiscoverResult {
   reachable: boolean
+  auth_failed: boolean
   ssh_user: string | null
   os_uname: string | null
   iris_path: string | null
@@ -50,7 +51,7 @@ interface DiscoverResult {
   daemon_running: boolean
   has_node_key: boolean
   registered_user_id: string | null
-  recommendation: "install" | "upgrade" | "start-daemon" | "reconfigure" | "skip"
+  recommendation: "install" | "upgrade" | "start-daemon" | "reconfigure" | "skip" | "needs-key"
   reason: string
 }
 
@@ -100,9 +101,97 @@ function sshExec(target: string, remoteCmd: string, timeoutSec = 15): { ok: bool
   }
 }
 
+// ── SSH key bootstrap ───────────────────────────────────────────────────────
+
+function isAuthError(stderr: string): boolean {
+  return /permission denied|no supported authentication|publickey|keyboard-interactive/i.test(
+    stderr,
+  )
+}
+
+function isUnreachable(stderr: string): boolean {
+  return /connection refused|no route|network is unreachable|operation timed out|host is down/i.test(
+    stderr,
+  )
+}
+
+function findLocalPubkey(): string | null {
+  for (const name of ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub"]) {
+    const p = join(homedir(), ".ssh", name)
+    if (existsSync(p)) return p
+  }
+  return null
+}
+
+function generateKeyIfNeeded(): string | null {
+  const existing = findLocalPubkey()
+  if (existing) return existing
+  console.log(`${dim("→")} no SSH key found, generating ed25519 keypair...`)
+  const r = spawnSync(
+    "ssh-keygen",
+    ["-t", "ed25519", "-N", "", "-f", join(homedir(), ".ssh", "id_ed25519")],
+    { stdio: "inherit" },
+  )
+  if (r.status !== 0) {
+    console.error("ssh-keygen failed")
+    return null
+  }
+  return findLocalPubkey()
+}
+
+function sshCopyId(target: string, pubkey: string): boolean {
+  // ssh-copy-id is interactive — it prompts for the target's password.
+  // Inherit stdio so the prompt is visible.
+  const r = spawnSync(
+    "ssh-copy-id",
+    ["-i", pubkey, "-o", "StrictHostKeyChecking=no", target],
+    { stdio: "inherit" },
+  )
+  return r.status === 0
+}
+
+function verifyKeyAuth(target: string): boolean {
+  const r = spawnSync(
+    "ssh",
+    [
+      "-o", "BatchMode=yes",
+      "-o", "ConnectTimeout=5",
+      "-o", "StrictHostKeyChecking=no",
+      "-o", "PreferredAuthentications=publickey",
+      target,
+      "echo OK",
+    ],
+    { encoding: "utf8", timeout: 8000 },
+  )
+  return r.status === 0 && r.stdout.includes("OK")
+}
+
+async function runSshSetup(target: string): Promise<boolean> {
+  if (verifyKeyAuth(target)) {
+    console.log(`${success("✓")} key auth already works for ${bold(target)}`)
+    return true
+  }
+  const pubkey = generateKeyIfNeeded()
+  if (!pubkey) return false
+  console.log(`${dim("→")} pushing ${dim(pubkey)} to ${bold(target)}`)
+  console.log(dim("  (you will be prompted for the remote password once)"))
+  const ok = sshCopyId(target, pubkey)
+  if (!ok) {
+    console.error(`${dim("✗")} ssh-copy-id failed`)
+    return false
+  }
+  if (verifyKeyAuth(target)) {
+    console.log(`${success("✓")} key auth verified for ${bold(target)}`)
+    return true
+  }
+  console.error(`${dim("✗")} key was copied but verification still fails`)
+  return false
+}
+
 function discover(target: string): DiscoverResult {
   const result: DiscoverResult = {
     reachable: false,
+    auth_failed: false,
     ssh_user: target.includes("@") ? target.split("@")[0] : null,
     os_uname: null,
     iris_path: null,
@@ -139,7 +228,15 @@ fi;
 `
   const r = sshExec(target, probe, 15)
   if (!r.ok) {
-    result.reason = r.stderr.trim().slice(0, 200) || "ssh failed"
+    if (isAuthError(r.stderr)) {
+      result.auth_failed = true
+      result.recommendation = "needs-key"
+      result.reason = "SSH reachable but no key auth — run: iris hive ssh-setup " + target
+    } else if (isUnreachable(r.stderr)) {
+      result.reason = "SSH not reachable: " + r.stderr.trim().split("\n")[0].slice(0, 160)
+    } else {
+      result.reason = r.stderr.trim().slice(0, 200) || "ssh failed"
+    }
     return result
   }
   result.reachable = true
@@ -206,6 +303,7 @@ function printDiscover(d: DiscoverResult) {
     upgrade: highlight("→ upgrade in place"),
     "start-daemon": highlight("→ start daemon (already installed + registered)"),
     reconfigure: highlight("→ run iris-login to register as a node"),
+    "needs-key": highlight("→ set up SSH key auth first"),
     skip: success("→ skip — looks healthy"),
   }
   console.log(`  ${map[d.recommendation]}`)
@@ -257,7 +355,8 @@ const HiveEnrollCommand = cmd({
       .option("force", { describe: "reinstall even if already healthy", type: "boolean", default: false })
       .option("dry-run", { describe: "show what would happen without doing it", type: "boolean", default: false })
       .option("user-id", { describe: "iris user id (defaults to your logged-in id)", type: "number" })
-      .option("install-version", { describe: "specific iris version to install", type: "string" }),
+      .option("install-version", { describe: "specific iris version to install", type: "string" })
+      .option("auto-key", { describe: "auto-run ssh-setup if key auth is missing", type: "boolean", default: true }),
   async handler(argv) {
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
@@ -267,12 +366,26 @@ const HiveEnrollCommand = cmd({
     if (!target.includes("@") && argv.user) target = `${argv.user}@${target}`
 
     console.log(`${dim("→")} probing ${bold(target)}...`)
-    const d = discover(target)
+    let d = discover(target)
+
+    // Auto-run ssh-setup if key auth is the only blocker
+    if (d.auth_failed && argv["auto-key"]) {
+      console.log()
+      console.log(`${highlight("!")} no SSH key auth — setting up now...`)
+      const ok = await runSshSetup(target)
+      if (!ok) {
+        console.error(`${dim("✗")} could not establish key auth — aborting`)
+        process.exit(1)
+      }
+      // Re-probe with key auth in place
+      console.log(`${dim("→")} re-probing ${bold(target)}...`)
+      d = discover(target)
+    }
 
     if (!d.reachable) {
       console.log(`${dim("✗")} cannot reach ${target}: ${d.reason}`)
-      console.log(dim("  Tip: ensure SSH is enabled and your key is authorized."))
-      console.log(dim("  Try: iris hive ssh " + target.replace(/^[^@]+@/, "")))
+      console.log(dim("  Tip: ensure SSH is enabled on the target."))
+      console.log(dim("  If key auth fails: iris hive ssh-setup " + target))
       process.exit(1)
     }
 
@@ -375,5 +488,26 @@ async function waitForNewNode(
   return null
 }
 
+// ============================================================================
+// ssh-setup
+// ============================================================================
+
+const HiveSshSetupCommand = cmd({
+  command: "ssh-setup <target>",
+  describe: "set up passwordless SSH key auth to a host (wraps ssh-copy-id)",
+  builder: (yargs) =>
+    yargs
+      .positional("target", { describe: "user@ip", type: "string", demandOption: true })
+      .option("user", { describe: "ssh user if target is bare ip", type: "string" }),
+  async handler(argv) {
+    let target = String(argv.target)
+    if (!target.includes("@") && argv.user) target = `${argv.user}@${target}`
+
+    const ok = await runSshSetup(target)
+    if (!ok) process.exit(1)
+  },
+})
+
 export const HiveDiscoverCommandExport = HiveDiscoverCommand
 export const HiveEnrollCommandExport = HiveEnrollCommand
+export const HiveSshSetupCommandExport = HiveSshSetupCommand

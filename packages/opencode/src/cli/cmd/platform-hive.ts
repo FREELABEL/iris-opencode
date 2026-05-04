@@ -14,6 +14,7 @@ import {
 import {
   HiveDiscoverCommandExport,
   HiveEnrollCommandExport,
+  HiveSshSetupCommandExport,
 } from "./platform-hive-enroll"
 
 // Use iris-api base for Hive endpoints
@@ -3073,6 +3074,7 @@ export const PlatformHiveCommand = cmd({
       .command(HiveNodesCommandExport)
       .command(HiveRunCommandExport)
       // Remote enrollment (SSH-based)
+      .command(HiveSshSetupCommandExport)
       .command(HiveDiscoverCommandExport)
       .command(HiveEnrollCommandExport)
       // Script deployment
