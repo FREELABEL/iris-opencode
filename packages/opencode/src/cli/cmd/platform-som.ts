@@ -10,11 +10,46 @@ import { SomCampaignCommand } from "./platform-som-campaign"
 
 const RAICHU = process.env.IRIS_FL_API_URL ?? process.env.FL_API_URL ?? "https://raichu.heyiris.io"
 
-const CAMPAIGNS: Record<string, { board: number; strategy: string; ig: string; label: string; audience: string }> = {
-  courses:  { board: 38,  strategy: "AI Course | V3",         ig: "heyiris.io",        label: "AI Course Outreach",  audience: "AI builders, tech founders" },
-  creators: { board: 80,  strategy: "Creator Outreach | V1",  ig: "thediscoverpage_",   label: "Creator Outreach",    audience: "Artists, creators, hip-hop culture" },
-  beatbox:  { board: 224, strategy: "DJ Outreach | V1",       ig: "thebeatbox__",       label: "DJ Outreach",         audience: "DJs, producers, beatmakers" },
-  venues:   { board: 292, strategy: "Venue Partnership | V1", ig: "freelabelnet",       label: "Venue Partnership",   audience: "Cafes, venues, event spaces" },
+// Campaign type — mirrors the local fields these subcommands need. Loaded
+// from /api/v1/som/campaigns at the top of each command (Phase 1C — replaces
+// the hardcoded CAMPAIGNS map that was the second source of truth alongside
+// tests/e2e/som-config.js).
+type Campaign = { board: number; strategy: string; ig: string; label: string; audience: string; active: boolean }
+
+// Static audience hints — display-only labels for the overview/help. Not in
+// the DB schema. Add new keys as new campaign names appear.
+const AUDIENCE_HINTS: Record<string, string> = {
+  courses: "AI builders, tech founders",
+  creators: "Artists, creators, hip-hop culture",
+  beatbox: "DJs, producers, beatmakers",
+  venues: "Cafes, venues, event spaces",
+  freelabelnet: "FFAT artists/performers (Austin)",
+  mayo: "Mayo audience",
+  atxbeauty: "Beauty & wellness (Austin)",
+  gooddeals: "LinkedIn founders / B2B",
+}
+
+let _campaignCache: Record<string, Campaign> | null = null
+
+async function loadCampaigns(force = false): Promise<Record<string, Campaign>> {
+  if (_campaignCache && !force) return _campaignCache
+  const resp = await irisFetch(`/api/v1/som/campaigns`, {}, RAICHU)
+  if (!resp.ok) throw new Error(`Failed to load campaigns: HTTP ${resp.status}`)
+  const body = await resp.json()
+  const list = body?.data?.campaigns ?? []
+  const out: Record<string, Campaign> = {}
+  for (const c of list) {
+    out[c.name] = {
+      board: parseInt(c.bloq_id, 10),
+      strategy: c.strategy_name ?? "(no strategy)",
+      ig: c.ig_account ?? "",
+      label: c.label ?? c.name,
+      audience: AUDIENCE_HINTS[c.name] ?? "",
+      active: !!c.active,
+    }
+  }
+  _campaignCache = out
+  return out
 }
 
 function channelLabel(type: string): string {
@@ -52,6 +87,7 @@ const SomOverviewCommand = cmd({
   async handler(args) {
     await requireAuth()
 
+    const CAMPAIGNS = await loadCampaigns()
     let campaignNames = Object.keys(CAMPAIGNS)
     if (args.campaign) {
       if (!CAMPAIGNS[args.campaign as string]) {
@@ -156,6 +192,7 @@ const SomEditCommand = cmd({
     await requireAuth()
 
     const name = args.campaign as string
+    const CAMPAIGNS = await loadCampaigns()
     const cfg = CAMPAIGNS[name]
     if (!cfg) {
       prompts.log.error(`Unknown campaign: ${name}. Options: ${Object.keys(CAMPAIGNS).join(", ")}`)
@@ -297,14 +334,22 @@ const SomHelpCommand = cmd({
 
     console.log("")
     console.log(b("SOM — Sales Outreach Machine"))
-    console.log(d("Automated Instagram DM outreach across 4 campaigns"))
+    console.log(d("Automated Instagram DM outreach"))
     console.log("")
 
-    console.log(b("CAMPAIGNS"))
-    console.log("  courses   Board #38   @heyiris.io         AI builders, tech founders")
-    console.log("  creators  Board #80   @thediscoverpage_    Artists, creators, hip-hop culture")
-    console.log("  beatbox   Board #224  @thebeatbox__        DJs, producers, beatmakers")
-    console.log("  venues    Board #292  @freelabelnet        Cafes, venues, event spaces")
+    console.log(b("CAMPAIGNS") + d("  (live from /api/v1/som/campaigns)"))
+    try {
+      const CAMPAIGNS = await loadCampaigns()
+      const names = Object.keys(CAMPAIGNS).sort()
+      for (const name of names) {
+        const c = CAMPAIGNS[name]
+        const status = c.active ? "" : d("  [inactive]")
+        const audience = c.audience ? "  " + d(c.audience) : ""
+        console.log(`  ${name.padEnd(14)} Board #${String(c.board).padEnd(4)} @${(c.ig || "—").padEnd(20)}${audience}${status}`)
+      }
+    } catch (e: any) {
+      console.log(d(`  (failed to load: ${e.message})`))
+    }
     console.log("")
 
     console.log(b("DASHBOARD"))
@@ -498,6 +543,7 @@ const SomUpdateScriptCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Script — ${args.campaign}`)
 
+    const CAMPAIGNS = await loadCampaigns()
     const camp = CAMPAIGNS[args.campaign as string]
     if (!camp) {
       prompts.log.error(`Unknown campaign: ${args.campaign}`)
@@ -554,6 +600,7 @@ const SomClearAiCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Clear AI Prompt — ${args.campaign}`)
 
+    const CAMPAIGNS = await loadCampaigns()
     const camp = CAMPAIGNS[args.campaign as string]
     if (!camp) {
       prompts.log.error(`Unknown campaign: ${args.campaign}`)
