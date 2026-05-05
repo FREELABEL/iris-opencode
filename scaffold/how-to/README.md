@@ -23,6 +23,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "crowdfund a project", "add roles to opportunity", "pitch sections", "board members", "milestones", "open books", "the team", "filled vs open roles" | `crowdfunding-opportunities.md` |
 | "price a tutorial", "monetize learning", "sell a course", "paid content", "tutorial price" | `learning-tutorials.md` |
 | "feature a producer", "curate instrumentals", "community tab", "featured beats", "producer carousel" | `community-curation.md` |
+| "pulse", "readiness", "score", "is iris working", "daily digest", "health check on customer", "requirements", "playwright tests on a lead", "comms freshness", "trend sparkline" | `pulse.md` |
 
 ## How to use these files
 

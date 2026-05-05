@@ -1,5 +1,5 @@
 {
-  "version": "2026.05.06",
+  "version": "2026.05.04-pulse",
   "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
   "files": [
     {
@@ -91,6 +91,12 @@
       "dest": "how-to/community-curation.md",
       "managed": true,
       "purpose": "Feature producer profiles and curate instrumentals on the Discover Community tab via platform_configs."
+    },
+    {
+      "src": "how-to/pulse.md",
+      "dest": "how-to/pulse.md",
+      "managed": true,
+      "purpose": "Pulse readiness engine — autonomous 4-signal scoring (requirements + liveness + comms freshness + config), 15-min cron, daily digest. How to enroll a lead, view the score, run requirements, debug the loop."
     }
   ]
 }
