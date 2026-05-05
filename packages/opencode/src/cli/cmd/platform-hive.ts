@@ -11,6 +11,12 @@ import {
   HiveNodesCommandExport,
   HiveRunCommandExport,
 } from "./platform-hive-nodes"
+import {
+  HiveDiscoverCommandExport,
+  HiveEnrollCommandExport,
+  HiveSshSetupCommandExport,
+} from "./platform-hive-enroll"
+import { HiveSchedulesCommandExport } from "./platform-hive-schedule"
 
 // Use iris-api base for Hive endpoints
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
@@ -3068,6 +3074,12 @@ export const PlatformHiveCommand = cmd({
       // Node management + remote exec
       .command(HiveNodesCommandExport)
       .command(HiveRunCommandExport)
+      // Remote enrollment (SSH-based)
+      .command(HiveSshSetupCommandExport)
+      .command(HiveDiscoverCommandExport)
+      .command(HiveEnrollCommandExport)
+      // Cloud-side scheduling
+      .command(HiveSchedulesCommandExport)
       // Script deployment
       .command(HiveScriptCommand)
       .command(HiveScheduleCommand)
