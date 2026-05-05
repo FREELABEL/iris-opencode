@@ -3181,6 +3181,71 @@ const LeadsTasksCommand = cmd({
 })
 
 // ============================================================================
+// Enrich — dispatch a Hive `leadgen` task that calls fl-api enrich endpoints
+// for N leads in a bloq. Pure SDK, no Playwright, no IG sessions.
+// ============================================================================
+
+const LeadsEnrichCommand = cmd({
+  command: "enrich",
+  describe: "enrich leads in a bloq via the Hive leadgen task (quick-enrich-ig + full enrich)",
+  builder: (yargs) =>
+    yargs
+      .option("bloq", { alias: "b", describe: "bloq id to enrich leads from", type: "number", demandOption: true })
+      .option("limit", { alias: "n", describe: "max leads to enrich", type: "number", default: 20 })
+      .option("user-id", { describe: "user id (defaults to ~/.iris/sdk/.env)", type: "number" })
+      .option("queue", { describe: "fire and forget — print task id and exit", type: "boolean", default: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(argv) {
+    const { requireUserId } = await import("./iris-api")
+    const token = await requireAuth()
+    if (!token) { process.exitCode = 1; return }
+    const userId = await requireUserId(argv["user-id"] as number | undefined)
+    if (!userId) { process.exitCode = 1; return }
+
+    const bloqId = argv.bloq as number
+    const limit = argv.limit as number
+    const irisApiBase = process.env.IRIS_API_URL ?? "https://freelabel.net"
+    const prompt = `enrich bloq_id=${bloqId} limit=${limit}`
+    const title = `leadgen enrich bloq=${bloqId} limit=${limit}`
+
+    const res = await irisFetch(
+      `/api/v6/nodes/tasks`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: userId,
+          title,
+          type: "leadgen",
+          prompt,
+        }),
+      },
+      irisApiBase,
+    )
+
+    if (!res.ok) {
+      const body = await res.text()
+      if (argv.json) console.log(JSON.stringify({ ok: false, status: res.status, error: body }))
+      else console.error(`Task creation failed: ${res.status} ${body}`)
+      process.exitCode = 1
+      return
+    }
+
+    const created = (await res.json()) as { task: { id: string; status: string }; dispatched?: boolean }
+    const taskId = created.task?.id
+    const status = created.task?.status
+
+    if (argv.json) {
+      console.log(JSON.stringify({ ok: true, task_id: taskId, status, dispatched: created.dispatched ?? null }, null, 2))
+      return
+    }
+
+    console.log(`${success("✓")} dispatched ${bold("leadgen")} task ${highlight(taskId)} (status=${status})`)
+    console.log(dim(`  prompt:  ${prompt}`))
+    console.log(dim(`  monitor: iris hive tasks --task ${taskId}`))
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -3218,6 +3283,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsCollectCommand)
       .command(LeadsSegmentCommand)
       .command(LeadsRequirementsCommand)
+      .command(LeadsEnrichCommand)
       .demandCommand(),
   async handler() {},
 })

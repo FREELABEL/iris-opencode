@@ -51,7 +51,7 @@ const IntegrationsListCommand = cmd({
       if (!ok) { if (spinner) spinner.stop("Failed", 1); return }
 
       const raw = (await res.json()) as Record<string, any>
-      const integrations: any[] = raw?.data ?? raw ?? []
+      const integrations: any[] = raw?.connections ?? raw?.data ?? raw ?? []
 
       if (spinner) spinner.stop(`${integrations.length} integration(s)`)
 
@@ -70,27 +70,32 @@ const IntegrationsListCommand = cmd({
       const personal = integrations.filter((i: any) => !i.bloq_id)
       const shared = integrations.filter((i: any) => !!i.bloq_id)
 
+      const renderRow = (i: any, suffix = "") => {
+        const idLabel = i.id ? dim(`#${i.id}`) : dim("(no id)")
+        const account = i.account_email ?? i.name ?? null
+        const accountLabel = account ? `  ${dim("→")} ${bold(String(account))}` : ""
+        const provider = i.provider && i.provider !== "native" ? dim(` via ${i.provider}`) : ""
+        const tail = suffix ? `  ${dim(suffix)}` : ""
+        console.log(`  ${bold(String(i.type))}  ${idLabel}  ${statusBadge(i.status)}${accountLabel}${provider}${tail}`)
+      }
+
       if (personal.length > 0) {
         console.log()
         console.log(`  ${bold("Personal")} ${dim("(your account only)")}`)
         printDivider()
-        for (const i of personal) {
-          console.log(`  ${bold(String(i.type))}  ${dim(`#${i.id}`)}  ${statusBadge(i.status)}  ${dim(i.category ?? "")}`)
-        }
+        for (const i of personal) renderRow(i, i.category ?? "")
       }
 
       if (shared.length > 0) {
         console.log()
         console.log(`  ${bold("Shared")} ${dim("(bloq-level, accessible by all members)")}`)
         printDivider()
-        for (const i of shared) {
-          console.log(`  ${bold(String(i.type))}  ${dim(`#${i.id}`)}  ${statusBadge(i.status)}  ${dim(`bloq:${i.bloq_id}`)}`)
-        }
+        for (const i of shared) renderRow(i, `bloq:${i.bloq_id}`)
       }
 
       console.log()
       printDivider()
-      prompts.outro(dim("iris integrations connect <type> --bloq=<id>  — share with a bloq"))
+      prompts.outro(dim("Target a specific account: iris integrations exec <type> <fn> --account=<email>  (or --integration-id=<id>)"))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))

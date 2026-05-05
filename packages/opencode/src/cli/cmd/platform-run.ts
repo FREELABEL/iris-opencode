@@ -276,6 +276,36 @@ async function executeMacosLocal(
   }
 }
 
+/**
+ * Look up an integration_id from a user-supplied --account hint.
+ * Matches case-insensitively against account_email and name. Returns
+ * the first match. If multiple exist, the user should disambiguate
+ * with --integration-id directly.
+ */
+async function resolveAccountToIntegrationId(
+  userId: number,
+  normalizedType: string,
+  account: string,
+): Promise<number | null> {
+  try {
+    const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {}, IRIS_API)
+    if (!res.ok) return null
+    const data = (await res.json()) as any
+    const items: any[] = data?.connections ?? data?.data ?? data ?? []
+    const needle = account.toLowerCase()
+    const candidates = items.filter((i) => {
+      if (String(i.type ?? "").toLowerCase() !== normalizedType) return false
+      const email = String(i.account_email ?? "").toLowerCase()
+      const name = String(i.name ?? "").toLowerCase()
+      return email === needle || name === needle || email.includes(needle) || name.includes(needle)
+    })
+    if (candidates.length === 0) return null
+    return Number(candidates[0].id) || null
+  } catch {
+    return null
+  }
+}
+
 // Composio returns slugs without hyphens (googledrive), but iris-api expects
 // the hyphenated form (google-drive). Normalize before sending to backend.
 const SLUG_ALIASES: Record<string, string> = {
@@ -289,6 +319,7 @@ export async function executeIntegrationCall(
   type: string,
   fn: string,
   params: Record<string, unknown>,
+  options: { integrationId?: number; account?: string } = {},
 ): Promise<any> {
   // Local fast path for macos — calls the bridge directly, no remote API.
   if (type === "macos") {
@@ -300,6 +331,20 @@ export async function executeIntegrationCall(
   const normalized = SLUG_ALIASES[type] ?? type
   const userId = await requireUserId()
   if (!userId) throw new Error("user_id required")
+
+  // Resolve --account "alex@gmail.com" to an integration_id by querying the
+  // user's connections. If multiple match, prefer one whose account_email or
+  // name matches case-insensitively.
+  let integrationId: number | undefined = options.integrationId
+  if (!integrationId && options.account) {
+    integrationId = (await resolveAccountToIntegrationId(userId, normalized, options.account)) ?? undefined
+    if (!integrationId) {
+      throw new Error(
+        `No connection for type='${normalized}' matching --account='${options.account}'. ` +
+        `Run: iris integrations list`
+      )
+    }
+  }
 
   // Canva uses native service on fl-api (Composio has 0 actions)
   if (normalized === "canva") {
@@ -318,11 +363,14 @@ export async function executeIntegrationCall(
     return res.json()
   }
 
+  const body: Record<string, unknown> = { integration: normalized, action: fn, params }
+  if (integrationId) body.integration_id = integrationId
+
   const res = await irisFetch(
     `/api/v1/users/${userId}/integrations/execute-direct?user_id=${userId}`,
     {
       method: "POST",
-      body: JSON.stringify({ integration: normalized, action: fn, params }),
+      body: JSON.stringify(body),
     },
     IRIS_API, // execute-direct lives on iris-api, not fl-api
   )
@@ -494,43 +542,18 @@ const ListConnectedCommand = cmd({
     const userId = await requireUserId()
     if (!userId) { prompts.outro("Done"); return }
 
-    // Source 1: fl-api local integrations table
-    const flItems: any[] = []
+    // iris-api's /integrations endpoint already merges fl-api local rows with
+    // live Composio connected_accounts and surfaces account_email + entity_id
+    // per record. Use it directly so multi-account stays visible (a user with
+    // 2 Gmail accounts shows 2 rows, not 1 deduped by type).
+    const items: any[] = []
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/integrations`)
       if (res.ok) {
         const data = (await res.json()) as any
-        for (const i of (data?.data ?? data ?? [])) flItems.push(i)
+        for (const i of (data?.connections ?? data?.data ?? data ?? [])) items.push(i)
       }
     } catch {}
-
-    // Source 2: Composio connected_accounts (source of truth for OAuth)
-    const composioItems: any[] = []
-    try {
-      const cRes = await composioFetch(`/v3/connected_accounts?user_ids=user-${userId}`)
-      if (cRes.ok) {
-        const cData = (await cRes.json()) as any
-        for (const c of (cData?.items ?? cData?.data ?? [])) composioItems.push(c)
-      }
-    } catch {}
-
-    // Merge by toolkit slug — Composio takes precedence (it's the source of truth)
-    const merged = new Map<string, any>()
-    for (const i of flItems) {
-      const key = String(i.type ?? i.name ?? "?").toLowerCase()
-      merged.set(key, { source: "fl-api", type: key, status: i.status ?? "active", id: i.id })
-    }
-    for (const c of composioItems) {
-      const key = String(c?.toolkit?.slug ?? "?").toLowerCase()
-      merged.set(key, {
-        source: "oauth",
-        type: key,
-        status: String(c.status ?? "?").toLowerCase(),
-        id: c.id,
-        auth_scheme: c.authScheme ?? c.auth_scheme,
-      })
-    }
-    const items = Array.from(merged.values())
 
     if (args.json) {
       console.log(JSON.stringify(items, null, 2))
@@ -589,13 +612,17 @@ const ListConnectedCommand = cmd({
       } else if (v === "error") {
         statusLabel = `${UI.Style.TEXT_WARNING}[unverified]${UI.Style.TEXT_NORMAL} ${dim("— could not probe")}`
       } else {
-        // No verify function for this type — show active as before
         statusLabel = i.status === "active" ? dim("[active]") : dim(`[${i.status}]`)
       }
-      console.log(`  ${highlight(i.type)}  ${statusLabel}`)
+      // Show ID + per-account info so multi-account is discoverable.
+      const idLabel = i.id ? dim(`#${i.id}`) : dim("(no local id)")
+      const account = i.account_email ?? i.name ?? null
+      const accountLabel = account ? `  ${dim("→")} ${bold(String(account))}` : ""
+      const provider = i.provider && i.provider !== "native" ? dim(` via ${i.provider}`) : ""
+      console.log(`  ${highlight(i.type)}  ${idLabel}  ${statusLabel}${accountLabel}${provider}`)
     }
     printDivider()
-    prompts.outro(dim("iris integrations <type> <function> key=value …"))
+    prompts.outro(dim("Pick an account: iris integrations exec <type> <fn> --account=<email>  (or --integration-id=<id>)"))
   },
 })
 
@@ -633,12 +660,48 @@ const ConnectCommand = cmd({
   builder: (y) =>
     y
       .positional("type", { type: "string", demandOption: true })
-      .option("print-url", { type: "boolean", default: false, describe: "print the OAuth URL instead of opening a browser" }),
+      .option("print-url", { type: "boolean", default: false, describe: "print the OAuth URL instead of opening a browser" })
+      .option("name", {
+        type: "string",
+        describe: "label for this connection (e.g. \"Personal\" or \"Work\") — required when adding a 2nd account of the same type",
+      }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Connect: ${args.type}`)
+    const labelSuffix = args.name ? ` ${dim(`(${args.name})`)}` : ""
+    prompts.intro(`◈  Connect: ${args.type}${labelSuffix}`)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     const type = String(args.type)
+
+    // Multi-account guard: warn if a connection of this type already exists
+    // and no --name was supplied. Without a label the OAuth callback will
+    // overwrite the existing record (single-account legacy behavior).
+    if (!args.name) {
+      try {
+        const userId = await requireUserId()
+        if (userId) {
+          const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {}, IRIS_API)
+          if (res.ok) {
+            const data = (await res.json()) as any
+            const existing = (data?.connections ?? data?.data ?? []).filter(
+              (i: any) => String(i.type ?? "").toLowerCase() === (SLUG_ALIASES[type] ?? type),
+            )
+            if (existing.length > 0) {
+              const accounts = existing.map((i: any) => i.account_email ?? i.name ?? `#${i.id}`).join(", ")
+              prompts.log.warn(`You already have ${existing.length} ${type} connection(s): ${accounts}`)
+              console.log(`  ${dim("Re-running connect WITHOUT --name will overwrite the existing record.")}`)
+              console.log(`  ${dim("To add a second account, re-run with:")} ${highlight(`iris integrations connect ${type} --name="Personal"`)}`)
+              const proceed = await prompts.confirm({ message: "Continue and overwrite?", initialValue: false })
+              if (prompts.isCancel(proceed) || !proceed) {
+                prompts.outro("Cancelled")
+                return
+              }
+            }
+          }
+        }
+      } catch {
+        // non-fatal — fall through to normal connect
+      }
+    }
 
     if (APIKEY_TYPES.includes(type)) {
       const hints: Record<string, string> = {
@@ -921,6 +984,14 @@ const ExecCommand = cmd({
       .option("params-file", {
         type: "string",
         describe: "load params from a JSON file (merged with key=value params; key=value wins on conflict)",
+      })
+      .option("integration-id", {
+        type: "number",
+        describe: "target a specific connected account by integration record ID (multi-account)",
+      })
+      .option("account", {
+        type: "string",
+        describe: "target a connected account by email or name (e.g. --account=alex@gmail.com)",
       }),
   async handler(args) {
     // Suppress all UI chrome when --json for clean pipeable output (#55735)
@@ -976,14 +1047,23 @@ const ExecCommand = cmd({
           return
         }
         // Skip spinner/ANSI when --json to keep output parseable (#55735)
+        const accountOpts = {
+          integrationId: args["integration-id"] as number | undefined,
+          account: args.account as string | undefined,
+        }
         if (args.json) {
-          const result = await executeIntegrationCall(target, fn, params)
+          const result = await executeIntegrationCall(target, fn, params, accountOpts)
           console.log(JSON.stringify(result, null, 2))
           return
         }
         const spinner = prompts.spinner()
-        spinner.start(`Executing ${target}.${fn}…`)
-        const result = await executeIntegrationCall(target, fn, params)
+        const accountLabel = accountOpts.integrationId
+          ? ` ${dim(`(#${accountOpts.integrationId})`)}`
+          : accountOpts.account
+            ? ` ${dim(`(${accountOpts.account})`)}`
+            : ""
+        spinner.start(`Executing ${target}.${fn}${accountLabel}…`)
+        const result = await executeIntegrationCall(target, fn, params, accountOpts)
         spinner.stop(`${target}.${fn}`)
         displayResult(result, `${target}.${fn}`)
         prompts.outro("Done")
