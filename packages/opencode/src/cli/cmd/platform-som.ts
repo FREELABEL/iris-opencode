@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, bold, dim, success, highlight } from "./iris-api"
+import { SomCampaignCommand } from "./platform-som-campaign"
 
 // ============================================================================
 // SOM Campaign Overview + Edit — mirrors PHP som:overview and som:edit
@@ -612,6 +613,7 @@ export const PlatformSomCommand = cmd({
       .command(SomToggleCommand)
       .command(SomStatusCommand)
       .command(SomHelpCommand)
+      .command(SomCampaignCommand)
       // Default to overview when no subcommand
       .option("campaign", { alias: "c", describe: "show only one campaign", type: "string" })
       .option("scripts", { alias: "s", describe: "show full script text", type: "boolean" })
