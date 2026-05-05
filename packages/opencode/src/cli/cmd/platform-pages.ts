@@ -1087,13 +1087,75 @@ const QrCmd = cmd({
 })
 
 // ============================================================================
+// Screenshot
+// ============================================================================
+
+const ScreenshotCmd = cmd({
+  command: "screenshot <slug>",
+  aliases: ["snap", "ss"],
+  describe: "capture a full-page screenshot of a rendered page via Playwright",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true })
+      .option("width", { type: "number", default: 1440, describe: "viewport width" })
+      .option("out", { type: "string", describe: "output path (default: ./pages/<slug>.png)" })
+      .option("open", { type: "boolean", default: true, describe: "open image after capture" }),
+  async handler(args) {
+    UI.empty()
+    const slug = String(args.slug)
+    prompts.intro(`◈  Screenshot: ${slug}`)
+
+    const sp = prompts.spinner()
+    sp.start("Launching browser…")
+
+    try {
+      const { chromium } = await import("playwright")
+      const url = publicUrl(slug)
+      const outDir = join(process.cwd(), "pages")
+      if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true })
+      const outPath = args.out ? String(args.out) : join(outDir, `${slug}.png`)
+
+      const browser = await chromium.launch()
+      const page = await browser.newPage({ viewport: { width: args.width, height: 900 } })
+
+      sp.message(`Navigating to ${url}…`)
+      await page.goto(url, { waitUntil: "networkidle" })
+      await page.waitForTimeout(2000)
+
+      sp.message("Capturing…")
+      await page.screenshot({ path: outPath, fullPage: true })
+      await browser.close()
+
+      sp.stop("Captured")
+      prompts.log.success(`Saved: ${outPath}`)
+      prompts.log.info(`URL: ${url}`)
+
+      if (args.open) {
+        const { exec } = await import("child_process")
+        exec(`open "${outPath}"`)
+      }
+
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp.stop("Error")
+      if (e.message?.includes("Cannot find module") || e.message?.includes("playwright")) {
+        prompts.log.error("Playwright not installed. Run: npm install playwright")
+      } else {
+        prompts.log.error(e.message ?? String(e))
+      }
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
 export const PlatformPagesCommand = cmd({
   command: "pages",
   aliases: ["genesis"],
-  describe: "manage composable pages — list, view, get/set, pull/push/diff, publish, versions, qr",
+  describe: "manage composable pages — list, view, get/set, pull/push/diff, publish, versions, qr, screenshot",
   builder: (y) =>
     y
       .command(ListCmd)
@@ -1112,6 +1174,7 @@ export const PlatformPagesCommand = cmd({
       .command(VersionsCmd)
       .command(RollbackCmd)
       .command(QrCmd)
+      .command(ScreenshotCmd)
       .demandCommand(),
   async handler() {},
 })

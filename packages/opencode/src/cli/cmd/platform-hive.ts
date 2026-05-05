@@ -2,6 +2,15 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, getBridgeToken } from "./iris-api"
+import {
+  HiveScanCommandExport,
+  HiveProbeCommandExport,
+  HiveSshCommandExport,
+} from "./platform-hive-net"
+import {
+  HiveNodesCommandExport,
+  HiveRunCommandExport,
+} from "./platform-hive-nodes"
 
 // Use iris-api base for Hive endpoints
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
@@ -3052,6 +3061,13 @@ export const PlatformHiveCommand = cmd({
   describe: "manage Hive nodes, tasks, projects & peer connections",
   builder: (yargs) =>
     yargs
+      // LAN discovery (local utility — no API)
+      .command(HiveScanCommandExport)
+      .command(HiveProbeCommandExport)
+      .command(HiveSshCommandExport)
+      // Node management + remote exec
+      .command(HiveNodesCommandExport)
+      .command(HiveRunCommandExport)
       // Script deployment
       .command(HiveScriptCommand)
       .command(HiveScheduleCommand)

@@ -9,12 +9,51 @@ import { irisFetch, requireAuth, handleApiError, bold, dim, success, highlight }
 
 const RAICHU = process.env.IRIS_FL_API_URL ?? process.env.FL_API_URL ?? "https://raichu.heyiris.io"
 
-const CAMPAIGNS: Record<string, { board: number; strategy: string; ig: string; label: string; audience: string }> = {
-  courses:  { board: 38,  strategy: "AI Course | V3",         ig: "heyiris.io",        label: "AI Course Outreach",  audience: "AI builders, tech founders" },
-  creators: { board: 80,  strategy: "Creator Outreach | V1",  ig: "thediscoverpage_",   label: "Creator Outreach",    audience: "Artists, creators, hip-hop culture" },
-  beatbox:  { board: 224, strategy: "DJ Outreach | V1",       ig: "thebeatbox__",       label: "DJ Outreach",         audience: "DJs, producers, beatmakers" },
-  venues:   { board: 292, strategy: "Venue Partnership | V1", ig: "freelabelnet",       label: "Venue Partnership",   audience: "Cafes, venues, event spaces" },
+// Inline fallback — used when API is unreachable
+const INLINE_CAMPAIGNS: Record<string, { board: number; strategy: string; ig: string; label: string; audience: string }> = {
+  courses:      { board: 38,  strategy: "AI Course | V3",                  ig: "heyiris.io",        label: "AI Course Outreach",    audience: "AI builders, tech founders" },
+  creators:     { board: 80,  strategy: "Creator Outreach | V1",           ig: "thediscoverpage_",  label: "Creator Outreach",      audience: "Artists, creators, hip-hop culture" },
+  beatbox:      { board: 224, strategy: "DJ Outreach | V2",                ig: "thebeatbox__",      label: "DJ Outreach",           audience: "DJs, producers, beatmakers" },
+  mayo:         { board: 176, strategy: "Mayo Outreach | V2",              ig: "hourdemayo",        label: "Mayo Outreach",         audience: "Creators, influencers, foodies" },
+  venues:       { board: 292, strategy: "Venue Partnership | V1",          ig: "freelabelnet",      label: "Venue Partnership",     audience: "Cafes, venues, event spaces" },
+  freelabelnet: { board: 355, strategy: "Artist Outreach | FFAT V1",       ig: "freelabelnet",      label: "FFAT Artists (Austin)", audience: "Visual artists, muralists, performers" },
+  atxbeauty:    { board: 283, strategy: "Beauty & Wellness Outreach | V1", ig: "atxbeautylab.lisa", label: "ATX Beauty Outreach",   audience: "Estheticians, salons, wellness" },
+  gooddeals:    { board: 302, strategy: "LinkedIn Founder Outreach | V1",  ig: "",                  label: "Good Deals Outreach",   audience: "Startup founders, small biz owners" },
 }
+
+type CampaignEntry = { board: number; strategy: string; ig: string; label: string; audience: string }
+
+let _cachedCampaigns: Record<string, CampaignEntry> | null = null
+
+async function loadCampaigns(): Promise<Record<string, CampaignEntry>> {
+  if (_cachedCampaigns) return _cachedCampaigns
+  try {
+    const resp = await irisFetch("/api/v1/som/campaigns", {}, RAICHU)
+    if (resp.ok) {
+      const body = await resp.json() as any
+      const list = body?.data?.campaigns ?? body?.data ?? []
+      if (Array.isArray(list) && list.length > 0) {
+        const result: Record<string, CampaignEntry> = {}
+        for (const c of list) {
+          result[c.name] = {
+            board: Number(c.bloq_id),
+            strategy: c.strategy_name || "",
+            ig: c.ig_account || "",
+            label: c.label || c.name,
+            audience: c.metadata?.audience || "",
+          }
+        }
+        _cachedCampaigns = result
+        return result
+      }
+    }
+  } catch { /* fall through to inline */ }
+  _cachedCampaigns = INLINE_CAMPAIGNS
+  return INLINE_CAMPAIGNS
+}
+
+// Kept for backward compat in commands that reference it synchronously
+const CAMPAIGNS = INLINE_CAMPAIGNS
 
 function channelLabel(type: string): string {
   const map: Record<string, string> = { instagram: "IG DM", email: "Email", sms: "SMS", phone: "Phone", linkedin: "LinkedIn" }
@@ -51,9 +90,10 @@ const SomOverviewCommand = cmd({
   async handler(args) {
     await requireAuth()
 
-    let campaignNames = Object.keys(CAMPAIGNS)
+    const allCampaigns = await loadCampaigns()
+    let campaignNames = Object.keys(allCampaigns)
     if (args.campaign) {
-      if (!CAMPAIGNS[args.campaign as string]) {
+      if (!allCampaigns[args.campaign as string]) {
         prompts.log.error(`Unknown campaign: ${args.campaign}. Options: ${campaignNames.join(", ")}`)
         return
       }
@@ -63,7 +103,7 @@ const SomOverviewCommand = cmd({
     const allData: Record<string, unknown> = {}
 
     for (const name of campaignNames) {
-      const cfg = CAMPAIGNS[name]
+      const cfg = allCampaigns[name]
       const strategy = await fetchStrategyByName(cfg.board, cfg.strategy)
       const leads = await fetchLeadCount(cfg.board)
 
@@ -154,10 +194,11 @@ const SomEditCommand = cmd({
   async handler(args) {
     await requireAuth()
 
+    const allCampaigns = await loadCampaigns()
     const name = args.campaign as string
-    const cfg = CAMPAIGNS[name]
+    const cfg = allCampaigns[name]
     if (!cfg) {
-      prompts.log.error(`Unknown campaign: ${name}. Options: ${Object.keys(CAMPAIGNS).join(", ")}`)
+      prompts.log.error(`Unknown campaign: ${name}. Options: ${Object.keys(allCampaigns).join(", ")}`)
       return
     }
 
@@ -296,18 +337,16 @@ const SomHelpCommand = cmd({
 
     console.log("")
     console.log(b("SOM — Sales Outreach Machine"))
-    console.log(d("Automated Instagram DM outreach across 4 campaigns"))
+    console.log(d("Automated Instagram DM outreach across all campaigns"))
     console.log("")
 
     console.log(b("CAMPAIGNS"))
-    console.log("  courses   Board #38   @heyiris.io         AI builders, tech founders")
-    console.log("  creators  Board #80   @thediscoverpage_    Artists, creators, hip-hop culture")
-    console.log("  beatbox   Board #224  @thebeatbox__        DJs, producers, beatmakers")
-    console.log("  venues    Board #292  @freelabelnet        Cafes, venues, event spaces")
+    console.log("  Run " + d("iris som") + " to see all active campaigns (loaded from API)")
+    console.log("  Examples: courses, creators, beatbox, mayo, venues, freelabelnet, atxbeauty, gooddeals")
     console.log("")
 
     console.log(b("DASHBOARD"))
-    console.log("  iris som                       Overview of all 4 campaigns")
+    console.log("  iris som                       Overview of all campaigns")
     console.log("  iris som -s                    With full script text")
     console.log("  iris som -c creators           Just one campaign")
     console.log("  iris som --json                JSON output for scripting")
@@ -331,7 +370,7 @@ const SomHelpCommand = cmd({
     console.log("")
 
     console.log(b("RUN BATCHES"))
-    console.log("  npm run som:all -- limit=15 enrich=1    All 4 campaigns")
+    console.log("  npm run som:all -- limit=15 enrich=1    All active campaigns")
     console.log("  npm run som:creators -- limit=20        Just creators")
     console.log("  npm run som:beatbox -- limit=5 dry=1    Dry run (no DMs)")
     console.log("")
@@ -497,9 +536,10 @@ const SomUpdateScriptCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Script — ${args.campaign}`)
 
-    const camp = CAMPAIGNS[args.campaign as string]
+    const allCampaigns = await loadCampaigns()
+    const camp = allCampaigns[args.campaign as string]
     if (!camp) {
-      prompts.log.error(`Unknown campaign: ${args.campaign}`)
+      prompts.log.error(`Unknown campaign: ${args.campaign}. Options: ${Object.keys(allCampaigns).join(", ")}`)
       prompts.outro("Done")
       return
     }
@@ -553,9 +593,10 @@ const SomClearAiCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Clear AI Prompt — ${args.campaign}`)
 
-    const camp = CAMPAIGNS[args.campaign as string]
+    const allCampaigns = await loadCampaigns()
+    const camp = allCampaigns[args.campaign as string]
     if (!camp) {
-      prompts.log.error(`Unknown campaign: ${args.campaign}`)
+      prompts.log.error(`Unknown campaign: ${args.campaign}. Options: ${Object.keys(allCampaigns).join(", ")}`)
       prompts.outro("Done")
       return
     }

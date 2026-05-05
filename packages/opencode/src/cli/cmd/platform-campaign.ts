@@ -164,7 +164,8 @@ const CampaignCreateCommand = cmd({
         }),
       })
       if (!(await handleApiError(bloqRes, "Create board"))) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-      const bloq = ((await bloqRes.json()) as any)?.data ?? (await bloqRes.json())
+      const bloqBody = await bloqRes.json() as any
+      const bloq = bloqBody?.data ?? bloqBody
       const boardId = bloq.id
       spinner.stop(success(`Board #${boardId}: ${campaignName}`))
 
