@@ -402,60 +402,42 @@ const SomHelpCommand = cmd({
 
 // ── Toggle command ──
 
-function findSomConfig(): string | null {
-  const { existsSync } = require("fs")
-  const { join, resolve } = require("path")
-  let dir = process.cwd()
-  for (let i = 0; i < 10; i++) {
-    const candidate = join(dir, "tests", "e2e", "som-config.js")
-    if (existsSync(candidate)) return candidate
-    const parent = resolve(dir, "..")
-    if (parent === dir) break
-    dir = parent
-  }
-  return null
-}
-
 const SomToggleCommand = cmd({
   command: "toggle <campaign> [state]",
-  describe: "turn a campaign on or off",
+  describe: "turn a campaign on or off (updates DB)",
   builder: (yargs) =>
     yargs
-      .positional("campaign", { describe: "campaign name (courses, creators, beatbox, mayo, venues, atxbeauty, gooddeals)", type: "string", demandOption: true })
+      .positional("campaign", { describe: "campaign name", type: "string", demandOption: true })
       .positional("state", { describe: "on or off (toggles if omitted)", type: "string" }),
   async handler(args) {
-    const { readFileSync, writeFileSync } = require("fs")
+    await requireAuth()
     UI.empty()
     prompts.intro("◈  SOM Toggle")
 
-    const configPath = findSomConfig()
-    if (!configPath) {
-      prompts.log.error("som-config.js not found. Run from the freelabel project root.")
-      prompts.outro("Done")
-      return
-    }
-
-    const content = readFileSync(configPath, "utf-8")
+    const allCampaigns = await loadCampaigns()
     const campaign = (args.campaign as string).toLowerCase()
 
-    // Find the campaign line
-    const regex = new RegExp(`(${campaign}:\\s*\\{[^}]*active:\\s*)(true|false)`, "i")
-    const match = content.match(regex)
-
-    if (!match) {
-      prompts.log.error(`Campaign "${campaign}" not found in som-config.js`)
-      const available = content.match(/^\s+(\w+):\s*\{/gm)?.map((m: string) => m.trim().replace(/:\s*\{/, "")) ?? []
-      prompts.log.info(`Available: ${available.join(", ")}`)
+    if (!allCampaigns[campaign]) {
+      prompts.log.error(`Unknown campaign: ${campaign}. Options: ${Object.keys(allCampaigns).join(", ")}`)
       prompts.outro("Done")
       return
     }
 
-    const currentState = match[2] === "true"
-    let newState: boolean
+    // Fetch current state from API
+    const getResp = await irisFetch(`/api/v1/som/campaigns/${campaign}`, {}, RAICHU)
+    if (!getResp.ok) {
+      await handleApiError(getResp, "fetch campaign")
+      prompts.outro("Done")
+      return
+    }
+    const getBody = (await getResp.json()) as any
+    const campaignData = getBody?.data?.campaign ?? getBody?.data ?? getBody
+    const currentState = !!campaignData.active
 
+    let newState: boolean
     if (args.state === "on") newState = true
     else if (args.state === "off") newState = false
-    else newState = !currentState // toggle
+    else newState = !currentState
 
     if (currentState === newState) {
       prompts.log.info(`${campaign} is already ${newState ? "ON" : "OFF"}`)
@@ -463,58 +445,73 @@ const SomToggleCommand = cmd({
       return
     }
 
-    const updated = content.replace(regex, `$1${newState}`)
-    writeFileSync(configPath, updated)
+    // Update via API
+    const putResp = await irisFetch(`/api/v1/som/campaigns/${campaign}`, {
+      method: "PUT",
+      body: JSON.stringify({ active: newState }),
+    }, RAICHU)
+
+    if (!putResp.ok) {
+      await handleApiError(putResp, "update campaign")
+      prompts.outro("Done")
+      return
+    }
 
     prompts.log.info(`${bold(campaign)} ${currentState ? "ON → OFF" : "OFF → ON"}`)
 
-    // Show all campaign states
-    const allCampaigns = updated.match(/(\w+):\s*\{[^}]*active:\s*(true|false)/gi) ?? []
-    console.log("")
-    for (const line of allCampaigns) {
-      const nameMatch = line.match(/^(\w+):/)
-      const activeMatch = line.match(/active:\s*(true|false)/)
-      if (nameMatch && activeMatch) {
-        const n = nameMatch[1]
-        const a = activeMatch[1] === "true"
-        console.log(`  ${a ? "✅" : "❌"} ${n}`)
+    // Show all campaign states from API
+    _cachedCampaigns = null // bust cache
+    const listResp = await irisFetch("/api/v1/som/campaigns", {}, RAICHU)
+    if (listResp.ok) {
+      const body = (await listResp.json()) as any
+      const list = body?.data?.campaigns ?? body?.data ?? []
+      if (Array.isArray(list)) {
+        console.log("")
+        let on = 0, off = 0
+        for (const c of list) {
+          const a = !!c.active
+          console.log(`  ${a ? "✅" : "❌"} ${c.name}`)
+          a ? on++ : off++
+        }
+        console.log("")
+        prompts.log.info(dim(`${on} active, ${off} off`))
       }
     }
-    console.log("")
 
-    prompts.outro(dim("Changes take effect on next som:all run"))
+    prompts.outro(dim("Change is live — no deploy needed"))
   },
 })
 
 const SomStatusCommand = cmd({
   command: "status",
-  describe: "show which campaigns are on/off",
+  describe: "show which campaigns are on/off (from DB)",
   builder: (yargs) => yargs,
   async handler() {
-    const { readFileSync } = require("fs")
+    await requireAuth()
     UI.empty()
     prompts.intro("◈  SOM Status")
 
-    const configPath = findSomConfig()
-    if (!configPath) {
-      prompts.log.error("som-config.js not found")
+    const resp = await irisFetch("/api/v1/som/campaigns", {}, RAICHU)
+    if (!resp.ok) {
+      await handleApiError(resp, "fetch campaigns")
       prompts.outro("Done")
       return
     }
 
-    const content = readFileSync(configPath, "utf-8")
-    const allCampaigns = content.match(/(\w+):\s*\{[^}]*active:\s*(true|false)/gi) ?? []
+    const body = (await resp.json()) as any
+    const list = body?.data?.campaigns ?? body?.data ?? []
+
+    if (!Array.isArray(list) || list.length === 0) {
+      prompts.log.warn("No campaigns found in DB")
+      prompts.outro("Done")
+      return
+    }
 
     let on = 0, off = 0
-    for (const line of allCampaigns) {
-      const nameMatch = line.match(/^(\w+):/)
-      const activeMatch = line.match(/active:\s*(true|false)/)
-      if (nameMatch && activeMatch) {
-        const n = nameMatch[1]
-        const a = activeMatch[1] === "true"
-        console.log(`  ${a ? "✅" : "❌"} ${n}`)
-        a ? on++ : off++
-      }
+    for (const c of list) {
+      const a = !!c.active
+      console.log(`  ${a ? "✅" : "❌"} ${c.name} ${dim(`(board #${c.bloq_id})`)}`)
+      a ? on++ : off++
     }
     console.log("")
     prompts.outro(`${on} active, ${off} off`)
