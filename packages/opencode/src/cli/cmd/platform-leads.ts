@@ -1599,7 +1599,8 @@ const LeadsPulseCommand = cmd({
       .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
       .option("days", { describe: "look-back window in days", type: "number", default: 30 })
       .option("limit", { describe: "max messages per channel", type: "number", default: 50 })
-      .option("hydrate", { describe: "auto-send follow-up if gate is unpaid + past throttle window", type: "boolean", default: false })
+      .option("hydrate", { describe: "generate + send follow-up if gate is unpaid + past throttle window", type: "boolean", default: false })
+      .option("dry-run", { describe: "with --hydrate: generate the AI email but don't send it", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -2455,7 +2456,8 @@ const LeadsPulseCommand = cmd({
                 `Sign off as "IRIS AI — on behalf of the IRIS team"`,
               ].filter(Boolean).join("\n")
 
-              // Generate AI email using lead's full context (notes, history, tags)
+              // Generate AI email — pass bloq_id + strategy_template_id directly
+              const bloqId = (lead.bloq_ids ?? [])[0] ?? 40
               const genRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/generate-email`, {
                 method: "POST",
                 body: JSON.stringify({
@@ -2463,6 +2465,8 @@ const LeadsPulseCommand = cmd({
                   tone: "professional",
                   include_cta: true,
                   max_length: "short",
+                  bloq_id: bloqId,
+                  strategy_template_id: 37,
                 }),
               })
 
@@ -2471,44 +2475,50 @@ const LeadsPulseCommand = cmd({
                 console.log(`  ${dim(`AI generation failed: ${errBody.message ?? errBody.error ?? genRes.status}`)}`)
               } else {
                 const genData = (await genRes.json()) as any
-                const draft = genData.data ?? genData
+                const draft = genData.draft ?? genData.data?.draft ?? genData.data ?? genData
                 const emailSubject = draft.subject ?? `Following up — ${scopeShort}`
-                const emailBody = draft.body ?? draft.message ?? ""
+                const emailBody = draft.body ?? draft.message ?? draft.content ?? ""
 
                 if (!emailBody) {
                   console.log(`  ${dim("AI returned empty draft — skipping")}`)
                 } else {
                   // Preview the generated email
+                  console.log(`  ${dim("To:")} ${email}`)
                   console.log(`  ${dim("Subject:")} ${emailSubject}`)
-                  const previewLines = emailBody.split("\n").slice(0, 4)
-                  for (const line of previewLines) {
-                    console.log(`  ${dim(line.slice(0, 100))}`)
+                  console.log(`  ${dim("─".repeat(50))}`)
+                  for (const line of emailBody.split("\n")) {
+                    console.log(`  ${dim(line)}`)
                   }
-                  if (emailBody.split("\n").length > 4) console.log(`  ${dim("...")}`)
+                  console.log(`  ${dim("─".repeat(50))}`)
                   console.log()
 
-                  // Step 2: Send via quicksend
-                  const qsRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/quicksend`, {
-                    method: "POST",
-                    body: JSON.stringify({
-                      channel: "email",
-                      message: emailBody,
-                      subject: emailSubject,
-                    }),
-                  })
-
-                  if (qsRes.ok) {
-                    const qsData = (await qsRes.json()) as any
-                    if (qsData.success || qsData.message_id) {
-                      console.log(`  ${success("Sent AI follow-up")}  ${dim("to " + email)}`)
-                    } else if (qsData.status === "pending_approval") {
-                      console.log(`  ${highlight("AI draft queued for approval")}  ${dim("review: iris leads outreach approve")}`)
-                    } else {
-                      console.log(`  ${dim("Follow-up queued")}`)
-                    }
+                  if ((args as any)["dry-run"] || (args as any).dryRun) {
+                    console.log(`  ${highlight("DRY RUN — email NOT sent")}`)
+                    console.log(`  ${dim("Remove --dry-run to send")}`)
                   } else {
-                    const errBody = await qsRes.json().catch(() => ({}))
-                    console.log(`  ${dim(`Send failed: ${errBody.message ?? qsRes.status}`)}`)
+                    // Step 2: Send via quicksend
+                    const qsRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/quicksend`, {
+                      method: "POST",
+                      body: JSON.stringify({
+                        channel: "email",
+                        message: emailBody,
+                        subject: emailSubject,
+                      }),
+                    })
+
+                    if (qsRes.ok) {
+                      const qsData = (await qsRes.json()) as any
+                      if (qsData.success || qsData.message_id) {
+                        console.log(`  ${success("Sent AI follow-up")}  ${dim("to " + email)}`)
+                      } else if (qsData.status === "pending_approval") {
+                        console.log(`  ${highlight("AI draft queued for approval")}  ${dim("review: iris leads outreach approve")}`)
+                      } else {
+                        console.log(`  ${dim("Follow-up queued")}`)
+                      }
+                    } else {
+                      const errBody = await qsRes.json().catch(() => ({}))
+                      console.log(`  ${dim(`Send failed: ${errBody.message ?? qsRes.status}`)}`)
+                    }
                   }
                 }
               }
