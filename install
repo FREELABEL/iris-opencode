@@ -1239,48 +1239,7 @@ SDK_ENV="$IRIS_DIR/sdk/.env"
 CONFIG_JSON="$IRIS_DIR/config.json"
 API_BASE="https://raichu.heyiris.io"
 
-# Parse flags
-PRE_TOKEN="" ; PRE_USER_ID="" ; ACTION=""
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --token)  PRE_TOKEN="$2"; shift 2 ;;
-        --user-id) PRE_USER_ID="$2"; shift 2 ;;
-        --help|-h) echo "Usage: iris-login [whoami|--token TOKEN --user-id ID]"; exit 0 ;;
-        whoami|status) ACTION="whoami"; shift ;;
-        *) shift ;;
-    esac
-done
-
-# ─── whoami subcommand ────────────────────────────────────────────────────
-if [ "$ACTION" = "whoami" ]; then
-    if [ ! -f "$SDK_ENV" ]; then
-        echo -e "${RED}Not authenticated.${NC} Run ${CYAN}iris-login${NC} to log in."
-        exit 1
-    fi
-    TOKEN=$(grep IRIS_API_KEY "$SDK_ENV" 2>/dev/null | cut -d= -f2)
-    USERID=$(grep IRIS_USER_ID "$SDK_ENV" 2>/dev/null | cut -d= -f2)
-    if [ -z "$TOKEN" ]; then
-        echo -e "${RED}No token found.${NC} Run ${CYAN}iris-login${NC} to authenticate."
-        exit 1
-    fi
-    # Fetch user info from API
-    ME_RESP=$(curl -s --max-time 10 -H "Authorization: Bearer $TOKEN" -H "Accept: application/json" \
-        "$API_BASE/api/v1/me" 2>/dev/null || echo '{}')
-    ME_NAME=$(json_nested "$ME_RESP" "data.full_name")
-    ME_EMAIL=$(json_nested "$ME_RESP" "data.email")
-    ME_ID=$(json_nested "$ME_RESP" "data.id")
-    if [ -z "$ME_ID" ] || [ "$ME_ID" = "" ]; then
-        ME_ID="$USERID"
-    fi
-    echo -e ""
-    echo -e "${GREEN}Authenticated${NC}"
-    [ -n "$ME_NAME" ] && echo -e "  ${MUTED}Name:${NC}   $ME_NAME"
-    [ -n "$ME_EMAIL" ] && echo -e "  ${MUTED}Email:${NC}  $ME_EMAIL"
-    [ -n "$ME_ID" ] && echo -e "  ${MUTED}ID:${NC}     $ME_ID"
-    echo -e "  ${MUTED}Token:${NC}  ${TOKEN:0:12}..."
-    exit 0
-fi
-
+# JSON helpers — must be defined before whoami/token blocks that use them
 json_field() {
     local json="$1" field="$2"
     if command -v jq >/dev/null 2>&1; then
@@ -1335,6 +1294,48 @@ register_hive() {
     esac
     return 1
 }
+
+# Parse flags
+PRE_TOKEN="" ; PRE_USER_ID="" ; ACTION=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --token)  PRE_TOKEN="$2"; shift 2 ;;
+        --user-id) PRE_USER_ID="$2"; shift 2 ;;
+        --help|-h) echo "Usage: iris-login [whoami|--token TOKEN --user-id ID]"; exit 0 ;;
+        whoami|status) ACTION="whoami"; shift ;;
+        *) shift ;;
+    esac
+done
+
+# ─── whoami subcommand ────────────────────────────────────────────────────
+if [ "$ACTION" = "whoami" ]; then
+    if [ ! -f "$SDK_ENV" ]; then
+        echo -e "${RED}Not authenticated.${NC} Run ${CYAN}iris-login${NC} to log in."
+        exit 1
+    fi
+    TOKEN=$(grep IRIS_API_KEY "$SDK_ENV" 2>/dev/null | cut -d= -f2)
+    USERID=$(grep IRIS_USER_ID "$SDK_ENV" 2>/dev/null | cut -d= -f2)
+    if [ -z "$TOKEN" ]; then
+        echo -e "${RED}No token found.${NC} Run ${CYAN}iris-login${NC} to authenticate."
+        exit 1
+    fi
+    # Fetch user info from API
+    ME_RESP=$(curl -s --max-time 10 -H "Authorization: Bearer $TOKEN" -H "Accept: application/json" \
+        "$API_BASE/api/v1/me" 2>/dev/null || echo '{}')
+    ME_NAME=$(json_nested "$ME_RESP" "data.full_name")
+    ME_EMAIL=$(json_nested "$ME_RESP" "data.email")
+    ME_ID=$(json_nested "$ME_RESP" "data.id")
+    if [ -z "$ME_ID" ] || [ "$ME_ID" = "" ]; then
+        ME_ID="$USERID"
+    fi
+    echo -e ""
+    echo -e "${GREEN}Authenticated${NC}"
+    [ -n "$ME_NAME" ] && echo -e "  ${MUTED}Name:${NC}   $ME_NAME"
+    [ -n "$ME_EMAIL" ] && echo -e "  ${MUTED}Email:${NC}  $ME_EMAIL"
+    [ -n "$ME_ID" ] && echo -e "  ${MUTED}ID:${NC}     $ME_ID"
+    echo -e "  ${MUTED}Token:${NC}  ${TOKEN:0:12}..."
+    exit 0
+fi
 
 # ─── Scripted auth (--token flag) ──────────────────────────────────────────
 if [ -n "$PRE_TOKEN" ]; then

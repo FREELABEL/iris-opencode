@@ -62,7 +62,6 @@ interface ResolvedConfig {
   flApiSource: string
   irisApi: string
   irisApiSource: string
-  [key: string]: string | undefined
 }
 
 function resolveConfig(): ResolvedConfig {
