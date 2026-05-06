@@ -75,7 +75,7 @@ export const UpgradeCommand = {
       if (installedVersion && installedVersion !== target) {
         prompts.log.warn(`Expected v${target} but binary reports v${installedVersion}`)
         prompts.log.info(`Your shell may cache the old binary path. Run: hash -r && iris --version`)
-        prompts.log.info(`Or try: curl -fsSL https://heyiris.io/install-iris.sh | bash`)
+        prompts.log.info(`Or try: ${process.platform === "win32" ? 'irm https://heyiris.io/install-code.ps1 | iex' : 'curl -fsSL https://heyiris.io/install-code | bash'}`)
       } else {
         prompts.log.success(`Verified: v${installedVersion}`)
       }

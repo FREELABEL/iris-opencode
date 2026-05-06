@@ -383,12 +383,69 @@ export const AuthLoginCommand = cmd({
         describe: "re-authenticate even if already logged in",
         type: "boolean",
         default: false,
+      })
+      .option("token", {
+        describe: "authenticate non-interactively with a pre-existing SDK token",
+        type: "string",
+      })
+      .option("user-id", {
+        describe: "user ID (used with --token for non-interactive auth)",
+        type: "number",
       }),
   async handler(args) {
     await Instance.provide({
       directory: process.cwd(),
       async fn() {
         UI.empty()
+
+        // Non-interactive token auth (for agents, scripts, CI)
+        if (args.token) {
+          if (args.token.length < 20) {
+            prompts.log.error("Invalid token — must be at least 20 characters")
+            return
+          }
+          // Validate token against API
+          const apiBase = process.env.IRIS_AUTH_API_URL ?? "https://raichu.heyiris.io"
+          try {
+            const res = await fetch(`${apiBase}/api/v1/me`, {
+              headers: { Authorization: `Bearer ${args.token}`, Accept: "application/json" },
+              signal: AbortSignal.timeout(10_000),
+            })
+            if (!res.ok) {
+              prompts.log.error(`Token validation failed (HTTP ${res.status})`)
+              return
+            }
+            const data = (await res.json()) as any
+            const userId = args.userId ?? data?.data?.id ?? data?.id
+            if (!userId) {
+              prompts.log.error("Token valid but could not resolve user ID")
+              return
+            }
+
+            // Write ~/.iris/sdk/.env
+            fs.mkdirSync(path.join(IRIS_DIR, "sdk"), { recursive: true })
+            fs.writeFileSync(
+              SDK_ENV_PATH,
+              [
+                "# IRIS SDK Configuration",
+                `# Date: ${new Date().toISOString()}`,
+                "",
+                "IRIS_ENV=production",
+                `IRIS_API_KEY=${args.token}`,
+                `IRIS_USER_ID=${userId}`,
+                "IRIS_DEFAULT_MODEL=gpt-4o-mini",
+                "",
+              ].join("\n"),
+              { mode: 0o600 },
+            )
+            await Auth.set("iris", { type: "api", key: args.token })
+            prompts.log.success(`Authenticated (user ${userId})`)
+            prompts.outro("Done")
+          } catch (e) {
+            prompts.log.error(`Token validation failed: ${e instanceof Error ? e.message : String(e)}`)
+          }
+          return
+        }
 
         // If --provider flag or a URL is given, go straight to AI provider flow
         if (args.provider || args.url) {

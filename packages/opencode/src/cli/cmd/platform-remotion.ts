@@ -20,7 +20,7 @@ function remotionInstalled(): boolean {
 function runIrisRemotion(args: string[]): void {
   const wrapper = join(homedir(), ".iris", "bin", "iris-remotion")
   if (!existsSync(wrapper)) {
-    UI.error("iris-remotion not found. Run: curl -fsSL https://heyiris.io/install-code | bash")
+    UI.error(`iris-remotion not found. Run: ${process.platform === "win32" ? "irm https://heyiris.io/install-code.ps1 | iex" : "curl -fsSL https://heyiris.io/install-code | bash"}`)
     process.exit(1)
   }
   const result = spawnSync(wrapper, args, { stdio: "inherit", env: process.env })
@@ -104,7 +104,7 @@ const ListCommand = cmd({
   builder: (yargs) => yargs,
   async handler() {
     if (!remotionInstalled()) {
-      UI.error("Remotion not installed. Run: curl -fsSL https://heyiris.io/install-code | bash")
+      UI.error(`Remotion not installed. Run: ${process.platform === "win32" ? "irm https://heyiris.io/install-code.ps1 | iex" : "curl -fsSL https://heyiris.io/install-code | bash"}`)
       process.exit(1)
     }
     runIrisRemotion(["list"])

@@ -92,7 +92,8 @@ const HiveNodesListCommand = cmd({
     }
 
     if (nodes.length === 0) {
-      console.log(dim("No nodes registered. Install on a machine: curl heyiris.io/install-code | bash"))
+      const installHint = process.platform === "win32" ? "irm https://heyiris.io/install-code.ps1 | iex" : "curl heyiris.io/install-code | bash"
+      console.log(dim(`No nodes registered. Install on a machine: ${installHint}`))
       return
     }
 

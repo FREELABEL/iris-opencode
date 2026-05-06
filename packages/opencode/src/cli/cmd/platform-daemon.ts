@@ -17,13 +17,20 @@ function printKV(k: string, v: unknown) {
 }
 
 function getDaemonCtl(): string | null {
-  const p = join(homedir(), ".iris", "bin", "iris-daemon")
+  const ext = process.platform === "win32" ? ".cmd" : ""
+  const p = join(homedir(), ".iris", "bin", `iris-daemon${ext}`)
   return existsSync(p) ? p : null
 }
 
 function getBridgeCtl(): string | null {
-  const p = join(homedir(), ".iris", "bin", "iris-bridge")
+  const ext = process.platform === "win32" ? ".cmd" : ""
+  const p = join(homedir(), ".iris", "bin", `iris-bridge${ext}`)
   return existsSync(p) ? p : null
+}
+
+function getInstallHint(): string {
+  if (process.platform === "win32") return "irm https://heyiris.io/install-code.ps1 | iex"
+  return "curl -fsSL https://heyiris.io/install-code | bash"
 }
 
 function runCtl(ctl: string, action: string): string {
@@ -40,7 +47,7 @@ const DaemonStartCommand = cmd({
   async handler() {
     const ctl = getDaemonCtl()
     if (!ctl) {
-      prompts.log.error("Daemon not installed. Run: curl -fsSL https://heyiris.io/install-code | bash")
+      prompts.log.error(`Daemon not installed. Run: ${getInstallHint()}`)
       return
     }
     prompts.log.info("Starting daemon...")
@@ -123,12 +130,23 @@ const DaemonLogsCommand = cmd({
     if (!existsSync(logFile)) { prompts.log.error("No log file found"); return }
     const lines = (args as any).lines ?? 100
     const noFollow = (args as any).noFollow ?? false
-    if (noFollow) {
-      const out = execSync(`tail -n ${lines} "${logFile}"`, { timeout: 5000 }).toString()
-      if (out) console.log(out)
+    if (process.platform === "win32") {
+      // Windows: use PowerShell for tail-like behavior
+      if (noFollow) {
+        const out = execSync(`powershell -Command "Get-Content '${logFile}' -Tail ${lines}"`, { timeout: 5000 }).toString()
+        if (out) console.log(out)
+      } else {
+        const child = spawn("powershell", ["-Command", `Get-Content '${logFile}' -Tail ${lines} -Wait`], { stdio: "inherit" })
+        process.on("SIGINT", () => { child.kill(); process.exit(0) })
+      }
     } else {
-      const child = spawn("tail", ["-n", String(lines), "-f", logFile], { stdio: "inherit" })
-      process.on("SIGINT", () => { child.kill(); process.exit(0) })
+      if (noFollow) {
+        const out = execSync(`tail -n ${lines} "${logFile}"`, { timeout: 5000 }).toString()
+        if (out) console.log(out)
+      } else {
+        const child = spawn("tail", ["-n", String(lines), "-f", logFile], { stdio: "inherit" })
+        process.on("SIGINT", () => { child.kill(); process.exit(0) })
+      }
     }
   },
 })
@@ -253,7 +271,7 @@ const DaemonPassthroughCommand = cmd({
   async handler(args) {
     const ctl = getDaemonCtl()
     if (!ctl) {
-      prompts.log.error("Daemon not installed. Run: curl -fsSL https://heyiris.io/install-code | bash")
+      prompts.log.error(`Daemon not installed. Run: ${getInstallHint()}`)
       return
     }
     // Forward all unrecognized args to daemonctl
