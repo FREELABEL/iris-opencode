@@ -81,6 +81,7 @@ import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
 import { PlatformDoctorCommand } from "./cli/cmd/platform-doctor"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
+import { PlatformOnboardFlowsCommand } from "./cli/cmd/platform-onboard-flows"
 import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
 import { PlatformContractsCommand } from "./cli/cmd/platform-contracts"
 import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
@@ -260,6 +261,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDoctorCommand))
   .command(reg(PlatformObsCommand))
   .command(reg(PlatformOnboardCommand))
+  .command(reg(PlatformOnboardFlowsCommand))
   .command(reg(PlatformProposalsCommand))
   .command(reg(PlatformContractsCommand))
   .command(reg(PlatformPagesCommand))
