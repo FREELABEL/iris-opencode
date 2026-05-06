@@ -16,7 +16,9 @@ import { join } from "path"
     const _fs = require("fs"), _path = require("path")
     const _envPath = _path.join(require("os").homedir(), ".iris", "sdk", ".env")
     if (_fs.existsSync(_envPath)) {
-      for (const line of _fs.readFileSync(_envPath, "utf-8").split("\n")) {
+      let _raw = _fs.readFileSync(_envPath, "utf-8")
+      if (_raw.charCodeAt(0) === 0xFEFF) _raw = _raw.slice(1) // strip BOM
+      for (const line of _raw.split("\n")) {
         const m = line.match(/^(IRIS_API_URL|IRIS_FL_API_URL)\s*=\s*(.+)/)
         if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim()
       }
@@ -50,7 +52,9 @@ async function readSdkEnv(): Promise<Record<string, string>> {
     const envPath = join(homedir(), ".iris", "sdk", ".env")
     const file = Bun.file(envPath)
     if (await file.exists()) {
-      const text = await file.text()
+      // Strip BOM if present (Windows PowerShell 5.1 writes UTF-8 with BOM)
+      const raw = await file.text()
+      const text = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw
       for (const line of text.split("\n")) {
         const trimmed = line.trim()
         if (!trimmed || trimmed.startsWith("#")) continue

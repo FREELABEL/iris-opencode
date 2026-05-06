@@ -227,7 +227,8 @@ const IRIS_AUTH_API = process.env.IRIS_AUTH_API_URL ?? "https://raichu.heyiris.i
 async function irisLoginStatus(): Promise<{ authenticated: boolean; token?: string; userId?: string }> {
   try {
     if (fs.existsSync(SDK_ENV_PATH)) {
-      const text = fs.readFileSync(SDK_ENV_PATH, "utf-8")
+      const raw = fs.readFileSync(SDK_ENV_PATH, "utf-8")
+      const text = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw // strip BOM
       const token = text.match(/^IRIS_API_KEY=(.+)$/m)?.[1]?.trim()
       const userId = text.match(/^IRIS_USER_ID=(.+)$/m)?.[1]?.trim()
       if (token) return { authenticated: true, token, userId }

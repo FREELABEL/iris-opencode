@@ -33,7 +33,8 @@ function readSdkEnvSync(): Record<string, string> {
   try {
     const envPath = join(homedir(), ".iris", "sdk", ".env")
     if (!existsSync(envPath)) return out
-    const text = readFileSync(envPath, "utf-8")
+    const raw = readFileSync(envPath, "utf-8")
+    const text = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw // strip BOM
     for (const line of text.split("\n")) {
       const trimmed = line.trim()
       if (!trimmed || trimmed.startsWith("#")) continue

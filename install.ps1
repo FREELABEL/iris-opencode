@@ -294,6 +294,12 @@ $SDK_ENV = "$IRIS_DIR\sdk\.env"
 $CONFIG_JSON = "$IRIS_DIR\config.json"
 $API_BASE = "https://raichu.heyiris.io"
 
+# BOM-free UTF-8 writer (PS 5.1 Set-Content -Encoding UTF8 adds BOM which breaks .env parsing)
+function Write-Utf8NoBom {
+    param([string]$Path, [string]$Content)
+    [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding $false))
+}
+
 if ($Help) { Write-Host "Usage: iris-login [whoami|--Token TOKEN --UserId ID]"; exit 0 }
 
 function Get-JsonField {
@@ -318,7 +324,7 @@ function Register-Hive {
         if ($resp.node_key) {
             New-Item -ItemType Directory -Force -Path $IRIS_DIR | Out-Null
             $cfg = @{ node_api_key = $resp.node_key; user_id = [int]$HiveUserId; api_url = "https://freelabel.net" } | ConvertTo-Json
-            Set-Content -Path $CONFIG_JSON -Value $cfg -Encoding UTF8
+            Write-Utf8NoBom -Path $CONFIG_JSON -Content $cfg
             Write-Host "  Machine registered as Hive compute node" -ForegroundColor Green
             return
         }
@@ -374,12 +380,8 @@ if ($Token) {
         exit 1
     }
     New-Item -ItemType Directory -Force -Path "$IRIS_DIR\sdk" | Out-Null
-    @"
-IRIS_ENV=production
-IRIS_API_KEY=$Token
-IRIS_USER_ID=$UserId
-IRIS_DEFAULT_MODEL=gpt-4o-mini
-"@ | Set-Content -Path $SDK_ENV -Encoding UTF8
+    $envContent = "IRIS_ENV=production`nIRIS_API_KEY=$Token`nIRIS_USER_ID=$UserId`nIRIS_DEFAULT_MODEL=gpt-4o-mini`n"
+    Write-Utf8NoBom -Path $SDK_ENV -Content $envContent
     Write-Host "Authenticated via token." -ForegroundColor Green
     Register-Hive $Token $UserId
     exit 0
@@ -461,12 +463,8 @@ if (-not $SdkToken -or -not $LoginUserId) {
 }
 
 New-Item -ItemType Directory -Force -Path "$IRIS_DIR\sdk" | Out-Null
-@"
-IRIS_ENV=production
-IRIS_API_KEY=$SdkToken
-IRIS_USER_ID=$LoginUserId
-IRIS_DEFAULT_MODEL=gpt-4o-mini
-"@ | Set-Content -Path $SDK_ENV -Encoding UTF8
+$envContent = "IRIS_ENV=production`nIRIS_API_KEY=$SdkToken`nIRIS_USER_ID=$LoginUserId`nIRIS_DEFAULT_MODEL=gpt-4o-mini`n"
+Write-Utf8NoBom -Path $SDK_ENV -Content $envContent
 
 Write-Host "  Authenticated!" -ForegroundColor Green
 if ($Dashboard) { Write-Host "  Dashboard: $Dashboard" -ForegroundColor Cyan }
