@@ -1910,7 +1910,7 @@ const LeadsPulseCommand = cmd({
       if (dealHealth?.has_payment_gate) {
         const gateStatus = dealHealth.payment_received ? success("Paid") : (dealHealth.status === "sent" || dealHealth.status === "awaiting_payment" ? dim("Sent — awaiting payment") : dim(dealHealth.status ?? "Draft"))
         printKV("  Payment Gate", gateStatus)
-        if (dealHealth.amount) printKV("  Amount", `$${(dealHealth.amount / 100).toFixed(2)}`)
+        if (dealHealth.amount) printKV("  Amount", `$${Number(dealHealth.amount).toFixed(2)}`)
         // #71783: Show total received (Stripe + offline combined)
         if (dealHealth.total_received > 0) {
           printKV("  Total Received", success(`$${Number(dealHealth.total_received).toFixed(2)}`))
