@@ -82,7 +82,7 @@ export const UpgradeCommand = {
       prompts.log.info(`If iris --version still shows old, run: hash -r`)
 
       // Also update SDK and bridge if present
-      const home = process.env.HOME || ""
+      const home = process.env.HOME || process.env.USERPROFILE || ""
 
       const sdkDir = `${home}/.iris/sdk`
       const bridgeDir = `${home}/.iris/bridge`

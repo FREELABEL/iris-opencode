@@ -1310,17 +1310,23 @@ const HiveDoctorCommand = cmd({
     // 6. Security hardening checks
     const fs = require("fs")
     const path = require("path")
-    const tokenPath = path.join(process.env.HOME || "", ".iris", "bridge-token")
+    const os = require("os")
+    const tokenPath = path.join(os.homedir(), ".iris", "bridge-token")
 
     // Auth token
     if (fs.existsSync(tokenPath)) {
       try {
-        const stat = fs.statSync(tokenPath)
-        const mode = (stat.mode & 0o777).toString(8)
-        if (mode === "600") {
-          checks.push({ name: "Auth token", status: "pass", detail: `~/.iris/bridge-token (mode 0600)` })
+        if (process.platform === "win32") {
+          // Windows doesn't have Unix permissions — just check file exists
+          checks.push({ name: "Auth token", status: "pass", detail: "~/.iris/bridge-token" })
         } else {
-          checks.push({ name: "Auth token", status: "warn", detail: `Permissions too open (${mode}). Run: chmod 600 ~/.iris/bridge-token` })
+          const stat = fs.statSync(tokenPath)
+          const mode = (stat.mode & 0o777).toString(8)
+          if (mode === "600") {
+            checks.push({ name: "Auth token", status: "pass", detail: `~/.iris/bridge-token (mode 0600)` })
+          } else {
+            checks.push({ name: "Auth token", status: "warn", detail: `Permissions too open (${mode}). Run: chmod 600 ~/.iris/bridge-token` })
+          }
         }
       } catch {
         checks.push({ name: "Auth token", status: "pass", detail: "~/.iris/bridge-token" })

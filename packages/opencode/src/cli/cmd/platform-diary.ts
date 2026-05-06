@@ -17,7 +17,7 @@ import { join } from "path"
 //   iris diary --bloq 325    → bloq/project-level
 
 function getSdkUserId(): string | undefined {
-  const envPath = join(process.env.HOME || "~", ".iris", "sdk", ".env")
+  const envPath = join(process.env.HOME || process.env.USERPROFILE || "~", ".iris", "sdk", ".env")
   if (existsSync(envPath)) {
     const content = readFileSync(envPath, "utf-8")
     const match = content.match(/IRIS_USER_ID=(\d+)/)
