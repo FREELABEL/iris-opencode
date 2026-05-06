@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold } from "./iris-api"
+import { readFileSync, writeFileSync } from "fs"
 
 // ============================================================================
 // Brand CLI — first-class brand entity
@@ -560,6 +561,432 @@ const PersonasGroup = cmd({
 })
 
 // ============================================================================
+// brands design-tokens <subcommand>
+// ============================================================================
+
+function parseCssVars(css: string): Record<string, Record<string, string>> {
+  const tokens: Record<string, Record<string, string>> = {}
+  const varRe = /--([\w-]+)\s*:\s*([^;]+);/g
+  let m: RegExpExecArray | null
+  while ((m = varRe.exec(css)) !== null) {
+    const name = m[1].trim()
+    const value = m[2].trim()
+    // Group by prefix: --sp-emerald-800 → emerald.800
+    const parts = name.replace(/^sp-/, "").split("-")
+    const group = parts[0]
+    const key = parts.slice(1).join("-") || "default"
+    if (!tokens[group]) tokens[group] = {}
+    tokens[group][key] = value
+  }
+  return tokens
+}
+
+function tokensToCSS(tokens: Record<string, unknown>, brandSlug: string): string {
+  const prefix = brandSlug.slice(0, 4).toLowerCase()
+  const lines: string[] = [`:root {`]
+
+  function flatten(obj: Record<string, unknown>, path: string): void {
+    for (const [k, v] of Object.entries(obj)) {
+      const varName = path ? `${path}-${k}` : k
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        flatten(v as Record<string, unknown>, varName)
+      } else {
+        lines.push(`  --${prefix}-${varName}: ${String(v)};`)
+      }
+    }
+  }
+
+  if (tokens.colors) flatten(tokens.colors as Record<string, unknown>, "")
+  if (tokens.semantic) {
+    lines.push("")
+    for (const [k, v] of Object.entries(tokens.semantic as Record<string, string>)) {
+      lines.push(`  --${prefix}-${k.replace(/_/g, "-")}: ${v};`)
+    }
+  }
+  if (tokens.typography) {
+    lines.push("")
+    const typo = tokens.typography as Record<string, unknown>
+    if (typo.heading && typeof typo.heading === "object") {
+      const h = typo.heading as Record<string, unknown>
+      lines.push(`  --${prefix}-font-serif: ${JSON.stringify(h.family)}, ${h.fallback || "serif"};`)
+    }
+    if (typo.body && typeof typo.body === "object") {
+      const b = typo.body as Record<string, unknown>
+      lines.push(`  --${prefix}-font-sans: ${JSON.stringify(b.family)}, ${b.fallback || "sans-serif"};`)
+    }
+  }
+  lines.push("}")
+  return lines.join("\n") + "\n"
+}
+
+function tokensToMarkdown(tokens: Record<string, unknown>, brandName: string): string {
+  const lines: string[] = [`# ${brandName} Design Guidelines`, ""]
+
+  if (tokens.colors && typeof tokens.colors === "object") {
+    lines.push("## Colors", "")
+    for (const [group, shades] of Object.entries(tokens.colors as Record<string, unknown>)) {
+      lines.push(`### ${group.charAt(0).toUpperCase() + group.slice(1)}`, "")
+      if (shades && typeof shades === "object") {
+        lines.push("| Shade | Value |", "|-------|-------|")
+        for (const [shade, val] of Object.entries(shades as Record<string, string>)) {
+          lines.push(`| ${shade} | \`${val}\` |`)
+        }
+      } else {
+        lines.push(`\`${String(shades)}\``)
+      }
+      lines.push("")
+    }
+  }
+
+  if (tokens.typography && typeof tokens.typography === "object") {
+    lines.push("## Typography", "")
+    for (const [role, cfg] of Object.entries(tokens.typography as Record<string, unknown>)) {
+      if (cfg && typeof cfg === "object") {
+        const c = cfg as Record<string, unknown>
+        lines.push(`- **${role}**: ${c.family} (weights: ${Array.isArray(c.weights) ? c.weights.join(", ") : "400"})`)
+      }
+    }
+    lines.push("")
+  }
+
+  if (tokens.semantic && typeof tokens.semantic === "object") {
+    lines.push("## Semantic Tokens", "")
+    lines.push("| Token | Value |", "|-------|-------|")
+    for (const [k, v] of Object.entries(tokens.semantic as Record<string, string>)) {
+      lines.push(`| ${k} | \`${v}\` |`)
+    }
+    lines.push("")
+  }
+
+  if (tokens.components && typeof tokens.components === "object") {
+    lines.push("## Components", "")
+    for (const [comp, cfg] of Object.entries(tokens.components as Record<string, unknown>)) {
+      if (cfg && typeof cfg === "object") {
+        const pairs = Object.entries(cfg as Record<string, string>).map(([k, v]) => `${k}: ${v}`).join(", ")
+        lines.push(`- **${comp}**: ${pairs}`)
+      }
+    }
+    lines.push("")
+  }
+
+  if (tokens.voice && typeof tokens.voice === "object") {
+    const v = tokens.voice as Record<string, unknown>
+    lines.push("## Voice & Tone", "")
+    if (v.tone) lines.push(`**Tone**: ${v.tone}`, "")
+    if (v.vocabulary && typeof v.vocabulary === "object") {
+      lines.push("**Vocabulary**:", "")
+      for (const [k, val] of Object.entries(v.vocabulary as Record<string, string>)) {
+        lines.push(`- ${k}: "${val}"`)
+      }
+      lines.push("")
+    }
+  }
+
+  if (Array.isArray(tokens.donts) && tokens.donts.length > 0) {
+    lines.push("## Don'ts", "")
+    for (const d of tokens.donts) lines.push(`- ${d}`)
+    lines.push("")
+  }
+
+  if (tokens.agent_guide_md) {
+    lines.push("---", "", String(tokens.agent_guide_md))
+  }
+
+  return lines.join("\n") + "\n"
+}
+
+function printTokenSummary(tokens: Record<string, unknown>): void {
+  if (tokens.colors && typeof tokens.colors === "object") {
+    console.log(bold("Colors:"))
+    for (const [group, shades] of Object.entries(tokens.colors as Record<string, unknown>)) {
+      if (shades && typeof shades === "object") {
+        const vals = Object.entries(shades as Record<string, string>).map(([k, v]) => `${k}=${v}`).join("  ")
+        console.log(`  ${bold(group)}  ${dim(vals)}`)
+      }
+    }
+    console.log()
+  }
+  if (tokens.typography && typeof tokens.typography === "object") {
+    console.log(bold("Typography:"))
+    for (const [role, cfg] of Object.entries(tokens.typography as Record<string, unknown>)) {
+      if (cfg && typeof cfg === "object") {
+        const c = cfg as Record<string, unknown>
+        console.log(`  ${bold(role)}  ${c.family}  ${dim(`weights: ${Array.isArray(c.weights) ? c.weights.join(",") : "?"}`)}`)
+      }
+    }
+    console.log()
+  }
+  if (tokens.semantic && typeof tokens.semantic === "object") {
+    console.log(bold("Semantic:"))
+    const entries = Object.entries(tokens.semantic as Record<string, string>)
+    for (const [k, v] of entries) {
+      console.log(`  ${dim(k + ":")} ${v}`)
+    }
+    console.log()
+  }
+  if (tokens.components && typeof tokens.components === "object") {
+    console.log(bold("Components:"))
+    for (const [comp, cfg] of Object.entries(tokens.components as Record<string, unknown>)) {
+      if (cfg && typeof cfg === "object") {
+        const pairs = Object.entries(cfg as Record<string, string>).map(([k, v]) => `${k}=${v}`).join("  ")
+        console.log(`  ${bold(comp)}  ${dim(pairs)}`)
+      }
+    }
+    console.log()
+  }
+  if (tokens.voice && typeof tokens.voice === "object") {
+    const v = tokens.voice as Record<string, unknown>
+    if (v.tone) console.log(`${bold("Voice:")} ${v.tone}`)
+    console.log()
+  }
+}
+
+const DesignTokensGetCommand = cmd({
+  command: "get <slug>",
+  describe: "fetch and display design tokens for a brand (public)",
+  builder: (yargs) =>
+    yargs.positional("slug", { describe: "brand slug", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Design Tokens — ${args.slug}`)
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching…")
+    try {
+      const res = await irisFetch(`/api/v1/public/brands/${args.slug}/design-tokens`)
+      const ok = await handleApiError(res, "Get tokens"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = (await res.json()) as Record<string, unknown>
+      const tokens = (data?.design_tokens ?? {}) as Record<string, unknown>
+      spinner.stop(String(data?.name ?? args.slug))
+
+      if (Object.keys(tokens).length === 0) {
+        prompts.log.warn("No design tokens set")
+        prompts.outro(`Set them: ${dim(`iris brands design-tokens set ${args.slug} --file tokens.json`)}`)
+        return
+      }
+
+      printDivider()
+      printTokenSummary(tokens)
+      printDivider()
+      prompts.outro(`${dim(`iris brands design-tokens export ${args.slug} --format css`)}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const DesignTokensSetCommand = cmd({
+  command: "set <slug>",
+  describe: "set design tokens from a JSON file",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .option("file", { describe: "path to tokens JSON file", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Set Design Tokens — ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    let tokens: Record<string, unknown>
+    try {
+      tokens = JSON.parse(readFileSync(args.file!, "utf-8"))
+    } catch (e) {
+      prompts.log.error(`Failed to read ${args.file}: ${e instanceof Error ? e.message : String(e)}`)
+      prompts.outro("Done"); return
+    }
+
+    // Resolve brand ID by slug
+    const spinner = prompts.spinner()
+    spinner.start("Resolving brand…")
+    try {
+      const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
+      const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const listData = (await listRes.json()) as { data?: any }
+      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+      const brandId = brands[0].id
+
+      spinner.message("Updating tokens…")
+      const res = await irisFetch(`/api/v1/brands/${brandId}/design-tokens`, {
+        method: "PATCH",
+        body: JSON.stringify(tokens),
+      })
+      const ok = await handleApiError(res, "Set tokens"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop("Tokens updated")
+
+      const keys = Object.keys(tokens)
+      prompts.log.success(`Set ${keys.length} token group(s): ${keys.join(", ")}`)
+      prompts.outro(`${dim(`iris brands design-tokens get ${args.slug}`)}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const DesignTokensExportCommand = cmd({
+  command: "export <slug>",
+  describe: "export design tokens as CSS, JSON, or markdown",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .option("format", { describe: "css|json|md", type: "string", default: "json" })
+      .option("output", { describe: "output file path (default: stdout)", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Export Design Tokens — ${args.slug}`)
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching…")
+    try {
+      const res = await irisFetch(`/api/v1/public/brands/${args.slug}/design-tokens`)
+      const ok = await handleApiError(res, "Get tokens"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = (await res.json()) as Record<string, unknown>
+      const tokens = (data?.design_tokens ?? {}) as Record<string, unknown>
+      const brandName = String(data?.name ?? args.slug)
+      spinner.stop(brandName)
+
+      if (Object.keys(tokens).length === 0) {
+        prompts.log.warn("No design tokens to export")
+        prompts.outro("Done"); return
+      }
+
+      let output: string
+      const fmt = String(args.format).toLowerCase()
+      if (fmt === "css") {
+        output = tokensToCSS(tokens, String(args.slug))
+      } else if (fmt === "md" || fmt === "markdown") {
+        output = tokensToMarkdown(tokens, brandName)
+      } else {
+        output = JSON.stringify(tokens, null, 2) + "\n"
+      }
+
+      if (args.output) {
+        writeFileSync(args.output, output)
+        prompts.log.success(`Written to ${args.output}`)
+      } else {
+        process.stdout.write(output)
+      }
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const DesignTokensImportCommand = cmd({
+  command: "import <slug>",
+  describe: "import design tokens from a CSS custom properties file",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .option("css", { describe: "path to CSS file with custom properties", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Import CSS → Design Tokens — ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    let cssContent: string
+    try {
+      cssContent = readFileSync(args.css!, "utf-8")
+    } catch (e) {
+      prompts.log.error(`Failed to read ${args.css}: ${e instanceof Error ? e.message : String(e)}`)
+      prompts.outro("Done"); return
+    }
+
+    const parsed = parseCssVars(cssContent)
+    const groupCount = Object.keys(parsed).length
+    const varCount = Object.values(parsed).reduce((n, g) => n + Object.keys(g).length, 0)
+    prompts.log.info(`Parsed ${varCount} CSS variables across ${groupCount} groups`)
+
+    // Build token schema from parsed CSS groups
+    const colors: Record<string, Record<string, string>> = {}
+    const semantic: Record<string, string> = {}
+    const typography: Record<string, unknown> = {}
+
+    for (const [group, shades] of Object.entries(parsed)) {
+      // Semantic tokens (bg-*, fg-*, border-*, status-*)
+      if (["bg", "fg", "border", "status"].some((p) => group === p)) {
+        for (const [k, v] of Object.entries(shades)) {
+          semantic[`${group}_${k.replace(/-/g, "_")}`] = v
+        }
+      // Typography
+      } else if (group === "font") {
+        for (const [k, v] of Object.entries(shades)) {
+          if (k === "serif" || k === "sans" || k === "icon") {
+            const family = v.replace(/^"([^"]+)".*/, "$1")
+            const fallback = v.replace(/^"[^"]+"[, ]*/, "")
+            if (k === "serif") typography.heading = { family, fallback, weights: [400, 700] }
+            else if (k === "sans") typography.body = { family, fallback, weights: [300, 400, 700] }
+          }
+        }
+      // Skip spacing/radius/shadow/text-size/ease/dur (layout tokens, not brand identity)
+      } else if (["space", "radius", "shadow", "text", "ease", "dur"].includes(group)) {
+        continue
+      // Everything else is a color group
+      } else {
+        colors[group] = shades
+      }
+    }
+
+    const tokens: Record<string, unknown> = {}
+    if (Object.keys(colors).length > 0) tokens.colors = colors
+    if (Object.keys(semantic).length > 0) tokens.semantic = semantic
+    if (Object.keys(typography).length > 0) tokens.typography = typography
+
+    prompts.log.info(`Built token schema: ${Object.keys(tokens).join(", ")}`)
+
+    // Resolve brand ID
+    const spinner = prompts.spinner()
+    spinner.start("Resolving brand…")
+    try {
+      const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
+      const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const listData = (await listRes.json()) as { data?: any }
+      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+      const brandId = brands[0].id
+
+      spinner.message("Uploading tokens…")
+      const res = await irisFetch(`/api/v1/brands/${brandId}/design-tokens`, {
+        method: "PATCH",
+        body: JSON.stringify(tokens),
+      })
+      const ok = await handleApiError(res, "Import tokens"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop("Tokens imported")
+
+      printDivider()
+      printTokenSummary(tokens)
+      printDivider()
+      prompts.outro(`${dim(`iris brands design-tokens get ${args.slug}`)}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const DesignTokensGroup = cmd({
+  command: "design-tokens",
+  aliases: ["tokens", "dt"],
+  describe: "manage brand design tokens (colors, typography, components)",
+  builder: (yargs) =>
+    yargs
+      .command(DesignTokensGetCommand)
+      .command(DesignTokensSetCommand)
+      .command(DesignTokensExportCommand)
+      .command(DesignTokensImportCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -577,6 +1004,7 @@ export const PlatformBrandsCommand = cmd({
       .command(BrandsAttachCommand)
       .command(BrandsDetachCommand)
       .command(PersonasGroup)
+      .command(DesignTokensGroup)
       .demandCommand(),
   async handler() {},
 })
