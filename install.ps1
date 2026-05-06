@@ -284,13 +284,17 @@ $LoginScript = @'
 <# IRIS Login — Windows #>
 param(
     [string]$Token = "",
-    [string]$UserId = ""
+    [string]$UserId = "",
+    [switch]$Help,
+    [Parameter(Position=0)][string]$Action = ""
 )
 $ErrorActionPreference = "Stop"
 $IRIS_DIR = "$env:USERPROFILE\.iris"
 $SDK_ENV = "$IRIS_DIR\sdk\.env"
 $CONFIG_JSON = "$IRIS_DIR\config.json"
 $API_BASE = "https://raichu.heyiris.io"
+
+if ($Help) { Write-Host "Usage: iris-login [whoami|--Token TOKEN --UserId ID]"; exit 0 }
 
 function Get-JsonField {
     param([string]$Json, [string]$Field)
@@ -322,8 +326,53 @@ function Register-Hive {
     Write-Host "  Hive registration skipped. Try later: iris-daemon register" -ForegroundColor DarkGray
 }
 
+# ─── whoami subcommand ────────────────────────────────────────────────────
+if ($Action -eq "whoami" -or $Action -eq "status") {
+    if (-not (Test-Path $SDK_ENV)) {
+        Write-Host "Not authenticated. Run iris-login to log in." -ForegroundColor Red; exit 1
+    }
+    $envToken = (Get-Content $SDK_ENV | Where-Object { $_ -match "^IRIS_API_KEY=" }) -replace "IRIS_API_KEY=", ""
+    if (-not $envToken) {
+        Write-Host "No token found. Run iris-login to authenticate." -ForegroundColor Red; exit 1
+    }
+    try {
+        $meResp = Invoke-RestMethod -Uri "$API_BASE/api/v1/me" -Method Get `
+            -Headers @{ Authorization = "Bearer $envToken"; Accept = "application/json" } `
+            -TimeoutSec 10 -ErrorAction Stop
+        Write-Host ""
+        Write-Host "Authenticated" -ForegroundColor Green
+        if ($meResp.data.full_name) { Write-Host "  Name:   $($meResp.data.full_name)" }
+        if ($meResp.data.email) { Write-Host "  Email:  $($meResp.data.email)" }
+        if ($meResp.data.id) { Write-Host "  ID:     $($meResp.data.id)" }
+        Write-Host "  Token:  $($envToken.Substring(0, [Math]::Min(12, $envToken.Length)))..." -ForegroundColor DarkGray
+    } catch {
+        Write-Host "Token invalid or API unreachable." -ForegroundColor Red
+        Write-Host "  Delete ~\.iris\sdk\.env and run iris-login again." -ForegroundColor DarkGray
+    }
+    exit 0
+}
+
 # Scripted auth (--Token flag)
 if ($Token) {
+    if ($Token.Length -lt 20) {
+        Write-Host "Invalid token - must be at least 20 characters." -ForegroundColor Red
+        Write-Host "Get your token from: https://web.heyiris.io/settings/api-keys" -ForegroundColor DarkGray
+        exit 1
+    }
+    # Validate token against API
+    Write-Host "  Validating token..." -ForegroundColor DarkGray
+    try {
+        $validateResp = Invoke-RestMethod -Uri "$API_BASE/api/v1/me" -Method Get `
+            -Headers @{ Authorization = "Bearer $Token"; Accept = "application/json" } `
+            -TimeoutSec 10 -ErrorAction Stop
+        $validatedId = $validateResp.data.id
+        if (-not $validatedId) { throw "No user ID returned" }
+        if (-not $UserId) { $UserId = "$validatedId" }
+    } catch {
+        Write-Host "Token validation failed - API rejected the token." -ForegroundColor Red
+        Write-Host "Check that the token is correct and not expired." -ForegroundColor DarkGray
+        exit 1
+    }
     New-Item -ItemType Directory -Force -Path "$IRIS_DIR\sdk" | Out-Null
     @"
 IRIS_ENV=production

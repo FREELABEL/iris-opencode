@@ -1214,7 +1214,7 @@ const ConnectComposioCommand = cmd({
     y
       .positional("toolkit", { type: "string", demandOption: true })
       .option("auth-config", { type: "string", describe: "auth config id (ac_xxx); auto-discovered if omitted" })
-      .option("user-id", { type: "string", describe: "user id (defaults to local user)" }),
+      .option("user-id", { type: "number", describe: "user id (defaults to local user)" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Connect: ${args.toolkit}`)

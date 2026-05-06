@@ -1240,15 +1240,46 @@ CONFIG_JSON="$IRIS_DIR/config.json"
 API_BASE="https://raichu.heyiris.io"
 
 # Parse flags
-PRE_TOKEN="" ; PRE_USER_ID=""
+PRE_TOKEN="" ; PRE_USER_ID="" ; ACTION=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --token)  PRE_TOKEN="$2"; shift 2 ;;
         --user-id) PRE_USER_ID="$2"; shift 2 ;;
-        --help|-h) echo "Usage: iris-login [--token TOKEN --user-id ID]"; exit 0 ;;
+        --help|-h) echo "Usage: iris-login [whoami|--token TOKEN --user-id ID]"; exit 0 ;;
+        whoami|status) ACTION="whoami"; shift ;;
         *) shift ;;
     esac
 done
+
+# ─── whoami subcommand ────────────────────────────────────────────────────
+if [ "$ACTION" = "whoami" ]; then
+    if [ ! -f "$SDK_ENV" ]; then
+        echo -e "${RED}Not authenticated.${NC} Run ${CYAN}iris-login${NC} to log in."
+        exit 1
+    fi
+    TOKEN=$(grep IRIS_API_KEY "$SDK_ENV" 2>/dev/null | cut -d= -f2)
+    USERID=$(grep IRIS_USER_ID "$SDK_ENV" 2>/dev/null | cut -d= -f2)
+    if [ -z "$TOKEN" ]; then
+        echo -e "${RED}No token found.${NC} Run ${CYAN}iris-login${NC} to authenticate."
+        exit 1
+    fi
+    # Fetch user info from API
+    ME_RESP=$(curl -s --max-time 10 -H "Authorization: Bearer $TOKEN" -H "Accept: application/json" \
+        "$API_BASE/api/v1/me" 2>/dev/null || echo '{}')
+    ME_NAME=$(json_nested "$ME_RESP" "data.full_name")
+    ME_EMAIL=$(json_nested "$ME_RESP" "data.email")
+    ME_ID=$(json_nested "$ME_RESP" "data.id")
+    if [ -z "$ME_ID" ] || [ "$ME_ID" = "" ]; then
+        ME_ID="$USERID"
+    fi
+    echo -e ""
+    echo -e "${GREEN}Authenticated${NC}"
+    [ -n "$ME_NAME" ] && echo -e "  ${MUTED}Name:${NC}   $ME_NAME"
+    [ -n "$ME_EMAIL" ] && echo -e "  ${MUTED}Email:${NC}  $ME_EMAIL"
+    [ -n "$ME_ID" ] && echo -e "  ${MUTED}ID:${NC}     $ME_ID"
+    echo -e "  ${MUTED}Token:${NC}  ${TOKEN:0:12}..."
+    exit 0
+fi
 
 json_field() {
     local json="$1" field="$2"
@@ -1307,6 +1338,26 @@ register_hive() {
 
 # ─── Scripted auth (--token flag) ──────────────────────────────────────────
 if [ -n "$PRE_TOKEN" ]; then
+    # Validate token format (must be non-empty, at least 20 chars)
+    if [ ${#PRE_TOKEN} -lt 20 ]; then
+        echo -e "${RED}Invalid token — must be at least 20 characters.${NC}"
+        echo -e "${MUTED}Get your token from: ${NC}${CYAN}https://web.heyiris.io/settings/api-keys${NC}"
+        exit 1
+    fi
+    # Validate token against API
+    echo -e "${MUTED}  Validating token...${NC}"
+    VALIDATE_RESP=$(curl -s --max-time 10 -H "Authorization: Bearer $PRE_TOKEN" -H "Accept: application/json" \
+        "$API_BASE/api/v1/me" 2>/dev/null || echo '{}')
+    VALIDATE_ID=$(json_nested "$VALIDATE_RESP" "data.id")
+    if [ -z "$VALIDATE_ID" ] || [ "$VALIDATE_ID" = "" ] || [ "$VALIDATE_ID" = "null" ]; then
+        echo -e "${RED}Token validation failed — API rejected the token.${NC}"
+        echo -e "${MUTED}Check that the token is correct and not expired.${NC}"
+        exit 1
+    fi
+    # Auto-resolve user ID from API if not provided
+    if [ -z "$PRE_USER_ID" ] || [ "$PRE_USER_ID" = "0" ]; then
+        PRE_USER_ID="$VALIDATE_ID"
+    fi
     mkdir -p "$IRIS_DIR/sdk"
     cat > "$SDK_ENV" << ENVFILE
 IRIS_ENV=production

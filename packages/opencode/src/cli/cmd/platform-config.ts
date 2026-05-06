@@ -5,6 +5,7 @@ import {
   irisFetch,
   requireAuth,
   requireUserId,
+  resolveUserId,
   dim,
   bold,
   success,
@@ -61,6 +62,7 @@ interface ResolvedConfig {
   flApiSource: string
   irisApi: string
   irisApiSource: string
+  [key: string]: string | undefined
 }
 
 function resolveConfig(): ResolvedConfig {
@@ -152,6 +154,15 @@ const ShowCommand = cmd({
   builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const config = resolveConfig()
+
+    // Auto-resolve userId from API if we have a token but no userId in static config
+    if (!config.userId && config.apiKey) {
+      const resolved = await resolveUserId()
+      if (resolved) {
+        config.userId = String(resolved)
+        config.userIdSource = "auto-resolved via /api/v1/me"
+      }
+    }
 
     if (args.json) {
       console.log(

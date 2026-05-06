@@ -4,7 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
 import { runChannelHealthChecks } from "./platform-leads"
 import { execSync } from "child_process"
-import { existsSync } from "fs"
+import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 
@@ -214,8 +214,12 @@ export const PlatformDoctorCommand = cmd({
     const daemonPid = join(homedir(), ".iris", "daemon.pid")
     if (existsSync(daemonPid)) {
       try {
-        const pid = execSync(`cat "${daemonPid}"`, { encoding: "utf-8" }).trim()
-        execSync(`kill -0 ${pid} 2>/dev/null`)
+        const pid = readFileSync(daemonPid, "utf-8").trim()
+        if (process.platform === "win32") {
+          execSync(`tasklist /FI "PID eq ${pid}" | findstr ${pid}`, { encoding: "utf-8", timeout: 3000 })
+        } else {
+          execSync(`kill -0 ${pid} 2>/dev/null`)
+        }
         allResults.push({ name: "IRIS Daemon", ok: true, detail: `PID ${pid}` })
       } catch {
         allResults.push({ name: "IRIS Daemon", ok: false, detail: "PID file exists but process dead", hint: "run: iris hive start" })
@@ -238,28 +242,32 @@ export const PlatformDoctorCommand = cmd({
     }
     sp.stop("Integrations verified")
 
-    // ── 5. macOS Permissions ──
-    sp.start("Checking macOS permissions…")
-    // Full Disk Access (needed for iMessage SQLite)
-    {
-      const { isAvailable } = await import("../lib/imessage")
-      const ok = isAvailable()
-      allResults.push({
-        name: "Full Disk Access",
-        ok,
-        detail: ok ? "Messages.app readable" : "cannot read Messages.app",
-        hint: ok ? undefined : "System Settings → Privacy → Full Disk Access",
-      })
-    }
+    // ── 5. macOS Permissions (skip on non-macOS) ──
+    if (process.platform === "darwin") {
+      sp.start("Checking macOS permissions…")
+      // Full Disk Access (needed for iMessage SQLite)
+      {
+        const { isAvailable } = await import("../lib/imessage")
+        const ok = isAvailable()
+        allResults.push({
+          name: "Full Disk Access",
+          ok,
+          detail: ok ? "Messages.app readable" : "cannot read Messages.app",
+          hint: ok ? undefined : "System Settings → Privacy → Full Disk Access",
+        })
+      }
 
-    // Contacts access (needed for address book matching)
-    try {
-      execSync(`sqlite3 "${homedir()}/Library/Application Support/AddressBook/AddressBook-v22.abcddb" "SELECT count(*) FROM ZABCDRECORD LIMIT 1" 2>&1`, { encoding: "utf-8", timeout: 3000 })
-      allResults.push({ name: "Contacts Access", ok: true, detail: "AddressBook readable" })
-    } catch {
-      allResults.push({ name: "Contacts Access", ok: false, detail: "cannot read AddressBook", hint: "may need Contacts permission for terminal" })
+      // Contacts access (needed for address book matching)
+      try {
+        execSync(`sqlite3 "${homedir()}/Library/Application Support/AddressBook/AddressBook-v22.abcddb" "SELECT count(*) FROM ZABCDRECORD LIMIT 1" 2>&1`, { encoding: "utf-8", timeout: 3000 })
+        allResults.push({ name: "Contacts Access", ok: true, detail: "AddressBook readable" })
+      } catch {
+        allResults.push({ name: "Contacts Access", ok: false, detail: "cannot read AddressBook", hint: "may need Contacts permission for terminal" })
+      }
+      sp.stop("Permissions checked")
+    } else {
+      allResults.push({ name: "macOS Permissions", ok: true, detail: "skipped (not macOS)" })
     }
-    sp.stop("Permissions checked")
 
     // ── 6. SEO & Bot Protection ──
     sp.start("Testing SEO health…")
@@ -269,9 +277,10 @@ export const PlatformDoctorCommand = cmd({
 
     // ── 7. Local Tools ──
     const localTools = ["node", "git", "sqlite3", "curl"]
+    const whichCmd = process.platform === "win32" ? "where" : "which"
     for (const tool of localTools) {
       try {
-        execSync(`which ${tool}`, { encoding: "utf-8", timeout: 2000 })
+        execSync(`${whichCmd} ${tool}`, { encoding: "utf-8", timeout: 2000, stdio: "pipe" })
         allResults.push({ name: `Tool: ${tool}`, ok: true })
       } catch {
         allResults.push({ name: `Tool: ${tool}`, ok: false, hint: `install ${tool}` })
