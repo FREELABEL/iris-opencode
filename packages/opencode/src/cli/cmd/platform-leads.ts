@@ -1601,6 +1601,8 @@ const LeadsPulseCommand = cmd({
       .option("limit", { describe: "max messages per channel", type: "number", default: 50 })
       .option("hydrate", { describe: "generate + send follow-up if gate is unpaid + past throttle window", type: "boolean", default: false })
       .option("dry-run", { describe: "with --hydrate: generate the AI email but don't send it", type: "boolean", default: false })
+      .option("to", { describe: "with --hydrate: redirect email to this address (for testing)", type: "string" })
+      .option("force", { describe: "with --hydrate: ignore 48h throttle window", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -2426,7 +2428,8 @@ const LeadsPulseCommand = cmd({
           : Infinity
 
         console.log()
-        if (hoursSinceLast >= HYDRATION_WINDOW_HOURS) {
+        const forceHydrate = !!(args as any).force
+        if (hoursSinceLast >= HYDRATION_WINDOW_HOURS || forceHydrate) {
           console.log(`  ${bold("Hydration")}`)
           console.log(`  ${UI.Style.TEXT_WARNING}Last outreach: ${lastOutreachAt ? `${Math.floor(hoursSinceLast)}h ago` : "never"}${UI.Style.TEXT_NORMAL}  ${dim(`(${HYDRATION_WINDOW_HOURS}h window)`)}`)
 
@@ -2482,8 +2485,11 @@ const LeadsPulseCommand = cmd({
                 if (!emailBody) {
                   console.log(`  ${dim("AI returned empty draft — skipping")}`)
                 } else {
+                  const sendTo = (args as any).to ?? email
+                  const isRedirected = !!(args as any).to
+
                   // Preview the generated email
-                  console.log(`  ${dim("To:")} ${email}`)
+                  console.log(`  ${dim("To:")} ${sendTo}${isRedirected ? `  ${highlight("(redirected from " + email + ")")}` : ""}`)
                   console.log(`  ${dim("Subject:")} ${emailSubject}`)
                   console.log(`  ${dim("─".repeat(50))}`)
                   for (const line of emailBody.split("\n")) {
@@ -2496,20 +2502,23 @@ const LeadsPulseCommand = cmd({
                     console.log(`  ${highlight("DRY RUN — email NOT sent")}`)
                     console.log(`  ${dim("Remove --dry-run to send")}`)
                   } else {
-                    // Step 2: Send via quicksend
+                    // Send via quicksend (test_email override if --to is set)
+                    const qsBody: Record<string, unknown> = {
+                      channel: "email",
+                      message: emailBody,
+                      subject: emailSubject,
+                    }
+                    if (isRedirected) qsBody.test_email = sendTo
+
                     const qsRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/quicksend`, {
                       method: "POST",
-                      body: JSON.stringify({
-                        channel: "email",
-                        message: emailBody,
-                        subject: emailSubject,
-                      }),
+                      body: JSON.stringify(qsBody),
                     })
 
                     if (qsRes.ok) {
                       const qsData = (await qsRes.json()) as any
                       if (qsData.success || qsData.message_id) {
-                        console.log(`  ${success("Sent AI follow-up")}  ${dim("to " + email)}`)
+                        console.log(`  ${success("Sent AI follow-up")}  ${dim("to " + sendTo)}`)
                       } else if (qsData.status === "pending_approval") {
                         console.log(`  ${highlight("AI draft queued for approval")}  ${dim("review: iris leads outreach approve")}`)
                       } else {
