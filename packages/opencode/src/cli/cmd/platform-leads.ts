@@ -1727,6 +1727,7 @@ const LeadsPulseCommand = cmd({
         const reqS = sigs.requirements?.score
         const liveS = sigs.liveness?.score
         const commsS = sigs.comms_freshness?.score
+        const dealS = sigs.deal_health?.score
         const cfgS = sigs.config?.score
         const fmt = (v: number | null | undefined) =>
           v === null || v === undefined ? dim("—") : `${v}/100`
@@ -1734,6 +1735,7 @@ const LeadsPulseCommand = cmd({
           `req ${fmt(reqS)}`,
           `live ${fmt(liveS)}`,
           `comms ${fmt(commsS)}`,
+          `deal ${fmt(dealS)}`,
           `cfg ${fmt(cfgS)}`,
         ].join(dim(" · "))
         printKV("Signals", sigLine)
@@ -1961,6 +1963,14 @@ const LeadsPulseCommand = cmd({
       printKV("  Contracts", contracts.length > 0 ? `${contracts.length} (${contracts.filter((c: any) => c.signed_at).length} signed)` : dim("None"))
       const proposals = dealHealth?.proposals ?? []
       printKV("  Proposals", proposals.length > 0 ? `${proposals.length}` : dim("None"))
+
+      // Content agent check — from deal_health signal
+      const dealChecks = pulseReadiness?.signals?.deal_health?.checks ?? {}
+      if (dealChecks.has_content_agent === true) {
+        printKV("  Content Agent", success("Configured"))
+      } else if (dealChecks.has_content_agent === false) {
+        printKV("  Content Agent", `${UI.Style.TEXT_WARNING}Missing — no newsletter/content agent${UI.Style.TEXT_NORMAL}`)
+      }
 
       // Tasks section (#57666)
       console.log()
@@ -3246,6 +3256,169 @@ const LeadsEnrichCommand = cmd({
 })
 
 // ============================================================================
+// gate-all — batch-create payment gates for Won leads missing them
+// ============================================================================
+
+const LeadsGateAllCommand = cmd({
+  command: "gate-all",
+  aliases: ["enforce-terms"],
+  describe: "create payment gates for all Won leads that don't have one",
+  builder: (yargs) =>
+    yargs
+      .option("amount", { alias: "a", describe: "default amount per gate", type: "number", demandOption: true })
+      .option("scope", { alias: "s", describe: "default scope of work", type: "string", default: "IRIS Platform Services" })
+      .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
+      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one-time", "month", "quarter", "year"], default: "month" })
+      .option("term", { alias: "t", describe: "duration in months", type: "number" })
+      .option("dry-run", { describe: "show what would be created without creating", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const spinner = prompts.spinner()
+    spinner.start("Finding Won leads without payment gates...")
+
+    try {
+      // Fetch all Won leads
+      const params = new URLSearchParams({ status: "Won", per_page: "200" })
+      if (args.bloq) params.set("bloq_id", String(args.bloq))
+      const res = await irisFetch(`/api/v1/leads?${params}`)
+      if (!res.ok) { spinner.stop("Failed to fetch leads", 1); return }
+      const body = (await res.json()) as { data?: any[] }
+      const allWon: any[] = body?.data ?? []
+
+      // Filter: skip leads without email, already-gated, and self
+      const needsGate: any[] = []
+      const skipped: Array<{ lead: any; reason: string }> = []
+
+      for (const lead of allWon) {
+        // Skip leads without email (can't send reminders)
+        if (!lead.email) {
+          skipped.push({ lead, reason: "no email" })
+          continue
+        }
+
+        // Skip instagram/social-only emails
+        if (lead.email.endsWith("@instagram.com") || lead.email.endsWith("@twitter.com")) {
+          skipped.push({ lead, reason: "social email" })
+          continue
+        }
+
+        try {
+          const dsRes = await irisFetch(`/api/v1/leads/${lead.id}/deal-status`)
+          if (dsRes.ok) {
+            const dsBody = (await dsRes.json()) as any
+            const ds = dsBody?.data ?? dsBody // handle { success, data } wrapper
+            if (ds.has_payment_gate) {
+              skipped.push({ lead, reason: "already has gate" })
+              continue
+            }
+            // Skip leads with active Stripe subscriptions
+            if ((ds.stripe_received ?? 0) > 0) {
+              skipped.push({ lead, reason: `already paid ($${ds.stripe_received})` })
+              continue
+            }
+          }
+        } catch {
+          // If deal-status fails, include lead (safe default)
+        }
+
+        needsGate.push(lead)
+      }
+
+      spinner.stop(`${allWon.length} Won leads, ${needsGate.length} need gates, ${skipped.length} skipped`)
+
+      if (skipped.length > 0) {
+        console.log("")
+        console.log(dim("  Skipped:"))
+        for (const { lead, reason } of skipped) {
+          const name = lead.name ?? lead.first_name ?? `Lead #${lead.id}`
+          console.log(`    ${dim(`#${lead.id}`)}  ${dim(name)}  ${dim(`(${reason})`)}`)
+        }
+      }
+
+      if (needsGate.length === 0) {
+        console.log("")
+        console.log(success("  All eligible Won leads have payment gates!"))
+        return
+      }
+
+      // Show what needs gates
+      console.log("")
+      printDivider()
+      for (const lead of needsGate) {
+        const name = lead.name ?? lead.first_name ?? `Lead #${lead.id}`
+        const company = lead.company ? `  ${dim(lead.company)}` : ""
+        const email = lead.email ? `  ${dim(lead.email)}` : ""
+        console.log(`  ${dim(`#${lead.id}`)}  ${bold(name)}${company}${email}`)
+      }
+      printDivider()
+
+      if (args.dryRun || args["dry-run"]) {
+        console.log(dim(`\n  Dry run — would create ${needsGate.length} payment gate(s) at $${args.amount}/${args.interval}`))
+        console.log(dim(`  Run without --dry-run to execute`))
+        return
+      }
+
+      // Confirm
+      if (!isNonInteractive()) {
+        const confirmed = await prompts.confirm({
+          message: `Create payment gates for ${needsGate.length} leads at $${args.amount}/${args.interval}?`,
+        })
+        if (prompts.isCancel(confirmed) || !confirmed) {
+          prompts.cancel("Cancelled")
+          return
+        }
+      }
+
+      // Execute
+      const results: Array<{ lead_id: number; name: string; success: boolean; proposal_url?: string; error?: string }> = []
+      for (const lead of needsGate) {
+        const gateBody: Record<string, unknown> = {
+          amount: args.amount,
+          scope: args.scope,
+          auto_send_reminders: true,
+        }
+        if (args.bloq) gateBody.bloq_id = args.bloq
+        if (args.interval) gateBody.interval = args.interval
+        if (args.term) gateBody.duration_months = args.term
+
+        try {
+          const gRes = await irisFetch(`/api/v1/leads/${lead.id}/payment-gate`, {
+            method: "POST",
+            body: JSON.stringify(gateBody),
+          })
+          const gData = (await gRes.json()) as any
+          const name = lead.name ?? lead.first_name ?? `Lead #${lead.id}`
+          if (gData.success) {
+            results.push({ lead_id: lead.id, name, success: true, proposal_url: gData.proposal_url })
+            console.log(`  ${success("+")}  ${bold(name)}  ${dim(gData.proposal_url ?? "")}`)
+          } else {
+            results.push({ lead_id: lead.id, name, success: false, error: gData.message ?? "failed" })
+            console.log(`  ${highlight("x")}  ${bold(name)}  ${dim(gData.message ?? "failed")}`)
+          }
+        } catch (e: any) {
+          const name = lead.name ?? `Lead #${lead.id}`
+          results.push({ lead_id: lead.id, name, success: false, error: e.message })
+          console.log(`  ${highlight("x")}  ${bold(name)}  ${dim(e.message)}`)
+        }
+      }
+
+      const created = results.filter(r => r.success).length
+      console.log("")
+      console.log(success(`  ${created}/${needsGate.length} payment gates created`))
+
+      if (args.json) {
+        console.log(JSON.stringify(results, null, 2))
+      }
+    } catch (e: any) {
+      spinner.stop("Error", 1)
+      console.error(e.message)
+    }
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -3284,6 +3457,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsSegmentCommand)
       .command(LeadsRequirementsCommand)
       .command(LeadsEnrichCommand)
+      .command(LeadsGateAllCommand)
       .demandCommand(),
   async handler() {},
 })
