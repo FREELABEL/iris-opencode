@@ -37,8 +37,15 @@ function printBrand(b: Record<string, unknown>): void {
   const personas = Array.isArray(b.personas) ? b.personas.length : 0
   const integrations = Array.isArray(b.integrations) ? b.integrations.length : 0
   const assets = Array.isArray(b.assets) ? b.assets.length : 0
-  if (personas + integrations + assets > 0) {
-    console.log(`    ${dim(`personas=${personas}  integrations=${integrations}  assets=${assets}`)}`)
+  const meta = b.metadata as Record<string, unknown> | undefined
+  const tokenGroups = meta?.design_tokens && typeof meta.design_tokens === "object" ? Object.keys(meta.design_tokens).length : 0
+  const parts: string[] = []
+  if (personas > 0) parts.push(`personas=${personas}`)
+  if (integrations > 0) parts.push(`integrations=${integrations}`)
+  if (assets > 0) parts.push(`assets=${assets}`)
+  if (tokenGroups > 0) parts.push(`tokens=${tokenGroups}`)
+  if (parts.length > 0) {
+    console.log(`    ${dim(parts.join("  "))}`)
   }
 }
 
@@ -159,9 +166,18 @@ const BrandsShowCommand = cmd({
         console.log()
       }
 
+      // Design tokens summary
+      const dt = b.metadata?.design_tokens
+      if (dt && typeof dt === "object" && Object.keys(dt).length > 0) {
+        const groups = Object.keys(dt)
+        console.log(bold("Design Tokens:"))
+        console.log(`  ${groups.join(", ")}  ${dim(`(${groups.length} groups)`)}`)
+        console.log()
+      }
+
       printDivider()
       prompts.outro(
-        `${dim("iris brands personas add " + b.id)}  ·  ${dim("iris brands attach " + b.id + " <int_id>")}`,
+        `${dim("iris brands dt get " + (b.slug ?? b.id))}  ·  ${dim("iris brands personas add " + b.id)}  ·  ${dim("iris brands attach " + b.id + " <int_id>")}`,
       )
     } catch (err) {
       spinner.stop("Error", 1)
