@@ -2,7 +2,8 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold } from "./iris-api"
-import { readFileSync, writeFileSync } from "fs"
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
+import { join } from "path"
 
 // ============================================================================
 // Brand CLI — first-class brand entity
@@ -972,6 +973,191 @@ const DesignTokensImportCommand = cmd({
   },
 })
 
+// --- pull / push / diff ---
+
+const BRANDS_DIR = "brands"
+
+function brandTokenPath(slug: string): string {
+  return join(BRANDS_DIR, `${slug}-tokens.json`)
+}
+
+async function fetchPublicTokens(slug: string): Promise<{ tokens: Record<string, unknown>; name: string } | null> {
+  const res = await irisFetch(`/api/v1/public/brands/${slug}/design-tokens`)
+  if (!res.ok) return null
+  const data = (await res.json()) as Record<string, unknown>
+  return { tokens: (data.design_tokens ?? {}) as Record<string, unknown>, name: String(data.name ?? slug) }
+}
+
+const DesignTokensPullCommand = cmd({
+  command: "pull <slug>",
+  describe: "download brand design tokens to local ./brands/<slug>-tokens.json",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .option("output", { alias: "o", describe: "custom output path", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Pull Design Tokens — ${args.slug}`)
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching…")
+    try {
+      const result = await fetchPublicTokens(String(args.slug))
+      if (!result || Object.keys(result.tokens).length === 0) {
+        spinner.stop("Not found", 1)
+        prompts.log.error(`No design tokens for "${args.slug}"`)
+        prompts.outro("Done"); return
+      }
+
+      if (!existsSync(BRANDS_DIR)) mkdirSync(BRANDS_DIR, { recursive: true })
+      const filepath = args.output ?? brandTokenPath(String(args.slug))
+      writeFileSync(filepath, JSON.stringify(result.tokens, null, 2) + "\n")
+      spinner.stop(`Pulled ${result.name}`)
+
+      printDivider()
+      printKV("Brand", result.name)
+      printKV("Groups", Object.keys(result.tokens).join(", "))
+      printKV("Saved to", filepath)
+      printDivider()
+      prompts.outro(`${dim(`iris brands dt push ${args.slug}`)}  ·  ${dim(`iris brands dt diff ${args.slug}`)}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const DesignTokensPushCommand = cmd({
+  command: "push <slug>",
+  describe: "upload local ./brands/<slug>-tokens.json to brand API",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .option("file", { alias: "f", describe: "local JSON file (default: brands/<slug>-tokens.json)", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Push Design Tokens — ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const filepath = args.file ?? brandTokenPath(String(args.slug))
+    if (!existsSync(filepath)) {
+      prompts.log.error(`Local file not found: ${filepath}`)
+      prompts.log.info(`Run first: ${dim(`iris brands dt pull ${args.slug}`)}`)
+      prompts.outro("Done"); return
+    }
+
+    let tokens: Record<string, unknown>
+    try {
+      tokens = JSON.parse(readFileSync(filepath, "utf-8"))
+    } catch (e) {
+      prompts.log.error(`Failed to parse ${filepath}: ${e instanceof Error ? e.message : String(e)}`)
+      prompts.outro("Done"); return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Resolving brand…")
+    try {
+      const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
+      const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const listData = (await listRes.json()) as { data?: any }
+      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+
+      spinner.message("Pushing tokens…")
+      const res = await irisFetch(`/api/v1/brands/${brands[0].id}/design-tokens`, {
+        method: "PATCH",
+        body: JSON.stringify(tokens),
+      })
+      const ok = await handleApiError(res, "Push tokens"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop("Pushed")
+
+      const keys = Object.keys(tokens)
+      prompts.log.success(`Pushed ${keys.length} token group(s) from ${filepath}`)
+      prompts.outro(`${dim(`iris brands dt get ${args.slug}`)}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const DesignTokensDiffCommand = cmd({
+  command: "diff <slug>",
+  describe: "compare local tokens file with remote API",
+  builder: (yargs) =>
+    yargs.positional("slug", { describe: "brand slug", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Diff Design Tokens — ${args.slug}`)
+
+    const filepath = brandTokenPath(String(args.slug))
+    if (!existsSync(filepath)) {
+      prompts.log.error(`Local file not found: ${filepath}`)
+      prompts.log.info(`Run first: ${dim(`iris brands dt pull ${args.slug}`)}`)
+      prompts.outro("Done"); return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching remote…")
+    try {
+      const result = await fetchPublicTokens(String(args.slug))
+      if (!result) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+
+      const local = JSON.parse(readFileSync(filepath, "utf-8"))
+      const remote = result.tokens
+      spinner.stop(result.name)
+
+      const localStr = JSON.stringify(local, null, 2)
+      const remoteStr = JSON.stringify(remote, null, 2)
+
+      if (localStr === remoteStr) {
+        prompts.log.success("In sync — no differences")
+        prompts.outro("Done"); return
+      }
+
+      // Find added, removed, changed keys at top level
+      const localKeys = new Set(Object.keys(local))
+      const remoteKeys = new Set(Object.keys(remote))
+      const added: string[] = []
+      const removed: string[] = []
+      const changed: string[] = []
+
+      for (const k of localKeys) {
+        if (!remoteKeys.has(k)) added.push(k)
+        else if (JSON.stringify(local[k]) !== JSON.stringify(remote[k])) changed.push(k)
+      }
+      for (const k of remoteKeys) {
+        if (!localKeys.has(k)) removed.push(k)
+      }
+
+      printDivider()
+      if (added.length > 0) console.log(`  ${bold("+ local only:")} ${added.join(", ")}`)
+      if (removed.length > 0) console.log(`  ${bold("- remote only:")} ${removed.join(", ")}`)
+      if (changed.length > 0) {
+        console.log(`  ${bold("~ changed:")} ${changed.join(", ")}`)
+        for (const k of changed) {
+          const lKeys = typeof local[k] === "object" ? Object.keys(local[k]) : []
+          const rKeys = typeof remote[k] === "object" ? Object.keys(remote[k]) : []
+          const lOnly = lKeys.filter(x => !rKeys.includes(x))
+          const rOnly = rKeys.filter(x => !lKeys.includes(x))
+          const both = lKeys.filter(x => rKeys.includes(x) && JSON.stringify((local[k] as any)[x]) !== JSON.stringify((remote[k] as any)[x]))
+          if (lOnly.length > 0) console.log(`    ${dim(k + " + local:")} ${lOnly.join(", ")}`)
+          if (rOnly.length > 0) console.log(`    ${dim(k + " - remote:")} ${rOnly.join(", ")}`)
+          if (both.length > 0) console.log(`    ${dim(k + " ~ changed:")} ${both.join(", ")}`)
+        }
+      }
+      printDivider()
+      prompts.outro(`${dim(`iris brands dt push ${args.slug}`)}  to apply local  ·  ${dim(`iris brands dt pull ${args.slug}`)}  to overwrite local`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const DesignTokensGroup = cmd({
   command: "design-tokens",
   aliases: ["tokens", "dt"],
@@ -982,6 +1168,9 @@ const DesignTokensGroup = cmd({
       .command(DesignTokensSetCommand)
       .command(DesignTokensExportCommand)
       .command(DesignTokensImportCommand)
+      .command(DesignTokensPullCommand)
+      .command(DesignTokensPushCommand)
+      .command(DesignTokensDiffCommand)
       .demandCommand(),
   async handler() {},
 })
