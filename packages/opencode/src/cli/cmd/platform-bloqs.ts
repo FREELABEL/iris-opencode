@@ -95,6 +95,9 @@ const BloqsGetCommand = cmd({
       .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("files", { describe: "list files attached to this bloq", type: "boolean", default: false })
+      .option("items", { describe: "show recent items across all lists", type: "boolean", default: false })
+      .option("list", { describe: "show items in a specific list (by ID)", type: "number" })
+      .option("limit", { describe: "max items to show (default 10)", type: "number", default: 10 })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq #${args.id}`) }
@@ -148,10 +151,56 @@ const BloqsGetCommand = cmd({
       printKV("Created", b.created_at)
       console.log()
 
+      // Fetch items to get accurate counts and for --items/--list display
+      let allItems: any[] = []
+      const itemsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items?per_page=500`)
+      if (itemsRes.ok) {
+        const itemsData = (await itemsRes.json()) as { data?: any }
+        const raw = itemsData?.data
+        allItems = Array.isArray(raw) ? raw : (raw?.items ?? [])
+      }
+
+      // Build per-list item counts from actual data
+      const listItemCounts: Record<number, number> = {}
+      for (const item of allItems) {
+        const lid = item.bloq_list_id ?? item.list_id
+        if (lid) listItemCounts[lid] = (listItemCounts[lid] ?? 0) + 1
+      }
+
       if (lists.length > 0) {
         console.log(`  ${dim("Lists:")}`)
         for (const l of lists) {
-          console.log(`    ${dim("—")} ${bold(String(l.name ?? l.id))} ${dim(`#${l.id}`)} ${dim(`(${l.items_count ?? 0} items)`)}`)
+          const count = listItemCounts[l.id] ?? l.items_count ?? 0
+          console.log(`    ${dim("—")} ${bold(String(l.name ?? l.id))} ${dim(`#${l.id}`)} ${dim(`(${count} items)`)}`)
+        }
+        console.log()
+      }
+
+      // Show items if --items or --list requested
+      if (args.items || args.list) {
+        const limit = args.limit ?? 10
+        let displayItems = allItems
+
+        if (args.list) {
+          displayItems = allItems.filter((i: any) => (i.bloq_list_id ?? i.list_id) === args.list)
+          const listName = lists.find((l: any) => l.id === args.list)?.name ?? `List #${args.list}`
+          console.log(`  ${bold("Items")} in ${bold(listName)} ${dim(`(${displayItems.length} total, showing ${Math.min(limit, displayItems.length)})`)}`)
+        } else {
+          console.log(`  ${bold("Recent Items")} ${dim(`(${allItems.length} total, showing ${Math.min(limit, allItems.length)})`)}`)
+        }
+
+        const shown = displayItems.slice(0, limit)
+        for (const item of shown) {
+          const title = item.title ?? "(untitled)"
+          const listName = item.list_name ?? lists.find((l: any) => l.id === (item.bloq_list_id ?? item.list_id))?.name ?? ""
+          const content = String(item.content ?? "").replace(/\n/g, " ").slice(0, 120)
+          const date = item.created_at ? dim(new Date(item.created_at).toLocaleDateString()) : ""
+          console.log(`    ${dim(`#${item.id}`)}  ${bold(title)}  ${dim(listName)}  ${date}`)
+          if (content) console.log(`      ${dim(content)}`)
+        }
+
+        if (displayItems.length > limit) {
+          console.log(`    ${dim(`... ${displayItems.length - limit} more`)}`)
         }
         console.log()
       }
