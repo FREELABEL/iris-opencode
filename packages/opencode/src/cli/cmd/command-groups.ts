@@ -7,7 +7,7 @@ export interface CommandCategory {
 export const CATEGORIES: Record<string, CommandCategory> = {
   crm: {
     name: "CRM & Sales",
-    description: "Leads, outreach campaigns, invoicing, payments, delivery",
+    description: "Leads, pulse health scoring, payment gates, outreach, delivery",
     order: 1,
   },
   atlas: {
