@@ -1599,6 +1599,7 @@ const LeadsPulseCommand = cmd({
       .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
       .option("days", { describe: "look-back window in days", type: "number", default: 30 })
       .option("limit", { describe: "max messages per channel", type: "number", default: 50 })
+      .option("hydrate", { describe: "auto-send follow-up if gate is unpaid + past throttle window", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -2387,6 +2388,138 @@ const LeadsPulseCommand = cmd({
           console.log(`      ${dim(`via ${link.channel}`)}${link.from ? dim(` · ${link.from}`) : ""}`)
         }
         if (sharedLinks.length > 10) console.log(`    ${dim(`…and ${sharedLinks.length - 10} more`)}`)
+      }
+
+      // ── Hydration: auto-send payment follow-up if gate is unpaid + 48h since last outreach ──
+      const HYDRATION_WINDOW_HOURS = 48
+      if (dealHealth?.has_payment_gate && !dealHealth.payment_received && !dealHealth.deal_complete && email) {
+        // Determine last outreach timestamp
+        let lastOutreachAt: Date | null = null
+
+        // Check comms signal for last outbound
+        const commsSignal = pulseReadiness?.signals?.comms_freshness ?? {}
+        if (commsSignal.last_outbound_at) {
+          lastOutreachAt = new Date(commsSignal.last_outbound_at)
+        }
+
+        // Also check channel scan results for most recent outbound
+        if (channels) {
+          for (const ch of channels) {
+            for (const msg of (ch.messages ?? [])) {
+              const isOutbound = ch.name === "iMessage" ? msg.from_me : ch.name === "Gmail" ? !(msg.from ?? "").toLowerCase().includes(email.toLowerCase()) : false
+              if (isOutbound) {
+                const msgDate = new Date(msg.ts ?? msg.date ?? 0)
+                if (!lastOutreachAt || msgDate > lastOutreachAt) lastOutreachAt = msgDate
+              }
+            }
+          }
+        }
+
+        // Check gate creation date as fallback
+        if (!lastOutreachAt && dealHealth.created_at) {
+          lastOutreachAt = new Date(dealHealth.created_at)
+        }
+
+        const hoursSinceLast = lastOutreachAt
+          ? (Date.now() - lastOutreachAt.getTime()) / (1000 * 60 * 60)
+          : Infinity
+
+        console.log()
+        if (hoursSinceLast >= HYDRATION_WINDOW_HOURS) {
+          console.log(`  ${bold("Hydration")}`)
+          console.log(`  ${UI.Style.TEXT_WARNING}Last outreach: ${lastOutreachAt ? `${Math.floor(hoursSinceLast)}h ago` : "never"}${UI.Style.TEXT_NORMAL}  ${dim(`(${HYDRATION_WINDOW_HOURS}h window)`)}`)
+
+          if (!(args as any).hydrate) {
+            // Dry run — show what would happen
+            const firstName = (lead.name ?? lead.first_name ?? "").split(" ")[0] || "there"
+            const scopeShort = (dealHealth.scope ?? "our services").slice(0, 80)
+            console.log(`  ${dim("Would send follow-up to")} ${email} ${dim(`re: ${scopeShort}`)}`)
+            console.log(`  ${dim("Run with --hydrate to send")}`)
+          } else {
+            // Step 1: AI-generate a personalized follow-up using lead context
+            try {
+              const scopeShort = (dealHealth.scope ?? "our services").slice(0, 120)
+              const proposalLink = dealHealth.proposal_url ?? ""
+              const contractLink = dealHealth.contract_signing_url ?? ""
+              const amount = dealHealth.amount ?? ""
+
+              const aiPrompt = [
+                `Write a personalized follow-up email about their pending agreement.`,
+                `Project: ${scopeShort}`,
+                `Amount: $${amount}`,
+                proposalLink ? `Proposal link to include: ${proposalLink}` : "",
+                contractLink ? `Contract signing link to include: ${contractLink}` : "",
+                `Summarize what we've been working on together and why signing the agreement helps us keep momentum.`,
+                `Reference specific recent work or conversations if possible.`,
+                `Be warm, professional, and direct. End with a clear CTA to review and sign.`,
+                `Sign off as "IRIS AI — on behalf of the IRIS team"`,
+              ].filter(Boolean).join("\n")
+
+              // Generate AI email using lead's full context (notes, history, tags)
+              const genRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/generate-email`, {
+                method: "POST",
+                body: JSON.stringify({
+                  prompt: aiPrompt,
+                  tone: "professional",
+                  include_cta: true,
+                  max_length: "short",
+                }),
+              })
+
+              if (!genRes.ok) {
+                const errBody = await genRes.json().catch(() => ({}))
+                console.log(`  ${dim(`AI generation failed: ${errBody.message ?? errBody.error ?? genRes.status}`)}`)
+              } else {
+                const genData = (await genRes.json()) as any
+                const draft = genData.data ?? genData
+                const emailSubject = draft.subject ?? `Following up — ${scopeShort}`
+                const emailBody = draft.body ?? draft.message ?? ""
+
+                if (!emailBody) {
+                  console.log(`  ${dim("AI returned empty draft — skipping")}`)
+                } else {
+                  // Preview the generated email
+                  console.log(`  ${dim("Subject:")} ${emailSubject}`)
+                  const previewLines = emailBody.split("\n").slice(0, 4)
+                  for (const line of previewLines) {
+                    console.log(`  ${dim(line.slice(0, 100))}`)
+                  }
+                  if (emailBody.split("\n").length > 4) console.log(`  ${dim("...")}`)
+                  console.log()
+
+                  // Step 2: Send via quicksend
+                  const qsRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/quicksend`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      channel: "email",
+                      message: emailBody,
+                      subject: emailSubject,
+                    }),
+                  })
+
+                  if (qsRes.ok) {
+                    const qsData = (await qsRes.json()) as any
+                    if (qsData.success || qsData.message_id) {
+                      console.log(`  ${success("Sent AI follow-up")}  ${dim("to " + email)}`)
+                    } else if (qsData.status === "pending_approval") {
+                      console.log(`  ${highlight("AI draft queued for approval")}  ${dim("review: iris leads outreach approve")}`)
+                    } else {
+                      console.log(`  ${dim("Follow-up queued")}`)
+                    }
+                  } else {
+                    const errBody = await qsRes.json().catch(() => ({}))
+                    console.log(`  ${dim(`Send failed: ${errBody.message ?? qsRes.status}`)}`)
+                  }
+                }
+              }
+            } catch (e: any) {
+              console.log(`  ${dim(`Hydration error: ${e.message}`)}`)
+            }
+          }
+        } else {
+          const nextIn = Math.ceil(HYDRATION_WINDOW_HOURS - hoursSinceLast)
+          console.log(`  ${dim(`Hydration: last outreach ${Math.floor(hoursSinceLast)}h ago — next eligible in ${nextIn}h`)}`)
+        }
       }
 
       console.log()
