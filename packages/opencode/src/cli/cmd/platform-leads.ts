@@ -3645,6 +3645,210 @@ const LeadsGateAllCommand = cmd({
 })
 
 // ============================================================================
+// pulse-all — bulk pulse scorecard for all Won leads
+// ============================================================================
+
+const LeadsPulseAllCommand = cmd({
+  command: "pulse-all",
+  aliases: ["scorecard", "health"],
+  describe: "run pulse on all Won leads — scorecard with deal health, gates, and gaps",
+  builder: (yargs) =>
+    yargs
+      .option("status", { describe: "filter by status", type: "string", default: "Won" })
+      .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
+      .option("hydrate", { describe: "auto-send follow-ups to eligible leads (past 48h throttle)", type: "boolean", default: false })
+      .option("dry-run", { describe: "with --hydrate: preview emails without sending", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const spinner = prompts.spinner()
+    spinner.start(`Loading ${args.status} leads...`)
+
+    try {
+      const params = new URLSearchParams({ status: args.status, per_page: "200" })
+      if (args.bloq) params.set("bloq_id", String(args.bloq))
+      const res = await irisFetch(`/api/v1/leads?${params}`)
+      if (!res.ok) { spinner.stop("Failed", 1); return }
+      const body = (await res.json()) as { data?: any[] }
+      const leads: any[] = body?.data ?? []
+
+      // Skip junk leads (no email, social emails, self)
+      const eligible = leads.filter(l => {
+        if (!l.email) return false
+        if (l.email.endsWith("@instagram.com") || l.email.endsWith("@twitter.com")) return false
+        if (l.name === `Lead #${l.id}`) return false
+        return true
+      })
+
+      spinner.stop(`${leads.length} ${args.status} leads (${eligible.length} eligible)`)
+
+      // Fetch pulse data for each lead
+      type PulseRow = { id: number; name: string; email: string; company: string; pulse: number; band: string; deal: number | null; hasGate: boolean; amount: number | null; contentAgent: boolean; comms: number | null; lastOutreach: string | null; hydrationEligible: boolean }
+      const rows: PulseRow[] = []
+
+      for (const lead of eligible) {
+        try {
+          // Fetch readiness + deal status in parallel
+          const [readRes, dealRes] = await Promise.all([
+            irisFetch(`/api/v1/leads/${lead.id}/readiness`).catch(() => null),
+            irisFetch(`/api/v1/leads/${lead.id}/deal-status`).catch(() => null),
+          ])
+
+          const readData = readRes?.ok ? ((await readRes.json()) as any)?.data : null
+          const dealBody = dealRes?.ok ? (await dealRes.json()) as any : null
+          const deal = dealBody?.data ?? dealBody
+
+          const sigs = readData?.signals ?? {}
+          const dealChecks = sigs.deal_health?.checks ?? {}
+          const commsScore = sigs.comms_freshness?.score ?? null
+          const lastOut = sigs.comms_freshness?.last_outbound_at ?? null
+
+          rows.push({
+            id: lead.id,
+            name: (lead.name ?? lead.first_name ?? `Lead #${lead.id}`).slice(0, 22),
+            email: lead.email ?? "",
+            company: (lead.company ?? "").slice(0, 20),
+            pulse: readData?.score ?? 0,
+            band: readData?.band ?? "unknown",
+            deal: sigs.deal_health?.score ?? null,
+            hasGate: deal?.has_payment_gate ?? false,
+            amount: deal?.amount ?? null,
+            contentAgent: dealChecks.has_content_agent ?? false,
+            comms: commsScore,
+            lastOutreach: lastOut,
+            hydrationEligible: (deal?.has_payment_gate && !deal?.payment_received && !deal?.deal_complete) ?? false,
+          })
+        } catch {
+          rows.push({
+            id: lead.id, name: (lead.name ?? `#${lead.id}`).slice(0, 22), email: lead.email ?? "",
+            company: "", pulse: 0, band: "error", deal: null, hasGate: false, amount: null,
+            contentAgent: false, comms: null, lastOutreach: null, hydrationEligible: false,
+          })
+        }
+      }
+
+      // Sort by pulse score descending
+      rows.sort((a, b) => b.pulse - a.pulse)
+
+      if (args.json) {
+        console.log(JSON.stringify(rows, null, 2))
+        return
+      }
+
+      // Render scorecard
+      console.log()
+      console.log(`  ${bold("IRIS Pulse Scorecard")} ${dim(`— ${rows.length} ${args.status} leads`)}`)
+      console.log(dim("  " + "=".repeat(90)))
+
+      // Header
+      console.log(`  ${dim("ID".padEnd(8))}${"Name".padEnd(24)}${"Pulse".padEnd(8)}${"Deal".padEnd(8)}${"Gate".padEnd(10)}${"Amount".padEnd(10)}${"Comms".padEnd(8)}${"Content".padEnd(8)}`)
+      console.log(dim("  " + "-".repeat(90)))
+
+      for (const r of rows) {
+        const pulseColor = r.pulse >= 90 ? UI.Style.TEXT_SUCCESS
+          : r.pulse >= 50 ? UI.Style.TEXT_WARNING
+          : UI.Style.TEXT_DANGER
+        const pulseStr = `${pulseColor}${String(r.pulse).padEnd(4)}${UI.Style.TEXT_NORMAL}`
+        const dealStr = r.deal !== null ? `${r.deal}`.padEnd(8) : dim("—".padEnd(8))
+        const gateStr = r.hasGate
+          ? (r.amount ? success(`$${r.amount}`.padEnd(10)) : success("Yes".padEnd(10)))
+          : `${UI.Style.TEXT_DANGER}No${UI.Style.TEXT_NORMAL}`.padEnd(10 + 9) // ansi offset
+        const commsStr = r.comms !== null ? `${r.comms}`.padEnd(8) : dim("—".padEnd(8))
+        const contentStr = r.contentAgent ? success("Yes".padEnd(8)) : `${UI.Style.TEXT_WARNING}No${UI.Style.TEXT_NORMAL}`.padEnd(8 + 9)
+
+        console.log(`  ${dim(`#${r.id}`.padEnd(8))}${r.name.padEnd(24)}${pulseStr}    ${dealStr}${gateStr}${commsStr}${contentStr}`)
+      }
+
+      console.log(dim("  " + "-".repeat(90)))
+
+      // Summary
+      const avgPulse = rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.pulse, 0) / rows.length) : 0
+      const noGate = rows.filter(r => !r.hasGate).length
+      const noContent = rows.filter(r => !r.contentAgent).length
+      const healthy = rows.filter(r => r.band === "healthy").length
+      const failing = rows.filter(r => r.band === "failing").length
+
+      console.log()
+      console.log(`  ${bold("Summary")}`)
+      console.log(`  Avg Pulse: ${avgPulse}/100  |  ${success(`${healthy} healthy`)}  ${UI.Style.TEXT_DANGER}${failing} failing${UI.Style.TEXT_NORMAL}`)
+      console.log(`  ${noGate > 0 ? `${UI.Style.TEXT_DANGER}${noGate} without payment gate${UI.Style.TEXT_NORMAL}` : success("All have gates")}  |  ${noContent > 0 ? `${UI.Style.TEXT_WARNING}${noContent} without content agent${UI.Style.TEXT_NORMAL}` : success("All have content agents")}`)
+
+      // Hydration summary
+      const hydrationReady = rows.filter(r => r.hydrationEligible)
+      if (hydrationReady.length > 0) {
+        console.log()
+        console.log(`  ${bold("Hydration ready")} ${dim(`(${hydrationReady.length} leads with unpaid gates)`)}`)
+        for (const r of hydrationReady) {
+          console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim(`$${r.amount ?? "?"}`)}`)
+        }
+        if (!args.hydrate) {
+          console.log(`  ${dim("Run with --hydrate to send follow-ups (or --hydrate --dry-run to preview)")}`)
+        }
+      }
+
+      // If --hydrate, run pulse hydration on each eligible lead
+      if (args.hydrate && hydrationReady.length > 0) {
+        console.log()
+        console.log(`  ${bold("Hydrating...")}`)
+        for (const r of hydrationReady) {
+          try {
+            // Delegate to individual pulse command logic by calling the API directly
+            const genRes = await irisFetch(`/api/v1/leads/${r.id}/outreach/generate-email`, {
+              method: "POST",
+              body: JSON.stringify({
+                prompt: `Write a personalized follow-up email about their pending agreement.\nProject: ${r.company}\nAmount: $${r.amount}\nBe warm, professional, and direct. End with a clear CTA to review and sign.\nSign off as "IRIS AI — on behalf of the IRIS team"`,
+                tone: "professional",
+                include_cta: true,
+                max_length: "short",
+                bloq_id: 40,
+                strategy_template_id: 37,
+              }),
+            })
+            if (!genRes.ok) {
+              console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim("AI generation failed")}`)
+              continue
+            }
+            const genData = (await genRes.json()) as any
+            const draft = genData.draft ?? genData.data?.draft ?? genData.data ?? genData
+            const subject = draft.subject ?? `Following up — ${r.company}`
+            const emailBody = draft.body ?? draft.message ?? draft.content ?? ""
+
+            if (!emailBody) {
+              console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim("Empty draft")}`)
+              continue
+            }
+
+            if (args["dry-run"] || args.dryRun) {
+              console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${highlight("DRY RUN")}  ${dim(subject.slice(0, 60))}`)
+            } else {
+              const qsRes = await irisFetch(`/api/v1/leads/${r.id}/outreach/quicksend`, {
+                method: "POST",
+                body: JSON.stringify({ channel: "email", message: emailBody, subject, bloq_id: 40, strategy_template_id: 37 }),
+              })
+              if (qsRes.ok) {
+                console.log(`    ${success("+")}  ${r.name}  ${dim(subject.slice(0, 60))}`)
+              } else {
+                console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim("Send failed")}`)
+              }
+            }
+          } catch (e: any) {
+            console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim(e.message?.slice(0, 40))}`)
+          }
+        }
+      }
+
+      console.log()
+      printDivider()
+      prompts.outro(dim("iris leads pulse <id>  ·  iris leads gate-all -a 125  ·  iris leads pulse-all --hydrate"))
+    } catch (e: any) {
+      spinner.stop("Error", 1)
+      console.error(e.message)
+    }
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -3685,6 +3889,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsRequirementsCommand)
       .command(LeadsEnrichCommand)
       .command(LeadsGateAllCommand)
+      .command(LeadsPulseAllCommand)
       .demandCommand(),
   async handler() {},
 })
