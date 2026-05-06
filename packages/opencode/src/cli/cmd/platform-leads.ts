@@ -2507,6 +2507,8 @@ const LeadsPulseCommand = cmd({
                       channel: "email",
                       message: emailBody,
                       subject: emailSubject,
+                      bloq_id: bloqId,
+                      strategy_template_id: 37,
                     }
                     if (isRedirected) qsBody.test_email = sendTo
 
@@ -2766,6 +2768,9 @@ const LeadsPaymentGateCommand = cmd({
       .option("deposit", { describe: "deposit percentage (0-100)", type: "number" })
       .option("list-price", { describe: "original list price (shows strikethrough discount)", type: "number" })
       .option("discount", { describe: "discount percentage (0-100)", type: "number" })
+      .option("fee", { describe: "processing fee % passed to client (e.g. 2.5)", type: "number" })
+      .option("fee-flat", { describe: "flat fee per payment in dollars (e.g. 0.30)", type: "number" })
+      .option("absorb-fees", { describe: "absorb fees instead of passing to client", type: "boolean", default: false })
       .option("no-auto-remind", { describe: "disable D+1/D+3/D+7 auto-reminders", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
@@ -2784,6 +2789,13 @@ const LeadsPaymentGateCommand = cmd({
     if (args.deposit != null) body.deposit_percent = args.deposit
     if (args["list-price"]) body.list_price = args["list-price"]
     if (args.discount != null) body.discount_percent = args.discount
+    if (args.fee != null || args["fee-flat"] != null) {
+      body.processing_fee = {
+        percent: args.fee ?? 2.9,
+        flat: args["fee-flat"] ?? 0.30,
+        mode: args["absorb-fees"] ? "absorb" : "pass_to_client",
+      }
+    }
 
     const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
       method: "POST",
@@ -3190,6 +3202,68 @@ const LeadsRegenCheckoutCommand = cmd({
     } catch (err) {
       prompts.log.error(err instanceof Error ? err.message : String(err))
     }
+  },
+})
+
+// ============================================================================
+// Subscription Update — change a lead's Stripe subscription price
+// ============================================================================
+
+const LeadsSubscriptionUpdateCommand = cmd({
+  command: "subscription-update <id>",
+  aliases: ["sub-update", "upgrade"],
+  describe: "update a lead's Stripe subscription price (e.g. $39 → $102.50)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("amount", { alias: "a", describe: "new monthly amount", type: "number", demandOption: true })
+      .option("prorate", { describe: "prorate immediately (default: next billing cycle)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    // Show current subscription first
+    const pulseRes = await irisFetch(`/api/v1/leads/${args.id}`)
+    const lead = pulseRes.ok ? ((await pulseRes.json()) as any)?.data : null
+    const name = lead?.name ?? lead?.first_name ?? `Lead #${args.id}`
+
+    console.log()
+    console.log(`  ${bold(name)}`)
+
+    // Confirm
+    if (!isNonInteractive()) {
+      const confirmed = await prompts.confirm({
+        message: `Update subscription to $${args.amount}/mo${args.prorate ? " (prorated immediately)" : " (next billing cycle)"}?`,
+      })
+      if (prompts.isCancel(confirmed) || !confirmed) {
+        prompts.cancel("Cancelled")
+        return
+      }
+    }
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/subscription/update-price`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        amount: args.amount,
+        prorate: args.prorate,
+      }),
+    })
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      prompts.log.error(err.message ?? err.error ?? `Failed (${res.status})`)
+      return
+    }
+
+    const data = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+    const result = data.data ?? data
+    console.log(`  ${success("Subscription updated")}`)
+    printKV("  Old", `$${result.old_amount}/mo`)
+    printKV("  New", `$${result.new_amount}/mo`)
+    printKV("  Effective", result.effective === "immediately" ? "Immediately (prorated)" : "Next billing cycle")
+    printDivider()
   },
 })
 
@@ -3605,6 +3679,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsCreatePackageCommand)
       .command(LeadsUpdatePackageCommand)
       .command(LeadsRegenCheckoutCommand)
+      .command(LeadsSubscriptionUpdateCommand)
       .command(LeadsCollectCommand)
       .command(LeadsSegmentCommand)
       .command(LeadsRequirementsCommand)
