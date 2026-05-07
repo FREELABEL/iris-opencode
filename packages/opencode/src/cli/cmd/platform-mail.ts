@@ -184,7 +184,7 @@ const MailSendCommand = cmd({
     const payload: any = {
       to_email: args.to,
       subject: args.subject,
-      body: args.body,
+      body_text: args.body,
     }
     if (args.cc) payload.cc = args.cc
     if (args.attachment) payload.attachments = [args.attachment]
