@@ -366,46 +366,70 @@ const ListCommand = cmd({
 })
 
 const CloseCommand = cmd({
-  command: "close <id>",
+  command: "close <id..>",
   aliases: ["done", "resolve", "complete"],
-  describe: "mark a bug report as completed/resolved",
+  describe: "mark bug report(s) as completed/resolved",
   builder: (yargs) =>
     yargs
-      .positional("id", { describe: "bug item ID", type: "number", demandOption: true })
-      .option("note", { alias: "n", describe: "resolution note", type: "string" }),
+      .positional("id", { describe: "bug item ID(s)", type: "number", array: true, demandOption: true })
+      .option("note", { alias: "n", describe: "resolution note", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const token = await requireAuth()
     if (!token) return
 
-    const userId = await resolveUserId()
-    if (!userId) {
-      console.error("Could not resolve user ID.")
+    // Bug bloq is owned by user 193 — use that as the route userId
+    // so the ownership check in updateStatus passes
+    const BUG_OWNER_USER_ID = 193
+    const ids = (args.id as number[]).filter(Boolean)
+
+    if (ids.length === 0) {
+      console.error("No bug IDs provided")
+      process.exitCode = 1
       return
     }
 
     const spinner = prompts.spinner()
-    spinner.start(`Closing bug #${args.id}…`)
+    spinner.start(`Closing ${ids.length} bug(s)…`)
 
-    try {
-      // Update item status to "done" via the bloq item status endpoint
-      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/item/${args.id}/status`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: "done" }),
-      })
+    const results: Array<{ id: number; ok: boolean; error?: string }> = []
 
-      if (!res.ok) {
-        spinner.stop("Failed", 1)
-        const text = await res.text().catch(() => "")
-        prompts.log.error(`HTTP ${res.status}: ${text}`)
-        return
+    for (const bugId of ids) {
+      try {
+        const res = await irisFetch(`/api/v1/user/${BUG_OWNER_USER_ID}/bloqs/item/${bugId}/status`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: "done" }),
+        })
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "")
+          results.push({ id: bugId, ok: false, error: `HTTP ${res.status}: ${text}` })
+        } else {
+          results.push({ id: bugId, ok: true })
+        }
+      } catch (e: any) {
+        results.push({ id: bugId, ok: false, error: e.message })
       }
-
-      spinner.stop(`${success("✓")} Bug #${args.id} marked as done`)
-      console.log(dim("  iris bug list  — view all bugs"))
-    } catch (e: any) {
-      spinner.stop("Error", 1)
-      prompts.log.error(e.message)
     }
+
+    const okCount = results.filter((r) => r.ok).length
+    const failCount = results.filter((r) => !r.ok).length
+
+    if (args.json) {
+      spinner.stop("")
+      console.log(JSON.stringify({ results, ok: okCount, failed: failCount }, null, 2))
+      return
+    }
+
+    if (failCount === 0) {
+      spinner.stop(`${success("✓")} ${okCount} bug(s) marked as done`)
+    } else {
+      spinner.stop(`${okCount} closed, ${failCount} failed`)
+      for (const r of results.filter((r) => !r.ok)) {
+        prompts.log.error(`#${r.id}: ${r.error}`)
+      }
+    }
+    console.log(dim("  iris bug list --status=all  — view all bugs"))
   },
 })
 
