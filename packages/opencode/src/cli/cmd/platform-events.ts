@@ -1814,7 +1814,7 @@ const PreflightCommand = cmd({
         category: "Production",
       })
     } catch {
-      checks.push({ name: "IRIS Bridge", ok: false, hint: "iris hive start", category: "Production" })
+      checks.push({ name: "IRIS Bridge", ok: false, hint: "iris-daemon start", category: "Production" })
       checks.push({ name: "OBS connected", ok: false, hint: "start bridge first", category: "Production" })
     }
 

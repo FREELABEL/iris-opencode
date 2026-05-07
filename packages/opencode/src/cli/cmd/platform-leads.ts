@@ -1386,7 +1386,7 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
         if (res.ok) return { name: "Google Calendar", ok: true, status: "verified" }
         return { name: "Google Calendar", ok: false, status: "error", error: `HTTP ${res.status}`, hint: "check bridge: iris hive doctor" }
       } catch {
-        return { name: "Google Calendar", ok: false, status: "not_connected", hint: "bridge not running — iris hive start" }
+        return { name: "Google Calendar", ok: false, status: "not_connected", hint: "bridge not running — iris-daemon start" }
       }
     })(),
 
@@ -1410,7 +1410,7 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
         if (res.ok) return { name: "Apple Mail", ok: true, status: "verified" }
         return { name: "Apple Mail", ok: false, status: "error", error: `HTTP ${res.status}`, hint: "check bridge: iris hive doctor" }
       } catch {
-        return { name: "Apple Mail", ok: false, status: "not_connected", hint: "bridge not running — iris hive start" }
+        return { name: "Apple Mail", ok: false, status: "not_connected", hint: "bridge not running — iris-daemon start" }
       }
     })(),
 
@@ -1421,7 +1421,7 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
         if (res.ok) return { name: "IRIS Bridge", ok: true, status: "verified" }
         return { name: "IRIS Bridge", ok: false, status: "error", error: `HTTP ${res.status}` }
       } catch {
-        return { name: "IRIS Bridge", ok: false, status: "not_connected", hint: "run: iris hive start" }
+        return { name: "IRIS Bridge", ok: false, status: "not_connected", hint: "run: iris-daemon start" }
       }
     })(),
   ])
@@ -3454,6 +3454,19 @@ const LeadsEnrichCommand = cmd({
     const limit = argv.limit as number
     const irisApiBase = process.env.IRIS_API_URL ?? "https://freelabel.net"
 
+    // Pre-flight: warn if daemon isn't running (task will be created but won't execute)
+    try {
+      const daemonCheck = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(2000) })
+      if (!daemonCheck.ok) {
+        console.log(`⚠ Hive daemon is not healthy (HTTP ${daemonCheck.status}). Task will be queued but may not execute.`)
+        console.log(dim(`  Start it: iris-daemon start`))
+      }
+    } catch {
+      console.log(`⚠ Hive daemon is not running on localhost:3200. Task will be queued but won't execute until a node connects.`)
+      console.log(dim(`  Start it: iris-daemon start`))
+      console.log("")
+    }
+
     // Validate the bloq exists and belongs to the user before dispatching
     const bloqCheck = await irisFetch(`/api/v1/bloqs/${bloqId}`)
     if (!bloqCheck.ok) {
@@ -3778,7 +3791,7 @@ const LeadsPulseAllCommand = cmd({
             contentAgent: dealChecks.has_content_agent ?? false,
             comms: commsScore,
             lastOutreach: lastOut,
-            hydrationEligible: (hasGate && !deal?.payment_received && !deal?.deal_complete) ?? false,
+            hydrationEligible: (hasGate && !deal?.payment_received && !deal?.deal_complete && billingStatus !== "active") ?? false,
             billingStatus,
             monthlyAmount,
             nextPaymentDate: nextDate,
