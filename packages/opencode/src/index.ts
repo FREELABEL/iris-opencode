@@ -109,6 +109,7 @@ import { PlatformPersonalityCommand } from "./cli/cmd/platform-personality"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
+import { PlatformInboxCommand } from "./cli/cmd/platform-inbox"
 import { PlatformDocsCommand } from "./cli/cmd/platform-docs"
 import { PlatformWalletCommand } from "./cli/cmd/platform-wallet"
 import { PlatformConfigCommand } from "./cli/cmd/platform-config"
@@ -240,6 +241,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformSomCommand))
   .command(reg(PlatformEventCommand))
   .command(reg(PlatformMonitorCommand))
+  .command(reg(PlatformInboxCommand))
 
   .command(reg(PlatformInvoicesCommand))
   .command(reg(PlatformPaymentsCommand))

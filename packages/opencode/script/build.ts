@@ -127,7 +127,7 @@ for (const item of targets) {
     tsconfig: "./tsconfig.json",
     plugins: [solidPlugin],
     sourcemap: "external",
-    external: ["playwright-core", "electron"],
+    external: ["playwright", "electron"],
     compile: {
       autoloadBunfig: false,
       autoloadDotenv: false,

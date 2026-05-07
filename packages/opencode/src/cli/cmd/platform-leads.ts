@@ -3684,25 +3684,57 @@ const LeadsPulseAllCommand = cmd({
       spinner.stop(`${leads.length} ${args.status} leads (${eligible.length} eligible)`)
 
       // Fetch pulse data for each lead
-      type PulseRow = { id: number; name: string; email: string; company: string; pulse: number; band: string; deal: number | null; hasGate: boolean; amount: number | null; contentAgent: boolean; comms: number | null; lastOutreach: string | null; hydrationEligible: boolean }
+      type PulseRow = {
+        id: number; name: string; email: string; company: string; pulse: number; band: string;
+        deal: number | null; hasGate: boolean; amount: number | null; contentAgent: boolean;
+        comms: number | null; lastOutreach: string | null; hydrationEligible: boolean;
+        billingStatus: "active" | "past_due" | "pending" | "no_sub" | "no_gate";
+        monthlyAmount: number | null; nextPaymentDate: string | null; daysUntil: number | null;
+        totalPaid: number; proposalUrl: string | null;
+      }
       const rows: PulseRow[] = []
 
       for (const lead of eligible) {
         try {
-          // Fetch readiness + deal status in parallel
-          const [readRes, dealRes] = await Promise.all([
+          // Fetch readiness + deal status + stripe payments in parallel
+          const [readRes, dealRes, stripeRes] = await Promise.all([
             irisFetch(`/api/v1/leads/${lead.id}/readiness`).catch(() => null),
             irisFetch(`/api/v1/leads/${lead.id}/deal-status`).catch(() => null),
+            irisFetch(`/api/v1/leads/${lead.id}/stripe-payments`).catch(() => null),
           ])
 
           const readData = readRes?.ok ? ((await readRes.json()) as any)?.data : null
           const dealBody = dealRes?.ok ? (await dealRes.json()) as any : null
           const deal = dealBody?.data ?? dealBody
+          const stripe = stripeRes?.ok ? ((await stripeRes.json()) as any)?.data ?? {} : {}
 
           const sigs = readData?.signals ?? {}
           const dealChecks = sigs.deal_health?.checks ?? {}
           const commsScore = sigs.comms_freshness?.score ?? null
           const lastOut = sigs.comms_freshness?.last_outbound_at ?? null
+
+          // Compute billing status from Stripe data
+          const subs = stripe.subscriptions ?? []
+          const activeSub = subs.find((s: any) => s.status === "active" || s.status === "trialing")
+          const pastDueSub = subs.find((s: any) => s.status === "past_due")
+          const hasGate = deal?.has_payment_gate ?? false
+
+          let billingStatus: PulseRow["billingStatus"] = "no_gate"
+          if (activeSub) billingStatus = "active"
+          else if (pastDueSub) billingStatus = "past_due"
+          else if (hasGate) billingStatus = stripe.summary?.active_subscriptions > 0 ? "active" : (stripe.summary?.pending_sessions > 0 ? "pending" : "no_sub")
+          else billingStatus = "no_gate"
+
+          // Extract monthly amount + next date from active/past_due sub
+          const billingSub = activeSub ?? pastDueSub
+          const monthlyAmount = billingSub?.amount ? Number(billingSub.amount) : (deal?.amount ? Number(deal.amount) : null)
+          const nextDate = billingSub?.current_period_end ?? null
+          let daysUntil: number | null = null
+          if (nextDate) {
+            const next = new Date(nextDate)
+            const now = new Date()
+            daysUntil = Math.ceil((next.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+          }
 
           rows.push({
             id: lead.id,
@@ -3712,18 +3744,26 @@ const LeadsPulseAllCommand = cmd({
             pulse: readData?.score ?? 0,
             band: readData?.band ?? "unknown",
             deal: sigs.deal_health?.score ?? null,
-            hasGate: deal?.has_payment_gate ?? false,
+            hasGate,
             amount: deal?.amount ?? null,
             contentAgent: dealChecks.has_content_agent ?? false,
             comms: commsScore,
             lastOutreach: lastOut,
-            hydrationEligible: (deal?.has_payment_gate && !deal?.payment_received && !deal?.deal_complete) ?? false,
+            hydrationEligible: (hasGate && !deal?.payment_received && !deal?.deal_complete) ?? false,
+            billingStatus,
+            monthlyAmount,
+            nextPaymentDate: nextDate,
+            daysUntil,
+            totalPaid: stripe.total_paid ?? 0,
+            proposalUrl: deal?.proposal_url ?? null,
           })
         } catch {
           rows.push({
             id: lead.id, name: (lead.name ?? `#${lead.id}`).slice(0, 22), email: lead.email ?? "",
             company: "", pulse: 0, band: "error", deal: null, hasGate: false, amount: null,
             contentAgent: false, comms: null, lastOutreach: null, hydrationEligible: false,
+            billingStatus: "no_gate", monthlyAmount: null, nextPaymentDate: null,
+            daysUntil: null, totalPaid: 0, proposalUrl: null,
           })
         }
       }
@@ -3731,48 +3771,104 @@ const LeadsPulseAllCommand = cmd({
       // Sort by pulse score descending
       rows.sort((a, b) => b.pulse - a.pulse)
 
+      // Compute billing summary
+      const activeSubs = rows.filter(r => r.billingStatus === "active")
+      const pastDueRows = rows.filter(r => r.billingStatus === "past_due")
+      const notOnStripe = rows.filter(r => r.billingStatus === "no_sub" || r.billingStatus === "no_gate")
+      const mrr = activeSubs.reduce((s, r) => s + (r.monthlyAmount ?? 0), 0)
+      const totalCollected = rows.reduce((s, r) => s + r.totalPaid, 0)
+
       if (args.json) {
-        console.log(JSON.stringify(rows, null, 2))
+        console.log(JSON.stringify({
+          rows,
+          summary: {
+            mrr, totalCollected,
+            activeSubs: activeSubs.length,
+            pastDue: pastDueRows.length,
+            notOnStripe: notOnStripe.map(r => ({ id: r.id, name: r.name, proposalUrl: r.proposalUrl })),
+          },
+        }, null, 2))
         return
       }
 
       // Render scorecard
       console.log()
       console.log(`  ${bold("IRIS Pulse Scorecard")} ${dim(`— ${rows.length} ${args.status} leads`)}`)
-      console.log(dim("  " + "=".repeat(90)))
+      console.log(dim("  " + "=".repeat(94)))
 
       // Header
-      console.log(`  ${dim("ID".padEnd(8))}${"Name".padEnd(24)}${"Pulse".padEnd(8)}${"Deal".padEnd(8)}${"Gate".padEnd(10)}${"Amount".padEnd(10)}${"Comms".padEnd(8)}${"Content".padEnd(8)}`)
-      console.log(dim("  " + "-".repeat(90)))
+      console.log(`  ${dim("ID".padEnd(8))}${"Name".padEnd(22)}${"Pulse".padEnd(7)}${"Billing".padEnd(12)}${"$/mo".padEnd(10)}${"Next Due".padEnd(13)}${"Days".padEnd(7)}${"Paid".padEnd(10)}`)
+      console.log(dim("  " + "-".repeat(94)))
 
       for (const r of rows) {
         const pulseColor = r.pulse >= 90 ? UI.Style.TEXT_SUCCESS
           : r.pulse >= 50 ? UI.Style.TEXT_WARNING
           : UI.Style.TEXT_DANGER
         const pulseStr = `${pulseColor}${String(r.pulse).padEnd(4)}${UI.Style.TEXT_NORMAL}`
-        const dealStr = r.deal !== null ? `${r.deal}`.padEnd(8) : dim("—".padEnd(8))
-        const gateStr = r.hasGate
-          ? (r.amount ? success(`$${r.amount}`.padEnd(10)) : success("Yes".padEnd(10)))
-          : `${UI.Style.TEXT_DANGER}No${UI.Style.TEXT_NORMAL}`.padEnd(10 + 9) // ansi offset
-        const commsStr = r.comms !== null ? `${r.comms}`.padEnd(8) : dim("—".padEnd(8))
-        const contentStr = r.contentAgent ? success("Yes".padEnd(8)) : `${UI.Style.TEXT_WARNING}No${UI.Style.TEXT_NORMAL}`.padEnd(8 + 9)
 
-        console.log(`  ${dim(`#${r.id}`.padEnd(8))}${r.name.padEnd(24)}${pulseStr}    ${dealStr}${gateStr}${commsStr}${contentStr}`)
+        // Billing status with color
+        let billingStr: string
+        switch (r.billingStatus) {
+          case "active":
+            billingStr = `${UI.Style.TEXT_SUCCESS}Active${UI.Style.TEXT_NORMAL}`
+            break
+          case "past_due":
+            billingStr = `${UI.Style.TEXT_DANGER}PAST DUE${UI.Style.TEXT_NORMAL}`
+            break
+          case "pending":
+            billingStr = `${UI.Style.TEXT_WARNING}Pending${UI.Style.TEXT_NORMAL}`
+            break
+          case "no_sub":
+            billingStr = `${UI.Style.TEXT_DANGER}${bold("NO SUB")}${UI.Style.TEXT_NORMAL}`
+            break
+          default:
+            billingStr = `${UI.Style.TEXT_DANGER}No Gate${UI.Style.TEXT_NORMAL}`
+        }
+        // Pad to 12 visible chars (accounting for ANSI codes)
+        const billingPad = billingStr + " ".repeat(Math.max(0, 12 - (r.billingStatus === "past_due" ? 8 : r.billingStatus === "no_sub" ? 6 : r.billingStatus === "no_gate" ? 7 : r.billingStatus === "pending" ? 7 : 6)))
+
+        const amountStr = r.monthlyAmount ? `$${r.monthlyAmount}`.padEnd(10) : dim("--".padEnd(10))
+        const nextStr = r.nextPaymentDate ? (r.nextPaymentDate.split("T")[0] ?? r.nextPaymentDate).padEnd(13) : dim("--".padEnd(13))
+
+        let daysStr: string
+        if (r.daysUntil !== null) {
+          const dColor = r.daysUntil <= 0 ? UI.Style.TEXT_DANGER : r.daysUntil <= 7 ? UI.Style.TEXT_WARNING : UI.Style.TEXT_SUCCESS
+          const dLabel = r.daysUntil <= 0 ? "NOW" : `${r.daysUntil}d`
+          daysStr = `${dColor}${dLabel}${UI.Style.TEXT_NORMAL}` + " ".repeat(Math.max(0, 7 - dLabel.length))
+        } else {
+          daysStr = dim("--".padEnd(7))
+        }
+
+        const paidStr = r.totalPaid > 0 ? success(`$${r.totalPaid}`) : dim("$0")
+
+        console.log(`  ${dim(`#${r.id}`.padEnd(8))}${r.name.padEnd(22)}${pulseStr}   ${billingPad}${amountStr}${nextStr}${daysStr}${paidStr}`)
       }
 
-      console.log(dim("  " + "-".repeat(90)))
+      console.log(dim("  " + "-".repeat(94)))
 
-      // Summary
+      // Billing summary
+      console.log()
+      console.log(`  ${bold("Billing")}`)
+      console.log(`  MRR: ${success(`$${mrr.toFixed(2)}`)}  |  Total Collected: ${success(`$${totalCollected.toFixed(2)}`)}`)
+      console.log(`  ${success(`${activeSubs.length} active sub${activeSubs.length !== 1 ? "s" : ""}`)}  |  ${pastDueRows.length > 0 ? `${UI.Style.TEXT_DANGER}${pastDueRows.length} past due${UI.Style.TEXT_NORMAL}` : dim("0 past due")}`)
+
+      if (notOnStripe.length > 0) {
+        console.log()
+        console.log(`  ${UI.Style.TEXT_DANGER}${bold(`${notOnStripe.length} NOT ON STRIPE`)}${UI.Style.TEXT_NORMAL}`)
+        for (const r of notOnStripe) {
+          const url = r.proposalUrl ? dim(`  ${r.proposalUrl}`) : ""
+          console.log(`    ${UI.Style.TEXT_DANGER}!${UI.Style.TEXT_NORMAL}  ${dim(`#${r.id}`)}  ${r.name}${url}`)
+        }
+      }
+
+      // Pulse summary
       const avgPulse = rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.pulse, 0) / rows.length) : 0
-      const noGate = rows.filter(r => !r.hasGate).length
-      const noContent = rows.filter(r => !r.contentAgent).length
       const healthy = rows.filter(r => r.band === "healthy").length
       const failing = rows.filter(r => r.band === "failing").length
 
       console.log()
-      console.log(`  ${bold("Summary")}`)
+      console.log(`  ${bold("Health")}`)
       console.log(`  Avg Pulse: ${avgPulse}/100  |  ${success(`${healthy} healthy`)}  ${UI.Style.TEXT_DANGER}${failing} failing${UI.Style.TEXT_NORMAL}`)
-      console.log(`  ${noGate > 0 ? `${UI.Style.TEXT_DANGER}${noGate} without payment gate${UI.Style.TEXT_NORMAL}` : success("All have gates")}  |  ${noContent > 0 ? `${UI.Style.TEXT_WARNING}${noContent} without content agent${UI.Style.TEXT_NORMAL}` : success("All have content agents")}`)
 
       // Hydration summary
       const hydrationReady = rows.filter(r => r.hydrationEligible)

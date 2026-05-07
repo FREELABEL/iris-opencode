@@ -1149,6 +1149,68 @@ const SchedulesDiagnoseCommand = cmd({
   },
 })
 
+const SchedulesUpdateCommand = cmd({
+  command: "update <id>",
+  describe: "update a scheduled job's frequency or status",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "job ID", type: "number", demandOption: true })
+      .option("frequency", {
+        alias: "f",
+        describe: "new frequency",
+        type: "string",
+        choices: ["every_5_minutes", "every_10_minutes", "every_15_minutes", "every_30_minutes", "hourly", "every_2_hours", "every_4_hours", "every_6_hours", "every_12_hours", "daily", "weekly"],
+      }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Update schedule #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId()
+    if (!userId) { prompts.outro("Done"); return }
+
+    const payload: Record<string, unknown> = {}
+    if (args.frequency) payload.frequency = args.frequency
+
+    if (Object.keys(payload).length === 0) {
+      prompts.log.warn("Nothing to update. Use --frequency to set a new frequency.")
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "")
+        spinner.stop("Failed", 1)
+        prompts.log.error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as any
+      const job = data?.data ?? data
+      spinner.stop(`${success("✓")} Schedule #${args.id} updated`)
+      if (job?.frequency) printKV("Frequency", job.frequency)
+      if (job?.next_run_at) printKV("Next Run", job.next_run_at)
+      prompts.outro(dim(`iris schedules get ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const SchedulesFrequencyCommand = cmd({
   command: "frequency <agent-id> <freq>",
   aliases: ["freq"],
@@ -1381,6 +1443,7 @@ export const PlatformSchedulesCommand = cmd({
       .command(SchedulesToggleCommand)
       .command(SchedulesDeleteCommand)
       .command(SchedulesDiagnoseCommand)
+      .command(SchedulesUpdateCommand)
       .command(SchedulesFrequencyCommand)
       .command(SchedulesHoursCommand)
       .demandCommand(),
