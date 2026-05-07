@@ -154,9 +154,11 @@ else
   unzip -o "${assetName}"
 fi
 chmod +x iris
+# cd out of tmpDir BEFORE deleting it (avoids 'cwd deleted' errors)
+cd "${binDir}"
 # Remove old binary first (avoids overwriting a running executable)
 rm -f "${binDir}/iris"
-mv iris "${binDir}/iris"
+mv "${tmpDir}/iris" "${binDir}/iris"
 rm -rf "${tmpDir}"
 # Verify the new binary works
 "${binDir}/iris" --version
@@ -197,7 +199,8 @@ rm -rf "${tmpDir}"
       }
     }
 
-    const result = await cmd.quiet().throws(false)
+    const home = process.env.HOME || process.env.USERPROFILE || "/tmp"
+    const result = await cmd.cwd(home).quiet().throws(false)
     log.info("upgraded", {
       method: isIris() ? "iris-installer" : method,
       target,
@@ -208,7 +211,7 @@ rm -rf "${tmpDir}"
       throw new UpgradeFailedError({
         stderr: result.stderr.toString("utf8"),
       })
-    await $`${process.execPath} --version`.nothrow().quiet().text()
+    await $`${process.execPath} --version`.cwd(home).nothrow().quiet().text()
   }
 
   export const VERSION = typeof OPENCODE_VERSION === "string" ? OPENCODE_VERSION : "local"
