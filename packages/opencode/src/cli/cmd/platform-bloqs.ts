@@ -144,14 +144,7 @@ const BloqsGetCommand = cmd({
       spinner!.stop(String(b.name ?? `Bloq #${b.id}`))
 
       printDivider()
-      printKV("ID", b.id)
-      printKV("Name", b.name)
-      printKV("Description", b.description)
-      printKV("Items", b.items_count)
-      printKV("Created", b.created_at)
-      console.log()
-
-      // Fetch items to get accurate counts and for --items/--list display
+      // Fetch items first to get accurate counts
       let allItems: any[] = []
       const itemsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items?per_page=500`)
       if (itemsRes.ok) {
@@ -159,6 +152,13 @@ const BloqsGetCommand = cmd({
         const raw = itemsData?.data
         allItems = Array.isArray(raw) ? raw : (raw?.items ?? [])
       }
+
+      printKV("ID", b.id)
+      printKV("Name", b.name)
+      printKV("Description", b.description)
+      printKV("Items", allItems.length || b.items_count || 0)
+      printKV("Created", b.created_at)
+      console.log()
 
       // Build per-list item counts from actual data
       const listItemCounts: Record<number, number> = {}

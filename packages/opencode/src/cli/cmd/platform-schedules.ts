@@ -1212,18 +1212,19 @@ const SchedulesUpdateCommand = cmd({
 })
 
 const SchedulesFrequencyCommand = cmd({
-  command: "frequency <agent-id> <freq>",
+  command: "frequency <id> <freq>",
   aliases: ["freq"],
-  describe: "update heartbeat frequency for an agent",
+  describe: "update frequency for a scheduled job (by job ID) or heartbeat agent (by agent ID)",
   builder: (yargs) =>
     yargs
-      .positional("agent-id", { describe: "agent ID", type: "number", demandOption: true })
+      .positional("id", { describe: "job ID or agent ID", type: "number", demandOption: true })
       .positional("freq", {
         describe: "frequency",
         type: "string",
         demandOption: true,
         choices: ["every_5_minutes", "every_10_minutes", "every_15_minutes", "every_30_minutes", "hourly", "every_2_hours", "every_4_hours", "every_6_hours", "every_12_hours", "daily", "weekly"],
-      }),
+      })
+      .option("agent", { describe: "treat <id> as agent ID (heartbeat mode)", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Set frequency → ${args.freq}`)
@@ -1235,20 +1236,42 @@ const SchedulesFrequencyCommand = cmd({
     spinner.start("Updating…")
 
     try {
-      const res = await irisFetch(`/api/v1/monitor/enable-heartbeat`, {
-        method: "POST",
-        body: JSON.stringify({ agent_id: args["agent-id"], frequency: args.freq }),
-      }, IRIS_API)
+      // Try heartbeat endpoint first if --agent flag or as fallback
+      if (args.agent) {
+        const res = await irisFetch(`/api/v1/monitor/enable-heartbeat`, {
+          method: "POST",
+          body: JSON.stringify({ agent_id: args.id, frequency: args.freq }),
+        }, IRIS_API)
+
+        if (res.ok) {
+          const data = (await res.json()) as any
+          spinner.stop(`${success("✓")} ${data?.data?.agent_name ?? `Agent #${args.id}`} → ${args.freq}`)
+          prompts.outro(dim("iris schedules list --latest"))
+          return
+        }
+      }
+
+      // Generic: update scheduled job by job ID
+      const userId = await requireUserId()
+      if (!userId) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ frequency: args.freq }),
+      })
 
       if (!res.ok) {
+        const body = await res.text().catch(() => "")
         spinner.stop("Failed", 1)
-        prompts.log.error(`HTTP ${res.status}`)
-        prompts.outro("Done")
+        prompts.log.error(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+        prompts.outro(dim("Use --agent flag if this is an agent ID, not a job ID"))
         return
       }
 
       const data = (await res.json()) as any
-      spinner.stop(`${success("✓")} ${data?.data?.agent_name ?? `Agent #${args["agent-id"]}`} → ${args.freq}`)
+      const job = data?.data ?? data
+      spinner.stop(`${success("✓")} Schedule #${args.id} → ${args.freq}`)
+      if (job?.next_run_at) printKV("Next Run", job.next_run_at)
       prompts.outro(dim("iris schedules list --latest"))
     } catch (err) {
       spinner.stop("Error", 1)
