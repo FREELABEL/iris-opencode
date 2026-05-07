@@ -191,7 +191,7 @@ Each reminder has an `ai_prompt` template with `{first_name}`, `{scope}`, `{amou
 ### Reminders not sending automatically
 
 **Cause:** The queue worker may not be processing the `default` queue, or `auto_send_reminders` is off.
-**Fix:** Check `iris deals status <id>` — if Auto-send shows "No", toggle it: `iris leads payment-gate <id> --toggle-reminders`. Check worker logs: `doctl apps logs <app-id> fl-api-queue-worker --follow`.
+**Fix:** Check `iris deals status <id>` — if Auto-send shows "No", toggle it: `iris leads payment-gate <id> --toggle-reminders`. Check worker logs: `railway logs --service fl-api-queue-worker`.
 
 ## Key API endpoints (reference)
 

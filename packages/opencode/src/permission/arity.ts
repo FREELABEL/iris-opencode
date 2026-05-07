@@ -67,7 +67,6 @@ This dictionary is used to identify the "human-understandable command" from an i
     crictl: 2, // crictl ps
     deno: 2, // deno run server.ts
     "deno task": 3, // deno task dev
-    doctl: 3, // doctl kubernetes cluster list
     docker: 2, // docker run nginx
     "docker builder": 3, // docker builder prune
     "docker compose": 3, // docker compose up

@@ -32,7 +32,7 @@ export const PLATFORM_URLS = {
   /** iris-api (V6 engine — chat, integrations exec, tools, monitor) */
   irisApi: process.env.IRIS_API_URL ?? "https://freelabel.net",
   /** Fallback URLs for iris-api (tried in order when primary fails) */
-  irisApiFallbacks: ["https://main.heyiris.io", "https://iris-api.freelabel.net"],
+  irisApiFallbacks: [] as string[],
 } as const
 
 // Aliases for backward compat — prefer PLATFORM_URLS in new code
