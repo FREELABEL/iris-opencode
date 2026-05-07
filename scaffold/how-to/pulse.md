@@ -103,6 +103,90 @@ Daily at 8 AM Central:
     → sends via TransactionalEmailService → Resend
 ```
 
+## Billing scorecard (`pulse-all`)
+
+The bulk scorecard surfaces Stripe billing data alongside pulse scores — MRR, active subs, next payment dates, and who's NOT on Stripe yet.
+
+### Run the scorecard
+
+```bash
+iris leads pulse-all
+```
+
+Output:
+
+```
+ID      Name                  Pulse  Billing     $/mo      Next Due     Days   Paid
+#16387  Andrew Escher         87     Active      $50       2026-06-01   25d    $50
+#16388  Javier Fuentes        51     Active      $102.50   2026-05-18   11d    $39
+#75     Christiaan Cilliers   54     NO SUB      $250      --           --     $0
+#20829  Hector Fuentes        17     No Gate     --        --           --     $0
+
+Billing
+MRR: $309.47  |  Total Collected: $1,852.10
+4 active subs  |  0 past due
+
+10 NOT ON STRIPE
+  !  #75   Christiaan Cilliers  https://heyiris.io/proposal/e368...
+  !  #418  Haroon               https://heyiris.io/proposal/4340...
+```
+
+### Billing status meanings
+
+| Status | Color | Meaning |
+|--------|-------|---------|
+| Active | green | Has an active Stripe subscription |
+| PAST DUE | red | Subscription payment failed |
+| Pending | yellow | Has a payment gate, checkout session created, waiting for signup |
+| NO SUB | red bold | Has a payment gate but no subscription — recovery target |
+| No Gate | red | No payment gate created yet |
+
+### Key columns
+
+- **$/mo** — Stripe subscription amount (falls back to gate amount if no sub)
+- **Next Due** — `current_period_end` from Stripe subscription
+- **Days** — countdown to next payment (green >7d, yellow <=7d, red = overdue)
+- **Paid** — lifetime `total_paid` from Stripe
+
+### JSON output for automation
+
+```bash
+iris leads pulse-all --json | jq '.summary'
+# { "mrr": 309.47, "totalCollected": 1852.10, "activeSubs": 4, "pastDue": 0, "notOnStripe": [...] }
+
+# Find leads with active subs
+iris leads pulse-all --json | jq '.rows[] | select(.billingStatus == "active") | {id, name, monthlyAmount, nextPaymentDate}'
+
+# Find recovery targets (paid before but no active sub)
+iris leads pulse-all --json | jq '.rows[] | select(.totalPaid > 0 and .billingStatus != "active") | {id, name, totalPaid}'
+```
+
+### Auto-hydrate leads with unpaid gates
+
+```bash
+iris leads pulse-all --hydrate              # send AI follow-up emails
+iris leads pulse-all --hydrate --dry-run    # preview without sending
+```
+
+### Filter by status or bloq
+
+```bash
+iris leads pulse-all --status "In Negotiation"   # check negotiation pipeline
+iris leads pulse-all --bloq 40                    # filter to specific bloq
+```
+
+### Common gotcha: lead not showing up
+
+If a paying customer doesn't appear in the scorecard, check their lead status:
+
+```bash
+iris leads search "Customer Name"
+# If status is "In Negotiation" or "Prospected", update to Won:
+iris leads update <id> --status Won
+```
+
+The scorecard only shows Won leads by default. Active Stripe subscriptions on non-Won leads are invisible until the status is updated.
+
 ## Common operations
 
 ### Check what's currently dispatching
