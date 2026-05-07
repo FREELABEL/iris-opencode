@@ -3498,7 +3498,13 @@ const LeadsEnrichCommand = cmd({
       return
     }
 
-    console.log(`${success("✓")} dispatched ${bold("leadgen")} task ${highlight(taskId)} (status=${status})`)
+    if (created.dispatched === false) {
+      console.log(`⚠ Task ${highlight(taskId)} created but no daemon node is connected to execute it.`)
+      console.log(dim(`  Start the daemon: iris daemon start`))
+      console.log(dim(`  Task will execute when a node connects.`))
+    } else {
+      console.log(`${success("✓")} dispatched ${bold("leadgen")} task ${highlight(taskId)} (status=${status})`)
+    }
     console.log(dim(`  prompt:  ${prompt}`))
     console.log(dim(`  monitor: iris hive tasks --task ${taskId}`))
   },

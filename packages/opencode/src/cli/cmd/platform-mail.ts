@@ -1,17 +1,11 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { printDivider, printKV, dim, bold, success } from "./iris-api"
+import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch } from "./iris-api"
 
 // macOS Apple Mail integration via IRIS Bridge (localhost:3200)
 // Bridge endpoint: GET /api/mail/search?from=X&subject=X&days=N&limit=N&include_body=1&max_body=N
-// Bridge endpoint: POST /api/mail/send { to_email, subject, body, cc, attachments }
-
-const BRIDGE_URL = "http://localhost:3200"
-
-async function bridgeFetch(path: string): Promise<Response> {
-  return fetch(`${BRIDGE_URL}${path}`)
-}
+// Bridge endpoint: POST /api/mail/send { to_email, subject, body_text, cc, attachments }
 
 async function checkBridge(): Promise<boolean> {
   try {
@@ -189,7 +183,7 @@ const MailSendCommand = cmd({
     if (args.cc) payload.cc = args.cc
     if (args.attachment) payload.attachments = [args.attachment]
 
-    const res = await fetch(`${BRIDGE_URL}/api/mail/send`, {
+    const res = await bridgeFetch(`/api/mail/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
