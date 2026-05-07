@@ -1060,6 +1060,32 @@ const LeadsPushCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const result = data?.data ?? data
+
+      // Handle bloq reassignment if bloq_ids changed
+      const localBloqIds: number[] = Array.isArray(lead.bloq_ids) ? lead.bloq_ids : (lead.bloq_id ? [lead.bloq_id] : [])
+      const remoteBloqIds: number[] = Array.isArray(result.bloq_ids) ? result.bloq_ids : []
+
+      if (localBloqIds.length > 0) {
+        // Attach new bloqs
+        for (const bid of localBloqIds) {
+          if (!remoteBloqIds.includes(bid)) {
+            await irisFetch(`/api/v1/leads/${args.id}/attach-bloq`, {
+              method: "POST",
+              body: JSON.stringify({ bloq_id: bid }),
+            }).catch(() => {})
+          }
+        }
+        // Detach removed bloqs
+        for (const bid of remoteBloqIds) {
+          if (!localBloqIds.includes(bid)) {
+            await irisFetch(`/api/v1/leads/${args.id}/detach-bloq`, {
+              method: "POST",
+              body: JSON.stringify({ bloq_id: bid }),
+            }).catch(() => {})
+          }
+        }
+      }
+
       spinner.stop(success("Pushed"))
 
       printDivider()

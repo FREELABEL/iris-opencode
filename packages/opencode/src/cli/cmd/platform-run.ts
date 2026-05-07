@@ -973,14 +973,15 @@ const ConnectCommand = cmd({
     const pollSpinner = prompts.spinner()
     pollSpinner.start("Waiting for authorization… (complete in your browser)")
 
+    const pollUserId = await requireUserId().catch(() => null)
     const pollStart = Date.now()
     const pollTimeout = 60_000
     let connected = false
 
-    while (Date.now() - pollStart < pollTimeout) {
+    while (pollUserId && Date.now() - pollStart < pollTimeout) {
       await new Promise((r) => setTimeout(r, 3000))
       try {
-        const checkRes = await irisFetch(`/api/v1/users/${userId}/integrations`)
+        const checkRes = await irisFetch(`/api/v1/users/${pollUserId}/integrations`)
         if (checkRes.ok) {
           const checkData = (await checkRes.json()) as any
           const connections = checkData?.connections ?? checkData?.data ?? []
