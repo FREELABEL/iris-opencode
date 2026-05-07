@@ -222,10 +222,10 @@ export const PlatformDoctorCommand = cmd({
         }
         allResults.push({ name: "IRIS Daemon", ok: true, detail: `PID ${pid}` })
       } catch {
-        allResults.push({ name: "IRIS Daemon", ok: false, detail: "PID file exists but process dead", hint: "run: iris hive start" })
+        allResults.push({ name: "IRIS Daemon", ok: false, detail: "PID file exists but process dead", hint: "run: iris-daemon start" })
       }
     } else {
-      allResults.push({ name: "IRIS Daemon", ok: false, detail: "not running", hint: "run: iris hive start" })
+      allResults.push({ name: "IRIS Daemon", ok: false, detail: "not running", hint: "run: iris-daemon start" })
     }
     sp.stop("Bridge checked")
 
