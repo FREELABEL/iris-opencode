@@ -3468,7 +3468,7 @@ const LeadsEnrichCommand = cmd({
     }
 
     // Validate the bloq exists and belongs to the user before dispatching
-    const bloqCheck = await irisFetch(`/api/v1/bloqs/${bloqId}`)
+    const bloqCheck = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}`)
     if (!bloqCheck.ok) {
       const msg = `Bloq ${bloqId} not found or not accessible. Use ${dim("iris bloqs list")} to find your bloq IDs.`
       if (argv.json) console.log(JSON.stringify({ ok: false, error: msg }))
