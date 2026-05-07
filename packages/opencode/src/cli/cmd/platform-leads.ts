@@ -241,7 +241,10 @@ const LeadsListCommand = cmd({
 
       // Default: hide Prospected leads (mass-scraped venue/SOM leads)
       // Use --all or --status to see everything
+      const totalFromApi = data?.meta?.total ?? leads.length
+      let prospectedCount = 0
       if (!args.all && !args.status && !args.search) {
+        prospectedCount = leads.filter((l: any) => (l.status ?? "").toLowerCase() === "prospected").length
         leads = leads.filter((l: any) => {
           const s = (l.status ?? "").toLowerCase()
           return s !== "prospected"
@@ -268,8 +271,12 @@ const LeadsListCommand = cmd({
 
       // Trim to requested limit
       leads = leads.slice(0, args.limit)
-      const total = data?.meta?.total ?? leads.length
-      spinner.stop(`${leads.length} lead(s)${!args.all && !args.status ? dim(` (${total} total — use --all to see Prospected)`) : ""}`)
+      if (!args.all && !args.status) {
+        const suffix = prospectedCount > 0 ? dim(` (${prospectedCount} Prospected hidden — use --all to include)`) : ""
+        spinner.stop(`${leads.length} lead(s)${suffix}`)
+      } else {
+        spinner.stop(`${leads.length} lead(s)`)
+      }
 
       if (args.json) {
         console.log(JSON.stringify(leads, null, 2))
@@ -277,8 +284,13 @@ const LeadsListCommand = cmd({
       }
 
       if (leads.length === 0) {
-        prompts.log.warn("No leads found")
-        prompts.outro(`Create one: ${dim("iris leads create")}`)
+        if (prospectedCount > 0) {
+          prompts.log.warn(`No active leads — ${prospectedCount} Prospected leads hidden`)
+          prompts.outro(`View them: ${dim("iris leads list --all")}`)
+        } else {
+          prompts.log.warn("No leads found")
+          prompts.outro(`Create one: ${dim("iris leads create")}`)
+        }
         return
       }
 
@@ -3423,7 +3435,7 @@ const LeadsTasksCommand = cmd({
 
 const LeadsEnrichCommand = cmd({
   command: "enrich",
-  describe: "enrich leads in a bloq via the Hive leadgen task (quick-enrich-ig + full enrich)",
+  describe: "enrich leads in a bloq via API (no Playwright/browser needed)",
   builder: (yargs) =>
     yargs
       .option("bloq", { alias: "b", describe: "bloq id to enrich leads from", type: "number", demandOption: true })
@@ -3441,6 +3453,17 @@ const LeadsEnrichCommand = cmd({
     const bloqId = argv.bloq as number
     const limit = argv.limit as number
     const irisApiBase = process.env.IRIS_API_URL ?? "https://freelabel.net"
+
+    // Validate the bloq exists and belongs to the user before dispatching
+    const bloqCheck = await irisFetch(`/api/v1/bloqs/${bloqId}`)
+    if (!bloqCheck.ok) {
+      const msg = `Bloq ${bloqId} not found or not accessible. Use ${dim("iris bloqs list")} to find your bloq IDs.`
+      if (argv.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(msg)
+      process.exitCode = 1
+      return
+    }
+
     const prompt = `enrich bloq_id=${bloqId} limit=${limit}`
     const title = `leadgen enrich bloq=${bloqId} limit=${limit}`
 
