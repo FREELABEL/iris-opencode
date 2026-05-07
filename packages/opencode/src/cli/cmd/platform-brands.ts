@@ -1154,8 +1154,8 @@ const DesignTokensDiffCommand = cmd({
       if (changed.length > 0) {
         console.log(`  ${bold("~ changed:")} ${changed.join(", ")}`)
         for (const k of changed) {
-          const lKeys = typeof local[k] === "object" ? Object.keys(local[k]) : []
-          const rKeys = typeof remote[k] === "object" ? Object.keys(remote[k]) : []
+          const lKeys = typeof local[k] === "object" && local[k] !== null ? Object.keys(local[k]) : []
+          const rKeys = typeof remote[k] === "object" && remote[k] !== null ? Object.keys(remote[k]) : []
           const lOnly = lKeys.filter(x => !rKeys.includes(x))
           const rOnly = rKeys.filter(x => !lKeys.includes(x))
           const both = lKeys.filter(x => rKeys.includes(x) && JSON.stringify((local[k] as any)[x]) !== JSON.stringify((remote[k] as any)[x]))
