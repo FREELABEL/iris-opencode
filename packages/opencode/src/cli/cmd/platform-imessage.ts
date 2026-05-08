@@ -3,7 +3,7 @@ import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success } from "./iris-api"
 import { execSync } from "child_process"
-import { isAvailable, query as queryMessages, normalizeHandle, getContactCards } from "../lib/imessage"
+import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards } from "../lib/imessage"
 import { resolveContactName, resolveContactNames } from "../lib/contacts"
 
 const ImessageSearchCommand = cmd({
@@ -22,7 +22,7 @@ const ImessageSearchCommand = cmd({
     prompts.intro(`◈  iMessage Search — "${args.query}"`)
 
     if (!isAvailable()) {
-      prompts.log.error("iMessage not available. Requires macOS + Full Disk Access in System Settings.")
+      prompts.log.error(diagnoseAccess())
       prompts.outro("Done")
       return
     }
@@ -144,7 +144,7 @@ const ImessageReadCommand = cmd({
     prompts.intro(`◈  iMessage Read — "${args.query}"`)
 
     if (!isAvailable()) {
-      prompts.log.error("iMessage not available. Requires macOS + Full Disk Access.")
+      prompts.log.error(diagnoseAccess())
       prompts.outro("Done")
       return
     }
@@ -227,7 +227,7 @@ const ImessageChatsCommand = cmd({
     prompts.intro("◈  Recent iMessage Chats")
 
     if (!isAvailable()) {
-      prompts.log.error("iMessage not available. Requires macOS + Full Disk Access.")
+      prompts.log.error(diagnoseAccess())
       prompts.outro("Done")
       return
     }
@@ -358,7 +358,7 @@ const ImessageContactsCommand = cmd({
     prompts.intro("◈  iMessage Contact Cards")
 
     if (!isAvailable()) {
-      prompts.log.error("iMessage not available. Requires macOS + Full Disk Access.")
+      prompts.log.error(diagnoseAccess())
       prompts.outro("Done")
       return
     }

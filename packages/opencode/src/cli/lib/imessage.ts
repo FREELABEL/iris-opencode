@@ -46,6 +46,27 @@ export function isAvailable(): boolean {
 }
 
 /**
+ * Diagnose why iMessage access failed — returns a user-friendly reason string.
+ */
+export function diagnoseAccess(): string {
+  if (process.platform !== "darwin") return "iMessage is only available on macOS."
+  if (!existsSync(MESSAGES_DB)) return `Messages database not found at ${MESSAGES_DB}. Is Messages.app installed?`
+  try {
+    execSync(`sqlite3 "${MESSAGES_DB}" "SELECT 1 FROM message LIMIT 1"`, {
+      encoding: "utf-8",
+      timeout: 3000,
+    })
+    return "accessible" // shouldn't reach here if isAvailable() returned false
+  } catch (err: any) {
+    const msg = (err.stderr || err.message || "").toString()
+    if (msg.includes("authorization denied") || msg.includes("not permitted")) {
+      return "Full Disk Access required. Go to System Settings > Privacy & Security > Full Disk Access and enable your terminal app, then restart it."
+    }
+    return `Cannot read Messages database: ${msg.slice(0, 200)}`
+  }
+}
+
+/**
  * Run a raw SQL query against the Messages database.
  * Escapes double quotes in the SQL string.
  */
