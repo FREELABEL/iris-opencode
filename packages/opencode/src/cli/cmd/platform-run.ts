@@ -957,16 +957,52 @@ const ConnectCommand = cmd({
     console.log()
     if (args["print-url"]) {
       console.log(`  ${dim("Authorize at:")} ${url}`)
-    } else {
-      console.log(`  ${success("→")} Opening ${highlight(type)} in your browser to authorize…`)
-      openBrowser(url)
-    }
-    console.log()
-    if (!args["print-url"]) {
-      console.log(`  ${dim("If the browser didn't open, run:")} ${dim(`iris integrations connect ${type} --print-url`)}`)
       console.log()
+      console.log(`  ${dim("After authorizing, verify with:")} ${highlight("iris integrations list-connected")}`)
+      prompts.outro("Done")
+      return
     }
-    console.log(`  ${dim("After authorizing, verify with:")} ${highlight("iris integrations list-connected")}`)
+
+    console.log(`  ${success("→")} Opening ${highlight(type)} in your browser to authorize…`)
+    openBrowser(url)
+    console.log()
+    console.log(`  ${dim("If the browser didn't open, run:")} ${dim(`iris integrations connect ${type} --print-url`)}`)
+    console.log()
+
+    // Poll for connection confirmation (up to 60s)
+    const pollSpinner = prompts.spinner()
+    pollSpinner.start("Waiting for authorization… (complete in your browser)")
+
+    const pollUserId = await requireUserId().catch(() => null)
+    const pollStart = Date.now()
+    const pollTimeout = 60_000
+    let connected = false
+
+    while (pollUserId && Date.now() - pollStart < pollTimeout) {
+      await new Promise((r) => setTimeout(r, 3000))
+      try {
+        const checkRes = await irisFetch(`/api/v1/users/${pollUserId}/integrations`)
+        if (checkRes.ok) {
+          const checkData = (await checkRes.json()) as any
+          const connections = checkData?.connections ?? checkData?.data ?? []
+          const match = connections.find((c: any) =>
+            (c.type ?? c.integration_type ?? "").toLowerCase() === type.toLowerCase() ||
+            (c.name ?? "").toLowerCase().includes(type.toLowerCase())
+          )
+          if (match) {
+            connected = true
+            break
+          }
+        }
+      } catch {}
+    }
+
+    if (connected) {
+      pollSpinner.stop(`${success("✓")} ${bold(type)} connected successfully!`)
+    } else {
+      pollSpinner.stop(`${dim("Timed out waiting — check manually")}`)
+      console.log(`  ${dim("Verify with:")} ${highlight("iris integrations list-connected")}`)
+    }
     prompts.outro("Done")
   },
 })
