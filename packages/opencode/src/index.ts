@@ -42,6 +42,7 @@ import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
 import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
 import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventory"
 import { PlatformAtlasDatasetsCommand } from "./cli/cmd/platform-atlas-datasets"
+import { PlatformAtlasProjectionsCommand } from "./cli/cmd/platform-atlas-projections"
 import { PlatformIntegrationsCommand } from "./cli/cmd/platform-integrations"
 import { PlatformSchedulesCommand } from "./cli/cmd/platform-schedules"
 import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
@@ -118,6 +119,7 @@ import { PlatformAutomationCommand } from "./cli/cmd/platform-automation"
 import { PlatformAutomationTestCommand } from "./cli/cmd/platform-automation-test"
 import { HowToCommand } from "./cli/cmd/platform-howto"
 import { PlatformClaudeCommand } from "./cli/cmd/platform-claude"
+import { PlatformArticleQaCommand } from "./cli/cmd/platform-article-qa"
 import { GuideCommand } from "./cli/cmd/guide"
 import { registerCommand } from "./cli/cmd/command-groups"
 import { renderGroupedHelp } from "./cli/help-renderer"
@@ -220,6 +222,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAtlasStaffCommand))
   .command(reg(PlatformAtlasInventoryCommand))
   .command(reg(PlatformAtlasDatasetsCommand))
+  .command(reg(PlatformAtlasProjectionsCommand))
   .command(reg(PlatformIntegrationsCommand))
   .command(reg(PlatformSchedulesCommand))
   .command(reg(PlatformN8nCommand))
@@ -302,6 +305,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAutomationTestCommand))
   .command(reg(HowToCommand))
   .command(reg(PlatformClaudeCommand))
+  .command(reg(PlatformArticleQaCommand))
   .fail((msg) => {
     if (
       msg.startsWith("Unknown argument") ||

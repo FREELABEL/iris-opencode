@@ -89,6 +89,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "atlas:brand-kit": "atlas",
   "atlas:comms": "atlas",
   "atlas:datasets": "atlas",
+  "atlas:projections": "atlas",
   "good-deals": "atlas",
 
   // Knowledge & Content
@@ -106,6 +107,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "pages:batch": "pages",
   partials: "pages",
   copycat: "pages",
+  "article-qa": "pages",
   remotion: "pages",
   "cloud:upload": "pages",
 
