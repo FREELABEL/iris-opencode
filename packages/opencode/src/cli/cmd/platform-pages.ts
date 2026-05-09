@@ -368,6 +368,7 @@ const PushCmd = cmd({
       if (local.seo_title) updateData.seo_title = local.seo_title
       if (local.seo_description) updateData.seo_description = local.seo_description
       if (local.og_image) updateData.og_image = local.og_image
+      if (local.status) updateData.status = local.status
 
       const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
         method: "PUT",

@@ -107,7 +107,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "pages:batch": "pages",
   partials: "pages",
   copycat: "pages",
-  "article-qa": "pages",
+  "editorial": "pages",
   remotion: "pages",
   "cloud:upload": "pages",
 

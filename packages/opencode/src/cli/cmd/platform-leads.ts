@@ -4946,6 +4946,10 @@ const ReqListCommand = cmd({
         : dim("○")
       const lastRun = r.last_run_at ? dim(r.last_run_at.split("T")[0]) : dim("never run")
       console.log(`  ${statusIcon}  ${bold(r.name)}  ${dim(`#${r.id}`)}  ${lastRun}`)
+      if (r.last_output && r.last_status === "failed") {
+        const output = String(r.last_output).split("\n").slice(0, 5).map((l: string) => `       ${dim(l)}`).join("\n")
+        console.log(output)
+      }
     }
     printDivider()
     console.log(dim(`  Run all: iris leads requirements run ${args.leadId}`))

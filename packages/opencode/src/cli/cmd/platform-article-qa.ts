@@ -285,8 +285,9 @@ function printReport(title: string, wordCount: number, result: ScoreResult, fram
 // ── Subcommands ─────────────────────────────────────────────────
 
 const RunCmd = cmd({
-  command: "$0 <slug>",
-  describe: "analyze a single article by page slug",
+  command: "review <slug>",
+  aliases: ["$0"],
+  describe: "review a single article by page slug",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
@@ -476,16 +477,16 @@ const FrameworksCmd = cmd({
       console.log()
     }
     printDivider()
-    prompts.outro(dim("iris article-qa <slug> --framework ncma-6point"))
+    prompts.outro(dim("iris editorial review <slug> --framework ncma-6point"))
   },
 })
 
 // ── Main export ─────────────────────────────────────────────────
 
 export const PlatformArticleQaCommand = cmd({
-  command: "article-qa",
+  command: "editorial",
   aliases: ["qa"],
-  describe: "editorial content quality linter — score articles against quality frameworks",
+  describe: "editorial content suite — review, score, and publish articles and newsletters",
   builder: (y) =>
     y
       .command(BatchCmd)
