@@ -333,17 +333,150 @@ const IntegrationsDisconnectCommand = cmd({
   },
 })
 
+const IntegrationsExecCommand = cmd({
+  command: "call <type> <function>",
+  aliases: ["exec"],
+  describe: "execute a function on an integration (e.g. iris integrations call pathways calculate_settlement)",
+  builder: (yargs) =>
+    yargs
+      .positional("type", { describe: "integration type (e.g., pathways, gmail, atlas-os)", type: "string", demandOption: true })
+      .positional("function", { describe: "function name to execute (e.g., calculate_settlement)", type: "string", demandOption: true })
+      .option("params", { alias: "p", describe: "JSON params string (e.g. '{\"case_id\":\"CAS100\"}')", type: "string" })
+      .option("case-id", { describe: "shorthand: sets params.case_id", type: "string" })
+      .option("check-amount", { describe: "shorthand: sets params.check_amount", type: "number" })
+      .option("stage-filter", { describe: "shorthand: sets params.stage_filter", type: "string" })
+      .option("integration-id", { describe: "target a specific integration record ID (multi-account)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  ${bold(String(args.type))} → ${bold(String(args.function))}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Build params: explicit JSON > shorthand flags > empty
+    let params: Record<string, unknown> = {}
+    if (args.params) {
+      try { params = JSON.parse(args.params) } catch { prompts.log.error("Invalid JSON in --params"); process.exitCode = 1; return }
+    }
+    if (args["case-id"]) params.case_id = args["case-id"]
+    if (args["check-amount"] !== undefined) params.check_amount = args["check-amount"]
+    if (args["stage-filter"]) params.stage_filter = args["stage-filter"]
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start(`Executing ${args.type}.${args.function}…`)
+
+    try {
+      const body: Record<string, unknown> = {
+        integration: args.type,
+        action: args.function,
+        params,
+      }
+      if (args["integration-id"]) body.integration_id = args["integration-id"]
+
+      const res = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
+      const data = await res.json() as Record<string, any>
+
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.log.error(data?.error ?? data?.message ?? `HTTP ${res.status}`)
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+
+      if (args.json) {
+        console.log(JSON.stringify(data, null, 2))
+        return
+      }
+
+      const ok = data?.success !== false
+      if (spinner) spinner.stop(ok ? `${success("✓")} Success` : "Completed with issues")
+
+      // Pretty-print key results
+      if (data.providers && Array.isArray(data.providers)) {
+        console.log()
+        console.log(`  ${bold("Settlement Breakdown")}`)
+        printDivider()
+        for (const p of data.providers) {
+          const pct = p.percentage !== undefined ? dim(` (${p.percentage}%)`) : ""
+          console.log(`  ${p.name}  ${bold("$" + Number(p.settlement).toFixed(2))}  billed: $${Number(p.billed).toFixed(2)}${pct}`)
+        }
+        printDivider()
+        if (data.reduction_percentage !== undefined) printKV("Reduction %", `${data.reduction_percentage}%`)
+        if (data.check_amount !== undefined) printKV("Check Amount", `$${Number(data.check_amount).toFixed(2)}`)
+        if (data.total_billed !== undefined) printKV("Total Billed", `$${Number(data.total_billed).toFixed(2)}`)
+      } else if (data.pipeline && Array.isArray(data.pipeline)) {
+        console.log()
+        console.log(`  ${bold("Pipeline Summary")}`)
+        printDivider()
+        for (const stage of data.pipeline) {
+          console.log(`  ${bold(stage.stage)}  ${stage.count} case(s)  ${dim("$" + Number(stage.total_value).toFixed(2))}`)
+        }
+        printDivider()
+        if (data.totals) {
+          printKV("Total Cases", data.totals.cases)
+          printKV("Total Value", `$${Number(data.totals.value).toFixed(2)}`)
+        }
+        if (data.audit_flag_count > 0) printKV("Audit Flags", `${data.audit_flag_count} ⚠`)
+      } else if (data.flags && Array.isArray(data.flags)) {
+        console.log()
+        console.log(`  ${bold("Audit Results")}  ${data.status === "clean" ? success("✓ Clean") : "⚠ Needs Attention"}`)
+        printDivider()
+        for (const flag of data.flags) {
+          const icon = flag.severity === "error" ? "✗" : flag.severity === "warning" ? "⚠" : "ℹ"
+          console.log(`  ${icon}  ${flag.message}`)
+        }
+        if (data.flags.length === 0) console.log(`  ${success("✓")} No issues found`)
+        printDivider()
+      } else if (data.format === "iif") {
+        console.log()
+        console.log(`  ${bold("QuickBooks IIF Export")}`)
+        printDivider()
+        if (data.filename) printKV("File", data.filename)
+        if (data.instructions) printKV("Import", data.instructions)
+        if (data.provider_count !== undefined) printKV("Providers", data.provider_count)
+        if (data.amount !== undefined) printKV("Amount", `$${Number(data.amount).toFixed(2)}`)
+        printDivider()
+        console.log()
+        console.log(dim("--- IIF Content ---"))
+        console.log(data.content)
+        console.log(dim("--- End IIF ---"))
+      } else {
+        // Generic output
+        console.log()
+        console.log(JSON.stringify(data, null, 2))
+      }
+
+      console.log()
+      if (!args.json) prompts.outro(dim(`iris integrations call ${args.type} ${args.function} --json`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
 // ============================================================================
 // Root command
 // ============================================================================
 
 export const PlatformIntegrationsCommand = cmd({
   command: "integrations",
-  aliases: ["int"],
-  describe: "manage integrations — connect, share, list, disconnect",
+  aliases: ["int", "connect", "apps"],
+  describe: "manage integrations — connect, call, share, list, disconnect",
   builder: (yargs) =>
     yargs
       .command(IntegrationsListCommand)
+      .command(IntegrationsExecCommand)
       .command(IntegrationsConnectCommand)
       .command(IntegrationsShareCommand)
       .command(IntegrationsUnshareCommand)
