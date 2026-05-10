@@ -240,8 +240,8 @@ export function useIrisData() {
     try {
       const [agentsRes, workflowsRes, jobsRes, leadsRes] = await Promise.all([
         irisFetch(`/api/v1/users/${_userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
-        irisFetch(`/api/v1/users/${_userId}/bloqs/workflows?per_page=20`),
-        irisFetch(`/api/v1/users/${_userId}/bloqs/scheduled-jobs?per_page=50`),
+        irisFetch(`/api/v1/users/${_userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`),
+        irisFetch(`/api/v1/users/${_userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
         irisFetch(`/api/v1/users/${_userId}/leads?bloq_id=${bloqId}&per_page=50`),
       ])
 
