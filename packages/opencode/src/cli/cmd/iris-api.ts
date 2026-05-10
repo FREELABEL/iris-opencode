@@ -202,6 +202,8 @@ export async function handleApiError(res: Response, action: string): Promise<boo
       }
     } catch {}
     prompts.log.error(`${action} failed: ${msg}`)
+    // Ensure error is visible even when clack rendering swallows output
+    console.error(`  Error: ${msg}`)
     process.exitCode = 1
     return false
   }
