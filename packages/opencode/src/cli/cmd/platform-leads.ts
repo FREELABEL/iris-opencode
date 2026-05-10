@@ -465,6 +465,15 @@ const LeadsGetCommand = cmd({
       printKV("Bid", l.price_bid ? `$${l.price_bid}` : undefined)
       printKV("Created", l.created_at)
 
+      // Onboarding status — account + Stripe Connect + payout readiness
+      const obGet = l.onboarding_status
+      if (obGet) {
+        const acct = obGet.has_account ? success("account") : `${UI.Style.TEXT_DANGER}no account${UI.Style.TEXT_NORMAL}`
+        const stripe = obGet.stripe_connected ? success("stripe") : `${UI.Style.TEXT_DANGER}no stripe${UI.Style.TEXT_NORMAL}`
+        const payout = obGet.can_receive_payouts ? success("payouts ready") : `${UI.Style.TEXT_DANGER}cannot receive payouts${UI.Style.TEXT_NORMAL}`
+        printKV("Onboarding", `${acct} ${dim("·")} ${stripe} ${dim("·")} ${payout}`)
+      }
+
       // #57686: Completeness score in leads get (same logic as pulse)
       {
         const gFields = [
@@ -2951,62 +2960,72 @@ const LeadsPulseCommand = cmd({
         // Sort by date ascending for response time calc
         allMessages.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
 
-        // Sentiment Analysis — simple keyword-based scoring
-        const sentimentKeywords = {
-          positive: [
-            "thanks",
-            "thank you",
-            "great",
-            "awesome",
-            "perfect",
-            "excellent",
-            "love",
-            "appreciate",
-            "excited",
-            "looking forward",
-            "yes",
-            "sounds good",
-            "agree",
-          ],
-          negative: [
-            "issue",
-            "problem",
-            "unfortunately",
-            "concerned",
-            "worried",
-            "disappointed",
-            "delay",
-            "late",
-            "cancel",
-            "no",
-            "can't",
-            "won't",
-            "unable",
-          ],
-        }
+        // Sentiment Analysis — dual-model A/B test (gpt-4o-mini vs grok-3-fast)
+        type SentimentResult = { score: number; label: string; summary: string; model: string; latencyMs: number }
+        const sentimentResults: SentimentResult[] = []
+        {
+          const recentMsgs = allMessages.slice(-10)
+          if (recentMsgs.length > 0) {
+            const digest = recentMsgs
+              .map((m) => `[${m.isOutbound ? "YOU" : "THEM"}] ${m.text.slice(0, 200)}`)
+              .join("\n")
 
-        const analyzeSentiment = (text: string): number => {
-          const lower = text.toLowerCase()
-          let score = 0
-          for (const word of sentimentKeywords.positive) {
-            if (lower.includes(word)) score += 1
-          }
-          for (const word of sentimentKeywords.negative) {
-            if (lower.includes(word)) score -= 1
-          }
-          return score
-        }
+            const sysPrompt = `You analyze business communication sentiment. Return ONLY valid JSON, no markdown fences.
+Format: {"score": <-1.0 to 1.0>, "label": "<positive|neutral|negative|mixed>", "summary": "<1 sentence describing the relationship tone and trajectory>"}
+Score meaning: -1.0 = hostile/churning, -0.5 = frustrated, 0 = neutral/transactional, 0.5 = warm/engaged, 1.0 = enthusiastic/advocate.
+Consider context: "fixed the DNS issue" is positive (problem solved), not negative. Focus on relationship health, not topic negativity.`
+            const userPrompt = `Analyze the sentiment of this recent conversation between a business and their client:\n\n${digest}`
 
-        const sentiments = allMessages.map((m) => ({
-          score: analyzeSentiment(m.text),
-          date: m.date,
-          isOutbound: m.isOutbound,
-        }))
-        const recentSentiments = sentiments.slice(-10) // last 10 messages
-        const avgSentiment =
-          recentSentiments.length > 0
-            ? recentSentiments.reduce((sum, s) => sum + s.score, 0) / recentSentiments.length
-            : 0
+            // Resolve API keys
+            let openaiKey: string | null = process.env.OPENAI_API_KEY ?? null
+            let xaiKey: string | null = process.env.XAI_API_KEY ?? null
+            try {
+              for (const envPath of [
+                join(homedir(), ".iris", "sdk", ".env"),
+                join(homedir(), "Sites", "freelabel", "fl-docker-dev", "fl-api", ".env"),
+              ]) {
+                if (openaiKey && xaiKey) break
+                const f = Bun.file(envPath)
+                if (await f.exists()) {
+                  const raw = await f.text()
+                  for (const line of raw.split("\n")) {
+                    if (!openaiKey) { const m = line.match(/^OPENAI_API_KEY\s*=\s*(.+)/); if (m?.[1]) openaiKey = m[1].trim() }
+                    if (!xaiKey) { const m = line.match(/^XAI_API_KEY\s*=\s*(.+)/); if (m?.[1]) xaiKey = m[1].trim() }
+                  }
+                }
+              }
+            } catch {}
+
+            const callModel = async (url: string, key: string, model: string, label: string): Promise<SentimentResult | null> => {
+              const t0 = Date.now()
+              try {
+                const res = await fetch(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+                  body: JSON.stringify({
+                    model, temperature: 0, max_tokens: 150,
+                    messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }],
+                  }),
+                })
+                const latencyMs = Date.now() - t0
+                if (!res.ok) return null
+                const data = (await res.json()) as any
+                const content = data?.choices?.[0]?.message?.content ?? ""
+                const parsed = JSON.parse(content.replace(/```json\s*|```\s*/g, "").trim())
+                return { score: typeof parsed.score === "number" ? parsed.score : 0, label: parsed.label ?? "neutral", summary: parsed.summary ?? "", model: label, latencyMs }
+              } catch { return null }
+            }
+
+            const calls: Promise<SentimentResult | null>[] = []
+            if (openaiKey) calls.push(callModel("https://api.openai.com/v1/chat/completions", openaiKey, "gpt-4o-mini", "gpt-4o-mini"))
+            if (xaiKey) calls.push(callModel("https://api.x.ai/v1/chat/completions", xaiKey, "grok-3-fast", "grok-3-fast"))
+
+            const settled = await Promise.allSettled(calls)
+            for (const r of settled) {
+              if (r.status === "fulfilled" && r.value) sentimentResults.push(r.value)
+            }
+          }
+        }
 
         // Response time metrics
         const responseTimes: number[] = []
@@ -3056,15 +3075,35 @@ const LeadsPulseCommand = cmd({
         console.log()
         console.log(`  ${bold("Communication Intelligence")}`)
 
-        // Sentiment
-        const sentimentLabel =
-          avgSentiment > 0.3
-            ? success("Positive")
-            : avgSentiment < -0.3
-              ? `${UI.Style.TEXT_DANGER}Negative${UI.Style.TEXT_NORMAL}`
-              : dim("Neutral")
-        const sentimentScore = avgSentiment.toFixed(1)
-        printKV("  Sentiment", `${sentimentLabel}  ${dim(`(${sentimentScore})`)}`)
+        // Sentiment — show A/B comparison if both models returned results
+        if (sentimentResults.length > 0) {
+          const fmtSentiment = (r: SentimentResult) => {
+            const lbl = r.score > 0.3 ? success(r.label)
+              : r.score < -0.3 ? `${UI.Style.TEXT_DANGER}${r.label}${UI.Style.TEXT_NORMAL}`
+              : r.label === "mixed" ? `${UI.Style.TEXT_WARNING}${r.label}${UI.Style.TEXT_NORMAL}`
+              : dim(r.label)
+            return `${lbl} ${dim(`(${r.score.toFixed(1)})`)} ${dim(`${r.latencyMs}ms`)}`
+          }
+
+          if (sentimentResults.length === 1) {
+            // Single model
+            const r = sentimentResults[0]
+            printKV(`  Sentiment`, `${fmtSentiment(r)}  ${dim(`[${r.model}]`)}`)
+            if (r.summary) console.log(`    ${dim(r.summary)}`)
+          } else {
+            // A/B comparison
+            printKV("  Sentiment A/B", "")
+            for (const r of sentimentResults) {
+              console.log(`    ${highlight(r.model.padEnd(16))}${fmtSentiment(r)}`)
+              if (r.summary) console.log(`      ${dim(r.summary)}`)
+            }
+            // Show agreement/divergence
+            const scoreDiff = Math.abs(sentimentResults[0].score - sentimentResults[1].score)
+            const agree = scoreDiff < 0.3
+            console.log(`    ${dim("─".repeat(40))}`)
+            console.log(`    ${agree ? success("Models agree") : `${UI.Style.TEXT_WARNING}Models diverge (Δ${scoreDiff.toFixed(1)})${UI.Style.TEXT_NORMAL}`}  ${dim(`avg: ${(sentimentResults.reduce((s, r) => s + r.score, 0) / sentimentResults.length).toFixed(1)}`)}`)
+          }
+        }
 
         // Response times
         if (avgYourResponse !== null) {
