@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import * as prompts from "@clack/prompts"
+import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, printDivider, dim, bold, isNonInteractive, BRIDGE_URL, getBridgeToken } from "./iris-api"
 

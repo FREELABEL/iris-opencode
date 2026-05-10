@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import * as prompts from "@clack/prompts"
+import * as prompts from "./clack"
 import { UI } from "../ui"
 import fuzzysort from "fuzzysort"
 import { irisFetch, requireAuth } from "./iris-api"

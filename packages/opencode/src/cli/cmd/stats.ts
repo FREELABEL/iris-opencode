@@ -73,22 +73,32 @@ export const StatsCommand = cmd({
   })
   },
   handler: async (args) => {
-    await bootstrap(process.cwd(), async () => {
-      const stats = await aggregateSessionStats(args.days, args.project)
+    try {
+      await bootstrap(process.cwd(), async () => {
+        const stats = await aggregateSessionStats(args.days, args.project)
 
-      let modelLimit: number | undefined
-      if (args.models === true) {
-        modelLimit = Infinity
-      } else if (typeof args.models === "number") {
-        modelLimit = args.models
-      }
+        let modelLimit: number | undefined
+        if (args.models === true) {
+          modelLimit = Infinity
+        } else if (typeof args.models === "number") {
+          modelLimit = args.models
+        }
 
-      if (args.admin) {
-        displayAdminStats(stats, args.period, args.tools, modelLimit)
+        if (args.admin) {
+          displayAdminStats(stats, args.period, args.tools, modelLimit)
+        } else {
+          displayStats(stats, args.tools, modelLimit)
+        }
+      })
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        console.error("Error: Corrupted session data detected. Some session files contain invalid JSON.")
+        console.error("Run with --days 0 to only show today's stats, or delete corrupted files from ~/.local/share/opencode/storage/")
+        process.exitCode = 1
       } else {
-        displayStats(stats, args.tools, modelLimit)
+        throw err
       }
-    })
+    }
   },
 })
 
@@ -100,13 +110,13 @@ async function getAllSessions(): Promise<Session.Info[]> {
   const sessions: Session.Info[] = []
 
   const projectKeys = await Storage.list(["project"])
-  const projects = await Promise.all(projectKeys.map((key) => Storage.read<Project.Info>(key)))
+  const projects = await Promise.all(projectKeys.map((key) => Storage.read<Project.Info>(key).catch(() => null)))
 
   for (const project of projects) {
     if (!project) continue
 
     const sessionKeys = await Storage.list(["session", project.id])
-    const projectSessions = await Promise.all(sessionKeys.map((key) => Storage.read<Session.Info>(key)))
+    const projectSessions = await Promise.all(sessionKeys.map((key) => Storage.read<Session.Info>(key).catch(() => null)))
 
     for (const session of projectSessions) {
       if (session) {
@@ -193,7 +203,7 @@ export async function aggregateSessionStats(days?: number, projectFilter?: strin
     const batch = filteredSessions.slice(i, i + BATCH_SIZE)
 
     const batchPromises = batch.map(async (session) => {
-      const messages = await Session.messages({ sessionID: session.id })
+      const messages = await Session.messages({ sessionID: session.id }).catch(() => [] as any[])
 
       let sessionCost = 0
       let sessionTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }

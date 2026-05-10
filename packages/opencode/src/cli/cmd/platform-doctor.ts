@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import * as prompts from "@clack/prompts"
+import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
 import { runChannelHealthChecks } from "./platform-leads"

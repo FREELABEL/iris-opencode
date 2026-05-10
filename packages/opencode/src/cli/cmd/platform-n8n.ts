@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import * as prompts from "@clack/prompts"
+import * as prompts from "./clack"
 import { UI } from "../ui"
 import { requireAuth, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"

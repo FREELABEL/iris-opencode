@@ -1,8 +1,37 @@
 import { Auth } from "../../auth"
-import * as prompts from "@clack/prompts"
+import * as prompts from "./clack"
 import { UI } from "../ui"
 import { homedir } from "os"
 import { join } from "path"
+
+// ============================================================================
+// Quiet mode — suppress @clack/prompts ANSI output in non-TTY contexts.
+// When stdout is piped (e.g. inside the TUI bash tool), spinners and intro/
+// outro decorations emit raw escape codes that corrupt the captured output.
+// Runtime-patch the clack module so ALL platform commands get clean output
+// automatically without needing individual changes.
+// ============================================================================
+const _quiet = !process.stdout.isTTY
+const _noop = (() => {}) as (...args: any[]) => any
+const _noopSpinner = { start: _noop, stop: _noop, message: _noop }
+
+if (_quiet) {
+  const p = prompts as any
+  p.intro = _noop
+  p.outro = _noop
+  p.log = { info: _noop, warn: _noop, error: _noop, success: _noop, step: _noop, message: _noop }
+  p.spinner = () => _noopSpinner
+}
+
+export const cli = {
+  intro: _quiet ? _noop : prompts.intro,
+  outro: _quiet ? _noop : prompts.outro,
+  log: _quiet
+    ? { info: _noop, warn: _noop, error: _noop, success: _noop, step: _noop, message: _noop }
+    : prompts.log,
+  spinner: _quiet ? () => _noopSpinner : prompts.spinner,
+  empty: _quiet ? _noop : () => UI.empty(),
+} as const
 
 // ============================================================================
 // Base URLs — single source of truth for all platform endpoints.
@@ -173,6 +202,8 @@ export async function handleApiError(res: Response, action: string): Promise<boo
       }
     } catch {}
     prompts.log.error(`${action} failed: ${msg}`)
+    // Ensure error is visible even when clack rendering swallows output
+    console.error(`  Error: ${msg}`)
     process.exitCode = 1
     return false
   }

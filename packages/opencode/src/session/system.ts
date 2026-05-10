@@ -24,6 +24,7 @@ const IRIS_IDENTITY = [
   "By default, assume the user is working in their own project, not on IRIS source code.",
 ].join(" ")
 
+
 export namespace SystemPrompt {
   export function header(providerID: string) {
     const out: string[] = [IRIS_IDENTITY]
@@ -42,27 +43,16 @@ export namespace SystemPrompt {
 
   export async function environment() {
     const project = Instance.project
-    return [
-      [
-        `Here is some useful information about the environment you are running in:`,
-        `<env>`,
-        `  Working directory: ${Instance.directory}`,
-        `  Is directory a git repo: ${project.vcs === "git" ? "yes" : "no"}`,
-        `  Platform: ${process.platform}`,
-        `  Today's date: ${new Date().toDateString()}`,
-        `</env>`,
-        `<files>`,
-        `  ${
-          project.vcs === "git" && false
-            ? await Ripgrep.tree({
-                cwd: Instance.directory,
-                limit: 200,
-              })
-            : ""
-        }`,
-        `</files>`,
-      ].join("\n"),
+    const lines = [
+      `Here is some useful information about the environment you are running in:`,
+      `<env>`,
+      `  Working directory: ${Instance.directory}`,
+      `  Is directory a git repo: ${project.vcs === "git" ? "yes" : "no"}`,
+      `  Platform: ${process.platform}`,
+      `  Today's date: ${new Date().toDateString()}`,
+      `</env>`,
     ]
+    return [lines.join("\n")]
   }
 
   const LOCAL_RULE_FILES = [
@@ -71,6 +61,7 @@ export namespace SystemPrompt {
     "CONTEXT.md", // deprecated
   ]
   const GLOBAL_RULE_FILES = [
+    path.join(os.homedir(), ".iris", "platform-context.md"),
     path.join(os.homedir(), ".iris", "AGENTS.md"),
     path.join(Global.Path.config, "AGENTS.md"),
     path.join(os.homedir(), ".claude", "CLAUDE.md"),
@@ -91,7 +82,6 @@ export namespace SystemPrompt {
     for (const globalRuleFile of GLOBAL_RULE_FILES) {
       if (await Bun.file(globalRuleFile).exists()) {
         paths.add(globalRuleFile)
-        break
       }
     }
 

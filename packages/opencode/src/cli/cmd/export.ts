@@ -3,7 +3,7 @@ import { Session } from "../../session"
 import { cmd } from "./cmd"
 import { bootstrap } from "../bootstrap"
 import { UI } from "../ui"
-import * as prompts from "@clack/prompts"
+import * as prompts from "./clack"
 import { EOL } from "os"
 
 export const ExportCommand = cmd({

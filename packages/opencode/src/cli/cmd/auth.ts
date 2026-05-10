@@ -1,6 +1,6 @@
 import { Auth } from "../../auth"
 import { cmd } from "./cmd"
-import * as prompts from "@clack/prompts"
+import * as prompts from "./clack"
 import { UI } from "../ui"
 import { ModelsDev } from "../../provider/models"
 import { map, pipe, sortBy, values } from "remeda"

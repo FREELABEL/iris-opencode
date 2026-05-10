@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
-import * as prompts from "@clack/prompts"
+import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
 import path from "path"
 
 // ============================================================================
@@ -11,10 +11,25 @@ import path from "path"
 function printBloq(b: Record<string, unknown>): void {
   const name = bold(String(b.name ?? `Bloq #${b.id}`))
   const id = dim(`#${b.id}`)
-  const items = typeof b.items_count === "number" ? `  ${dim(String(b.items_count) + " items")}` : ""
-  console.log(`  ${name}  ${id}${items}`)
+  console.log(`  ${name}  ${id}`)
   if (b.description) {
     console.log(`    ${dim(String(b.description).slice(0, 100))}`)
+  }
+  // Compact summary from nested lists
+  const lists = Array.isArray(b.lists) ? b.lists as any[] : []
+  if (lists.length > 0) {
+    const totalItems = lists.reduce((sum: number, l: any) => sum + (l.items?.length ?? 0), 0)
+    const nonEmpty = lists.filter((l: any) => l.items?.length > 0)
+    const parts: string[] = []
+    parts.push(`${lists.length} lists`)
+    if (totalItems > 0) parts.push(`${totalItems} items`)
+    // Show non-empty list names
+    if (nonEmpty.length > 0 && nonEmpty.length <= 4) {
+      const listNames = nonEmpty.map((l: any) => `${l.name} (${l.items.length})`).join(", ")
+      console.log(`    ${dim(parts.join(" · ") + "  —  " + listNames)}`)
+    } else {
+      console.log(`    ${dim(parts.join(" · "))}`)
+    }
   }
 }
 
@@ -32,16 +47,16 @@ const BloqsListCommand = cmd({
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  IRIS Bloqs")
+    cli.empty()
+    cli.intro("◈  IRIS Bloqs")
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { cli.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { cli.outro("Done"); return }
 
-    const spinner = prompts.spinner()
+    const spinner = cli.spinner()
     spinner.start("Loading bloqs…")
 
     try {
@@ -50,7 +65,7 @@ const BloqsListCommand = cmd({
       if (!res.ok) {
         spinner.stop("Failed", 1)
         await handleApiError(res, "List bloqs")
-        prompts.outro("Done")
+        cli.outro("Done")
         return
       }
 
@@ -64,8 +79,8 @@ const BloqsListCommand = cmd({
       }
 
       if (bloqs.length === 0) {
-        prompts.log.warn("No bloqs found")
-        prompts.outro(`Create one: ${dim("iris bloqs create")}`)
+        cli.log.warn("No bloqs found")
+        cli.outro(`Create one: ${dim("iris bloqs create")}`)
         return
       }
 
@@ -76,7 +91,7 @@ const BloqsListCommand = cmd({
       }
       printDivider()
 
-      prompts.outro(
+      cli.outro(
         `${dim("iris bloqs get <id>")}  ·  ${dim("iris bloqs ingest <id> <file>")}`,
       )
     } catch (err) {
@@ -153,12 +168,44 @@ const BloqsGetCommand = cmd({
         allItems = Array.isArray(raw) ? raw : (raw?.items ?? [])
       }
 
+      // Fetch bloq-scoped agents, contacts, files in parallel
+      const extractArr = async (r: Response) => {
+        if (!r.ok) return []
+        const j = (await r.json()) as any
+        return j?.data ?? j ?? []
+      }
+      const [agentsRes, leadsRes, filesRes, schedulesRes] = await Promise.all([
+        irisFetch(`/api/v1/users/${userId}/bloqs/agents?bloq_id=${args.id}&per_page=50`),
+        irisFetch(`/api/v1/users/${userId}/leads?bloq_id=${args.id}&per_page=50`),
+        irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/files`),
+        irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?per_page=50`),
+      ])
+      const [agents, leads, files, schedules] = await Promise.all([
+        extractArr(agentsRes), extractArr(leadsRes), extractArr(filesRes), extractArr(schedulesRes),
+      ])
+      // Filter schedules to agents in this bloq
+      const agentIds = new Set(agents.map((a: any) => a.id))
+      const bloqSchedules = schedules.filter((s: any) => agentIds.has(s.agent_id))
+
       printKV("ID", b.id)
       printKV("Name", b.name)
       printKV("Description", b.description)
-      printKV("Items", allItems.length || b.items_count || 0)
       printKV("Created", b.created_at)
       console.log()
+
+      // Entity summary bar
+      const parts: string[] = []
+      if (lists.length > 0) parts.push(`${lists.length} lists`)
+      const itemCount = allItems.length || b.items_count || 0
+      if (itemCount > 0) parts.push(`${itemCount} items`)
+      if (agents.length > 0) parts.push(`${agents.length} agents`)
+      if (leads.length > 0) parts.push(`${leads.length} contacts`)
+      if (bloqSchedules.length > 0) parts.push(`${bloqSchedules.length} schedules`)
+      if (files.length > 0) parts.push(`${files.length} files`)
+      if (parts.length > 0) {
+        console.log(`  ${parts.join(dim("  ·  "))}`)
+        console.log()
+      }
 
       // Build per-list item counts from actual data
       const listItemCounts: Record<number, number> = {}
@@ -172,6 +219,21 @@ const BloqsGetCommand = cmd({
         for (const l of lists) {
           const count = listItemCounts[l.id] ?? l.items_count ?? 0
           console.log(`    ${dim("—")} ${bold(String(l.name ?? l.id))} ${dim(`#${l.id}`)} ${dim(`(${count} items)`)}`)
+          // Show top 3 item previews per list
+          const listItems = allItems.filter((i: any) => (i.bloq_list_id ?? i.list_id) === l.id)
+          const preview = listItems.slice(0, 3)
+          for (const item of preview) {
+            const contentObj = typeof item.content === "object" && item.content ? item.content : null
+            const rawContent = typeof item.content === "string" ? item.content : ""
+            const title = (typeof item.title === "string" && item.title)
+              || (contentObj?.title ? String(contentObj.title) : "")
+              || (rawContent ? rawContent.replace(/[#\n]/g, " ").trim().slice(0, 80) : "(untitled)")
+            console.log(`      ${dim("•")} ${title}`)
+          }
+          const remaining = listItems.length - preview.length
+          if (remaining > 0) {
+            console.log(`      ${dim(`+ ${remaining} more`)}`)
+          }
         }
         console.log()
       }
@@ -224,6 +286,27 @@ const BloqsGetCommand = cmd({
             console.log()
           }
         }
+      }
+
+      if (agents.length > 0) {
+        console.log(`  ${dim("Agents:")} ${dim(`(${agents.length})`)}`)
+        for (const a of agents.slice(0, 3)) {
+          const status = a.active ? "active" : "paused"
+          const hb = a.heartbeat_mode && a.heartbeat_mode !== "off" ? dim(` [heartbeat]`) : ""
+          console.log(`    ${dim("•")} ${a.name} ${dim(`#${a.id}`)} ${dim(status)}${hb}`)
+        }
+        if (agents.length > 3) console.log(`    ${dim(`+ ${agents.length - 3} more`)}`)
+        console.log()
+      }
+
+      if (leads.length > 0) {
+        console.log(`  ${dim("Contacts:")} ${dim(`(${leads.length})`)}`)
+        for (const l of leads.slice(0, 3)) {
+          const status = l.status ? dim(l.status) : ""
+          console.log(`    ${dim("•")} ${l.name ?? l.nickname ?? "Unknown"} ${dim(`#${l.id}`)} ${status}`)
+        }
+        if (leads.length > 3) console.log(`    ${dim(`+ ${leads.length - 3} more`)}`)
+        console.log()
       }
 
       printDivider()
@@ -852,6 +935,95 @@ const BloqsComposeCommand = cmd({
   },
 })
 
+const BloqsRenameCommand = cmd({
+  command: "rename <type> <id> [name]",
+  aliases: ["mv"],
+  describe: "rename a bloq, list, or item",
+  builder: (yargs) =>
+    yargs
+      .positional("type", { describe: "what to rename", choices: ["bloq", "list", "item"] as const, demandOption: true })
+      .positional("id", { describe: "ID of the bloq/list/item", type: "number", demandOption: true })
+      .positional("name", { describe: "new name", type: "string" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Rename ${args.type} #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    let name = args.name as string | undefined
+    if (!name) {
+      try {
+        name = (await promptOrFail("name", () =>
+          prompts.text({
+            message: "New name",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          }),
+        )) as string
+      } catch (err) {
+        if (err instanceof MissingFlagError) {
+          prompts.log.error(err.message)
+          prompts.outro("Done")
+          process.exitCode = 2
+          return
+        }
+        throw err
+      }
+      if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start(`Renaming ${args.type}…`)
+
+    try {
+      let res: Response
+
+      switch (args.type) {
+        case "bloq":
+          res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ name }),
+          })
+          break
+        case "list":
+          res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/${args.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ name }),
+          })
+          break
+        case "item":
+          res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ title: name }),
+          })
+          break
+        default:
+          spinner.stop("Invalid type", 1)
+          prompts.outro("Done")
+          return
+      }
+
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, `Rename ${args.type}`)
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Renamed to: ${bold(name!)}`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -902,6 +1074,7 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
       .command(BloqsComposeCommand)
+      .command(BloqsRenameCommand)
       .demandCommand(),
   async handler() {},
 })

@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
-import * as prompts from "@clack/prompts"
+import * as prompts from "./clack"
 import { UI } from "../ui"
 import { MCP } from "../../mcp"
 import { McpAuth } from "../../mcp/auth"
@@ -13,6 +13,7 @@ import { Instance } from "../../project/instance"
 import { Installation } from "../../installation"
 import path from "path"
 import { Global } from "../../global"
+import { McpServeCommand } from "./mcp-serve"
 
 function getAuthStatusIcon(status: MCP.AuthStatus): string {
   switch (status) {
@@ -53,6 +54,7 @@ export const McpCommand = cmd({
   describe: "manage MCP (Model Context Protocol) servers",
   builder: (yargs) =>
     yargs
+      .command(McpServeCommand)
       .command(McpAddCommand)
       .command(McpListCommand)
       .command(McpAuthCommand)
