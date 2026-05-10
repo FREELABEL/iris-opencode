@@ -2262,7 +2262,7 @@ const LeadsPulseCommand = cmd({
         }
         // Parse opportunities linked to this lead
         if (oppsRes.status === "fulfilled" && oppsRes.value?.ok) {
-          const od = ((await oppsRes.value.json()) as any)?.data
+          const od = ((await oppsRes.value.json()) as any)?.data?.data
           leadOpportunities = Array.isArray(od) ? od : []
         }
       }
