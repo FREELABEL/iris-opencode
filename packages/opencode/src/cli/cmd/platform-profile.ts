@@ -350,7 +350,7 @@ const ProfileCreateCommand = cmd({
     const ok = await handleApiError(res, "Create profile")
     if (!ok) { spinner.stop("Failed", 1); return }
     const data = (await res.json()) as any
-    const profile = data?.data ?? data
+    const profile = data?.data ?? data?.profile ?? data
 
     // Warn if assigned slug differs from expected (counter suffix added)
     const expectedSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
@@ -579,7 +579,7 @@ const ProfileBatchCreateCommand = cmd({
         }
 
         const data = (await res.json()) as any
-        const profile = data?.data ?? data
+        const profile = data?.data ?? data?.profile ?? data
 
         // Link to lead if lead_id provided
         if (leadId && profile.pk) {
