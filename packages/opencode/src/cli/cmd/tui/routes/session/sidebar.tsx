@@ -9,19 +9,21 @@ import { Installation } from "@/installation"
 import { useDirectory } from "../../context/directory"
 import { useKV } from "../../context/kv"
 import { TodoItem } from "../../component/todo-item"
-import { MOCK_AGENTS, MOCK_WORKFLOWS, MOCK_BLOCS } from "../../iris/mock"
-import type { IrisAgent, IrisWorkflow } from "../../iris/mock"
+import { useIrisData } from "../../iris/api"
+import type { IrisAgent, IrisWorkflow, AtlasItem, IrisContact, IrisPage } from "../../iris/types"
 
-type SidebarTab = "agents" | "workflows" | "blocs" | "session"
+type SidebarTab = "agents" | "workflows" | "contacts" | "pages" | "atlas" | "session"
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   agents: "Agents",
   workflows: "Flows",
-  blocs: "BLOQs",
+  contacts: "Contacts",
+  pages: "Pages",
+  atlas: "Atlas",
   session: "Sess",
 }
 
-const TABS: SidebarTab[] = ["agents", "workflows", "blocs", "session"]
+const TABS: SidebarTab[] = ["atlas", "agents", "contacts", "workflows", "pages", "session"]
 
 export function Sidebar(props: { sessionID: string }) {
   const sync = useSync()
@@ -31,7 +33,45 @@ export function Sidebar(props: { sessionID: string }) {
   const todo = createMemo(() => sync.data.todo[props.sessionID] ?? [])
   const messages = createMemo(() => sync.data.message[props.sessionID] ?? [])
 
-  const [activeTab, setActiveTab] = createSignal<SidebarTab>("agents")
+  const [activeTab, setActiveTab] = createSignal<SidebarTab>("atlas")
+  const iris = useIrisData()
+  const [bloqPickerOpen, setBloqPickerOpen] = createSignal(false)
+  const [expandedLists, setExpandedLists] = createSignal<Set<number>>(new Set())
+  const [activeDoc, setActiveDoc] = createSignal<AtlasItem | null>(null)
+  const [hoveredItemId, setHoveredItemId] = createSignal<number | null>(null)
+  const [hoveredBloqId, setHoveredBloqId] = createSignal<number | null>(null)
+  const [hoveredListId, setHoveredListId] = createSignal<number | null>(null)
+  const [hoveredRowId, setHoveredRowId] = createSignal<string | null>(null)
+  const [searchQuery, setSearchQuery] = createSignal("")
+  let searchInput: any
+
+  const matchesSearch = (text: string) => {
+    const q = searchQuery().toLowerCase()
+    if (!q) return true
+    return text.toLowerCase().includes(q)
+  }
+
+  const toggleList = (listId: number) => {
+    setExpandedLists((prev) => {
+      const next = new Set(prev)
+      if (next.has(listId)) next.delete(listId)
+      else next.add(listId)
+      return next
+    })
+  }
+
+  // Wrap selectBloq to also reset sidebar state
+  const handleSelectBloq = (bloqId: number) => {
+    iris.selectBloq(bloqId)
+    setExpandedLists(new Set<number>())
+    setActiveDoc(null)
+    setActiveContact(null)
+  }
+
+  const selectedBloqName = createMemo(() => {
+    const id = iris.data.selectedBloqId
+    return iris.data.bloqList.find((b) => b.id === id)?.name ?? "Select BLOQ..."
+  })
 
   const [expanded, setExpanded] = createStore({
     heartbeat: true,
@@ -40,11 +80,35 @@ export function Sidebar(props: { sessionID: string }) {
     todo: true,
   })
 
-  const heartbeatAgents = createMemo(() => MOCK_AGENTS.filter((a) => a.type === "heartbeat"))
-  const standardAgents = createMemo(() => MOCK_AGENTS.filter((a) => a.type === "standard"))
-  const activeBlocs = createMemo(() => MOCK_BLOCS.filter((b) => b.status === "active"))
-  const archivedBlocs = createMemo(() => MOCK_BLOCS.filter((b) => b.status === "archived"))
-
+  const heartbeatAgents = createMemo(() =>
+    iris.data.agents.filter((a) => a.type === "heartbeat" && matchesSearch(a.name))
+  )
+  const standardAgents = createMemo(() =>
+    iris.data.agents.filter((a) => a.type === "standard" && matchesSearch(a.name))
+  )
+  const filteredWorkflows = createMemo(() =>
+    iris.data.workflows.filter((w) => matchesSearch(w.name))
+  )
+  const filteredAtlas = createMemo(() => {
+    const q = searchQuery().toLowerCase()
+    if (!q) return iris.data.atlas
+    return iris.data.atlas
+      .map((list) => ({
+        ...list,
+        items: list.items.filter((i) => i.title.toLowerCase().includes(q)),
+      }))
+      .filter((list) => list.name.toLowerCase().includes(q) || list.items.length > 0)
+  })
+  const filteredContacts = createMemo(() =>
+    iris.data.contacts.filter((c) => matchesSearch(c.name) || matchesSearch(c.email ?? "") || matchesSearch(c.company ?? ""))
+  )
+  const filteredPages = createMemo(() =>
+    iris.data.pages.filter((p) => matchesSearch(p.title) || matchesSearch(p.slug))
+  )
+  const filteredBloqs = createMemo(() =>
+    iris.data.bloqList.filter((b) => matchesSearch(b.name))
+  )
+  const [activeContact, setActiveContact] = createSignal<IrisContact | null>(null)
   const cost = createMemo(() => {
     const total = messages().reduce((sum, x) => sum + (x.role === "assistant" ? x.cost : 0), 0)
     return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(total)
@@ -76,24 +140,68 @@ export function Sidebar(props: { sessionID: string }) {
     ({ idle: theme.textMuted, running: theme.info, success: theme.success, error: theme.error })[status] ??
     theme.textMuted
 
-  const fmtMsgs = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`)
-
   return (
     <Show when={session()}>
       <box
         backgroundColor={theme.backgroundPanel}
-        width={42}
+        width={80}
         paddingTop={1}
         paddingBottom={1}
         paddingLeft={2}
         paddingRight={2}
       >
-        {/* IRIS brand header */}
+        {/* IRIS brand header + bloq selector */}
         <box flexShrink={0} paddingBottom={1}>
           <text fg={theme.accent}>
             <b>◈ IRIS</b>
           </text>
-          <text fg={theme.textMuted}>{session().title}</text>
+          <Show when={iris.data.bloqList.length > 0}>
+            <box
+              onMouseDown={() => {
+                setBloqPickerOpen(!bloqPickerOpen())
+                if (!bloqPickerOpen()) {
+                  setTimeout(() => searchInput?.focus(), 10)
+                }
+              }}
+              flexDirection="row"
+              gap={1}
+            >
+              <text fg={theme.accent}>◈</text>
+              <text fg={theme.text}>{selectedBloqName()}</text>
+              <Show when={iris.data.selectedBloqId}>
+                <text fg={theme.textMuted}> #{iris.data.selectedBloqId}</text>
+              </Show>
+              <text fg={theme.textMuted}>{bloqPickerOpen() ? "▲" : "▼"}</text>
+            </box>
+            <Show when={bloqPickerOpen()}>
+              <box paddingLeft={2}>
+                <For each={filteredBloqs()}>
+                  {(bloq) => {
+                    const isSelected = () => bloq.id === iris.data.selectedBloqId
+                    const isHovered = () => hoveredBloqId() === bloq.id
+                    return (
+                      <box
+                        backgroundColor={isHovered() ? theme.backgroundElement : undefined}
+                        onMouseOver={() => setHoveredBloqId(bloq.id)}
+                        onMouseOut={() => hoveredBloqId() === bloq.id && setHoveredBloqId(null)}
+                        onMouseDown={() => {
+                          handleSelectBloq(bloq.id)
+                          setBloqPickerOpen(false)
+                        }}
+                      >
+                        <text fg={isSelected() || isHovered() ? theme.accent : theme.textMuted}>
+                          {isSelected() ? "● " : "○ "}{bloq.name}
+                        </text>
+                      </box>
+                    )
+                  }}
+                </For>
+              </box>
+            </Show>
+          </Show>
+          <Show when={iris.data.bloqList.length === 0 && iris.data.status === "loaded"}>
+            <text fg={theme.textMuted}>No projects</text>
+          </Show>
         </box>
 
         {/* Tab bar */}
@@ -102,7 +210,10 @@ export function Sidebar(props: { sessionID: string }) {
             {(tab) => (
               <text
                 fg={activeTab() === tab ? theme.accent : theme.textMuted}
-                onMouseDown={() => setActiveTab(tab)}
+                onMouseDown={() => {
+                  setActiveTab(tab)
+                  setSearchQuery("")
+                }}
               >
                 {activeTab() === tab ? `[${TAB_LABELS[tab]}]` : TAB_LABELS[tab]}
               </text>
@@ -110,12 +221,45 @@ export function Sidebar(props: { sessionID: string }) {
           </For>
         </box>
 
+        {/* Search */}
+        <Show when={activeTab() !== "session"}>
+          <box
+            flexShrink={0}
+            paddingBottom={2}
+            onMouseDown={() => { searchInput?.focus() }}
+          >
+            <input
+              ref={(r) => { searchInput = r }}
+              onInput={(e) => { setSearchQuery(e) }}
+              focusedBackgroundColor={theme.backgroundElement}
+              cursorColor={theme.accent}
+              focusedTextColor={theme.text}
+              placeholder={`Search ${TAB_LABELS[activeTab()].toLowerCase()}...`}
+            />
+          </box>
+        </Show>
+
         {/* Tab content */}
         <scrollbox flexGrow={1}>
           <box flexShrink={0} gap={1} paddingRight={1}>
             <Switch>
               {/* ── AGENTS ── */}
               <Match when={activeTab() === "agents"}>
+                <Show when={iris.data.status === "loading"}>
+                  <text fg={theme.textMuted}>Loading...</text>
+                </Show>
+                <Show when={iris.data.status === "no-auth" || iris.data.status === "error"}>
+                  <box gap={1}>
+                    <text fg={theme.textMuted}>Not connected</text>
+                    <text fg={theme.textMuted}>Run: iris auth login</text>
+                  </box>
+                </Show>
+                <Show when={iris.data.status === "loaded" && iris.data.agents.length === 0}>
+                  <text fg={theme.textMuted}>No agents found</text>
+                </Show>
+                <Show when={searchQuery() && heartbeatAgents().length === 0 && standardAgents().length === 0}>
+                  <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
+                </Show>
                 <box gap={1}>
                   {/* Heartbeat agents */}
                   <box>
@@ -134,29 +278,37 @@ export function Sidebar(props: { sessionID: string }) {
                     </box>
                     <Show when={expanded.heartbeat}>
                       <For each={heartbeatAgents()}>
-                        {(agent) => (
-                          <box>
-                            <box flexDirection="row" justifyContent="space-between">
-                              <box flexDirection="row" gap={1}>
-                                <text flexShrink={0} fg={agentColor(agent.status)}>
-                                  •
-                                </text>
-                                <text fg={theme.text}>{agent.name}</text>
+                        {(agent) => {
+                          const key = `ha-${agent.id}`
+                          const hovered = () => hoveredRowId() === key
+                          return (
+                            <box
+                              backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                              onMouseOver={() => setHoveredRowId(key)}
+                              onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                            >
+                              <box flexDirection="row" justifyContent="space-between">
+                                <box flexDirection="row" gap={1}>
+                                  <text flexShrink={0} fg={agentColor(agent.status)}>
+                                    •
+                                  </text>
+                                  <text fg={hovered() ? theme.accent : theme.text}>{agent.name}</text>
+                                </box>
+                                <Show when={agent.schedule}>
+                                  <text fg={theme.textMuted}>{agent.schedule}</text>
+                                </Show>
                               </box>
-                              <Show when={agent.schedule}>
-                                <text fg={theme.textMuted}>{agent.schedule}</text>
+                              <Show when={agent.nextRun || agent.lastRun}>
+                                <text fg={theme.textMuted}>
+                                  {"   "}
+                                  {agent.nextRun ? `next ${agent.nextRun}` : ""}
+                                  {agent.nextRun && agent.lastRun ? "  ·  " : ""}
+                                  {agent.lastRun ?? ""}
+                                </text>
                               </Show>
                             </box>
-                            <Show when={agent.nextRun || agent.lastRun}>
-                              <text fg={theme.textMuted}>
-                                {"   "}
-                                {agent.nextRun ? `next ${agent.nextRun}` : ""}
-                                {agent.nextRun && agent.lastRun ? "  ·  " : ""}
-                                {agent.lastRun ?? ""}
-                              </text>
-                            </Show>
-                          </box>
-                        )}
+                          )
+                        }}
                       </For>
                     </Show>
                   </box>
@@ -175,17 +327,27 @@ export function Sidebar(props: { sessionID: string }) {
                     </box>
                     <Show when={expanded.standard}>
                       <For each={standardAgents()}>
-                        {(agent) => (
-                          <box flexDirection="row" justifyContent="space-between">
-                            <box flexDirection="row" gap={1}>
-                              <text flexShrink={0} fg={agentColor(agent.status)}>
-                                •
-                              </text>
-                              <text fg={theme.text}>{agent.name}</text>
+                        {(agent) => {
+                          const key = `sa-${agent.id}`
+                          const hovered = () => hoveredRowId() === key
+                          return (
+                            <box
+                              flexDirection="row"
+                              justifyContent="space-between"
+                              backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                              onMouseOver={() => setHoveredRowId(key)}
+                              onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                            >
+                              <box flexDirection="row" gap={1}>
+                                <text flexShrink={0} fg={agentColor(agent.status)}>
+                                  •
+                                </text>
+                                <text fg={hovered() ? theme.accent : theme.text}>{agent.name}</text>
+                              </box>
+                              <text fg={theme.textMuted}>{agent.status}</text>
                             </box>
-                            <text fg={theme.textMuted}>{agent.status}</text>
-                          </box>
-                        )}
+                          )
+                        }}
                       </For>
                     </Show>
                   </box>
@@ -194,90 +356,280 @@ export function Sidebar(props: { sessionID: string }) {
 
               {/* ── WORKFLOWS ── */}
               <Match when={activeTab() === "workflows"}>
+                <Show when={iris.data.status === "loading"}>
+                  <text fg={theme.textMuted}>Loading...</text>
+                </Show>
+                <Show when={iris.data.status === "no-auth" || iris.data.status === "error"}>
+                  <box gap={1}>
+                    <text fg={theme.textMuted}>Not connected</text>
+                    <text fg={theme.textMuted}>Run: iris auth login</text>
+                  </box>
+                </Show>
+                <Show when={iris.data.status === "loaded" && iris.data.workflows.length === 0}>
+                  <text fg={theme.textMuted}>No workflows found</text>
+                </Show>
+                <Show when={searchQuery() && filteredWorkflows().length === 0 && iris.data.workflows.length > 0}>
+                  <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
+                </Show>
                 <box gap={1}>
-                  <For each={MOCK_WORKFLOWS}>
-                    {(wf) => (
-                      <box>
-                        <box flexDirection="row" gap={1}>
-                          <text flexShrink={0} fg={workflowColor(wf.status)}>
-                            {workflowIcon(wf.status)}
-                          </text>
-                          <text fg={theme.text} wrapMode="word">
-                            {wf.name}
+                  <For each={filteredWorkflows()}>
+                    {(wf) => {
+                      const key = `wf-${wf.id}`
+                      const hovered = () => hoveredRowId() === key
+                      return (
+                        <box
+                          backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                          onMouseOver={() => setHoveredRowId(key)}
+                          onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                        >
+                          <box flexDirection="row" gap={1}>
+                            <text flexShrink={0} fg={workflowColor(wf.status)}>
+                              {workflowIcon(wf.status)}
+                            </text>
+                            <text fg={hovered() ? theme.accent : theme.text} wrapMode="word">
+                              {wf.name}
+                            </text>
+                          </box>
+                          <text fg={theme.textMuted}>
+                            {"   "}
+                            {wf.status === "running" ? "running now" : wf.lastRun ? `last ran ${wf.lastRun}` : "never ran"}
+                            {wf.triggerCount > 0 ? `  ·  ${wf.triggerCount} runs` : ""}
                           </text>
                         </box>
-                        <text fg={theme.textMuted}>
-                          {"   "}
-                          {wf.status === "running" ? "running..." : wf.lastRun ?? "never"}
-                          {wf.status !== "running" ? `  ×${wf.triggerCount}` : ""}
-                        </text>
-                      </box>
-                    )}
+                      )
+                    }}
                   </For>
                 </box>
               </Match>
 
-              {/* ── BLOQs ── */}
-              <Match when={activeTab() === "blocs"}>
-                <box gap={1}>
-                  <Show when={activeBlocs().length > 0}>
-                    <box>
+              {/* ── CONTACTS ── */}
+              <Match when={activeTab() === "contacts"}>
+                <Show when={iris.data.status === "loading"}>
+                  <text fg={theme.textMuted}>Loading...</text>
+                </Show>
+                <Show when={iris.data.status === "no-auth" || iris.data.status === "error"}>
+                  <box gap={1}>
+                    <text fg={theme.textMuted}>Not connected</text>
+                    <text fg={theme.textMuted}>Run: iris auth login</text>
+                  </box>
+                </Show>
+                <Show when={iris.data.status === "loaded" && iris.data.contacts.length === 0}>
+                  <text fg={theme.textMuted}>No contacts in this project</text>
+                </Show>
+                <Show when={searchQuery() && filteredContacts().length === 0 && iris.data.contacts.length > 0}>
+                  <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
+                </Show>
+
+                {/* Contact detail view */}
+                <Show when={activeContact()}>
+                  {(contact) => (
+                    <box gap={1}>
+                      <text fg={theme.accent} onMouseDown={() => setActiveContact(null)}>
+                        ← Back
+                      </text>
                       <text fg={theme.text}>
-                        <b>Active</b>
+                        <b>{contact().name}</b>
                       </text>
-                      <For each={activeBlocs()}>
-                        {(bloq) => (
-                          <box paddingTop={1}>
-                            <box flexDirection="row" justifyContent="space-between">
-                              <box flexDirection="row" gap={1}>
-                                <text flexShrink={0} fg={theme.accent}>
-                                  ◈
-                                </text>
-                                <text fg={theme.text}>{bloq.name}</text>
-                              </box>
-                              <Show when={bloq.context}>
-                                <text fg={theme.textMuted}>{bloq.context}</text>
+                      <Show when={contact().company}>
+                        <text fg={theme.textMuted}>{contact().company}</text>
+                      </Show>
+                      <Show when={contact().email}>
+                        <text fg={theme.text}>{contact().email}</text>
+                      </Show>
+                      <Show when={contact().phone}>
+                        <text fg={theme.text}>{contact().phone}</text>
+                      </Show>
+                      <box paddingTop={1}>
+                        <text fg={theme.textMuted}>Status: {contact().status ?? "None"}</text>
+                        <text fg={theme.textMuted}>Source: {contact().source ?? "Unknown"}</text>
+                        <text fg={theme.textMuted}>Score: {contact().leadScore}{contact().isHot ? " 🔥" : ""}</text>
+                      </box>
+                    </box>
+                  )}
+                </Show>
+
+                {/* Contact list */}
+                <Show when={!activeContact()}>
+                  <box gap={1}>
+                    <For each={filteredContacts()}>
+                      {(contact) => {
+                        const key = `ct-${contact.id}`
+                        const hovered = () => hoveredRowId() === key
+                        return (
+                          <box
+                            backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                            onMouseOver={() => setHoveredRowId(key)}
+                            onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                            onMouseDown={() => setActiveContact(contact)}
+                          >
+                            <box flexDirection="row" gap={1}>
+                              <text flexShrink={0} fg={contact.isHot ? theme.warning : theme.success}>
+                                •
+                              </text>
+                              <text fg={hovered() ? theme.accent : theme.text}>{contact.name} <span style={{ fg: theme.textMuted }}>#{contact.id}</span></text>
+                              <Show when={contact.status}>
+                                <text flexShrink={0} fg={theme.textMuted}>{contact.status}</text>
                               </Show>
                             </box>
-                            <text fg={theme.textMuted}>
-                              {"   "}
-                              {bloq.leadCount} leads  ·  {fmtMsgs(bloq.messageCount)} msgs
-                            </text>
-                            <text fg={theme.textMuted}>{"   "}{bloq.lastActivity}</text>
+                            <Show when={contact.email || contact.company}>
+                              <text fg={theme.textMuted}>
+                                {"   "}
+                                {contact.company ? `${contact.company}  ·  ` : ""}
+                                {contact.email ?? ""}
+                              </text>
+                            </Show>
                           </box>
-                        )}
-                      </For>
-                    </box>
-                  </Show>
-                  <Show when={archivedBlocs().length > 0}>
-                    <box>
-                      <text fg={theme.textMuted}>
-                        <b>Archived</b>
-                      </text>
-                      <For each={archivedBlocs()}>
-                        {(bloq) => (
-                          <box paddingTop={1}>
-                            <box flexDirection="row" justifyContent="space-between">
-                              <box flexDirection="row" gap={1}>
-                                <text flexShrink={0} fg={theme.textMuted}>
-                                  ◈
-                                </text>
-                                <text fg={theme.textMuted}>{bloq.name}</text>
-                              </box>
-                              <Show when={bloq.context}>
-                                <text fg={theme.textMuted}>{bloq.context}</text>
-                              </Show>
-                            </box>
-                            <text fg={theme.textMuted}>
-                              {"   "}
-                              {bloq.leadCount} leads  ·  {fmtMsgs(bloq.messageCount)} msgs
+                        )
+                      }}
+                    </For>
+                  </box>
+                </Show>
+              </Match>
+
+              {/* ── PAGES ── */}
+              <Match when={activeTab() === "pages"}>
+                <Show when={iris.data.pages.length === 0 && iris.data.status === "loaded"}>
+                  <text fg={theme.textMuted}>No pages found</text>
+                </Show>
+                <Show when={searchQuery() && filteredPages().length === 0 && iris.data.pages.length > 0}>
+                  <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
+                </Show>
+                <box gap={1}>
+                  <For each={filteredPages()}>
+                    {(page) => {
+                      const key = `pg-${page.id}`
+                      const hovered = () => hoveredRowId() === key
+                      const statusColor = () =>
+                        page.status === "published" ? theme.success : theme.textMuted
+                      return (
+                        <box
+                          backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                          onMouseOver={() => setHoveredRowId(key)}
+                          onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                        >
+                          <box flexDirection="row" gap={1}>
+                            <text flexShrink={0} fg={statusColor()}>
+                              {page.status === "published" ? "●" : "○"}
+                            </text>
+                            <text fg={hovered() ? theme.accent : theme.text} wrapMode="word">
+                              {page.title}
                             </text>
                           </box>
-                        )}
-                      </For>
-                    </box>
-                  </Show>
+                          <text fg={theme.textMuted}>
+                            {"   "}
+                            /{page.slug}  ·  v{page.version}  ·  {page.updatedAt}
+                          </text>
+                        </box>
+                      )
+                    }}
+                  </For>
                 </box>
+              </Match>
+
+              {/* ── ATLAS (lists + items for selected bloq) ── */}
+              <Match when={activeTab() === "atlas"}>
+                <Show when={iris.data.status === "loading"}>
+                  <text fg={theme.textMuted}>Loading...</text>
+                </Show>
+                <Show when={iris.data.status === "no-auth" || iris.data.status === "error"}>
+                  <box gap={1}>
+                    <text fg={theme.textMuted}>Not connected</text>
+                    <text fg={theme.textMuted}>Run: iris auth login</text>
+                  </box>
+                </Show>
+                <Show when={iris.data.status === "loaded" && iris.data.atlas.length === 0}>
+                  <text fg={theme.textMuted}>No lists in this project</text>
+                </Show>
+                <Show when={searchQuery() && filteredAtlas().length === 0 && iris.data.atlas.length > 0}>
+                  <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
+                </Show>
+
+                {/* Document view — shown when an item is clicked */}
+                <Show when={activeDoc()}>
+                  {(doc) => (
+                    <box gap={1}>
+                      <box flexDirection="row" gap={1}>
+                        <text fg={theme.accent} onMouseDown={() => setActiveDoc(null)}>
+                          ← Back
+                        </text>
+                      </box>
+                      <text fg={theme.text}>
+                        <b>{doc().title}</b>
+                      </text>
+                      <Show when={doc().type}>
+                        <text fg={theme.textMuted}>{doc().type}</text>
+                      </Show>
+                      <Show when={doc().description}>
+                        <box paddingTop={1}>
+                          <text fg={theme.textMuted} wrapMode="word">{doc().description}</text>
+                        </box>
+                      </Show>
+                      <Show when={doc().content}>
+                        <box paddingTop={1}>
+                          <text fg={theme.text} wrapMode="word">{doc().content}</text>
+                        </box>
+                      </Show>
+                      <Show when={!doc().content && !doc().description}>
+                        <text fg={theme.textMuted}>No content</text>
+                      </Show>
+                    </box>
+                  )}
+                </Show>
+
+                {/* List view — default */}
+                <Show when={!activeDoc()}>
+                  <box gap={1}>
+                    <For each={filteredAtlas()}>
+                      {(list) => {
+                        const isOpen = () => expandedLists().has(list.id)
+                        return (
+                          <box>
+                            <box
+                              flexDirection="row"
+                              gap={1}
+                              backgroundColor={hoveredListId() === list.id ? theme.backgroundElement : undefined}
+                              onMouseOver={() => list.items.length > 0 && setHoveredListId(list.id)}
+                              onMouseOut={() => hoveredListId() === list.id && setHoveredListId(null)}
+                              onMouseDown={() => list.items.length > 0 && toggleList(list.id)}
+                            >
+                              <text fg={hoveredListId() === list.id ? theme.accent : theme.text}>
+                                {list.items.length === 0 ? " " : isOpen() ? "▼" : "▶"}
+                              </text>
+                              <text fg={hoveredListId() === list.id ? theme.accent : theme.text}>
+                                <b>{list.name}</b>
+                              </text>
+                              <text fg={theme.textMuted}>{list.items.length}</text>
+                            </box>
+                            <Show when={isOpen() && list.items.length > 0}>
+                              <box paddingLeft={2}>
+                                <For each={list.items}>
+                                  {(item) => (
+                                    <box
+                                      flexDirection="row"
+                                      gap={1}
+                                      backgroundColor={hoveredItemId() === item.id ? theme.backgroundElement : undefined}
+                                      onMouseOver={() => setHoveredItemId(item.id)}
+                                      onMouseOut={() => hoveredItemId() === item.id && setHoveredItemId(null)}
+                                      onMouseDown={() => setActiveDoc(item)}
+                                    >
+                                      <text flexShrink={0} fg={item.status === "active" ? theme.success : theme.textMuted}>
+                                        {item.status === "completed" ? "✓" : "·"}
+                                      </text>
+                                      <text fg={hoveredItemId() === item.id ? theme.accent : theme.text} wrapMode="word">{item.title}</text>
+                                      <Show when={item.type}>
+                                        <text flexShrink={0} fg={theme.textMuted}>{item.type}</text>
+                                      </Show>
+                                    </box>
+                                  )}
+                                </For>
+                              </box>
+                            </Show>
+                          </box>
+                        )
+                      }}
+                    </For>
+                  </box>
+                </Show>
               </Match>
 
               {/* ── SESSION ── */}

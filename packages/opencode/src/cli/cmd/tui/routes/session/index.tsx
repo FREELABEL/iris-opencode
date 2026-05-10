@@ -920,6 +920,7 @@ export function Session() {
             </Show>
             <scrollbox
               ref={(r) => (scroll = r)}
+              onMouseDown={() => prompt?.focus()}
               viewportOptions={{
                 paddingRight: showScrollbar() ? 1 : 0,
               }}

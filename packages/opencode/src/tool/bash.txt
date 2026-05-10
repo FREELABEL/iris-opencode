@@ -114,3 +114,27 @@ Important:
 
 # Other common operations
 - View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments
+
+# IRIS CLI — Platform Commands
+The `iris` CLI is available for interacting with the IRIS platform. Use these EXACT commands — do NOT guess or invent command names.
+
+When the user asks about their projects, bloqs, or data — run the command immediately. After listing, proactively run `iris bloqs get <id>` for any bloq the user asks about WITHOUT waiting for confirmation.
+
+Common commands:
+  iris bloqs list                    List projects with list/item counts per bloq
+  iris bloqs get <id>                Show full project: summary bar, lists with top 3 items, agents, contacts
+  iris bloqs get <id> --items       Show all items with content previews
+  iris leads list                    List CRM leads/contacts
+  iris leads get <id>               Show lead details
+  iris leads search <query>         Search leads by name/email
+  iris agents list                  List AI agents
+  iris agents get <id>              Show agent details
+  iris pages list                   List Genesis pages
+  iris pages get <slug>             Show page details
+  iris workflows list               List workflows
+  iris schedules list               List scheduled jobs
+  iris config                       Show SDK config and connection status
+  iris doctor                       Full system health check
+
+Use --json flag on any list command for JSON output. Use --limit N to control results.
+IMPORTANT: Do NOT use `iris sdk:call` — use the specific commands above instead.

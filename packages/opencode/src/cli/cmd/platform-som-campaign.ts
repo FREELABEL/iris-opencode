@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import * as prompts from "@clack/prompts"
+import * as prompts from "./clack"
 import { irisFetch, requireAuth, bold, dim } from "./iris-api"
 
 // ─── iris som campaign — DB-backed registry CRUD ─────────────────────────────
