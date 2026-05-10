@@ -1,0 +1,82 @@
+{
+  "slug": "vanguard-footer",
+  "component_type": "SiteFooter",
+  "label": "Vanguard Healthcare \u2014 Footer",
+  "props": {
+    "themeMode": "dark",
+    "logo": {
+      "imageUrl": "https://freelabel.net/img/brands/vanguard/vhcs-logo-full.png",
+      "tagline": "One Network. End-to-End Solutions for Independent Medicine.",
+      "accentDot": false
+    },
+    "columns": [
+      {
+        "title": "Company",
+        "links": [
+          {
+            "label": "Home",
+            "url": "/p/vanguard"
+          },
+          {
+            "label": "About",
+            "url": "/p/vanguard-about"
+          },
+          {
+            "label": "Our Network",
+            "url": "/p/vanguard-network"
+          },
+          {
+            "label": "Pathways AI",
+            "url": "/p/vanguard-pathways-ai"
+          },
+          {
+            "label": "Invest",
+            "url": "/p/vanguard-invest"
+          },
+          {
+            "label": "Partners",
+            "url": "/p/vanguard-partners"
+          },
+          {
+            "label": "Careers",
+            "url": "/p/vanguard-careers"
+          },
+          {
+            "label": "Contact",
+            "url": "/p/vanguard-contact"
+          }
+        ]
+      },
+      {
+        "title": "Subsidiaries",
+        "links": [
+          {
+            "label": "Pathways Injury Consultants",
+            "url": "https://www.pathwaysinjuryconsultants.com"
+          },
+          {
+            "label": "ProPath Training",
+            "url": "https://www.propathtraining.com"
+          },
+          {
+            "label": "Pathways AI",
+            "url": "https://www.pathwaysai.com"
+          },
+          {
+            "label": "Pathways Advisors",
+            "url": "https://www.pathwaysadvisors.com"
+          },
+          {
+            "label": "Pathways Mgmt of Texas",
+            "url": "#"
+          },
+          {
+            "label": "Vanguard Venture Group",
+            "url": "#"
+          }
+        ]
+      }
+    ],
+    "copyright": "\u00a9 2025 Vanguard Healthcare Solutions, LLC. All rights reserved."
+  }
+}

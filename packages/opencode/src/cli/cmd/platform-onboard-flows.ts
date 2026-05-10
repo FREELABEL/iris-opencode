@@ -30,16 +30,18 @@ async function fetchAnalytics(slug: string): Promise<any | null> {
 export const PlatformOnboardFlowsCommand = cmd({
   command: "onboard-flows [action] [slug]",
   aliases: ["flows"],
-  describe: "manage schema-driven onboarding flows (list, view, analytics, test, embed)",
+  describe: "manage schema-driven onboarding flows (list, view, analytics, sessions, test, embed)",
   builder: (y) =>
     y
       .positional("action", {
-        describe: "action: list | view | analytics | test | embed | create",
+        describe: "action: list | view | analytics | sessions | test | embed | create",
         type: "string",
         default: "list",
       })
       .positional("slug", { describe: "flow slug", type: "string" })
-      .option("bloq-id", { describe: "filter by bloq ID", type: "number" }),
+      .option("bloq-id", { describe: "filter by bloq ID", type: "number" })
+      .option("status", { describe: "filter sessions by status (in_progress, completed, abandoned)", type: "string" })
+      .option("limit", { describe: "max sessions to return", type: "number", default: 20 }),
   async handler(args) {
     UI.empty()
     const action = (args.action as string) || "list"
@@ -147,6 +149,46 @@ export const PlatformOnboardFlowsCommand = cmd({
       return
     }
 
+    // ── SESSIONS ─────────────────────────────────────
+    if (action === "sessions") {
+      if (!slug) { prompts.log.error("Usage: iris onboard-flows sessions <slug>"); prompts.outro("Done"); return }
+
+      sp.start("Fetching sessions…")
+      const statusFilter = args["status"] as string | undefined
+      const limit = (args["limit"] as number) || 20
+      const qs = new URLSearchParams()
+      if (statusFilter) qs.set("status", statusFilter)
+      qs.set("limit", String(limit))
+      const res = await irisFetch(`/api/v1/onboarding/flows/${slug}/sessions?${qs}`)
+      if (!res.ok) { sp.stop("Failed to fetch sessions", 1); prompts.outro("Done"); return }
+      const data = await res.json() as any
+      const sessions = data?.sessions ?? []
+      sp.stop(success(`${sessions.length} session(s)`))
+
+      if (sessions.length === 0) {
+        prompts.log.info(dim("No sessions found."))
+        prompts.outro("Done")
+        return
+      }
+
+      for (const s of sessions) {
+        printDivider()
+        const name = s.contact?.name || dim("(no name)")
+        const email = s.contact?.email || dim("(no email)")
+        const statusIcon = s.status === "completed" ? "✓" : s.status === "abandoned" ? "✗" : "…"
+        printKV("Session", `#${s.id}  ${statusIcon} ${s.status}`)
+        printKV("Contact", `${name}  ${email}`)
+        if (s.contact?.phone) printKV("Phone", s.contact.phone)
+        printKV("Progress", `Step ${s.current_step} / ${s.steps_completed} submitted`)
+        if (s.lead_id) printKV("Lead", `#${s.lead_id}`)
+        printKV("Started", s.started_at || s.created_at)
+        if (s.completed_at) printKV("Completed", s.completed_at)
+      }
+      printDivider()
+      prompts.outro(dim(`${sessions.length} of ${data.total ?? sessions.length} sessions shown`))
+      return
+    }
+
     // ── TEST ─────────────────────────────────────────────
     if (action === "test") {
       if (!slug) { prompts.log.error("Usage: iris onboard-flows test <slug>"); prompts.outro("Done"); return }
@@ -195,7 +237,7 @@ export const PlatformOnboardFlowsCommand = cmd({
       return
     }
 
-    prompts.log.error(`Unknown action: ${action}. Available: list, view, analytics, test, embed, create`)
+    prompts.log.error(`Unknown action: ${action}. Available: list, view, analytics, sessions, test, embed, create`)
     prompts.outro("Done")
   },
 })

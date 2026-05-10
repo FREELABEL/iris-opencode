@@ -1,0 +1,326 @@
+{
+  "id": 128,
+  "slug": "vanguard",
+  "title": "Vanguard Healthcare Solutions",
+  "seo_title": "Vanguard Healthcare Solutions | One Network for Independent Medicine",
+  "seo_description": "The Pathways Network gives independent physicians the infrastructure, technology, capital, and referral network to grow.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "bloq",
+  "owner_id": 38,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "light",
+      "backgroundColor": "#ffffff",
+      "branding": {
+        "name": "Vanguard Healthcare Solutions",
+        "primaryColor": "#143A82",
+        "secondaryColor": "#4380C8"
+      }
+    },
+    "components": [
+      {
+        "type": "SiteNavigation",
+        "id": "vhcs-nav",
+        "props": {
+          "logo": {
+            "url": "/p/vanguard",
+            "imageUrl": "https://freelabel.net/img/brands/vanguard/vhcs-logo-full.png",
+            "accentDot": false
+          },
+          "links": [
+            {
+              "url": "/p/vanguard-about",
+              "label": "About"
+            },
+            {
+              "url": "/p/vanguard-network",
+              "label": "Our Network"
+            },
+            {
+              "url": "/p/vanguard-pathways-ai",
+              "label": "Pathways AI"
+            },
+            {
+              "url": "/p/vanguard-invest",
+              "label": "Invest"
+            },
+            {
+              "url": "/p/vanguard-contact",
+              "label": "Contact"
+            }
+          ],
+          "ctaColor": "#4380C8",
+          "ctaButton": {
+            "url": "/p/vanguard-contact",
+            "text": "Join the Network"
+          },
+          "themeMode": "light",
+          "transparent": false
+        }
+      },
+      {
+        "type": "AgencyHero",
+        "id": "home-hero",
+        "props": {
+          "themeMode": "light",
+          "preHeadline": "WE SUPPORT INDEPENDENT MEDICINE",
+          "headlineAccent": "One Network.",
+          "headline": "End-to-End Solutions for Independent Medicine.",
+          "description": "77.6% of physicians gave up their independence. You didn’t. The Pathways Network gives you the infrastructure, technology, and capital to make that decision sustainable — without giving up an ounce of clinical autonomy.",
+          "size": "large",
+          "align": "left",
+          "accentColor": "#143A82",
+          "ctas": [
+            {
+              "text": "Join the Network",
+              "url": "https://heyiris.io/p/vanguard-contact",
+              "variant": "primary"
+            },
+            {
+              "text": "Explore Our Services",
+              "url": "https://heyiris.io/p/vanguard-network",
+              "variant": "outline"
+            }
+          ]
+        }
+      },
+      {
+        "type": "StatsSection",
+        "id": "home-stats",
+        "props": {
+          "themeMode": "light",
+          "accentColor": "#143A82",
+          "stats": [
+            {
+              "value": "2018",
+              "label": "Founded in Dallas, Texas"
+            },
+            {
+              "value": "200+",
+              "label": "Providers in the Network"
+            },
+            {
+              "value": "$60B+",
+              "label": "PI Market Opportunity"
+            }
+          ]
+        }
+      },
+      {
+        "type": "ValuePillars",
+        "id": "home-problem",
+        "props": {
+          "themeMode": "light",
+          "heading": "80% of physicians are now employed by hospitals or corporations.",
+          "subheading": "Those who choose independence deserve better. The Pathways Network was built for them.",
+          "accentColor": "#143A82",
+          "columns": 2,
+          "pillars": [
+            {
+              "icon": "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+              "title": "The paperwork never ends.",
+              "description": "Billing, compliance, credentialing, documentation. We handle it."
+            },
+            {
+              "icon": "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+              "title": "Cash flow is unpredictable.",
+              "description": "PI cases pay 12–36 months out. We provide early-pay capital so you don’t wait."
+            },
+            {
+              "icon": "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4",
+              "title": "You’re building without a foundation.",
+              "description": "No referral network. No payer leverage. No tech stack. The Pathways Network changes all of that."
+            },
+            {
+              "icon": "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z",
+              "title": "PI documentation is a liability.",
+              "description": "Poor notes hurt cases and damage attorney relationships. Pathways AI captures clinical intelligence at the point of care."
+            }
+          ]
+        }
+      },
+      {
+        "type": "FeatureShowcase",
+        "id": "home-tracks",
+        "props": {
+          "themeMode": "light",
+          "heading": "Two service tracks. One integrated network.",
+          "subheading": "Choose Personal Injury Care, Traditional Healthcare, or both. The infrastructure is the same.",
+          "accentColor": "#143A82",
+          "features": [
+            {
+              "heading": "Personal Injury Care",
+              "description": "From first referral to final settlement. Case management, documentation, compliance training, and case funding — everything a practice needs to treat PI patients and get paid.\n\nPathways Injury Consultants | ProPath Training",
+              "imageUrl": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=600&h=400&fit=crop",
+              "imagePosition": "right",
+              "stats": [
+                {
+                  "value": "End-to-end",
+                  "label": "case management"
+                },
+                {
+                  "value": "12-36 mo",
+                  "label": "payment cycles solved"
+                }
+              ]
+            },
+            {
+              "heading": "Traditional Healthcare",
+              "description": "Built for independent practice. Revenue cycle management, MSO services, and care coordination. The operational backbone hospital systems have — now available to independent practices.\n\nPathways Advisors | Pathways Management of Texas",
+              "imageUrl": "https://images.unsplash.com/photo-1631217868264-e5b90bb7e133?w=600&h=400&fit=crop",
+              "imagePosition": "left",
+              "stats": [
+                {
+                  "value": "Full MSO",
+                  "label": "services"
+                },
+                {
+                  "value": "100%",
+                  "label": "clinical autonomy retained"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "ValuePillars",
+        "id": "home-benefits",
+        "props": {
+          "themeMode": "light",
+          "heading": "What joining the network actually means for your practice.",
+          "accentColor": "#4380C8",
+          "columns": 2,
+          "pillars": [
+            {
+              "icon": "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z",
+              "title": "A Referral Network That Works for You",
+              "description": "PI attorneys and case managers actively routing patients to Pathways Network providers.",
+              "link": {
+                "text": "Learn more",
+                "url": "https://heyiris.io/p/vanguard-network"
+              }
+            },
+            {
+              "icon": "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8",
+              "title": "Capital Solutions Built for PI",
+              "description": "Early-pay options for Letter of Protection cases — designed around the way personal injury healthcare actually works.",
+              "link": {
+                "text": "Learn more",
+                "url": "https://heyiris.io/p/vanguard-invest"
+              }
+            },
+            {
+              "icon": "M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z",
+              "title": "Technology That Does the Heavy Lifting",
+              "description": "AI-generated clinical notes, automated workflows, and real-time records — so you practice medicine, not paperwork.",
+              "link": {
+                "text": "Explore Pathways AI",
+                "url": "https://heyiris.io/p/vanguard-pathways-ai"
+              }
+            },
+            {
+              "icon": "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z",
+              "title": "Compliance You Don’t Have to Think About",
+              "description": "Continuously updated PI training and regulatory guidance through ProPath Training."
+            }
+          ]
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "home-cta",
+        "props": {
+          "themeMode": "dark",
+          "title": "Independent medicine. Fully supported.",
+          "subtitle": "No hospital employment. No loss of clinical authority. Just the network.",
+          "primaryButtonText": "Join the Pathways Network",
+          "primaryButtonUrl": "https://heyiris.io/p/vanguard-contact",
+          "primaryButtonVariant": "primary",
+          "secondaryButtonText": "Explore Investment Opportunities",
+          "secondaryButtonUrl": "https://heyiris.io/p/vanguard-invest",
+          "secondaryButtonVariant": "outline",
+          "backgroundGradient": "from-slate-900 via-blue-950 to-slate-900",
+          "textAlign": "center",
+          "fullHeight": false
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "vhcs-footer",
+        "props": {
+          "logo": {
+            "tagline": "One Network. End-to-End Solutions for Independent Medicine.",
+            "imageUrl": "https://freelabel.net/img/brands/vanguard/vhcs-logo-full.png",
+            "accentDot": false
+          },
+          "columns": [
+            {
+              "links": [
+                {
+                  "url": "/p/vanguard",
+                  "label": "Home"
+                },
+                {
+                  "url": "/p/vanguard-about",
+                  "label": "About"
+                },
+                {
+                  "url": "/p/vanguard-network",
+                  "label": "Our Network"
+                },
+                {
+                  "url": "/p/vanguard-pathways-ai",
+                  "label": "Pathways AI"
+                },
+                {
+                  "url": "/p/vanguard-invest",
+                  "label": "Invest"
+                },
+                {
+                  "url": "/p/vanguard-contact",
+                  "label": "Contact"
+                }
+              ],
+              "title": "Company"
+            },
+            {
+              "links": [
+                {
+                  "url": "https://www.pathwaysinjuryconsultants.com",
+                  "label": "Pathways Injury Consultants"
+                },
+                {
+                  "url": "https://www.propathtraining.com",
+                  "label": "ProPath Training"
+                },
+                {
+                  "url": "https://www.pathwaysai.com",
+                  "label": "Pathways AI"
+                },
+                {
+                  "url": "https://www.pathwaysadvisors.com",
+                  "label": "Pathways Advisors"
+                },
+                {
+                  "url": "#",
+                  "label": "Pathways Mgmt of Texas"
+                },
+                {
+                  "url": "#",
+                  "label": "Vanguard Venture Group"
+                }
+              ],
+              "title": "Subsidiaries"
+            }
+          ],
+          "copyright": "© 2025 Vanguard Healthcare Solutions, LLC. All rights reserved.",
+          "themeMode": "dark"
+        }
+      }
+    ]
+  }
+}

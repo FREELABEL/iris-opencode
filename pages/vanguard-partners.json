@@ -1,0 +1,194 @@
+{
+  "version": "1.0",
+  "type": "landing",
+  "theme": {
+    "mode": "light",
+    "backgroundColor": "#ffffff",
+    "branding": {
+      "name": "Vanguard Healthcare Solutions",
+      "primaryColor": "#143A82",
+      "secondaryColor": "#4380C8"
+    }
+  },
+  "components": [
+    {
+      "type": "SiteNavigation",
+      "id": "vhcs-nav",
+      "props": {
+        "themeMode": "light",
+        "logo": {
+          "imageUrl": "https://freelabel.net/img/brands/vanguard/vhcs-logo-full.png",
+          "accentDot": false,
+          "url": "/p/vanguard"
+        },
+        "links": [
+          { "label": "About", "url": "/p/vanguard-about" },
+          { "label": "Our Network", "url": "/p/vanguard-network" },
+          { "label": "Pathways AI", "url": "/p/vanguard-pathways-ai" },
+          { "label": "Invest", "url": "/p/vanguard-invest" },
+          { "label": "Partners", "url": "/p/vanguard-partners" },
+          { "label": "Careers", "url": "/p/vanguard-careers" },
+          { "label": "Contact", "url": "/p/vanguard-contact" }
+        ],
+        "ctaButton": { "text": "Join the Network", "url": "/p/vanguard-contact" },
+        "ctaColor": "#4380C8",
+        "transparent": true
+      }
+    },
+    {
+      "type": "Hero",
+      "id": "partners-hero",
+      "props": {
+        "themeMode": "dark",
+        "title": "The Vanguard Advantage.",
+        "subtitle": "An integrated medicine ecosystem that brings value to physicians, chiropractors, healthcare providers, and their patients.",
+        "backgroundGradient": "from-slate-900 via-blue-950 to-slate-900",
+        "textAlign": "center",
+        "fullHeight": false
+      }
+    },
+    {
+      "type": "ValuePillars",
+      "id": "partners-benefits",
+      "props": {
+        "themeMode": "light",
+        "heading": "What our partners receive.",
+        "subheading": "Access to the most comprehensive network of supporting physicians, services, therapies and technology \u2014 all working in concert.",
+        "accentColor": "#143A82",
+        "columns": 2,
+        "pillars": [
+          {
+            "icon": "M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z",
+            "title": "Patient-First Philosophy",
+            "description": "A holistic approach to care that keeps the patient at the center and the referring physician in control of the referral process."
+          },
+          {
+            "icon": "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4",
+            "title": "Integrated Clinical Solutions",
+            "description": "Orthopedic, pain management, chiropractic, and personal injury care \u2014 coordinated across our full network of specialists."
+          },
+          {
+            "icon": "M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z",
+            "title": "Technology & AI Platform",
+            "description": "Pathways AI captures clinical intelligence at the point of care and orchestrates it across the entire ecosystem in real time."
+          },
+          {
+            "icon": "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8",
+            "title": "Healthcare Investment Capital",
+            "description": "Working capital solutions and venture investment through Vanguard Venture Group \u2014 designed for the cash flow realities of PI healthcare."
+          },
+          {
+            "icon": "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z",
+            "title": "Training & Compliance",
+            "description": "Continuously updated PI education, documentation standards, and clinical protocols through ProPath Training."
+          },
+          {
+            "icon": "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6",
+            "title": "Practice Growth",
+            "description": "Marketing, branding, business development, and patient volume optimization \u2014 so your practice grows alongside the network."
+          }
+        ]
+      }
+    },
+    {
+      "type": "FeatureShowcase",
+      "id": "partners-ideal",
+      "props": {
+        "themeMode": "light",
+        "heading": "The ideal practice partner.",
+        "subheading": "Vanguard partners get access to tailored programs that help their practices thrive \u2014 not just survive.",
+        "accentColor": "#143A82",
+        "features": [
+          {
+            "title": "Operational Support",
+            "heading": "Operational Support",
+            "description": "Implementing exceptional service standards, incorporating systems into practices, optimizing marketing methods to increase patient volume, and handling insurers, collections, and other challenges common to non-integrated practices.",
+            "imageUrl": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=600&h=400&fit=crop",
+            "imagePosition": "right",
+            "stats": [
+              { "value": "Full MSO", "label": "services available" },
+              { "value": "100%", "label": "physician autonomy" }
+            ]
+          },
+          {
+            "title": "Integrated Across the Continuum of Care",
+            "heading": "Integrated Across the Continuum of Care",
+            "description": "Our network serves the entire healthcare ecosystem: patients, physicians, hospitals, skilled nursing facilities, laboratories, telemedicine providers, healthcare management teams, legal teams, and corporate clients.",
+            "imageUrl": "https://images.unsplash.com/photo-1631217868264-e5b90bb7e133?w=600&h=400&fit=crop",
+            "imagePosition": "left",
+            "stats": [
+              { "value": "200+", "label": "providers" },
+              { "value": "6", "label": "subsidiaries" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "QuoteBlock",
+      "id": "partners-testimonial",
+      "props": {
+        "themeMode": "light",
+        "quote": "After partnering with Vanguard Healthcare Solutions, our chiropractic practice has grown exponentially. We are seeing more patients, offering more services, and have improved our overall quality of care. With Vanguard, we have never lost a patient. In fact, we are seeing more referred patients than before and as a result, our bottom line has improved significantly.",
+        "attribution": "Dr. Spangler",
+        "attributionTitle": "Chiropractic Partner",
+        "accentColor": "#143A82"
+      }
+    },
+    {
+      "type": "Hero",
+      "id": "partners-cta",
+      "props": {
+        "themeMode": "dark",
+        "title": "Ready to join the network?",
+        "subtitle": "Whether you're a physician, specialist, attorney, or healthcare facility \u2014 we'll connect you with the right team.",
+        "primaryButtonText": "Become a Partner",
+        "primaryButtonUrl": "/p/vanguard-contact",
+        "secondaryButtonText": "Explore Our Network",
+        "secondaryButtonUrl": "/p/vanguard-network",
+        "backgroundGradient": "from-slate-900 via-blue-950 to-slate-900",
+        "textAlign": "center",
+        "fullHeight": false
+      }
+    },
+    {
+      "type": "SiteFooter",
+      "id": "vhcs-footer",
+      "props": {
+        "themeMode": "dark",
+        "logo": {
+          "imageUrl": "https://freelabel.net/img/brands/vanguard/vhcs-logo-full.png",
+          "tagline": "One Network. End-to-End Solutions for Independent Medicine.",
+          "accentDot": false
+        },
+        "columns": [
+          {
+            "title": "Company",
+            "links": [
+              { "label": "Home", "url": "/p/vanguard" },
+              { "label": "About", "url": "/p/vanguard-about" },
+              { "label": "Our Network", "url": "/p/vanguard-network" },
+              { "label": "Pathways AI", "url": "/p/vanguard-pathways-ai" },
+              { "label": "Invest", "url": "/p/vanguard-invest" },
+              { "label": "Partners", "url": "/p/vanguard-partners" },
+              { "label": "Careers", "url": "/p/vanguard-careers" },
+              { "label": "Contact", "url": "/p/vanguard-contact" }
+            ]
+          },
+          {
+            "title": "Subsidiaries",
+            "links": [
+              { "label": "Pathways Injury Consultants", "url": "https://www.pathwaysinjuryconsultants.com" },
+              { "label": "ProPath Training", "url": "https://www.propathtraining.com" },
+              { "label": "Pathways AI", "url": "https://www.pathwaysai.com" },
+              { "label": "Pathways Advisors", "url": "https://www.pathwaysadvisors.com" },
+              { "label": "Pathways Mgmt of Texas", "url": "#" },
+              { "label": "Vanguard Venture Group", "url": "#" }
+            ]
+          }
+        ],
+        "copyright": "\u00a9 2025 Vanguard Healthcare Solutions, LLC. All rights reserved."
+      }
+    }
+  ]
+}

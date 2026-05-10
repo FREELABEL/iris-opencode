@@ -1,0 +1,49 @@
+{
+  "slug": "vanguard-nav",
+  "component_type": "SiteNavigation",
+  "label": "Vanguard Healthcare \u2014 Navigation",
+  "props": {
+    "themeMode": "light",
+    "logo": {
+      "imageUrl": "https://freelabel.net/img/brands/vanguard/vhcs-logo-full.png",
+      "accentDot": false,
+      "url": "/p/vanguard"
+    },
+    "links": [
+      {
+        "label": "About",
+        "url": "/p/vanguard-about"
+      },
+      {
+        "label": "Our Network",
+        "url": "/p/vanguard-network"
+      },
+      {
+        "label": "Pathways AI",
+        "url": "/p/vanguard-pathways-ai"
+      },
+      {
+        "label": "Invest",
+        "url": "/p/vanguard-invest"
+      },
+      {
+        "label": "Partners",
+        "url": "/p/vanguard-partners"
+      },
+      {
+        "label": "Careers",
+        "url": "/p/vanguard-careers"
+      },
+      {
+        "label": "Contact",
+        "url": "/p/vanguard-contact"
+      }
+    ],
+    "ctaButton": {
+      "text": "Join the Network",
+      "url": "/p/vanguard-contact"
+    },
+    "ctaColor": "#4380C8",
+    "transparent": true
+  }
+}
