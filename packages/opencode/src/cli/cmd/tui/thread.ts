@@ -58,7 +58,11 @@ export const TuiThreadCommand = cmd({
     try {
       process.chdir(cwd)
     } catch (e) {
-      UI.error("Failed to change directory to " + cwd)
+      if (args.project && !args.project.includes("/") && !args.project.includes(".")) {
+        UI.error(`Unknown command '${args.project}'. Run 'iris --help' for available commands.`)
+      } else {
+        UI.error("Failed to change directory to " + cwd)
+      }
       return
     }
 
