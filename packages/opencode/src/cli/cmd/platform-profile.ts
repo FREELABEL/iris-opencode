@@ -352,6 +352,11 @@ const ProfileCreateCommand = cmd({
     const data = (await res.json()) as any
     const profile = data?.data ?? data
 
+    // Warn if assigned slug differs from expected (counter suffix added)
+    const expectedSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    const assignedSlug = profile.id ?? profile.slug
+    const slugMismatch = assignedSlug && assignedSlug !== expectedSlug
+
     // Link to lead if --lead-id provided
     const leadId = args["lead-id"] as number | undefined
     if (leadId && profile.pk) {
@@ -360,16 +365,18 @@ const ProfileCreateCommand = cmd({
           method: "PUT",
           body: JSON.stringify({ profile_id: profile.pk }),
         })
+        const slugNote = slugMismatch ? ` (slug: ${assignedSlug} — '${expectedSlug}' was taken)` : ''
         if (linkRes.ok) {
-          spinner.stop(success(`${name} created + linked to lead #${leadId}`))
+          spinner.stop(success(`${name} created + linked to lead #${leadId}${slugNote}`))
         } else {
-          spinner.stop(success(`${name} created (lead link failed — update lead manually)`))
+          spinner.stop(success(`${name} created (lead link failed — update lead manually)${slugNote}`))
         }
       } catch {
         spinner.stop(success(`${name} created (lead link failed)`))
       }
     } else {
-      spinner.stop(success(`${name} created`))
+      const slugNote = slugMismatch ? ` (slug: ${assignedSlug} — '${expectedSlug}' was taken)` : ''
+      spinner.stop(success(`${name} created${slugNote}`))
     }
 
     if (args.json) { console.log(JSON.stringify(profile, null, 2)); return }
@@ -585,7 +592,9 @@ const ProfileBatchCreateCommand = cmd({
         }
 
         const slug = profile.id ?? profile.slug ?? "?"
-        console.log(`  ✅ ${bold(name)} → @${slug}${leadId ? dim("  → Lead #" + leadId) : ""}`)
+        const batchExpected = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+        const slugWarn = slug !== batchExpected ? dim(` (expected '${batchExpected}')`) : ""
+        console.log(`  ✅ ${bold(name)} → @${slug}${slugWarn}${leadId ? dim("  → Lead #" + leadId) : ""}`)
         results.push({ ...profile, lead_id: leadId })
         created++
       } catch (err: any) {
