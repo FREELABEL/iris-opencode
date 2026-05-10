@@ -3,6 +3,10 @@ import { createStore, reconcile } from "solid-js/store"
 import { irisFetch, resolveUserId } from "../../iris-api"
 import type { IrisAgent, IrisWorkflow, AtlasList, AtlasItem, IrisContact, IrisPage } from "./types"
 import { IRIS_API } from "../../iris-api"
+import os from "os"
+import path from "path"
+
+const PLATFORM_CONTEXT_PATH = path.join(os.homedir(), ".iris", "platform-context.md")
 
 type DataStatus = "loading" | "loaded" | "error" | "no-auth"
 
@@ -252,9 +256,78 @@ export function useIrisData() {
       setData("workflows", reconcile(mapWorkflows(rawWorkflows)))
       setData("contacts", reconcile(mapContacts(rawLeads)))
       setData("status", "loaded")
+      syncIrisContext()
     } catch {
       if (data.status !== "loaded") setData("status", "error")
     }
+  }
+
+  function syncIrisContext() {
+    const bloq = data.bloqList.find((b) => b.id === data.selectedBloqId)
+    if (!bloq) {
+      import("fs").then((fs) => {
+        try { fs.unlinkSync(PLATFORM_CONTEXT_PATH) } catch {}
+      })
+      return
+    }
+
+    const lines: string[] = [
+      `# IRIS Platform Context`,
+      `You have the following IRIS project selected. Use this to answer questions without running CLI commands.`,
+      ``,
+      `## Selected Project: ${bloq.name} (#${bloq.id})`,
+      ``,
+    ]
+
+    // Atlas lists summary
+    if (data.atlas.length > 0) {
+      const totalItems = data.atlas.reduce((sum, l) => sum + l.items.length, 0)
+      lines.push(`### Lists (${data.atlas.length} total, ${totalItems} items)`)
+      for (const list of data.atlas) {
+        if (list.items.length === 0) continue
+        const preview = list.items.slice(0, 3).map((i) => i.title).join(", ")
+        const more = list.items.length > 3 ? ` +${list.items.length - 3} more` : ""
+        lines.push(`- ${list.name} (${list.items.length}): ${preview}${more}`)
+      }
+      lines.push(``)
+    }
+
+    // Agents
+    lines.push(`### Agents (${data.agents.length})`)
+    if (data.agents.length > 0) {
+      for (const a of data.agents.slice(0, 10)) {
+        lines.push(`- ${a.name} #${a.id}${a.model ? ` (${a.model})` : ""}${a.schedule ? ` every ${a.schedule}` : ""}`)
+      }
+      if (data.agents.length > 10) lines.push(`- +${data.agents.length - 10} more`)
+    } else {
+      lines.push(`None in this project.`)
+    }
+    lines.push(``)
+
+    // Contacts
+    lines.push(`### Contacts (${data.contacts.length})`)
+    if (data.contacts.length > 0) {
+      for (const c of data.contacts.slice(0, 10)) {
+        lines.push(`- ${c.name} #${c.id}${c.status ? ` (${c.status})` : ""}`)
+      }
+      if (data.contacts.length > 10) lines.push(`- +${data.contacts.length - 10} more`)
+    } else {
+      lines.push(`None in this project.`)
+    }
+    lines.push(``)
+
+    // Pages
+    lines.push(`### Pages (${data.pages.length})`)
+    if (data.pages.length > 0) {
+      for (const p of data.pages.slice(0, 10)) {
+        lines.push(`- ${p.title} /${p.slug}`)
+      }
+      if (data.pages.length > 10) lines.push(`- +${data.pages.length - 10} more`)
+    } else {
+      lines.push(`None in this project.`)
+    }
+
+    Bun.write(PLATFORM_CONTEXT_PATH, lines.join("\n")).catch(() => {})
   }
 
   function selectBloq(bloqId: number) {
@@ -274,7 +347,12 @@ export function useIrisData() {
   const interval = setInterval(() => {
     if (data.selectedBloqId) fetchBloqData(data.selectedBloqId)
   }, 30_000)
-  onCleanup(() => clearInterval(interval))
+  onCleanup(() => {
+    clearInterval(interval)
+    import("fs").then((fs) => {
+      try { fs.unlinkSync(PLATFORM_CONTEXT_PATH) } catch {}
+    })
+  })
 
   return { data, selectBloq, refetch: fetchBloqList }
 }
