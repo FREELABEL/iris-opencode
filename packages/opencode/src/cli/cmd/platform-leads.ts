@@ -2951,62 +2951,57 @@ const LeadsPulseCommand = cmd({
         // Sort by date ascending for response time calc
         allMessages.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
 
-        // Sentiment Analysis — simple keyword-based scoring
-        const sentimentKeywords = {
-          positive: [
-            "thanks",
-            "thank you",
-            "great",
-            "awesome",
-            "perfect",
-            "excellent",
-            "love",
-            "appreciate",
-            "excited",
-            "looking forward",
-            "yes",
-            "sounds good",
-            "agree",
-          ],
-          negative: [
-            "issue",
-            "problem",
-            "unfortunately",
-            "concerned",
-            "worried",
-            "disappointed",
-            "delay",
-            "late",
-            "cancel",
-            "no",
-            "can't",
-            "won't",
-            "unable",
-          ],
-        }
+        // Sentiment Analysis — dual-model A/B (gpt-4o-mini vs grok-3-fast)
+        type SentimentResult = { score: number; label: string; summary: string; model: string; latencyMs: number }
+        const sentimentResults: SentimentResult[] = []
+        {
+          const recentMsgs = allMessages.slice(-10)
+          if (recentMsgs.length > 0) {
+            const digest = recentMsgs.map((m) => `[${m.isOutbound ? "YOU" : "THEM"}] ${m.text.slice(0, 200)}`).join("\n")
+            const sysPrompt = `You analyze business communication sentiment. Return ONLY valid JSON, no markdown fences.
+Format: {"score": <-1.0 to 1.0>, "label": "<positive|neutral|negative|mixed>", "summary": "<1 sentence describing the relationship tone and trajectory>"}
+Score meaning: -1.0 = hostile/churning, -0.5 = frustrated, 0 = neutral/transactional, 0.5 = warm/engaged, 1.0 = enthusiastic/advocate.
+Consider context: "fixed the DNS issue" is positive (problem solved), not negative. Focus on relationship health, not topic negativity.`
+            const userPrompt = `Analyze the sentiment of this recent conversation between a business and their client:\n\n${digest}`
 
-        const analyzeSentiment = (text: string): number => {
-          const lower = text.toLowerCase()
-          let score = 0
-          for (const word of sentimentKeywords.positive) {
-            if (lower.includes(word)) score += 1
-          }
-          for (const word of sentimentKeywords.negative) {
-            if (lower.includes(word)) score -= 1
-          }
-          return score
-        }
+            let openaiKey: string | null = process.env.OPENAI_API_KEY ?? null
+            let xaiKey: string | null = process.env.XAI_API_KEY ?? null
+            try {
+              for (const ep of [join(homedir(), ".iris", "sdk", ".env"), join(homedir(), "Sites", "freelabel", "fl-docker-dev", "fl-api", ".env")]) {
+                if (openaiKey && xaiKey) break
+                const f = Bun.file(ep)
+                if (await f.exists()) {
+                  for (const line of (await f.text()).split("\n")) {
+                    if (!openaiKey) { const m = line.match(/^OPENAI_API_KEY\s*=\s*(.+)/); if (m?.[1]) openaiKey = m[1].trim() }
+                    if (!xaiKey) { const m = line.match(/^XAI_API_KEY\s*=\s*(.+)/); if (m?.[1]) xaiKey = m[1].trim() }
+                  }
+                }
+              }
+            } catch {}
 
-        const sentiments = allMessages.map((m) => ({
-          score: analyzeSentiment(m.text),
-          date: m.date,
-          isOutbound: m.isOutbound,
-        }))
-        const recentSentiments = sentiments.slice(-10) // last 10 messages
-        const avgSentiment =
-          recentSentiments.length > 0
-            ? recentSentiments.reduce((sum, s) => sum + s.score, 0) / recentSentiments.length
-            : 0
+            const callModel = async (url: string, key: string, model: string, label: string, extra?: Record<string, unknown>): Promise<SentimentResult | null> => {
+              const t0 = Date.now()
+              try {
+                const res = await fetch(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+                  body: JSON.stringify({ model, max_completion_tokens: 200, messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }], ...extra }),
+                })
+                const ms = Date.now() - t0
+                if (!res.ok) return null
+                const data = (await res.json()) as any
+                const raw = (data?.choices?.[0]?.message?.content ?? "").replace(/```json\s*|```\s*/g, "").trim()
+                const p = JSON.parse(raw)
+                return { score: typeof p.score === "number" ? p.score : 0, label: p.label ?? "neutral", summary: p.summary ?? "", model: label, latencyMs: ms }
+              } catch { return null }
+            }
+
+            if (openaiKey) {
+              const r = await callModel("https://api.openai.com/v1/chat/completions", openaiKey, "gpt-5-nano", "gpt-5-nano", { reasoning_effort: "low" })
+              if (r) sentimentResults.push(r)
+            }
+          }
+        }
 
         // Response time metrics
         const responseTimes: number[] = []
@@ -3057,14 +3052,12 @@ const LeadsPulseCommand = cmd({
         console.log(`  ${bold("Communication Intelligence")}`)
 
         // Sentiment
-        const sentimentLabel =
-          avgSentiment > 0.3
-            ? success("Positive")
-            : avgSentiment < -0.3
-              ? `${UI.Style.TEXT_DANGER}Negative${UI.Style.TEXT_NORMAL}`
-              : dim("Neutral")
-        const sentimentScore = avgSentiment.toFixed(1)
-        printKV("  Sentiment", `${sentimentLabel}  ${dim(`(${sentimentScore})`)}`)
+        if (sentimentResults.length > 0) {
+          const r = sentimentResults[0]
+          const lbl = r.score > 0.3 ? success(r.label) : r.score < -0.3 ? `${UI.Style.TEXT_DANGER}${r.label}${UI.Style.TEXT_NORMAL}` : r.label === "mixed" ? `${UI.Style.TEXT_WARNING}${r.label}${UI.Style.TEXT_NORMAL}` : dim(r.label)
+          printKV("  Sentiment", `${lbl} ${dim(`(${r.score.toFixed(1)})`)}`)
+          if (r.summary) console.log(`    ${dim(r.summary)}`)
+        }
 
         // Response times
         if (avgYourResponse !== null) {
