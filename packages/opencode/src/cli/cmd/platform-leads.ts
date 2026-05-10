@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive, PLATFORM_URLS, BRIDGE_URL, getBridgeToken } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive, PLATFORM_URLS, BRIDGE_URL, getBridgeToken, resolveUserId } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+import { homedir } from "os"
 import { join, basename, isAbsolute } from "path"
 
 // ============================================================================
@@ -4618,45 +4619,34 @@ const LeadsCollectCommand = cmd({
 // Segment — saved filters for lead groups
 // ============================================================================
 
-const SEGMENT_FILE = ".iris/lead-segments.json"
+// ============================================================================
+// Segments — stored in platform DB (lead_segments table), synced across team
+// ============================================================================
 
-function resolveSegmentFile(): string {
-  let dir = process.cwd()
-  for (let i = 0; i < 10; i++) {
-    if (existsSync(join(dir, "fl-docker-dev"))) return join(dir, SEGMENT_FILE)
-    const parent = join(dir, "..")
-    if (parent === dir) break
-    dir = parent
-  }
-  return join(process.cwd(), SEGMENT_FILE)
-}
-
-interface LeadSegment {
-  name: string
-  filters: Record<string, string>
-  created: string
-}
-
-function loadSegments(): LeadSegment[] {
-  const path = resolveSegmentFile()
-  if (!existsSync(path)) return []
-  try { return JSON.parse(readFileSync(path, "utf-8")) } catch { return [] }
-}
-
-function saveSegments(segments: LeadSegment[]): void {
-  const path = resolveSegmentFile()
-  const dir = join(path, "..")
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(path, JSON.stringify(segments, null, 2))
+async function fetchSegments(bloqId?: number): Promise<any[]> {
+  const userId = await resolveUserId()
+  if (!userId) return []
+  const path = bloqId
+    ? `/api/v1/users/${userId}/bloqs/${bloqId}/lead-segments`
+    : `/api/v1/users/${userId}/lead-segments`
+  const res = await irisFetch(path)
+  if (!res.ok) return []
+  const data = await res.json().catch(() => ({}))
+  return data?.segments ?? []
 }
 
 const SegmentListCommand = cmd({
   command: "list",
   aliases: ["ls"],
   describe: "list saved segments",
-  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean" }),
+  builder: (yargs) =>
+    yargs
+      .option("bloq-id", { describe: "filter by bloq/project ID", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
-    const segments = loadSegments()
+    if (!(await requireAuth())) return
+
+    const segments = await fetchSegments(args["bloq-id"] as number | undefined)
     if ((args as any).json) { console.log(JSON.stringify(segments, null, 2)); return }
     if (segments.length === 0) {
       prompts.log.info("No segments saved yet")
@@ -4667,8 +4657,10 @@ const SegmentListCommand = cmd({
     console.log(bold(`Lead Segments (${segments.length})`))
     printDivider()
     for (const seg of segments) {
-      const filters = Object.entries(seg.filters).map(([k, v]) => `${k}=${v}`).join(", ")
-      console.log(`  ${bold(seg.name)}  ${dim(filters)}  ${dim(seg.created)}`)
+      const summary = seg.filter_summary || Object.entries(seg.filters || {}).map(([k, v]: [string, any]) => `${k}=${v}`).join(", ")
+      const bloqTag = seg.bloq_id ? dim(` [bloq #${seg.bloq_id}]`) : dim(" [global]")
+      const countTag = seg.lead_count != null ? dim(` (${seg.lead_count} leads)`) : ""
+      console.log(`  ${bold(seg.name)}  ${dim(summary)}${bloqTag}${countTag}`)
     }
     printDivider()
   },
@@ -4677,101 +4669,106 @@ const SegmentListCommand = cmd({
 const SegmentCreateCommand = cmd({
   command: "create <name>",
   aliases: ["add", "save"],
-  describe: "create a named segment with filters",
+  describe: "create a named segment with filters (stored in platform DB)",
   builder: (yargs) =>
     yargs
       .positional("name", { describe: "segment name", type: "string", demandOption: true })
       .option("status", { describe: "filter by status (Won, Active, In Negotiation, etc.)", type: "string" })
       .option("search", { describe: "search query (name/email/company)", type: "string" })
-      .option("bloq-id", { describe: "filter by bloq/project ID", type: "number" })
+      .option("bloq-id", { describe: "scope segment to a bloq/project ID", type: "number" })
       .option("min-price", { describe: "minimum price_bid", type: "number" })
       .option("max-price", { describe: "maximum price_bid", type: "number" })
       .option("tag", { describe: "filter by tag", type: "string" })
+      .option("shared", { describe: "make visible to team members", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
-    const filters: Record<string, string> = {}
+    if (!(await requireAuth())) return
+
+    const filters: Record<string, any> = {}
     if (args.status) filters.status = String(args.status)
     if (args.search) filters.search = String(args.search)
-    if (args["bloq-id"]) filters.bloq_id = String(args["bloq-id"])
-    if (args["min-price"]) filters.min_price = String(args["min-price"])
-    if (args["max-price"]) filters.max_price = String(args["max-price"])
-    if (args.tag) filters.tag = String(args.tag)
+    if (args["min-price"]) filters.value_range = { ...(filters.value_range || {}), min: Number(args["min-price"]) }
+    if (args["max-price"]) filters.value_range = { ...(filters.value_range || {}), max: Number(args["max-price"]) }
+    if (args.tag) filters.tags = [String(args.tag)]
 
     if (Object.keys(filters).length === 0) {
       prompts.log.error("At least one filter required (--status, --search, --bloq-id, --min-price, --tag)")
       return
     }
 
-    const segments = loadSegments()
-    const existing = segments.findIndex((s) => s.name === args.name)
-    const seg: LeadSegment = { name: String(args.name), filters, created: new Date().toISOString().split("T")[0] }
+    const userId = await resolveUserId()
+    if (!userId) { prompts.log.error("Could not resolve user ID"); return }
 
-    if (existing >= 0) segments[existing] = seg
-    else segments.push(seg)
+    const bloqId = args["bloq-id"] as number | undefined
+    const path = bloqId
+      ? `/api/v1/users/${userId}/bloqs/${bloqId}/lead-segments`
+      : `/api/v1/users/${userId}/lead-segments`
 
-    saveSegments(segments)
+    const res = await irisFetch(path, {
+      method: "POST",
+      body: JSON.stringify({
+        name: String(args.name),
+        filters,
+        is_shared: args.shared,
+      }),
+    })
+
+    if (!(await handleApiError(res, "Create segment"))) return
+
+    const data = await res.json().catch(() => ({}))
+    const seg = data?.segment
 
     if ((args as any).json) { console.log(JSON.stringify(seg, null, 2)); return }
-    prompts.log.success(`Segment "${args.name}" ${existing >= 0 ? "updated" : "created"}`)
-    console.log(dim(`  Filters: ${Object.entries(filters).map(([k, v]) => `${k}=${v}`).join(", ")}`))
-    console.log(dim(`  View: iris leads segment view "${args.name}"`))
+    prompts.log.success(`Segment "${args.name}" created (ID: ${seg?.id})`)
+    if (seg?.filter_summary) console.log(dim(`  Filters: ${seg.filter_summary}`))
+    if (seg?.lead_count != null) console.log(dim(`  Matching leads: ${seg.lead_count}`))
+    console.log(dim(`  View: iris leads segment view ${seg?.id}`))
   },
 })
 
 const SegmentViewCommand = cmd({
-  command: "view <name>",
+  command: "view <id>",
   aliases: ["show", "run"],
   describe: "run a saved segment and show matching leads",
   builder: (yargs) =>
     yargs
-      .positional("name", { describe: "segment name", type: "string", demandOption: true })
+      .positional("id", { describe: "segment ID or name", type: "string", demandOption: true })
       .option("limit", { describe: "max results", type: "number", default: 50 })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
     if (!(await requireAuth())) return
 
-    const segments = loadSegments()
-    const seg = segments.find((s) => s.name === args.name)
-    if (!seg) {
-      prompts.log.error(`Segment "${args.name}" not found`)
-      const names = segments.map((s) => s.name).join(", ")
-      if (names) console.log(dim(`  Available: ${names}`))
-      return
+    const userId = await resolveUserId()
+    if (!userId) { prompts.log.error("Could not resolve user ID"); return }
+
+    // Resolve by ID or name
+    let segmentId = args.id
+    if (isNaN(Number(segmentId))) {
+      // Look up by name
+      const segments = await fetchSegments()
+      const match = segments.find((s: any) => s.name.toLowerCase() === String(segmentId).toLowerCase())
+      if (!match) {
+        prompts.log.error(`Segment "${segmentId}" not found`)
+        const names = segments.map((s: any) => s.name).join(", ")
+        if (names) console.log(dim(`  Available: ${names}`))
+        return
+      }
+      segmentId = String(match.id)
     }
 
-    const params = new URLSearchParams({ per_page: String(args.limit) })
-    for (const [k, v] of Object.entries(seg.filters)) {
-      if (!["min_price", "max_price", "tag"].includes(k)) params.set(k, v)
-    }
-
-    const res = await irisFetch(`/api/v1/leads?${params}`)
-    if (!(await handleApiError(res, "Fetch segment"))) return
+    // Fetch leads via the segment's dedicated leads endpoint
+    const res = await irisFetch(`/api/v1/users/${userId}/lead-segments/${segmentId}/leads?per_page=${args.limit}`)
+    if (!(await handleApiError(res, "Fetch segment leads"))) return
 
     const data = await res.json().catch(() => ({}))
-    let leads: any[] = data?.data ?? []
-
-    // Client-side filters the API doesn't support natively
-    if (seg.filters.min_price) {
-      const min = Number(seg.filters.min_price)
-      leads = leads.filter((l: any) => Number(l.price_bid ?? 0) >= min)
-    }
-    if (seg.filters.max_price) {
-      const max = Number(seg.filters.max_price)
-      leads = leads.filter((l: any) => Number(l.price_bid ?? 0) <= max)
-    }
-    if (seg.filters.tag) {
-      const tag = seg.filters.tag.toLowerCase()
-      leads = leads.filter((l: any) => {
-        const tags = Array.isArray(l.tags) ? l.tags : (typeof l.tags === "string" ? l.tags.split(",") : [])
-        return tags.some((t: string) => t.toLowerCase().includes(tag))
-      })
-    }
+    const leads: any[] = data?.leads ?? data?.data ?? []
+    const seg = data?.segment
 
     if ((args as any).json) { console.log(JSON.stringify({ segment: seg, leads, count: leads.length }, null, 2)); return }
 
     console.log("")
-    console.log(bold(`Segment: ${seg.name} — ${leads.length} leads`))
-    console.log(dim(`  Filters: ${Object.entries(seg.filters).map(([k, v]) => `${k}=${v}`).join(", ")}`))
+    console.log(bold(`Segment: ${seg?.name ?? segmentId} — ${leads.length} leads`))
+    if (seg?.filter_summary) console.log(dim(`  Filters: ${seg.filter_summary}`))
     printDivider()
 
     if (leads.length === 0) { prompts.log.info("No leads match this segment"); return }
@@ -4781,31 +4778,110 @@ const SegmentViewCommand = cmd({
 })
 
 const SegmentDeleteCommand = cmd({
-  command: "delete <name>",
+  command: "delete <id>",
   aliases: ["rm", "remove"],
   describe: "delete a saved segment",
   builder: (yargs) =>
-    yargs.positional("name", { describe: "segment name", type: "string", demandOption: true }),
+    yargs.positional("id", { describe: "segment ID", type: "number", demandOption: true }),
   async handler(args) {
-    const segments = loadSegments()
-    const idx = segments.findIndex((s) => s.name === args.name)
-    if (idx < 0) { prompts.log.error(`Segment "${args.name}" not found`); return }
-    segments.splice(idx, 1)
-    saveSegments(segments)
-    prompts.log.success(`Segment "${args.name}" deleted`)
+    if (!(await requireAuth())) return
+
+    const userId = await resolveUserId()
+    if (!userId) { prompts.log.error("Could not resolve user ID"); return }
+
+    const res = await irisFetch(`/api/v1/users/${userId}/lead-segments/${args.id}`, { method: "DELETE" })
+    if (!(await handleApiError(res, "Delete segment"))) return
+
+    prompts.log.success(`Segment #${args.id} deleted`)
+  },
+})
+
+// One-time migration: push local segments to platform DB
+const SegmentMigrateCommand = cmd({
+  command: "migrate",
+  aliases: ["sync-local"],
+  describe: "migrate local ~/.iris/lead-segments.json to platform DB (one-time)",
+  builder: (yargs) =>
+    yargs
+      .option("bloq-id", { describe: "target bloq ID for migrated segments", type: "number" })
+      .option("dry-run", { describe: "show what would be migrated without saving", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const localPath = join(homedir(), ".iris", "lead-segments.json")
+    if (!existsSync(localPath)) {
+      prompts.log.info("No local segments file found at ~/.iris/lead-segments.json")
+      return
+    }
+
+    let localSegments: Array<{ name: string; filters: Record<string, string>; created: string }> = []
+    try { localSegments = JSON.parse(readFileSync(localPath, "utf-8")) } catch { prompts.log.error("Failed to parse local segments file"); return }
+
+    if (localSegments.length === 0) { prompts.log.info("No local segments to migrate"); return }
+
+    console.log("")
+    console.log(bold(`Migrating ${localSegments.length} local segment(s) to platform DB`))
+    printDivider()
+
+    if (args["dry-run"]) {
+      for (const seg of localSegments) {
+        console.log(`  ${bold(seg.name)}  ${dim(Object.entries(seg.filters).map(([k, v]) => `${k}=${v}`).join(", "))}`)
+      }
+      console.log("")
+      console.log(dim("Dry run — no changes made. Remove --dry-run to migrate."))
+      return
+    }
+
+    const userId = await resolveUserId()
+    if (!userId) { prompts.log.error("Could not resolve user ID"); return }
+
+    const bloqId = args["bloq-id"] as number | undefined
+    const path = bloqId
+      ? `/api/v1/users/${userId}/bloqs/${bloqId}/lead-segments`
+      : `/api/v1/users/${userId}/lead-segments`
+
+    let ok = 0
+    let fail = 0
+    for (const seg of localSegments) {
+      // Convert flat string filters to API format
+      const filters: Record<string, any> = { ...seg.filters }
+      if (filters.min_price) { filters.value_range = { ...(filters.value_range || {}), min: Number(filters.min_price) }; delete filters.min_price }
+      if (filters.max_price) { filters.value_range = { ...(filters.value_range || {}), max: Number(filters.max_price) }; delete filters.max_price }
+      if (filters.tag) { filters.tags = [filters.tag]; delete filters.tag }
+
+      const res = await irisFetch(path, {
+        method: "POST",
+        body: JSON.stringify({ name: seg.name, filters }),
+      })
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}))
+        console.log(`  ${success("+")} ${seg.name} → ID #${data?.segment?.id}`)
+        ok++
+      } else {
+        console.log(`  ${dim("x")} ${seg.name} — failed (HTTP ${res.status})`)
+        fail++
+      }
+    }
+
+    printDivider()
+    console.log(`  ${ok} migrated, ${fail} failed`)
+    if (ok > 0 && fail === 0) {
+      console.log(dim(`  Local file kept at ${localPath} — safe to delete once verified`))
+    }
   },
 })
 
 export const LeadsSegmentCommand = cmd({
   command: "segment",
   aliases: ["segments", "seg"],
-  describe: "manage saved lead segments — named filters for quick access",
+  describe: "manage lead segments — named filters stored in platform DB (shared across team)",
   builder: (yargs) =>
     yargs
       .command(SegmentListCommand)
       .command(SegmentCreateCommand)
       .command(SegmentViewCommand)
       .command(SegmentDeleteCommand)
+      .command(SegmentMigrateCommand)
       .demandCommand(),
   async handler() {},
 })
