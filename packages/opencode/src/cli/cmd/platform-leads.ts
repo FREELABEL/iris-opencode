@@ -3003,50 +3003,54 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
           }
         }
 
-        // Response time metrics
-        const responseTimes: number[] = []
-        for (let i = 1; i < allMessages.length; i++) {
-          const prev = allMessages[i - 1]
-          const curr = allMessages[i]
-
-          // Only measure when direction changes (they reply to you, or you reply to them)
-          if (prev.isOutbound !== curr.isOutbound) {
-            const timeDiff = new Date(curr.date).getTime() - new Date(prev.date).getTime()
-            const hours = timeDiff / (1000 * 60 * 60)
-            if (hours > 0 && hours < 7 * 24) {
-              // ignore > 1 week gaps
-              responseTimes.push(hours)
+        // Response time metrics — business hours aware
+        // Counts only Mon-Fri 8am-6pm hours between messages (excludes overnight + weekends)
+        const businessHoursBetween = (startDate: Date, endDate: Date): number => {
+          if (endDate <= startDate) return 0
+          let hours = 0
+          const cursor = new Date(startDate)
+          while (cursor < endDate) {
+            const day = cursor.getDay() // 0=Sun, 6=Sat
+            const hour = cursor.getHours()
+            if (day >= 1 && day <= 5 && hour >= 8 && hour < 18) {
+              hours += 1
             }
+            cursor.setTime(cursor.getTime() + 3600000) // advance 1 hour
+            // Safety: cap at 500 iterations (3 weeks of hours)
+            if (hours > 500) break
           }
+          return hours
         }
 
-        const avgResponseTime =
-          responseTimes.length > 0 ? responseTimes.reduce((sum, t) => sum + t, 0) / responseTimes.length : null
-
-        // Your response time vs theirs
         const yourResponses: number[] = []
         const theirResponses: number[] = []
+        const yourBizResponses: number[] = []
+        const theirBizResponses: number[] = []
         for (let i = 1; i < allMessages.length; i++) {
           const prev = allMessages[i - 1]
           const curr = allMessages[i]
-
           if (prev.isOutbound !== curr.isOutbound) {
-            const timeDiff = new Date(curr.date).getTime() - new Date(prev.date).getTime()
-            const hours = timeDiff / (1000 * 60 * 60)
-            if (hours > 0 && hours < 7 * 24) {
+            const prevDate = new Date(prev.date)
+            const currDate = new Date(curr.date)
+            const wallHours = (currDate.getTime() - prevDate.getTime()) / (1000 * 60 * 60)
+            if (wallHours > 0 && wallHours < 7 * 24) {
+              const bizHours = businessHoursBetween(prevDate, currDate)
               if (curr.isOutbound) {
-                yourResponses.push(hours)
+                yourResponses.push(wallHours)
+                yourBizResponses.push(bizHours)
               } else {
-                theirResponses.push(hours)
+                theirResponses.push(wallHours)
+                theirBizResponses.push(bizHours)
               }
             }
           }
         }
 
-        const avgYourResponse =
-          yourResponses.length > 0 ? yourResponses.reduce((sum, t) => sum + t, 0) / yourResponses.length : null
-        const avgTheirResponse =
-          theirResponses.length > 0 ? theirResponses.reduce((sum, t) => sum + t, 0) / theirResponses.length : null
+        const avg = (arr: number[]) => arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : null
+        const avgYourResponse = avg(yourResponses)
+        const avgTheirResponse = avg(theirResponses)
+        const avgYourBiz = avg(yourBizResponses)
+        const avgTheirBiz = avg(theirBizResponses)
 
         console.log()
         console.log(`  ${bold("Communication Intelligence")}`)
@@ -3060,22 +3064,16 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
         }
 
         // Response times
+        const fmtH = (h: number) => h < 1 ? `${Math.round(h * 60)}m` : h < 24 ? `${h.toFixed(1)}h` : `${(h / 24).toFixed(1)}d`
         if (avgYourResponse !== null) {
-          const formatHours = (h: number) =>
-            h < 1 ? `${Math.round(h * 60)}m` : h < 24 ? `${h.toFixed(1)}h` : `${(h / 24).toFixed(1)}d`
-          printKV("  Your Avg Response", formatHours(avgYourResponse))
+          const bizNote = avgYourBiz !== null ? dim(` (${fmtH(avgYourBiz)} biz hrs)`) : ""
+          printKV("  Your Avg Response", `${fmtH(avgYourResponse)}${bizNote}`)
         }
         if (avgTheirResponse !== null) {
-          const formatHours = (h: number) =>
-            h < 1 ? `${Math.round(h * 60)}m` : h < 24 ? `${h.toFixed(1)}h` : `${(h / 24).toFixed(1)}d`
           const theirColor = avgTheirResponse > 48 ? UI.Style.TEXT_WARNING : ""
           const theirNormal = avgTheirResponse > 48 ? UI.Style.TEXT_NORMAL : ""
-          printKV("  Their Avg Response", `${theirColor}${formatHours(avgTheirResponse)}${theirNormal}`)
-        }
-        if (avgResponseTime !== null) {
-          const formatHours = (h: number) =>
-            h < 1 ? `${Math.round(h * 60)}m` : h < 24 ? `${h.toFixed(1)}h` : `${(h / 24).toFixed(1)}d`
-          printKV("  Overall Avg", dim(formatHours(avgResponseTime)))
+          const bizNote = avgTheirBiz !== null ? dim(` (${fmtH(avgTheirBiz)} biz hrs)`) : ""
+          printKV("  Their Avg Response", `${theirColor}${fmtH(avgTheirResponse)}${theirNormal}${bizNote}`)
         }
       }
 
@@ -3136,14 +3134,33 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
           }
         }
 
-        // Lead owner / assigned_to
-        const owner = lead.assigned_to_name ?? lead.owner_name
-        if (owner) {
-          const existing = teamMembers.get(owner)
+        // From CRM notes — track unique user_ids who contributed (non-system)
+        const noteUserIds = new Set<number>()
+        const crmNotes: any[] = Array.isArray(lead.notes) ? lead.notes : []
+        for (const n of crmNotes) {
+          if (typeof n === "object" && n.user_id && !n.is_system_generated) {
+            noteUserIds.add(n.user_id)
+            const key = `user:${n.user_id}`
+            const existing = teamMembers.get(key)
+            if (existing) {
+              existing.roles.add("notes")
+              if (n.created_at && n.created_at > existing.lastActive) existing.lastActive = n.created_at
+            } else {
+              teamMembers.set(key, { name: n.created_by_name ?? n.author_name ?? n.user_name ?? `User #${n.user_id}`, roles: new Set(["notes"]), lastActive: n.created_at ?? "" })
+            }
+          }
+        }
+
+        // Lead owner / assigned_to — use user_id as fallback key
+        const ownerId = lead.assigned_to ?? lead.owner_id ?? lead.user_id
+        const ownerName = lead.assigned_to_name ?? lead.owner_name
+        if (ownerId) {
+          const key = ownerName ?? `user:${ownerId}`
+          const existing = teamMembers.get(key)
           if (existing) {
             existing.roles.add("owner")
           } else {
-            teamMembers.set(owner, { name: owner, roles: new Set(["owner"]), lastActive: "" })
+            teamMembers.set(key, { name: ownerName ?? `User #${ownerId}`, roles: new Set(["owner"]), lastActive: "" })
           }
         }
 
@@ -3180,21 +3197,25 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
           if (skipped.length > 0) printKV("  Skipped", dim(String(skipped.length)))
 
           // Show next pending step
-          const nextStep = pending.sort((a: any, b: any) => (a.step_number ?? 0) - (b.step_number ?? 0))[0]
+          // Assign fallback step numbers from array index when API returns null
+          const withIndex = (arr: any[]) => arr.map((s: any, i: number) => ({ ...s, _stepNum: s.step_number ?? i + 1 }))
+          const pendingIndexed = withIndex(pending).sort((a: any, b: any) => a._stepNum - b._stepNum)
+          const nextStep = pendingIndexed[0]
           if (nextStep) {
             const stepChannel = nextStep.channel ?? nextStep.type ?? "email"
             const dueDate = nextStep.due_date ? dim(` · due ${nextStep.due_date.split("T")[0]}`) : ""
             const overdue = nextStep.due_date && new Date(nextStep.due_date) < new Date() ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}` : ""
-            printKV("  Next Step", `${highlight(`#${nextStep.step_number ?? "?"} ${stepChannel}`)}${dueDate}${overdue}`)
+            printKV("  Next Step", `${highlight(`#${nextStep._stepNum} ${stepChannel}`)}${dueDate}${overdue}`)
             if (nextStep.subject) console.log(`    ${dim(`Subject: ${nextStep.subject.slice(0, 80)}`)}`)
           }
 
           // Show last completed step
-          const lastCompleted = completed.sort((a: any, b: any) => (b.step_number ?? 0) - (a.step_number ?? 0))[0]
+          const completedIndexed = withIndex(completed).sort((a: any, b: any) => b._stepNum - a._stepNum)
+          const lastCompleted = completedIndexed[0]
           if (lastCompleted) {
             const completedDate = lastCompleted.completed_at ? dim(lastCompleted.completed_at.split("T")[0]) : ""
             const replied = lastCompleted.replied_at ? success(" REPLIED") : ""
-            printKV("  Last Completed", `${dim(`#${lastCompleted.step_number ?? "?"} ${lastCompleted.channel ?? "email"}`)} ${completedDate}${replied}`)
+            printKV("  Last Completed", `${dim(`#${lastCompleted._stepNum} ${lastCompleted.channel ?? "email"}`)} ${completedDate}${replied}`)
           }
         }
 
@@ -3305,11 +3326,11 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
         }
         // Priority 3: Pending outreach steps that are due
         else if (pendingOutreach.length > 0) {
-          const nextStep = pendingOutreach.sort((a: any, b: any) => (a.step_number ?? 0) - (b.step_number ?? 0))[0]
+          const nextStep = pendingOutreach.map((s: any, i: number) => ({ ...s, _n: s.step_number ?? i + 1 })).sort((a: any, b: any) => a._n - b._n)[0]
           const isOverdue = nextStep.due_date && new Date(nextStep.due_date) < new Date()
           nextAction = isOverdue
-            ? `Execute overdue outreach step #${nextStep.step_number ?? "?"} (${nextStep.channel ?? "email"})`
-            : `Pending outreach step #${nextStep.step_number ?? "?"} — ${nextStep.channel ?? "email"}${nextStep.due_date ? ` due ${nextStep.due_date.split("T")[0]}` : ""}`
+            ? `Execute overdue outreach step #${nextStep._n} (${nextStep.channel ?? "email"})`
+            : `Pending outreach step #${nextStep._n} — ${nextStep.channel ?? "email"}${nextStep.due_date ? ` due ${nextStep.due_date.split("T")[0]}` : ""}`
           actionPriority = isOverdue ? "high" : "medium"
         }
         // Priority 4: No recent inbound (ghost lead)
