@@ -454,6 +454,19 @@ const IntegrationsExecCommand = cmd({
         console.log(JSON.stringify(data, null, 2))
       }
 
+      // Report bundle attachment (shown after any of the above)
+      if (data.report_bundle) {
+        const rb = data.report_bundle
+        console.log()
+        console.log(`  ${bold("Report Bundle")}  ${rb.success ? success("✓ Generated") : "✗ Failed"}`)
+        printDivider()
+        if (rb.zip_url) printKV("Download", rb.zip_url)
+        if (rb.bloq_item_url) printKV("View", rb.bloq_item_url)
+        if (rb.formats) printKV("Formats", rb.formats.join(", "))
+        if (rb.error) printKV("Error", rb.error)
+        printDivider()
+      }
+
       console.log()
       if (!args.json) prompts.outro(dim(`iris integrations call ${args.type} ${args.function} --json`))
     } catch (err) {
