@@ -2207,10 +2207,11 @@ const LeadsPulseCommand = cmd({
       let outreachSteps: any[] = []
       let leadWorkflows: any[] = []
       let productUsage: any = null
+      let leadOpportunities: any[] = []
       {
         const userId = await resolveUserId()
         const bloqId = (lead.bloq_ids ?? [])[0]
-        const [dealRes, stripeRes, tasksRes, scoreRes, activityRes, outreachRes, workflowsRes, usageRes] = await Promise.allSettled([
+        const [dealRes, stripeRes, tasksRes, scoreRes, activityRes, outreachRes, workflowsRes, usageRes, oppsRes] = await Promise.allSettled([
           irisFetch(`/api/v1/leads/${leadId}/deal-status`),
           irisFetch(`/api/v1/leads/${leadId}/stripe-payments`),
           irisFetch(`/api/v1/leads/${leadId}/tasks`),
@@ -2219,6 +2220,7 @@ const LeadsPulseCommand = cmd({
           irisFetch(`/api/v1/leads/${leadId}/outreach-steps`),
           bloqId && userId ? irisFetch(`/api/v1/users/${userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`) : Promise.resolve(null),
           irisFetch(`/api/v1/leads/${leadId}/usage`),
+          irisFetch(`/api/v1/marketplace/opportunities?lead_id=${leadId}&limit=10`),
         ])
 
         // Parse deal-status
@@ -2257,6 +2259,11 @@ const LeadsPulseCommand = cmd({
         // Parse product usage data
         if (usageRes.status === "fulfilled" && usageRes.value?.ok) {
           productUsage = ((await usageRes.value.json()) as any)?.data ?? null
+        }
+        // Parse opportunities linked to this lead
+        if (oppsRes.status === "fulfilled" && oppsRes.value?.ok) {
+          const od = ((await oppsRes.value.json()) as any)?.data
+          leadOpportunities = Array.isArray(od) ? od : []
         }
       }
 
@@ -2447,6 +2454,23 @@ const LeadsPulseCommand = cmd({
             }
           }
         }
+      }
+
+      // Opportunities linked to this lead
+      if (leadOpportunities.length > 0) {
+        console.log()
+        console.log(`  ${bold("Opportunities")}  ${dim(`(${leadOpportunities.length})`)}`)
+        for (const opp of leadOpportunities.slice(0, 5)) {
+          const title = opp.public_title ?? opp.title ?? "Untitled"
+          const parts: string[] = []
+          if (opp.funding_goal_cents) parts.push(`$${(opp.funding_goal_cents / 100).toFixed(0)} goal`)
+          if (opp.total_raised_cents) parts.push(`$${(opp.total_raised_cents / 100).toFixed(0)} raised`)
+          if (opp.applications_count) parts.push(`${opp.applications_count} apps`)
+          if (opp.investment_interests_count) parts.push(`${opp.investment_interests_count} investors`)
+          console.log(`    ${dim(`#${opp.id}`)}  ${title}  ${dim(parts.join(" · "))}`)
+        }
+        if (leadOpportunities.length > 5)
+          console.log(`    ${dim(`…and ${leadOpportunities.length - 5} more`)}`)
       }
 
       // Requirements Health — automated deliverable testing
