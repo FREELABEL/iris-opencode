@@ -935,6 +935,95 @@ const BloqsComposeCommand = cmd({
   },
 })
 
+const BloqsRenameCommand = cmd({
+  command: "rename <type> <id> [name]",
+  aliases: ["mv"],
+  describe: "rename a bloq, list, or item",
+  builder: (yargs) =>
+    yargs
+      .positional("type", { describe: "what to rename", choices: ["bloq", "list", "item"] as const, demandOption: true })
+      .positional("id", { describe: "ID of the bloq/list/item", type: "number", demandOption: true })
+      .positional("name", { describe: "new name", type: "string" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Rename ${args.type} #${args.id}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    let name = args.name as string | undefined
+    if (!name) {
+      try {
+        name = (await promptOrFail("name", () =>
+          prompts.text({
+            message: "New name",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          }),
+        )) as string
+      } catch (err) {
+        if (err instanceof MissingFlagError) {
+          prompts.log.error(err.message)
+          prompts.outro("Done")
+          process.exitCode = 2
+          return
+        }
+        throw err
+      }
+      if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start(`Renaming ${args.type}…`)
+
+    try {
+      let res: Response
+
+      switch (args.type) {
+        case "bloq":
+          res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ name }),
+          })
+          break
+        case "list":
+          res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/${args.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ name }),
+          })
+          break
+        case "item":
+          res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ title: name }),
+          })
+          break
+        default:
+          spinner.stop("Invalid type", 1)
+          prompts.outro("Done")
+          return
+      }
+
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, `Rename ${args.type}`)
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Renamed to: ${bold(name!)}`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -985,6 +1074,7 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
       .command(BloqsComposeCommand)
+      .command(BloqsRenameCommand)
       .demandCommand(),
   async handler() {},
 })

@@ -57,8 +57,12 @@ const ROUTES: Record<string, RouteDescriptor> = {
   "bloqs.count": { method: "GET", path: "/api/v1/user/{userId}/bloqs/count", needsUserId: true },
   "bloqs.lists.all": { method: "GET", path: "/api/v1/user/{userId}/bloqs/{bloqId}/lists", needsUserId: true },
   "bloqs.lists.create": { method: "POST", path: "/api/v1/user/{userId}/bloqs/{bloqId}/lists", needsUserId: true },
+  "bloqs.lists.update": { method: "PATCH", path: "/api/v1/user/{userId}/bloqs/list/{listId}", needsUserId: true },
+  "bloqs.lists.delete": { method: "DELETE", path: "/api/v1/user/{userId}/bloqs/list/{listId}", needsUserId: true },
   "bloqs.items.list": { method: "GET", path: "/api/v1/user/bloqs/lists/{listId}/items" },
   "bloqs.items.create": { method: "POST", path: "/api/v1/user/bloqs/lists/{listId}/items" },
+  "bloqs.items.update": { method: "PUT", path: "/api/v1/user/bloqs/list/item/{itemId}" },
+  "bloqs.items.delete": { method: "DELETE", path: "/api/v1/user/bloqs/list/item/{itemId}" },
   "bloqs.content.list": { method: "GET", path: "/api/v1/user/bloqs/{bloqId}/content" },
   "bloqs.content.create": { method: "POST", path: "/api/v1/user/bloqs/{bloqId}/content" },
 
