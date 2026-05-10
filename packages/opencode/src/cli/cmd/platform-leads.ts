@@ -1,7 +1,24 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive, PLATFORM_URLS, BRIDGE_URL, getBridgeToken, resolveUserId } from "./iris-api"
+import {
+  irisFetch,
+  requireAuth,
+  handleApiError,
+  printDivider,
+  printKV,
+  dim,
+  bold,
+  success,
+  highlight,
+  promptOrFail,
+  MissingFlagError,
+  isNonInteractive,
+  PLATFORM_URLS,
+  BRIDGE_URL,
+  getBridgeToken,
+  resolveUserId,
+} from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { homedir } from "os"
@@ -25,7 +42,10 @@ function resolveSyncDir(): string {
 }
 
 function slugify(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")
 }
 
 function leadFilename(l: Record<string, unknown>): string {
@@ -36,7 +56,9 @@ function leadFilename(l: Record<string, unknown>): string {
 function findLocalFile(dir: string, id: number): string | undefined {
   if (!existsSync(dir)) return undefined
   const prefix = `${id}-`
-  const files = require("fs").readdirSync(dir).filter((f: string) => f.startsWith(prefix) && f.endsWith(".json"))
+  const files = require("fs")
+    .readdirSync(dir)
+    .filter((f: string) => f.startsWith(prefix) && f.endsWith(".json"))
   return files.length > 0 ? join(dir, files[0]) : undefined
 }
 
@@ -65,9 +87,10 @@ function printLead(l: Record<string, unknown>): void {
   // Show bloq associations (project/CRM the lead belongs to)
   const bloqIds = Array.isArray(l.bloq_ids) ? l.bloq_ids : []
   const bloqNames = Array.isArray(l.bloq_names) ? l.bloq_names : []
-  const bloqLabel = bloqIds.length > 0
-    ? `  ${dim(bloqIds.map((id: unknown, i: number) => `bloq:${id}${bloqNames[i] ? ` (${bloqNames[i]})` : ""}`).join(", "))}`
-    : ""
+  const bloqLabel =
+    bloqIds.length > 0
+      ? `  ${dim(bloqIds.map((id: unknown, i: number) => `bloq:${id}${bloqNames[i] ? ` (${bloqNames[i]})` : ""}`).join(", "))}`
+      : ""
   console.log(`  ${id}  ${name}${company}${status}${bloqLabel}`)
   if (l.email) console.log(`    ${dim("✉")} ${email}`)
 }
@@ -85,7 +108,9 @@ function formatTime(iso: string): string {
     const d = new Date(iso)
     if (isNaN(d.getTime())) return iso
     return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
-  } catch { return iso }
+  } catch {
+    return iso
+  }
 }
 
 function formatDate(iso: string): string {
@@ -93,7 +118,9 @@ function formatDate(iso: string): string {
     const d = new Date(iso)
     if (isNaN(d.getTime())) return iso
     return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
-  } catch { return iso }
+  } catch {
+    return iso
+  }
 }
 
 /**
@@ -122,8 +149,7 @@ async function fetchLeadCalendarEvents(
   const nameL = (lead.name ?? "").toLowerCase()
   const emailL = (lead.email ?? "").toLowerCase()
   const filtered = events.filter((ev: any) => {
-    const haystack = [ev.summary, ev.description, JSON.stringify(ev.attendees ?? [])]
-      .join(" ").toLowerCase()
+    const haystack = [ev.summary, ev.description, JSON.stringify(ev.attendees ?? [])].join(" ").toLowerCase()
     if (emailL && haystack.includes(emailL)) return true
     if (nameL && nameL.length > 2 && haystack.includes(nameL)) return true
     return false
@@ -154,10 +180,16 @@ async function resolveLeadId(idOrQuery: string): Promise<{ leadId: number; lead:
     try {
       const params = new URLSearchParams({ search: String(idOrQuery), per_page: "5" })
       const searchRes = await irisFetch(`/api/v1/leads?${params}`)
-      if (!searchRes.ok) { spinner.stop("Search failed", 1); return null }
+      if (!searchRes.ok) {
+        spinner.stop("Search failed", 1)
+        return null
+      }
       const searchData = (await searchRes.json()) as { data?: any[] }
       const matches: any[] = searchData?.data ?? []
-      if (matches.length === 0) { spinner.stop("No leads found", 1); return null }
+      if (matches.length === 0) {
+        spinner.stop("No leads found", 1)
+        return null
+      }
       if (matches.length === 1) {
         leadId = matches[0].id
         spinner.stop(`Found: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
@@ -165,7 +197,9 @@ async function resolveLeadId(idOrQuery: string): Promise<{ leadId: number; lead:
         spinner.stop(`${matches.length} matches — ambiguous`)
         prompts.log.warn("Multiple leads match. Specify by ID or use a more precise query:")
         for (const m of matches) {
-          prompts.log.info(`  #${m.id}  ${m.name ?? m.email ?? "Unknown"}${m.company ? `  ${m.company}` : ""}  ${m.status ?? ""}`)
+          prompts.log.info(
+            `  #${m.id}  ${m.name ?? m.email ?? "Unknown"}${m.company ? `  ${m.company}` : ""}  ${m.status ?? ""}`,
+          )
         }
         process.exitCode = 1
         return null
@@ -220,7 +254,10 @@ const LeadsListCommand = cmd({
     prompts.intro("◈  IRIS Leads")
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Loading leads…")
@@ -235,7 +272,12 @@ const LeadsListCommand = cmd({
 
       const res = await irisFetch(`/api/v1/leads?${params}`)
       const ok = await handleApiError(res, "List leads")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
       let leads: any[] = data?.data ?? []
@@ -302,9 +344,7 @@ const LeadsListCommand = cmd({
       }
       printDivider()
 
-      prompts.outro(
-        `${dim("iris leads get <id>")}  ·  ${dim("iris leads search <query>")}`,
-      )
+      prompts.outro(`${dim("iris leads get <id>")}  ·  ${dim("iris leads search <query>")}`)
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -324,7 +364,10 @@ const LeadsGetCommand = cmd({
     UI.empty()
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     let leadId = Number(args.id)
 
@@ -357,7 +400,9 @@ const LeadsGetCommand = cmd({
         } else if (isNonInteractive()) {
           // Non-TTY / parallel context — auto-pick first match to avoid hanging (#55719)
           leadId = matches[0].id
-          spinner.stop(`${matches.length} matches — auto-selected: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
+          spinner.stop(
+            `${matches.length} matches — auto-selected: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`,
+          )
         } else {
           spinner.stop(`${matches.length} matches`)
           const choice = await prompts.select({
@@ -367,7 +412,10 @@ const LeadsGetCommand = cmd({
               label: `#${l.id}  ${l.name ?? l.email ?? "Unknown"}${l.company ? `  ${l.company}` : ""}  ${l.status ?? ""}`,
             })),
           })
-          if (prompts.isCancel(choice)) { prompts.cancel("Cancelled"); return }
+          if (prompts.isCancel(choice)) {
+            prompts.cancel("Cancelled")
+            return
+          }
           leadId = choice as number
         }
       } catch (err) {
@@ -387,11 +435,21 @@ const LeadsGetCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/leads/${leadId}`)
       const ok = await handleApiError(res, "Get lead")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any }
       const l = data?.data ?? data
-      if (!l || !l.id) { spinner.stop("Lead not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!l || !l.id) {
+        spinner.stop("Lead not found", 1)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
       spinner.stop(String(l.name ?? l.first_name ?? `Lead #${l.id}`))
 
       printDivider()
@@ -420,7 +478,12 @@ const LeadsGetCommand = cmd({
         ]
         const gScore = Math.round((gFields.filter((f) => f.has).length / gFields.length) * 100)
         const gMissing = gFields.filter((f) => !f.has).map((f) => f.name)
-        const gColor = gScore >= 80 ? success(`${gScore}%`) : gScore >= 50 ? `${UI.Style.TEXT_WARNING}${gScore}%${UI.Style.TEXT_NORMAL}` : `${UI.Style.TEXT_DANGER}${gScore}%${UI.Style.TEXT_NORMAL}`
+        const gColor =
+          gScore >= 80
+            ? success(`${gScore}%`)
+            : gScore >= 50
+              ? `${UI.Style.TEXT_WARNING}${gScore}%${UI.Style.TEXT_NORMAL}`
+              : `${UI.Style.TEXT_DANGER}${gScore}%${UI.Style.TEXT_NORMAL}`
         if (gMissing.length > 0) {
           printKV("Completeness", `${gColor}  ${dim(`missing: ${gMissing.join(", ")}`)}`)
         } else {
@@ -436,10 +499,7 @@ const LeadsGetCommand = cmd({
 
       // Outreach summary
       if ((l.outreach_steps_count ?? 0) > 0) {
-        printKV(
-          "Outreach",
-          `${l.completed_outreach_steps_count ?? 0} / ${l.outreach_steps_count} steps completed`,
-        )
+        printKV("Outreach", `${l.completed_outreach_steps_count ?? 0} / ${l.outreach_steps_count} steps completed`)
       }
 
       // Notes — truncated by default, full with --notes flag (#57652)
@@ -450,10 +510,12 @@ const LeadsGetCommand = cmd({
         console.log(`  ${dim("Notes")}  ${dim(`(${notes.length})`)}`)
         for (const note of notes) {
           const rawContent =
-            typeof note === "object"
-              ? (note.content ?? JSON.stringify(note)).replace(/\\n/g, "\n")
-              : String(note)
-          const display = showFull ? rawContent : (rawContent.length > 200 ? rawContent.slice(0, 200) + "..." : rawContent)
+            typeof note === "object" ? (note.content ?? JSON.stringify(note)).replace(/\\n/g, "\n") : String(note)
+          const display = showFull
+            ? rawContent
+            : rawContent.length > 200
+              ? rawContent.slice(0, 200) + "..."
+              : rawContent
           const date = typeof note === "object" ? (note.created_at ?? "") : ""
           if (date) console.log(`    ${dim(date)}`)
           const lines = display.split("\n")
@@ -462,19 +524,20 @@ const LeadsGetCommand = cmd({
           }
           console.log()
         }
-        if (!showFull && notes.some((n: any) => {
-          const c = typeof n === "object" ? (n.content ?? JSON.stringify(n)) : String(n)
-          return c.length > 200
-        })) {
+        if (
+          !showFull &&
+          notes.some((n: any) => {
+            const c = typeof n === "object" ? (n.content ?? JSON.stringify(n)) : String(n)
+            return c.length > 200
+          })
+        ) {
           console.log(`    ${dim(`Use ${highlight(`--notes`)} for full content`)}`)
         }
       }
 
       printDivider()
 
-      prompts.outro(
-        `${dim("iris leads note " + leadId + ' "follow up scheduled"')}  Add a note`,
-      )
+      prompts.outro(`${dim("iris leads note " + leadId + ' "follow up scheduled"')}  Add a note`)
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -504,7 +567,10 @@ const LeadsSearchCommand = cmd({
     prompts.intro(`◈  Lead Search: ${args.query}`)
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Searching…")
@@ -513,7 +579,7 @@ const LeadsSearchCommand = cmd({
       const params = new URLSearchParams({ search: args.query, per_page: String(args.limit) })
       const res = await irisFetch(`/api/v1/leads?${params}`)
       if (!res.ok) {
-        const errBody = await res.json().catch(() => ({})) as Record<string, unknown>
+        const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>
         const errMsg = String(errBody?.message || errBody?.error || `HTTP ${res.status}`)
         spinner.stop("Failed", 1)
         process.exitCode = 1
@@ -539,10 +605,14 @@ const LeadsSearchCommand = cmd({
               // Filter to leads that match ALL words (case-insensitive)
               const allWords = words.map((w) => w.toLowerCase())
               const filtered = fbLeads.filter((l: any) => {
-                const haystack = `${l.name ?? ""} ${l.first_name ?? ""} ${l.last_name ?? ""} ${l.email ?? ""} ${l.company ?? ""}`.toLowerCase()
+                const haystack =
+                  `${l.name ?? ""} ${l.first_name ?? ""} ${l.last_name ?? ""} ${l.email ?? ""} ${l.company ?? ""}`.toLowerCase()
                 return allWords.every((w) => haystack.includes(w))
               })
-              if (filtered.length > 0) { leads = filtered; break }
+              if (filtered.length > 0) {
+                leads = filtered
+                break
+              }
               // If no multi-word match, show partial matches
               if (leads.length === 0) leads = fbLeads
             }
@@ -586,7 +656,11 @@ const LeadsCreateCommand = cmd({
       .option("phone", { describe: "phone number", type: "string" })
       .option("company", { describe: "company name", type: "string" })
       .option("source", { describe: "lead source (e.g. referral, inbound, outreach)", type: "string" })
-      .option("status", { describe: "initial status", type: "string", choices: ["Prospected", "Contacted", "Interested", "Converted", "Archived"] })
+      .option("status", {
+        describe: "initial status",
+        type: "string",
+        choices: ["Prospected", "Contacted", "Interested", "Converted", "Archived"],
+      })
       .option("notes", { describe: "initial note to attach", type: "string" })
       .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" }),
   async handler(args) {
@@ -594,7 +668,10 @@ const LeadsCreateCommand = cmd({
     prompts.intro("◈  Create Lead")
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     // Bug #6/#57642: Require non-empty name. Trim whitespace before checking.
     let name = typeof args.name === "string" ? args.name.trim() : args.name
@@ -610,7 +687,10 @@ const LeadsCreateCommand = cmd({
         message: "Full name",
         validate: (x) => (x && x.length > 0 ? undefined : "Required"),
       })
-      if (prompts.isCancel(result)) { prompts.outro("Cancelled"); return }
+      if (prompts.isCancel(result)) {
+        prompts.outro("Cancelled")
+        return
+      }
       name = result as string
     }
 
@@ -645,7 +725,10 @@ const LeadsCreateCommand = cmd({
       if (args.status) payload.status = args.status
       // Store additional emails in contact_info.emails array
       if (args.emails) {
-        const extras = String(args.emails).split(",").map((e: string) => e.trim()).filter(Boolean)
+        const extras = String(args.emails)
+          .split(",")
+          .map((e: string) => e.trim())
+          .filter(Boolean)
         if (extras.length > 0) {
           payload.contact_info = { emails: extras }
         }
@@ -656,7 +739,11 @@ const LeadsCreateCommand = cmd({
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Create lead")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any }
       const l = data?.data ?? data
@@ -680,7 +767,9 @@ const LeadsCreateCommand = cmd({
             body: JSON.stringify({ message: args.notes }),
           })
           prompts.log.info(dim("Note attached"))
-        } catch { /* non-fatal */ }
+        } catch {
+          /* non-fatal */
+        }
       }
 
       prompts.outro(dim(`iris leads get ${l.id}`))
@@ -696,26 +785,38 @@ const LeadsNotesCommand = cmd({
   command: "notes <id>",
   aliases: ["view-notes"],
   describe: "list all notes for a lead",
-  builder: (yargs) =>
-    yargs.positional("id", { describe: "lead ID or name", type: "string", demandOption: true }),
+  builder: (yargs) => yargs.positional("id", { describe: "lead ID or name", type: "string", demandOption: true }),
   async handler(args) {
     UI.empty()
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     let leadId = Number(args.id)
     if (isNaN(leadId)) {
       // Resolve name → ID
       const params = new URLSearchParams({ search: String(args.id), per_page: "5" })
       const searchRes = await irisFetch(`/api/v1/leads?${params}`)
-      if (!searchRes.ok) { prompts.log.error("Search failed"); prompts.outro("Done"); return }
+      if (!searchRes.ok) {
+        prompts.log.error("Search failed")
+        prompts.outro("Done")
+        return
+      }
       const searchData = (await searchRes.json()) as { data?: any[] }
       const matches: any[] = searchData?.data ?? []
-      if (matches.length === 0) { prompts.log.warn(`No leads matching "${args.id}"`); prompts.outro("Done"); return }
-      if (matches.length === 1) { leadId = matches[0].id }
-      else if (isNonInteractive()) { leadId = matches[0].id }
-      else {
+      if (matches.length === 0) {
+        prompts.log.warn(`No leads matching "${args.id}"`)
+        prompts.outro("Done")
+        return
+      }
+      if (matches.length === 1) {
+        leadId = matches[0].id
+      } else if (isNonInteractive()) {
+        leadId = matches[0].id
+      } else {
         const choice = await prompts.select({
           message: "Which lead?",
           options: matches.map((l: any) => ({
@@ -723,7 +824,10 @@ const LeadsNotesCommand = cmd({
             label: `#${l.id}  ${l.name ?? l.email ?? "Unknown"}`,
           })),
         })
-        if (prompts.isCancel(choice)) { prompts.cancel("Cancelled"); return }
+        if (prompts.isCancel(choice)) {
+          prompts.cancel("Cancelled")
+          return
+        }
         leadId = choice as number
       }
     }
@@ -735,7 +839,12 @@ const LeadsNotesCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/leads/${leadId}`)
       const ok = await handleApiError(res, "Get lead")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any }
       const lead = data?.data ?? data
@@ -752,9 +861,8 @@ const LeadsNotesCommand = cmd({
 
       printDivider()
       for (const note of notes) {
-        const content = typeof note === "object"
-          ? (note.content ?? JSON.stringify(note)).replace(/\\n/g, "\n")
-          : String(note)
+        const content =
+          typeof note === "object" ? (note.content ?? JSON.stringify(note)).replace(/\\n/g, "\n") : String(note)
         const date = typeof note === "object" ? (note.created_at ?? "") : ""
         if (date) console.log(`  ${dim(date)}`)
         const lines = content.split("\n")
@@ -764,7 +872,9 @@ const LeadsNotesCommand = cmd({
         console.log()
       }
       printDivider()
-      prompts.outro(`${success("✓")} ${notes.length} note${notes.length === 1 ? "" : "s"}  ·  ${dim(`iris leads note ${leadId} "…"`)}`)
+      prompts.outro(
+        `${success("✓")} ${notes.length} note${notes.length === 1 ? "" : "s"}  ·  ${dim(`iris leads note ${leadId} "…"`)}`,
+      )
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -781,7 +891,11 @@ const LeadsNoteCommand = cmd({
       .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
       .positional("message", { describe: "note content (optional if --file used)", type: "string" })
       .option("file", { alias: "f", describe: "read note content from a file (.md, .txt)", type: "string" })
-      .option("type", { describe: "note type tag", type: "string", choices: ["note", "meeting_intel", "call_log", "email_log", "system"] }),
+      .option("type", {
+        describe: "note type tag",
+        type: "string",
+        choices: ["note", "meeting_intel", "call_log", "email_log", "system"],
+      }),
   async handler(args) {
     UI.empty()
 
@@ -794,11 +908,18 @@ const LeadsNoteCommand = cmd({
     }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     // ── Resolve lead ID from name/email if not numeric ──
     const resolved = await resolveLeadId(String(args.id))
-    if (!resolved) { process.exitCode = 1; prompts.outro("Done"); return }
+    if (!resolved) {
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
     const { leadId } = resolved
 
     prompts.intro(`◈  Note — Lead #${leadId}`)
@@ -809,14 +930,16 @@ const LeadsNoteCommand = cmd({
       const filePath = isAbsolute(String(args.file)) ? String(args.file) : join(process.cwd(), String(args.file))
       if (!existsSync(filePath)) {
         prompts.log.error(`File not found: ${filePath}`)
-        process.exitCode = 1  // Bug #5: exit 1 not 0
-        prompts.outro("Done"); return
+        process.exitCode = 1 // Bug #5: exit 1 not 0
+        prompts.outro("Done")
+        return
       }
       content = readFileSync(filePath, "utf-8")
       if (!content.trim()) {
         prompts.log.error("File is empty")
         process.exitCode = 1
-        prompts.outro("Done"); return
+        prompts.outro("Done")
+        return
       }
       prompts.log.info(dim(`Read ${content.length.toLocaleString()} chars from ${basename(filePath)}`))
     }
@@ -836,7 +959,11 @@ const LeadsNoteCommand = cmd({
         body: JSON.stringify(body),
       })
       const ok = await handleApiError(res, "Add note")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
 
       spinner.stop(`${success("✓")} Note added`)
       prompts.outro(dim(`iris leads get ${leadId}`))
@@ -865,18 +992,33 @@ const LeadsUpdateCommand = cmd({
       .option("stage", { describe: "pipeline stage", type: "string" })
       .option("bid", { describe: "price bid amount", type: "number" })
       .option("mrr", { describe: "monthly recurring revenue amount", type: "number" })
-      .option("revenue-type", { describe: "revenue type", type: "string", choices: ["retainer", "performance", "one_time"] as const })
-      .option("payment-method", { describe: "how they pay", type: "string", choices: ["stripe", "mercury", "offline", "mixed"] as const })
+      .option("revenue-type", {
+        describe: "revenue type",
+        type: "string",
+        choices: ["retainer", "performance", "one_time"] as const,
+      })
+      .option("payment-method", {
+        describe: "how they pay",
+        type: "string",
+        choices: ["stripe", "mercury", "offline", "mixed"] as const,
+      })
       .option("chat-id", { describe: "link an iMessage chat ID (e.g. chat713220476491386040)", type: "string" }),
   async handler(args) {
     UI.empty()
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     // ── Resolve lead ID from name/email if not numeric ── (Bug #3)
     const resolved = await resolveLeadId(String(args.id))
-    if (!resolved) { process.exitCode = 1; prompts.outro("Done"); return }
+    if (!resolved) {
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
     const { leadId } = resolved
 
     prompts.intro(`◈  Update Lead #${leadId}`)
@@ -923,7 +1065,11 @@ const LeadsUpdateCommand = cmd({
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Update lead")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any }
       const l = data?.data ?? data
@@ -956,7 +1102,10 @@ const LeadsPullCommand = cmd({
     prompts.intro(`◈  Pull Lead #${args.id}`)
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Fetching lead…")
@@ -964,7 +1113,11 @@ const LeadsPullCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/leads/${args.id}`)
       const ok = await handleApiError(res, "Pull lead")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any }
       const lead = data?.data ?? data
@@ -1008,7 +1161,10 @@ const LeadsPushCommand = cmd({
     prompts.intro(`◈  Push Lead #${args.id}`)
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     const spinner = prompts.spinner()
 
@@ -1057,13 +1213,17 @@ const LeadsPushCommand = cmd({
         body: JSON.stringify(payload),
       })
       const ok = await handleApiError(res, "Push lead")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any }
       const result = data?.data ?? data
 
       // Handle bloq reassignment if bloq_ids changed
-      const localBloqIds: number[] = Array.isArray(lead.bloq_ids) ? lead.bloq_ids : (lead.bloq_id ? [lead.bloq_id] : [])
+      const localBloqIds: number[] = Array.isArray(lead.bloq_ids) ? lead.bloq_ids : lead.bloq_id ? [lead.bloq_id] : []
       const remoteBloqIds: number[] = Array.isArray(result.bloq_ids) ? result.bloq_ids : []
 
       if (localBloqIds.length > 0) {
@@ -1117,7 +1277,10 @@ const LeadsDiffCommand = cmd({
     prompts.intro(`◈  Diff Lead #${args.id}`)
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Comparing…")
@@ -1125,7 +1288,11 @@ const LeadsDiffCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/leads/${args.id}`)
       const ok = await handleApiError(res, "Fetch lead")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any }
       const live = data?.data ?? data
@@ -1143,7 +1310,23 @@ const LeadsDiffCommand = cmd({
 
       const local = JSON.parse(readFileSync(filepath, "utf-8"))
 
-      const fields = ["name", "email", "phone", "company", "status", "source", "lead_type", "address", "city", "state", "zipcode", "country", "price_bid", "website", "stage"]
+      const fields = [
+        "name",
+        "email",
+        "phone",
+        "company",
+        "status",
+        "source",
+        "lead_type",
+        "address",
+        "city",
+        "state",
+        "zipcode",
+        "country",
+        "price_bid",
+        "website",
+        "stage",
+      ]
       const changes: { field: string; live: unknown; local: unknown }[] = []
 
       for (const f of fields) {
@@ -1181,8 +1364,12 @@ const LeadsDiffCommand = cmd({
       } else {
         for (const c of changes) {
           console.log(`  ${UI.Style.TEXT_WARNING}~ ${c.field}${UI.Style.TEXT_NORMAL}`)
-          console.log(`    ${UI.Style.TEXT_DANGER}- live:  ${String(c.live ?? "(empty)").slice(0, 120)}${UI.Style.TEXT_NORMAL}`)
-          console.log(`    ${UI.Style.TEXT_SUCCESS}+ local: ${String(c.local ?? "(empty)").slice(0, 120)}${UI.Style.TEXT_NORMAL}`)
+          console.log(
+            `    ${UI.Style.TEXT_DANGER}- live:  ${String(c.live ?? "(empty)").slice(0, 120)}${UI.Style.TEXT_NORMAL}`,
+          )
+          console.log(
+            `    ${UI.Style.TEXT_SUCCESS}+ local: ${String(c.local ?? "(empty)").slice(0, 120)}${UI.Style.TEXT_NORMAL}`,
+          )
         }
       }
       console.log()
@@ -1213,7 +1400,10 @@ const LeadsDeleteCommand = cmd({
     prompts.intro(`◈  Delete Lead #${args.id}`)
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     let confirmed: boolean | symbol = args.yes
     if (!confirmed) {
@@ -1225,7 +1415,10 @@ const LeadsDeleteCommand = cmd({
       }
       confirmed = await prompts.confirm({ message: `Delete lead #${args.id}? This cannot be undone.` })
     }
-    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    if (!confirmed || prompts.isCancel(confirmed)) {
+      prompts.outro("Cancelled")
+      return
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")
@@ -1233,7 +1426,11 @@ const LeadsDeleteCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/leads/${args.id}`, { method: "DELETE" })
       const ok = await handleApiError(res, "Delete lead")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
 
       spinner.stop(`${success("✓")} Lead #${args.id} deleted`)
       prompts.outro(dim("iris leads list"))
@@ -1255,7 +1452,12 @@ const LeadsMergeCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("keep", { describe: "lead ID to keep (primary)", type: "number", demandOption: true })
-      .positional("remove", { describe: "lead ID(s) to merge into the primary and delete", type: "number", array: true, demandOption: true })
+      .positional("remove", {
+        describe: "lead ID(s) to merge into the primary and delete",
+        type: "number",
+        array: true,
+        demandOption: true,
+      })
       .option("yes", { describe: "skip confirmation prompt", type: "boolean", alias: "y", default: false }),
   async handler(args) {
     UI.empty()
@@ -1263,7 +1465,10 @@ const LeadsMergeCommand = cmd({
     prompts.intro(`◈  Merge Leads → keep #${args.keep}, remove ${removeIds.map((id) => `#${id}`).join(", ")}`)
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Loading leads…")
@@ -1286,7 +1491,9 @@ const LeadsMergeCommand = cmd({
 
       const primary = leads[args.keep]
       printDivider()
-      console.log(`  ${bold("Keep")} → #${args.keep}  ${primary.name ?? "Unknown"}  ${dim(primary.email ?? "")}  ${primary.status ?? ""}`)
+      console.log(
+        `  ${bold("Keep")} → #${args.keep}  ${primary.name ?? "Unknown"}  ${dim(primary.email ?? "")}  ${primary.status ?? ""}`,
+      )
       for (const rid of removeIds) {
         const r = leads[rid]
         console.log(`  ${dim("Remove")} → #${rid}  ${r.name ?? "Unknown"}  ${dim(r.email ?? "")}  ${r.status ?? ""}`)
@@ -1315,9 +1522,14 @@ const LeadsMergeCommand = cmd({
           process.exitCode = 2
           return
         }
-        confirmed = await prompts.confirm({ message: `Merge ${removeIds.length} lead(s) into #${args.keep} and delete them?` })
+        confirmed = await prompts.confirm({
+          message: `Merge ${removeIds.length} lead(s) into #${args.keep} and delete them?`,
+        })
       }
-      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+      if (!confirmed || prompts.isCancel(confirmed)) {
+        prompts.outro("Cancelled")
+        return
+      }
 
       const mergeSpinner = prompts.spinner()
       mergeSpinner.start("Merging…")
@@ -1397,7 +1609,13 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
         const res = await irisFetch("/api/v1/leads/0/gmail-threads")
         // 401/403 = token expired; 404 = lead not found but integration works; 200 = ok
         if (res.status === 401 || res.status === 403) {
-          return { name: "Gmail", ok: false, status: "expired", error: "token expired", hint: "run: iris connect gmail" }
+          return {
+            name: "Gmail",
+            ok: false,
+            status: "expired",
+            error: "token expired",
+            hint: "run: iris connect gmail",
+          }
         }
         // Any response (even 404 for lead 0) means the integration is reachable
         return { name: "Gmail", ok: true, status: "verified" }
@@ -1409,11 +1627,25 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
     // Google Calendar — verify via bridge
     (async (): Promise<ChannelHealth> => {
       try {
-        const res = await fetch(`${BRIDGE_BASE}/api/calendar/events?days=1&limit=1`, { signal: AbortSignal.timeout(3000), headers: bridgeHeaders() })
+        const res = await fetch(`${BRIDGE_BASE}/api/calendar/events?days=1&limit=1`, {
+          signal: AbortSignal.timeout(3000),
+          headers: bridgeHeaders(),
+        })
         if (res.ok) return { name: "Google Calendar", ok: true, status: "verified" }
-        return { name: "Google Calendar", ok: false, status: "error", error: `HTTP ${res.status}`, hint: "check bridge: iris hive doctor" }
+        return {
+          name: "Google Calendar",
+          ok: false,
+          status: "error",
+          error: `HTTP ${res.status}`,
+          hint: "check bridge: iris hive doctor",
+        }
       } catch {
-        return { name: "Google Calendar", ok: false, status: "not_connected", hint: "bridge not running — iris-daemon start" }
+        return {
+          name: "Google Calendar",
+          ok: false,
+          status: "not_connected",
+          hint: "bridge not running — iris-daemon start",
+        }
       }
     })(),
 
@@ -1424,7 +1656,13 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
         if (isAvailable()) {
           return { name: "iMessage", ok: true, status: "verified" }
         }
-        return { name: "iMessage", ok: false, status: "no_permission", error: "Full Disk Access required", hint: "System Settings → Privacy → Full Disk Access → enable terminal" }
+        return {
+          name: "iMessage",
+          ok: false,
+          status: "no_permission",
+          error: "Full Disk Access required",
+          hint: "System Settings → Privacy → Full Disk Access → enable terminal",
+        }
       } catch {
         return { name: "iMessage", ok: false, status: "error", error: "check failed", hint: "check macOS Messages.app" }
       }
@@ -1433,11 +1671,25 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
     // Apple Mail — verify via bridge
     (async (): Promise<ChannelHealth> => {
       try {
-        const res = await fetch(`${BRIDGE_BASE}/api/mail/search?from=test&days=1&limit=1`, { signal: AbortSignal.timeout(3000), headers: bridgeHeaders() })
+        const res = await fetch(`${BRIDGE_BASE}/api/mail/search?from=test&days=1&limit=1`, {
+          signal: AbortSignal.timeout(3000),
+          headers: bridgeHeaders(),
+        })
         if (res.ok) return { name: "Apple Mail", ok: true, status: "verified" }
-        return { name: "Apple Mail", ok: false, status: "error", error: `HTTP ${res.status}`, hint: "check bridge: iris hive doctor" }
+        return {
+          name: "Apple Mail",
+          ok: false,
+          status: "error",
+          error: `HTTP ${res.status}`,
+          hint: "check bridge: iris hive doctor",
+        }
       } catch {
-        return { name: "Apple Mail", ok: false, status: "not_connected", hint: "bridge not running — iris-daemon start" }
+        return {
+          name: "Apple Mail",
+          ok: false,
+          status: "not_connected",
+          hint: "bridge not running — iris-daemon start",
+        }
       }
     })(),
 
@@ -1488,7 +1740,10 @@ const LeadsSyncCommsCommand = cmd({
       .option("limit", { describe: "max messages per channel per lead", type: "number", default: 50 }),
   async handler(args) {
     const token = await requireAuth()
-    if (!token) { process.exitCode = 1; return }
+    if (!token) {
+      process.exitCode = 1
+      return
+    }
 
     const days = args.days as number
     const msgLimit = args.limit as number
@@ -1537,7 +1792,9 @@ const LeadsSyncCommsCommand = cmd({
                 : []
               channels.push({ name: "Gmail", messages: msgs })
             }
-          } catch { /* non-fatal */ }
+          } catch {
+            /* non-fatal */
+          }
         }
 
         // ── iMessage (via local bridge) ──
@@ -1552,7 +1809,9 @@ const LeadsSyncCommsCommand = cmd({
               const d = (await r.json()) as any
               channels.push({ name: "iMessage", messages: d?.messages ?? [] })
             }
-          } catch { /* bridge offline → silent skip */ }
+          } catch {
+            /* bridge offline → silent skip */
+          }
         }
 
         // ── Apple Mail (via local bridge) ──
@@ -1566,7 +1825,9 @@ const LeadsSyncCommsCommand = cmd({
               const d = (await r.json()) as any
               channels.push({ name: "Apple Mail", messages: d?.messages ?? [] })
             }
-          } catch { /* non-fatal */ }
+          } catch {
+            /* non-fatal */
+          }
         }
 
         // ── Map channel results → atlas/comms/ingest payload (same shape as pulse) ──
@@ -1580,7 +1841,7 @@ const LeadsSyncCommsCommand = cmd({
             if (ch.name === "iMessage") {
               return {
                 direction: msg.from_me ? "outbound" : "inbound",
-                from_identifier: msg.from_me ? "me" : (phone || email),
+                from_identifier: msg.from_me ? "me" : phone || email,
                 body: msg.text ?? "",
                 sent_at: msg.ts ?? msg.date ?? null,
                 metadata: { source: "comms_sync_task" },
@@ -1613,7 +1874,9 @@ const LeadsSyncCommsCommand = cmd({
                 body: JSON.stringify({ lead_id: leadId, channel: channelKey, items }),
               })
               if (ingestRes.ok) leadIngested += items.length
-            } catch { /* non-fatal */ }
+            } catch {
+              /* non-fatal */
+            }
           }
         }
 
@@ -1638,8 +1901,16 @@ const LeadsPulseCommand = cmd({
       .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
       .option("days", { describe: "look-back window in days", type: "number", default: 30 })
       .option("limit", { describe: "max messages per channel", type: "number", default: 50 })
-      .option("hydrate", { describe: "generate + send follow-up if gate is unpaid + past throttle window", type: "boolean", default: false })
-      .option("dry-run", { describe: "with --hydrate: generate the AI email but don't send it", type: "boolean", default: false })
+      .option("hydrate", {
+        describe: "generate + send follow-up if gate is unpaid + past throttle window",
+        type: "boolean",
+        default: false,
+      })
+      .option("dry-run", {
+        describe: "with --hydrate: generate the AI email but don't send it",
+        type: "boolean",
+        default: false,
+      })
       .option("to", { describe: "with --hydrate: redirect email to this address (for testing)", type: "string" })
       .option("force", { describe: "with --hydrate: ignore 48h throttle window", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
@@ -1647,7 +1918,10 @@ const LeadsPulseCommand = cmd({
     UI.empty()
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
 
     let leadId = Number(args.id)
 
@@ -1658,7 +1932,12 @@ const LeadsPulseCommand = cmd({
       try {
         const params = new URLSearchParams({ search: String(args.id), per_page: "5" })
         const searchRes = await irisFetch(`/api/v1/leads?${params}`)
-        if (!searchRes.ok) { spinner.stop("Search failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+        if (!searchRes.ok) {
+          spinner.stop("Search failed", 1)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
         const searchData = (await searchRes.json()) as { data?: any[] }
         const matches: any[] = searchData?.data ?? []
         if (matches.length === 0) {
@@ -1673,10 +1952,14 @@ const LeadsPulseCommand = cmd({
         } else if (isNonInteractive()) {
           // Non-TTY / parallel context — auto-pick first match with warning (#55742)
           leadId = matches[0].id
-          spinner.stop(`${matches.length} matches — auto-selected: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
+          spinner.stop(
+            `${matches.length} matches — auto-selected: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`,
+          )
           prompts.log.warn("Multiple matches found. Using first result. Other matches:")
           for (const m of matches.slice(1)) {
-            prompts.log.info(`  #${m.id}  ${m.name ?? m.email ?? "Unknown"}${m.company ? `  ${m.company}` : ""}  ${m.status ?? ""}`)
+            prompts.log.info(
+              `  #${m.id}  ${m.name ?? m.email ?? "Unknown"}${m.company ? `  ${m.company}` : ""}  ${m.status ?? ""}`,
+            )
           }
         } else {
           spinner.stop(`${matches.length} matches`)
@@ -1687,7 +1970,10 @@ const LeadsPulseCommand = cmd({
               label: `#${l.id}  ${l.name ?? l.email ?? "Unknown"}${l.company ? `  ${l.company}` : ""}  ${l.status ?? ""}`,
             })),
           })
-          if (prompts.isCancel(choice)) { prompts.cancel("Cancelled"); return }
+          if (prompts.isCancel(choice)) {
+            prompts.cancel("Cancelled")
+            return
+          }
           leadId = choice as number
         }
       } catch (err) {
@@ -1708,7 +1994,12 @@ const LeadsPulseCommand = cmd({
       // Step 1: Fetch lead details (#55722 — exit non-zero if lead not found)
       const res = await irisFetch(`/api/v1/leads/${leadId}`)
       const ok = await handleApiError(res, "Get lead")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as { data?: any }
       const lead = data?.data ?? data
@@ -1740,7 +2031,9 @@ const LeadsPulseCommand = cmd({
           const rBody = (await rRes.json()) as any
           pulseReadiness = rBody?.data ?? null
         }
-      } catch { /* non-fatal — render without the score */ }
+      } catch {
+        /* non-fatal — render without the score */
+      }
 
       if (pulseReadiness) {
         const ps = pulseReadiness.score as number
@@ -1759,9 +2052,7 @@ const LeadsPulseCommand = cmd({
           const blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
           const chronological = [...history].reverse() // history is newest-first
           const recent = chronological.slice(-8)
-          const sparkline = recent
-            .map((h) => blocks[Math.min(7, Math.max(0, Math.floor(h.score / 12.5)))])
-            .join("")
+          const sparkline = recent.map((h) => blocks[Math.min(7, Math.max(0, Math.floor(h.score / 12.5)))]).join("")
           printKV("Trend", `${dim(sparkline)}  ${dim(`(${history.length} snapshots)`)}`)
         }
 
@@ -1772,8 +2063,7 @@ const LeadsPulseCommand = cmd({
         const commsS = sigs.comms_freshness?.score
         const dealS = sigs.deal_health?.score
         const cfgS = sigs.config?.score
-        const fmt = (v: number | null | undefined) =>
-          v === null || v === undefined ? dim("—") : `${v}/100`
+        const fmt = (v: number | null | undefined) => (v === null || v === undefined ? dim("—") : `${v}/100`)
         const sigLine = [
           `req ${fmt(reqS)}`,
           `live ${fmt(liveS)}`,
@@ -1788,19 +2078,42 @@ const LeadsPulseCommand = cmd({
       let duplicateLeadIds: number[] = []
       try {
         const dupSearches: Promise<any[]>[] = []
-        if (email) dupSearches.push(irisFetch(`/api/v1/leads?search=${encodeURIComponent(email)}&per_page=5`).then(async (r) => r.ok ? ((await r.json()) as any)?.data ?? [] : []).catch(() => []))
-        if (phone) dupSearches.push(irisFetch(`/api/v1/leads?search=${encodeURIComponent(phone)}&per_page=5`).then(async (r) => r.ok ? ((await r.json()) as any)?.data ?? [] : []).catch(() => []))
-        if (name && name !== `Lead #${leadId}`) dupSearches.push(irisFetch(`/api/v1/leads?search=${encodeURIComponent(name)}&per_page=5`).then(async (r) => r.ok ? ((await r.json()) as any)?.data ?? [] : []).catch(() => []))
+        if (email)
+          dupSearches.push(
+            irisFetch(`/api/v1/leads?search=${encodeURIComponent(email)}&per_page=5`)
+              .then(async (r) => (r.ok ? (((await r.json()) as any)?.data ?? []) : []))
+              .catch(() => []),
+          )
+        if (phone)
+          dupSearches.push(
+            irisFetch(`/api/v1/leads?search=${encodeURIComponent(phone)}&per_page=5`)
+              .then(async (r) => (r.ok ? (((await r.json()) as any)?.data ?? []) : []))
+              .catch(() => []),
+          )
+        if (name && name !== `Lead #${leadId}`)
+          dupSearches.push(
+            irisFetch(`/api/v1/leads?search=${encodeURIComponent(name)}&per_page=5`)
+              .then(async (r) => (r.ok ? (((await r.json()) as any)?.data ?? []) : []))
+              .catch(() => []),
+          )
         const results = await Promise.all(dupSearches)
         const allMatches = results.flat().filter((l: any) => l.id !== leadId)
-        // Deduplicate by ID
+        // Deduplicate by ID and require at least one concrete identifier match
+        // (email or phone) to avoid false positives from fuzzy name search
         const seen = new Set<number>()
         for (const m of allMatches) {
-          if (!seen.has(m.id)) { seen.add(m.id); duplicateLeadIds.push(m.id) }
+          if (seen.has(m.id)) continue
+          const emailMatch = email && m.email && m.email.toLowerCase() === email.toLowerCase()
+          const phoneMatch = phone && m.phone && m.phone.replace(/\D/g, "") === phone.replace(/\D/g, "")
+          if (!emailMatch && !phoneMatch) continue
+          seen.add(m.id)
+          duplicateLeadIds.push(m.id)
         }
         if (duplicateLeadIds.length > 0) {
           // #57685: Rank duplicates by data richness to suggest best master record
-          const uniqueDups = allMatches.filter((v: any, i: number, a: any[]) => a.findIndex((x: any) => x.id === v.id) === i)
+          const uniqueDups = allMatches.filter(
+            (v: any, i: number, a: any[]) => a.findIndex((x: any) => x.id === v.id) === i,
+          )
           const scoreLead = (l: any) => {
             let s = 0
             if (l.email) s += 2
@@ -1819,7 +2132,9 @@ const LeadsPulseCommand = cmd({
           const mergeId = masterId === leadId ? (bestDup?.id ?? duplicateLeadIds[0]) : leadId
 
           console.log()
-          console.log(`  ${UI.Style.TEXT_WARNING}⚠ Possible duplicates${UI.Style.TEXT_NORMAL}  ${dim(`(${duplicateLeadIds.length})`)}`)
+          console.log(
+            `  ${UI.Style.TEXT_WARNING}⚠ Possible duplicates${UI.Style.TEXT_NORMAL}  ${dim(`(${duplicateLeadIds.length})`)}`,
+          )
           for (const m of uniqueDups.slice(0, 3)) {
             console.log(`    ${dim(`#${m.id}`)}  ${m.name ?? "Unknown"}  ${dim(m.email ?? "")}  ${dim(m.status ?? "")}`)
           }
@@ -1853,7 +2168,9 @@ const LeadsPulseCommand = cmd({
             console.log(`    ${dim(`Merge: iris leads merge ${masterId} ${mergeId}`)}`)
           }
         }
-      } catch { /* non-fatal */ }
+      } catch {
+        /* non-fatal */
+      }
 
       // CRM notes summary
       const notes: any[] = Array.isArray(lead.notes) ? lead.notes : []
@@ -1863,7 +2180,10 @@ const LeadsPulseCommand = cmd({
         // #57684: Mask credentials/tokens/passwords in note previews
         const maskSecrets = (text: string): string =>
           text
-            .replace(/(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\s*[:=]\s*\S+/gi, (m) => m.split(/[:=]/)[0] + ": ●●●●●●●●")
+            .replace(
+              /(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\s*[:=]\s*\S+/gi,
+              (m) => m.split(/[:=]/)[0] + ": ●●●●●●●●",
+            )
             .replace(/(?:sk|pk|rk|Bearer|eyJ)[_-]?[A-Za-z0-9\-_.]{20,}/g, "●●●●●●●●")
             .replace(/(?:ghp|gho|github_pat)_[A-Za-z0-9]{20,}/g, "●●●●●●●●")
         // Show latest 3 note previews
@@ -1878,19 +2198,27 @@ const LeadsPulseCommand = cmd({
         }
       }
 
-      // Deal Health section (#57649/#57665) — fetch deal-status + stripe-payments + score + activities in parallel
+      // Deal Health section (#57649/#57665) — fetch deal-status + stripe-payments + score + activities + outreach + workflows in parallel
       let dealHealth: any = null
       let stripeData: any = null
       let leadTasks: any[] = []
       let leadScore: any = null
       let activities: any[] = []
+      let outreachSteps: any[] = []
+      let leadWorkflows: any[] = []
+      let productUsage: any = null
       {
-        const [dealRes, stripeRes, tasksRes, scoreRes, activityRes] = await Promise.allSettled([
+        const userId = await resolveUserId()
+        const bloqId = (lead.bloq_ids ?? [])[0]
+        const [dealRes, stripeRes, tasksRes, scoreRes, activityRes, outreachRes, workflowsRes, usageRes] = await Promise.allSettled([
           irisFetch(`/api/v1/leads/${leadId}/deal-status`),
           irisFetch(`/api/v1/leads/${leadId}/stripe-payments`),
           irisFetch(`/api/v1/leads/${leadId}/tasks`),
           irisFetch(`/api/v1/leads/${leadId}/score`),
           irisFetch(`/api/v1/leads/${leadId}/activities?limit=20`),
+          irisFetch(`/api/v1/leads/${leadId}/outreach-steps`),
+          bloqId && userId ? irisFetch(`/api/v1/users/${userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`) : Promise.resolve(null),
+          irisFetch(`/api/v1/leads/${leadId}/usage`),
         ])
 
         // Parse deal-status
@@ -1916,6 +2244,20 @@ const LeadsPulseCommand = cmd({
           const ad = ((await activityRes.value.json()) as any)?.data
           activities = Array.isArray(ad) ? ad : []
         }
+        // Parse outreach steps
+        if (outreachRes.status === "fulfilled" && outreachRes.value?.ok) {
+          const od = ((await outreachRes.value.json()) as any)?.data
+          outreachSteps = Array.isArray(od) ? od : (od?.steps ?? [])
+        }
+        // Parse workflows for this lead's bloq
+        if (workflowsRes.status === "fulfilled" && workflowsRes.value?.ok) {
+          const wd = ((await workflowsRes.value.json()) as any)?.data
+          leadWorkflows = Array.isArray(wd) ? wd : []
+        }
+        // Parse product usage data
+        if (usageRes.status === "fulfilled" && usageRes.value?.ok) {
+          productUsage = ((await usageRes.value.json()) as any)?.data ?? null
+        }
       }
 
       // If duplicates found and primary has no Stripe data, check duplicates for payments
@@ -1931,14 +2273,21 @@ const LeadsPulseCommand = cmd({
                 break // use first duplicate with payment data
               }
             }
-          } catch { /* non-fatal */ }
+          } catch {
+            /* non-fatal */
+          }
         }
       }
 
       // #71782: Engagement Score — composite score from backend LeadScoringService
       if (leadScore) {
         const s = leadScore.score ?? 0
-        const scoreLabel = s >= 70 ? success(`${s}/100`) : s >= 40 ? `${UI.Style.TEXT_WARNING}${s}/100${UI.Style.TEXT_NORMAL}` : `${UI.Style.TEXT_DANGER}${s}/100${UI.Style.TEXT_NORMAL}`
+        const scoreLabel =
+          s >= 70
+            ? success(`${s}/100`)
+            : s >= 40
+              ? `${UI.Style.TEXT_WARNING}${s}/100${UI.Style.TEXT_NORMAL}`
+              : `${UI.Style.TEXT_DANGER}${s}/100${UI.Style.TEXT_NORMAL}`
         const hotBadge = leadScore.is_hot_lead ? `  ${success("HOT")}` : ""
         printKV("Engagement", `${scoreLabel}${hotBadge}`)
       }
@@ -1947,7 +2296,11 @@ const LeadsPulseCommand = cmd({
       console.log()
       console.log(`  ${bold("Deal Health")}`)
       if (dealHealth?.has_payment_gate) {
-        const gateStatus = dealHealth.payment_received ? success("Paid") : (dealHealth.status === "sent" || dealHealth.status === "awaiting_payment" ? dim("Sent — awaiting payment") : dim(dealHealth.status ?? "Draft"))
+        const gateStatus = dealHealth.payment_received
+          ? success("Paid")
+          : dealHealth.status === "sent" || dealHealth.status === "awaiting_payment"
+            ? dim("Sent — awaiting payment")
+            : dim(dealHealth.status ?? "Draft")
         printKV("  Payment Gate", gateStatus)
         if (dealHealth.amount) printKV("  Amount", `$${Number(dealHealth.amount).toFixed(2)}`)
         // #71783: Show total received (Stripe + offline combined)
@@ -1972,9 +2325,15 @@ const LeadsPulseCommand = cmd({
       if (stripeData?.summary) {
         const s = stripeData.summary
         const totalPaid = stripeData.total_paid ?? 0 // API returns dollars, NOT cents
-        printKV("  Stripe Received", totalPaid > 0 ? success(`$${Number(totalPaid).toFixed(2)}`) + stripeDupNote : dim("$0"))
+        printKV(
+          "  Stripe Received",
+          totalPaid > 0 ? success(`$${Number(totalPaid).toFixed(2)}`) + stripeDupNote : dim("$0"),
+        )
         if (s.total_invoices > 0) {
-          printKV("  Stripe Invoices", `${s.total_invoices} (${s.paid_invoices} paid${s.pending_invoices > 0 ? `, ${s.pending_invoices} pending` : ""})`)
+          printKV(
+            "  Stripe Invoices",
+            `${s.total_invoices} (${s.paid_invoices} paid${s.pending_invoices > 0 ? `, ${s.pending_invoices} pending` : ""})`,
+          )
         } else {
           printKV("  Stripe Invoices", dim("None"))
         }
@@ -1984,7 +2343,7 @@ const LeadsPulseCommand = cmd({
           const activeSubs = subs.filter((sub: any) => sub.status === "active" || sub.status === "trialing")
           if (activeSubs.length > 0) {
             for (const sub of activeSubs) {
-              const amt = sub.amount ? `$${Number(sub.amount).toFixed(2)}` : sub.plan_name ?? "active"
+              const amt = sub.amount ? `$${Number(sub.amount).toFixed(2)}` : (sub.plan_name ?? "active")
               const interval = sub.interval ? `/${sub.interval}` : ""
               const nextBill = sub.current_period_end ? dim(` · next: ${sub.current_period_end}`) : ""
               printKV("  Subscription", `${success(amt + interval)}${nextBill}`)
@@ -1993,7 +2352,11 @@ const LeadsPulseCommand = cmd({
             printKV("  Subscriptions", `${s.active_subscriptions} active`)
           }
         }
-        if (s.past_due_subscriptions > 0) printKV("  Past Due", `${UI.Style.TEXT_DANGER}${s.past_due_subscriptions} subscription(s)${UI.Style.TEXT_NORMAL}`)
+        if (s.past_due_subscriptions > 0)
+          printKV(
+            "  Past Due",
+            `${UI.Style.TEXT_DANGER}${s.past_due_subscriptions} subscription(s)${UI.Style.TEXT_NORMAL}`,
+          )
         if (s.pending_sessions > 0) printKV("  Checkout", dim(`${s.pending_sessions} pending session(s)`))
       } else if (!stripeData?.has_stripe_customer) {
         printKV("  Stripe", dim("No Stripe customer"))
@@ -2003,7 +2366,12 @@ const LeadsPulseCommand = cmd({
 
       // Deal-status extras (contracts, proposals)
       const contracts = dealHealth?.contracts ?? []
-      printKV("  Contracts", contracts.length > 0 ? `${contracts.length} (${contracts.filter((c: any) => c.signed_at).length} signed)` : dim("None"))
+      printKV(
+        "  Contracts",
+        contracts.length > 0
+          ? `${contracts.length} (${contracts.filter((c: any) => c.signed_at).length} signed)`
+          : dim("None"),
+      )
       const proposals = dealHealth?.proposals ?? []
       printKV("  Proposals", proposals.length > 0 ? `${proposals.length}` : dim("None"))
 
@@ -2012,7 +2380,10 @@ const LeadsPulseCommand = cmd({
       if (dealChecks.has_content_agent === true) {
         printKV("  Content Agent", success("Configured"))
       } else if (dealChecks.has_content_agent === false) {
-        printKV("  Content Agent", `${UI.Style.TEXT_WARNING}Missing — no newsletter/content agent${UI.Style.TEXT_NORMAL}`)
+        printKV(
+          "  Content Agent",
+          `${UI.Style.TEXT_WARNING}Missing — no newsletter/content agent${UI.Style.TEXT_NORMAL}`,
+        )
       }
 
       // Tasks section (#57666)
@@ -2041,7 +2412,8 @@ const LeadsPulseCommand = cmd({
         // Show top 5 pending tasks (already sorted: overdue first, then by due date)
         for (const t of pending.slice(0, 5)) {
           const due = t.due_date ? dim(` due ${t.due_date.split("T")[0]}`) : ""
-          const overdueMark = t.due_date && new Date(t.due_date) < now ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}` : ""
+          const overdueMark =
+            t.due_date && new Date(t.due_date) < now ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}` : ""
           console.log(`    ${dim("○")} ${t.title}${due}${overdueMark}`)
         }
         if (pending.length > 5) console.log(`    ${dim(`…and ${pending.length - 5} more`)}`)
@@ -2086,9 +2458,10 @@ const LeadsPulseCommand = cmd({
             console.log()
             console.log(`  ${bold("Requirements Health")}`)
             const icon = rs.failing > 0 ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}` : success("✓")
-            const statusText = rs.failing > 0
-              ? `${UI.Style.TEXT_DANGER}${rs.passing}/${rs.total} passing (${rs.failing} FAILING)${UI.Style.TEXT_NORMAL}`
-              : success(`${rs.passing}/${rs.total} passing`)
+            const statusText =
+              rs.failing > 0
+                ? `${UI.Style.TEXT_DANGER}${rs.passing}/${rs.total} passing (${rs.failing} FAILING)${UI.Style.TEXT_NORMAL}`
+                : success(`${rs.passing}/${rs.total} passing`)
             console.log(`    ${icon} ${statusText}`)
             if (rs.untested > 0) console.log(`    ${dim(`${rs.untested} untested`)}`)
             console.log(`    ${dim(`Last run: ${rs.last_run ? rs.last_run.split("T")[0] : "never"}`)}`)
@@ -2106,10 +2479,15 @@ const LeadsPulseCommand = cmd({
           const type = act.activity_type ?? "note"
           const content = (act.content ?? "").split("\n")[0].slice(0, 100)
           const dateStr = act.created_at ? dim(` ${String(act.created_at).split("T")[0]}`) : ""
-          const who = act.is_system_generated ? dim(" [system]") : (act.user_name && act.user_name !== "Unknown User" ? dim(` [${act.user_name}]`) : "")
+          const who = act.is_system_generated
+            ? dim(" [system]")
+            : act.user_name && act.user_name !== "Unknown User"
+              ? dim(` [${act.user_name}]`)
+              : ""
           console.log(`    ${icon} ${highlight(type.padEnd(18))}${content}${dateStr}${who}`)
         }
-        if (activities.length > 8) console.log(`    ${dim(`…and ${activities.length - 8} more — iris leads activities ${leadId}`)}`)
+        if (activities.length > 8)
+          console.log(`    ${dim(`…and ${activities.length - 8} more — iris leads activities ${leadId}`)}`)
       }
 
       // Step 2: Integration pre-flight checks (#57677)
@@ -2117,13 +2495,17 @@ const LeadsPulseCommand = cmd({
       console.log(`  ${bold("Integration Health")}`)
       const healthChecks = await runChannelHealthChecks()
       for (const hc of healthChecks) {
-        const icon = hc.ok ? success("✓") : (hc.status === "not_connected" ? dim("—") : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`)
+        const icon = hc.ok
+          ? success("✓")
+          : hc.status === "not_connected"
+            ? dim("—")
+            : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
         const statusText = hc.ok
           ? success("connected + verified")
           : hc.status === "not_connected"
             ? dim("not connected")
             : `${UI.Style.TEXT_DANGER}${hc.error}${UI.Style.TEXT_NORMAL}`
-        const hint = (!hc.ok && hc.hint) ? dim(` — ${hc.hint}`) : ""
+        const hint = !hc.ok && hc.hint ? dim(` — ${hc.hint}`) : ""
         console.log(`  ${icon} ${highlight(hc.name.padEnd(18))}${statusText}${hint}`)
       }
 
@@ -2134,25 +2516,33 @@ const LeadsPulseCommand = cmd({
           const reqBody = await reqRes.json().catch(() => ({}))
           const reqs: any[] = reqBody.data ?? []
           if (reqs.length > 0) {
-            const passing = reqs.filter(r => r.last_status === "passed" || r.last_status === "completed").length
-            const failing = reqs.filter(r => r.last_status === "failed").length
+            const passing = reqs.filter((r) => r.last_status === "passed" || r.last_status === "completed").length
+            const failing = reqs.filter((r) => r.last_status === "failed").length
             const untested = reqs.length - passing - failing
-            const headerColor = failing > 0 ? highlight : (untested === reqs.length ? dim : success)
+            const headerColor = failing > 0 ? highlight : untested === reqs.length ? dim : success
 
             console.log()
-            console.log(`  ${bold("Requirements")}  ${headerColor(`${passing}/${reqs.length} passing`)}${failing > 0 ? highlight(` · ${failing} FAILING`) : ""}${untested > 0 ? dim(` · ${untested} untested`) : ""}`)
+            console.log(
+              `  ${bold("Requirements")}  ${headerColor(`${passing}/${reqs.length} passing`)}${failing > 0 ? highlight(` · ${failing} FAILING`) : ""}${untested > 0 ? dim(` · ${untested} untested`) : ""}`,
+            )
             for (const r of reqs.slice(0, 5)) {
-              const icon = r.last_status === "passed" || r.last_status === "completed" ? success("✓")
-                : r.last_status === "failed" ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
-                : dim("○")
+              const icon =
+                r.last_status === "passed" || r.last_status === "completed"
+                  ? success("✓")
+                  : r.last_status === "failed"
+                    ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+                    : dim("○")
               const lastRun = r.last_run_at ? dim(r.last_run_at.split("T")[0]) : dim("never run")
               console.log(`  ${icon} ${highlight(r.name.padEnd(28))}${lastRun}`)
             }
-            if (reqs.length > 5) console.log(dim(`  …and ${reqs.length - 5} more — iris leads requirements list ${leadId}`))
+            if (reqs.length > 5)
+              console.log(dim(`  …and ${reqs.length - 5} more — iris leads requirements list ${leadId}`))
             if (untested > 0) console.log(dim(`  Run all: iris leads requirements run ${leadId}`))
           }
         }
-      } catch (e) { /* requirements section is best-effort */ }
+      } catch (e) {
+        /* requirements section is best-effort */
+      }
 
       // Step 3: Search channels in parallel
       console.log()
@@ -2201,11 +2591,15 @@ const LeadsPulseCommand = cmd({
                   // Fallback: try Apple Mail-style search via bridge as Gmail backup
                   const body = await r.text().catch(() => "")
                   let errorMsg = `HTTP ${r.status}`
-                  try { errorMsg = JSON.parse(body)?.error ?? JSON.parse(body)?.message ?? errorMsg } catch {}
+                  try {
+                    errorMsg = JSON.parse(body)?.error ?? JSON.parse(body)?.message ?? errorMsg
+                  } catch {}
                   channels.push({ name: "Gmail", messages: [], error: errorMsg })
                 }
               })
-              .catch((e) => { channels.push({ name: "Gmail", messages: [], error: e.message }) }),
+              .catch((e) => {
+                channels.push({ name: "Gmail", messages: [], error: e.message })
+              }),
           )
         }
 
@@ -2213,7 +2607,10 @@ const LeadsPulseCommand = cmd({
         const handle = phone || email
         if (handle) {
           fetches.push(
-            fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=${msgLimit}`, { headers: bridgeHeaders() })
+            fetch(
+              `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=${msgLimit}`,
+              { headers: bridgeHeaders() },
+            )
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
@@ -2223,12 +2620,17 @@ const LeadsPulseCommand = cmd({
                   channels.push({ name: "iMessage", messages: [], error: body || `HTTP ${r.status}` })
                 }
               })
-              .catch((e) => { channels.push({ name: "iMessage", messages: [], error: e.message }) }),
+              .catch((e) => {
+                channels.push({ name: "iMessage", messages: [], error: e.message })
+              }),
           )
         } else if (name) {
           // Fallback: search by contact name via Contacts.app resolution
           fetches.push(
-            fetch(`${BRIDGE_BASE}/api/imessage/search?name=${encodeURIComponent(name)}&days=${days}&limit=${msgLimit}`, { headers: bridgeHeaders() })
+            fetch(
+              `${BRIDGE_BASE}/api/imessage/search?name=${encodeURIComponent(name)}&days=${days}&limit=${msgLimit}`,
+              { headers: bridgeHeaders() },
+            )
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
@@ -2238,10 +2640,16 @@ const LeadsPulseCommand = cmd({
                   channels.push({ name: "iMessage", messages: [], error: body || `HTTP ${r.status}` })
                 }
               })
-              .catch((e) => { channels.push({ name: "iMessage", messages: [], error: e.message }) }),
+              .catch((e) => {
+                channels.push({ name: "iMessage", messages: [], error: e.message })
+              }),
           )
         } else {
-          channels.push({ name: "iMessage", messages: [], error: `No phone, email, or name — add with: iris leads update ${leadId} --phone "..."` })
+          channels.push({
+            name: "iMessage",
+            messages: [],
+            error: `No phone, email, or name — add with: iris leads update ${leadId} --phone "..."`,
+          })
         }
 
         // #71781: iMessage group chats — scan linked chat IDs or auto-discover via bridge
@@ -2249,7 +2657,9 @@ const LeadsPulseCommand = cmd({
         // Auto-discover group chats if none linked and we have a handle
         if (chatIds.length === 0 && handle) {
           fetches.push(
-            fetch(`${BRIDGE_BASE}/api/imessage/group-chats?handle=${encodeURIComponent(handle)}&days=${days}&limit=5`, { headers: bridgeHeaders() })
+            fetch(`${BRIDGE_BASE}/api/imessage/group-chats?handle=${encodeURIComponent(handle)}&days=${days}&limit=5`, {
+              headers: bridgeHeaders(),
+            })
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
@@ -2261,11 +2671,15 @@ const LeadsPulseCommand = cmd({
                   }
                   // Now scan discovered group chats
                   const gcFetches = chatIds.map((chatId: string) =>
-                    fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`, { headers: bridgeHeaders() })
+                    fetch(
+                      `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`,
+                      { headers: bridgeHeaders() },
+                    )
                       .then(async (r2) => {
                         if (r2.ok) {
                           const d2 = (await r2.json()) as any
-                          const label = groups.find((g: any) => g.chat_identifier === chatId)?.display_name || chatId.slice(0, 12)
+                          const label =
+                            groups.find((g: any) => g.chat_identifier === chatId)?.display_name || chatId.slice(0, 12)
                           channels.push({ name: `iMessage Group (${label})`, messages: d2?.messages ?? [] })
                         }
                       })
@@ -2280,16 +2694,25 @@ const LeadsPulseCommand = cmd({
           // Scan explicitly linked chat IDs
           for (const chatId of chatIds) {
             fetches.push(
-              fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`, { headers: bridgeHeaders() })
+              fetch(
+                `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(chatId)}&days=${days}&limit=${msgLimit}`,
+                { headers: bridgeHeaders() },
+              )
                 .then(async (r) => {
                   if (r.ok) {
                     const d = (await r.json()) as any
                     channels.push({ name: `iMessage Group (${chatId.slice(0, 12)}…)`, messages: d?.messages ?? [] })
                   } else {
-                    channels.push({ name: `iMessage Group`, messages: [], error: `Chat ${chatId.slice(0, 20)} — HTTP ${r.status}` })
+                    channels.push({
+                      name: `iMessage Group`,
+                      messages: [],
+                      error: `Chat ${chatId.slice(0, 20)} — HTTP ${r.status}`,
+                    })
                   }
                 })
-                .catch((e) => { channels.push({ name: `iMessage Group`, messages: [], error: e.message }) }),
+                .catch((e) => {
+                  channels.push({ name: `iMessage Group`, messages: [], error: e.message })
+                }),
             )
           }
         }
@@ -2297,7 +2720,10 @@ const LeadsPulseCommand = cmd({
         // Apple Mail (via local bridge daemon)
         if (email) {
           fetches.push(
-            fetch(`${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=${msgLimit}&include_body=0`, { headers: bridgeHeaders() })
+            fetch(
+              `${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=${msgLimit}&include_body=0`,
+              { headers: bridgeHeaders() },
+            )
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
@@ -2307,7 +2733,9 @@ const LeadsPulseCommand = cmd({
                   channels.push({ name: "Apple Mail", messages: [], error: body || `HTTP ${r.status}` })
                 }
               })
-              .catch((e) => { channels.push({ name: "Apple Mail", messages: [], error: e.message }) }),
+              .catch((e) => {
+                channels.push({ name: "Apple Mail", messages: [], error: e.message })
+              }),
           )
         }
 
@@ -2323,7 +2751,9 @@ const LeadsPulseCommand = cmd({
               }))
               channels.push({ name: "Meetings", messages: allEvents })
             })
-            .catch((e) => { channels.push({ name: "Meetings", messages: [], error: e.message }) }),
+            .catch((e) => {
+              channels.push({ name: "Meetings", messages: [], error: e.message })
+            }),
         )
 
         await Promise.allSettled(fetches)
@@ -2333,22 +2763,56 @@ const LeadsPulseCommand = cmd({
 
         // Persist-after: fire-and-forget write to lead_comms for history (#57657)
         // Maps live-scan results → atlas:comms ingest format. Dedup hash prevents duplicates.
-        const channelMap: Record<string, string> = { "Gmail": "gmail", "iMessage": "imessage", "Apple Mail": "apple_mail", "Meetings": "calendar" }
+        const channelMap: Record<string, string> = {
+          Gmail: "gmail",
+          iMessage: "imessage",
+          "Apple Mail": "apple_mail",
+          Meetings: "calendar",
+        }
         for (const ch of channels) {
           const channelKey = channelMap[ch.name]
           if (!channelKey || ch.messages.length === 0) continue
-          const items = ch.messages.map((msg: any) => {
-            if (ch.name === "iMessage") {
-              return { direction: msg.from_me ? "outbound" : "inbound", from_identifier: msg.from_me ? "me" : (phone || email), body: msg.text ?? "", sent_at: msg.ts ?? msg.date ?? null, metadata: { source: "pulse_scan" } }
-            } else if (ch.name === "Gmail") {
-              return { direction: (msg.from ?? "").toLowerCase().includes(email.toLowerCase()) ? "inbound" : "outbound", from_identifier: msg.from ?? "", subject: msg.subject ?? "", body: msg.snippet ?? msg.subject ?? "", sent_at: msg.date ?? null, metadata: { gmail_thread_id: msg.thread_id, source: "pulse_scan" } }
-            } else if (ch.name === "Apple Mail") {
-              return { direction: "inbound", from_identifier: email, subject: msg.subject ?? "", body: msg.body ?? msg.subject ?? "", sent_at: msg.date ?? msg.ts ?? null, metadata: { source: "pulse_scan" } }
-            } else if (ch.name === "Meetings") {
-              return { direction: "outbound", from_identifier: "me", subject: msg.summary ?? "", body: `Meeting: ${msg.summary ?? ""}${msg.location ? ` @ ${msg.location}` : ""}`, sent_at: msg.date ?? null, metadata: { event_status: msg.status, source: "pulse_scan" } }
-            }
-            return null
-          }).filter(Boolean)
+          const items = ch.messages
+            .map((msg: any) => {
+              if (ch.name === "iMessage") {
+                return {
+                  direction: msg.from_me ? "outbound" : "inbound",
+                  from_identifier: msg.from_me ? "me" : phone || email,
+                  body: msg.text ?? "",
+                  sent_at: msg.ts ?? msg.date ?? null,
+                  metadata: { source: "pulse_scan" },
+                }
+              } else if (ch.name === "Gmail") {
+                return {
+                  direction: (msg.from ?? "").toLowerCase().includes(email.toLowerCase()) ? "inbound" : "outbound",
+                  from_identifier: msg.from ?? "",
+                  subject: msg.subject ?? "",
+                  body: msg.snippet ?? msg.subject ?? "",
+                  sent_at: msg.date ?? null,
+                  metadata: { gmail_thread_id: msg.thread_id, source: "pulse_scan" },
+                }
+              } else if (ch.name === "Apple Mail") {
+                return {
+                  direction: "inbound",
+                  from_identifier: email,
+                  subject: msg.subject ?? "",
+                  body: msg.body ?? msg.subject ?? "",
+                  sent_at: msg.date ?? msg.ts ?? null,
+                  metadata: { source: "pulse_scan" },
+                }
+              } else if (ch.name === "Meetings") {
+                return {
+                  direction: "outbound",
+                  from_identifier: "me",
+                  subject: msg.summary ?? "",
+                  body: `Meeting: ${msg.summary ?? ""}${msg.location ? ` @ ${msg.location}` : ""}`,
+                  sent_at: msg.date ?? null,
+                  metadata: { event_status: msg.status, source: "pulse_scan" },
+                }
+              }
+              return null
+            })
+            .filter(Boolean)
           if (items.length > 0) {
             irisFetch("/api/v1/atlas/comms/ingest", {
               method: "POST",
@@ -2360,7 +2824,13 @@ const LeadsPulseCommand = cmd({
 
       // JSON output
       if (args.json) {
-        console.log(JSON.stringify({ lead, dealHealth, stripeData, tasks: leadTasks, score: leadScore, activities, channels }, null, 2))
+        console.log(
+          JSON.stringify(
+            { lead, dealHealth, stripeData, tasks: leadTasks, score: leadScore, activities, outreachSteps, workflows: leadWorkflows, productUsage, channels },
+            null,
+            2,
+          ),
+        )
         prompts.outro("Done")
         return
       }
@@ -2369,9 +2839,7 @@ const LeadsPulseCommand = cmd({
       for (const ch of channels) {
         console.log()
         const count = ch.messages.length
-        const label = ch.error
-          ? `${ch.name}  ${dim(`⚠ ${ch.error}`)}`
-          : `${ch.name}  ${dim(`(${count})`)}`
+        const label = ch.error ? `${ch.name}  ${dim(`⚠ ${ch.error}`)}` : `${ch.name}  ${dim(`(${count})`)}`
         console.log(`  ${bold(label)}`)
 
         if (count === 0 && !ch.error) {
@@ -2432,6 +2900,455 @@ const LeadsPulseCommand = cmd({
         if (sharedLinks.length > 10) console.log(`    ${dim(`…and ${sharedLinks.length - 10} more`)}`)
       }
 
+      // ── NEW: Communication Intelligence ──
+      // Sentiment analysis + response time metrics
+      if (channels.length > 0) {
+        const allMessages: Array<{ text: string; date: string; isOutbound: boolean; channel: string }> = []
+
+        for (const ch of channels) {
+          for (const msg of ch.messages) {
+            const text = msg.text ?? msg.subject ?? msg.body ?? msg.summary ?? ""
+            const date = msg.ts ?? msg.date ?? ""
+            const isOutbound =
+              ch.name === "iMessage"
+                ? msg.from_me
+                : ch.name === "Gmail"
+                  ? !(msg.from ?? "").toLowerCase().includes(email.toLowerCase())
+                  : ch.name === "Meetings"
+                    ? msg.status === "upcoming" || msg.status === "past"
+                    : false
+
+            if (text && date) {
+              allMessages.push({ text, date, isOutbound, channel: ch.name })
+            }
+          }
+        }
+
+        // Sort by date ascending for response time calc
+        allMessages.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+
+        // Sentiment Analysis — simple keyword-based scoring
+        const sentimentKeywords = {
+          positive: [
+            "thanks",
+            "thank you",
+            "great",
+            "awesome",
+            "perfect",
+            "excellent",
+            "love",
+            "appreciate",
+            "excited",
+            "looking forward",
+            "yes",
+            "sounds good",
+            "agree",
+          ],
+          negative: [
+            "issue",
+            "problem",
+            "unfortunately",
+            "concerned",
+            "worried",
+            "disappointed",
+            "delay",
+            "late",
+            "cancel",
+            "no",
+            "can't",
+            "won't",
+            "unable",
+          ],
+        }
+
+        const analyzeSentiment = (text: string): number => {
+          const lower = text.toLowerCase()
+          let score = 0
+          for (const word of sentimentKeywords.positive) {
+            if (lower.includes(word)) score += 1
+          }
+          for (const word of sentimentKeywords.negative) {
+            if (lower.includes(word)) score -= 1
+          }
+          return score
+        }
+
+        const sentiments = allMessages.map((m) => ({
+          score: analyzeSentiment(m.text),
+          date: m.date,
+          isOutbound: m.isOutbound,
+        }))
+        const recentSentiments = sentiments.slice(-10) // last 10 messages
+        const avgSentiment =
+          recentSentiments.length > 0
+            ? recentSentiments.reduce((sum, s) => sum + s.score, 0) / recentSentiments.length
+            : 0
+
+        // Response time metrics
+        const responseTimes: number[] = []
+        for (let i = 1; i < allMessages.length; i++) {
+          const prev = allMessages[i - 1]
+          const curr = allMessages[i]
+
+          // Only measure when direction changes (they reply to you, or you reply to them)
+          if (prev.isOutbound !== curr.isOutbound) {
+            const timeDiff = new Date(curr.date).getTime() - new Date(prev.date).getTime()
+            const hours = timeDiff / (1000 * 60 * 60)
+            if (hours > 0 && hours < 7 * 24) {
+              // ignore > 1 week gaps
+              responseTimes.push(hours)
+            }
+          }
+        }
+
+        const avgResponseTime =
+          responseTimes.length > 0 ? responseTimes.reduce((sum, t) => sum + t, 0) / responseTimes.length : null
+
+        // Your response time vs theirs
+        const yourResponses: number[] = []
+        const theirResponses: number[] = []
+        for (let i = 1; i < allMessages.length; i++) {
+          const prev = allMessages[i - 1]
+          const curr = allMessages[i]
+
+          if (prev.isOutbound !== curr.isOutbound) {
+            const timeDiff = new Date(curr.date).getTime() - new Date(prev.date).getTime()
+            const hours = timeDiff / (1000 * 60 * 60)
+            if (hours > 0 && hours < 7 * 24) {
+              if (curr.isOutbound) {
+                yourResponses.push(hours)
+              } else {
+                theirResponses.push(hours)
+              }
+            }
+          }
+        }
+
+        const avgYourResponse =
+          yourResponses.length > 0 ? yourResponses.reduce((sum, t) => sum + t, 0) / yourResponses.length : null
+        const avgTheirResponse =
+          theirResponses.length > 0 ? theirResponses.reduce((sum, t) => sum + t, 0) / theirResponses.length : null
+
+        console.log()
+        console.log(`  ${bold("Communication Intelligence")}`)
+
+        // Sentiment
+        const sentimentLabel =
+          avgSentiment > 0.3
+            ? success("Positive")
+            : avgSentiment < -0.3
+              ? `${UI.Style.TEXT_DANGER}Negative${UI.Style.TEXT_NORMAL}`
+              : dim("Neutral")
+        const sentimentScore = avgSentiment.toFixed(1)
+        printKV("  Sentiment", `${sentimentLabel}  ${dim(`(${sentimentScore})`)}`)
+
+        // Response times
+        if (avgYourResponse !== null) {
+          const formatHours = (h: number) =>
+            h < 1 ? `${Math.round(h * 60)}m` : h < 24 ? `${h.toFixed(1)}h` : `${(h / 24).toFixed(1)}d`
+          printKV("  Your Avg Response", formatHours(avgYourResponse))
+        }
+        if (avgTheirResponse !== null) {
+          const formatHours = (h: number) =>
+            h < 1 ? `${Math.round(h * 60)}m` : h < 24 ? `${h.toFixed(1)}h` : `${(h / 24).toFixed(1)}d`
+          const theirColor = avgTheirResponse > 48 ? UI.Style.TEXT_WARNING : ""
+          const theirNormal = avgTheirResponse > 48 ? UI.Style.TEXT_NORMAL : ""
+          printKV("  Their Avg Response", `${theirColor}${formatHours(avgTheirResponse)}${theirNormal}`)
+        }
+        if (avgResponseTime !== null) {
+          const formatHours = (h: number) =>
+            h < 1 ? `${Math.round(h * 60)}m` : h < 24 ? `${h.toFixed(1)}h` : `${(h / 24).toFixed(1)}d`
+          printKV("  Overall Avg", dim(formatHours(avgResponseTime)))
+        }
+      }
+
+      // ── Team Context — who else is working with this lead ──
+      {
+        // Extract unique team members from activities + outreach steps + tasks
+        const teamMembers = new Map<string, { name: string; roles: Set<string>; lastActive: string }>()
+
+        // From activities
+        for (const act of activities) {
+          if (act.user_name && act.user_name !== "Unknown User" && !act.is_system_generated) {
+            const existing = teamMembers.get(act.user_name)
+            if (existing) {
+              existing.roles.add(act.activity_type ?? "activity")
+              if (act.created_at > existing.lastActive) existing.lastActive = act.created_at
+            } else {
+              teamMembers.set(act.user_name, {
+                name: act.user_name,
+                roles: new Set([act.activity_type ?? "activity"]),
+                lastActive: act.created_at ?? "",
+              })
+            }
+          }
+        }
+
+        // From outreach steps
+        for (const step of outreachSteps) {
+          const sender = step.sent_by_name ?? step.assigned_to_name
+          if (sender) {
+            const existing = teamMembers.get(sender)
+            if (existing) {
+              existing.roles.add("outreach")
+              if (step.completed_at && step.completed_at > existing.lastActive) existing.lastActive = step.completed_at
+            } else {
+              teamMembers.set(sender, {
+                name: sender,
+                roles: new Set(["outreach"]),
+                lastActive: step.completed_at ?? step.created_at ?? "",
+              })
+            }
+          }
+        }
+
+        // From tasks
+        for (const task of leadTasks) {
+          const assignee = task.assigned_to_name ?? task.assignee_name
+          if (assignee) {
+            const existing = teamMembers.get(assignee)
+            if (existing) {
+              existing.roles.add("tasks")
+            } else {
+              teamMembers.set(assignee, {
+                name: assignee,
+                roles: new Set(["tasks"]),
+                lastActive: task.updated_at ?? task.created_at ?? "",
+              })
+            }
+          }
+        }
+
+        // Lead owner / assigned_to
+        const owner = lead.assigned_to_name ?? lead.owner_name
+        if (owner) {
+          const existing = teamMembers.get(owner)
+          if (existing) {
+            existing.roles.add("owner")
+          } else {
+            teamMembers.set(owner, { name: owner, roles: new Set(["owner"]), lastActive: "" })
+          }
+        }
+
+        if (teamMembers.size > 0) {
+          console.log()
+          console.log(`  ${bold("Team Context")}  ${dim(`(${teamMembers.size})`)}`)
+          const sorted = [...teamMembers.values()].sort((a, b) => {
+            if (a.roles.has("owner") && !b.roles.has("owner")) return -1
+            if (!a.roles.has("owner") && b.roles.has("owner")) return 1
+            return (b.lastActive || "").localeCompare(a.lastActive || "")
+          })
+          for (const member of sorted.slice(0, 6)) {
+            const roleList = [...member.roles].join(", ")
+            const lastDate = member.lastActive ? dim(` · last: ${member.lastActive.split("T")[0]}`) : ""
+            const ownerBadge = member.roles.has("owner") ? ` ${success("OWNER")}` : ""
+            console.log(`    ${highlight(member.name.padEnd(20))}${dim(roleList)}${ownerBadge}${lastDate}`)
+          }
+          if (sorted.length > 6) console.log(`    ${dim(`…and ${sorted.length - 6} more`)}`)
+        }
+      }
+
+      // ── Workflow & Outreach Status — sequences/automations running for this lead ──
+      {
+        // Outreach steps (sequences)
+        if (outreachSteps.length > 0) {
+          const completed = outreachSteps.filter((s: any) => s.status === "completed" || s.completed_at)
+          const pending = outreachSteps.filter((s: any) => s.status === "pending" || (!s.completed_at && s.status !== "skipped"))
+          const skipped = outreachSteps.filter((s: any) => s.status === "skipped")
+
+          console.log()
+          console.log(`  ${bold("Outreach Sequence")}  ${dim(`(${outreachSteps.length} steps)`)}`)
+          printKV("  Completed", completed.length > 0 ? success(String(completed.length)) : dim("0"))
+          printKV("  Pending", pending.length > 0 ? `${UI.Style.TEXT_WARNING}${pending.length}${UI.Style.TEXT_NORMAL}` : dim("0"))
+          if (skipped.length > 0) printKV("  Skipped", dim(String(skipped.length)))
+
+          // Show next pending step
+          const nextStep = pending.sort((a: any, b: any) => (a.step_number ?? 0) - (b.step_number ?? 0))[0]
+          if (nextStep) {
+            const stepChannel = nextStep.channel ?? nextStep.type ?? "email"
+            const dueDate = nextStep.due_date ? dim(` · due ${nextStep.due_date.split("T")[0]}`) : ""
+            const overdue = nextStep.due_date && new Date(nextStep.due_date) < new Date() ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}` : ""
+            printKV("  Next Step", `${highlight(`#${nextStep.step_number ?? "?"} ${stepChannel}`)}${dueDate}${overdue}`)
+            if (nextStep.subject) console.log(`    ${dim(`Subject: ${nextStep.subject.slice(0, 80)}`)}`)
+          }
+
+          // Show last completed step
+          const lastCompleted = completed.sort((a: any, b: any) => (b.step_number ?? 0) - (a.step_number ?? 0))[0]
+          if (lastCompleted) {
+            const completedDate = lastCompleted.completed_at ? dim(lastCompleted.completed_at.split("T")[0]) : ""
+            const replied = lastCompleted.replied_at ? success(" REPLIED") : ""
+            printKV("  Last Completed", `${dim(`#${lastCompleted.step_number ?? "?"} ${lastCompleted.channel ?? "email"}`)} ${completedDate}${replied}`)
+          }
+        }
+
+        // Workflows linked to this lead's bloq
+        if (leadWorkflows.length > 0) {
+          console.log()
+          console.log(`  ${bold("Automations")}  ${dim(`(${leadWorkflows.length} workflows)`)}`)
+          for (const wf of leadWorkflows.slice(0, 5)) {
+            const statusIcon = wf.is_active ? success("active") : dim("inactive")
+            const lastRun = wf.last_run_at ? dim(` · last: ${wf.last_run_at.split("T")[0]}`) : ""
+            const wfType = wf.type ? dim(` [${wf.type}]`) : ""
+            console.log(`    ${dim(`#${wf.id}`)} ${highlight((wf.name ?? "Unnamed").slice(0, 30).padEnd(30))}${statusIcon}${wfType}${lastRun}`)
+          }
+          if (leadWorkflows.length > 5) console.log(`    ${dim(`…and ${leadWorkflows.length - 5} more — iris workflows list`)}`)
+        }
+      }
+
+      // ── Product Usage — login frequency, feature adoption ──
+      if (productUsage) {
+        console.log()
+        console.log(`  ${bold("Product Usage")}`)
+        if (productUsage.last_login) {
+          const lastLogin = new Date(productUsage.last_login)
+          const daysSince = Math.floor((Date.now() - lastLogin.getTime()) / (1000 * 60 * 60 * 24))
+          const loginColor = daysSince > 14 ? UI.Style.TEXT_DANGER : daysSince > 7 ? UI.Style.TEXT_WARNING : ""
+          const loginNormal = daysSince > 7 ? UI.Style.TEXT_NORMAL : ""
+          printKV("  Last Login", `${loginColor}${productUsage.last_login.split("T")[0]} (${daysSince}d ago)${loginNormal}`)
+        }
+        if (productUsage.login_count !== undefined) printKV("  Logins (30d)", String(productUsage.login_count))
+        if (productUsage.api_calls !== undefined) printKV("  API Calls (30d)", String(productUsage.api_calls))
+        if (productUsage.features_used) {
+          const features = Array.isArray(productUsage.features_used) ? productUsage.features_used : []
+          if (features.length > 0) {
+            printKV("  Features", features.slice(0, 5).join(", "))
+          }
+        }
+        if (productUsage.storage_used_mb) printKV("  Storage", `${productUsage.storage_used_mb}MB`)
+      }
+
+      // ── Next Best Action — AI recommendation based on all signals ──
+      {
+        // Build a compact signal summary for AI reasoning
+        const signals: string[] = []
+        const pulseScore = pulseReadiness?.score
+        const pulseBand = pulseReadiness?.band
+
+        // Pulse score context
+        if (pulseScore !== undefined) signals.push(`Pulse: ${pulseScore}/100 (${pulseBand})`)
+
+        // Deal health
+        if (dealHealth?.has_payment_gate) {
+          signals.push(dealHealth.payment_received ? "Payment: received" : "Payment gate: UNPAID")
+        }
+        if (stripeData?.total_paid > 0) signals.push(`Stripe paid: $${stripeData.total_paid}`)
+
+        // Communication freshness
+        const commsSignal = pulseReadiness?.signals?.comms_freshness
+        if (commsSignal?.last_inbound_at) {
+          const daysSinceInbound = Math.floor((Date.now() - new Date(commsSignal.last_inbound_at).getTime()) / (1000 * 60 * 60 * 24))
+          signals.push(`Last inbound: ${daysSinceInbound}d ago`)
+        }
+        if (commsSignal?.last_outbound_at) {
+          const daysSinceOutbound = Math.floor((Date.now() - new Date(commsSignal.last_outbound_at).getTime()) / (1000 * 60 * 60 * 24))
+          signals.push(`Last outbound: ${daysSinceOutbound}d ago`)
+        }
+
+        // Tasks
+        const overdueTasks = leadTasks.filter((t: any) => !t.is_completed && t.due_date && new Date(t.due_date) < new Date())
+        if (overdueTasks.length > 0) signals.push(`Overdue tasks: ${overdueTasks.length}`)
+        const pendingTasks = leadTasks.filter((t: any) => !t.is_completed)
+        if (pendingTasks.length > 0) signals.push(`Pending tasks: ${pendingTasks.length}`)
+
+        // Outreach
+        const pendingOutreach = outreachSteps.filter((s: any) => !s.completed_at && s.status !== "skipped")
+        if (pendingOutreach.length > 0) signals.push(`Pending outreach steps: ${pendingOutreach.length}`)
+        const hasReply = outreachSteps.some((s: any) => s.replied_at)
+        if (hasReply) signals.push("Has replied to outreach")
+
+        // Requirements
+        const reqSignal = pulseReadiness?.signals?.requirements
+        if (reqSignal?.score !== undefined && reqSignal.score < 100) {
+          signals.push(`Requirements: ${reqSignal.score}/100`)
+        }
+
+        // Status
+        signals.push(`Status: ${lead.status ?? "Unknown"}`)
+
+        // Determine next best action using rule-based logic (no API call needed)
+        let nextAction = ""
+        let actionPriority: "high" | "medium" | "low" = "medium"
+
+        // Priority 1: Unpaid gate + stale comms
+        if (dealHealth?.has_payment_gate && !dealHealth.payment_received) {
+          const lastOutbound = commsSignal?.last_outbound_at ? new Date(commsSignal.last_outbound_at) : null
+          const hoursSince = lastOutbound ? (Date.now() - lastOutbound.getTime()) / (1000 * 60 * 60) : Infinity
+          if (hoursSince > 48) {
+            nextAction = `Send payment follow-up — gate unpaid, last outreach ${hoursSince === Infinity ? "never" : `${Math.floor(hoursSince)}h ago`}`
+            actionPriority = "high"
+          } else {
+            nextAction = `Wait for payment — follow-up sent ${Math.floor(hoursSince)}h ago (next eligible in ${Math.ceil(48 - hoursSince)}h)`
+            actionPriority = "low"
+          }
+        }
+        // Priority 2: Overdue tasks
+        else if (overdueTasks.length > 0) {
+          nextAction = `Complete ${overdueTasks.length} overdue task(s): "${overdueTasks[0].title}"`
+          actionPriority = "high"
+        }
+        // Priority 3: Pending outreach steps that are due
+        else if (pendingOutreach.length > 0) {
+          const nextStep = pendingOutreach.sort((a: any, b: any) => (a.step_number ?? 0) - (b.step_number ?? 0))[0]
+          const isOverdue = nextStep.due_date && new Date(nextStep.due_date) < new Date()
+          nextAction = isOverdue
+            ? `Execute overdue outreach step #${nextStep.step_number ?? "?"} (${nextStep.channel ?? "email"})`
+            : `Pending outreach step #${nextStep.step_number ?? "?"} — ${nextStep.channel ?? "email"}${nextStep.due_date ? ` due ${nextStep.due_date.split("T")[0]}` : ""}`
+          actionPriority = isOverdue ? "high" : "medium"
+        }
+        // Priority 4: No recent inbound (ghost lead)
+        else if (commsSignal?.last_inbound_at) {
+          const daysSinceInbound = Math.floor((Date.now() - new Date(commsSignal.last_inbound_at).getTime()) / (1000 * 60 * 60 * 24))
+          if (daysSinceInbound > 14) {
+            nextAction = `Re-engage — no inbound communication in ${daysSinceInbound} days`
+            actionPriority = "high"
+          } else if (daysSinceInbound > 7) {
+            nextAction = `Check in — ${daysSinceInbound} days since last response`
+            actionPriority = "medium"
+          }
+        }
+        // Priority 5: Failing requirements
+        else if (reqSignal?.score !== undefined && reqSignal.score < 50) {
+          nextAction = `Fix deliverables — requirements score ${reqSignal.score}/100`
+          actionPriority = "high"
+        }
+        // Priority 6: No payment gate and deal in progress
+        else if (!dealHealth?.has_payment_gate && (lead.status === "Won" || lead.status === "Active")) {
+          nextAction = `Create payment gate — active lead with no billing set up`
+          actionPriority = "medium"
+        }
+        // Default: Everything looks good
+        else if (pulseScore && pulseScore >= 80) {
+          nextAction = "On track — maintain regular check-ins"
+          actionPriority = "low"
+        }
+
+        if (nextAction) {
+          console.log()
+          console.log(`  ${bold("Next Best Action")}`)
+          const priorityLabel = actionPriority === "high"
+            ? `${UI.Style.TEXT_DANGER}HIGH${UI.Style.TEXT_NORMAL}`
+            : actionPriority === "medium"
+              ? `${UI.Style.TEXT_WARNING}MEDIUM${UI.Style.TEXT_NORMAL}`
+              : dim("LOW")
+          console.log(`    [${priorityLabel}] ${nextAction}`)
+
+          // Quick action hints
+          if (nextAction.includes("payment follow-up")) {
+            console.log(`    ${dim(`Run: iris leads pulse ${leadId} --hydrate`)}`)
+          } else if (nextAction.includes("overdue task")) {
+            console.log(`    ${dim(`Run: iris leads tasks ${leadId}`)}`)
+          } else if (nextAction.includes("outreach step")) {
+            console.log(`    ${dim(`Run: iris outreach send --lead ${leadId}`)}`)
+          } else if (nextAction.includes("Re-engage") || nextAction.includes("Check in")) {
+            console.log(`    ${dim(`Run: iris leads meet ${leadId} --at …  or  iris leads note ${leadId} "…"`)}`)
+          } else if (nextAction.includes("payment gate")) {
+            console.log(`    ${dim(`Run: iris leads payment-gate ${leadId} -a 500`)}`)
+          } else if (nextAction.includes("deliverables")) {
+            console.log(`    ${dim(`Run: iris leads requirements run ${leadId}`)}`)
+          }
+        }
+      }
+
       // ── Hydration: auto-send payment follow-up if gate is unpaid + 48h since last outreach ──
       const HYDRATION_WINDOW_HOURS = 48
       if (dealHealth?.has_payment_gate && !dealHealth.payment_received && !dealHealth.deal_complete && email) {
@@ -2447,8 +3364,13 @@ const LeadsPulseCommand = cmd({
         // Also check channel scan results for most recent outbound
         if (channels) {
           for (const ch of channels) {
-            for (const msg of (ch.messages ?? [])) {
-              const isOutbound = ch.name === "iMessage" ? msg.from_me : ch.name === "Gmail" ? !(msg.from ?? "").toLowerCase().includes(email.toLowerCase()) : false
+            for (const msg of ch.messages ?? []) {
+              const isOutbound =
+                ch.name === "iMessage"
+                  ? msg.from_me
+                  : ch.name === "Gmail"
+                    ? !(msg.from ?? "").toLowerCase().includes(email.toLowerCase())
+                    : false
               if (isOutbound) {
                 const msgDate = new Date(msg.ts ?? msg.date ?? 0)
                 if (!lastOutreachAt || msgDate > lastOutreachAt) lastOutreachAt = msgDate
@@ -2462,15 +3384,15 @@ const LeadsPulseCommand = cmd({
           lastOutreachAt = new Date(dealHealth.created_at)
         }
 
-        const hoursSinceLast = lastOutreachAt
-          ? (Date.now() - lastOutreachAt.getTime()) / (1000 * 60 * 60)
-          : Infinity
+        const hoursSinceLast = lastOutreachAt ? (Date.now() - lastOutreachAt.getTime()) / (1000 * 60 * 60) : Infinity
 
         console.log()
         const forceHydrate = !!(args as any).force
         if (hoursSinceLast >= HYDRATION_WINDOW_HOURS || forceHydrate) {
           console.log(`  ${bold("Hydration")}`)
-          console.log(`  ${UI.Style.TEXT_WARNING}Last outreach: ${lastOutreachAt ? `${Math.floor(hoursSinceLast)}h ago` : "never"}${UI.Style.TEXT_NORMAL}  ${dim(`(${HYDRATION_WINDOW_HOURS}h window)`)}`)
+          console.log(
+            `  ${UI.Style.TEXT_WARNING}Last outreach: ${lastOutreachAt ? `${Math.floor(hoursSinceLast)}h ago` : "never"}${UI.Style.TEXT_NORMAL}  ${dim(`(${HYDRATION_WINDOW_HOURS}h window)`)}`,
+          )
 
           if (!(args as any).hydrate) {
             // Dry run — show what would happen
@@ -2496,7 +3418,9 @@ const LeadsPulseCommand = cmd({
                 `Reference specific recent work or conversations if possible.`,
                 `Be warm, professional, and direct. End with a clear CTA to review and sign.`,
                 `Sign off as "IRIS AI — on behalf of the IRIS team"`,
-              ].filter(Boolean).join("\n")
+              ]
+                .filter(Boolean)
+                .join("\n")
 
               // Generate AI email — pass bloq_id + strategy_template_id directly
               const bloqId = (lead.bloq_ids ?? [])[0] ?? 40
@@ -2528,7 +3452,9 @@ const LeadsPulseCommand = cmd({
                   const isRedirected = !!(args as any).to
 
                   // Preview the generated email
-                  console.log(`  ${dim("To:")} ${sendTo}${isRedirected ? `  ${highlight("(redirected from " + email + ")")}` : ""}`)
+                  console.log(
+                    `  ${dim("To:")} ${sendTo}${isRedirected ? `  ${highlight("(redirected from " + email + ")")}` : ""}`,
+                  )
                   console.log(`  ${dim("Subject:")} ${emailSubject}`)
                   console.log(`  ${dim("─".repeat(50))}`)
                   for (const line of emailBody.split("\n")) {
@@ -2561,7 +3487,9 @@ const LeadsPulseCommand = cmd({
                       if (qsData.success || qsData.message_id) {
                         console.log(`  ${success("Sent AI follow-up")}  ${dim("to " + sendTo)}`)
                       } else if (qsData.status === "pending_approval") {
-                        console.log(`  ${highlight("AI draft queued for approval")}  ${dim("review: iris leads outreach approve")}`)
+                        console.log(
+                          `  ${highlight("AI draft queued for approval")}  ${dim("review: iris leads outreach approve")}`,
+                        )
                       } else {
                         console.log(`  ${dim("Follow-up queued")}`)
                       }
@@ -2578,7 +3506,9 @@ const LeadsPulseCommand = cmd({
           }
         } else {
           const nextIn = Math.ceil(HYDRATION_WINDOW_HOURS - hoursSinceLast)
-          console.log(`  ${dim(`Hydration: last outreach ${Math.floor(hoursSinceLast)}h ago — next eligible in ${nextIn}h`)}`)
+          console.log(
+            `  ${dim(`Hydration: last outreach ${Math.floor(hoursSinceLast)}h ago — next eligible in ${nextIn}h`)}`,
+          )
         }
       }
 
@@ -2611,14 +3541,25 @@ const LeadsMeetCommand = cmd({
       .option("duration", { type: "number", default: 30, describe: "duration in minutes" })
       .option("location", { alias: "l", type: "string" })
       .option("notes", { type: "string", describe: "meeting agenda/notes" })
-      .option("no-calendar", { type: "boolean", default: false, describe: "skip Google Calendar sync (note + task only)" })
+      .option("no-calendar", {
+        type: "boolean",
+        default: false,
+        describe: "skip Google Calendar sync (note + task only)",
+      })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
 
     const resolved = await resolveLeadId(String(args.id))
-    if (!resolved) { process.exitCode = 1; prompts.outro("Done"); return }
+    if (!resolved) {
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
     const { leadId, lead } = resolved
     const leadName = lead.name ?? lead.first_name ?? `Lead #${leadId}`
 
@@ -2643,7 +3584,9 @@ const LeadsMeetCommand = cmd({
       `Lead: #${leadId} ${leadName}`,
       lead.email ? `Email: ${lead.email}` : "",
       lead.phone ? `Phone: ${lead.phone}` : "",
-    ].filter(Boolean).join("\n")
+    ]
+      .filter(Boolean)
+      .join("\n")
 
     prompts.intro(`◈  Schedule Meeting — ${leadName}`)
     const spinner = prompts.spinner()
@@ -2672,7 +3615,12 @@ const LeadsMeetCommand = cmd({
       const noteMsg = `Meeting scheduled: ${title}\nDate: ${formatDate(startTime)} ${formatTime(startTime)}${args.location ? `\nLocation: ${args.location}` : ""}${args.notes ? `\nAgenda: ${args.notes}` : ""}${calendarResult?.event_url ? `\nCalendar: ${calendarResult.event_url}` : ""}`
       await irisFetch(`/api/v1/leads/${leadId}/notes`, {
         method: "POST",
-        body: JSON.stringify({ message: noteMsg, type: "meeting_scheduled", activity_type: "meeting", activity_icon: "calendar" }),
+        body: JSON.stringify({
+          message: noteMsg,
+          type: "meeting_scheduled",
+          activity_type: "meeting",
+          activity_icon: "calendar",
+        }),
       })
     } catch {}
 
@@ -2690,7 +3638,13 @@ const LeadsMeetCommand = cmd({
     } catch {}
 
     if (args.json) {
-      console.log(JSON.stringify({ lead_id: leadId, title, start: startTime, end: endTime, calendar: calendarResult ?? null }, null, 2))
+      console.log(
+        JSON.stringify(
+          { lead_id: leadId, title, start: startTime, end: endTime, calendar: calendarResult ?? null },
+          null,
+          2,
+        ),
+      )
     } else {
       printDivider()
       printKV("Lead", `#${leadId} ${leadName}`)
@@ -2699,7 +3653,10 @@ const LeadsMeetCommand = cmd({
       printKV("Duration", `${args.duration} min`)
       if (args.location) printKV("Location", args.location as string)
       if (calendarResult?.event_url) printKV("Calendar", calendarResult.event_url)
-      printKV("Synced", args["no-calendar"] ? dim("skipped") : (calendarResult ? success("✓ Google Calendar") : dim("failed")))
+      printKV(
+        "Synced",
+        args["no-calendar"] ? dim("skipped") : calendarResult ? success("✓ Google Calendar") : dim("failed"),
+      )
       printKV("Note", success("✓ saved"))
       printKV("Task", success("✓ created"))
       printDivider()
@@ -2725,10 +3682,17 @@ const LeadsMeetingsCommand = cmd({
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
 
     const resolved = await resolveLeadId(String(args.id))
-    if (!resolved) { process.exitCode = 1; prompts.outro("Done"); return }
+    if (!resolved) {
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
     const { leadId, lead } = resolved
     const leadName = lead.name ?? lead.first_name ?? `Lead #${leadId}`
 
@@ -2755,7 +3719,9 @@ const LeadsMeetingsCommand = cmd({
         console.log(`  ${bold("Upcoming")}`)
         for (const ev of upcoming) {
           const start = ev.start || ev.start_time || ""
-          console.log(`    ${success("▸")} ${formatDate(start)} ${formatTime(start)}  ${bold(ev.summary || "(no title)")}`)
+          console.log(
+            `    ${success("▸")} ${formatDate(start)} ${formatTime(start)}  ${bold(ev.summary || "(no title)")}`,
+          )
           if (ev.location) console.log(`      ${dim(ev.location)}`)
         }
       }
@@ -2802,7 +3768,12 @@ const LeadsPaymentGateCommand = cmd({
       .option("bloq", { alias: "b", describe: "bloq ID", type: "number" })
       .option("package", { alias: "p", describe: "service package ID (auto-fills amount + scope)", type: "number" })
       .option("packages", { describe: "multiple package IDs for selectable tiers (comma-separated)", type: "string" })
-      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one-time", "month", "quarter", "year"] })
+      .option("interval", {
+        alias: "i",
+        describe: "billing interval",
+        type: "string",
+        choices: ["one-time", "month", "quarter", "year"],
+      })
       .option("term", { alias: "t", describe: "duration in months (for recurring)", type: "number" })
       .option("deposit", { describe: "deposit percentage (0-100)", type: "number" })
       .option("list-price", { describe: "original list price (shows strikethrough discount)", type: "number" })
@@ -2831,7 +3802,7 @@ const LeadsPaymentGateCommand = cmd({
     if (args.fee != null || args["fee-flat"] != null) {
       body.processing_fee = {
         percent: args.fee ?? 2.9,
-        flat: args["fee-flat"] ?? 0.30,
+        flat: args["fee-flat"] ?? 0.3,
         mode: args["absorb-fees"] ? "absorb" : "pass_to_client",
       }
     }
@@ -2844,7 +3815,10 @@ const LeadsPaymentGateCommand = cmd({
 
     const data = await res.json().catch(() => ({}))
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
 
     if (!data.success) {
       if (data.error === "duplicate") {
@@ -2904,7 +3878,10 @@ const LeadsUpdatePaymentGateCommand = cmd({
     if (!(await handleApiError(res, "Update payment gate"))) return
 
     const data = await res.json().catch(() => ({}))
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
 
     if (data.success) {
       console.log(success("Payment gate updated"))
@@ -2935,7 +3912,10 @@ const LeadsDeletePaymentGateCommand = cmd({
     if (!(await handleApiError(res, "Delete payment gate"))) return
 
     const data = await res.json().catch(() => ({}))
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
 
     if (data.success) {
       console.log(success(data.message || "Payment gate deleted"))
@@ -2966,7 +3946,10 @@ const LeadsDealStatusCommand = cmd({
     const result = await res.json().catch(() => ({}))
     const status = result?.data ?? result
 
-    if (args.json) { console.log(JSON.stringify(status, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(status, null, 2))
+      return
+    }
 
     if (!status?.has_payment_gate) {
       prompts.log.info(`No payment gate for lead #${args.id}`)
@@ -3027,7 +4010,10 @@ const LeadsPackagesCommand = cmd({
     const result = await res.json().catch(() => ({}))
     const packages: any[] = result?.data?.packages ?? result?.data ?? []
 
-    if (args.json) { console.log(JSON.stringify(packages, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(packages, null, 2))
+      return
+    }
 
     if (!packages.length) {
       prompts.log.info(`No packages found for bloq #${args.bloq}`)
@@ -3041,7 +4027,9 @@ const LeadsPackagesCommand = cmd({
     for (const pkg of packages) {
       const billing = pkg.billing_type && pkg.billing_type !== "one_time" ? dim(` (${pkg.billing_type})`) : ""
       const active = pkg.is_active === false ? dim(" [inactive]") : ""
-      console.log(`  ${dim(`#${pkg.id}`)}  ${bold(pkg.name)}  ${success(`$${Number(pkg.price ?? 0).toFixed(2)}`)}${billing}${active}`)
+      console.log(
+        `  ${dim(`#${pkg.id}`)}  ${bold(pkg.name)}  ${success(`$${Number(pkg.price ?? 0).toFixed(2)}`)}${billing}${active}`,
+      )
       if (pkg.scope_template) {
         console.log(`       ${dim(String(pkg.scope_template).slice(0, 70))}`)
       }
@@ -3063,7 +4051,13 @@ const LeadsCreatePackageCommand = cmd({
       .positional("bloq", { describe: "bloq ID", type: "number", demandOption: true })
       .option("name", { alias: "n", describe: "package name", type: "string", demandOption: true })
       .option("price", { alias: "a", describe: "price (or use --amount)", type: "number", demandOption: true })
-      .option("billing", { alias: "b", describe: "billing type", type: "string", choices: ["one_time", "monthly", "yearly", "milestone"], default: "monthly" })
+      .option("billing", {
+        alias: "b",
+        describe: "billing type",
+        type: "string",
+        choices: ["one_time", "monthly", "yearly", "milestone"],
+        default: "monthly",
+      })
       .option("scope", { alias: "s", describe: "scope of work template", type: "string" })
       .option("features", { alias: "f", describe: "features (comma-separated)", type: "string" })
       .option("description", { alias: "d", describe: "package description", type: "string" })
@@ -3087,7 +4081,10 @@ const LeadsCreatePackageCommand = cmd({
 
     const data = await res.json().catch(() => ({}))
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
 
     if (!res.ok || !data.success) {
       prompts.log.error(data.message || "Failed to create package")
@@ -3130,7 +4127,12 @@ const LeadsUpdatePackageCommand = cmd({
       .positional("packageId", { describe: "package ID", type: "number", demandOption: true })
       .option("name", { alias: "n", describe: "package name", type: "string" })
       .option("price", { alias: "a", describe: "price", type: "number" })
-      .option("billing", { alias: "b", describe: "billing type", type: "string", choices: ["one_time", "monthly", "yearly", "milestone"] })
+      .option("billing", {
+        alias: "b",
+        describe: "billing type",
+        type: "string",
+        choices: ["one_time", "monthly", "yearly", "milestone"],
+      })
       .option("scope", { alias: "s", describe: "scope of work template", type: "string" })
       .option("features", { alias: "f", describe: "features (comma-separated)", type: "string" })
       .option("description", { alias: "d", describe: "package description", type: "string" })
@@ -3160,7 +4162,10 @@ const LeadsUpdatePackageCommand = cmd({
 
     const data = await res.json().catch(() => ({}))
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
 
     if (!res.ok || !data.success) {
       prompts.log.error(data.message || "Failed to update package")
@@ -3256,7 +4261,11 @@ const LeadsSubscriptionUpdateCommand = cmd({
     yargs
       .positional("id", { describe: "lead ID", type: "number", demandOption: true })
       .option("amount", { alias: "a", describe: "new monthly amount", type: "number", demandOption: true })
-      .option("prorate", { describe: "prorate immediately (default: next billing cycle)", type: "boolean", default: false })
+      .option("prorate", {
+        describe: "prorate immediately (default: next billing cycle)",
+        type: "boolean",
+        default: false,
+      })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -3295,7 +4304,10 @@ const LeadsSubscriptionUpdateCommand = cmd({
     }
 
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
 
     const result = data.data ?? data
     console.log(`  ${success("Subscription updated")}`)
@@ -3320,17 +4332,27 @@ const LeadsTasksListCommand = cmd({
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
     const spinner = prompts.spinner()
     spinner.start("Loading tasks…")
     try {
       const res = await irisFetch(`/api/v1/leads/${args.id}/tasks`)
       const ok = await handleApiError(res, "List tasks")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
       const data = ((await res.json()) as any)?.data
       const tasks: any[] = data?.tasks ?? data ?? []
       spinner.stop(`${tasks.length} task(s)`)
-      if (args.json) { console.log(JSON.stringify(tasks, null, 2)); return }
+      if (args.json) {
+        console.log(JSON.stringify(tasks, null, 2))
+        return
+      }
       if (tasks.length === 0) {
         prompts.log.info("No tasks yet")
         prompts.outro(dim(`iris leads tasks create ${args.id} --title "Follow up"`))
@@ -3340,7 +4362,10 @@ const LeadsTasksListCommand = cmd({
       for (const t of tasks) {
         const check = t.is_completed ? success("✓") : "○"
         const due = t.due_date ? dim(` due ${String(t.due_date).split("T")[0]}`) : ""
-        const overdue = !t.is_completed && t.due_date && new Date(t.due_date) < new Date() ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}` : ""
+        const overdue =
+          !t.is_completed && t.due_date && new Date(t.due_date) < new Date()
+            ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}`
+            : ""
         console.log(`  ${check} ${bold(t.title)}  ${dim(`#${t.id}`)}${due}${overdue}`)
         if (t.description) console.log(`    ${dim(t.description.slice(0, 120))}`)
       }
@@ -3366,7 +4391,10 @@ const LeadsTasksCreateCommand = cmd({
       .option("agent-id", { type: "number", describe: "assign to agent" }),
   async handler(args) {
     UI.empty()
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
     const spinner = prompts.spinner()
     spinner.start("Creating task…")
     try {
@@ -3376,7 +4404,11 @@ const LeadsTasksCreateCommand = cmd({
       if (args["agent-id"]) body.agent_id = args["agent-id"]
       const res = await irisFetch(`/api/v1/leads/${args.id}/tasks`, { method: "POST", body: JSON.stringify(body) })
       const ok = await handleApiError(res, "Create task")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
       const data = ((await res.json()) as any)?.data
       const task = data?.task ?? data
       spinner.stop(`${success("✓")} Task created: ${task.title} (#${task.id})`)
@@ -3398,7 +4430,10 @@ const LeadsTasksCompleteCommand = cmd({
       .positional("task-id", { type: "number", demandOption: true }),
   async handler(args) {
     UI.empty()
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
     const spinner = prompts.spinner()
     spinner.start("Completing…")
     try {
@@ -3407,7 +4442,11 @@ const LeadsTasksCompleteCommand = cmd({
         body: JSON.stringify({ is_completed: true }),
       })
       const ok = await handleApiError(res, "Complete task")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
       spinner.stop(success("✓ Task completed"))
       prompts.outro(dim(`iris leads tasks list ${args["lead-id"]}`))
     } catch (err) {
@@ -3427,13 +4466,20 @@ const LeadsTasksDeleteCommand = cmd({
       .positional("task-id", { type: "number", demandOption: true }),
   async handler(args) {
     UI.empty()
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
     const spinner = prompts.spinner()
     spinner.start("Deleting…")
     try {
       const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/tasks/${args["task-id"]}`, { method: "DELETE" })
       const ok = await handleApiError(res, "Delete task")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
       spinner.stop(success("✓ Task deleted"))
     } catch (err) {
       spinner.stop("Error", 1)
@@ -3473,9 +4519,15 @@ const LeadsEnrichCommand = cmd({
   async handler(argv) {
     const { requireUserId } = await import("./iris-api")
     const token = await requireAuth()
-    if (!token) { process.exitCode = 1; return }
+    if (!token) {
+      process.exitCode = 1
+      return
+    }
     const userId = await requireUserId(argv["user-id"] as number | undefined)
-    if (!userId) { process.exitCode = 1; return }
+    if (!userId) {
+      process.exitCode = 1
+      return
+    }
 
     const bloqId = argv.bloq as number
     const limit = argv.limit as number
@@ -3485,11 +4537,15 @@ const LeadsEnrichCommand = cmd({
     try {
       const daemonCheck = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(2000) })
       if (!daemonCheck.ok) {
-        console.log(`⚠ Hive daemon is not healthy (HTTP ${daemonCheck.status}). Task will be queued but may not execute.`)
+        console.log(
+          `⚠ Hive daemon is not healthy (HTTP ${daemonCheck.status}). Task will be queued but may not execute.`,
+        )
         console.log(dim(`  Start it: iris-daemon start`))
       }
     } catch {
-      console.log(`⚠ Hive daemon is not running on localhost:3200. Task will be queued but won't execute until a node connects.`)
+      console.log(
+        `⚠ Hive daemon is not running on localhost:3200. Task will be queued but won't execute until a node connects.`,
+      )
       console.log(dim(`  Start it: iris-daemon start`))
       console.log("")
     }
@@ -3534,7 +4590,9 @@ const LeadsEnrichCommand = cmd({
     const status = created.task?.status
 
     if (argv.json) {
-      console.log(JSON.stringify({ ok: true, task_id: taskId, status, dispatched: created.dispatched ?? null }, null, 2))
+      console.log(
+        JSON.stringify({ ok: true, task_id: taskId, status, dispatched: created.dispatched ?? null }, null, 2),
+      )
       return
     }
 
@@ -3561,9 +4619,20 @@ const LeadsGateAllCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("amount", { alias: "a", describe: "default amount per gate", type: "number", demandOption: true })
-      .option("scope", { alias: "s", describe: "default scope of work", type: "string", default: "IRIS Platform Services" })
+      .option("scope", {
+        alias: "s",
+        describe: "default scope of work",
+        type: "string",
+        default: "IRIS Platform Services",
+      })
       .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
-      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one-time", "month", "quarter", "year"], default: "month" })
+      .option("interval", {
+        alias: "i",
+        describe: "billing interval",
+        type: "string",
+        choices: ["one-time", "month", "quarter", "year"],
+        default: "month",
+      })
       .option("term", { alias: "t", describe: "duration in months", type: "number" })
       .option("dry-run", { describe: "show what would be created without creating", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
@@ -3578,7 +4647,10 @@ const LeadsGateAllCommand = cmd({
       const params = new URLSearchParams({ status: "Won", per_page: "200" })
       if (args.bloq) params.set("bloq_id", String(args.bloq))
       const res = await irisFetch(`/api/v1/leads?${params}`)
-      if (!res.ok) { spinner.stop("Failed to fetch leads", 1); return }
+      if (!res.ok) {
+        spinner.stop("Failed to fetch leads", 1)
+        return
+      }
       const body = (await res.json()) as { data?: any[] }
       const allWon: any[] = body?.data ?? []
 
@@ -3650,7 +4722,9 @@ const LeadsGateAllCommand = cmd({
       printDivider()
 
       if (args.dryRun || args["dry-run"]) {
-        console.log(dim(`\n  Dry run — would create ${needsGate.length} payment gate(s) at $${args.amount}/${args.interval}`))
+        console.log(
+          dim(`\n  Dry run — would create ${needsGate.length} payment gate(s) at $${args.amount}/${args.interval}`),
+        )
         console.log(dim(`  Run without --dry-run to execute`))
         return
       }
@@ -3667,7 +4741,8 @@ const LeadsGateAllCommand = cmd({
       }
 
       // Execute
-      const results: Array<{ lead_id: number; name: string; success: boolean; proposal_url?: string; error?: string }> = []
+      const results: Array<{ lead_id: number; name: string; success: boolean; proposal_url?: string; error?: string }> =
+        []
       for (const lead of needsGate) {
         const gateBody: Record<string, unknown> = {
           amount: args.amount,
@@ -3699,7 +4774,7 @@ const LeadsGateAllCommand = cmd({
         }
       }
 
-      const created = results.filter(r => r.success).length
+      const created = results.filter((r) => r.success).length
       console.log("")
       console.log(success(`  ${created}/${needsGate.length} payment gates created`))
 
@@ -3725,8 +4800,16 @@ const LeadsPulseAllCommand = cmd({
     yargs
       .option("status", { describe: "filter by status", type: "string", default: "Won" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
-      .option("hydrate", { describe: "auto-send follow-ups to eligible leads (past 48h throttle)", type: "boolean", default: false })
-      .option("dry-run", { describe: "with --hydrate: preview emails without sending", type: "boolean", default: false })
+      .option("hydrate", {
+        describe: "auto-send follow-ups to eligible leads (past 48h throttle)",
+        type: "boolean",
+        default: false,
+      })
+      .option("dry-run", {
+        describe: "with --hydrate: preview emails without sending",
+        type: "boolean",
+        default: false,
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -3738,12 +4821,15 @@ const LeadsPulseAllCommand = cmd({
       const params = new URLSearchParams({ status: args.status, per_page: "200" })
       if (args.bloq) params.set("bloq_id", String(args.bloq))
       const res = await irisFetch(`/api/v1/leads?${params}`)
-      if (!res.ok) { spinner.stop("Failed", 1); return }
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        return
+      }
       const body = (await res.json()) as { data?: any[] }
       const leads: any[] = body?.data ?? []
 
       // Skip junk leads (no email, social emails, self)
-      const eligible = leads.filter(l => {
+      const eligible = leads.filter((l) => {
         if (!l.email) return false
         if (l.email.endsWith("@instagram.com") || l.email.endsWith("@twitter.com")) return false
         if (l.name === `Lead #${l.id}`) return false
@@ -3754,12 +4840,25 @@ const LeadsPulseAllCommand = cmd({
 
       // Fetch pulse data for each lead
       type PulseRow = {
-        id: number; name: string; email: string; company: string; pulse: number; band: string;
-        deal: number | null; hasGate: boolean; amount: number | null; contentAgent: boolean;
-        comms: number | null; lastOutreach: string | null; hydrationEligible: boolean;
-        billingStatus: "active" | "past_due" | "pending" | "no_sub" | "no_gate";
-        monthlyAmount: number | null; nextPaymentDate: string | null; daysUntil: number | null;
-        totalPaid: number; proposalUrl: string | null;
+        id: number
+        name: string
+        email: string
+        company: string
+        pulse: number
+        band: string
+        deal: number | null
+        hasGate: boolean
+        amount: number | null
+        contentAgent: boolean
+        comms: number | null
+        lastOutreach: string | null
+        hydrationEligible: boolean
+        billingStatus: "active" | "past_due" | "pending" | "no_sub" | "no_gate"
+        monthlyAmount: number | null
+        nextPaymentDate: string | null
+        daysUntil: number | null
+        totalPaid: number
+        proposalUrl: string | null
       }
       const rows: PulseRow[] = []
 
@@ -3773,9 +4872,9 @@ const LeadsPulseAllCommand = cmd({
           ])
 
           const readData = readRes?.ok ? ((await readRes.json()) as any)?.data : null
-          const dealBody = dealRes?.ok ? (await dealRes.json()) as any : null
+          const dealBody = dealRes?.ok ? ((await dealRes.json()) as any) : null
           const deal = dealBody?.data ?? dealBody
-          const stripe = stripeRes?.ok ? ((await stripeRes.json()) as any)?.data ?? {} : {}
+          const stripe = stripeRes?.ok ? (((await stripeRes.json()) as any)?.data ?? {}) : {}
 
           const sigs = readData?.signals ?? {}
           const dealChecks = sigs.deal_health?.checks ?? {}
@@ -3791,12 +4890,22 @@ const LeadsPulseAllCommand = cmd({
           let billingStatus: PulseRow["billingStatus"] = "no_gate"
           if (activeSub) billingStatus = "active"
           else if (pastDueSub) billingStatus = "past_due"
-          else if (hasGate) billingStatus = stripe.summary?.active_subscriptions > 0 ? "active" : (stripe.summary?.pending_sessions > 0 ? "pending" : "no_sub")
+          else if (hasGate)
+            billingStatus =
+              stripe.summary?.active_subscriptions > 0
+                ? "active"
+                : stripe.summary?.pending_sessions > 0
+                  ? "pending"
+                  : "no_sub"
           else billingStatus = "no_gate"
 
           // Extract monthly amount + next date from active/past_due sub
           const billingSub = activeSub ?? pastDueSub
-          const monthlyAmount = billingSub?.amount ? Number(billingSub.amount) : (deal?.amount ? Number(deal.amount) : null)
+          const monthlyAmount = billingSub?.amount
+            ? Number(billingSub.amount)
+            : deal?.amount
+              ? Number(deal.amount)
+              : null
           const nextDate = billingSub?.current_period_end ?? null
           let daysUntil: number | null = null
           if (nextDate) {
@@ -3818,7 +4927,8 @@ const LeadsPulseAllCommand = cmd({
             contentAgent: dealChecks.has_content_agent ?? false,
             comms: commsScore,
             lastOutreach: lastOut,
-            hydrationEligible: (hasGate && !deal?.payment_received && !deal?.deal_complete && billingStatus !== "active") ?? false,
+            hydrationEligible:
+              (hasGate && !deal?.payment_received && !deal?.deal_complete && billingStatus !== "active") ?? false,
             billingStatus,
             monthlyAmount,
             nextPaymentDate: nextDate,
@@ -3828,11 +4938,25 @@ const LeadsPulseAllCommand = cmd({
           })
         } catch {
           rows.push({
-            id: lead.id, name: (lead.name ?? `#${lead.id}`).slice(0, 22), email: lead.email ?? "",
-            company: "", pulse: 0, band: "error", deal: null, hasGate: false, amount: null,
-            contentAgent: false, comms: null, lastOutreach: null, hydrationEligible: false,
-            billingStatus: "no_gate", monthlyAmount: null, nextPaymentDate: null,
-            daysUntil: null, totalPaid: 0, proposalUrl: null,
+            id: lead.id,
+            name: (lead.name ?? `#${lead.id}`).slice(0, 22),
+            email: lead.email ?? "",
+            company: "",
+            pulse: 0,
+            band: "error",
+            deal: null,
+            hasGate: false,
+            amount: null,
+            contentAgent: false,
+            comms: null,
+            lastOutreach: null,
+            hydrationEligible: false,
+            billingStatus: "no_gate",
+            monthlyAmount: null,
+            nextPaymentDate: null,
+            daysUntil: null,
+            totalPaid: 0,
+            proposalUrl: null,
           })
         }
       }
@@ -3841,22 +4965,29 @@ const LeadsPulseAllCommand = cmd({
       rows.sort((a, b) => b.pulse - a.pulse)
 
       // Compute billing summary
-      const activeSubs = rows.filter(r => r.billingStatus === "active")
-      const pastDueRows = rows.filter(r => r.billingStatus === "past_due")
-      const notOnStripe = rows.filter(r => r.billingStatus === "no_sub" || r.billingStatus === "no_gate")
+      const activeSubs = rows.filter((r) => r.billingStatus === "active")
+      const pastDueRows = rows.filter((r) => r.billingStatus === "past_due")
+      const notOnStripe = rows.filter((r) => r.billingStatus === "no_sub" || r.billingStatus === "no_gate")
       const mrr = activeSubs.reduce((s, r) => s + (r.monthlyAmount ?? 0), 0)
       const totalCollected = rows.reduce((s, r) => s + r.totalPaid, 0)
 
       if (args.json) {
-        console.log(JSON.stringify({
-          rows,
-          summary: {
-            mrr, totalCollected,
-            activeSubs: activeSubs.length,
-            pastDue: pastDueRows.length,
-            notOnStripe: notOnStripe.map(r => ({ id: r.id, name: r.name, proposalUrl: r.proposalUrl })),
-          },
-        }, null, 2))
+        console.log(
+          JSON.stringify(
+            {
+              rows,
+              summary: {
+                mrr,
+                totalCollected,
+                activeSubs: activeSubs.length,
+                pastDue: pastDueRows.length,
+                notOnStripe: notOnStripe.map((r) => ({ id: r.id, name: r.name, proposalUrl: r.proposalUrl })),
+              },
+            },
+            null,
+            2,
+          ),
+        )
         return
       }
 
@@ -3866,13 +4997,14 @@ const LeadsPulseAllCommand = cmd({
       console.log(dim("  " + "=".repeat(94)))
 
       // Header
-      console.log(`  ${dim("ID".padEnd(8))}${"Name".padEnd(22)}${"Pulse".padEnd(7)}${"Billing".padEnd(12)}${"$/mo".padEnd(10)}${"Next Due".padEnd(13)}${"Days".padEnd(7)}${"Paid".padEnd(10)}`)
+      console.log(
+        `  ${dim("ID".padEnd(8))}${"Name".padEnd(22)}${"Pulse".padEnd(7)}${"Billing".padEnd(12)}${"$/mo".padEnd(10)}${"Next Due".padEnd(13)}${"Days".padEnd(7)}${"Paid".padEnd(10)}`,
+      )
       console.log(dim("  " + "-".repeat(94)))
 
       for (const r of rows) {
-        const pulseColor = r.pulse >= 90 ? UI.Style.TEXT_SUCCESS
-          : r.pulse >= 50 ? UI.Style.TEXT_WARNING
-          : UI.Style.TEXT_DANGER
+        const pulseColor =
+          r.pulse >= 90 ? UI.Style.TEXT_SUCCESS : r.pulse >= 50 ? UI.Style.TEXT_WARNING : UI.Style.TEXT_DANGER
         const pulseStr = `${pulseColor}${String(r.pulse).padEnd(4)}${UI.Style.TEXT_NORMAL}`
 
         // Billing status with color
@@ -3894,14 +5026,33 @@ const LeadsPulseAllCommand = cmd({
             billingStr = `${UI.Style.TEXT_DANGER}No Gate${UI.Style.TEXT_NORMAL}`
         }
         // Pad to 12 visible chars (accounting for ANSI codes)
-        const billingPad = billingStr + " ".repeat(Math.max(0, 12 - (r.billingStatus === "past_due" ? 8 : r.billingStatus === "no_sub" ? 6 : r.billingStatus === "no_gate" ? 7 : r.billingStatus === "pending" ? 7 : 6)))
+        const billingPad =
+          billingStr +
+          " ".repeat(
+            Math.max(
+              0,
+              12 -
+                (r.billingStatus === "past_due"
+                  ? 8
+                  : r.billingStatus === "no_sub"
+                    ? 6
+                    : r.billingStatus === "no_gate"
+                      ? 7
+                      : r.billingStatus === "pending"
+                        ? 7
+                        : 6),
+            ),
+          )
 
         const amountStr = r.monthlyAmount ? `$${r.monthlyAmount}`.padEnd(10) : dim("--".padEnd(10))
-        const nextStr = r.nextPaymentDate ? (r.nextPaymentDate.split("T")[0] ?? r.nextPaymentDate).padEnd(13) : dim("--".padEnd(13))
+        const nextStr = r.nextPaymentDate
+          ? (r.nextPaymentDate.split("T")[0] ?? r.nextPaymentDate).padEnd(13)
+          : dim("--".padEnd(13))
 
         let daysStr: string
         if (r.daysUntil !== null) {
-          const dColor = r.daysUntil <= 0 ? UI.Style.TEXT_DANGER : r.daysUntil <= 7 ? UI.Style.TEXT_WARNING : UI.Style.TEXT_SUCCESS
+          const dColor =
+            r.daysUntil <= 0 ? UI.Style.TEXT_DANGER : r.daysUntil <= 7 ? UI.Style.TEXT_WARNING : UI.Style.TEXT_SUCCESS
           const dLabel = r.daysUntil <= 0 ? "NOW" : `${r.daysUntil}d`
           daysStr = `${dColor}${dLabel}${UI.Style.TEXT_NORMAL}` + " ".repeat(Math.max(0, 7 - dLabel.length))
         } else {
@@ -3910,7 +5061,9 @@ const LeadsPulseAllCommand = cmd({
 
         const paidStr = r.totalPaid > 0 ? success(`$${r.totalPaid}`) : dim("$0")
 
-        console.log(`  ${dim(`#${r.id}`.padEnd(8))}${r.name.padEnd(22)}${pulseStr}   ${billingPad}${amountStr}${nextStr}${daysStr}${paidStr}`)
+        console.log(
+          `  ${dim(`#${r.id}`.padEnd(8))}${r.name.padEnd(22)}${pulseStr}   ${billingPad}${amountStr}${nextStr}${daysStr}${paidStr}`,
+        )
       }
 
       console.log(dim("  " + "-".repeat(94)))
@@ -3918,8 +5071,12 @@ const LeadsPulseAllCommand = cmd({
       // Billing summary
       console.log()
       console.log(`  ${bold("Billing")}`)
-      console.log(`  MRR: ${success(`$${mrr.toFixed(2)}`)}  |  Total Collected: ${success(`$${totalCollected.toFixed(2)}`)}`)
-      console.log(`  ${success(`${activeSubs.length} active sub${activeSubs.length !== 1 ? "s" : ""}`)}  |  ${pastDueRows.length > 0 ? `${UI.Style.TEXT_DANGER}${pastDueRows.length} past due${UI.Style.TEXT_NORMAL}` : dim("0 past due")}`)
+      console.log(
+        `  MRR: ${success(`$${mrr.toFixed(2)}`)}  |  Total Collected: ${success(`$${totalCollected.toFixed(2)}`)}`,
+      )
+      console.log(
+        `  ${success(`${activeSubs.length} active sub${activeSubs.length !== 1 ? "s" : ""}`)}  |  ${pastDueRows.length > 0 ? `${UI.Style.TEXT_DANGER}${pastDueRows.length} past due${UI.Style.TEXT_NORMAL}` : dim("0 past due")}`,
+      )
 
       if (notOnStripe.length > 0) {
         console.log()
@@ -3932,15 +5089,17 @@ const LeadsPulseAllCommand = cmd({
 
       // Pulse summary
       const avgPulse = rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.pulse, 0) / rows.length) : 0
-      const healthy = rows.filter(r => r.band === "healthy").length
-      const failing = rows.filter(r => r.band === "failing").length
+      const healthy = rows.filter((r) => r.band === "healthy").length
+      const failing = rows.filter((r) => r.band === "failing").length
 
       console.log()
       console.log(`  ${bold("Health")}`)
-      console.log(`  Avg Pulse: ${avgPulse}/100  |  ${success(`${healthy} healthy`)}  ${UI.Style.TEXT_DANGER}${failing} failing${UI.Style.TEXT_NORMAL}`)
+      console.log(
+        `  Avg Pulse: ${avgPulse}/100  |  ${success(`${healthy} healthy`)}  ${UI.Style.TEXT_DANGER}${failing} failing${UI.Style.TEXT_NORMAL}`,
+      )
 
       // Hydration summary
-      const hydrationReady = rows.filter(r => r.hydrationEligible)
+      const hydrationReady = rows.filter((r) => r.hydrationEligible)
       if (hydrationReady.length > 0) {
         console.log()
         console.log(`  ${bold("Hydration ready")} ${dim(`(${hydrationReady.length} leads with unpaid gates)`)}`)
@@ -3989,7 +5148,13 @@ const LeadsPulseAllCommand = cmd({
             } else {
               const qsRes = await irisFetch(`/api/v1/leads/${r.id}/outreach/quicksend`, {
                 method: "POST",
-                body: JSON.stringify({ channel: "email", message: emailBody, subject, bloq_id: 40, strategy_template_id: 37 }),
+                body: JSON.stringify({
+                  channel: "email",
+                  message: emailBody,
+                  subject,
+                  bloq_id: 40,
+                  strategy_template_id: 37,
+                }),
               })
               if (qsRes.ok) {
                 console.log(`    ${success("+")}  ${r.name}  ${dim(subject.slice(0, 60))}`)
@@ -4084,16 +5249,21 @@ const DealsListCommand = cmd({
     const data = result?.data ?? {}
     const deals: any[] = data?.deals ?? []
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
 
     if (!deals.length) {
       prompts.log.info("No active deals found")
-      console.log(dim("Create one: iris leads payment-gate <lead-id> -a 500 -s \"Scope\""))
+      console.log(dim('Create one: iris leads payment-gate <lead-id> -a 500 -s "Scope"'))
       return
     }
 
     console.log("")
-    console.log(bold(`Active Deals — ${deals.length} total | Pipeline: $${Number(data.pipeline_value ?? 0).toFixed(2)}`))
+    console.log(
+      bold(`Active Deals — ${deals.length} total | Pipeline: $${Number(data.pipeline_value ?? 0).toFixed(2)}`),
+    )
     printDivider()
 
     const statusLabels: Record<string, string> = {
@@ -4135,7 +5305,10 @@ const DealsStatusCommand = cmd({
     const result = await res.json().catch(() => ({}))
     const status = result?.data ?? result
 
-    if (args.json) { console.log(JSON.stringify(status, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(status, null, 2))
+      return
+    }
 
     if (!status?.has_payment_gate) {
       prompts.log.info(`No payment gate for lead #${args.id}`)
@@ -4193,7 +5366,10 @@ const DealsRemindCommand = cmd({
 
     const result = await res.json().catch(() => ({}))
 
-    if (args.json) { console.log(JSON.stringify(result, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
 
     if (result?.success) {
       prompts.log.success(result.message ?? "Reminder sent")
@@ -4278,8 +5454,16 @@ const DealsCreateCommand = cmd({
       .option("bloq", { alias: "b", describe: "bloq ID", type: "number" })
       .option("package", { alias: "p", describe: "package ID", type: "number" })
       .option("packages", { describe: "comma-separated package IDs for multi-tier", type: "string" })
-      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one-time", "month", "quarter", "year"] })
-      .option("pass-fees", { describe: "pass Stripe processing fees to the client (default 2.9% + $0.30)", type: "boolean" })
+      .option("interval", {
+        alias: "i",
+        describe: "billing interval",
+        type: "string",
+        choices: ["one-time", "month", "quarter", "year"],
+      })
+      .option("pass-fees", {
+        describe: "pass Stripe processing fees to the client (default 2.9% + $0.30)",
+        type: "boolean",
+      })
       .option("absorb-fees", { describe: "absorb Stripe processing fees (you pay them)", type: "boolean" })
       .option("fee-percent", { describe: "processing fee percentage (default 2.9)", type: "number" })
       .option("fee-flat", { describe: "processing fee flat amount (default 0.30)", type: "number" })
@@ -4310,7 +5494,10 @@ const DealsCreateCommand = cmd({
 
     const result = await res.json().catch(() => ({}))
 
-    if (args.json) { console.log(JSON.stringify(result, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
 
     if (result?.success || result?.data) {
       const data = result?.data ?? result
@@ -4355,7 +5542,10 @@ const DealsDeleteCommand = cmd({
 
     const result = await res.json().catch(() => ({}))
 
-    if (args.json) { console.log(JSON.stringify(result, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
 
     if (result?.success) {
       prompts.log.success(`Payment gate deleted for lead #${args.id}`)
@@ -4374,7 +5564,12 @@ const DealsUpdateCommand = cmd({
       .positional("id", { describe: "lead ID", type: "number", demandOption: true })
       .option("amount", { alias: "a", describe: "new amount in dollars", type: "number" })
       .option("scope", { alias: "s", describe: "new scope of work", type: "string" })
-      .option("interval", { alias: "i", describe: "billing interval", type: "string", choices: ["one-time", "month", "quarter", "year"] })
+      .option("interval", {
+        alias: "i",
+        describe: "billing interval",
+        type: "string",
+        choices: ["one-time", "month", "quarter", "year"],
+      })
       .option("pass-fees", { describe: "pass Stripe processing fees to the client", type: "boolean" })
       .option("absorb-fees", { describe: "absorb Stripe processing fees (you pay them)", type: "boolean" })
       .option("fee-percent", { describe: "processing fee percentage (default 2.9)", type: "number" })
@@ -4412,7 +5607,10 @@ const DealsUpdateCommand = cmd({
     if (args.interval) {
       body.interval = args.interval
     } else if (status.billing_type) {
-      const mapped = { monthly: "month", quarterly: "quarter", yearly: "year", one_time: "one-time" } as Record<string, string>
+      const mapped = { monthly: "month", quarterly: "quarter", yearly: "year", one_time: "one-time" } as Record<
+        string,
+        string
+      >
       body.interval = mapped[status.billing_type] ?? status.billing_type
     }
     if (args["pass-fees"] || args["absorb-fees"] || args["fee-percent"] || args["fee-flat"]) {
@@ -4429,7 +5627,10 @@ const DealsUpdateCommand = cmd({
 
     const result = await createRes.json().catch(() => ({}))
 
-    if (args.json) { console.log(JSON.stringify(result, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
 
     const data = result?.data ?? result
     prompts.log.success(`Payment gate updated for lead #${args.id}`)
@@ -4481,7 +5682,12 @@ const LeadsCollectCommand = cmd({
       .option("notes", { describe: "notes about the payment", type: "string" })
       .option("send", { describe: "send payment link via email", type: "boolean", default: true })
       .option("subscribe", { describe: "create recurring subscription instead of one-time", type: "boolean" })
-      .option("interval", { describe: "subscription interval", type: "string", choices: ["month", "year"] as const, default: "month" })
+      .option("interval", {
+        describe: "subscription interval",
+        type: "string",
+        choices: ["month", "year"] as const,
+        default: "month",
+      })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -4540,10 +5746,14 @@ const LeadsCollectCommand = cmd({
         }
       } else {
         steps.push("mark_paid_failed")
-        if (!args.json) console.log(highlight(`  ⚠ Mark paid failed: ${markBody?.error ?? markBody?.message ?? "unknown"}`))
+        if (!args.json)
+          console.log(highlight(`  ⚠ Mark paid failed: ${markBody?.error ?? markBody?.message ?? "unknown"}`))
       }
 
-      if (args.json) { console.log(JSON.stringify(results, null, 2)); return }
+      if (args.json) {
+        console.log(JSON.stringify(results, null, 2))
+        return
+      }
       printDivider()
       return
     }
@@ -4608,7 +5818,10 @@ const LeadsCollectCommand = cmd({
       }
     }
 
-    if (args.json) { console.log(JSON.stringify({ ...results, invoice_id: invoiceId }, null, 2)); return }
+    if (args.json) {
+      console.log(JSON.stringify({ ...results, invoice_id: invoiceId }, null, 2))
+      return
+    }
     printDivider()
     if (results.checkout_url) printKV("Payment Link", String(results.checkout_url))
     console.log(dim(`  Track: iris deals status ${leadId}`))
@@ -4647,17 +5860,24 @@ const SegmentListCommand = cmd({
     if (!(await requireAuth())) return
 
     const segments = await fetchSegments(args["bloq-id"] as number | undefined)
-    if ((args as any).json) { console.log(JSON.stringify(segments, null, 2)); return }
+    if ((args as any).json) {
+      console.log(JSON.stringify(segments, null, 2))
+      return
+    }
     if (segments.length === 0) {
       prompts.log.info("No segments saved yet")
-      console.log(dim("Create one: iris leads segment create \"Won Retainers\" --status=Won"))
+      console.log(dim('Create one: iris leads segment create "Won Retainers" --status=Won'))
       return
     }
     console.log("")
     console.log(bold(`Lead Segments (${segments.length})`))
     printDivider()
     for (const seg of segments) {
-      const summary = seg.filter_summary || Object.entries(seg.filters || {}).map(([k, v]: [string, any]) => `${k}=${v}`).join(", ")
+      const summary =
+        seg.filter_summary ||
+        Object.entries(seg.filters || {})
+          .map(([k, v]: [string, any]) => `${k}=${v}`)
+          .join(", ")
       const bloqTag = seg.bloq_id ? dim(` [bloq #${seg.bloq_id}]`) : dim(" [global]")
       const countTag = seg.lead_count != null ? dim(` (${seg.lead_count} leads)`) : ""
       console.log(`  ${bold(seg.name)}  ${dim(summary)}${bloqTag}${countTag}`)
@@ -4697,7 +5917,10 @@ const SegmentCreateCommand = cmd({
     }
 
     const userId = await resolveUserId()
-    if (!userId) { prompts.log.error("Could not resolve user ID"); return }
+    if (!userId) {
+      prompts.log.error("Could not resolve user ID")
+      return
+    }
 
     const bloqId = args["bloq-id"] as number | undefined
     const path = bloqId
@@ -4718,7 +5941,10 @@ const SegmentCreateCommand = cmd({
     const data = await res.json().catch(() => ({}))
     const seg = data?.segment
 
-    if ((args as any).json) { console.log(JSON.stringify(seg, null, 2)); return }
+    if ((args as any).json) {
+      console.log(JSON.stringify(seg, null, 2))
+      return
+    }
     prompts.log.success(`Segment "${args.name}" created (ID: ${seg?.id})`)
     if (seg?.filter_summary) console.log(dim(`  Filters: ${seg.filter_summary}`))
     if (seg?.lead_count != null) console.log(dim(`  Matching leads: ${seg.lead_count}`))
@@ -4739,7 +5965,10 @@ const SegmentViewCommand = cmd({
     if (!(await requireAuth())) return
 
     const userId = await resolveUserId()
-    if (!userId) { prompts.log.error("Could not resolve user ID"); return }
+    if (!userId) {
+      prompts.log.error("Could not resolve user ID")
+      return
+    }
 
     // Resolve by ID or name
     let segmentId = args.id
@@ -4764,14 +5993,20 @@ const SegmentViewCommand = cmd({
     const leads: any[] = data?.leads ?? data?.data ?? []
     const seg = data?.segment
 
-    if ((args as any).json) { console.log(JSON.stringify({ segment: seg, leads, count: leads.length }, null, 2)); return }
+    if ((args as any).json) {
+      console.log(JSON.stringify({ segment: seg, leads, count: leads.length }, null, 2))
+      return
+    }
 
     console.log("")
     console.log(bold(`Segment: ${seg?.name ?? segmentId} — ${leads.length} leads`))
     if (seg?.filter_summary) console.log(dim(`  Filters: ${seg.filter_summary}`))
     printDivider()
 
-    if (leads.length === 0) { prompts.log.info("No leads match this segment"); return }
+    if (leads.length === 0) {
+      prompts.log.info("No leads match this segment")
+      return
+    }
     for (const l of leads) printLead(l)
     printDivider()
   },
@@ -4781,13 +6016,15 @@ const SegmentDeleteCommand = cmd({
   command: "delete <id>",
   aliases: ["rm", "remove"],
   describe: "delete a saved segment",
-  builder: (yargs) =>
-    yargs.positional("id", { describe: "segment ID", type: "number", demandOption: true }),
+  builder: (yargs) => yargs.positional("id", { describe: "segment ID", type: "number", demandOption: true }),
   async handler(args) {
     if (!(await requireAuth())) return
 
     const userId = await resolveUserId()
-    if (!userId) { prompts.log.error("Could not resolve user ID"); return }
+    if (!userId) {
+      prompts.log.error("Could not resolve user ID")
+      return
+    }
 
     const res = await irisFetch(`/api/v1/users/${userId}/lead-segments/${args.id}`, { method: "DELETE" })
     if (!(await handleApiError(res, "Delete segment"))) return
@@ -4815,9 +6052,17 @@ const SegmentMigrateCommand = cmd({
     }
 
     let localSegments: Array<{ name: string; filters: Record<string, string>; created: string }> = []
-    try { localSegments = JSON.parse(readFileSync(localPath, "utf-8")) } catch { prompts.log.error("Failed to parse local segments file"); return }
+    try {
+      localSegments = JSON.parse(readFileSync(localPath, "utf-8"))
+    } catch {
+      prompts.log.error("Failed to parse local segments file")
+      return
+    }
 
-    if (localSegments.length === 0) { prompts.log.info("No local segments to migrate"); return }
+    if (localSegments.length === 0) {
+      prompts.log.info("No local segments to migrate")
+      return
+    }
 
     console.log("")
     console.log(bold(`Migrating ${localSegments.length} local segment(s) to platform DB`))
@@ -4825,7 +6070,13 @@ const SegmentMigrateCommand = cmd({
 
     if (args["dry-run"]) {
       for (const seg of localSegments) {
-        console.log(`  ${bold(seg.name)}  ${dim(Object.entries(seg.filters).map(([k, v]) => `${k}=${v}`).join(", "))}`)
+        console.log(
+          `  ${bold(seg.name)}  ${dim(
+            Object.entries(seg.filters)
+              .map(([k, v]) => `${k}=${v}`)
+              .join(", "),
+          )}`,
+        )
       }
       console.log("")
       console.log(dim("Dry run — no changes made. Remove --dry-run to migrate."))
@@ -4833,7 +6084,10 @@ const SegmentMigrateCommand = cmd({
     }
 
     const userId = await resolveUserId()
-    if (!userId) { prompts.log.error("Could not resolve user ID"); return }
+    if (!userId) {
+      prompts.log.error("Could not resolve user ID")
+      return
+    }
 
     const bloqId = args["bloq-id"] as number | undefined
     const path = bloqId
@@ -4845,9 +6099,18 @@ const SegmentMigrateCommand = cmd({
     for (const seg of localSegments) {
       // Convert flat string filters to API format
       const filters: Record<string, any> = { ...seg.filters }
-      if (filters.min_price) { filters.value_range = { ...(filters.value_range || {}), min: Number(filters.min_price) }; delete filters.min_price }
-      if (filters.max_price) { filters.value_range = { ...(filters.value_range || {}), max: Number(filters.max_price) }; delete filters.max_price }
-      if (filters.tag) { filters.tags = [filters.tag]; delete filters.tag }
+      if (filters.min_price) {
+        filters.value_range = { ...(filters.value_range || {}), min: Number(filters.min_price) }
+        delete filters.min_price
+      }
+      if (filters.max_price) {
+        filters.value_range = { ...(filters.value_range || {}), max: Number(filters.max_price) }
+        delete filters.max_price
+      }
+      if (filters.tag) {
+        filters.tags = [filters.tag]
+        delete filters.tag
+      }
 
       const res = await irisFetch(path, {
         method: "POST",
@@ -4955,7 +6218,9 @@ const ReqCreateCommand = cmd({
 
     let scriptContent: string
     if (args["script-file"]) {
-      const filePath = isAbsolute(String(args["script-file"])) ? String(args["script-file"]) : join(process.cwd(), String(args["script-file"]))
+      const filePath = isAbsolute(String(args["script-file"]))
+        ? String(args["script-file"])
+        : join(process.cwd(), String(args["script-file"]))
       if (!existsSync(filePath)) {
         prompts.log.error(`File not found: ${filePath}`)
         return
@@ -4976,7 +6241,10 @@ const ReqCreateCommand = cmd({
 
     const body = await res.json().catch(() => ({}))
 
-    if ((args as any).json) { console.log(JSON.stringify(body, null, 2)); return }
+    if ((args as any).json) {
+      console.log(JSON.stringify(body, null, 2))
+      return
+    }
 
     if (body.success) {
       prompts.log.success(`Requirement "${args.name}" created for ${leadName} (#${leadId})`)
@@ -5005,7 +6273,10 @@ const ReqListCommand = cmd({
     const body = await res.json().catch(() => ({}))
     const reqs: any[] = body.data ?? []
 
-    if ((args as any).json) { console.log(JSON.stringify(reqs, null, 2)); return }
+    if ((args as any).json) {
+      console.log(JSON.stringify(reqs, null, 2))
+      return
+    }
 
     if (reqs.length === 0) {
       prompts.log.info(`No requirements for lead #${args.leadId}`)
@@ -5017,13 +6288,20 @@ const ReqListCommand = cmd({
     console.log(bold(`Requirements — Lead #${args.leadId} (${reqs.length})`))
     printDivider()
     for (const r of reqs) {
-      const statusIcon = r.last_status === "passed" || r.last_status === "completed" ? success("✓")
-        : r.last_status === "failed" ? highlight("✗")
-        : dim("○")
+      const statusIcon =
+        r.last_status === "passed" || r.last_status === "completed"
+          ? success("✓")
+          : r.last_status === "failed"
+            ? highlight("✗")
+            : dim("○")
       const lastRun = r.last_run_at ? dim(r.last_run_at.split("T")[0]) : dim("never run")
       console.log(`  ${statusIcon}  ${bold(r.name)}  ${dim(`#${r.id}`)}  ${lastRun}`)
       if (r.last_output && r.last_status === "failed") {
-        const output = String(r.last_output).split("\n").slice(0, 5).map((l: string) => `       ${dim(l)}`).join("\n")
+        const output = String(r.last_output)
+          .split("\n")
+          .slice(0, 5)
+          .map((l: string) => `       ${dim(l)}`)
+          .join("\n")
         console.log(output)
       }
     }
@@ -5059,9 +6337,9 @@ const ReqRunCommand = cmd({
       if (listRes.ok) {
         const listBody = await listRes.json().catch(() => ({}))
         const reqs = listBody?.data ?? listBody?.requirements ?? listBody ?? []
-        const match = Array.isArray(reqs) ? reqs.find((r: any) =>
-          (r.name ?? r.title ?? '').toLowerCase() === String(args.name).toLowerCase()
-        ) : null
+        const match = Array.isArray(reqs)
+          ? reqs.find((r: any) => (r.name ?? r.title ?? "").toLowerCase() === String(args.name).toLowerCase())
+          : null
         if (match?.id) {
           url = `/api/v1/leads/${leadId}/requirements/${match.id}/run`
         } else {
@@ -5076,7 +6354,10 @@ const ReqRunCommand = cmd({
 
     const body = await res.json().catch(() => ({}))
 
-    if ((args as any).json) { console.log(JSON.stringify(body, null, 2)); return }
+    if ((args as any).json) {
+      console.log(JSON.stringify(body, null, 2))
+      return
+    }
 
     if (body.success) {
       console.log(success(`  ✓ ${body.dispatched}/${body.total} requirements dispatched to Hive`))
@@ -5109,7 +6390,10 @@ const ReqSummaryCommand = cmd({
 
     const s = await res.json().catch(() => ({}))
 
-    if ((args as any).json) { console.log(JSON.stringify(s, null, 2)); return }
+    if ((args as any).json) {
+      console.log(JSON.stringify(s, null, 2))
+      return
+    }
 
     if (s.total === 0) {
       prompts.log.info(`No requirements for lead #${args.leadId}`)
@@ -5146,7 +6430,10 @@ const ReqDeleteCommand = cmd({
     if (!(await handleApiError(res, "Delete requirement"))) return
 
     const body = await res.json().catch(() => ({}))
-    if ((args as any).json) { console.log(JSON.stringify(body, null, 2)); return }
+    if ((args as any).json) {
+      console.log(JSON.stringify(body, null, 2))
+      return
+    }
     prompts.log.success(body.message ?? "Requirement deleted")
   },
 })
@@ -5159,7 +6446,12 @@ const ReqAllCommand = cmd({
     yargs
       .option("page", { alias: "p", describe: "page number", type: "number", default: 1 })
       .option("per-page", { describe: "results per page", type: "number", default: 25 })
-      .option("status", { alias: "s", describe: "filter by status", type: "string", choices: ["passed", "failed", "untested"] })
+      .option("status", {
+        alias: "s",
+        describe: "filter by status",
+        type: "string",
+        choices: ["passed", "failed", "untested"],
+      })
       .option("search", { describe: "filter by lead name/company", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
@@ -5176,7 +6468,10 @@ const ReqAllCommand = cmd({
     if (!(await handleApiError(res, "List all requirements"))) return
 
     const body = await res.json().catch(() => ({}))
-    if ((args as any).json) { console.log(JSON.stringify(body, null, 2)); return }
+    if ((args as any).json) {
+      console.log(JSON.stringify(body, null, 2))
+      return
+    }
 
     const items: any[] = body.data ?? []
     const pg = body.pagination ?? {}
@@ -5187,24 +6482,32 @@ const ReqAllCommand = cmd({
     }
 
     console.log("")
-    console.log(bold(`Active Requirements — ${pg.total ?? items.length} total · page ${pg.current_page ?? 1}/${pg.last_page ?? 1}`))
+    console.log(
+      bold(
+        `Active Requirements — ${pg.total ?? items.length} total · page ${pg.current_page ?? 1}/${pg.last_page ?? 1}`,
+      ),
+    )
     printDivider()
 
     for (const r of items) {
       const status = r.last_status
-      const icon = status === "passed" || status === "completed" ? success("✓")
-        : status === "failed" ? highlight("✗")
-        : dim("○")
-      const lead = r.lead ? `${r.lead.name ?? "?"}${r.lead.company ? dim(" — " + r.lead.company) : ""}` : dim("(no lead)")
+      const icon =
+        status === "passed" || status === "completed" ? success("✓") : status === "failed" ? highlight("✗") : dim("○")
+      const lead = r.lead
+        ? `${r.lead.name ?? "?"}${r.lead.company ? dim(" — " + r.lead.company) : ""}`
+        : dim("(no lead)")
       const lastRun = r.last_run_at ? dim(r.last_run_at.split("T")[0]) : dim("never")
-      const counts = (r.pass_count || r.fail_count) ? dim(` ${r.pass_count}✓ / ${r.fail_count}✗`) : ""
+      const counts = r.pass_count || r.fail_count ? dim(` ${r.pass_count}✓ / ${r.fail_count}✗`) : ""
       console.log(`  ${icon}  ${bold(r.name)}${counts}`)
       console.log(`     ${dim(`#${r.id} · lead #${r.lead?.id ?? "?"}`)} ${lead}  ${lastRun}`)
     }
 
     printDivider()
     if (pg.last_page && pg.last_page > 1) {
-      const next = (pg.current_page ?? 1) < pg.last_page ? `iris leads requirements all --page ${(pg.current_page ?? 1) + 1}` : null
+      const next =
+        (pg.current_page ?? 1) < pg.last_page
+          ? `iris leads requirements all --page ${(pg.current_page ?? 1) + 1}`
+          : null
       if (next) console.log(dim(`  Next: ${next}`))
     }
     console.log(dim(`  Filters: --status passed|failed|untested  --search <name>  --per-page 50`))
@@ -5222,7 +6525,16 @@ const ReqScheduleCommand = cmd({
         alias: "f",
         describe: "run frequency",
         type: "string",
-        choices: ["hourly", "every_2_hours", "every_4_hours", "every_6_hours", "every_8_hours", "every_12_hours", "daily", "weekly"],
+        choices: [
+          "hourly",
+          "every_2_hours",
+          "every_4_hours",
+          "every_6_hours",
+          "every_8_hours",
+          "every_12_hours",
+          "daily",
+          "weekly",
+        ],
         default: "hourly",
       })
       .option("name", { describe: "schedule name", type: "string" })
@@ -5250,7 +6562,10 @@ const ReqScheduleCommand = cmd({
     if (!(await handleApiError(res, "Schedule requirements"))) return
 
     const result = await res.json().catch(() => ({}))
-    if ((args as any).json) { console.log(JSON.stringify(result, null, 2)); return }
+    if ((args as any).json) {
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
 
     if (result?.success || result?.id || result?.data) {
       const data = result.data ?? result
