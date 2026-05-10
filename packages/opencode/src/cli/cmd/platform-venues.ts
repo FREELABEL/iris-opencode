@@ -48,6 +48,7 @@ function printVenue(v: Record<string, unknown>): void {
   const location = [v.city, v.state].filter(Boolean).join(", ")
   console.log(`  ${name}  ${id}${type}`)
   if (location) console.log(`    ${dim(location)}`)
+  if (v.public_url) console.log(`    ${dim(String(v.public_url))}`)
 }
 
 // ============================================================================
@@ -129,6 +130,7 @@ const GetCommand = cmd({
       printKV("ID", v.id)
       printKV("Name", v.name)
       printKV("Type", v.type)
+      printKV("URL", v.public_url)
       printKV("Address", v.address)
       printKV("City", v.city)
       printKV("State", v.state)
@@ -205,6 +207,7 @@ const CreateCommand = cmd({
       printKV("ID", v.id)
       printKV("Name", v.name)
       printKV("Type", v.type)
+      printKV("URL", v.public_url)
       printDivider()
 
       prompts.outro(dim(`iris venues get ${v.id}`))
