@@ -1,0 +1,129 @@
+{
+  "id": 177,
+  "slug": "ssg-splurge",
+  "title": "SSG Splurge",
+  "seo_title": "SSG Splurge - Book Now",
+  "seo_description": "SSG Splurge - headlining shows, feature verses, studio sessions, and special guest appearances. Book now through FreeLabel.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "bloq",
+  "owner_id": 38,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "dark",
+      "backgroundColor": "#0a0a0a",
+      "branding": {
+        "name": "SSG Splurge",
+        "primaryColor": "#e11d48"
+      }
+    },
+    "components": [
+      {
+        "type": "Hero",
+        "id": "ssg-splurge-hero",
+        "props": {
+          "themeMode": "dark",
+          "title": "SSG Splurge",
+          "subtitle": "Dallas-based artist available for headlining shows, feature verses, studio sessions, and special guest appearances.",
+          "labelText": "BOOKING NOW",
+          "labelColor": "#e11d48",
+          "textAlign": "center"
+        }
+      },
+      {
+        "type": "PricingTiers",
+        "id": "ssg-splurge-services",
+        "props": {
+          "themeMode": "dark",
+          "title": "Services",
+          "subtitle": "Book SSG Splurge for your next event or project",
+          "tiers": [
+            {
+              "name": "Studio Session",
+              "price": "$300",
+              "interval": "per hour",
+              "description": "In-studio recording and collaboration session.",
+              "features": [
+                "Hourly rate",
+                "Creative direction",
+                "Professional environment"
+              ],
+              "ctaText": "Book Session",
+              "ctaUrl": "https://freelabel.net/@ssg-splurge-1"
+            },
+            {
+              "name": "Feature Verse",
+              "price": "$1,000",
+              "description": "Custom recorded verse for your track. Studio-quality delivery.",
+              "features": [
+                "Custom written verse",
+                "Studio-quality recording",
+                "2 revisions included"
+              ],
+              "highlighted": false,
+              "ctaText": "Request Feature",
+              "ctaUrl": "https://freelabel.net/@ssg-splurge-1"
+            },
+            {
+              "name": "Headlining Show",
+              "price": "$3,500",
+              "description": "Full headlining performance set for concerts, festivals, and major events.",
+              "features": [
+                "Full performance set",
+                "Meet & greet available",
+                "Professional rider included"
+              ],
+              "highlighted": true,
+              "ctaText": "Book Show",
+              "ctaUrl": "https://freelabel.net/@ssg-splurge-1"
+            },
+            {
+              "name": "Guest Appearance",
+              "price": "$1,500",
+              "description": "Guest appearance at your event, club night, or private function.",
+              "features": [
+                "Event appearance",
+                "Photo opportunities",
+                "Social media promotion"
+              ],
+              "ctaText": "Book Appearance",
+              "ctaUrl": "https://freelabel.net/@ssg-splurge-1"
+            }
+          ]
+        }
+      },
+      {
+        "type": "ButtonCTA",
+        "id": "ssg-splurge-cta",
+        "props": {
+          "themeMode": "dark",
+          "title": "Ready to Book?",
+          "subtitle": "Get in touch to book SSG Splurge for your next event or project.",
+          "buttonText": "Book Now",
+          "buttonUrl": "https://freelabel.net/@ssg-splurge-1",
+          "buttonColor": "#e11d48"
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "ssg-splurge-footer",
+        "props": {
+          "themeMode": "dark",
+          "brandName": "SSG Splurge",
+          "links": [
+            {
+              "label": "Profile",
+              "url": "https://freelabel.net/@ssg-splurge-1"
+            },
+            {
+              "label": "Management",
+              "url": "https://freelabel.net/@nsg-billz"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

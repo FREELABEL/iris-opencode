@@ -10,7 +10,7 @@ import { useDirectory } from "../../context/directory"
 import { useKV } from "../../context/kv"
 import { TodoItem } from "../../component/todo-item"
 import { useIrisData } from "../../iris/api"
-import type { IrisAgent, IrisWorkflow, AtlasItem, IrisContact, IrisPage } from "../../iris/types"
+import type { IrisAgent, IrisWorkflow, IrisWorkflowDetail, AtlasItem, IrisContact, IrisPage } from "../../iris/types"
 
 type SidebarTab = "agents" | "workflows" | "contacts" | "pages" | "atlas" | "session"
 
@@ -66,6 +66,8 @@ export function Sidebar(props: { sessionID: string }) {
     setExpandedLists(new Set<number>())
     setActiveDoc(null)
     setActiveContact(null)
+    setActiveWorkflow(null)
+    setWorkflowImported(false)
   }
 
   const selectedBloqName = createMemo(() => {
@@ -109,6 +111,9 @@ export function Sidebar(props: { sessionID: string }) {
     iris.data.bloqList.filter((b) => matchesSearch(b.name))
   )
   const [activeContact, setActiveContact] = createSignal<IrisContact | null>(null)
+  const [activeWorkflow, setActiveWorkflow] = createSignal<IrisWorkflowDetail | null>(null)
+  const [workflowLoading, setWorkflowLoading] = createSignal(false)
+  const [workflowImported, setWorkflowImported] = createSignal(false)
   const cost = createMemo(() => {
     const total = messages().reduce((sum, x) => sum + (x.role === "assistant" ? x.cost : 0), 0)
     return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(total)
@@ -371,35 +376,117 @@ export function Sidebar(props: { sessionID: string }) {
                 <Show when={searchQuery() && filteredWorkflows().length === 0 && iris.data.workflows.length > 0}>
                   <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
                 </Show>
-                <box gap={1}>
-                  <For each={filteredWorkflows()}>
-                    {(wf) => {
-                      const key = `wf-${wf.id}`
-                      const hovered = () => hoveredRowId() === key
-                      return (
-                        <box
-                          backgroundColor={hovered() ? theme.backgroundElement : undefined}
-                          onMouseOver={() => setHoveredRowId(key)}
-                          onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
-                        >
-                          <box flexDirection="row" gap={1}>
-                            <text flexShrink={0} fg={workflowColor(wf.status)}>
-                              {workflowIcon(wf.status)}
-                            </text>
-                            <text fg={hovered() ? theme.accent : theme.text} wrapMode="word">
-                              {wf.name}
+
+                {/* Workflow detail view */}
+                <Show when={activeWorkflow()}>
+                  {(wf) => (
+                    <box gap={1}>
+                      <text fg={theme.accent} onMouseDown={() => { setActiveWorkflow(null); setWorkflowImported(false) }}>
+                        ← Back
+                      </text>
+                      <text fg={theme.text}>
+                        <b>{wf().name}</b> <span style={{ fg: theme.textMuted }}>#{wf().id}</span>
+                      </text>
+                      <Show when={wf().description}>
+                        <text fg={theme.textMuted} wrapMode="word">{wf().description}</text>
+                      </Show>
+                      <box paddingTop={1} gap={1}>
+                        <Show when={wf().execution_mode}>
+                          <text fg={theme.textMuted}>Mode: {wf().execution_mode}</text>
+                        </Show>
+                        <Show when={wf().category}>
+                          <text fg={theme.textMuted}>Category: {wf().category}</text>
+                        </Show>
+                        <text fg={theme.textMuted}>
+                          Status: {wf().status} · {wf().triggerCount} runs
+                          {wf().lastRun ? ` · last ${wf().lastRun}` : ""}
+                        </text>
+                        <Show when={wf().steps?.length}>
+                          <text fg={theme.text}>{wf().steps!.length} steps</text>
+                        </Show>
+                        <Show when={wf().allowed_tools?.length}>
+                          <text fg={theme.textMuted}>Tools: {wf().allowed_tools!.join(", ")}</text>
+                        </Show>
+                        <Show when={wf().dependencies?.length}>
+                          <text fg={theme.textMuted}>Deps: {wf().dependencies!.join(", ")}</text>
+                        </Show>
+                        <Show when={wf().require_human_approval}>
+                          <text fg={theme.warning}>Requires human approval</text>
+                        </Show>
+                        <Show when={wf().max_iterations}>
+                          <text fg={theme.textMuted}>Max iterations: {wf().max_iterations}</text>
+                        </Show>
+                      </box>
+
+                      {/* Import button */}
+                      <box paddingTop={1}>
+                        <Show when={!workflowImported()} fallback={
+                          <text fg={theme.success}>✓ Imported to context</text>
+                        }>
+                          <box
+                            backgroundColor={theme.accent}
+                            paddingLeft={2}
+                            paddingRight={2}
+                            onMouseDown={() => {
+                              iris.importWorkflowToContext(wf())
+                              setWorkflowImported(true)
+                            }}
+                          >
+                            <text fg={theme.backgroundPanel}>
+                              <b>▶ Import Schema</b>
                             </text>
                           </box>
-                          <text fg={theme.textMuted}>
-                            {"   "}
-                            {wf.status === "running" ? "running now" : wf.lastRun ? `last ran ${wf.lastRun}` : "never ran"}
-                            {wf.triggerCount > 0 ? `  ·  ${wf.triggerCount} runs` : ""}
-                          </text>
-                        </box>
-                      )
-                    }}
-                  </For>
-                </box>
+                        </Show>
+                        <text fg={theme.textMuted}>
+                          Loads workflow steps + schema into agent context
+                        </text>
+                      </box>
+                    </box>
+                  )}
+                </Show>
+
+                {/* Workflow list */}
+                <Show when={!activeWorkflow()}>
+                  <Show when={workflowLoading()}>
+                    <text fg={theme.textMuted}>Loading workflow...</text>
+                  </Show>
+                  <box gap={1}>
+                    <For each={filteredWorkflows()}>
+                      {(wf) => {
+                        const key = `wf-${wf.id}`
+                        const hovered = () => hoveredRowId() === key
+                        return (
+                          <box
+                            backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                            onMouseOver={() => setHoveredRowId(key)}
+                            onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                            onMouseDown={async () => {
+                              setWorkflowLoading(true)
+                              setWorkflowImported(false)
+                              const detail = await iris.fetchWorkflowDetail(wf.id)
+                              setWorkflowLoading(false)
+                              if (detail) setActiveWorkflow(detail)
+                            }}
+                          >
+                            <box flexDirection="row" gap={1}>
+                              <text flexShrink={0} fg={workflowColor(wf.status)}>
+                                {workflowIcon(wf.status)}
+                              </text>
+                              <text fg={hovered() ? theme.accent : theme.text} wrapMode="word">
+                                {wf.name}
+                              </text>
+                            </box>
+                            <text fg={theme.textMuted}>
+                              {"   "}
+                              {wf.status === "running" ? "running now" : wf.lastRun ? `last ran ${wf.lastRun}` : "never ran"}
+                              {wf.triggerCount > 0 ? `  ·  ${wf.triggerCount} runs` : ""}
+                            </text>
+                          </box>
+                        )
+                      }}
+                    </For>
+                  </box>
+                </Show>
               </Match>
 
               {/* ── CONTACTS ── */}

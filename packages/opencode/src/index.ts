@@ -32,6 +32,7 @@ import { SessionCommand } from "./cli/cmd/session"
 import { PlatformChatCommand } from "./cli/cmd/platform-chat"
 import { PlatformAgentsCommand } from "./cli/cmd/platform-agents"
 import { PlatformLeadsCommand, PlatformDealsCommand } from "./cli/cmd/platform-leads"
+import { PlatformDialerCommand } from "./cli/cmd/platform-dialer"
 import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
 import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
@@ -212,6 +213,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAgentsCommand))
   .command(reg(PlatformLeadsCommand))
   .command(reg(PlatformDealsCommand))
+  .command(reg(PlatformDialerCommand))
   .command(reg(PlatformWorkflowsCommand))
   .command(reg(PlatformBloqsCommand))
   .command(reg(PlatformBrandsCommand))

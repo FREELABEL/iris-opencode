@@ -1,0 +1,1682 @@
+{
+  "id": 109,
+  "slug": "component-showcase",
+  "title": "Component Showcase — Preline-Inspired Components",
+  "seo_title": "Component Showcase | IRIS Page Builder",
+  "seo_description": "Demo page showcasing 19 composable page builder components — testimonials, team, contact, pricing, gallery, before/after, service menus, and more.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "user",
+  "owner_id": 193,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "dark",
+      "backgroundColor": "#000000",
+      "branding": {
+        "name": "IRIS",
+        "primaryColor": "#34d399",
+        "secondaryColor": "#6366f1",
+        "fontFamily": "Inter, sans-serif"
+      }
+    },
+    "components": [
+      {
+        "type": "AnnouncementBanner",
+        "id": "showcase-announcement",
+        "props": {
+          "text": "16 composable components now available for your page builder.",
+          "linkText": "Explore all →",
+          "linkUrl": "#testimonials",
+          "dismissible": true,
+          "backgroundColor": "#34d399",
+          "themeMode": "dark"
+        }
+      },
+      {
+        "type": "SiteNavigation",
+        "id": "showcase-nav",
+        "props": {
+          "themeMode": "dark",
+          "logo": {
+            "text": "IRIS Components",
+            "accentDot": true
+          },
+          "links": [
+            {
+              "label": "Testimonials",
+              "url": "#testimonials"
+            },
+            {
+              "label": "Team",
+              "url": "#team"
+            },
+            {
+              "label": "Pricing",
+              "url": "#pricing"
+            },
+            {
+              "label": "Clients",
+              "url": "#clients"
+            },
+            {
+              "label": "Careers",
+              "url": "#careers"
+            },
+            {
+              "label": "Contact",
+              "url": "#contact"
+            }
+          ],
+          "ctaButton": {
+            "text": "Get Started",
+            "url": "#pricing"
+          }
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "showcase-hero",
+        "props": {
+          "themeMode": "dark",
+          "title": "Preline-Inspired Components",
+          "subtitle": "A showcase of 6 new composable page builder components — testimonials, team sections, contact forms, pricing comparisons, logo marquees, and store locators.",
+          "labelText": "NEW COMPONENTS",
+          "labelColor": "#34d399",
+          "primaryButtonText": "Explore Below",
+          "primaryButtonUrl": "#testimonials",
+          "backgroundGradient": "from-black to-slate-900",
+          "textAlign": "center"
+        }
+      },
+      {
+        "type": "LogoMarquee",
+        "id": "showcase-logos",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Trusted by innovative companies worldwide",
+          "speed": 35,
+          "pauseOnHover": true,
+          "logoWidth": 180,
+          "logos": [
+            {
+              "src": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2f/Google_2015_logo.svg/368px-Google_2015_logo.svg.png",
+              "alt": "Google"
+            },
+            {
+              "src": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a9/Amazon_logo.svg/320px-Amazon_logo.svg.png",
+              "alt": "Amazon"
+            },
+            {
+              "src": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/44/Microsoft_logo.svg/320px-Microsoft_logo.svg.png",
+              "alt": "Microsoft"
+            },
+            {
+              "src": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fa/Apple_logo_black.svg/160px-Apple_logo_black.svg.png",
+              "alt": "Apple"
+            },
+            {
+              "src": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Netflix_2015_logo.svg/320px-Netflix_2015_logo.svg.png",
+              "alt": "Netflix"
+            },
+            {
+              "src": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e1/Logo_of_YouTube_%282015-2017%29.svg/320px-Logo_of_YouTube_%282015-2017%29.svg.png",
+              "alt": "YouTube"
+            }
+          ]
+        }
+      },
+      {
+        "type": "TestimonialsSection",
+        "id": "testimonials",
+        "props": {
+          "themeMode": "dark",
+          "heading": "What Our Clients Say",
+          "subheading": "Hear from businesses that transformed their online presence.",
+          "accentColor": "#34d399",
+          "layout": "marquee",
+          "testimonials": [
+            {
+              "name": "Sarah Chen",
+              "role": "CEO, TechVentures",
+              "avatar": "https://randomuser.me/api/portraits/women/44.jpg",
+              "text": "The page builder completely changed how we present our brand. We went from a generic template to a stunning custom site in hours, not weeks.",
+              "rating": 5
+            },
+            {
+              "name": "Marcus Johnson",
+              "role": "Marketing Director, Bloom Agency",
+              "avatar": "https://randomuser.me/api/portraits/men/32.jpg",
+              "text": "We've tried every website builder out there. This is the first one that actually feels like it was designed for agencies. The component library is incredible.",
+              "rating": 5
+            },
+            {
+              "name": "Dr. Emily Rodriguez",
+              "role": "Owner, Bright Smiles Dental",
+              "avatar": "https://randomuser.me/api/portraits/women/68.jpg",
+              "text": "As a dental practice, we needed something professional but easy to update. The booking wizard and contact section alone saved us thousands.",
+              "rating": 5
+            },
+            {
+              "name": "David Park",
+              "role": "CTO, Nexus Labs",
+              "avatar": "https://randomuser.me/api/portraits/men/75.jpg",
+              "text": "The dark mode support and theming system is exactly what we needed. Every component looks polished right out of the box.",
+              "rating": 4
+            },
+            {
+              "name": "Lisa Thompson",
+              "role": "Founder, Creative Collective",
+              "avatar": "https://randomuser.me/api/portraits/women/90.jpg",
+              "text": "We switched three of our client sites over in a single weekend. The composable architecture means we never start from scratch.",
+              "rating": 5
+            }
+          ]
+        }
+      },
+      {
+        "type": "TestimonialsSection",
+        "id": "testimonials-grid",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Grid Layout Variant",
+          "subheading": "The same testimonials rendered in a 3-column grid.",
+          "accentColor": "#34d399",
+          "layout": "grid",
+          "columns": 3,
+          "testimonials": [
+            {
+              "name": "Sarah Chen",
+              "role": "CEO, TechVentures",
+              "text": "The page builder completely changed how we present our brand. We went from a generic template to a stunning custom site in hours.",
+              "rating": 5
+            },
+            {
+              "name": "Marcus Johnson",
+              "role": "Marketing Director, Bloom Agency",
+              "text": "We've tried every website builder out there. This is the first one that actually feels like it was designed for agencies.",
+              "rating": 5
+            },
+            {
+              "name": "Dr. Emily Rodriguez",
+              "role": "Owner, Bright Smiles Dental",
+              "text": "As a dental practice, we needed something professional but easy to update. The booking wizard and contact section saved us thousands.",
+              "rating": 5
+            }
+          ]
+        }
+      },
+      {
+        "type": "TeamSection",
+        "id": "team",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Meet the Team",
+          "subheading": "The people behind the platform.",
+          "accentColor": "#34d399",
+          "layout": "cards",
+          "columns": 4,
+          "hiringLink": "#",
+          "hiringLabel": "We're hiring →",
+          "members": [
+            {
+              "name": "Alex Mayo",
+              "role": "Founder & CEO",
+              "avatar": "https://randomuser.me/api/portraits/men/1.jpg",
+              "bio": "Building the future of composable web experiences.",
+              "social": {
+                "twitter": "#",
+                "linkedin": "#"
+              }
+            },
+            {
+              "name": "Jordan Lee",
+              "role": "Head of Engineering",
+              "avatar": "https://randomuser.me/api/portraits/women/2.jpg",
+              "bio": "Full-stack architect with a passion for developer experience.",
+              "social": {
+                "github": "#",
+                "linkedin": "#"
+              }
+            },
+            {
+              "name": "Sam Rivera",
+              "role": "Lead Designer",
+              "avatar": "https://randomuser.me/api/portraits/men/3.jpg",
+              "bio": "Crafting pixel-perfect interfaces and design systems.",
+              "social": {
+                "twitter": "#",
+                "website": "#"
+              }
+            },
+            {
+              "name": "Chris Nakamura",
+              "role": "AI Engineer",
+              "avatar": "https://randomuser.me/api/portraits/men/4.jpg",
+              "bio": "Making AI agents that actually help people get work done.",
+              "social": {
+                "github": "#"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "TeamSection",
+        "id": "team-grid",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Grid Layout Variant",
+          "subheading": "Minimal name + role layout with dashed connectors — great for larger teams.",
+          "accentColor": "#34d399",
+          "layout": "grid",
+          "members": [
+            {
+              "name": "Alex Mayo",
+              "role": "Founder & CEO"
+            },
+            {
+              "name": "Jordan Lee",
+              "role": "Head of Engineering"
+            },
+            {
+              "name": "Sam Rivera",
+              "role": "Lead Designer"
+            },
+            {
+              "name": "Chris Nakamura",
+              "role": "AI Engineer"
+            },
+            {
+              "name": "Taylor Kim",
+              "role": "Product Manager"
+            },
+            {
+              "name": "Morgan Chen",
+              "role": "DevOps Lead"
+            },
+            {
+              "name": "Ava Patel",
+              "role": "Frontend Engineer"
+            },
+            {
+              "name": "Liam O'Brien",
+              "role": "Backend Engineer"
+            }
+          ]
+        }
+      },
+      {
+        "type": "ComparisonMatrix",
+        "id": "pricing",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Choose Your Plan",
+          "subheading": "Compare features across all tiers.",
+          "accentColor": "#34d399",
+          "showToggle": true,
+          "plans": [
+            {
+              "name": "Starter",
+              "subtitle": "For personal projects",
+              "price": {
+                "monthly": 0,
+                "annually": 0
+              },
+              "ctaLabel": "Get Started Free",
+              "ctaLink": "#"
+            },
+            {
+              "name": "Pro",
+              "subtitle": "For growing businesses",
+              "price": {
+                "monthly": 49,
+                "annually": 39
+              },
+              "ctaLabel": "Start Free Trial",
+              "ctaLink": "#",
+              "highlighted": true
+            },
+            {
+              "name": "Business",
+              "subtitle": "For teams and agencies",
+              "price": {
+                "monthly": 99,
+                "annually": 79
+              },
+              "ctaLabel": "Contact Sales",
+              "ctaLink": "#"
+            },
+            {
+              "name": "Enterprise",
+              "subtitle": "Custom solutions",
+              "ctaLabel": "Talk to Us",
+              "ctaLink": "#"
+            }
+          ],
+          "features": [
+            {
+              "category": "Core Features",
+              "rows": [
+                {
+                  "label": "Pages",
+                  "values": [
+                    "3",
+                    "Unlimited",
+                    "Unlimited",
+                    "Unlimited"
+                  ]
+                },
+                {
+                  "label": "Custom domain",
+                  "values": [
+                    false,
+                    true,
+                    true,
+                    true
+                  ]
+                },
+                {
+                  "label": "SSL certificate",
+                  "values": [
+                    true,
+                    true,
+                    true,
+                    true
+                  ]
+                },
+                {
+                  "label": "Analytics",
+                  "values": [
+                    false,
+                    true,
+                    true,
+                    true
+                  ]
+                },
+                {
+                  "label": "Priority support",
+                  "values": [
+                    false,
+                    false,
+                    true,
+                    true
+                  ]
+                }
+              ]
+            },
+            {
+              "category": "Page Builder",
+              "rows": [
+                {
+                  "label": "Component library",
+                  "values": [
+                    "Basic",
+                    "Full",
+                    "Full + Custom",
+                    "Full + Custom"
+                  ]
+                },
+                {
+                  "label": "AI page generation",
+                  "values": [
+                    false,
+                    true,
+                    true,
+                    true
+                  ]
+                },
+                {
+                  "label": "Custom CSS",
+                  "values": [
+                    false,
+                    true,
+                    true,
+                    true
+                  ]
+                },
+                {
+                  "label": "Form submissions",
+                  "values": [
+                    "50/mo",
+                    "500/mo",
+                    "Unlimited",
+                    "Unlimited"
+                  ]
+                },
+                {
+                  "label": "Team collaboration",
+                  "values": [
+                    false,
+                    false,
+                    true,
+                    true
+                  ]
+                }
+              ]
+            },
+            {
+              "category": "Integrations",
+              "rows": [
+                {
+                  "label": "Stripe payments",
+                  "values": [
+                    false,
+                    true,
+                    true,
+                    true
+                  ]
+                },
+                {
+                  "label": "Google Maps embed",
+                  "values": [
+                    true,
+                    true,
+                    true,
+                    true
+                  ]
+                },
+                {
+                  "label": "CRM integration",
+                  "values": [
+                    false,
+                    false,
+                    true,
+                    true
+                  ]
+                },
+                {
+                  "label": "API access",
+                  "values": [
+                    false,
+                    false,
+                    false,
+                    true
+                  ]
+                },
+                {
+                  "label": "White-label",
+                  "values": [
+                    false,
+                    false,
+                    false,
+                    true
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "ContactSection",
+        "id": "contact",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Get in Touch",
+          "subheading": "Have a question or want to work together? We'd love to hear from you.",
+          "accentColor": "#34d399",
+          "layout": "split",
+          "showForm": true,
+          "submitLabel": "Send message",
+          "contactInfo": [
+            {
+              "type": "address",
+              "label": "Our Office",
+              "value": "300 Bath Street, Tay House\nGlasgow G2 4JR, United Kingdom"
+            },
+            {
+              "type": "email",
+              "label": "Email Us",
+              "value": "hello@example.com",
+              "link": "mailto:hello@example.com"
+            },
+            {
+              "type": "phone",
+              "label": "Call Us",
+              "value": "+1 (555) 000-0000",
+              "link": "tel:+15550000000"
+            },
+            {
+              "type": "hours",
+              "label": "Business Hours",
+              "value": "Mon — Fri: 9:00 AM — 6:00 PM\nSat: 10:00 AM — 2:00 PM"
+            }
+          ],
+          "formFields": [
+            {
+              "name": "name",
+              "label": "Name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "email",
+              "label": "Email",
+              "type": "email",
+              "required": true
+            },
+            {
+              "name": "company",
+              "label": "Company",
+              "type": "text",
+              "required": false
+            },
+            {
+              "name": "phone",
+              "label": "Phone",
+              "type": "tel",
+              "required": false
+            },
+            {
+              "name": "message",
+              "label": "Message",
+              "type": "textarea",
+              "required": true
+            }
+          ]
+        }
+      },
+      {
+        "type": "MapSection",
+        "id": "locations",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Our Locations",
+          "subheading": "Visit us at any of our offices worldwide.",
+          "accentColor": "#34d399",
+          "layout": "grid",
+          "columns": 3,
+          "mapEmbedUrl": "https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d387190.2799160891!2d-74.25987571760744!3d40.69767006458873!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x89c24fa5d33f083b%3A0xc80b8f06e177fe62!2sNew+York%2C+NY!5e0!3m2!1sen!2sus!4v1",
+          "locations": [
+            {
+              "name": "New York HQ",
+              "group": "United States",
+              "address": [
+                "350 Fifth Avenue, Suite 3200",
+                "New York, NY 10118"
+              ],
+              "hours": "Mon — Fri: 9:00 AM — 6:00 PM",
+              "phone": "+1 (212) 555-0100",
+              "image": "https://images.unsplash.com/photo-1534430480872-3498386e7856?w=600&h=400&fit=crop",
+              "directionsUrl": "https://maps.google.com/?q=350+Fifth+Avenue+New+York"
+            },
+            {
+              "name": "San Francisco",
+              "group": "United States",
+              "address": [
+                "535 Mission Street, Suite 1400",
+                "San Francisco, CA 94105"
+              ],
+              "hours": "Mon — Fri: 9:00 AM — 6:00 PM",
+              "image": "https://images.unsplash.com/photo-1501594907352-04cda38ebc29?w=600&h=400&fit=crop",
+              "directionsUrl": "https://maps.google.com/?q=535+Mission+Street+San+Francisco"
+            },
+            {
+              "name": "Dallas",
+              "group": "United States",
+              "address": [
+                "2711 N Haskell Ave, Suite 1400",
+                "Dallas, TX 75204"
+              ],
+              "hours": "Mon — Fri: 8:00 AM — 5:00 PM",
+              "image": "https://images.unsplash.com/photo-1545194445-dddb8f4487c6?w=600&h=400&fit=crop",
+              "directionsUrl": "https://maps.google.com/?q=2711+N+Haskell+Ave+Dallas"
+            },
+            {
+              "name": "London",
+              "group": "United Kingdom",
+              "address": [
+                "1 Canada Square, 37th Floor",
+                "London E14 5AB"
+              ],
+              "hours": "Mon — Fri: 9:00 AM — 6:00 PM",
+              "image": "https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?w=600&h=400&fit=crop",
+              "directionsUrl": "https://maps.google.com/?q=1+Canada+Square+London"
+            },
+            {
+              "name": "Tokyo",
+              "group": "Japan",
+              "address": [
+                "Shibuya Scramble Square, 15F",
+                "Shibuya, Tokyo 150-6115"
+              ],
+              "hours": "Mon — Fri: 10:00 AM — 7:00 PM",
+              "image": "https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?w=600&h=400&fit=crop",
+              "directionsUrl": "https://maps.google.com/?q=Shibuya+Scramble+Square+Tokyo"
+            }
+          ]
+        }
+      },
+      {
+        "type": "FeatureShowcase",
+        "id": "feature-showcase",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Built for Scale",
+          "subheading": "Every component is designed to handle real business data, not just demo content.",
+          "accentColor": "#34d399",
+          "features": [
+            {
+              "heading": "Composable Architecture",
+              "description": "Mix and match any component on any page. Every piece works independently but looks cohesive when combined. No lock-in, no rigid templates.",
+              "imageUrl": "https://images.unsplash.com/photo-1551434678-e076c223a692?w=600&h=400&fit=crop",
+              "imagePosition": "right",
+              "stats": [
+                {
+                  "value": "90%",
+                  "label": "faster builds",
+                  "description": "Compared to custom-coded pages from scratch",
+                  "trend": "up"
+                },
+                {
+                  "value": "16+",
+                  "label": "components",
+                  "description": "And growing — new components added weekly"
+                },
+                {
+                  "value": "0",
+                  "label": "dependencies",
+                  "description": "Pure Tailwind CSS, no external UI libraries"
+                }
+              ]
+            },
+            {
+              "heading": "Dark & Light Mode",
+              "description": "Every component ships with full dark and light mode support. One prop toggles the entire page. Brand colors cascade automatically via CSS variables.",
+              "imageUrl": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&h=400&fit=crop",
+              "imagePosition": "left",
+              "quote": {
+                "text": "The theming system saved us weeks of design work. We just set our brand colors and everything looked right.",
+                "author": "Sarah Chen",
+                "role": "CEO, TechVentures"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "ClientGrid",
+        "id": "clients",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Trusted Partners",
+          "subheading": "Companies building with our component system.",
+          "accentColor": "#34d399",
+          "columns": 3,
+          "clients": [
+            {
+              "name": "Dent Society",
+              "description": "Automotive repair specialists",
+              "url": "https://freelabel.net/p/dent-society"
+            },
+            {
+              "name": "Acre Real Estate",
+              "description": "Property management platform",
+              "url": "https://freelabel.net/p/acre"
+            },
+            {
+              "name": "Atlas OS",
+              "description": "Inventory management system"
+            },
+            {
+              "name": "Beatbox Media",
+              "description": "Music production platform",
+              "url": "https://freelabel.net/p/beatbox"
+            },
+            {
+              "name": "CatoDrive",
+              "description": "Premium car rental service",
+              "url": "https://freelabel.net/p/catodrive"
+            },
+            {
+              "name": "GeekGang",
+              "description": "Tech community hub",
+              "url": "https://freelabel.net/p/geekgang"
+            }
+          ]
+        }
+      },
+      {
+        "type": "CareersListing",
+        "id": "careers",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Join the Team",
+          "subheading": "We're building the future of composable web experiences. Come help us.",
+          "accentColor": "#34d399",
+          "showFilters": true,
+          "jobs": [
+            {
+              "title": "Senior Frontend Engineer",
+              "department": "Engineering",
+              "location": "Remote",
+              "type": "Full-time",
+              "url": "#"
+            },
+            {
+              "title": "Backend Engineer (Laravel)",
+              "department": "Engineering",
+              "location": "Remote",
+              "type": "Full-time",
+              "url": "#"
+            },
+            {
+              "title": "AI/ML Engineer",
+              "department": "Engineering",
+              "location": "Remote",
+              "type": "Full-time",
+              "url": "#"
+            },
+            {
+              "title": "Product Designer",
+              "department": "Design",
+              "location": "Remote",
+              "type": "Full-time",
+              "url": "#"
+            },
+            {
+              "title": "UX Researcher",
+              "department": "Design",
+              "location": "New York",
+              "type": "Contract",
+              "url": "#"
+            },
+            {
+              "title": "Developer Advocate",
+              "department": "Marketing",
+              "location": "Remote",
+              "type": "Full-time",
+              "url": "#"
+            },
+            {
+              "title": "Content Strategist",
+              "department": "Marketing",
+              "location": "Dallas",
+              "type": "Full-time",
+              "url": "#"
+            },
+            {
+              "title": "Customer Success Manager",
+              "department": "Operations",
+              "location": "Remote",
+              "type": "Full-time",
+              "url": "#"
+            }
+          ]
+        }
+      },
+      {
+        "type": "BeforeAfter",
+        "id": "before-after",
+        "props": {
+          "themeMode": "dark",
+          "heading": "See the Difference",
+          "subheading": "Interactive before/after comparisons — drag the slider to reveal the transformation.",
+          "layout": "slider",
+          "comparisons": [
+            {
+              "title": "Hail Damage Repair",
+              "beforeImage": "https://images.unsplash.com/photo-1549317661-bd32c8ce0afa?w=600&h=450&fit=crop",
+              "afterImage": "https://images.unsplash.com/photo-1494976388531-d1058494cdd8?w=600&h=450&fit=crop",
+              "beforeLabel": "Before",
+              "afterLabel": "After"
+            },
+            {
+              "title": "Full Detail Service",
+              "beforeImage": "https://images.unsplash.com/photo-1520340356584-f9917d1eea6f?w=600&h=450&fit=crop",
+              "afterImage": "https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=600&h=450&fit=crop",
+              "beforeLabel": "Before",
+              "afterLabel": "After"
+            }
+          ]
+        }
+      },
+      {
+        "type": "ServiceMenu",
+        "id": "service-menu",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Service Menu",
+          "subheading": "Three layout variants: cards, restaurant-style menu, and list view.",
+          "layout": "menu",
+          "categories": [
+            {
+              "category": "Haircuts",
+              "items": [
+                {
+                  "name": "Classic Cut",
+                  "price": "$35",
+                  "duration": "30 min"
+                },
+                {
+                  "name": "Fade & Design",
+                  "price": "$45",
+                  "duration": "45 min",
+                  "badge": "Popular"
+                },
+                {
+                  "name": "Kids Cut (12 & under)",
+                  "price": "$25",
+                  "duration": "20 min"
+                },
+                {
+                  "name": "Beard Trim & Shape",
+                  "price": "$20",
+                  "duration": "15 min"
+                }
+              ]
+            },
+            {
+              "category": "Color Services",
+              "items": [
+                {
+                  "name": "Full Color",
+                  "price": "$120+",
+                  "duration": "2 hrs"
+                },
+                {
+                  "name": "Highlights / Balayage",
+                  "price": "$150+",
+                  "duration": "2.5 hrs",
+                  "badge": "Premium"
+                },
+                {
+                  "name": "Root Touch-Up",
+                  "price": "$75",
+                  "duration": "1 hr"
+                },
+                {
+                  "name": "Color Correction",
+                  "price": "$200+",
+                  "duration": "3+ hrs"
+                }
+              ]
+            },
+            {
+              "category": "Treatments",
+              "items": [
+                {
+                  "name": "Deep Conditioning",
+                  "price": "$40",
+                  "duration": "30 min"
+                },
+                {
+                  "name": "Keratin Treatment",
+                  "price": "$250",
+                  "duration": "2 hrs"
+                },
+                {
+                  "name": "Scalp Treatment",
+                  "price": "$55",
+                  "duration": "45 min"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "PortfolioGallery",
+        "id": "gallery",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Our Work",
+          "subheading": "Click any image to view full size. Filter by category.",
+          "columns": 3,
+          "aspectRatio": "square",
+          "showFilters": true,
+          "items": [
+            {
+              "imageUrl": "https://images.unsplash.com/photo-1560066984-138dadb4c035?w=400&h=400&fit=crop",
+              "title": "Balayage Transformation",
+              "category": "Hair"
+            },
+            {
+              "imageUrl": "https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=400&h=400&fit=crop",
+              "title": "Classic Fade",
+              "category": "Hair"
+            },
+            {
+              "imageUrl": "https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=400&h=400&fit=crop",
+              "title": "Full Detail",
+              "category": "Auto"
+            },
+            {
+              "imageUrl": "https://images.unsplash.com/photo-1494976388531-d1058494cdd8?w=400&h=400&fit=crop",
+              "title": "Paint Correction",
+              "category": "Auto"
+            },
+            {
+              "imageUrl": "https://images.unsplash.com/photo-1600880292203-757bb62b4baf?w=400&h=400&fit=crop",
+              "title": "Office Renovation",
+              "category": "Interior"
+            },
+            {
+              "imageUrl": "https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?w=400&h=400&fit=crop",
+              "title": "Modern Kitchen",
+              "category": "Interior"
+            },
+            {
+              "imageUrl": "https://images.unsplash.com/photo-1562259929-b4e1fd3aef09?w=400&h=400&fit=crop",
+              "title": "Braids & Locs",
+              "category": "Hair"
+            },
+            {
+              "imageUrl": "https://images.unsplash.com/photo-1549317661-bd32c8ce0afa?w=400&h=400&fit=crop",
+              "title": "Dent Repair",
+              "category": "Auto"
+            },
+            {
+              "imageUrl": "https://images.unsplash.com/photo-1497366216548-37526070297c?w=400&h=400&fit=crop",
+              "title": "Workspace Design",
+              "category": "Interior"
+            }
+          ]
+        }
+      },
+      {
+        "type": "VehicleGrid",
+        "id": "vehicle-grid",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Browse Our Fleet",
+          "subheading": "Turo-inspired vehicle browsing with search, filters, and instant booking.",
+          "columns": 3,
+          "showFilters": true,
+          "showSearch": true,
+          "showSort": true,
+          "vehicles": [
+            {
+              "name": "Tesla Model 3",
+              "make": "Tesla",
+              "model": "Model 3",
+              "year": 2024,
+              "images": [
+                "https://images.unsplash.com/photo-1560958089-b8a1929cea89?w=600&h=375&fit=crop",
+                "https://images.unsplash.com/photo-1554744512-d6c603f27c54?w=600&h=375&fit=crop"
+              ],
+              "pricePerDay": 89,
+              "rating": 4.9,
+              "reviewCount": 47,
+              "seats": 5,
+              "transmission": "Auto",
+              "fuelType": "Electric",
+              "mileage": "Unlimited",
+              "features": [
+                "Autopilot",
+                "Apple CarPlay",
+                "USB-C",
+                "Premium Sound"
+              ],
+              "instantBook": true,
+              "deliveryAvailable": true,
+              "category": "Electric",
+              "badge": "Top Pick",
+              "hostName": "Alex M.",
+              "url": "#"
+            },
+            {
+              "name": "BMW M4 Competition",
+              "make": "BMW",
+              "model": "M4",
+              "year": 2023,
+              "images": [
+                "https://images.unsplash.com/photo-1617531653332-bd46c24f2068?w=600&h=375&fit=crop"
+              ],
+              "pricePerDay": 175,
+              "rating": 4.8,
+              "reviewCount": 23,
+              "seats": 4,
+              "transmission": "Auto",
+              "fuelType": "Gas",
+              "mileage": "200 mi/day",
+              "features": [
+                "M Sport",
+                "Heated Seats",
+                "Sunroof",
+                "Harman Kardon"
+              ],
+              "instantBook": true,
+              "category": "Luxury",
+              "url": "#"
+            },
+            {
+              "name": "Jeep Wrangler Rubicon",
+              "make": "Jeep",
+              "model": "Wrangler",
+              "year": 2024,
+              "images": [
+                "https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=600&h=375&fit=crop"
+              ],
+              "pricePerDay": 120,
+              "rating": 4.7,
+              "reviewCount": 31,
+              "seats": 5,
+              "transmission": "Auto",
+              "fuelType": "Gas",
+              "mileage": "250 mi/day",
+              "features": [
+                "4WD",
+                "Removable Top",
+                "Off-Road Package",
+                "Bluetooth"
+              ],
+              "deliveryAvailable": true,
+              "category": "SUV",
+              "url": "#"
+            },
+            {
+              "name": "Mercedes C300",
+              "make": "Mercedes",
+              "model": "C300",
+              "year": 2023,
+              "images": [
+                "https://images.unsplash.com/photo-1618843479313-40f8afb4b4d8?w=600&h=375&fit=crop"
+              ],
+              "pricePerDay": 95,
+              "originalPrice": 130,
+              "rating": 4.6,
+              "reviewCount": 18,
+              "seats": 5,
+              "transmission": "Auto",
+              "fuelType": "Gas",
+              "features": [
+                "Leather",
+                "Apple CarPlay",
+                "Sunroof"
+              ],
+              "instantBook": true,
+              "category": "Luxury",
+              "badge": "Sale",
+              "url": "#"
+            },
+            {
+              "name": "Toyota Camry SE",
+              "make": "Toyota",
+              "model": "Camry",
+              "year": 2024,
+              "images": [
+                "https://images.unsplash.com/photo-1621007947382-bb3c3994e3fb?w=600&h=375&fit=crop"
+              ],
+              "pricePerDay": 45,
+              "rating": 4.5,
+              "reviewCount": 62,
+              "seats": 5,
+              "transmission": "Auto",
+              "fuelType": "Gas",
+              "mileage": "Unlimited",
+              "features": [
+                "Bluetooth",
+                "Backup Camera",
+                "Apple CarPlay"
+              ],
+              "instantBook": true,
+              "deliveryAvailable": true,
+              "category": "Economy",
+              "url": "#"
+            },
+            {
+              "name": "Ford Mustang GT",
+              "make": "Ford",
+              "model": "Mustang",
+              "year": 2023,
+              "images": [
+                "https://images.unsplash.com/photo-1584345604476-8ec5f82d661f?w=600&h=375&fit=crop"
+              ],
+              "pricePerDay": 110,
+              "rating": 4.8,
+              "reviewCount": 29,
+              "seats": 4,
+              "transmission": "Manual",
+              "fuelType": "Gas",
+              "features": [
+                "V8 Engine",
+                "Sport Mode",
+                "Premium Sound",
+                "Track Apps"
+              ],
+              "category": "Sports",
+              "badge": "Popular",
+              "url": "#"
+            }
+          ]
+        }
+      },
+      {
+        "type": "FundingTiers",
+        "id": "funding",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Support the Project",
+          "subheading": "Fan funding with tier selection, progress tracking, and custom amounts.",
+          "accentColor": "#34d399",
+          "goalAmount": 50000,
+          "raisedAmount": 32450,
+          "backerCount": 847,
+          "daysLeft": 21,
+          "currency": "$",
+          "allowCustom": true,
+          "ctaText": "Back This Project",
+          "tiers": [
+            {
+              "name": "Supporter",
+              "amount": 10,
+              "description": "Show your support and get exclusive updates.",
+              "perks": [
+                "Early access updates",
+                "Backer badge",
+                "Discord community"
+              ],
+              "icon": "heart"
+            },
+            {
+              "name": "Pro Backer",
+              "amount": 50,
+              "description": "Everything in Supporter plus premium perks.",
+              "perks": [
+                "All Supporter perks",
+                "Beta access",
+                "Name in credits",
+                "Monthly Q&A"
+              ],
+              "popular": true,
+              "limited": 200,
+              "claimed": 143
+            },
+            {
+              "name": "Founding Member",
+              "amount": 250,
+              "description": "Be part of the founding team.",
+              "perks": [
+                "All Pro perks",
+                "1-on-1 onboarding",
+                "Lifetime access",
+                "Custom branding",
+                "Priority support"
+              ],
+              "limited": 50,
+              "claimed": 38
+            },
+            {
+              "name": "Enterprise",
+              "amount": 1000,
+              "description": "White-label deployment for your organization.",
+              "perks": [
+                "All Founding perks",
+                "White-label license",
+                "Custom integrations",
+                "Dedicated account manager",
+                "SLA guarantee"
+              ],
+              "limited": 10,
+              "claimed": 7
+            },
+            {
+              "name": "Sold Out Example",
+              "amount": 5000,
+              "description": "This tier is fully claimed.",
+              "perks": [
+                "Everything above",
+                "Equity participation"
+              ],
+              "soldOut": true,
+              "limited": 5,
+              "claimed": 5
+            }
+          ]
+        }
+      },
+      {
+        "type": "EventGrid",
+        "id": "events",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Upcoming Events",
+          "subheading": "Filterable event cards with dates, locations, and registration.",
+          "columns": 3,
+          "showFilters": true,
+          "events": [
+            {
+              "title": "SXSW 2026 — AI & Music",
+              "date": "Mar 14-16, 2026",
+              "time": "10:00 AM",
+              "location": "Austin Convention Center",
+              "description": "Join us for three days exploring the intersection of AI and the music industry.",
+              "imageUrl": "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=600&h=340&fit=crop",
+              "category": "Conference",
+              "price": "$299",
+              "ctaText": "Get Tickets",
+              "ctaUrl": "#",
+              "featured": true
+            },
+            {
+              "title": "Freelabel Demo Day",
+              "date": "Apr 5, 2026",
+              "time": "2:00 PM",
+              "location": "Virtual",
+              "description": "Live demo of the latest page builder components and AI workflow features.",
+              "imageUrl": "https://images.unsplash.com/photo-1591115765373-5207764f72e7?w=600&h=340&fit=crop",
+              "category": "Webinar",
+              "ctaText": "Register Free",
+              "ctaUrl": "#"
+            },
+            {
+              "title": "DFW Startup Mixer",
+              "date": "Apr 12, 2026",
+              "time": "6:00 PM",
+              "location": "Deep Ellum, Dallas",
+              "description": "Networking event for Dallas-Fort Worth tech founders and builders.",
+              "imageUrl": "https://images.unsplash.com/photo-1511578314322-379afb476865?w=600&h=340&fit=crop",
+              "category": "Meetup",
+              "price": "$15",
+              "ctaText": "RSVP",
+              "ctaUrl": "#"
+            },
+            {
+              "title": "AI Agent Workshop",
+              "date": "Apr 20, 2026",
+              "time": "1:00 PM",
+              "location": "Virtual",
+              "description": "Hands-on workshop: build your first AI agent with the IRIS platform.",
+              "imageUrl": "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&h=340&fit=crop",
+              "category": "Workshop",
+              "ctaText": "Enroll",
+              "ctaUrl": "#",
+              "soldOut": true
+            },
+            {
+              "title": "Creator Economy Summit",
+              "date": "May 8-9, 2026",
+              "time": "9:00 AM",
+              "location": "Los Angeles, CA",
+              "description": "Two-day summit for creators, brands, and platforms building the future of D2C.",
+              "imageUrl": "https://images.unsplash.com/photo-1475721027785-f74eccf877e2?w=600&h=340&fit=crop",
+              "category": "Conference",
+              "price": "$499",
+              "ctaText": "Get Tickets",
+              "ctaUrl": "#"
+            },
+            {
+              "title": "Community Office Hours",
+              "date": "Every Thursday",
+              "time": "3:00 PM CST",
+              "location": "Discord",
+              "description": "Open Q&A with the engineering team. Bring your questions.",
+              "imageUrl": "https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=600&h=340&fit=crop",
+              "category": "Meetup",
+              "ctaText": "Join Discord",
+              "ctaUrl": "#"
+            }
+          ]
+        }
+      },
+      {
+        "type": "ShoppingCart",
+        "id": "cart",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Shopping Cart",
+          "currency": "$",
+          "taxRate": 0.0825,
+          "shippingCost": 5.99,
+          "discount": 10,
+          "checkoutUrl": "#",
+          "checkoutLabel": "Proceed to Checkout",
+          "items": [
+            {
+              "name": "Premium Headphones",
+              "price": 149.99,
+              "quantity": 1,
+              "imageUrl": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=200&h=200&fit=crop",
+              "variant": "Matte Black"
+            },
+            {
+              "name": "Wireless Keyboard",
+              "price": 79.99,
+              "quantity": 2,
+              "imageUrl": "https://images.unsplash.com/photo-1587829741301-dc798b83add3?w=200&h=200&fit=crop",
+              "variant": "Space Gray"
+            },
+            {
+              "name": "USB-C Hub",
+              "price": 34.99,
+              "quantity": 1,
+              "imageUrl": "https://images.unsplash.com/photo-1625842268584-8f3296236571?w=200&h=200&fit=crop"
+            }
+          ]
+        }
+      },
+      {
+        "type": "ProductGrid",
+        "id": "product-grid",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Shop Our Products",
+          "subheading": "Filterable product grid with categories, search, and sorting.",
+          "columns": 4,
+          "showFilters": true,
+          "showSearch": true,
+          "showSort": true,
+          "products": [
+            {
+              "name": "BREZ OG Micro (4-Pack)",
+              "category": "BREZ",
+              "price": 20,
+              "imageUrl": "https://images.unsplash.com/photo-1625772299848-391b6a87d7b3?w=300&h=400&fit=crop",
+              "rating": 4.8,
+              "reviewCount": 47,
+              "badge": "Best Seller"
+            },
+            {
+              "name": "BREZ Flow (4-Pack)",
+              "category": "BREZ",
+              "price": 20,
+              "imageUrl": "https://images.unsplash.com/photo-1558642452-9d2a7deb7f62?w=300&h=400&fit=crop",
+              "rating": 4.6,
+              "reviewCount": 23
+            },
+            {
+              "name": "BREZ Elevate (4-Pack)",
+              "category": "BREZ",
+              "price": 20,
+              "imageUrl": "https://images.unsplash.com/photo-1546173159-315724a31696?w=300&h=400&fit=crop",
+              "rating": 4.7,
+              "reviewCount": 31
+            },
+            {
+              "name": "BREZ OG (4-Pack)",
+              "category": "BREZ",
+              "price": 24,
+              "imageUrl": "https://images.unsplash.com/photo-1544252890-c45fb3f24768?w=300&h=400&fit=crop",
+              "rating": 4.9,
+              "reviewCount": 62,
+              "badge": "Popular"
+            },
+            {
+              "name": "BREZ OG Extra Strength",
+              "category": "BREZ",
+              "price": 28,
+              "originalPrice": 32,
+              "imageUrl": "https://images.unsplash.com/photo-1609951651556-5334e2706168?w=300&h=400&fit=crop",
+              "rating": 4.8,
+              "reviewCount": 18
+            },
+            {
+              "name": "BREZ OG Spirit (750ml)",
+              "category": "BREZ",
+              "price": 54,
+              "imageUrl": "https://images.unsplash.com/photo-1551024709-8f23befc6f87?w=300&h=400&fit=crop",
+              "rating": 4.9,
+              "reviewCount": 12,
+              "badge": "Premium"
+            },
+            {
+              "name": "Kaviva Kava Soda — Single",
+              "category": "Kaviva",
+              "price": 7,
+              "imageUrl": "https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=300&h=400&fit=crop",
+              "rating": 4.5,
+              "reviewCount": 29
+            },
+            {
+              "name": "Kaviva 4-Pack Sampler",
+              "category": "Kaviva",
+              "price": 28,
+              "imageUrl": "https://images.unsplash.com/photo-1581006852262-e4307cf6283a?w=300&h=400&fit=crop",
+              "rating": 4.7,
+              "reviewCount": 15,
+              "badge": "Try It"
+            }
+          ]
+        }
+      },
+      {
+        "type": "NewsletterSignup",
+        "id": "newsletter",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Stay in the Loop",
+          "subheading": "Get early access to new products, events, and exclusive member-only pricing.",
+          "placeholder": "your@email.com",
+          "buttonText": "Subscribe",
+          "successMessage": "Welcome! Check your inbox for a confirmation.",
+          "layout": "card",
+          "accentColor": "#34d399"
+        }
+      },
+      {
+        "type": "StepWizard",
+        "id": "step-wizard",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Book Your Service",
+          "layout": "horizontal",
+          "submitLabel": "Confirm Booking",
+          "steps": [
+            {
+              "title": "Personal Info",
+              "description": "Tell us about yourself so we can personalize your experience.",
+              "fields": [
+                {
+                  "name": "firstName",
+                  "label": "First Name",
+                  "type": "text",
+                  "required": true,
+                  "halfWidth": true
+                },
+                {
+                  "name": "lastName",
+                  "label": "Last Name",
+                  "type": "text",
+                  "required": true,
+                  "halfWidth": true
+                },
+                {
+                  "name": "email",
+                  "label": "Email Address",
+                  "type": "email",
+                  "required": true
+                },
+                {
+                  "name": "phone",
+                  "label": "Phone Number",
+                  "type": "tel"
+                }
+              ]
+            },
+            {
+              "title": "Service Details",
+              "description": "Choose your service and preferred date.",
+              "fields": [
+                {
+                  "name": "service",
+                  "label": "Service Type",
+                  "type": "select",
+                  "options": [
+                    "Consultation",
+                    "Full Service",
+                    "Premium Package",
+                    "Custom"
+                  ]
+                },
+                {
+                  "name": "date",
+                  "label": "Preferred Date",
+                  "type": "date",
+                  "required": true
+                },
+                {
+                  "name": "notes",
+                  "label": "Additional Notes",
+                  "type": "textarea",
+                  "placeholder": "Anything we should know?"
+                }
+              ]
+            },
+            {
+              "title": "Review & Confirm",
+              "description": "Review your details and confirm your booking.",
+              "content": "<div class='p-4 rounded-lg bg-white/5 border border-white/10'><p class='text-sm text-gray-400'>Your booking summary will appear here. Click <strong class='text-white'>Confirm Booking</strong> to complete.</p></div>"
+            }
+          ]
+        }
+      },
+      {
+        "type": "FileUpload",
+        "id": "file-upload",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Upload Your Documents",
+          "subheading": "Three upload layouts: drag-drop zone, front/back document cards, and avatar upload.",
+          "layout": "cards",
+          "slots": [
+            {
+              "label": "Front",
+              "description": "Upload the front of your driver's license or ID",
+              "accept": "image/*"
+            },
+            {
+              "label": "Back",
+              "description": "Upload the back of your driver's license or ID",
+              "accept": "image/*"
+            }
+          ]
+        }
+      },
+      {
+        "type": "ProtectionPicker",
+        "id": "protection-picker",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Choose Your Protection",
+          "subheading": "Select a coverage plan that works for you. You can change this anytime.",
+          "plans": [
+            {
+              "name": "Premier",
+              "price": "$29/day",
+              "priceNote": "Best coverage",
+              "description": "Maximum protection with zero stress. Covers everything including windshield and tires.",
+              "coverage": [
+                "Collision damage",
+                "Comprehensive coverage",
+                "Windshield & tires",
+                "Roadside assistance",
+                "Personal effects"
+              ],
+              "deductible": "$0",
+              "recommended": true
+            },
+            {
+              "name": "Standard",
+              "price": "$15/day",
+              "description": "Solid coverage for most situations. Covers collision and comprehensive with a small deductible.",
+              "coverage": [
+                "Collision damage",
+                "Comprehensive coverage",
+                "Roadside assistance"
+              ],
+              "deductible": "$500"
+            },
+            {
+              "name": "Minimum",
+              "price": "$9/day",
+              "description": "Basic liability coverage. You're responsible for damage to the vehicle up to its value.",
+              "coverage": [
+                "Third-party liability",
+                "Basic roadside"
+              ],
+              "deductible": "$2,500"
+            }
+          ]
+        }
+      },
+      {
+        "type": "OrderConfirmation",
+        "id": "order-confirmation",
+        "props": {
+          "themeMode": "dark",
+          "heading": "Booking Confirmed!",
+          "message": "Your reservation has been confirmed. A confirmation email has been sent to",
+          "email": "alex@example.com",
+          "orderId": "BK-20260329-001",
+          "estimatedDelivery": "Pickup: Sat, Apr 5 at 10:00 AM",
+          "continueUrl": "#",
+          "continueLabel": "View My Bookings",
+          "subtotal": 267,
+          "tax": 22.03,
+          "shipping": 0,
+          "discount": 20,
+          "total": 269.03,
+          "items": [
+            {
+              "name": "Tesla Model 3 — 3 Day Rental",
+              "quantity": 1,
+              "price": 267,
+              "imageUrl": "https://images.unsplash.com/photo-1560958089-b8a1929cea89?w=200&h=200&fit=crop",
+              "variant": "Apr 5–8, 2026"
+            }
+          ]
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "showcase-footer",
+        "props": {
+          "themeMode": "dark",
+          "logo": {
+            "text": "IRIS",
+            "tagline": "Composable page builder for modern businesses.",
+            "accentDot": true
+          },
+          "columns": [
+            {
+              "title": "Components",
+              "links": [
+                {
+                  "label": "Testimonials",
+                  "url": "#testimonials"
+                },
+                {
+                  "label": "Team",
+                  "url": "#team"
+                },
+                {
+                  "label": "Contact",
+                  "url": "#contact"
+                },
+                {
+                  "label": "Pricing",
+                  "url": "#pricing"
+                },
+                {
+                  "label": "Locations",
+                  "url": "#locations"
+                }
+              ]
+            },
+            {
+              "title": "Resources",
+              "links": [
+                {
+                  "label": "Documentation",
+                  "url": "#"
+                },
+                {
+                  "label": "Templates",
+                  "url": "#"
+                },
+                {
+                  "label": "Changelog",
+                  "url": "#"
+                }
+              ]
+            }
+          ],
+          "copyright": "© 2026 FREELABEL, INC. All rights reserved."
+        }
+      }
+    ]
+  }
+}

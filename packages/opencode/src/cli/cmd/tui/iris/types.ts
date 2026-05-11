@@ -24,6 +24,25 @@ export interface IrisWorkflow {
   triggerCount: number
 }
 
+export interface IrisWorkflowDetail extends IrisWorkflow {
+  description?: string
+  steps?: any[]
+  settings?: Record<string, any>
+  input_schema?: Record<string, any>
+  output_schema?: Record<string, any>
+  allowed_tools?: string[]
+  agent_config?: Record<string, any>
+  execution_mode?: string
+  dependencies?: string[]
+  script_content?: string
+  script_language?: string
+  hive_task_type?: string
+  callable_name?: string
+  callable_description?: string
+  require_human_approval?: boolean
+  max_iterations?: number
+}
+
 // Atlas (bloq lists + items)
 
 export interface AtlasItem {

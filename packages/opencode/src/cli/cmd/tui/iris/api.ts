@@ -1,7 +1,7 @@
 import { createSignal, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { irisFetch, resolveUserId } from "../../iris-api"
-import type { IrisAgent, IrisWorkflow, AtlasList, AtlasItem, IrisContact, IrisPage } from "./types"
+import type { IrisAgent, IrisWorkflow, IrisWorkflowDetail, AtlasList, AtlasItem, IrisContact, IrisPage } from "./types"
 import { IRIS_API } from "../../iris-api"
 import os from "os"
 import path from "path"
@@ -173,10 +173,9 @@ export function useIrisData() {
   let _userId: number | null = null
   let _rawBloqs: any[] = []
 
-  function extractAtlas(bloqId: number): AtlasList[] {
-    const bloq = _rawBloqs.find((b: any) => b.id === bloqId)
-    if (!bloq?.lists) return []
-    return (bloq.lists as any[]).map((l: any) => ({
+  function extractAtlas(raw: any): AtlasList[] {
+    if (!raw?.lists) return []
+    return (raw.lists as any[]).map((l: any) => ({
       id: l.id,
       name: l.name,
       items: (l.items ?? []).map((i: any) => ({
@@ -199,7 +198,7 @@ export function useIrisData() {
 
     try {
       const [bloqRes, pagesRes] = await Promise.all([
-        irisFetch(`/api/v1/user/${_userId}/bloqs`),
+        irisFetch(`/api/v1/user/${_userId}/bloqs?simplified=true`),
         irisFetch(`/api/v1/pages?user_id=${_userId}&per_page=50`, {}, IRIS_API),
       ])
       if (bloqRes.status === 401) {
@@ -207,7 +206,6 @@ export function useIrisData() {
         return
       }
       const raw = await extractData(bloqRes)
-      _rawBloqs = raw
       const list: BloqOption[] = raw.map((b: any) => ({ id: b.id, name: b.name }))
       setData("bloqList", reconcile(list))
 
@@ -223,10 +221,7 @@ export function useIrisData() {
       // Auto-select first bloq if none selected
       if (!data.selectedBloqId && list.length > 0) {
         setData("selectedBloqId", list[0].id)
-        setData("atlas", reconcile(extractAtlas(list[0].id)))
         await fetchBloqData(list[0].id)
-      } else if (data.selectedBloqId) {
-        setData("atlas", reconcile(extractAtlas(data.selectedBloqId)))
       }
       setData("status", "loaded")
     } catch {
@@ -238,12 +233,22 @@ export function useIrisData() {
     if (!_userId) return
 
     try {
-      const [agentsRes, workflowsRes, jobsRes, leadsRes] = await Promise.all([
+      const [bloqDetailRes, agentsRes, workflowsRes, jobsRes, leadsRes] = await Promise.all([
+        irisFetch(`/api/v1/user/${_userId}/bloqs/${bloqId}`),
         irisFetch(`/api/v1/users/${_userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
         irisFetch(`/api/v1/users/${_userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`),
         irisFetch(`/api/v1/users/${_userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
         irisFetch(`/api/v1/users/${_userId}/leads?bloq_id=${bloqId}&per_page=50`),
       ])
+
+      // Extract atlas from single-bloq detail response
+      try {
+        if (bloqDetailRes.ok) {
+          const bloqJson = await bloqDetailRes.json() as any
+          const bloqData = bloqJson?.data ?? bloqJson
+          setData("atlas", reconcile(extractAtlas(bloqData)))
+        }
+      } catch {}
 
       const [rawAgents, rawWorkflows, rawJobs, rawLeads] = await Promise.all([
         extractData(agentsRes),
@@ -330,6 +335,125 @@ export function useIrisData() {
     Bun.write(PLATFORM_CONTEXT_PATH, lines.join("\n")).catch(() => {})
   }
 
+  async function fetchWorkflowDetail(workflowId: number): Promise<IrisWorkflowDetail | null> {
+    if (!_userId) return null
+    try {
+      const res = await irisFetch(`/api/v1/users/${_userId}/bloqs/workflows/${workflowId}`)
+      if (!res.ok) return null
+      const raw = await res.json() as any
+      const wf = raw?.data ?? raw
+      let status: IrisWorkflowDetail["status"] = "idle"
+      if (wf.status === "running") status = "running"
+      else if (wf.failed_runs && wf.failed_runs > 0) status = "error"
+      else if (wf.last_executed_at) status = "success"
+      return {
+        id: wf.id,
+        name: wf.name,
+        status,
+        category: wf.category,
+        lastRun: relativeTime(wf.last_executed_at),
+        triggerCount: wf.run_count ?? 0,
+        description: wf.description,
+        steps: wf.steps,
+        settings: wf.settings,
+        input_schema: wf.input_schema,
+        output_schema: wf.output_schema,
+        allowed_tools: wf.allowed_tools,
+        agent_config: wf.agent_config,
+        execution_mode: wf.execution_mode,
+        dependencies: wf.dependencies,
+        script_content: wf.script_content,
+        script_language: wf.script_language,
+        hive_task_type: wf.hive_task_type,
+        callable_name: wf.callable_name,
+        callable_description: wf.callable_description,
+        require_human_approval: wf.require_human_approval,
+        max_iterations: wf.max_iterations,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  function importWorkflowToContext(wf: IrisWorkflowDetail) {
+    const lines: string[] = []
+
+    lines.push(`\n## Active Workflow: ${wf.name} (#${wf.id})`)
+    if (wf.description) lines.push(`**Description**: ${wf.description}`)
+    if (wf.execution_mode) lines.push(`**Execution Mode**: ${wf.execution_mode}`)
+    if (wf.callable_name) lines.push(`**Callable Name**: ${wf.callable_name}`)
+    if (wf.callable_description) lines.push(`**Callable Description**: ${wf.callable_description}`)
+    if (wf.category) lines.push(`**Category**: ${wf.category}`)
+    if (wf.max_iterations) lines.push(`**Max Iterations**: ${wf.max_iterations}`)
+    if (wf.require_human_approval) lines.push(`**Requires Human Approval**: yes`)
+    if (wf.dependencies?.length) lines.push(`**Dependencies**: ${wf.dependencies.join(", ")}`)
+    if (wf.script_language) lines.push(`**Script Language**: ${wf.script_language}`)
+    if (wf.hive_task_type) lines.push(`**Hive Task Type**: ${wf.hive_task_type}`)
+
+    if (wf.steps?.length) {
+      lines.push(`\n### Steps (${wf.steps.length})`)
+      lines.push("```json")
+      lines.push(JSON.stringify(wf.steps, null, 2))
+      lines.push("```")
+    }
+
+    if (wf.input_schema && Object.keys(wf.input_schema).length > 0) {
+      lines.push(`\n### Input Schema`)
+      lines.push("```json")
+      lines.push(JSON.stringify(wf.input_schema, null, 2))
+      lines.push("```")
+    }
+
+    if (wf.output_schema && Object.keys(wf.output_schema).length > 0) {
+      lines.push(`\n### Output Schema`)
+      lines.push("```json")
+      lines.push(JSON.stringify(wf.output_schema, null, 2))
+      lines.push("```")
+    }
+
+    if (wf.allowed_tools?.length) {
+      lines.push(`\n### Allowed Tools`)
+      lines.push(wf.allowed_tools.map((t) => `- ${t}`).join("\n"))
+    }
+
+    if (wf.agent_config && Object.keys(wf.agent_config).length > 0) {
+      lines.push(`\n### Agent Config`)
+      lines.push("```json")
+      lines.push(JSON.stringify(wf.agent_config, null, 2))
+      lines.push("```")
+    }
+
+    if (wf.settings && Object.keys(wf.settings).length > 0) {
+      lines.push(`\n### Workflow Settings`)
+      lines.push("```json")
+      lines.push(JSON.stringify(wf.settings, null, 2))
+      lines.push("```")
+    }
+
+    if (wf.script_content) {
+      lines.push(`\n### Script Content`)
+      lines.push("```" + (wf.script_language ?? ""))
+      lines.push(wf.script_content)
+      lines.push("```")
+    }
+
+    lines.push(`\n### Instructions`)
+    lines.push(`You have this workflow loaded. Use the steps, schema, and tools above to execute or reason about this workflow. If it has input_schema, ask the user for required inputs before running. Use \`iris workflows run ${wf.id}\` to execute it, or run the steps manually if needed.`)
+
+    // Append to existing platform-context.md
+    const content = lines.join("\n")
+    import("fs").then((fs) => {
+      try {
+        const existing = fs.existsSync(PLATFORM_CONTEXT_PATH)
+          ? fs.readFileSync(PLATFORM_CONTEXT_PATH, "utf-8")
+          : ""
+        // Remove any previous "Active Workflow" section
+        const cleaned = existing.replace(/\n## Active Workflow:[\s\S]*$/, "")
+        fs.writeFileSync(PLATFORM_CONTEXT_PATH, cleaned + content)
+      } catch {}
+    })
+  }
+
   function selectBloq(bloqId: number) {
     setData("selectedBloqId", bloqId)
     setData("agents", [])
@@ -354,5 +478,5 @@ export function useIrisData() {
     })
   })
 
-  return { data, selectBloq, refetch: fetchBloqList }
+  return { data, selectBloq, refetch: fetchBloqList, fetchWorkflowDetail, importWorkflowToContext }
 }

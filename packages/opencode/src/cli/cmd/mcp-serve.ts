@@ -180,12 +180,10 @@ function validateCommand(command: string): { args: string[]; error?: string } {
 }
 
 async function execIris(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  // Auto-append --json if not present and not a help request
-  const hasJson = args.includes("--json")
-  const isHelp = args.includes("--help") || args.includes("-h")
-  const finalArgs = (!hasJson && !isHelp) ? [...args, "--json"] : args
-
-  const proc = Bun.spawn([IRIS_BIN, ...finalArgs], {
+  // Don't auto-append --json — not all commands support it, and yargs strict
+  // mode rejects unknown flags (e.g. `leads delete 123 --json` shows help text).
+  // The tool description tells agents to use --json when they want structured output.
+  const proc = Bun.spawn([IRIS_BIN, ...args], {
     env: { ...process.env, IRIS_NON_INTERACTIVE: "1" },
     stdout: "pipe",
     stderr: "pipe",
@@ -255,7 +253,7 @@ export const McpServeCommand = cmd({
       tools: [
         {
           name: "iris_run",
-          description: "Execute any IRIS CLI command. The --json flag is auto-appended for structured output. Example: 'leads list --search acme'",
+          description: "Execute any IRIS CLI command. Add --json for structured output on list/get commands. Omit --json for action commands (delete, create, update). Example: 'leads list --search acme --json'",
           inputSchema: {
             type: "object" as const,
             properties: {

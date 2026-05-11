@@ -1,0 +1,47 @@
+[
+  {
+    "key": "tour_manager",
+    "title": "Tour Manager",
+    "count": 1,
+    "pay_type": "fixed",
+    "pay_amount": 2000,
+    "equity_bps": 50,
+    "description": "Coordinate venues, travel, lodging, day-of-show logistics. Keep the tour on schedule, handle venue relationships, manage artist needs across 4 cities."
+  },
+  {
+    "key": "sound_engineer",
+    "title": "Sound Engineer",
+    "count": 2,
+    "pay_type": "per_show",
+    "pay_amount": 400,
+    "equity_bps": 25,
+    "description": "Run FOH sound, manage monitors, soundcheck, mixing during show. Need 2 engineers to rotate or cover both Dallas shows if we do the '2 for 1'."
+  },
+  {
+    "key": "videographer",
+    "title": "Videographer / Content Lead",
+    "count": 1,
+    "pay_type": "per_show",
+    "pay_amount": 600,
+    "equity_bps": 100,
+    "description": "Capture every show — stage footage, crowd reactions, backstage. Edit into 3-5 viral clips per show. Own the content strategy, post-tour documentary cut."
+  },
+  {
+    "key": "street_team",
+    "title": "Street Team Lead",
+    "count": 4,
+    "pay_type": "fixed",
+    "pay_amount": 300,
+    "equity_bps": 10,
+    "description": "On-the-ground promo in your city. Poster runs, Instagram story blitzes, link up with local influencers, pack the venue. You get a cut of ticket sales you drive."
+  },
+  {
+    "key": "social_media_manager",
+    "title": "Social Media Manager",
+    "count": 1,
+    "pay_type": "fixed",
+    "pay_amount": 1200,
+    "equity_bps": 50,
+    "description": "Run @nsgbillz, @ssgsplurge, @10k.caash, @nikeboymeech socials leading up to and during tour. Hype content, countdown posts, live coverage, post-show recaps."
+  }
+]

@@ -5357,6 +5357,80 @@ const LeadsPulseAllCommand = cmd({
 })
 
 // ============================================================================
+// Disposition command
+// ============================================================================
+
+const LeadsDispositionCommand = cmd({
+  command: "disposition <id> <status>",
+  aliases: ["disp"],
+  describe: "record a call disposition for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .positional("status", {
+        describe: "disposition status",
+        type: "string",
+        choices: ["meeting_booked", "call_back_later", "not_interested", "wrong_person", "no_contact", "voicemail_left"],
+        demandOption: true,
+      })
+      .option("note", { alias: "n", describe: "call notes", type: "string" })
+      .option("duration", { alias: "d", describe: "call duration in seconds", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    const token = await requireAuth()
+    if (!token) return
+
+    const userId = await resolveUserId()
+    if (!userId) {
+      prompts.log.error("Could not resolve user ID")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Recording disposition...")
+
+    try {
+      // Save outreach step
+      const res = await irisFetch(`/api/v1/users/${userId}/leads/${args.id}/outreach-steps`, {
+        method: "POST",
+        body: JSON.stringify({
+          type: "call",
+          status: "completed",
+          data: {
+            disposition: args.status,
+            notes: args.note || "",
+            call_duration: args.duration || 0,
+            source: "cli_dialer",
+          },
+        }),
+      })
+
+      if (!(await handleApiError(res, "Save disposition"))) {
+        spinner.stop("Failed", 1)
+        return
+      }
+
+      // Also save as note if note provided
+      if (args.note) {
+        await irisFetch(`/api/v1/users/${userId}/leads/${args.id}/notes`, {
+          method: "POST",
+          body: JSON.stringify({
+            message: `[Dialer] ${args.status.replace(/_/g, " ")}: ${args.note}`,
+            type: "call_note",
+          }),
+        })
+      }
+
+      spinner.stop(success(`Disposition saved: ${args.status.replace(/_/g, " ")}`))
+      prompts.outro(dim(`iris leads pulse ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -5399,6 +5473,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsGateAllCommand)
       .command(LeadsKBCommand)
       .command(LeadsPulseAllCommand)
+      .command(LeadsDispositionCommand)
       .demandCommand(),
   async handler() {},
 })
