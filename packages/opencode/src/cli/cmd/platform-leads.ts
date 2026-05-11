@@ -3311,7 +3311,9 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
         let actionPriority: "high" | "medium" | "low" = "medium"
 
         // Priority 1: Unpaid gate + stale comms
-        if (dealHealth?.has_payment_gate && !dealHealth.payment_received) {
+        // Skip if Stripe shows payment received (subscription or invoice paid) even if gate flag is stale
+        const stripeHasPaid = (stripeData?.total_paid ?? 0) > 0 || (stripeData?.summary?.active_subscriptions ?? 0) > 0
+        if (dealHealth?.has_payment_gate && !dealHealth.payment_received && !stripeHasPaid) {
           const lastOutbound = commsSignal?.last_outbound_at ? new Date(commsSignal.last_outbound_at) : null
           const hoursSince = lastOutbound ? (Date.now() - lastOutbound.getTime()) / (1000 * 60 * 60) : Infinity
           if (hoursSince > 48) {
@@ -3392,7 +3394,8 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
 
       // ── Hydration: auto-send payment follow-up if gate is unpaid + 48h since last outreach ──
       const HYDRATION_WINDOW_HOURS = 48
-      if (dealHealth?.has_payment_gate && !dealHealth.payment_received && !dealHealth.deal_complete && email) {
+      const stripeHasPaidForHydration = (stripeData?.total_paid ?? 0) > 0 || (stripeData?.summary?.active_subscriptions ?? 0) > 0
+      if (dealHealth?.has_payment_gate && !dealHealth.payment_received && !stripeHasPaidForHydration && !dealHealth.deal_complete && email) {
         // Determine last outreach timestamp
         let lastOutreachAt: Date | null = null
 
