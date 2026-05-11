@@ -125,7 +125,7 @@ async function loadRecipes(): Promise<string> {
   return sections.join("\n")
 }
 
-function validateCommand(command: string): { args: string[]; error?: string } {
+export function validateCommand(command: string): { args: string[]; error?: string } {
   const trimmed = command.trim()
   if (!trimmed) return { args: [], error: "Empty command" }
 
@@ -157,8 +157,10 @@ function validateCommand(command: string): { args: string[]; error?: string } {
 
   if (args.length === 0) return { args: [], error: "Empty command" }
 
-  // Reject shell metacharacters in any arg
-  const dangerous = /[;&|`$\\<>!\n\r]/
+  // Reject shell injection vectors — args are passed via Bun.spawn (no shell),
+  // so only block chars that could chain/inject commands if a shell were involved.
+  // Safe in direct spawn: & $ ! % # @ ? ^
+  const dangerous = /[;|`\\<>\n\r]/
   for (const arg of args) {
     if (dangerous.test(arg)) {
       return { args: [], error: `Rejected: shell metacharacter found in argument "${arg}". Pass arguments individually, not as a shell expression.` }
