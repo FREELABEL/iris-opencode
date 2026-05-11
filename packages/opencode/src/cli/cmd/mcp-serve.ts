@@ -158,7 +158,7 @@ function validateCommand(command: string): { args: string[]; error?: string } {
   if (args.length === 0) return { args: [], error: "Empty command" }
 
   // Reject shell metacharacters in any arg
-  const dangerous = /[;&|`$(){}\\<>!\n\r]/
+  const dangerous = /[;&|`$\\<>!\n\r]/
   for (const arg of args) {
     if (dangerous.test(arg)) {
       return { args: [], error: `Rejected: shell metacharacter found in argument "${arg}". Pass arguments individually, not as a shell expression.` }
@@ -314,7 +314,7 @@ export const McpServeCommand = cmd({
       if (name === "iris_help") {
         const command = (args?.command as string) ?? ""
         const parts = command.trim().split(/\s+/)
-        const dangerous = /[;&|`$(){}\\<>!\n\r]/
+        const dangerous = /[;&|`$\\<>!\n\r]/
         for (const part of parts) {
           if (dangerous.test(part)) {
             return { content: [{ type: "text" as const, text: `Error: invalid characters in command` }], isError: true }

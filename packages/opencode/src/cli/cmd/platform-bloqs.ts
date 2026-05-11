@@ -60,7 +60,7 @@ const BloqsListCommand = cmd({
     spinner.start("Loading bloqs…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit) })
+      const params = new URLSearchParams({ per_page: String(args.limit), simplified: "1" })
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs?${params}`)
       if (!res.ok) {
         spinner.stop("Failed", 1)

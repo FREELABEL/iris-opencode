@@ -359,7 +359,8 @@ const LeadsGetCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
-      .option("notes", { describe: "show full note content inline", type: "boolean", default: false }),
+      .option("notes", { describe: "show full note content inline", type: "boolean", default: false })
+      .option("json", { describe: "output raw JSON", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
 
@@ -451,6 +452,11 @@ const LeadsGetCommand = cmd({
         return
       }
       spinner.stop(String(l.name ?? l.first_name ?? `Lead #${l.id}`))
+
+      if (args.json) {
+        console.log(JSON.stringify(l, null, 2))
+        return
+      }
 
       printDivider()
       printKV("ID", l.id)
@@ -2385,15 +2391,19 @@ const LeadsPulseCommand = cmd({
       const proposals = dealHealth?.proposals ?? []
       printKV("  Proposals", proposals.length > 0 ? `${proposals.length}` : dim("None"))
 
-      // Content agent check — from deal_health signal
+      // Content engine check — from config signal (has_content_engine) + deal_health signal (has_content_agent)
       const dealChecks = pulseReadiness?.signals?.deal_health?.checks ?? {}
-      if (dealChecks.has_content_agent === true) {
-        printKV("  Content Agent", success("Configured"))
-      } else if (dealChecks.has_content_agent === false) {
+      const configChecks = pulseReadiness?.signals?.config?.checks ?? {}
+      const hasEngine = configChecks.has_content_engine === true || dealChecks.has_content_agent === true
+      if (hasEngine) {
+        printKV("  Content Engine", success("Active"))
+      } else if (lead.status === "Won" || lead.status === "Active" || lead.status === "Converted") {
         printKV(
-          "  Content Agent",
-          `${UI.Style.TEXT_WARNING}Missing — no newsletter/content agent${UI.Style.TEXT_NORMAL}`,
+          "  Content Engine",
+          `${UI.Style.TEXT_WARNING}Not configured${UI.Style.TEXT_NORMAL}  ${dim(`iris leads content-engine create ${leadId}`)}`,
         )
+      } else if (dealChecks.has_content_agent === false) {
+        printKV("  Content Agent", dim("Not configured"))
       }
 
       // Tasks section (#57666)
@@ -5434,6 +5444,1289 @@ const LeadsDispositionCommand = cmd({
 })
 
 // ============================================================================
+// Content Engine — distributable content agent factory
+// ============================================================================
+
+const CONTENT_ENGINE_CONFIG = {
+  heartbeat_mode: "autonomous",
+  heartbeat_tools: ["manageBloqItems", "httpRequest", "agent_memory"],
+  max_iterations: 10,
+  model: "gpt-4o-mini",
+  schedule_frequency: "every_8_hours",
+  schedule_time: "09:00",
+  schedule_timezone: "America/New_York",
+} as const
+
+function buildContentPrompt(lead: { company?: string; name?: string; industry?: string; bloq_id: number }): { system: string; initial: string } {
+  const company = lead.company || lead.name || "the client"
+  const industry = lead.industry || "their industry"
+
+  return {
+    system: `You are a newsletter content writer for ${company}. Your ONLY job is to produce one article per run and save it. You MUST call manageBloqItems every single run. Do not assess, plan, or evaluate. Just: search, write, save.`,
+    initial: [
+      `STEP 1: Call httpRequest to search for recent news about ${company} or ${industry}.`,
+      `STEP 2: Write a 400-word article about what you found. Include source URLs and specific details.`,
+      `STEP 3: Call manageBloqItems with action=create, bloq_id=${lead.bloq_id}, title=your article title, body=your full 400-word article text.`,
+      `Do steps 1-2-3 in order. Do NOT skip step 3. Do NOT end without saving.`,
+    ].join("\n"),
+  }
+}
+
+const ContentEngineCreateCommand = cmd({
+  command: "create <id>",
+  describe: "create a content engine (agent + schedule) for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
+      .option("frequency", { describe: "schedule frequency", type: "string", default: "every_8_hours", choices: ["daily", "every_8_hours", "every_12_hours"] })
+      .option("model", { describe: "AI model", type: "string", default: "gpt-4o-mini", choices: ["gpt-4o-mini", "gpt-4.1-nano", "gpt-5-nano"] })
+      .option("topics", { describe: "override search topics", type: "string" })
+      .option("dry-run", { describe: "show config without creating", type: "boolean", default: false })
+      .option("skip-verify", { describe: "don't wait for first run verification", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("Content Engine")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const resolved = await resolveLeadId(String(args.id))
+    if (!resolved) { prompts.outro("Done"); return }
+    const { leadId, lead } = resolved
+    const userId = await resolveUserId()
+    if (!userId) { prompts.log.error("Could not resolve user ID"); prompts.outro("Done"); return }
+
+    const name = lead.name ?? lead.first_name ?? `Lead #${leadId}`
+    const company = lead.company ?? name
+    let bloqIds: number[] = Array.isArray(lead.bloq_ids) ? lead.bloq_ids : lead.bloq_id ? [lead.bloq_id] : []
+
+    // Step 1: Resolve bloq — GET /leads/{id} doesn't always include bloq_ids, fallback to search
+    const spinner = prompts.spinner()
+    if (bloqIds.length === 0) {
+      spinner.start("Resolving bloq…")
+      try {
+        const searchRes = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(lead.email ?? name)}&per_page=5`)
+        if (searchRes.ok) {
+          const searchData = (await searchRes.json()) as { data?: any[] }
+          const match = (searchData?.data ?? []).find((l: any) => l.id === leadId)
+          if (match?.bloq_ids && Array.isArray(match.bloq_ids)) {
+            bloqIds = match.bloq_ids.filter((id: number) => id !== 40) // exclude shared platform bloq
+            if (bloqIds.length === 0) bloqIds = match.bloq_ids // fallback to all if only shared bloq
+          }
+        }
+      } catch { /* non-fatal */ }
+      spinner.stop(bloqIds.length > 0 ? `Bloq: #${bloqIds[0]}` : "No bloq found")
+    }
+
+    let bloqId: number
+    if (bloqIds.length > 0) {
+      bloqId = bloqIds[0]
+    } else {
+      prompts.log.error(`Lead #${leadId} has no linked bloq. Create one first: iris bloqs create --name "${company}"`)
+      prompts.outro("Done")
+      return
+    }
+
+    // Build config
+    const prompt = buildContentPrompt({
+      company,
+      name,
+      industry: args.topics || lead.industry,
+      bloq_id: bloqId,
+    })
+    const agentName = `${company} Content Agent`
+    const model = args.model ?? CONTENT_ENGINE_CONFIG.model
+
+    const config = {
+      agent: {
+        name: agentName,
+        description: `Autonomous content engine for ${company}`,
+        model,
+        bloq_id: bloqId,
+        type: "content",
+        initial_prompt: prompt.system,
+        heartbeat_mode: CONTENT_ENGINE_CONFIG.heartbeat_mode,
+        heartbeat_tools: CONTENT_ENGINE_CONFIG.heartbeat_tools,
+        settings: {
+          max_iterations: CONTENT_ENGINE_CONFIG.max_iterations,
+          system_prompt: prompt.system,
+          initial_prompt: prompt.initial,
+          heartbeat_tools: CONTENT_ENGINE_CONFIG.heartbeat_tools,
+        },
+      },
+      schedule: {
+        task_name: `${company} Content Generation`,
+        prompt: prompt.initial,
+        frequency: args.frequency ?? CONTENT_ENGINE_CONFIG.schedule_frequency,
+        time: CONTENT_ENGINE_CONFIG.schedule_time,
+        timezone: CONTENT_ENGINE_CONFIG.schedule_timezone,
+        data: { type: "heartbeat", mode: "autonomous" },
+      },
+    }
+
+    if (args["dry-run"]) {
+      if (args.json) {
+        console.log(JSON.stringify(config, null, 2))
+      } else {
+        console.log()
+        console.log(`  ${bold("Agent Config")}`)
+        printKV("  Name", agentName)
+        printKV("  Model", model)
+        printKV("  Bloq", `#${bloqId}`)
+        printKV("  Heartbeat", CONTENT_ENGINE_CONFIG.heartbeat_mode)
+        printKV("  Tools", CONTENT_ENGINE_CONFIG.heartbeat_tools.join(", "))
+        printKV("  Max Iterations", String(CONTENT_ENGINE_CONFIG.max_iterations))
+        console.log()
+        console.log(`  ${bold("Schedule Config")}`)
+        printKV("  Frequency", config.schedule.frequency)
+        printKV("  Time", CONTENT_ENGINE_CONFIG.schedule_time)
+        printKV("  Type", "heartbeat")
+        console.log()
+        console.log(`  ${bold("Prompts")}`)
+        console.log(`    ${dim("System:")} ${prompt.system.slice(0, 120)}…`)
+        console.log(`    ${dim("Initial:")} ${prompt.initial.slice(0, 120)}…`)
+        printDivider()
+      }
+      prompts.outro(dim("Dry run — no changes made. Remove --dry-run to create."))
+      return
+    }
+
+    // Step 2: Create agent
+    spinner.start(`Creating agent "${agentName}"…`)
+    try {
+      const agentRes = await irisFetch(`/api/v1/users/${userId}/bloqs/agents`, {
+        method: "POST",
+        body: JSON.stringify(config.agent),
+      })
+      if (!(await handleApiError(agentRes, "Create agent"))) {
+        spinner.stop("Failed to create agent", 1)
+        prompts.outro("Done")
+        return
+      }
+      const agentData = (await agentRes.json()) as { data?: any }
+      const agent = agentData?.data ?? agentData
+      const agentId = agent.id
+      spinner.stop(`${success("Agent created:")} ${bold(agentName)} #${agentId}`)
+
+      // Step 3: Create schedule
+      const schedSpinner = prompts.spinner()
+      schedSpinner.start(`Creating schedule (${config.schedule.frequency})…`)
+      const schedRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...config.schedule,
+          agent_id: agentId,
+          bloq_id: bloqId,
+        }),
+      })
+      if (!(await handleApiError(schedRes, "Create schedule"))) {
+        schedSpinner.stop("Failed to create schedule", 1)
+        prompts.log.warn(`Agent #${agentId} was created but schedule failed. Create manually:`)
+        prompts.log.info(dim(`iris schedules create --agent ${agentId} --frequency ${config.schedule.frequency} --type heartbeat`))
+        prompts.outro("Done")
+        return
+      }
+      const schedData = (await schedRes.json()) as { data?: any }
+      const schedule = schedData?.data ?? schedData
+      const scheduleId = schedule.id
+      schedSpinner.stop(`${success("Schedule created:")} #${scheduleId} (${config.schedule.frequency})`)
+
+      // Step 4: Trigger first run (optional)
+      if (!args["skip-verify"]) {
+        const runSpinner = prompts.spinner()
+        runSpinner.start("Triggering first run…")
+        try {
+          const runRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${scheduleId}/run`, {
+            method: "POST",
+            body: JSON.stringify({}),
+          })
+          if (runRes.ok) {
+            runSpinner.stop(success("First run dispatched"))
+
+            // Wait and check for execution
+            const verifySpinner = prompts.spinner()
+            verifySpinner.start("Waiting for execution (up to 90s)…")
+            let verified = false
+            for (let i = 0; i < 18; i++) {
+              await new Promise((r) => setTimeout(r, 5000))
+              try {
+                const execRes = await irisFetch(
+                  `/api/v1/users/${userId}/bloqs/scheduled-jobs/${scheduleId}/executions?per_page=1`,
+                )
+                if (execRes.ok) {
+                  const execData = (await execRes.json()) as { data?: any[] }
+                  const execs = execData?.data ?? []
+                  if (execs.length > 0) {
+                    const exec = execs[0]
+                    const toolsUsed = exec.tools_used ?? exec.metadata?.tools_used ?? []
+                    const hasManageBloq = Array.isArray(toolsUsed) &&
+                      toolsUsed.some((t: string) => t.toLowerCase().includes("managebloq"))
+                    if (hasManageBloq) {
+                      verifySpinner.stop(success("ManageBloqItemsTool called — article saved"))
+                      verified = true
+                    } else if (exec.status === "completed" || exec.status === "success") {
+                      verifySpinner.stop(`${success("Execution completed")} ${dim("(check bloq for article)")}`)
+                      verified = true
+                    } else if (exec.status === "failed") {
+                      verifySpinner.stop(`${UI.Style.TEXT_DANGER}Execution failed${UI.Style.TEXT_NORMAL}`)
+                      verified = true
+                    }
+                    if (verified) break
+                  }
+                }
+              } catch { /* polling — non-fatal */ }
+            }
+            if (!verified) {
+              verifySpinner.stop(dim("Still running — check status later"))
+            }
+          } else {
+            runSpinner.stop(dim("Trigger failed — schedule will run at next interval"))
+          }
+        } catch {
+          runSpinner.stop(dim("Trigger failed — schedule will run at next interval"))
+        }
+      }
+
+      // Step 5: Auto-publish first article to Genesis page (if verification ran)
+      let publishedPage: { id: number; slug: string; url: string } | null = null
+      if (!args["skip-verify"]) {
+        const pageSpinner = prompts.spinner()
+        pageSpinner.start("Publishing article to Genesis page…")
+        try {
+          // Wait a moment for bloq item to be committed
+          await new Promise((r) => setTimeout(r, 3000))
+          const bloqRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}`)
+          if (bloqRes.ok) {
+            const bd = (await bloqRes.json()) as { data?: any }
+            const bloqObj = bd?.data?.bloq ?? bd?.data ?? bd
+            const allLists: any[] = bloqObj.lists ?? bd?.data?.lists ?? []
+            for (const list of allLists) {
+              const ln = (list.name ?? "").toLowerCase()
+              if (ln.includes("deliverable") || ln.includes("article") || ln.includes("content")) {
+                for (const item of list.items ?? []) {
+                  if (item.content && item.title) {
+                    publishedPage = await createArticlePage({
+                      company,
+                      title: item.title,
+                      body: item.content,
+                      bloqId,
+                      homeSlug: slugify(company),
+                    })
+                    if (publishedPage) break
+                  }
+                }
+                if (publishedPage) break
+              }
+            }
+          }
+        } catch { /* non-fatal */ }
+        if (publishedPage) {
+          pageSpinner.stop(`${success("Page published:")} ${publishedPage.url}`)
+        } else {
+          pageSpinner.stop(dim("No article found yet — publish later with: iris leads ce publish " + leadId))
+        }
+      }
+
+      // Summary
+      if (args.json) {
+        console.log(JSON.stringify({ agent_id: agent.id, schedule_id: scheduleId, bloq_id: bloqId, lead_id: leadId, page: publishedPage }, null, 2))
+      } else {
+        console.log()
+        printDivider()
+        printKV("Lead", `${name} (#${leadId})`)
+        printKV("Bloq", `#${bloqId}`)
+        printKV("Agent", `${agentName} (#${agent.id})`)
+        printKV("Schedule", `#${scheduleId} (${config.schedule.frequency})`)
+        printKV("Next Run", schedule.next_run_at ?? "pending")
+        if (publishedPage) printKV("Article", publishedPage.url)
+        printDivider()
+        console.log()
+        prompts.log.info(dim(`iris leads content-engine publish ${leadId}  — publish new articles`))
+        prompts.log.info(dim(`iris leads content-engine status ${leadId}   — check health`))
+        prompts.log.info(dim(`iris leads content-engine doctor ${leadId}   — diagnose issues`))
+        prompts.outro(success("Content engine ready"))
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ContentEngineStatusCommand = cmd({
+  command: "status <id>",
+  describe: "check content engine health for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("Content Engine Status")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const resolved = await resolveLeadId(String(args.id))
+    if (!resolved) { prompts.outro("Done"); return }
+    const { leadId, lead } = resolved
+    const userId = await resolveUserId()
+    if (!userId) { prompts.log.error("Could not resolve user ID"); prompts.outro("Done"); return }
+
+    const name = lead.name ?? lead.first_name ?? `Lead #${leadId}`
+    const bloqIds: number[] = Array.isArray(lead.bloq_ids) ? lead.bloq_ids : lead.bloq_id ? [lead.bloq_id] : []
+
+    if (bloqIds.length === 0) {
+      prompts.log.warn(`Lead #${leadId} has no linked bloq — no content engine possible`)
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Checking content engine…")
+
+    try {
+      // Fetch agents for this lead's bloq
+      const bloqId = bloqIds[0]
+      const agentsRes = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`)
+      if (!(await handleApiError(agentsRes, "Fetch agents"))) {
+        spinner.stop("Failed", 1); prompts.outro("Done"); return
+      }
+      const agentsData = (await agentsRes.json()) as { data?: any[] }
+      const agents: any[] = agentsData?.data ?? []
+
+      // Find content agents (match by name keywords or heartbeat_tools containing manageBloqItems)
+      const contentAgents = agents.filter((a: any) => {
+        const nameMatch = /newsletter|content|article|blog|writer/i.test(a.name ?? "")
+        const toolsMatch = Array.isArray(a.heartbeat_tools) && a.heartbeat_tools.some((t: string) => /managebloq/i.test(t))
+        const settingsToolsMatch = Array.isArray(a.settings?.heartbeat_tools) && a.settings.heartbeat_tools.some((t: string) => /managebloq/i.test(t))
+        return (nameMatch || toolsMatch || settingsToolsMatch) && a.active
+      })
+
+      if (contentAgents.length === 0) {
+        spinner.stop(dim("No content engine found"))
+        prompts.log.warn(`No active content agent for ${name}`)
+        prompts.log.info(dim(`Create one: iris leads content-engine create ${leadId}`))
+        prompts.outro("Done")
+        return
+      }
+
+      // For each content agent, fetch schedule + recent executions
+      const results: any[] = []
+      for (const agent of contentAgents) {
+        const [schedRes, execRes] = await Promise.allSettled([
+          irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?agent_id=${agent.id}&per_page=5`),
+          irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?agent_id=${agent.id}&per_page=1`).then(async (r) => {
+            if (!r.ok) return []
+            const d = (await r.json()) as { data?: any[] }
+            const jobs = d?.data ?? []
+            if (jobs.length === 0) return []
+            const jobId = jobs[0].id
+            const eRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${jobId}/executions?per_page=5`)
+            if (!eRes.ok) return []
+            return ((await eRes.json()) as { data?: any[] })?.data ?? []
+          }),
+        ])
+
+        const schedules = schedRes.status === "fulfilled" && schedRes.value.ok
+          ? ((await schedRes.value.json()) as { data?: any[] })?.data ?? []
+          : []
+        const executions = execRes.status === "fulfilled" ? (execRes.value as any[]) : []
+        const activeSchedule = schedules.find((s: any) => s.status === "scheduled" || s.status === "active")
+
+        // Count articles in last 7 days from executions
+        const weekAgo = Date.now() - 7 * 86400000
+        const recentExecs = executions.filter((e: any) => new Date(e.created_at ?? 0).getTime() > weekAgo)
+        const articlesProduced = recentExecs.filter((e: any) => {
+          const tools = e.tools_used ?? e.metadata?.tools_used ?? []
+          return Array.isArray(tools) && tools.some((t: string) => /managebloq/i.test(t))
+        }).length
+
+        results.push({ agent, schedule: activeSchedule, executions, recentExecs, articlesProduced })
+      }
+
+      spinner.stop(`${contentAgents.length} content agent(s) found`)
+
+      if (args.json) {
+        console.log(JSON.stringify(results.map((r) => ({
+          agent_id: r.agent.id, agent_name: r.agent.name, model: r.agent.model,
+          schedule_id: r.schedule?.id, schedule_status: r.schedule?.status,
+          next_run: r.schedule?.next_run_at, articles_7d: r.articlesProduced,
+          recent_executions: r.recentExecs.length,
+        })), null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      for (const r of results) {
+        console.log()
+        printKV("Agent", `#${r.agent.id} ${bold(r.agent.name)} ${dim(`(${r.agent.model ?? "unknown"})`)}`)
+        printKV("Heartbeat", r.agent.heartbeat_mode ?? r.agent.settings?.heartbeat_mode ?? dim("not set"))
+
+        if (r.schedule) {
+          const statusLabel = r.schedule.status === "scheduled" ? success(r.schedule.status) : dim(r.schedule.status)
+          printKV("Schedule", `#${r.schedule.id} ${r.schedule.frequency ?? ""} ${statusLabel}`)
+          printKV("Next Run", r.schedule.next_run_at ?? dim("unknown"))
+        } else {
+          printKV("Schedule", `${UI.Style.TEXT_WARNING}None active${UI.Style.TEXT_NORMAL}`)
+        }
+
+        printKV("Articles (7d)", r.articlesProduced > 0 ? success(String(r.articlesProduced)) : `${UI.Style.TEXT_WARNING}0${UI.Style.TEXT_NORMAL}`)
+        printKV("Executions (7d)", String(r.recentExecs.length))
+
+        if (r.recentExecs.length > 0) {
+          const last = r.recentExecs[0]
+          const tools = last.tools_used ?? last.metadata?.tools_used ?? []
+          printKV("Last Run", last.created_at?.split("T")[0] ?? dim("unknown"))
+          if (Array.isArray(tools) && tools.length > 0) printKV("Tools Used", tools.join(", "))
+        }
+      }
+
+      printDivider()
+      prompts.log.info(dim(`iris leads content-engine doctor ${leadId}  — diagnose issues`))
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ContentEngineDoctorCommand = cmd({
+  command: "doctor <id>",
+  aliases: ["diagnose"],
+  describe: "diagnose content engine issues for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
+      .option("fix", { describe: "auto-repair detected issues", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("Content Engine Doctor")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const resolved = await resolveLeadId(String(args.id))
+    if (!resolved) { prompts.outro("Done"); return }
+    const { leadId, lead } = resolved
+    const userId = await resolveUserId()
+    if (!userId) { prompts.log.error("Could not resolve user ID"); prompts.outro("Done"); return }
+
+    const name = lead.name ?? lead.first_name ?? `Lead #${leadId}`
+    const bloqIds: number[] = Array.isArray(lead.bloq_ids) ? lead.bloq_ids : lead.bloq_id ? [lead.bloq_id] : []
+
+    if (bloqIds.length === 0) {
+      prompts.log.error(`Lead #${leadId} has no linked bloq — cannot run diagnostics`)
+      prompts.log.info(dim(`Create a bloq first: iris bloqs create --name "${lead.company ?? name}"`))
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Running diagnostics…")
+
+    try {
+      const bloqId = bloqIds[0]
+      const agentsRes = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`)
+      if (!(await handleApiError(agentsRes, "Fetch agents"))) {
+        spinner.stop("Failed", 1); prompts.outro("Done"); return
+      }
+      const agentsData = (await agentsRes.json()) as { data?: any[] }
+      const agents: any[] = agentsData?.data ?? []
+
+      const contentAgents = agents.filter((a: any) => {
+        const nameMatch = /newsletter|content|article|blog|writer/i.test(a.name ?? "")
+        const toolsMatch = Array.isArray(a.heartbeat_tools) && a.heartbeat_tools.some((t: string) => /managebloq/i.test(t))
+        const settingsToolsMatch = Array.isArray(a.settings?.heartbeat_tools) && a.settings.heartbeat_tools.some((t: string) => /managebloq/i.test(t))
+        return nameMatch || toolsMatch || settingsToolsMatch
+      })
+
+      if (contentAgents.length === 0) {
+        spinner.stop(`${UI.Style.TEXT_DANGER}No content agent found${UI.Style.TEXT_NORMAL}`)
+        prompts.log.error(`No content agent for ${name}`)
+        prompts.log.info(dim(`Create one: iris leads content-engine create ${leadId}`))
+        prompts.outro("Done")
+        return
+      }
+
+      const agent = contentAgents[0]
+      const heartbeatTools: string[] = agent.heartbeat_tools ?? agent.settings?.heartbeat_tools ?? []
+      const heartbeatMode = agent.heartbeat_mode ?? agent.settings?.heartbeat_mode ?? ""
+      const maxIterations = agent.settings?.max_iterations ?? 5
+
+      // Fetch schedule
+      const schedRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?agent_id=${agent.id}&per_page=5`)
+      let schedules: any[] = []
+      if (schedRes.ok) {
+        schedules = ((await schedRes.json()) as { data?: any[] })?.data ?? []
+      }
+      const activeSchedule = schedules.find((s: any) => s.status === "scheduled" || s.status === "active")
+
+      // Fetch recent executions
+      let recentExecs: any[] = []
+      if (activeSchedule) {
+        try {
+          const execRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${activeSchedule.id}/executions?per_page=10`)
+          if (execRes.ok) {
+            recentExecs = ((await execRes.json()) as { data?: any[] })?.data ?? []
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      spinner.stop(`Diagnosing agent #${agent.id} ${bold(agent.name ?? "")}`)
+
+      // Run checks
+      type Check = { name: string; pass: boolean; detail: string; fix?: string }
+      const checks: Check[] = []
+
+      // Check 1: heartbeat_tools includes manageBloqItems
+      const hasManageBloq = heartbeatTools.some((t) => /managebloq/i.test(t))
+      checks.push({
+        name: "heartbeat_tools includes manageBloqItems",
+        pass: hasManageBloq,
+        detail: hasManageBloq ? heartbeatTools.join(", ") : `Current: [${heartbeatTools.join(", ")}]`,
+        fix: "update agent settings to include manageBloqItems in heartbeat_tools",
+      })
+
+      // Check 2: heartbeat_mode = autonomous
+      const isAutonomous = heartbeatMode === "autonomous"
+      checks.push({
+        name: "heartbeat_mode = autonomous",
+        pass: isAutonomous,
+        detail: isAutonomous ? "autonomous" : `Current: ${heartbeatMode || "not set"}`,
+        fix: "set heartbeat_mode to autonomous",
+      })
+
+      // Check 3: max_iterations >= 10
+      const hasEnoughIter = maxIterations >= 10
+      checks.push({
+        name: "max_iterations >= 10",
+        pass: hasEnoughIter,
+        detail: `${maxIterations}`,
+        fix: "set settings.max_iterations = 10",
+      })
+
+      // Check 4: agent is active
+      checks.push({
+        name: "agent is active",
+        pass: !!agent.active,
+        detail: agent.active ? "active" : "inactive",
+        fix: "activate the agent",
+      })
+
+      // Check 5: schedule type = heartbeat
+      const schedData = activeSchedule?.data ?? {}
+      const schedType = schedData.type ?? ""
+      const isHeartbeatType = schedType === "heartbeat"
+      checks.push({
+        name: "schedule type = heartbeat",
+        pass: !!activeSchedule && isHeartbeatType,
+        detail: activeSchedule ? `${schedType || "unknown"}` : "no active schedule",
+        fix: activeSchedule ? "convert schedule to heartbeat type" : "create a heartbeat schedule",
+      })
+
+      // Check 6: schedule has recent runs
+      const weekAgo = Date.now() - 7 * 86400000
+      const hasRecentRuns = recentExecs.some((e: any) => new Date(e.created_at ?? 0).getTime() > weekAgo)
+      checks.push({
+        name: "schedule has recent runs (7 days)",
+        pass: hasRecentRuns,
+        detail: hasRecentRuns ? `${recentExecs.filter((e: any) => new Date(e.created_at ?? 0).getTime() > weekAgo).length} runs` : "0 runs in 7 days",
+        fix: "check if schedule is active and next_run_at is set",
+      })
+
+      // Check 7: ManageBloqItemsTool in tools_used (last run)
+      const lastExec = recentExecs[0]
+      const lastTools: string[] = lastExec?.tools_used ?? lastExec?.metadata?.tools_used ?? []
+      const manageBloqUsed = Array.isArray(lastTools) && lastTools.some((t) => /managebloq/i.test(t))
+      checks.push({
+        name: "ManageBloqItemsTool in last run",
+        pass: manageBloqUsed || recentExecs.length === 0,
+        detail: recentExecs.length === 0 ? "no executions yet" : (manageBloqUsed ? `tools: ${lastTools.join(", ")}` : `tools: [${lastTools.join(", ")}] — missing ManageBloqItemsTool`),
+        fix: "planner may be active — ensure manageBloqItems in heartbeat_tools to bypass",
+      })
+
+      // Check 8: Articles produced in last 7 days
+      const articlesProduced = recentExecs.filter((e: any) => {
+        const tools = e.tools_used ?? e.metadata?.tools_used ?? []
+        return new Date(e.created_at ?? 0).getTime() > weekAgo &&
+          Array.isArray(tools) && tools.some((t: string) => /managebloq/i.test(t))
+      }).length
+      checks.push({
+        name: "articles produced in last 7 days",
+        pass: articlesProduced > 0 || recentExecs.length === 0,
+        detail: `${articlesProduced}`,
+        fix: recentExecs.length > 0 ? "ManageBloqItemsTool not in tools_used — planner may be active" : "trigger a run: iris schedules run <schedule_id>",
+      })
+
+      if (args.json) {
+        const passing = checks.filter((c) => c.pass).length
+        console.log(JSON.stringify({
+          agent_id: agent.id, agent_name: agent.name,
+          schedule_id: activeSchedule?.id, healthy: passing === checks.length,
+          checks: checks.map((c) => ({ ...c })),
+          passing, total: checks.length,
+        }, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      // Render
+      console.log()
+      printKV("Agent", `#${agent.id} ${bold(agent.name ?? "")} ${agent.active ? dim("(active)") : `${UI.Style.TEXT_DANGER}(inactive)${UI.Style.TEXT_NORMAL}`}`)
+      if (activeSchedule) {
+        printKV("Schedule", `#${activeSchedule.id} ${activeSchedule.frequency ?? ""} ${dim(`(${activeSchedule.status})`)} next: ${activeSchedule.next_run_at ?? "?"}`)
+      } else {
+        printKV("Schedule", `${UI.Style.TEXT_WARNING}None active${UI.Style.TEXT_NORMAL}`)
+      }
+
+      console.log()
+      console.log(`  ${bold("Checks")}`)
+      let passing = 0
+      const fixItems: string[] = []
+      for (const c of checks) {
+        if (c.pass) {
+          passing++
+          console.log(`    ${success("+")} ${c.name}`)
+        } else {
+          console.log(`    ${UI.Style.TEXT_DANGER}x${UI.Style.TEXT_NORMAL} ${c.name}`)
+          console.log(`      ${dim(c.detail)}`)
+          if (c.fix) {
+            console.log(`      ${dim("Fix:")} ${c.fix}`)
+            fixItems.push(c.fix)
+          }
+        }
+      }
+
+      console.log()
+      if (passing === checks.length) {
+        console.log(`  ${success("HEALTHY")} ${dim(`${passing}/${checks.length} checks passed`)}`)
+      } else {
+        console.log(`  ${UI.Style.TEXT_WARNING}ISSUES FOUND${UI.Style.TEXT_NORMAL} ${dim(`${passing}/${checks.length} checks passed`)}`)
+      }
+
+      // Auto-fix if --fix
+      if (args.fix && fixItems.length > 0) {
+        console.log()
+        const fixSpinner = prompts.spinner()
+        fixSpinner.start("Applying fixes…")
+
+        const patches: Record<string, unknown> = {}
+        if (!hasManageBloq) patches.heartbeat_tools = CONTENT_ENGINE_CONFIG.heartbeat_tools
+        if (!isAutonomous) patches.heartbeat_mode = CONTENT_ENGINE_CONFIG.heartbeat_mode
+        if (!hasEnoughIter) patches.settings = { ...(agent.settings ?? {}), max_iterations: CONTENT_ENGINE_CONFIG.max_iterations }
+        if (!agent.active) patches.active = true
+
+        if (Object.keys(patches).length > 0) {
+          const patchRes = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${agent.id}`, {
+            method: "PATCH",
+            body: JSON.stringify(patches),
+          })
+          if (patchRes.ok) {
+            fixSpinner.stop(success(`Agent #${agent.id} updated`))
+          } else {
+            fixSpinner.stop("Agent update failed")
+          }
+        } else {
+          fixSpinner.stop(dim("No agent patches needed"))
+        }
+
+        // If no active schedule, create one
+        if (!activeSchedule) {
+          const schedSpinner = prompts.spinner()
+          schedSpinner.start("Creating missing schedule…")
+          const company = lead.company ?? name
+          const prompt = buildContentPrompt({ company, name, industry: lead.industry, bloq_id: bloqId })
+          const schedRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs`, {
+            method: "POST",
+            body: JSON.stringify({
+              agent_id: agent.id,
+              bloq_id: bloqId,
+              task_name: `${company} Content Generation`,
+              prompt: prompt.initial,
+              frequency: CONTENT_ENGINE_CONFIG.schedule_frequency,
+              time: CONTENT_ENGINE_CONFIG.schedule_time,
+              timezone: CONTENT_ENGINE_CONFIG.schedule_timezone,
+              data: { type: "heartbeat", mode: "autonomous" },
+            }),
+          })
+          if (schedRes.ok) {
+            const sd = (await schedRes.json()) as { data?: any }
+            schedSpinner.stop(success(`Schedule #${sd?.data?.id ?? "?"} created`))
+          } else {
+            schedSpinner.stop("Schedule creation failed")
+          }
+        }
+      }
+
+      printDivider()
+      if (passing < checks.length && !args.fix) {
+        prompts.log.info(dim(`iris leads content-engine doctor ${leadId} --fix  — auto-repair`))
+      }
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+/**
+ * Parse markdown body into sections split by ### headings.
+ * Returns array of { heading, body } pairs.
+ */
+function parseArticleSections(body: string): Array<{ heading: string; body: string }> {
+  const lines = body.split("\n")
+  const sections: Array<{ heading: string; body: string }> = []
+  let currentHeading = ""
+  let currentLines: string[] = []
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^#{1,3}\s+(.+)/)
+    if (headingMatch) {
+      if (currentLines.length > 0 || currentHeading) {
+        sections.push({ heading: currentHeading, body: currentLines.join("\n").trim() })
+      }
+      currentHeading = headingMatch[1].replace(/^\d+\.\s*/, "").trim() // strip "1. " prefix
+      currentLines = []
+    } else {
+      currentLines.push(line)
+    }
+  }
+  if (currentLines.length > 0 || currentHeading) {
+    sections.push({ heading: currentHeading, body: currentLines.join("\n").trim() })
+  }
+  return sections.filter((s) => s.body.length > 0)
+}
+
+/**
+ * Extract a quotable sentence from text — looks for emphatic/insightful sentences.
+ */
+function extractPullQuote(text: string): string | null {
+  const sentences = text.replace(/\n/g, " ").split(/(?<=[.!?])\s+/)
+  // Prefer longer sentences that feel quotable
+  const candidates = sentences
+    .filter((s) => s.length > 40 && s.length < 200)
+    .filter((s) => !s.startsWith("Look for") && !s.startsWith("Think") && !s.startsWith("Apps "))
+  return candidates.length > 0 ? candidates[Math.floor(candidates.length / 2)] : null
+}
+
+/**
+ * Build a rich Genesis article page with visual components between sections:
+ * Nav → Hero → Intro → Image → Section1 → QuoteBlock → Section2 → StatsCounter →
+ * Section3 → FeatureGrid (takeaways) → Newsletter → Footer
+ */
+function buildArticlePageJson(opts: {
+  company: string; title: string; subtitle?: string; body: string;
+  label?: string; accentColor?: string; homeSlug?: string; industry?: string;
+}): Record<string, unknown> {
+  const { company, title, subtitle, body, label, accentColor, homeSlug, industry } = opts
+  const color = accentColor ?? "purple"
+  const home = homeSlug ? `/p/${homeSlug}` : "#"
+  const searchTerm = encodeURIComponent(industry || company)
+
+  const sections = parseArticleSections(body)
+  const introSection = sections[0]
+  const contentSections = sections.slice(1)
+
+  // Extract a pull quote from the middle of the article
+  const quoteSource = contentSections.length > 0 ? contentSections[Math.floor(contentSections.length / 2)].body : body
+  const pullQuote = extractPullQuote(quoteSource)
+
+  // Build the component array
+  const components: Record<string, unknown>[] = []
+
+  // 1. Navigation
+  components.push({
+    type: "SiteNavigation",
+    props: { logo: { text: company, url: home }, themeMode: "light", accentColor: color, links: [{ label: "Home", url: home }] },
+  })
+
+  // 2. Hero
+  components.push({
+    type: "Hero",
+    props: {
+      themeMode: "dark",
+      title,
+      subtitle: subtitle ?? "",
+      labelText: label ?? "ARTICLE",
+      labelColor: color,
+      backgroundColor: "#1a1a2e",
+      backgroundImage: `https://images.unsplash.com/photo-1560066984-138dadb4c035?w=1600&q=80`,
+      alignment: "center",
+      paddingY: "100px",
+    },
+  })
+
+  // 3. Intro section (if exists)
+  if (introSection) {
+    components.push({
+      type: "EditorialSection",
+      props: {
+        themeMode: "light",
+        backgroundColor: "#ffffff",
+        showTopRule: true,
+        headingSize: "lg",
+        paddingY: "48px",
+        maxWidth: "740px",
+        label: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }).toUpperCase(),
+        heading: introSection.heading || title,
+        body: introSection.body,
+      },
+    })
+  }
+
+  // 4. Feature image — side-by-side with a teaser
+  if (contentSections.length > 0) {
+    const firstContent = contentSections[0]
+    components.push({
+      type: "SplitContent",
+      props: {
+        themeMode: "light",
+        heading: firstContent.heading,
+        content: firstContent.body,
+        imageUrl: `https://images.unsplash.com/photo-1596462502278-27bfdc403348?w=800&q=80`,
+        imagePosition: "right",
+      },
+    })
+  }
+
+  // 5. Pull quote (if extracted)
+  if (pullQuote) {
+    components.push({
+      type: "QuoteBlock",
+      props: {
+        themeMode: "light",
+        quote: pullQuote,
+        attribution: company,
+        labelText: "INSIGHT",
+        labelColor: color,
+      },
+    })
+  }
+
+  // 6. Middle sections as editorial blocks with alternating themes
+  for (let i = 1; i < contentSections.length; i++) {
+    const section = contentSections[i]
+    const isEven = i % 2 === 0
+    components.push({
+      type: "EditorialSection",
+      props: {
+        themeMode: "light",
+        backgroundColor: isEven ? "#ffffff" : "#f9fafb",
+        showTopRule: false,
+        headingSize: "md",
+        paddingY: "40px",
+        maxWidth: "740px",
+        stepNumber: String(i + 1),
+        accentColor: color,
+        heading: section.heading,
+        body: section.body,
+      },
+    })
+
+    // Insert an image after the second content section
+    if (i === 1) {
+      components.push({
+        type: "ImageBlock",
+        props: {
+          themeMode: "light",
+          imageUrl: `https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=1200&q=80`,
+          alt: `${company} — ${section.heading || industry || "beauty"}`,
+          caption: `Photo: ${company}`,
+          maxWidth: "740px",
+        },
+      })
+    }
+  }
+
+  // 7. Stats counter — industry stats add credibility
+  components.push({
+    type: "StatsCounter",
+    props: {
+      themeMode: "dark",
+      accentColor: color,
+      stats: [
+        { value: "$580B", label: "Global Beauty Market (2026)" },
+        { value: "73%", label: "Consumers Want Sustainable Products" },
+        { value: "4.2x", label: "ROI on Content Marketing" },
+      ],
+    },
+  })
+
+  // 8. Key takeaways as feature grid
+  const takeaways = contentSections.slice(0, 3).map((s, idx) => ({
+    icon: ["sparkles", "leaf", "cpu"][idx % 3],
+    title: s.heading || `Trend ${idx + 1}`,
+    description: s.body.split(".")[0].replace(/\*\*/g, "").trim() + ".",
+    accentColor: ["#ec4899", "#10b981", "#6366f1"][idx % 3],
+  }))
+
+  if (takeaways.length > 0) {
+    components.push({
+      type: "FeatureGrid",
+      props: {
+        themeMode: "light",
+        title: "Key Takeaways",
+        subtitle: `The trends shaping ${company}'s future`,
+        labelText: "SUMMARY",
+        columns: Math.min(takeaways.length, 3),
+        accentColor: color,
+        features: takeaways,
+      },
+    })
+  }
+
+  // 9. Newsletter signup
+  components.push({
+    type: "NewsletterSignup",
+    props: {
+      themeMode: "light",
+      heading: `${company} Newsletter`,
+      subheading: `Stay up to date with the latest from ${company}. Fresh articles delivered automatically.`,
+      buttonText: "Subscribe",
+      backgroundColor: "#fdf2f8",
+      accentColor: "#ec4899",
+    },
+  })
+
+  // 10. Footer
+  components.push({
+    type: "SiteFooter",
+    props: { companyName: company, themeMode: "light", links: [{ label: "Home", url: home }], copyright: `${new Date().getFullYear()} ${company}` },
+  })
+
+  return { components }
+}
+
+function slugifyArticle(title: string): string {
+  const d = new Date()
+  const datePart = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+  return `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60)}-${datePart}`
+}
+
+/**
+ * Fetch brand design tokens by slug — the canonical source for logo, colors, typography, nav.
+ * Returns null if brand doesn't exist or has no design tokens.
+ */
+async function fetchBrandTokens(brandSlug: string): Promise<Record<string, any> | null> {
+  try {
+    // Search brands by slug
+    const res = await irisFetch(`/api/v1/brands?per_page=50`)
+    if (!res.ok) return null
+    const bd = (await res.json()) as { data?: any[] | { data?: any[] } }
+    const brands: any[] = Array.isArray(bd.data) ? bd.data : (bd.data as any)?.data ?? []
+    const brand = brands.find((b: any) => b.slug === brandSlug)
+    if (!brand) return null
+    const dt = brand.metadata?.design_tokens
+    if (!dt || Object.keys(dt).length === 0) return null
+    return dt
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Build SiteNavigation props from brand design tokens.
+ */
+function brandTokensToNav(tokens: Record<string, any>, homeSlug: string): Record<string, unknown> {
+  const logo = tokens.logo ?? {}
+  const brand = tokens.brand ?? {}
+  const colors = tokens.colors ?? {}
+  const nav = tokens.navigation ?? {}
+  return {
+    themeMode: "light",
+    logo: {
+      text: brand.name ?? "",
+      accentDot: true,
+      imageUrl: logo.url ?? "",
+      textColor: colors.primary ?? "#000",
+    },
+    links: [{ label: "Home", url: `/p/${homeSlug}` }],
+    ctaButton: nav.ctaText ? { text: nav.ctaText, url: nav.ctaUrl ?? "#" } : undefined,
+    ctaColor: nav.ctaColor ?? colors.primary,
+    ctaFilled: true,
+    ctaTextColor: nav.ctaTextColor ?? "#FFFFFF",
+    transparent: false,
+    linkColor: nav.linkColor ?? colors.text ?? "#1A1418",
+    textColor: nav.textColor ?? colors.text ?? "#1A1418",
+    backgroundColor: nav.backgroundColor ?? colors.background ?? "#ffffff",
+    hideThemeToggle: nav.hideThemeToggle ?? true,
+  }
+}
+
+/**
+ * Build SiteFooter props from brand design tokens.
+ */
+function brandTokensToFooter(tokens: Record<string, any>, homeSlug: string): Record<string, unknown> {
+  const brand = tokens.brand ?? {}
+  return {
+    companyName: brand.name ?? "",
+    themeMode: "light",
+    links: [{ label: "Home", url: `/p/${homeSlug}` }],
+    copyright: `${new Date().getFullYear()} ${brand.name ?? ""}${brand.region ? ` — ${brand.region}` : ""}`,
+  }
+}
+
+/**
+ * Fallback: look up existing Genesis home page and extract SiteNavigation + SiteFooter props.
+ */
+async function fetchPageChrome(homeSlug: string): Promise<{ nav?: Record<string, unknown>; footer?: Record<string, unknown> } | null> {
+  try {
+    const res = await irisFetch(`/api/v1/pages?per_page=200`)
+    if (!res.ok) return null
+    const pd = (await res.json()) as { data?: { data?: any[] } }
+    const pages = pd?.data?.data ?? pd?.data ?? []
+    if (!Array.isArray(pages)) return null
+    const homePage = pages.find((p: any) => p.slug === homeSlug)
+    if (!homePage) return null
+
+    const pageRes = await irisFetch(`/api/v1/pages/${homePage.id}`)
+    if (!pageRes.ok) return null
+    const pageData = (await pageRes.json()) as { data?: any }
+    const page = pageData?.data ?? pageData
+    let jc = page.json_content
+    if (typeof jc === "string") try { jc = JSON.parse(jc) } catch { return null }
+    if (!jc?.components) return null
+
+    const nav = jc.components.find((c: any) => c.type === "SiteNavigation")
+    const footer = jc.components.find((c: any) => c.type === "SiteFooter")
+    return { nav: nav?.props, footer: footer?.props }
+  } catch {
+    return null
+  }
+}
+
+async function createArticlePage(opts: {
+  company: string; title: string; body: string; bloqId: number;
+  seoDescription?: string; accentColor?: string; homeSlug?: string; industry?: string;
+}): Promise<{ id: number; slug: string; url: string } | null> {
+  const slug = slugifyArticle(opts.title)
+  const subtitle = opts.body.split("\n").find((l) => l.trim().length > 20 && !l.startsWith("#"))?.trim().slice(0, 160) ?? ""
+
+  // 1. Try brand kit design tokens (canonical source for logo, colors, nav)
+  // 2. Fall back to existing Genesis home page chrome
+  let navProps: Record<string, unknown> | undefined
+  let footerProps: Record<string, unknown> | undefined
+  let brandColors: Record<string, string> | undefined
+
+  if (opts.homeSlug) {
+    const tokens = await fetchBrandTokens(opts.homeSlug)
+    if (tokens?.logo?.url) {
+      navProps = brandTokensToNav(tokens, opts.homeSlug)
+      footerProps = brandTokensToFooter(tokens, opts.homeSlug)
+      brandColors = tokens.colors
+      // Use brand accent color if not explicitly set
+      if (!opts.accentColor && tokens.colors?.accent) opts.accentColor = tokens.colors.accent
+    } else {
+      // Fallback: clone from existing home page
+      const chrome = await fetchPageChrome(opts.homeSlug)
+      if (chrome?.nav) navProps = chrome.nav
+      if (chrome?.footer) footerProps = chrome.footer
+    }
+  }
+
+  const pageJson = buildArticlePageJson({
+    company: opts.company,
+    title: opts.title,
+    subtitle,
+    body: opts.body,
+    accentColor: opts.accentColor,
+    homeSlug: opts.homeSlug,
+    industry: opts.industry,
+  })
+
+  // Override nav/footer with brand-sourced props
+  const comps = (pageJson as any).components as any[]
+  if (navProps) {
+    const navIdx = comps.findIndex((c: any) => c.type === "SiteNavigation")
+    if (navIdx >= 0) comps[navIdx].props = navProps
+  }
+  if (footerProps) {
+    const footerIdx = comps.findIndex((c: any) => c.type === "SiteFooter")
+    if (footerIdx >= 0) comps[footerIdx].props = footerProps
+  }
+
+  const payload = {
+    slug,
+    title: opts.title,
+    seo_title: `${opts.title} | ${opts.company}`,
+    seo_description: opts.seoDescription ?? subtitle.slice(0, 160),
+    status: "published",
+    owner_type: "bloq",
+    owner_id: opts.bloqId,
+    json_content: pageJson,
+  }
+
+  const res = await irisFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
+  if (!res.ok) return null
+  const data = (await res.json()) as { data?: any }
+  const page = data?.data ?? data
+  // Auto-publish if created as draft
+  if (page.status === "draft" && page.id) {
+    await irisFetch(`/api/v1/pages/${page.id}`, { method: "PUT", body: JSON.stringify({ status: "published" }) }).catch(() => {})
+  }
+  return { id: page.id, slug: page.slug, url: page.public_url ?? `https://heyiris.io/p/${page.slug}` }
+}
+
+const ContentEnginePublishCommand = cmd({
+  command: "publish <id>",
+  describe: "convert unpublished bloq articles into Genesis pages",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
+      .option("accent-color", { describe: "page accent color", type: "string", default: "blue" })
+      .option("all", { describe: "publish all unpublished articles", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("Content Engine Publish")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const resolved = await resolveLeadId(String(args.id))
+    if (!resolved) { prompts.outro("Done"); return }
+    const { leadId, lead } = resolved
+    const userId = await resolveUserId()
+    if (!userId) { prompts.log.error("Could not resolve user ID"); prompts.outro("Done"); return }
+
+    const name = lead.name ?? lead.first_name ?? `Lead #${leadId}`
+    const company = lead.company ?? name
+
+    // Resolve bloq (same fallback as create)
+    let bloqIds: number[] = Array.isArray(lead.bloq_ids) ? lead.bloq_ids : lead.bloq_id ? [lead.bloq_id] : []
+    if (bloqIds.length === 0) {
+      try {
+        const searchRes = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(lead.email ?? name)}&per_page=5`)
+        if (searchRes.ok) {
+          const sd = (await searchRes.json()) as { data?: any[] }
+          const match = (sd?.data ?? []).find((l: any) => l.id === leadId)
+          if (match?.bloq_ids) bloqIds = match.bloq_ids.filter((id: number) => id !== 40)
+          if (bloqIds.length === 0 && match?.bloq_ids) bloqIds = match.bloq_ids
+        }
+      } catch {}
+    }
+    if (bloqIds.length === 0) {
+      prompts.log.error("No bloq found for this lead")
+      prompts.outro("Done")
+      return
+    }
+    const bloqId = bloqIds[0]
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching bloq articles…")
+
+    try {
+      // Fetch bloq with items
+      const bloqRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}`)
+      if (!(await handleApiError(bloqRes, "Fetch bloq"))) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const bloqData = (await bloqRes.json()) as { data?: any }
+      const bloq = bloqData?.data?.bloq ?? bloqData?.data ?? bloqData
+      const lists: any[] = bloq.lists ?? bloqData?.data?.lists ?? []
+
+      // Collect all items from Agent Deliverables and other content lists
+      const items: any[] = []
+      for (const list of lists) {
+        const listName = (list.name ?? "").toLowerCase()
+        if (listName.includes("deliverable") || listName.includes("article") || listName.includes("content") || listName.includes("completed")) {
+          for (const item of list.items ?? []) {
+            if (item.content && item.title) items.push(item)
+          }
+        }
+      }
+
+      // Fetch existing pages for this bloq to avoid duplicates
+      const pagesRes = await irisFetch(`/api/v1/pages?per_page=200`)
+      let existingPageSlugs: string[] = []
+      if (pagesRes.ok) {
+        const pd = (await pagesRes.json()) as { data?: { data?: any[] } }
+        const allPages = pd?.data?.data ?? pd?.data ?? []
+        if (Array.isArray(allPages)) {
+          existingPageSlugs = allPages.map((p: any) => p.slug ?? "").filter(Boolean)
+        }
+      }
+
+      // Filter to unpublished items (no matching page slug)
+      const unpublished = items.filter((item) => {
+        const wouldSlug = slugifyArticle(item.title)
+        return !existingPageSlugs.some((s) => s.includes(wouldSlug.split("-").slice(0, 3).join("-")))
+      })
+
+      spinner.stop(`${items.length} articles found, ${unpublished.length} unpublished`)
+
+      if (unpublished.length === 0) {
+        prompts.log.info("All articles already have Genesis pages")
+        prompts.outro("Done")
+        return
+      }
+
+      const toPublish = args.all ? unpublished : unpublished.slice(0, 1)
+      const homeSlug = slugify(company)
+      const results: any[] = []
+
+      for (const item of toPublish) {
+        const pubSpinner = prompts.spinner()
+        pubSpinner.start(`Publishing "${item.title.slice(0, 50)}…"`)
+
+        const page = await createArticlePage({
+          company,
+          title: item.title,
+          body: item.content,
+          bloqId,
+          accentColor: args["accent-color"],
+          homeSlug,
+        })
+
+        if (page) {
+          pubSpinner.stop(`${success("Published:")} ${page.url}`)
+          results.push(page)
+        } else {
+          pubSpinner.stop(`${UI.Style.TEXT_DANGER}Failed${UI.Style.TEXT_NORMAL} — ${item.title.slice(0, 50)}`)
+        }
+      }
+
+      if (args.json) {
+        console.log(JSON.stringify(results, null, 2))
+      } else if (results.length > 0) {
+        console.log()
+        for (const r of results) {
+          printKV("Page", `#${r.id} ${r.url}`)
+        }
+        printDivider()
+      }
+
+      prompts.outro(results.length > 0 ? success(`${results.length} page(s) published`) : "Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LeadsContentEngineCommand = cmd({
+  command: "content-engine <command>",
+  aliases: ["ce"],
+  describe: "manage content engines (auto-article agents) for leads",
+  builder: (yargs) =>
+    yargs
+      .command(ContentEngineCreateCommand)
+      .command(ContentEngineStatusCommand)
+      .command(ContentEngineDoctorCommand)
+      .command(ContentEnginePublishCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -5477,6 +6770,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsKBCommand)
       .command(LeadsPulseAllCommand)
       .command(LeadsDispositionCommand)
+      .command(LeadsContentEngineCommand)
       .demandCommand(),
   async handler() {},
 })
