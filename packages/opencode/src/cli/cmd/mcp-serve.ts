@@ -221,7 +221,7 @@ export const McpServeCommand = cmd({
     buildCommandCatalog()
 
     const server = new Server(
-      { name: "iris-gateway", version: "1.0.0" },
+      { name: "IRIS OS", version: "1.0.0" },
       { capabilities: { resources: {}, tools: {} } },
     )
 
