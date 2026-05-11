@@ -2064,12 +2064,15 @@ const LeadsPulseCommand = cmd({
         const dealS = sigs.deal_health?.score
         const cfgS = sigs.config?.score
         const fmt = (v: number | null | undefined) => (v === null || v === undefined ? dim("—") : `${v}/100`)
+        const kbSig = sigs.knowledge_completeness
+        const kbLabel = kbSig ? `KB ${kbSig.docs_count ?? 0}/${kbSig.docs_total ?? 8} docs (${fmt(kbSig.score)})` : `KB ${dim("—")}`
         const sigLine = [
           `req ${fmt(reqS)}`,
           `live ${fmt(liveS)}`,
           `comms ${fmt(commsS)}`,
           `deal ${fmt(dealS)}`,
           `cfg ${fmt(cfgS)}`,
+          kbLabel,
         ].join(dim(" · "))
         printKV("Signals", sigLine)
       }
@@ -4827,6 +4830,134 @@ const LeadsGateAllCommand = cmd({
 })
 
 // ============================================================================
+// kb — Lead Knowledge Base (AI-generated sales intelligence docs)
+// ============================================================================
+
+const LeadsKBCommand = cmd({
+  command: "kb <id>",
+  describe: "view or generate AI knowledge base docs for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("section", { alias: "s", describe: "show full content of one section", type: "string" })
+      .option("generate", { alias: "g", describe: "generate all 8 KB sections", type: "boolean", default: false })
+      .option("regenerate", { alias: "r", describe: "regenerate one section (by slug)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const leadId = args.id as number
+
+    // --generate: dispatch async generation
+    if (args.generate) {
+      const spinner = prompts.spinner()
+      spinner.start("Dispatching KB generation...")
+      try {
+        const res = await irisFetch(`/api/v1/leads/${leadId}/knowledge-base/generate`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        })
+        if (res.ok) {
+          spinner.stop(success("KB generation queued — check back in ~30s"))
+        } else {
+          spinner.stop("Failed to dispatch", 1)
+        }
+      } catch {
+        spinner.stop("Error", 1)
+      }
+      return
+    }
+
+    // --regenerate: regenerate one section
+    if (args.regenerate) {
+      const spinner = prompts.spinner()
+      spinner.start(`Regenerating ${args.regenerate}...`)
+      try {
+        const res = await irisFetch(`/api/v1/leads/${leadId}/knowledge-base/${args.regenerate}/regenerate`, {
+          method: "POST",
+        })
+        if (res.ok) {
+          const body = (await res.json()) as any
+          spinner.stop(success(`Regenerated: ${body?.data?.title ?? args.regenerate}`))
+        } else {
+          const err = await res.json().catch(() => ({})) as any
+          spinner.stop(err?.error ?? "Regeneration failed", 1)
+        }
+      } catch {
+        spinner.stop("Error", 1)
+      }
+      return
+    }
+
+    // Default: list all KB docs
+    const spinner = prompts.spinner()
+    spinner.start("Loading knowledge base...")
+
+    try {
+      const res = await irisFetch(`/api/v1/leads/${leadId}/knowledge-base`)
+      if (!res.ok) {
+        spinner.stop("Failed to load KB", 1)
+        return
+      }
+
+      const body = (await res.json()) as any
+      const docs: any[] = body?.data ?? []
+      const completeness = body?.completeness ?? { count: docs.length, total: 8 }
+
+      spinner.stop(`${completeness.count}/${completeness.total} sections`)
+
+      if (args.json) {
+        console.log(JSON.stringify(body, null, 2))
+        return
+      }
+
+      if (docs.length === 0) {
+        console.log()
+        console.log(`  ${dim("No KB docs yet.")}  Run: ${highlight(`iris leads kb ${leadId} --generate`)}`)
+        return
+      }
+
+      // --section: show one section's full content
+      if (args.section) {
+        const doc = docs.find((d: any) => d.description === args.section)
+        if (!doc) {
+          console.log(`  ${dim(`Section "${args.section}" not found.`)}`)
+          console.log(`  ${dim("Available:")} ${docs.map((d: any) => d.description).join(", ")}`)
+          return
+        }
+        console.log()
+        console.log(bold(`  ${doc.title}`))
+        console.log()
+        console.log(doc.content)
+        return
+      }
+
+      // Summary table
+      console.log()
+      const sections = body?.sections ?? {}
+      const allSlugs = Object.keys(sections)
+
+      for (const slug of allSlugs) {
+        const doc = docs.find((d: any) => d.description === slug)
+        if (doc) {
+          const words = (doc.content ?? "").split(/\s+/).length
+          const date = doc.updated_at ? new Date(doc.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""
+          console.log(`  ${success("\u2713")} ${sections[slug].padEnd(25)} ${dim(`${words} words`)}  ${dim(date)}`)
+        } else {
+          console.log(`  ${dim("\u2717")} ${dim((sections[slug] ?? slug).padEnd(25))} ${dim("missing")}`)
+        }
+      }
+      console.log()
+      prompts.outro(dim(`iris leads kb ${leadId} --section icp  \u00b7  iris leads kb ${leadId} --generate`))
+    } catch (e: any) {
+      spinner.stop("Error", 1)
+      console.error(e.message)
+    }
+  },
+})
+
+// ============================================================================
 // pulse-all — bulk pulse scorecard for all Won leads
 // ============================================================================
 
@@ -4897,6 +5028,7 @@ const LeadsPulseAllCommand = cmd({
         daysUntil: number | null
         totalPaid: number
         proposalUrl: string | null
+        kbCount: number
       }
       const rows: PulseRow[] = []
 
@@ -4973,6 +5105,7 @@ const LeadsPulseAllCommand = cmd({
             daysUntil,
             totalPaid: stripe.total_paid ?? 0,
             proposalUrl: deal?.proposal_url ?? null,
+            kbCount: sigs.knowledge_completeness?.docs_count ?? 0,
           })
         } catch {
           rows.push({
@@ -4995,6 +5128,7 @@ const LeadsPulseAllCommand = cmd({
             daysUntil: null,
             totalPaid: 0,
             proposalUrl: null,
+            kbCount: 0,
           })
         }
       }
@@ -5130,10 +5264,16 @@ const LeadsPulseAllCommand = cmd({
       const healthy = rows.filter((r) => r.band === "healthy").length
       const failing = rows.filter((r) => r.band === "failing").length
 
+      const kbComplete = rows.filter((r) => r.kbCount >= 8).length
+      const kbMissing = rows.filter((r) => r.kbCount === 0).length
+
       console.log()
       console.log(`  ${bold("Health")}`)
       console.log(
         `  Avg Pulse: ${avgPulse}/100  |  ${success(`${healthy} healthy`)}  ${UI.Style.TEXT_DANGER}${failing} failing${UI.Style.TEXT_NORMAL}`,
+      )
+      console.log(
+        `  KB: ${success(`${kbComplete} complete`)}  ${kbMissing > 0 ? `${UI.Style.TEXT_WARNING}${kbMissing} missing${UI.Style.TEXT_NORMAL}` : dim("0 missing")}  ${dim(`(iris leads kb <id> --generate)`)}`,
       )
 
       // Hydration summary
@@ -5257,6 +5397,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsRequirementsCommand)
       .command(LeadsEnrichCommand)
       .command(LeadsGateAllCommand)
+      .command(LeadsKBCommand)
       .command(LeadsPulseAllCommand)
       .demandCommand(),
   async handler() {},
