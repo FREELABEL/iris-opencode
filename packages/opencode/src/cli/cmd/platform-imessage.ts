@@ -315,8 +315,9 @@ const ImessageSendCommand = cmd({
     if (digits.length === 10) handle = `+1${digits}`
     else if (digits.length === 11 && digits.startsWith("1")) handle = `+${digits}`
 
-    // Escape message for AppleScript — replace backslashes and double quotes
-    const escapedMessage = args.message
+    // Clean up stray backslash escapes from upstream (MCP/shell) then escape for AppleScript
+    const cleanMessage = args.message.replace(/\\([^\\])/g, "$1")
+    const escapedMessage = cleanMessage
       .replace(/\\/g, "\\\\")
       .replace(/"/g, '\\"')
 
@@ -336,7 +337,7 @@ end tell`
         timeout: 15000,
       })
       sp.stop(success(`Sent to ${handle}`))
-      console.log(`  ${dim(args.message.length > 100 ? args.message.slice(0, 100) + "…" : args.message)}`)
+      console.log(`  ${dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)}`)
       prompts.outro("Done")
     } catch (err: any) {
       sp.stop("Failed", 1)
