@@ -121,6 +121,7 @@ import { PlatformAutomationTestCommand } from "./cli/cmd/platform-automation-tes
 import { HowToCommand } from "./cli/cmd/platform-howto"
 import { PlatformClaudeCommand } from "./cli/cmd/platform-claude"
 import { PlatformArticleQaCommand } from "./cli/cmd/platform-article-qa"
+import { PlatformMsgCommand } from "./cli/cmd/platform-msg"
 import { GuideCommand } from "./cli/cmd/guide"
 import { registerCommand } from "./cli/cmd/command-groups"
 import { renderGroupedHelp } from "./cli/help-renderer"
@@ -308,6 +309,7 @@ const cli = yargs(rawArgs)
   .command(reg(HowToCommand))
   .command(reg(PlatformClaudeCommand))
   .command(reg(PlatformArticleQaCommand))
+  .command(reg(PlatformMsgCommand))
   .fail((msg) => {
     if (
       msg.startsWith("Unknown argument") ||

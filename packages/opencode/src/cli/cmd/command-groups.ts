@@ -146,6 +146,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   profile: "entities",
 
   // Communication
+  msg: "communication",
   obs: "communication",
   phone: "communication",
   voice: "communication",

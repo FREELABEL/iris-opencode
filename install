@@ -1398,10 +1398,13 @@ fi
 echo -e "${MUTED}  Sending verification code...${NC}"
 SEND_RESP=$(curl -s --max-time 15 -X POST "$API_BASE/api/v1/auth/send-login-code" \
     -H "Content-Type: application/json" -H "Accept: application/json" \
-    --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false}')
+    --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false,"error":"Network error — check your connection"}')
 SEND_OK=$(json_field "$SEND_RESP" "success")
 if [ "$SEND_OK" != "True" ] && [ "$SEND_OK" != "true" ]; then
-    echo -e "${RED}  Failed to send code.${NC} Sign up at: ${CYAN}https://web.heyiris.io/login/register${NC}"
+    SEND_ERR=$(json_field "$SEND_RESP" "error")
+    [ -z "$SEND_ERR" ] && SEND_ERR="Unknown error"
+    echo -e "${RED}  Failed to send code:${NC} $SEND_ERR"
+    echo -e "  ${MUTED}Sign up at:${NC} ${CYAN}https://web.heyiris.io/login/register${NC}"
     exit 1
 fi
 IS_NEW=$(json_nested "$SEND_RESP" "data.new_account")
@@ -1412,10 +1415,12 @@ else
 fi
 echo -n "  Enter the 6-digit code: "
 read -r CODE || CODE=""
+# Strip all whitespace (spaces, tabs, non-breaking spaces from email copy-paste)
+CODE=$(echo "$CODE" | tr -d '[:space:]')
 if [ -z "$CODE" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
 
 echo -e "${MUTED}  Verifying...${NC}"
-LOGIN_RESP=$(curl -s --max-time 15 -X POST "$API_BASE/api/v1/auth/login-with-code" \
+LOGIN_RESP=$(curl -s --max-time 15 -w '\n{"_http_status":%{http_code}}' -X POST "$API_BASE/api/v1/auth/login-with-code" \
     -H "Content-Type: application/json" -H "Accept: application/json" \
     --data-raw "{
         \"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\",
@@ -1424,10 +1429,13 @@ LOGIN_RESP=$(curl -s --max-time 15 -X POST "$API_BASE/api/v1/auth/login-with-cod
         \"sdk_token_name\": \"IRIS CLI\",
         \"sdk_token_expires_days\": 365,
         \"generate_dashboard_url\": true
-    }" 2>/dev/null || echo '{"success":false}')
+    }" 2>/dev/null || echo '{"success":false,"error":"Network error — check your connection"}')
 LOGIN_OK=$(json_field "$LOGIN_RESP" "success")
 if [ "$LOGIN_OK" != "True" ] && [ "$LOGIN_OK" != "true" ]; then
-    echo -e "${RED}  Login failed.${NC} Code may have expired — run ${CYAN}iris-login${NC} to try again."
+    LOGIN_ERR=$(json_field "$LOGIN_RESP" "error")
+    [ -z "$LOGIN_ERR" ] && LOGIN_ERR="Code may have expired"
+    echo -e "${RED}  Login failed:${NC} $LOGIN_ERR"
+    echo -e "  ${MUTED}Run ${NC}${CYAN}iris-login${NC}${MUTED} to try again.${NC}"
     exit 1
 fi
 
@@ -2245,6 +2253,8 @@ if [ "$tty_available" = "true" ] && [ -z "$pre_token" ] && [ "$AUTH_SUCCESS" != 
             echo -e ""
             echo -n "  Enter the 6-digit code: "
             read -r VERIFY_CODE < /dev/tty || VERIFY_CODE=""
+            # Strip all whitespace (spaces, tabs, non-breaking spaces from email copy-paste)
+            VERIFY_CODE=$(echo "$VERIFY_CODE" | tr -d '[:space:]')
 
             # Validate code format
             if [ -n "$VERIFY_CODE" ] && ! [[ "$VERIFY_CODE" =~ ^[0-9]{4,8}$ ]]; then
@@ -2374,47 +2384,12 @@ if [ "$AUTH_SUCCESS" = "true" ] && [ -n "$SDK_TOKEN" ] && [ "$tty_available" = "
 
         if [ -n "$DEVICE_ID" ]; then
             PRICING_URL="https://web.heyiris.io/pricing?source=cli&device_id=$DEVICE_ID"
-            POLL_URL="https://raichu.heyiris.io/api/v1/cli/auth/poll?device_id=$DEVICE_ID"
 
             echo -e ""
             echo -e "${CYAN}One more step — pick a plan${NC}"
             echo -e "  ${MUTED}You're authenticated as${NC} ${USER_EMAIL:-your account}${MUTED}, but you don't have an active subscription yet.${NC}"
-            echo -e "  ${MUTED}Opening your browser...${NC}"
-            echo -e "  ${MUTED}If it doesn't open, visit:${NC} ${CYAN}${PRICING_URL}${NC}"
-
-            if command -v open >/dev/null 2>&1; then
-                open "$PRICING_URL" >/dev/null 2>&1 || true
-            elif command -v xdg-open >/dev/null 2>&1; then
-                xdg-open "$PRICING_URL" >/dev/null 2>&1 || true
-            elif command -v start >/dev/null 2>&1; then
-                start "$PRICING_URL" >/dev/null 2>&1 || true
-            fi
-
-            echo -e "  ${MUTED}Waiting for subscription activation (up to 10 minutes — Ctrl+C to skip)...${NC}"
-
-            POLL_ATTEMPTS=300
-            i=0
-            SUB_CONFIRMED=false
-            while [ "$i" -lt "$POLL_ATTEMPTS" ]; do
-                POLL_RESPONSE=$(curl -s --max-time 10 -w '\n%{http_code}' "$POLL_URL" 2>/dev/null || printf '\n0')
-                POLL_STATUS=$(printf '%s' "$POLL_RESPONSE" | tail -n1)
-
-                if [ "$POLL_STATUS" = "200" ]; then
-                    # Webhook fired — subscription is active. Discard the second
-                    # token (we already have one from email/code), just confirm.
-                    SUB_CONFIRMED=true
-                    echo -e "  ${GREEN}Subscription active. Welcome to IRIS.${NC}"
-                    break
-                fi
-
-                sleep 2
-                i=$((i + 1))
-            done
-
-            if [ "$SUB_CONFIRMED" != "true" ]; then
-                echo -e "  ${MUTED}No subscription detected yet. You can finish payment later — your CLI is authenticated.${NC}"
-                echo -e ""
-            fi
+            echo -e "  ${MUTED}Visit:${NC} ${CYAN}${PRICING_URL}${NC}"
+            echo -e ""
         fi
     elif [ "$SUB_ACTIVE" = "true" ] || [ "$SUB_ACTIVE" = "True" ] || [ "$SUB_ACTIVE" = "1" ]; then
         echo -e "  ${MUTED}Active subscription detected — skipping payment step.${NC}"

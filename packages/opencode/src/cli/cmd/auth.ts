@@ -274,18 +274,35 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
       }),
       signal: AbortSignal.timeout(15_000),
     })
-    const sendData = (await sendRes.json()) as any
-    const ok = sendData?.success === true || sendData?.success === "True"
+    const sendBody = await sendRes.text()
+    let sendData: any
+    try {
+      sendData = JSON.parse(sendBody)
+    } catch {
+      spinner.stop("Failed", 1)
+      prompts.log.error(`Unexpected response (HTTP ${sendRes.status}): ${sendBody.slice(0, 200)}`)
+      return false
+    }
+    const ok = sendData?.success === true || sendData?.success === "True" || sendData?.success === "true"
     if (!ok) {
       spinner.stop("Failed", 1)
-      prompts.log.error("Could not send code. Sign up at: https://web.heyiris.io/login/register")
+      const detail = sendData?.error || sendData?.message || `HTTP ${sendRes.status}`
+      prompts.log.error(`Could not send code: ${detail}`)
+      if (sendRes.status === 404) {
+        prompts.log.info("User not found. Sign up at: https://web.heyiris.io/login/register")
+      }
       return false
     }
     const isNew = sendData?.data?.new_account === true || sendData?.data?.new_account === "true"
     spinner.stop(isNew ? "Account created! Check your inbox." : "Code sent! Check your inbox.")
   } catch (e) {
     spinner.stop("Failed", 1)
-    prompts.log.error(`Network error: ${e instanceof Error ? e.message : String(e)}`)
+    const msg = e instanceof Error ? e.message : String(e)
+    if (msg.includes("abort") || msg.includes("timeout")) {
+      prompts.log.error("Request timed out — the email may still arrive. Check your inbox and run login again.")
+    } else {
+      prompts.log.error(`Network error: ${msg}`)
+    }
     return false
   }
 
@@ -302,12 +319,13 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
   const verifySpinner = prompts.spinner()
   verifySpinner.start("Verifying…")
   try {
+    const trimmedCode = String(code).trim().replace(/\s/g, "")
     const loginRes = await fetch(`${IRIS_AUTH_API}/api/v1/auth/login-with-code`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
         email,
-        login_code: String(code).trim(),
+        login_code: trimmedCode,
         generate_sdk_token: true,
         sdk_token_name: "IRIS CLI",
         sdk_token_expires_days: 365,
@@ -315,11 +333,20 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
       }),
       signal: AbortSignal.timeout(15_000),
     })
-    const loginData = (await loginRes.json()) as any
-    const loginOk = loginData?.success === true || loginData?.success === "True"
+    const loginBody = await loginRes.text()
+    let loginData: any
+    try {
+      loginData = JSON.parse(loginBody)
+    } catch {
+      verifySpinner.stop("Failed", 1)
+      prompts.log.error(`Unexpected response (HTTP ${loginRes.status}): ${loginBody.slice(0, 200)}`)
+      return false
+    }
+    const loginOk = loginData?.success === true || loginData?.success === "True" || loginData?.success === "true"
     if (!loginOk) {
       verifySpinner.stop("Failed", 1)
-      prompts.log.error("Login failed — code may have expired. Try again.")
+      const detail = loginData?.error || loginData?.message || `HTTP ${loginRes.status}`
+      prompts.log.error(`Login failed: ${detail}`)
       return false
     }
 
@@ -361,7 +388,12 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
     return true
   } catch (e) {
     verifySpinner.stop("Failed", 1)
-    prompts.log.error(`Network error: ${e instanceof Error ? e.message : String(e)}`)
+    const msg = e instanceof Error ? e.message : String(e)
+    if (msg.includes("abort") || msg.includes("timeout")) {
+      prompts.log.error("Verification timed out. Try again — your code is still valid for 30 minutes.")
+    } else {
+      prompts.log.error(`Network error: ${msg}`)
+    }
     return false
   }
 }
