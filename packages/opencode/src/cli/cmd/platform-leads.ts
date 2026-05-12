@@ -5550,6 +5550,7 @@ const ContentEngineCreateCommand = cmd({
         heartbeat_tools: CONTENT_ENGINE_CONFIG.heartbeat_tools,
         settings: {
           max_iterations: CONTENT_ENGINE_CONFIG.max_iterations,
+          model, // ensure model is in settings (HeartbeatExecutorService reads from here)
           system_prompt: prompt.system,
           initial_prompt: prompt.initial,
           heartbeat_tools: CONTENT_ENGINE_CONFIG.heartbeat_tools,
