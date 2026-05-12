@@ -533,6 +533,7 @@ const ListIntegrationsCommand = cmd({
 
 const ListConnectedCommand = cmd({
   command: "list-connected",
+  aliases: ["list", "ls"],
   describe: "show your connected integrations",
   builder: (y) => y.option("json", { type: "boolean" }),
   async handler(args) {
