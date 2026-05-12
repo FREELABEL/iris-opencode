@@ -300,7 +300,8 @@ export const McpServeCommand = cmd({
             return { content: [{ type: "text" as const, text: `${errMsg}${hint}` }], isError: true }
           }
 
-          return { content: [{ type: "text" as const, text: result.stdout || "(no output)" }] }
+          const text = [result.stdout, result.stderr].filter(Boolean).join("\n").trim() || "(no output)"
+          return { content: [{ type: "text" as const, text }] }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
           if (msg.includes("ENOENT") || msg.includes("not found")) {

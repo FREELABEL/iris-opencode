@@ -2089,6 +2089,20 @@ const LeadsPulseCommand = cmd({
         printKV("Signals", sigLine)
       }
 
+      // Onboarding progress — compact inline display
+      try {
+        const obRes = await irisFetch(`/api/v1/leads/${leadId}/onboarding`)
+        if (obRes.ok) {
+          const obData = ((await obRes.json()) as any)?.data
+          if (obData?.applied) {
+            const obPct = obData.percent ?? 0
+            const obColor = obPct >= 80 ? UI.Style.TEXT_SUCCESS : obPct >= 40 ? UI.Style.TEXT_WARNING : UI.Style.TEXT_DANGER
+            const nextLabel = obData.next_incomplete ? ` — Next: ${obData.next_incomplete}` : ""
+            printKV("Onboarding", `${obColor}${obData.completed}/${obData.total} (${obPct}%)${UI.Style.TEXT_NORMAL}${dim(nextLabel)}`)
+          }
+        }
+      } catch { /* non-fatal */ }
+
       // Duplicate detection — search for leads with same email/phone/name
       let duplicateLeadIds: number[] = []
       try {
@@ -5376,6 +5390,239 @@ const LeadsPulseAllCommand = cmd({
 })
 
 // ============================================================================
+// Onboarding Checklist — structured client setup tracking
+// ============================================================================
+
+const LeadsOnboardCommand = cmd({
+  command: "onboard <id>",
+  aliases: ["onboarding"],
+  describe: "show/manage onboarding checklist for a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "string", demandOption: true })
+      .option("apply", { describe: "apply default onboarding template", type: "boolean", default: false })
+      .option("sync", { describe: "auto-detect completed items", type: "boolean", default: false })
+      .option("check", { describe: "mark item N as complete", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) return
+
+    let leadId = Number(args.id)
+    if (isNaN(leadId)) {
+      const params = new URLSearchParams({ search: String(args.id), per_page: "5" })
+      const searchRes = await irisFetch(`/api/v1/leads?${params}`)
+      if (!searchRes.ok) { prompts.log.error("Search failed"); return }
+      const matches: any[] = ((await searchRes.json()) as any)?.data ?? []
+      if (matches.length === 0) { prompts.log.error(`No lead found for "${args.id}"`); return }
+      leadId = matches[0].id
+    }
+
+    const spinner = prompts.spinner()
+
+    // --apply: apply template first
+    if (args.apply) {
+      spinner.start("Applying onboarding checklist...")
+      const applyRes = await irisFetch(`/api/v1/leads/${leadId}/onboarding/apply`, { method: "POST" })
+      if (!(await handleApiError(applyRes, "Apply onboarding"))) { spinner.stop("Failed", 1); return }
+      const applyData = ((await applyRes.json()) as any)?.data
+      if (applyData?.already_applied) {
+        spinner.stop("Already applied")
+      } else {
+        spinner.stop(success("Onboarding checklist applied"))
+      }
+    }
+
+    // --sync: auto-detect completed items
+    if (args.sync) {
+      spinner.start("Syncing onboarding status...")
+      const syncRes = await irisFetch(`/api/v1/leads/${leadId}/onboarding/sync`, { method: "POST" })
+      if (!(await handleApiError(syncRes, "Sync onboarding"))) { spinner.stop("Failed", 1); return }
+      const syncData = ((await syncRes.json()) as any)?.data
+      spinner.stop(success(`Synced: ${syncData?.synced ?? 0} items auto-detected`))
+    }
+
+    // --check N: mark item complete
+    if (args.check !== undefined) {
+      spinner.start(`Marking item #${args.check} complete...`)
+      const checkRes = await irisFetch(`/api/v1/leads/${leadId}/onboarding/check/${args.check}`, { method: "POST" })
+      if (!(await handleApiError(checkRes, "Mark complete"))) { spinner.stop("Failed", 1); return }
+      spinner.stop(success(`Item #${args.check} marked complete`))
+    }
+
+    // Always show status
+    spinner.start("Loading onboarding status...")
+    const statusRes = await irisFetch(`/api/v1/leads/${leadId}/onboarding`)
+    if (!(await handleApiError(statusRes, "Get onboarding"))) { spinner.stop("Failed", 1); return }
+    const data = ((await statusRes.json()) as any)?.data
+
+    spinner.stop("")
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
+
+    if (!data?.applied) {
+      prompts.log.info(`No onboarding checklist applied for lead #${leadId}`)
+      console.log(dim(`  Apply: iris leads onboard ${leadId} --apply`))
+      return
+    }
+
+    // Fetch lead name
+    const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
+    const leadName = leadRes.ok ? ((await leadRes.json()) as any)?.data?.name ?? `Lead #${leadId}` : `Lead #${leadId}`
+
+    const pct = data.percent ?? 0
+    const filled = Math.round(pct / 10)
+    const bar = "=".repeat(filled) + "-".repeat(10 - filled)
+
+    console.log()
+    console.log(`  ${bold(`Onboarding: Lead #${leadId} — ${leadName}`)}`)
+    console.log(`  Progress: ${data.completed}/${data.total} (${pct}%) [${bar}]`)
+    console.log()
+
+    for (const item of data.items ?? []) {
+      const check = item.is_completed ? success("[x]") : "[ ]"
+      const orderStr = `${item.order}.`.padEnd(4)
+      const titleStr = item.title.padEnd(35)
+      let meta = ""
+      if (item.is_completed && item.completed_at) {
+        const d = new Date(item.completed_at)
+        meta = dim(`(auto  ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })})`)
+      } else if (item.due_date) {
+        const d = new Date(item.due_date)
+        const isOverdue = item.is_overdue
+        const label = `(${isOverdue ? "overdue " : "due "}${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })})`
+        meta = isOverdue ? `${UI.Style.TEXT_DANGER}${label}${UI.Style.TEXT_NORMAL}` : dim(label)
+      }
+      const next = !item.is_completed && item.title === data.next_incomplete ? `  ${highlight("<-- NEXT")}` : ""
+      console.log(`  ${check} ${orderStr}${titleStr} ${meta}${next}`)
+    }
+
+    console.log()
+    if (pct < 100) {
+      console.log(dim(`  Sync: iris leads onboard ${leadId} --sync`))
+      console.log(dim(`  Mark: iris leads onboard ${leadId} --check <n>`))
+    }
+    prompts.outro(dim(`iris leads pulse ${leadId}`))
+  },
+})
+
+const LeadsOnboardAllCommand = cmd({
+  command: "onboard-all",
+  aliases: ["onboarding-all"],
+  describe: "batch onboarding status for all Won leads",
+  builder: (yargs) =>
+    yargs
+      .option("status", { describe: "filter by status", type: "string", default: "Won" })
+      .option("apply", { describe: "batch-apply to leads missing checklist", type: "boolean", default: false })
+      .option("sync", { describe: "batch sync all applied checklists", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const spinner = prompts.spinner()
+    spinner.start(`Loading ${args.status} leads...`)
+
+    try {
+      const params = new URLSearchParams({ status: args.status, per_page: "200" })
+      const res = await irisFetch(`/api/v1/leads?${params}`)
+      if (!res.ok) { spinner.stop("Failed", 1); return }
+      const leads: any[] = ((await res.json()) as any)?.data ?? []
+      const eligible = leads.filter((l) => l.email && !l.email.endsWith("@instagram.com") && !l.email.endsWith("@twitter.com"))
+      spinner.stop(`${leads.length} ${args.status} leads (${eligible.length} eligible)`)
+
+      type OnboardRow = { id: number; name: string; completed: number; total: number; percent: number; nextAction: string; dueDate: string; applied: boolean }
+      const rows: OnboardRow[] = []
+
+      for (const lead of eligible) {
+        try {
+          // Apply if requested and not yet applied
+          if (args.apply) {
+            await irisFetch(`/api/v1/leads/${lead.id}/onboarding/apply`, { method: "POST" }).catch(() => null)
+          }
+          // Sync if requested
+          if (args.sync) {
+            await irisFetch(`/api/v1/leads/${lead.id}/onboarding/sync`, { method: "POST" }).catch(() => null)
+          }
+
+          const obRes = await irisFetch(`/api/v1/leads/${lead.id}/onboarding`).catch(() => null)
+          const obData = obRes?.ok ? ((await obRes.json()) as any)?.data : null
+
+          if (!obData?.applied) {
+            rows.push({ id: lead.id, name: (lead.name ?? `Lead #${lead.id}`).slice(0, 22), completed: 0, total: 0, percent: 0, nextAction: "[not applied]", dueDate: "--", applied: false })
+          } else {
+            const nextItem = (obData.items ?? []).find((i: any) => !i.is_completed)
+            const dueStr = nextItem?.due_date ? new Date(nextItem.due_date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "--"
+            const isOverdue = nextItem?.is_overdue
+            rows.push({
+              id: lead.id,
+              name: (lead.name ?? `Lead #${lead.id}`).slice(0, 22),
+              completed: obData.completed,
+              total: obData.total,
+              percent: obData.percent,
+              nextAction: nextItem?.title ?? "Complete",
+              dueDate: isOverdue ? `${dueStr} (overdue!)` : dueStr,
+              applied: true,
+            })
+          }
+        } catch {
+          rows.push({ id: lead.id, name: (lead.name ?? `Lead #${lead.id}`).slice(0, 22), completed: 0, total: 0, percent: 0, nextAction: "[error]", dueDate: "--", applied: false })
+        }
+      }
+
+      if (args.json) {
+        console.log(JSON.stringify(rows, null, 2))
+        return
+      }
+
+      console.log()
+      console.log(`  ${bold("Onboarding Scorecard")} ${dim(`— ${rows.length} ${args.status} leads`)}`)
+      console.log(dim("  " + "=".repeat(90)))
+      console.log(`  ${dim("ID".padEnd(8))}${"Name".padEnd(24)}${"Onboard".padEnd(10)}${"Progress".padEnd(10)}${"Next Action".padEnd(28)}${"Due"}`)
+      console.log(dim("  " + "-".repeat(90)))
+
+      for (const r of rows) {
+        const idStr = dim(`#${r.id}`.padEnd(8))
+        const nameStr = r.name.padEnd(24)
+        let onbStr: string
+        if (!r.applied) {
+          onbStr = dim("--".padEnd(10))
+        } else {
+          onbStr = `${r.completed}/${r.total}`.padEnd(10)
+        }
+        const pctColor = r.percent >= 80 ? UI.Style.TEXT_SUCCESS : r.percent >= 40 ? UI.Style.TEXT_WARNING : UI.Style.TEXT_DANGER
+        const pctStr = r.applied ? `${pctColor}${(r.percent + "%").padEnd(10)}${UI.Style.TEXT_NORMAL}` : dim("--".padEnd(10))
+        const nextStr = (r.applied ? r.nextAction : dim(r.nextAction)).toString().slice(0, 27).padEnd(28)
+        const dueStr = r.dueDate.includes("overdue") ? `${UI.Style.TEXT_DANGER}${r.dueDate}${UI.Style.TEXT_NORMAL}` : dim(r.dueDate)
+
+        console.log(`  ${idStr}${nameStr}${onbStr}${pctStr}${nextStr}${dueStr}`)
+      }
+
+      console.log(dim("  " + "-".repeat(90)))
+
+      const applied = rows.filter((r) => r.applied)
+      const notApplied = rows.filter((r) => !r.applied)
+      const avgPct = applied.length > 0 ? Math.round(applied.reduce((s, r) => s + r.percent, 0) / applied.length) : 0
+      console.log()
+      console.log(`  ${bold("Summary")}`)
+      console.log(`  Applied: ${applied.length}/${rows.length}  |  Avg progress: ${avgPct}%  |  Not applied: ${notApplied.length}`)
+
+      if (notApplied.length > 0 && !args.apply) {
+        console.log(`  ${dim("Run with --apply to batch-apply checklists to unapplied leads")}`)
+      }
+
+      console.log()
+      prompts.outro(dim("iris leads onboard <id>  ·  iris leads onboard-all --apply --sync"))
+    } catch (e: any) {
+      spinner.stop("Error", 1)
+      console.error(e.message)
+    }
+  },
+})
+
+// ============================================================================
 // Disposition command
 // ============================================================================
 
@@ -6776,6 +7023,8 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsGateAllCommand)
       .command(LeadsKBCommand)
       .command(LeadsPulseAllCommand)
+      .command(LeadsOnboardCommand)
+      .command(LeadsOnboardAllCommand)
       .command(LeadsDispositionCommand)
       .command(LeadsContentEngineCommand)
       .demandCommand(),
