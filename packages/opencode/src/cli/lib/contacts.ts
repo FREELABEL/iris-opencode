@@ -32,12 +32,18 @@ export async function resolveContactName(identifier: string): Promise<string | n
   const search = normalizeForSearch(identifier)
 
   try {
-    const res = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(search)}&per_page=1`)
+    const res = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(search)}&per_page=5`)
     if (res.ok) {
       const data = (await res.json()) as any
       const leads = data?.data?.data ?? data?.data ?? []
       if (Array.isArray(leads) && leads.length > 0) {
-        const name = leads[0].name ?? leads[0].first_name ?? null
+        // Prefer a lead whose name contains the search term (case-insensitive)
+        const searchLower = search.toLowerCase()
+        const nameMatch = leads.find((l: any) =>
+          (l.name || l.nickname || "").toLowerCase().includes(searchLower)
+        )
+        const lead = nameMatch ?? leads[0]
+        const name = lead.name ?? lead.nickname ?? lead.first_name ?? null
         cache.set(identifier, name)
         return name
       }

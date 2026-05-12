@@ -33,6 +33,7 @@ const ImessageSearchCommand = cmd({
     let normalized = isPhone ? normalizeHandle(args.query) : args.query
 
     // If not a phone number, try to resolve as lead name → phone or email (#58890)
+    let resolvedName: string | null = null
     if (!isPhone) {
       try {
         const { irisFetch: _fetch } = await import("./iris-api")
@@ -49,12 +50,14 @@ const ImessageSearchCommand = cmd({
               if (resolvedDigits.length >= 7) {
                 normalized = normalizeHandle(withPhone.phone)
                 isPhone = true
-                prompts.log.info(`Resolved "${args.query}" → ${withPhone.name || "?"} (${withPhone.phone})`)
+                resolvedName = withPhone.name || withPhone.nickname || null
+                prompts.log.info(`Resolved "${args.query}" → ${resolvedName || "?"} (${withPhone.phone})`)
               }
             } else if (withEmail) {
               // iMessage can use email as Apple ID handle
               normalized = withEmail.email
-              prompts.log.info(`Resolved "${args.query}" → ${withEmail.name || "?"} (${withEmail.email})`)
+              resolvedName = withEmail.name || withEmail.nickname || null
+              prompts.log.info(`Resolved "${args.query}" → ${resolvedName || "?"} (${withEmail.email})`)
             }
           }
         }
@@ -106,8 +109,8 @@ const ImessageSearchCommand = cmd({
         return
       }
 
-      // Resolve contact name from leads (#58888)
-      const contactName = await resolveContactName(digits || String(args.query)) ?? "Them"
+      // Use already-resolved name from lead lookup, or resolve from phone digits (#58888)
+      const contactName = resolvedName ?? await resolveContactName(digits || String(args.query)) ?? "Them"
 
       // Display in chronological order (oldest first)
       const reversed = [...messages].reverse()
