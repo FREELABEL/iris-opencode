@@ -44,6 +44,7 @@ const BloqsListCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("search", { alias: "s", describe: "search bloqs by name", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
@@ -61,6 +62,7 @@ const BloqsListCommand = cmd({
 
     try {
       const params = new URLSearchParams({ per_page: String(args.limit), simplified: "1" })
+      if (args.search) params.set("search", args.search)
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs?${params}`)
       if (!res.ok) {
         spinner.stop("Failed", 1)
@@ -70,8 +72,18 @@ const BloqsListCommand = cmd({
       }
 
       const data = (await res.json()) as { data?: any[] }
-      const bloqs: any[] = data?.data ?? []
-      spinner.stop(`${bloqs.length} bloq(s)`)
+      let bloqs: any[] = data?.data ?? []
+      // Client-side filter fallback if API doesn't support search param
+      if (args.search && bloqs.length > 0) {
+        const q = args.search.toLowerCase()
+        const filtered = bloqs.filter((b) => {
+          const name = String(b.name ?? "").toLowerCase()
+          const desc = String(b.description ?? "").toLowerCase()
+          return name.includes(q) || desc.includes(q)
+        })
+        if (filtered.length > 0) bloqs = filtered
+      }
+      spinner.stop(`${bloqs.length} bloq(s)${args.search ? ` matching "${args.search}"` : ""}`)
 
       if (args.json) {
         console.log(JSON.stringify(bloqs, null, 2))
