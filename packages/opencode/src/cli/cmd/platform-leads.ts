@@ -558,7 +558,8 @@ const LeadsSearchCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("query", { describe: "search query", type: "string", demandOption: true })
-      .option("limit", { describe: "max results", type: "number", default: 10 }),
+      .option("limit", { describe: "max results", type: "number", default: 10 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
 
@@ -628,6 +629,11 @@ const LeadsSearchCommand = cmd({
 
       const total = data?.meta?.total ?? leads.length
       spinner.stop(`${total} result(s)`)
+
+      if (args.json) {
+        console.log(JSON.stringify(leads, null, 2))
+        return
+      }
 
       if (leads.length === 0) {
         prompts.log.warn(`No leads matching "${args.query}"`)
@@ -4933,10 +4939,10 @@ const LeadsKBCommand = cmd({
 
       // --section: show one section's full content
       if (args.section) {
-        const doc = docs.find((d: any) => d.description === args.section)
+        const doc = docs.find((d: any) => d.section === args.section)
         if (!doc) {
           console.log(`  ${dim(`Section "${args.section}" not found.`)}`)
-          console.log(`  ${dim("Available:")} ${docs.map((d: any) => d.description).join(", ")}`)
+          console.log(`  ${dim("Available:")} ${docs.map((d: any) => d.section).join(", ")}`)
           return
         }
         console.log()
@@ -4952,7 +4958,7 @@ const LeadsKBCommand = cmd({
       const allSlugs = Object.keys(sections)
 
       for (const slug of allSlugs) {
-        const doc = docs.find((d: any) => d.description === slug)
+        const doc = docs.find((d: any) => d.section === slug)
         if (doc) {
           const words = (doc.content ?? "").split(/\s+/).length
           const date = doc.updated_at ? new Date(doc.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""
