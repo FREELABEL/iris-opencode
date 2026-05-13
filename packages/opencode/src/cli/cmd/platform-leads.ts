@@ -3605,7 +3605,7 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
       }
 
       // ── Recap: professional status update email for any lead with email ──
-      const RECAP_WINDOW_HOURS = 168 // 7 days
+      const RECAP_WINDOW_HOURS = 72 // 3 days
       if (email && !email.endsWith("@instagram.com") && !email.endsWith("@twitter.com")) {
         // Determine last outreach timestamp (same logic as hydrate)
         let lastRecapOutreach: Date | null = null
@@ -5642,7 +5642,7 @@ const LeadsPulseAllCommand = cmd({
       }
 
       // Recap summary + execution
-      const RECAP_WINDOW_HOURS = 168
+      const RECAP_WINDOW_HOURS = 72
       const recapReady = rows.filter((r) => r.recapEligible)
       if (recapReady.length > 0) {
         console.log()
