@@ -133,7 +133,7 @@ const RemoveMemberCommand = cmd({
 
 export const PlatformBloqMembersCommand = cmd({
   command: "bloq-members",
-  aliases: ["members", "team"],
+  aliases: ["members", "team", "share", "invite"],
   describe: "manage bloq team members and sharing permissions",
   builder: (yargs) =>
     yargs

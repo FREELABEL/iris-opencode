@@ -99,6 +99,8 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   bloq: "knowledge",
   "bloq-ingest": "knowledge",
   "bloq-members": "knowledge",
+  share: "knowledge",
+  invite: "knowledge",
   "how-to": "knowledge",
 
   // Pages & Publishing

@@ -21,7 +21,7 @@ let knownCommands: Set<string> = new Set()
 
 function buildCommandCatalog(): string {
   const commands = getRegistry()
-  knownCommands = new Set(commands.map((c) => c.name))
+  knownCommands = new Set(commands.flatMap((c) => [c.name, ...c.aliases]))
 
   const grouped: Record<string, typeof commands> = {}
   for (const cmd of commands) {
@@ -174,12 +174,13 @@ export function validateCommand(command: string): { args: string[]; error?: stri
     return { args }
   }
   if (knownCommands.size > 0 && !knownCommands.has(firstArg)) {
-    // Check aliases
-    const registry = getRegistry()
-    const match = registry.find((c) => c.aliases.includes(firstArg))
-    if (!match) {
-      return { args: [], error: `Unknown command "${firstArg}". Use iris_help to discover available commands, or read the iris://commands resource.` }
-    }
+    return { args: [], error: `Unknown command "${firstArg}". Use iris_help to discover available commands, or read the iris://commands resource.` }
+  }
+  // Rewrite alias to canonical command name so yargs resolves it
+  const registry = getRegistry()
+  const aliasMatch = registry.find((c) => c.aliases.includes(firstArg))
+  if (aliasMatch) {
+    args[0] = aliasMatch.name
   }
 
   return { args }
@@ -259,7 +260,28 @@ export const McpServeCommand = cmd({
       tools: [
         {
           name: "iris_run",
-          description: "Execute any IRIS CLI command. Add --json for structured output on list/get commands. Omit --json for action commands (delete, create, update). Example: 'leads list --search acme --json'",
+          description: `Execute any IRIS CLI command. Add --json for structured output on list/get commands. Omit --json for action commands (create, update, close). Use iris_help to discover subcommands for any domain.
+
+Common commands and their subcommands:
+- leads: list, get, create, update, delete, note, pulse, gate, gate-all, pulse-all, subscription-update
+- bug: report (aliases: submit, new), list (aliases: ls), close (aliases: done, resolve, complete) — NO delete command, use close
+- bloqs: list, get, create, update, search, items
+- pages: list, get, create, update, push, pull, sync, diff, publish, history, rollback
+- agents: list, get, create, update, chat
+- outreach: send, campaigns, templates, status
+- brands: list, get, create, update, design-tokens (alias: dt)
+- invoices: list, get, create, send
+- schedules: list, get, create, delete, inspect
+- integrations: list, connect, exec, status, test
+- workflows: list, get, cancel
+- memory: store, search, query, entities
+- mail: inbox, read, send, search
+- imessage: read, send, search
+- partials: list, get, create, update, push, pull
+- hive: nodes, tasks, campaigns, dispatch
+- n8n: list, pull, push, diff, activate, deactivate, dispatch
+
+Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-page --json'`,
           inputSchema: {
             type: "object" as const,
             properties: {
