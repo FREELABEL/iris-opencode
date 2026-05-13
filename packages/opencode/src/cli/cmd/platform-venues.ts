@@ -777,177 +777,109 @@ const EnrichCommand = cmd({
 })
 
 // ============================================================================
-// Discover — find venues based on artist touring patterns
+// Discover — full venue outreach pipeline (Eventbrite + DDG + AI tour-seed)
+// Wraps the existing tests/e2e/venue-outreach.spec.ts Playwright pipeline
 // ============================================================================
 
+function findProjectRoot(): string {
+  let dir = process.cwd()
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(dir, "tests", "e2e", "venue-outreach.spec.ts"))) return dir
+    if (existsSync(join(dir, "fl-docker-dev"))) return dir
+    const parent = join(dir, "..")
+    if (parent === dir) break
+    dir = parent
+  }
+  return process.cwd()
+}
+
 const DiscoverCommand = cmd({
-  command: "discover <artist>",
-  describe: "discover venues based on where similar artists perform",
+  command: "discover <cities>",
+  describe: "discover, enrich & outreach venues via full pipeline (Eventbrite + DDG + AI tour-seed)",
   builder: (yargs) =>
     yargs
-      .positional("artist", { describe: "artist name (e.g. 'SSG Splurge')", type: "string", demandOption: true })
-      .option("genre", { describe: "genre for better matching", type: "string" })
-      .option("seed-artists", { describe: "comma-separated similar artists to seed search", type: "string" })
-      .option("limit", { describe: "max venues per city", type: "number", default: 5 })
-      .option("save", { describe: "auto-create venue records", type: "boolean", default: false })
-      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+      .positional("cities", { describe: "comma-separated city slugs (e.g. 'houston,dallas,atlanta')", type: "string", demandOption: true })
+      .option("artist", { describe: "artist name for tour-seeded discovery + email context", type: "string" })
+      .option("genre", { describe: "music genre (default: hip-hop)", type: "string", default: "hip-hop" })
+      .option("seed-artists", { describe: "comma-separated similar artists to seed", type: "string" })
+      .option("limit", { describe: "venues to process per city", type: "number", default: 15 })
+      .option("board", { describe: "board/bloq ID for lead creation", type: "number", default: 292 })
+      .option("enrich", { describe: "also enrich venues (scrape emails + socials)", type: "boolean", default: false })
+      .option("email", { describe: "also generate + send booking inquiry emails", type: "boolean", default: false })
+      .option("dry", { describe: "preview mode — no saves or sends", type: "boolean", default: false })
+      .option("tour-seed-max", { describe: "max AI-recommended cities to add", type: "number", default: 8 }),
   async handler(args) {
-    if (!args.json) { UI.empty(); prompts.intro(`◈  Venue Discovery: ${args.artist}`) }
+    UI.empty()
+    prompts.intro(`◈  Venue Discovery Pipeline`)
 
-    const token = await requireAuth()
-    if (!token) { if (!args.json) prompts.outro("Done"); return }
+    const root = findProjectRoot()
+    const specPath = join(root, "tests", "e2e", "venue-outreach.spec.ts")
 
-    const spinner = args.json ? null : prompts.spinner()
-    if (spinner) spinner.start("Finding similar artists and touring cities…")
+    if (!existsSync(specPath)) {
+      prompts.log.error(`Pipeline not found at: ${specPath}`)
+      prompts.log.warn("Run from the freelabel project root directory")
+      prompts.outro("Done")
+      return
+    }
+
+    // Build env vars for the Playwright pipeline
+    const env: Record<string, string> = {
+      CITIES: args.cities,
+      DISCOVER: "1",
+      LIMIT: String(args.limit),
+      BOARD_ID: String(args.board),
+    }
+    if (args.enrich) env.ENRICH = "1"
+    if (args.email) env.EMAIL = "1"
+    if (args.dry) env.DRY_RUN = "1"
+    if (args.artist) env.ARTIST_NAME = args.artist
+    if (args.genre) env.GENRE = args.genre
+    if (args["seed-artists"]) env.SEED_ARTISTS = args["seed-artists"]
+    if (args["tour-seed-max"]) env.TOUR_SEED_MAX = String(args["tour-seed-max"])
+
+    // Display run config
+    const cityDisplay = args.cities.split(",").map((c: string) => c.trim().replace(/-/g, " ")).join(", ")
+    const phases = ["Discover", args.enrich ? "Enrich" : null, args.email ? "Email" : null].filter(Boolean).join(" → ")
+
+    printDivider()
+    printKV("Cities", cityDisplay)
+    printKV("Phases", phases)
+    printKV("Limit", `${args.limit}/city`)
+    printKV("Board", args.board)
+    if (args.artist) printKV("Artist", args.artist)
+    if (args["seed-artists"]) printKV("Seed Artists", args["seed-artists"])
+    if (args.dry) printKV("Mode", "DRY RUN (no saves)")
+    printDivider()
+    console.log()
+
+    const spinner = prompts.spinner()
+    spinner.start("Running venue outreach pipeline…")
 
     try {
-      const userId = await resolveUserId()
+      const { execSync } = require("child_process")
+      const timeout = Math.max(600000, args.limit * (args.enrich ? 3 : 1) * 120000)
+      const cmd = `npx playwright test tests/e2e/venue-outreach.spec.ts --headed --timeout ${timeout}`
 
-      // Step 1: Use AI to find similar artists + their touring cities
-      const genreHint = args.genre ? ` in the ${args.genre} genre` : ""
-      const seedHint = args["seed-artists"] ? ` (also consider: ${args["seed-artists"]})` : ""
-      const aiPrompt = `List 3-5 artists similar to "${args.artist}"${genreHint}${seedHint} and for each, list 2-3 cities where they commonly perform live. Return ONLY valid JSON in this format: [{"artist":"Name","cities":["City, ST"]}]. No markdown, no explanation.`
+      spinner.stop("Pipeline started — output below:")
+      console.log()
 
-      const aiRes = await irisFetch("/api/v1/tools/execute", {
-        method: "POST",
-        body: JSON.stringify({
-          tool: "deepResearch",
-          params: { query: aiPrompt, model: "gpt-4.1-nano" },
-          user_id: userId || 193,
-        }),
-      }, IRIS_API)
+      execSync(cmd, {
+        stdio: "inherit",
+        cwd: root,
+        env: { ...process.env, ...env },
+      })
 
-      if (!aiRes.ok) {
-        if (spinner) spinner.stop("AI lookup failed", 1)
-        if (!args.json) prompts.outro("Done")
-        return
+      console.log()
+      prompts.log.success("Pipeline completed")
+      prompts.outro(dim("iris venues list --sort trending"))
+    } catch (err: any) {
+      console.log()
+      if (err.status) {
+        prompts.log.error(`Pipeline exited with code ${err.status}`)
+      } else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
       }
-
-      const aiRaw = (await aiRes.json()) as any
-      const aiText = aiRaw?.result?.text ?? aiRaw?.result?.content ?? aiRaw?.data?.text ?? JSON.stringify(aiRaw?.result ?? "")
-
-      // Parse JSON from AI response (may be wrapped in markdown code blocks)
-      let artistData: Array<{ artist: string; cities: string[] }> = []
-      try {
-        const jsonStr = aiText.replace(/```json?\n?/g, "").replace(/```/g, "").trim()
-        artistData = JSON.parse(jsonStr)
-      } catch {
-        if (spinner) spinner.stop("Failed to parse artist data", 1)
-        if (!args.json) prompts.log.error("AI returned unparseable response")
-        if (!args.json) prompts.outro("Done")
-        return
-      }
-
-      if (spinner) spinner.stop(`${artistData.length} similar artists found`)
-
-      // Collect unique cities
-      const allCities = [...new Set(artistData.flatMap((a) => a.cities))]
-
-      if (!args.json) {
-        console.log()
-        console.log(`  ${dim("Similar artists:")} ${artistData.map((a) => a.artist).join(", ")}`)
-        console.log(`  ${dim("Touring cities:")} ${allCities.join(", ")}`)
-        console.log()
-      }
-
-      // Step 2: Search for venues in each city
-      const cityResults: Record<string, any[]> = {}
-      for (const city of allCities) {
-        const citySpinner = args.json ? null : prompts.spinner()
-        if (citySpinner) citySpinner.start(`Searching venues in ${city}…`)
-
-        try {
-          const searchRes = await irisFetch("/api/v1/tools/execute", {
-            method: "POST",
-            body: JSON.stringify({
-              tool: "searchPlaces",
-              params: { query: `live music venues in ${city}`, location: city },
-              user_id: userId || 193,
-            }),
-          }, IRIS_API)
-
-          if (searchRes.ok) {
-            const searchRaw = (await searchRes.json()) as any
-            const toolResult = searchRaw?.result ?? searchRaw?.data ?? searchRaw
-            const venues: any[] = (toolResult?.results ?? toolResult?.places ?? []).slice(0, args.limit)
-            cityResults[city] = venues
-            if (citySpinner) citySpinner.stop(`${venues.length} venue(s) in ${city}`)
-          } else {
-            if (citySpinner) citySpinner.stop(`${city}: search failed`, 1)
-            cityResults[city] = []
-          }
-        } catch {
-          if (citySpinner) citySpinner.stop(`${city}: error`, 1)
-          cityResults[city] = []
-        }
-      }
-
-      // Step 3: Display results grouped by city
-      if (args.json && !args.save) {
-        console.log(JSON.stringify({ artist: args.artist, similar_artists: artistData, venues_by_city: cityResults }, null, 2))
-        return
-      }
-
-      if (!args.json) {
-        printDivider()
-        for (const [city, venues] of Object.entries(cityResults)) {
-          console.log(`  ${bold(city)}  ${dim(`(${venues.length} venues)`)}`)
-          for (const v of venues) {
-            console.log(`    ${v.title || "Unknown"}  ${v.rating ? dim(`★ ${v.rating}`) : ""}`)
-            if (v.address) console.log(`      ${dim(v.address)}`)
-          }
-          console.log()
-        }
-        printDivider()
-      }
-
-      // Step 4: Save if requested
-      if (args.save) {
-        const saveSpinner = prompts.spinner()
-        saveSpinner.start("Saving venue records…")
-        let created = 0
-        let touched = 0
-
-        for (const [, venues] of Object.entries(cityResults)) {
-          for (const p of venues) {
-            const payload: Record<string, unknown> = {
-              name: p.title,
-              type: "venue",
-              address: p.address || null,
-              phone: p.phone || null,
-              website_url: p.website || null,
-              rating: p.rating || null,
-              google_place_id: p.cid || p.place_id || null,
-              data_source: "searchPlaces",
-            }
-            const addrParts = (p.address || "").split(",").map((s: string) => s.trim())
-            if (addrParts.length >= 2) {
-              payload.city = addrParts[addrParts.length - 2] || null
-              const stateZip = addrParts[addrParts.length - 1] || ""
-              const stateMatch = stateZip.match(/^([A-Z]{2})\b/)
-              if (stateMatch) payload.state = stateMatch[1]
-            }
-
-            try {
-              const createRes = await irisFetch("/api/v1/venues", { method: "POST", body: JSON.stringify(payload) })
-              if (createRes.ok) {
-                const body = (await createRes.json()) as any
-                if (body?.message?.includes("already exists")) touched++
-                else created++
-              }
-            } catch { /* skip */ }
-          }
-        }
-
-        const summary = [created > 0 ? `${created} created` : null, touched > 0 ? `${touched} touched` : null].filter(Boolean).join(", ")
-        saveSpinner.stop(`${success("✓")} ${summary || "No changes"}`)
-      }
-
-      if (!args.json) prompts.outro(dim("iris venues list --sort trending"))
-    } catch (err) {
-      if (spinner) spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      if (!args.json) prompts.outro("Done")
+      prompts.outro(dim("Check output above for details"))
     }
   },
 })
