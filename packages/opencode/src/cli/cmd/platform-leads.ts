@@ -99,8 +99,12 @@ function printLead(l: Record<string, unknown>): void {
 // Calendar helpers (mirrors platform-calendar.ts pattern)
 // ============================================================================
 
-async function calExec(action: string, params: Record<string, unknown>): Promise<any> {
-  return executeIntegrationCall("google-calendar", action, params)
+async function calExec(
+  action: string,
+  params: Record<string, unknown>,
+  opts: { integrationId?: number; account?: string } = {},
+): Promise<any> {
+  return executeIntegrationCall("google-calendar", action, params, opts)
 }
 
 function formatTime(iso: string): string {
@@ -3622,6 +3626,9 @@ const LeadsMeetCommand = cmd({
         default: false,
         describe: "skip Google Calendar sync (note + task only)",
       })
+      .option("account", { type: "string", describe: "Google account email (multi-account)" })
+      .option("integration-id", { type: "number", describe: "specific integration record ID" })
+      .option("attendees", { type: "array", string: true, describe: "additional attendee emails" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -3671,6 +3678,14 @@ const LeadsMeetCommand = cmd({
     if (!args["no-calendar"]) {
       spinner.start("Creating calendar event…")
       try {
+        const attendeeList: string[] = []
+        if (lead.email) attendeeList.push(lead.email)
+        if (args.attendees) attendeeList.push(...(args.attendees as string[]))
+
+        const accountOpts: { integrationId?: number; account?: string } = {}
+        if (args.integrationId ?? args["integration-id"]) accountOpts.integrationId = Number(args.integrationId ?? args["integration-id"])
+        if (args.account) accountOpts.account = args.account as string
+
         calendarResult = await calExec("create_event", {
           title,
           start_time: startTime,
@@ -3678,7 +3693,8 @@ const LeadsMeetCommand = cmd({
           description,
           location: args.location ?? undefined,
           timezone: "America/Chicago",
-        })
+          ...(attendeeList.length > 0 ? { attendees: attendeeList } : {}),
+        }, accountOpts)
         spinner.stop(`${success("✓")} Calendar event created`)
       } catch (err: any) {
         spinner.stop(`Calendar sync failed: ${err.message}`)
@@ -4293,31 +4309,41 @@ const LeadsRegenCheckoutCommand = cmd({
       return
     }
 
-    // Trigger regeneration by hitting the checkout redirect URL.
-    // The CheckoutRedirectController auto-regenerates stale sessions on click.
+    // Extract short code from the checkout URL
     const url = String(status.stripe_checkout_url)
-    prompts.log.info(`Hitting ${dim(url)} to trigger auto-refresh...`)
+    const shortCode = url.split("/checkout/").pop()
+
+    if (!shortCode) {
+      prompts.log.error("Could not extract short code from checkout URL: " + url)
+      return
+    }
+
+    // Use the force-regenerate API endpoint (bypasses 23h stale check)
+    prompts.log.info(`Regenerating checkout ${dim(shortCode)}...`)
 
     try {
-      const res = await fetch(url, { redirect: "manual" })
+      const res = await irisFetch(`/api/v1/checkout/${shortCode}/regenerate`, { method: "POST" })
+
       if (args.json) {
-        console.log(JSON.stringify({ status: res.status, location: res.headers.get("location") }, null, 2))
+        const data = await res.json().catch(() => ({}))
+        console.log(JSON.stringify(data, null, 2))
         return
       }
-      if (res.status === 302 || res.status === 301) {
-        const dest = res.headers.get("location") ?? "(unknown)"
+
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}))
         console.log("")
-        console.log(success("Checkout session refreshed"))
+        console.log(success("Checkout session regenerated"))
         printDivider()
-        printKV("Short URL", url)
-        printKV("Fresh Stripe URL", dest.length > 80 ? dest.slice(0, 80) + "..." : dest)
+        printKV("Short URL", data.short_url ?? url)
+        printKV("Fresh Stripe URL", (data.destination_url ?? "").length > 80 ? (data.destination_url ?? "").slice(0, 80) + "..." : (data.destination_url ?? "unknown"))
+        printKV("Regeneration #", String(data.regeneration_count ?? "?"))
         printDivider()
-      } else if (res.status === 200) {
-        prompts.log.success("Checkout link is healthy (returned 200)")
-      } else if (res.status === 410) {
-        prompts.log.error("Short URL has expired (our expiration). Create a new payment gate.")
+      } else if (res.status === 404) {
+        prompts.log.error("Checkout redirect not found. Create a new payment gate.")
       } else {
-        prompts.log.error(`Unexpected status: ${res.status}`)
+        const body = await res.text().catch(() => "")
+        prompts.log.error(`Regeneration failed (${res.status}): ${body}`)
       }
     } catch (err) {
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -4993,16 +5019,16 @@ const LeadsKBCommand = cmd({
 })
 
 // ============================================================================
-// pulse-all — bulk pulse scorecard for all Won leads
+// pulse-all — bulk pulse scorecard for all Won + Active leads
 // ============================================================================
 
 const LeadsPulseAllCommand = cmd({
   command: "pulse-all",
   aliases: ["scorecard", "health"],
-  describe: "run pulse on all Won leads — scorecard with deal health, gates, and gaps",
+  describe: "run pulse on all Won + Active leads — scorecard with deal health, gates, and gaps",
   builder: (yargs) =>
     yargs
-      .option("status", { describe: "filter by status", type: "string", default: "Won" })
+      .option("status", { describe: "filter by status (comma-separated, e.g. Won,Active)", type: "string", default: "Won,Active" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
       .option("hydrate", {
         describe: "auto-send follow-ups to eligible leads (past 48h throttle)",
@@ -5019,18 +5045,21 @@ const LeadsPulseAllCommand = cmd({
     if (!(await requireAuth())) return
 
     const spinner = prompts.spinner()
-    spinner.start(`Loading ${args.status} leads...`)
+    const statuses = args.status.split(",").map((s: string) => s.trim())
+    spinner.start(`Loading ${statuses.join(" + ")} leads...`)
 
     try {
-      const params = new URLSearchParams({ status: args.status, per_page: "200" })
-      if (args.bloq) params.set("bloq_id", String(args.bloq))
-      const res = await irisFetch(`/api/v1/leads?${params}`)
-      if (!res.ok) {
-        spinner.stop("Failed", 1)
-        return
-      }
-      const body = (await res.json()) as { data?: any[] }
-      const leads: any[] = body?.data ?? []
+      // Fetch each status in parallel and merge
+      const fetches = statuses.map(async (status: string) => {
+        const params = new URLSearchParams({ status, per_page: "200" })
+        if (args.bloq) params.set("bloq_id", String(args.bloq))
+        const res = await irisFetch(`/api/v1/leads?${params}`)
+        if (!res.ok) return []
+        const body = (await res.json()) as { data?: any[] }
+        return body?.data ?? []
+      })
+      const results = await Promise.all(fetches)
+      const leads: any[] = results.flat()
 
       // Skip junk leads (no email, social emails, self)
       const eligible = leads.filter((l) => {
@@ -5040,7 +5069,7 @@ const LeadsPulseAllCommand = cmd({
         return true
       })
 
-      spinner.stop(`${leads.length} ${args.status} leads (${eligible.length} eligible)`)
+      spinner.stop(`${leads.length} ${statuses.join(" + ")} leads (${eligible.length} eligible)`)
 
       // Fetch pulse data for each lead
       type PulseRow = {

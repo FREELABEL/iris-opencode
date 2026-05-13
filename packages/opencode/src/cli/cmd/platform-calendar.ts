@@ -7,8 +7,27 @@ import { executeIntegrationCall } from "./platform-run"
 // Google Calendar integration via iris-api execute-direct endpoint
 // Replaces the old bridge-based macOS Calendar.app implementation
 
-async function calExec(action: string, params: Record<string, unknown>): Promise<any> {
-  return executeIntegrationCall("google-calendar", action, params)
+type AccountOpts = { integrationId?: number; account?: string }
+
+function addAccountOptions(yargs: any): any {
+  return yargs
+    .option("account", { type: "string", describe: "Google account email (multi-account)" })
+    .option("integration-id", { type: "number", describe: "specific integration record ID" })
+}
+
+function getAccountOpts(args: any): AccountOpts {
+  const opts: AccountOpts = {}
+  if (args.integrationId ?? args["integration-id"]) opts.integrationId = Number(args.integrationId ?? args["integration-id"])
+  if (args.account) opts.account = args.account as string
+  return opts
+}
+
+export async function calExec(
+  action: string,
+  params: Record<string, unknown>,
+  opts: AccountOpts = {},
+): Promise<any> {
+  return executeIntegrationCall("google-calendar", action, params, opts)
 }
 
 function formatTime(iso: string): string {
@@ -53,7 +72,7 @@ const CalendarListCommand = cmd({
   aliases: ["ls"],
   describe: "list upcoming calendar events",
   builder: (yargs) =>
-    yargs
+    addAccountOptions(yargs)
       .option("days", { type: "number", default: 7, describe: "look ahead N days" })
       .option("limit", { type: "number", default: 20, describe: "max events" })
       .option("calendar", { type: "string", alias: "c", describe: "calendar ID (default: primary)" })
@@ -70,7 +89,7 @@ const CalendarListCommand = cmd({
       time_min: now.toISOString(),
       time_max: end.toISOString(),
       ...(args.calendar ? { calendar_id: args.calendar } : {}),
-    })
+    }, getAccountOpts(args))
 
     if (!result?.success) {
       prompts.log.error(result?.error ?? "Failed to fetch events")
@@ -112,7 +131,7 @@ const CalendarTodayCommand = cmd({
   aliases: ["now"],
   describe: "show today's calendar events",
   builder: (yargs) =>
-    yargs
+    addAccountOptions(yargs)
       .option("calendar", { type: "string", alias: "c" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -128,7 +147,7 @@ const CalendarTodayCommand = cmd({
       time_min: start.toISOString(),
       time_max: end.toISOString(),
       ...(args.calendar ? { calendar_id: args.calendar } : {}),
-    })
+    }, getAccountOpts(args))
 
     if (!result?.success) {
       prompts.log.error(result?.error ?? "Failed to fetch events")
@@ -159,7 +178,7 @@ const CalendarTomorrowCommand = cmd({
   command: "tomorrow",
   describe: "show tomorrow's calendar events",
   builder: (yargs) =>
-    yargs
+    addAccountOptions(yargs)
       .option("calendar", { type: "string", alias: "c" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -175,7 +194,7 @@ const CalendarTomorrowCommand = cmd({
       time_min: start.toISOString(),
       time_max: end.toISOString(),
       ...(args.calendar ? { calendar_id: args.calendar } : {}),
-    })
+    }, getAccountOpts(args))
 
     if (!result?.success) {
       prompts.log.error(result?.error ?? "Failed to fetch events")
@@ -218,6 +237,8 @@ const CalendarAddCommand = cmd({
       .option("repeat-count", { type: "number", describe: "number of recurrences" })
       .option("recurrence", { type: "string", describe: "raw RRULE string (e.g. FREQ=WEEKLY;COUNT=4)" })
       .option("all-day", { type: "boolean", default: false })
+      .option("account", { type: "string", describe: "Google account email (multi-account)" })
+      .option("integration-id", { type: "number", describe: "specific integration record ID" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -239,7 +260,7 @@ const CalendarAddCommand = cmd({
     if (args.repeatCount ?? args["repeat-count"]) params.repeat_count = args.repeatCount ?? args["repeat-count"]
     if (args.recurrence) params.recurrence = args.recurrence
 
-    const result = await calExec("create_event", params)
+    const result = await calExec("create_event", params, getAccountOpts(args))
 
     if (args.json) {
       console.log(JSON.stringify(result, null, 2))
@@ -275,6 +296,8 @@ const CalendarUpdateCommand = cmd({
       .option("location", { type: "string", alias: "l" })
       .option("description", { type: "string", alias: "d" })
       .option("calendar", { type: "string", alias: "c" })
+      .option("account", { type: "string", describe: "Google account email (multi-account)" })
+      .option("integration-id", { type: "number", describe: "specific integration record ID" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -293,7 +316,7 @@ const CalendarUpdateCommand = cmd({
     if (args.description) params.description = args.description
     if (args.calendar) params.calendar_id = args.calendar
 
-    const result = await calExec("update_event", params)
+    const result = await calExec("update_event", params, getAccountOpts(args))
 
     if (args.json) {
       console.log(JSON.stringify(result, null, 2))
@@ -321,6 +344,8 @@ const CalendarDeleteCommand = cmd({
     yargs
       .positional("event-id", { type: "string", demandOption: true })
       .option("calendar", { type: "string", alias: "c" })
+      .option("account", { type: "string", describe: "Google account email (multi-account)" })
+      .option("integration-id", { type: "number", describe: "specific integration record ID" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -332,7 +357,7 @@ const CalendarDeleteCommand = cmd({
     }
     if (args.calendar) params.calendar_id = args.calendar
 
-    const result = await calExec("delete_event", params)
+    const result = await calExec("delete_event", params, getAccountOpts(args))
 
     if (args.json) {
       console.log(JSON.stringify(result, null, 2))
@@ -354,13 +379,13 @@ const CalendarDeleteCommand = cmd({
 const CalendarCalendarsCommand = cmd({
   command: "calendars",
   describe: "list all accessible calendars",
-  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  builder: (yargs) => addAccountOptions(yargs).option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
     UI.empty()
     prompts.intro("◈  Calendar — All Calendars")
 
-    const result = await calExec("get_calendars", {})
+    const result = await calExec("get_calendars", {}, getAccountOpts(args))
 
     if (args.json) {
       console.log(JSON.stringify(result, null, 2))
@@ -396,6 +421,8 @@ const CalendarFreeCommand = cmd({
       .option("from", { type: "string", demandOption: true, describe: "start of window (ISO)" })
       .option("to", { type: "string", demandOption: true, describe: "end of window (ISO)" })
       .option("calendar", { type: "array", string: true, alias: "c", describe: "calendar ID(s), repeatable" })
+      .option("account", { type: "string", describe: "Google account email (multi-account)" })
+      .option("integration-id", { type: "number", describe: "specific integration record ID" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -411,7 +438,7 @@ const CalendarFreeCommand = cmd({
       params.calendar_ids = args.calendar
     }
 
-    const result = await calExec("find_free_slots", params)
+    const result = await calExec("find_free_slots", params, getAccountOpts(args))
 
     if (args.json) {
       console.log(JSON.stringify(result, null, 2))

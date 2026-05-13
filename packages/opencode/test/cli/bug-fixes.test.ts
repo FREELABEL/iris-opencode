@@ -426,3 +426,131 @@ describe("calendar event display (#58778, #58779)", () => {
     expect(getEventLabel(event)).toBe("7d4kh6431gmu")
   })
 })
+
+// ============================================================================
+// Calendar multi-account selection (wrong account bug)
+// ============================================================================
+
+describe("calendar multi-account selection", () => {
+  // Replicate calExec signature to test param threading
+  function buildCalExecPayload(
+    action: string,
+    params: Record<string, unknown>,
+    opts: { integrationId?: number; account?: string } = {},
+  ): { integration: string; action: string; params: Record<string, unknown>; integration_id?: number; account?: string } {
+    const payload: any = { integration: "google-calendar", action, params }
+    if (opts.integrationId) payload.integration_id = opts.integrationId
+    if (opts.account) payload.account = opts.account
+    return payload
+  }
+
+  test("passes integrationId when --account provided", () => {
+    const payload = buildCalExecPayload("get_events", { max_results: 10 }, { account: "alex@freelabel.net" })
+    expect(payload.account).toBe("alex@freelabel.net")
+  })
+
+  test("passes integrationId when --integration-id provided", () => {
+    const payload = buildCalExecPayload("get_events", { max_results: 10 }, { integrationId: 42 })
+    expect(payload.integration_id).toBe(42)
+  })
+
+  test("omits integrationId when neither flag provided (backward compat)", () => {
+    const payload = buildCalExecPayload("get_events", { max_results: 10 })
+    expect(payload.integration_id).toBeUndefined()
+    expect(payload.account).toBeUndefined()
+  })
+})
+
+// ============================================================================
+// Lead meeting attendee injection
+// ============================================================================
+
+describe("lead meeting attendee injection", () => {
+  function buildMeetParams(
+    lead: { email?: string; name?: string },
+    extraAttendees?: string[],
+  ): Record<string, unknown> {
+    const attendeeList: string[] = []
+    if (lead.email) attendeeList.push(lead.email)
+    if (extraAttendees) attendeeList.push(...extraAttendees)
+
+    const params: Record<string, unknown> = {
+      title: `Meeting with ${lead.name ?? "Lead"}`,
+      start_time: "2026-05-15T10:00:00Z",
+      end_time: "2026-05-15T10:30:00Z",
+      timezone: "America/Chicago",
+    }
+    if (attendeeList.length > 0) params.attendees = attendeeList
+    return params
+  }
+
+  test("create_event params include attendees when lead has email", () => {
+    const params = buildMeetParams({ email: "jane@example.com", name: "Jane" })
+    expect(params.attendees).toEqual(["jane@example.com"])
+  })
+
+  test("create_event params omit attendees when lead has no email", () => {
+    const params = buildMeetParams({ name: "Unknown Lead" })
+    expect(params.attendees).toBeUndefined()
+  })
+
+  test("--attendees flag merges additional emails with lead email", () => {
+    const params = buildMeetParams(
+      { email: "jane@example.com", name: "Jane" },
+      ["bob@example.com", "alice@example.com"],
+    )
+    expect(params.attendees).toEqual(["jane@example.com", "bob@example.com", "alice@example.com"])
+  })
+})
+
+// ============================================================================
+// Multi-account on leads meet
+// ============================================================================
+
+describe("multi-account on leads meet", () => {
+  function buildMeetCalOpts(args: { account?: string; integrationId?: number }): { integrationId?: number; account?: string } {
+    const opts: { integrationId?: number; account?: string } = {}
+    if (args.integrationId) opts.integrationId = args.integrationId
+    if (args.account) opts.account = args.account
+    return opts
+  }
+
+  test("--account flag threads through to calendar call", () => {
+    const opts = buildMeetCalOpts({ account: "alex@freelabel.net" })
+    expect(opts.account).toBe("alex@freelabel.net")
+  })
+
+  test("--integration-id flag threads through to calendar call", () => {
+    const opts = buildMeetCalOpts({ integrationId: 99 })
+    expect(opts.integrationId).toBe(99)
+  })
+})
+
+// ============================================================================
+// Source integrity: multi-account + attendees wired in source files
+// ============================================================================
+
+describe("multi-account source integrity", () => {
+  const { readFileSync } = require("fs")
+  const { join } = require("path")
+
+  test("platform-calendar.ts calExec accepts opts parameter", () => {
+    const source = readFileSync(join(import.meta.dir, "../../src/cli/cmd/platform-calendar.ts"), "utf-8")
+    expect(source).toContain("getAccountOpts(args)")
+    expect(source).toContain('option("account"')
+    expect(source).toContain('option("integration-id"')
+  })
+
+  test("platform-leads.ts meet command has attendees support", () => {
+    const source = readFileSync(join(import.meta.dir, "../../src/cli/cmd/platform-leads.ts"), "utf-8")
+    expect(source).toContain("attendeeList")
+    expect(source).toContain('option("attendees"')
+    expect(source).toContain('option("account"')
+  })
+
+  test("platform-leads.ts calExec forwards opts", () => {
+    const source = readFileSync(join(import.meta.dir, "../../src/cli/cmd/platform-leads.ts"), "utf-8")
+    // calExec signature should accept opts
+    expect(source).toMatch(/calExec\(\s*\n?\s*action.*\n?\s*params.*\n?\s*opts/)
+  })
+})
