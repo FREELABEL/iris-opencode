@@ -3849,6 +3849,7 @@ const LeadsMeetCommand = cmd({
       })
       .option("account", { type: "string", describe: "Google account email (multi-account)" })
       .option("integration-id", { type: "number", describe: "specific integration record ID" })
+      .option("calendar", { type: "string", describe: "calendar ID (e.g. 'primary', 'work@group.calendar.google.com')" })
       .option("attendees", { type: "array", string: true, describe: "additional attendee emails" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -3915,6 +3916,7 @@ const LeadsMeetCommand = cmd({
           location: args.location ?? undefined,
           timezone: "America/Chicago",
           ...(attendeeList.length > 0 ? { attendees: attendeeList } : {}),
+          ...(args.calendar ? { calendar_id: args.calendar } : {}),
         }, accountOpts)
         spinner.stop(`${success("✓")} Calendar event created`)
       } catch (err: any) {
@@ -3965,6 +3967,7 @@ const LeadsMeetCommand = cmd({
       printKV("When", `${formatDate(startTime)} ${formatTime(startTime)}`)
       printKV("Duration", `${args.duration} min`)
       if (args.location) printKV("Location", args.location as string)
+      if (args.calendar) printKV("Calendar ID", args.calendar as string)
       if (calendarResult?.event_url) printKV("Calendar", calendarResult.event_url)
       printKV(
         "Synced",
