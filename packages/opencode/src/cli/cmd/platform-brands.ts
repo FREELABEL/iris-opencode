@@ -291,13 +291,13 @@ const BrandsDeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "brand ID", type: "number", demandOption: true })
-      .option("yes", { describe: "skip confirmation", type: "boolean", default: false }),
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Brand #${args.id}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
-    if (!args.yes) {
+    if (!args.force) {
       const confirmed = await prompts.confirm({ message: `Delete brand #${args.id}? Personas will be removed; integrations and assets are unlinked but kept.` })
       if (prompts.isCancel(confirmed) || !confirmed) { prompts.outro("Cancelled"); return }
     }

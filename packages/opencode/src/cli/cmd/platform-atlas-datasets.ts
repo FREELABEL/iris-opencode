@@ -653,14 +653,17 @@ const RecordsDeleteCommand = cmd({
   builder: (y) =>
     y
       .positional("id", { type: "number", demandOption: true })
-      .option("schema", { type: "string", demandOption: true, alias: "s" }),
+      .option("schema", { type: "string", demandOption: true, alias: "s" })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Record #${args.id}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
-    const confirm = await prompts.confirm({ message: `Delete record #${args.id}?` })
-    if (prompts.isCancel(confirm) || !confirm) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirm = await prompts.confirm({ message: `Delete record #${args.id}?` })
+      if (prompts.isCancel(confirm) || !confirm) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")

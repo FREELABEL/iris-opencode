@@ -1412,7 +1412,7 @@ const LeadsDeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "lead ID", type: "number", demandOption: true })
-      .option("yes", { describe: "skip confirmation prompt", type: "boolean", alias: "y", default: false }),
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Lead #${args.id}`)
@@ -1423,7 +1423,7 @@ const LeadsDeleteCommand = cmd({
       return
     }
 
-    let confirmed: boolean | symbol = args.yes
+    let confirmed: boolean | symbol = args.force
     if (!confirmed) {
       if (isNonInteractive()) {
         prompts.log.error("Refusing to delete without --yes in non-interactive mode.")
@@ -1476,7 +1476,7 @@ const LeadsMergeCommand = cmd({
         array: true,
         demandOption: true,
       })
-      .option("yes", { describe: "skip confirmation prompt", type: "boolean", alias: "y", default: false }),
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     const removeIds: number[] = (args.remove as number[]) ?? []
@@ -1532,7 +1532,7 @@ const LeadsMergeCommand = cmd({
       }
 
       // Confirm
-      let confirmed: boolean | symbol = args.yes
+      let confirmed: boolean | symbol = args.force
       if (!confirmed) {
         if (isNonInteractive()) {
           prompts.log.error("Refusing to merge without --yes in non-interactive mode.")
@@ -5313,6 +5313,11 @@ const LeadsPulseAllCommand = cmd({
       })
       .option("to", { describe: "with --hydrate/--recap: redirect all emails to this address (for testing)", type: "string" })
       .option("force", { describe: "with --hydrate/--recap: ignore throttle window", type: "boolean", default: false })
+      .option("prepare", {
+        describe: "list lowest-pulse leads with top action items",
+        type: "boolean",
+        default: false,
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -5367,6 +5372,12 @@ const LeadsPulseAllCommand = cmd({
         proposalUrl: string | null
         kbCount: number
         recapEligible: boolean
+        tasksPending: number
+        tasksOverdue: number
+        tasksCompleted: number
+        reqPassing: number
+        reqTotal: number
+        meetingScore: number | null
       }
       const rows: PulseRow[] = []
 
@@ -5383,6 +5394,30 @@ const LeadsPulseAllCommand = cmd({
           const dealBody = dealRes?.ok ? ((await dealRes.json()) as any) : null
           const deal = dealBody?.data ?? dealBody
           const stripe = stripeRes?.ok ? (((await stripeRes.json()) as any)?.data ?? {}) : {}
+
+          // Extra fetches for --prepare (tasks + requirements)
+          let tasksPending = 0, tasksOverdue = 0, tasksCompleted = 0
+          let reqPassing = 0, reqTotal = 0
+          if (args.prepare) {
+            const [tasksRes, reqRes] = await Promise.allSettled([
+              irisFetch(`/api/v1/leads/${lead.id}/tasks`),
+              irisFetch(`/api/v1/leads/${lead.id}/requirements/summary`),
+            ])
+            if (tasksRes.status === "fulfilled" && tasksRes.value?.ok) {
+              const td = ((await tasksRes.value.json()) as any)?.data ?? []
+              const tasks: any[] = Array.isArray(td) ? td : []
+              const now = new Date()
+              tasksCompleted = tasks.filter((t: any) => t.status === "completed" || t.completed).length
+              const pending = tasks.filter((t: any) => t.status !== "completed" && !t.completed)
+              tasksOverdue = pending.filter((t: any) => t.due_date && new Date(t.due_date) < now).length
+              tasksPending = pending.length
+            }
+            if (reqRes.status === "fulfilled" && reqRes.value?.ok) {
+              const rd = ((await reqRes.value.json()) as any)?.data ?? {}
+              reqPassing = rd.passing ?? rd.passed ?? 0
+              reqTotal = rd.total ?? 0
+            }
+          }
 
           const sigs = readData?.signals ?? {}
           const dealChecks = sigs.deal_health?.checks ?? {}
@@ -5445,6 +5480,12 @@ const LeadsPulseAllCommand = cmd({
             proposalUrl: deal?.proposal_url ?? null,
             kbCount: sigs.knowledge_completeness?.docs_count ?? 0,
             recapEligible: !!(lead.email && !lead.email.endsWith("@instagram.com") && !lead.email.endsWith("@twitter.com")),
+            tasksPending,
+            tasksOverdue,
+            tasksCompleted,
+            reqPassing,
+            reqTotal,
+            meetingScore: sigs.meeting_engagement?.score ?? null,
           })
         } catch {
           rows.push({
@@ -5469,12 +5510,95 @@ const LeadsPulseAllCommand = cmd({
             proposalUrl: null,
             kbCount: 0,
             recapEligible: !!(lead.email && !lead.email.endsWith("@instagram.com") && !lead.email.endsWith("@twitter.com")),
+            tasksPending: 0,
+            tasksOverdue: 0,
+            tasksCompleted: 0,
+            reqPassing: 0,
+            reqTotal: 0,
+            meetingScore: null,
           })
         }
       }
 
       // Sort by pulse score descending
       rows.sort((a, b) => b.pulse - a.pulse)
+
+      // --prepare: detailed lowest-pulse list with tasks, requirements, and 3 action items
+      if (args.prepare) {
+        const sorted = [...rows].sort((a, b) => a.pulse - b.pulse) // ascending (worst first)
+        console.log()
+        console.log(`  ${bold("Prepare — Lowest Pulse Leads")} ${dim(`(${sorted.length} leads)`)}`)
+        console.log(dim("  " + "=".repeat(100)))
+
+        for (const r of sorted) {
+          const pulseColor =
+            r.pulse >= 90 ? UI.Style.TEXT_SUCCESS : r.pulse >= 50 ? UI.Style.TEXT_WARNING : UI.Style.TEXT_DANGER
+          const pulseStr = `${pulseColor}${r.pulse}/100${UI.Style.TEXT_NORMAL}`
+
+          // Billing badge
+          let billingBadge = ""
+          switch (r.billingStatus) {
+            case "active": billingBadge = `${UI.Style.TEXT_SUCCESS}Active${UI.Style.TEXT_NORMAL}`; break
+            case "past_due": billingBadge = `${UI.Style.TEXT_DANGER}PAST DUE${UI.Style.TEXT_NORMAL}`; break
+            case "pending": billingBadge = `${UI.Style.TEXT_WARNING}Pending${UI.Style.TEXT_NORMAL}`; break
+            case "no_sub": billingBadge = `${UI.Style.TEXT_DANGER}NO SUB${UI.Style.TEXT_NORMAL}`; break
+            default: billingBadge = `${UI.Style.TEXT_DANGER}No Gate${UI.Style.TEXT_NORMAL}`
+          }
+
+          // Stats line
+          const taskStr = r.tasksPending > 0
+            ? `${r.tasksOverdue > 0 ? `${UI.Style.TEXT_DANGER}${r.tasksOverdue} overdue${UI.Style.TEXT_NORMAL} · ` : ""}${r.tasksPending} pending · ${r.tasksCompleted} done`
+            : dim("no tasks")
+          const reqStr = r.reqTotal > 0
+            ? `${r.reqPassing === r.reqTotal ? UI.Style.TEXT_SUCCESS : r.reqPassing === 0 ? UI.Style.TEXT_DANGER : UI.Style.TEXT_WARNING}${r.reqPassing}/${r.reqTotal} passing${UI.Style.TEXT_NORMAL}`
+            : dim("no reqs")
+          const kbStr = r.kbCount > 0
+            ? `${r.kbCount >= 8 ? UI.Style.TEXT_SUCCESS : UI.Style.TEXT_WARNING}${r.kbCount}/8 KB${UI.Style.TEXT_NORMAL}`
+            : `${UI.Style.TEXT_DANGER}0/8 KB${UI.Style.TEXT_NORMAL}`
+          const meetStr = r.meetingScore !== null
+            ? `${r.meetingScore >= 80 ? UI.Style.TEXT_SUCCESS : UI.Style.TEXT_WARNING}mtg ${r.meetingScore}${UI.Style.TEXT_NORMAL}`
+            : dim("no mtg")
+
+          // Build top 3 actions
+          const actions: string[] = []
+          if (r.kbCount === 0) actions.push(`iris leads kb ${r.id} --generate`)
+          if (r.billingStatus === "no_sub" || r.billingStatus === "no_gate") actions.push(`iris leads payment-gate ${r.id} -a …`)
+          if (r.billingStatus === "past_due") actions.push(`iris leads pulse ${r.id} --hydrate`)
+          if (r.reqTotal === 0) actions.push(`iris leads requirements run ${r.id}`)
+          else if (r.reqPassing < r.reqTotal) actions.push(`iris leads requirements run ${r.id}`)
+          if (!r.contentAgent) actions.push(`iris leads content-engine create ${r.id}`)
+          if (r.comms !== null && r.comms < 30) actions.push(`iris leads pulse ${r.id} --recap`)
+          if (r.meetingScore === null) actions.push(`iris leads meet ${r.id} --at …`)
+          if (r.tasksOverdue > 0) actions.push(`iris leads tasks ${r.id}`)
+          if (r.hydrationEligible) actions.push(`iris leads pulse ${r.id} --hydrate`)
+          // Deduplicate and take top 3
+          const uniqueActions = [...new Set(actions)].slice(0, 3)
+
+          // Render
+          console.log()
+          console.log(`  ${dim(`#${r.id}`.padEnd(8))}${bold(r.name)}  ${pulseStr}  ${billingBadge}`)
+          console.log(`  ${"".padEnd(8)}${dim("Tasks:")} ${taskStr}  ${dim("|")}  ${dim("Reqs:")} ${reqStr}  ${dim("|")}  ${kbStr}  ${dim("|")}  ${meetStr}`)
+          if (uniqueActions.length > 0) {
+            for (let i = 0; i < uniqueActions.length; i++) {
+              console.log(`  ${"".padEnd(8)}${UI.Style.TEXT_WARNING}${i + 1}.${UI.Style.TEXT_NORMAL} ${dim(uniqueActions[i]!)}`)
+            }
+          } else {
+            console.log(`  ${"".padEnd(8)}${UI.Style.TEXT_SUCCESS}On track${UI.Style.TEXT_NORMAL}`)
+          }
+        }
+
+        console.log()
+        console.log(dim("  " + "-".repeat(100)))
+        const avgPulse = rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.pulse, 0) / rows.length) : 0
+        const failing = rows.filter((r) => r.band === "failing").length
+        const totalOverdue = rows.reduce((s, r) => s + r.tasksOverdue, 0)
+        const totalPending = rows.reduce((s, r) => s + r.tasksPending, 0)
+        console.log(`  Avg Pulse: ${avgPulse}/100  |  ${UI.Style.TEXT_DANGER}${failing} failing${UI.Style.TEXT_NORMAL}  |  Tasks: ${totalPending} pending${totalOverdue > 0 ? `, ${UI.Style.TEXT_DANGER}${totalOverdue} overdue${UI.Style.TEXT_NORMAL}` : ""}`)
+        console.log()
+        printDivider()
+        prompts.outro(dim("iris leads pulse-all --recap --dry-run  ·  iris leads pulse-all --hydrate"))
+        return
+      }
 
       // Compute billing summary
       const activeSubs = rows.filter((r) => r.billingStatus === "active")

@@ -212,17 +212,20 @@ const OutreachDeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "board/bloq ID", type: "string", demandOption: true })
-      .positional("id", { describe: "strategy ID", type: "string", demandOption: true }),
+      .positional("id", { describe: "strategy ID", type: "string", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     await requireAuth()
 
     const strategy = await fetchStrategy(args.bloqId, args.id)
     const name = String(strategy.name ?? `#${args.id}`)
 
-    const confirmed = await prompts.confirm({ message: `Delete strategy "${name}"?` })
-    if (!confirmed || prompts.isCancel(confirmed)) {
-      prompts.log.info("Cancelled")
-      return
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Delete strategy "${name}"?` })
+      if (!confirmed || prompts.isCancel(confirmed)) {
+        prompts.log.info("Cancelled")
+        return
+      }
     }
 
     const resp = await irisFetch(`/api/v1/bloqs/${args.bloqId}/outreach-strategy-templates/${args.id}`, {

@@ -473,7 +473,9 @@ const DeleteCommand = cmd({
   command: "delete <id>",
   describe: "delete a program",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "program ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "program ID", type: "number", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Program #${args.id}`)
@@ -481,8 +483,10 @@ const DeleteCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const confirmed = await prompts.confirm({ message: `Delete program #${args.id}? This cannot be undone.` })
-    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Delete program #${args.id}? This cannot be undone.` })
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")
@@ -666,7 +670,8 @@ const PackageDeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
-      .positional("package-id", { describe: "package ID", type: "number", demandOption: true }),
+      .positional("package-id", { describe: "package ID", type: "number", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Package #${args["package-id"]}`)
@@ -674,8 +679,10 @@ const PackageDeleteCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const confirmed = await prompts.confirm({ message: `Delete package #${args["package-id"]}?` })
-    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Delete package #${args["package-id"]}?` })
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")

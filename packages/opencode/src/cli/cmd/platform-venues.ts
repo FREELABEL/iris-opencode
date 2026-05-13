@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, IRIS_API } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -475,7 +475,9 @@ const DeleteCommand = cmd({
   command: "delete <id>",
   describe: "delete a venue",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "venue ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "venue ID", type: "number", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Venue #${args.id}`)
@@ -483,8 +485,10 @@ const DeleteCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const confirmed = await prompts.confirm({ message: `Delete venue #${args.id}?` })
-    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Delete venue #${args.id}?` })
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")
@@ -505,13 +509,229 @@ const DeleteCommand = cmd({
 })
 
 // ============================================================================
+// Search — find venues via Serper Places API and optionally create them
+// ============================================================================
+
+const SearchCommand = cmd({
+  command: "search <query>",
+  describe: "search for venues by city/query via Google Places (Serper). Use --save to auto-create.",
+  aliases: ["find", "scrape"],
+  builder: (yargs) =>
+    yargs
+      .positional("query", { describe: "search query (e.g. 'concert venues in Dallas TX')", type: "string", demandOption: true })
+      .option("limit", { describe: "max results", type: "number", default: 10 })
+      .option("save", { describe: "auto-create venues from results", type: "boolean", default: false })
+      .option("type", { describe: "venue type to assign on save", type: "string", default: "venue" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro("◈  Venue Search") }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start(`Searching: ${args.query}…`)
+
+    try {
+      // Use searchPlaces via iris-api tools/execute (has Serper key configured)
+      const userId = await resolveUserId()
+      const res = await irisFetch("/api/v1/tools/execute", {
+        method: "POST",
+        body: JSON.stringify({
+          tool: "searchPlaces",
+          params: { query: args.query, location: args.query },
+          user_id: userId || 193,
+        }),
+      }, IRIS_API)
+      const ok = await handleApiError(res, "Search venues")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const raw = (await res.json()) as any
+      const toolResult = raw?.result ?? raw?.data ?? raw
+      const places: any[] = (toolResult?.results ?? toolResult?.places ?? []).slice(0, args.limit)
+
+      if (args.json && !args.save) { console.log(JSON.stringify(places, null, 2)); return }
+
+      if (places.length === 0) {
+        if (spinner) spinner.stop("No results")
+        if (!args.json) prompts.log.warn("No venues found for that query")
+        if (!args.json) prompts.outro(dim("Try a different search, e.g. 'music venues in Little Rock AR'"))
+        return
+      }
+
+      if (spinner) spinner.stop(`${places.length} venue(s) found`)
+
+      if (!args.save) {
+        // Display-only mode
+        printDivider()
+        for (const p of places) {
+          console.log(`  ${bold(p.title || "Unknown")}`)
+          if (p.address) console.log(`    ${dim(p.address)}`)
+          const meta = [p.rating ? `★ ${p.rating}` : null, p.phone, p.website].filter(Boolean)
+          if (meta.length) console.log(`    ${dim(meta.join("  ·  "))}`)
+          console.log()
+        }
+        printDivider()
+        prompts.outro(dim("Add --save to auto-create these as venue records"))
+        return
+      }
+
+      // Save mode — create venues from results
+      const saveSpinner = prompts.spinner()
+      saveSpinner.start("Creating venue records…")
+      let created = 0
+
+      for (const p of places) {
+        const payload: Record<string, unknown> = {
+          name: p.title,
+          type: args.type,
+          address: p.address || null,
+          phone: p.phone || null,
+          website_url: p.website || null,
+          rating: p.rating || null,
+          data_source: "searchPlaces",
+        }
+        // Try to parse city/state from address
+        const addrParts = (p.address || "").split(",").map((s: string) => s.trim())
+        if (addrParts.length >= 2) {
+          payload.city = addrParts[addrParts.length - 2] || null
+          const stateZip = addrParts[addrParts.length - 1] || ""
+          const stateMatch = stateZip.match(/^([A-Z]{2})\b/)
+          if (stateMatch) payload.state = stateMatch[1]
+        }
+
+        try {
+          const createRes = await irisFetch("/api/v1/venues", { method: "POST", body: JSON.stringify(payload) })
+          if (createRes.ok) created++
+        } catch { /* skip individual failures */ }
+      }
+
+      saveSpinner.stop(`${success("✓")} Created ${created}/${places.length} venues`)
+
+      if (args.json) {
+        console.log(JSON.stringify({ created, total: places.length, places }, null, 2))
+      }
+
+      prompts.outro(dim("iris venues list"))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Enrich — backfill venue data from Serper Places + Images
+// ============================================================================
+
+const EnrichCommand = cmd({
+  command: "enrich <id>",
+  describe: "enrich a venue with Google Places data (rating, phone, address, photos)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "venue ID (or 'all' to enrich all venues missing data)", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Enrich Venue${args.id === "all" ? "s" : " #" + args.id}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+
+    // Determine which venues to enrich
+    let venueIds: number[] = []
+    if (args.id === "all") {
+      if (spinner) spinner.start("Finding venues that need enrichment…")
+      const listRes = await irisFetch("/api/v1/venues?limit=100")
+      if (!listRes.ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+      const listRaw = (await listRes.json()) as any
+      const allVenues: any[] = listRaw?.data?.data ?? listRaw?.data ?? (Array.isArray(listRaw) ? listRaw : [])
+      venueIds = allVenues
+        .filter((v: any) => !v.google_place_id || !v.photo || !v.description)
+        .map((v: any) => Number(v.id))
+      if (spinner) spinner.stop(`${venueIds.length} venue(s) need enrichment`)
+      if (venueIds.length === 0) { if (!args.json) prompts.outro("All venues already enriched"); return }
+    } else {
+      venueIds = [Number(args.id)]
+    }
+
+    const results: any[] = []
+    for (const vid of venueIds) {
+      if (spinner) spinner.start(`Enriching venue #${vid}…`)
+
+      // Fetch current venue data
+      const getRes = await irisFetch(`/api/v1/venues/${vid}`)
+      if (!getRes.ok) { if (spinner) spinner.stop(`#${vid}: not found`, 1); continue }
+      const venueData = (await getRes.json()) as any
+      const venue = venueData?.data ?? venueData?.venue ?? venueData
+
+      // Search Serper for this venue
+      const city = venue.city || ""
+      const state = venue.state || ""
+      const locationStr = [city, state].filter(Boolean).join(", ")
+      const searchQuery = `${venue.name} ${locationStr}`
+
+      const enrichUserId = await resolveUserId()
+      const searchRes = await irisFetch("/api/v1/tools/execute", {
+        method: "POST",
+        body: JSON.stringify({
+          tool: "searchPlaces",
+          params: { query: searchQuery, location: locationStr },
+          user_id: enrichUserId || 193,
+        }),
+      }, IRIS_API)
+
+      if (!searchRes.ok) { if (spinner) spinner.stop(`#${vid}: search failed`, 1); continue }
+      const searchRaw = (await searchRes.json()) as any
+      const searchResult = searchRaw?.result ?? searchRaw?.data ?? searchRaw
+      const places: any[] = searchResult?.results ?? searchResult?.places ?? []
+      const match = places[0]
+
+      if (!match) {
+        if (spinner) spinner.stop(`#${vid}: no match found`)
+        results.push({ id: vid, name: venue.name, status: "no_match" })
+        continue
+      }
+
+      // Build update payload
+      const update: Record<string, unknown> = {}
+      if (match.phone && !venue.phone) update.phone = match.phone
+      if (match.website && !venue.website_url) update.website_url = match.website
+      if (match.rating) update.rating = match.rating
+      if (match.address && !venue.address) update.address = match.address
+
+      if (Object.keys(update).length === 0) {
+        if (spinner) spinner.stop(`#${vid}: already up to date`)
+        results.push({ id: vid, name: venue.name, status: "up_to_date" })
+        continue
+      }
+
+      // Apply update
+      const updateRes = await irisFetch(`/api/v1/venues/${vid}`, { method: "PUT", body: JSON.stringify(update) })
+      if (updateRes.ok) {
+        if (spinner) spinner.stop(`${success("✓")} #${vid} ${venue.name}: enriched (${Object.keys(update).join(", ")})`)
+        results.push({ id: vid, name: venue.name, status: "enriched", fields: Object.keys(update) })
+      } else {
+        if (spinner) spinner.stop(`#${vid}: update failed`, 1)
+        results.push({ id: vid, name: venue.name, status: "update_failed" })
+      }
+    }
+
+    if (args.json) { console.log(JSON.stringify(results, null, 2)); return }
+    prompts.outro(dim("iris venues list"))
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
 export const PlatformVenuesCommand = cmd({
   command: "venues",
   aliases: ["studios"],
-  describe: "manage venues & studios — pull, push, diff, CRUD",
+  describe: "manage venues & studios — pull, push, diff, CRUD, search, enrich",
   builder: (yargs) =>
     yargs
       .command(ListCommand)
@@ -522,6 +742,8 @@ export const PlatformVenuesCommand = cmd({
       .command(PushCommand)
       .command(DiffCommand)
       .command(DeleteCommand)
+      .command(SearchCommand)
+      .command(EnrichCommand)
       .demandCommand(),
   async handler() {},
 })

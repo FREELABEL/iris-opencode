@@ -566,13 +566,13 @@ const CancelCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("runId", { describe: "run ID", type: "string", demandOption: true })
-      .option("yes", { alias: "y", describe: "skip confirmation", type: "boolean", default: false })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const token = await requireAuth()
     if (!token) return
 
-    if (!args.yes) {
+    if (!args.force) {
       if (isNonInteractive()) {
         const msg = "Refusing to cancel without --yes in non-interactive mode."
         if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
@@ -614,13 +614,13 @@ const DeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "automation ID", type: "number", demandOption: true })
-      .option("yes", { alias: "y", describe: "skip confirmation", type: "boolean", default: false })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const token = await requireAuth()
     if (!token) return
 
-    if (!args.yes) {
+    if (!args.force) {
       if (isNonInteractive()) {
         const msg = "Refusing to delete without --yes in non-interactive mode."
         if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))

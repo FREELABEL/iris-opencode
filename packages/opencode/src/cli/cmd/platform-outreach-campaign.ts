@@ -193,10 +193,13 @@ function actionCmd(action: string, destructive = false) {
   return cmd({
     command: `${action} <id>`,
     describe: `${action} a campaign`,
-    builder: (yargs) => yargs.positional("id", { describe: "campaign ID", type: "number", demandOption: true }),
+    builder: (yargs) =>
+      yargs
+        .positional("id", { describe: "campaign ID", type: "number", demandOption: true })
+        .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
     async handler(args) {
       if (!(await requireAuth())) return
-      if (destructive) {
+      if (destructive && !args.force) {
         const ok = await prompts.confirm({ message: `${action} campaign #${args.id}?` })
         if (!ok || prompts.isCancel(ok)) { prompts.log.info("Cancelled"); return }
       }
@@ -332,11 +335,16 @@ const DuplicateCmd = cmd({
 const DeleteCmd = cmd({
   command: "delete <id>",
   describe: "delete a draft campaign",
-  builder: (yargs) => yargs.positional("id", { describe: "campaign ID", type: "number", demandOption: true }),
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "campaign ID", type: "number", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
-    const ok = await prompts.confirm({ message: `Delete campaign #${args.id}?` })
-    if (!ok || prompts.isCancel(ok)) { prompts.log.info("Cancelled"); return }
+    if (!args.force) {
+      const ok = await prompts.confirm({ message: `Delete campaign #${args.id}?` })
+      if (!ok || prompts.isCancel(ok)) { prompts.log.info("Cancelled"); return }
+    }
     const res = await irisFetch(`${BASE}/${args.id}`, { method: "DELETE" })
     if (!(await handleApiError(res, "Delete"))) return
     prompts.log.success(`${success("✓")} Campaign #${args.id} deleted`)

@@ -211,11 +211,11 @@ const DeleteCmd = cmd({
   command: "delete <id-or-name>",
   aliases: ["rm"],
   describe: "delete a campaign permanently",
-  builder: (y) => y.positional("id-or-name", { type: "string", demandOption: true }).option("yes", { type: "boolean", describe: "skip confirmation" }),
+  builder: (y) => y.positional("id-or-name", { type: "string", demandOption: true }).option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     await requireAuth()
     const ref = args["id-or-name"] as string
-    if (!args.yes) {
+    if (!args.force) {
       const ok = await prompts.confirm({ message: `Delete campaign ${ref}? This cannot be undone.` })
       if (!ok || prompts.isCancel(ok)) { prompts.log.info("Cancelled"); return }
     }

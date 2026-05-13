@@ -460,7 +460,7 @@ const DeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "product ID", type: "number", demandOption: true })
-      .option("yes", { describe: "skip confirmation prompt", type: "boolean", alias: "y", default: false }),
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Product #${args.id}`)
@@ -468,7 +468,7 @@ const DeleteCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    let confirmed: boolean | symbol = args.yes
+    let confirmed: boolean | symbol = args.force
     if (!confirmed) {
       if (isNonInteractive()) {
         prompts.log.error("Refusing to delete without --yes in non-interactive mode.")
