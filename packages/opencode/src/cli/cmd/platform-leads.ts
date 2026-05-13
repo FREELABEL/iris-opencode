@@ -3700,27 +3700,17 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
               const noteActivities = activities.filter((a: any) => a.type === "note" || a.activity_type === "note").slice(0, 3)
               const recentNotes = noteActivities.map((n: any) => (n.title ?? n.description ?? n.content ?? "").slice(0, 60)).filter(Boolean).join("; ")
 
-              // Payment status line
-              const totalPaid = stripeData?.total_paid ?? 0
-              const activeSubs = stripeData?.summary?.active_subscriptions ?? 0
-              let paymentStatus = ""
-              if (totalPaid > 0) paymentStatus = `Total paid to date: $${totalPaid}. Active subscriptions: ${activeSubs}.`
-              else if (dealHealth?.has_payment_gate && !dealHealth.payment_received) paymentStatus = "Payment gate created but unpaid."
-              else paymentStatus = "No payment activity yet."
-
               const aiPrompt = [
-                `Status update email to ${firstName} re: "${scopeShort}".`,
+                `Production status update email to ${firstName} re: "${scopeShort}".`,
                 `Client: ${name} (${lead.company ?? ""}).`,
-                amount ? `Amount: $${amount}. ${paymentStatus}` : paymentStatus,
                 onboardingSummary,
                 reqSummary,
                 kbSummary,
                 tasksSummary,
                 recentNotes ? `Notes: ${recentNotes}` : "",
-                proposalLink ? `Proposal: ${proposalLink}` : "",
-                contractLink ? `Contract: ${contractLink}` : "",
-                `Cover: accomplishments, what's next, what we need from them.`,
-                `Include links if available. Under 300 words. Warm but professional.`,
+                `Focus ONLY on production progress — what we built, what's next, what we need from them.`,
+                `Do NOT mention pricing, payments, invoices, billing, or agreements.`,
+                `Under 300 words. Warm but professional.`,
                 `No pulse scores or internal metrics. Sign off as "IRIS AI — on behalf of the IRIS team"`,
               ].filter(Boolean).join("\n").slice(0, 995)
 
@@ -3898,19 +3888,19 @@ const LeadsMeetCommand = cmd({
 
     let calendarResult: any = null
     let resolvedCalendarName: string | undefined
+    let calendarId: string | undefined
+    const attendeeList: string[] = []
+    if (lead.email) attendeeList.push(lead.email)
+    if (args.attendees) attendeeList.push(...(args.attendees as string[]))
+
     if (!args["no-calendar"]) {
       spinner.start("Creating calendar event…")
       try {
-        const attendeeList: string[] = []
-        if (lead.email) attendeeList.push(lead.email)
-        if (args.attendees) attendeeList.push(...(args.attendees as string[]))
-
         const accountOpts: { integrationId?: number; account?: string } = {}
         if (args.integrationId ?? args["integration-id"]) accountOpts.integrationId = Number(args.integrationId ?? args["integration-id"])
         if (args.account) accountOpts.account = args.account as string
 
         // Resolve calendar name → ID (e.g. "Meetings" → "abc123@group.calendar.google.com")
-        let calendarId: string | undefined
         if (args.calendar) {
           const calInput = args.calendar as string
           // If it looks like an ID already (contains @ or is "primary"), use directly
@@ -3973,6 +3963,18 @@ const LeadsMeetCommand = cmd({
           type: "meeting_scheduled",
           activity_type: "meeting",
           activity_icon: "calendar",
+          activity_data: JSON.stringify({
+            calendar_event_id: calendarResult?.event_id ?? calendarResult?.id ?? null,
+            calendar_id: calendarId ?? "primary",
+            calendar_name: resolvedCalendarName ?? null,
+            event_url: calendarResult?.event_url ?? calendarResult?.htmlLink ?? null,
+            account: (args.account as string) ?? null,
+            start_time: startTime,
+            end_time: endTime,
+            title,
+            attendees: attendeeList,
+            location: (args.location as string) ?? null,
+          }),
         }),
       })
     } catch {}
@@ -5745,15 +5747,14 @@ const LeadsPulseAllCommand = cmd({
             const kbDocs = readData?.signals?.knowledge_completeness?.docs_count ?? 0
 
             const aiPrompt = [
-              `Write a professional status update email to ${r.name.split(" ")[0] || "there"} about their project.`,
+              `Production status update email to ${r.name.split(" ")[0] || "there"} about their project.`,
               `Client: ${r.name} (${r.company})`,
-              r.amount ? `Agreement: $${r.amount}` : "",
               onboardingSummary,
               reqSummary,
               `KB: ${kbDocs} sections populated.`,
-              r.proposalUrl ? `Proposal: ${r.proposalUrl}` : "",
-              `Cover: accomplishments, what's next, what we need from them.`,
-              `Under 300 words. Warm but professional. Do NOT mention pulse scores.`,
+              `Focus ONLY on production progress — what we built, what's next, what we need from them.`,
+              `Do NOT mention pricing, payments, invoices, billing, or agreements.`,
+              `Under 300 words. Warm but professional. No pulse scores or internal metrics.`,
               `Sign off as "IRIS AI — on behalf of the IRIS team"`,
             ].filter(Boolean).join("\n")
 
