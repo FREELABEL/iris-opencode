@@ -63,16 +63,16 @@ const ListCommand = cmd({
     yargs
       .option("limit", { describe: "max results", type: "number", default: 20 })
       .option("search", { alias: "q", describe: "search query", type: "string" })
-      .option("type", { describe: "venue type (studio/venue/restaurant/bar/store/coffee-shop)", type: "string" }),
+      .option("type", { describe: "venue type (studio/venue/restaurant/bar/store/coffee-shop)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Venues")
+    if (!args.json) { UI.empty(); prompts.intro("◈  Venues") }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
 
     try {
       const params = new URLSearchParams({ limit: String(args.limit) })
@@ -81,11 +81,16 @@ const ListCommand = cmd({
 
       const res = await irisFetch(`/api/v1/venues?${params}`)
       const ok = await handleApiError(res, "List venues")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
       const items: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
-      spinner.stop(`${items.length} venue(s)`)
+      if (spinner) spinner.stop(`${items.length} venue(s)`)
+
+      if (args.json) {
+        console.log(JSON.stringify(items, null, 2))
+        return
+      }
 
       if (items.length === 0) { prompts.log.warn("No venues found"); prompts.outro("Done"); return }
 
@@ -95,9 +100,9 @@ const ListCommand = cmd({
 
       prompts.outro(dim("iris venues get <id>  |  iris venues pull <id>"))
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      if (!args.json) prompts.outro("Done")
     }
   },
 })
