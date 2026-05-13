@@ -545,11 +545,14 @@ const SearchCommand = cmd({
     try {
       // Use searchPlaces via iris-api tools/execute (has Serper key configured)
       const userId = await resolveUserId()
+      // Extract location hint (last 2-3 words likely city/state) — don't duplicate full query as location
+      const queryWords = args.query.trim().split(/\s+/)
+      const locationHint = queryWords.length > 3 ? queryWords.slice(-2).join(" ") : ""
       const res = await irisFetch("/api/v1/tools/execute", {
         method: "POST",
         body: JSON.stringify({
           tool: "searchPlaces",
-          params: { query: args.query, location: args.query },
+          params: { query: args.query, location: locationHint },
           user_id: userId || 193,
         }),
       }, IRIS_API)
