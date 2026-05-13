@@ -41,7 +41,7 @@ Trend:    ▁▃▄▆█  (8 snapshots)
 Signals:  req 80/100 · live 100/100 · comms 60/100 · cfg 75/100
 ```
 
-The four signals are weighted **40% requirements / 25% liveness / 20% comms freshness / 15% config**. Null signals (e.g. unconverted lead with no liveness data) drop their weight and the rest renormalize.
+The signals are weighted **35% requirements / 20% liveness / 18% comms freshness / 13% config / 7% deal health / 7% meeting engagement**. Null signals (e.g. unconverted lead with no liveness data) drop their weight and the rest renormalize.
 
 ### 3. Run requirements manually
 
@@ -168,6 +168,49 @@ iris leads pulse-all --hydrate              # send AI follow-up emails
 iris leads pulse-all --hydrate --dry-run    # preview without sending
 ```
 
+### Send recap status updates to clients (`--recap`)
+
+AI-generated production status emails — what you've built, what's next, what you need from them. Works on any lead with email, not just unpaid gates. 72h (3-day) throttle.
+
+```bash
+# Single lead
+iris leads pulse <id> --recap --dry-run          # preview without sending
+iris leads pulse <id> --recap --to alex@freelabel.net  # send to yourself first
+iris leads pulse <id> --recap                    # send to the client
+iris leads pulse <id> --recap --force            # bypass 72h throttle
+
+# Bulk — all eligible leads
+iris leads pulse-all --recap --dry-run           # preview all
+iris leads pulse-all --recap --to alex@freelabel.net   # all to yourself
+iris leads pulse-all --recap --force             # bypass throttle for all
+```
+
+Recaps focus on **production progress only** — no pricing, payments, or billing mentioned. The AI prompt pulls onboarding completion, requirements health, KB docs, tasks, and recent notes. The backend's RAG system adds semantically relevant lead notes on top.
+
+The `--recap` and `--hydrate` flags can run together — they serve different purposes (status update vs payment follow-up) and have independent throttle windows (72h vs 48h), but both reset based on the same "last outreach" timestamp.
+
+### Prepare dashboard (`--prepare`)
+
+Operational view sorted worst-first, with per-lead task counts, requirements health, KB completeness, meeting scores, and top 3 prioritized CLI commands to improve each lead's pulse.
+
+```bash
+iris leads pulse-all --prepare
+```
+
+Output per lead:
+
+```
+#20119  Carrington Smurl  51/100  Pending
+        Tasks: 32 overdue · 72 pending · 0 done  |  Reqs: 0/2 passing  |  0/8 KB  |  mtg 90
+        1. iris leads kb 20119 --generate
+        2. iris leads requirements run 20119
+        3. iris leads content-engine create 20119
+```
+
+Actions adapt to what's missing — KB generation, payment gates, requirements, content engine, meetings, task review, hydration, or recap. Leads with everything covered show "On track".
+
+The footer shows aggregate stats: average pulse, failing count, total tasks pending/overdue across all leads.
+
 ### Filter by status or bloq
 
 ```bash
@@ -227,24 +270,33 @@ Looks for `Trend:` line. Eight unicode block characters (`▁▂▃▄▅▆▇�
 ## What feeds each signal
 
 ```
-  requirements (40%)   bloq_workflows execution_mode='requirement'
-                        with hive_config.last_status:
-                          'passed'/'completed' = passing
-                          'failed'             = failing
-                          null                  = untested
-                        weighted by hive_config.severity
+  requirements (35%)      bloq_workflows execution_mode='requirement'
+                           with hive_config.last_status:
+                             'passed'/'completed' = passing
+                             'failed'             = failing
+                             null                  = untested
+                           weighted by hive_config.severity
 
-  liveness (25%)        bloq_agents.last_heartbeat_at < 2h ago
-                        AND health_status NOT IN (paused_budget, paused)
+  liveness (20%)           bloq_agents.last_heartbeat_at < 2h ago
+                           AND health_status NOT IN (paused_budget, paused)
 
-  comms_freshness (20%) lead_comms latest sent_at:
-                          inbound <7d  = 100
-                          inbound <30d = 60
-                          inbound <90d = 30
-                          outbound only = 30
-                          nothing       = 0
+  comms_freshness (18%)    lead_comms latest sent_at:
+                             inbound <7d  = 100
+                             inbound <30d = 60
+                             inbound <90d = 30
+                             outbound only = 30
+                             nothing       = 0
 
-  config (15%)          integrations.count + users.stack_profile present
+  config (13%)             integrations.count + users.stack_profile present
+
+  deal_health (7%)         has_payment_gate + payment_received + proposal + contract
+
+  meeting_engagement (7%)  som_lead_notes activity_type='meeting' + lead_tasks:
+                             meeting in <=7d (upcoming or past)  = 100
+                             meeting in 7–14d                    = 90
+                             meeting in last 30d                 = 60
+                             meeting >30d out                    = 40
+                             no meetings                        = null (redistributed)
 ```
 
 ## Cross-scope traversal (paying users)
