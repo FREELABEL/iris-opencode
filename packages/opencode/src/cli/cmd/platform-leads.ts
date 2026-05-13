@@ -3897,6 +3897,7 @@ const LeadsMeetCommand = cmd({
     const spinner = prompts.spinner()
 
     let calendarResult: any = null
+    let resolvedCalendarName: string | undefined
     if (!args["no-calendar"]) {
       spinner.start("Creating calendar event…")
       try {
@@ -3908,6 +3909,43 @@ const LeadsMeetCommand = cmd({
         if (args.integrationId ?? args["integration-id"]) accountOpts.integrationId = Number(args.integrationId ?? args["integration-id"])
         if (args.account) accountOpts.account = args.account as string
 
+        // Resolve calendar name → ID (e.g. "Meetings" → "abc123@group.calendar.google.com")
+        let calendarId: string | undefined
+        if (args.calendar) {
+          const calInput = args.calendar as string
+          // If it looks like an ID already (contains @ or is "primary"), use directly
+          if (calInput === "primary" || calInput.includes("@")) {
+            calendarId = calInput
+          } else {
+            // Resolve by display name
+            try {
+              const calsResult = await calExec("get_calendars", {}, accountOpts)
+              const cals: any[] = calsResult?.calendars ?? calsResult?.data?.calendars ?? []
+              const match = cals.find((c: any) => (c.name ?? "").toLowerCase() === calInput.toLowerCase())
+              if (match) {
+                calendarId = match.id
+                resolvedCalendarName = match.name
+              } else {
+                // Fuzzy: partial match
+                const fuzzy = cals.find((c: any) => (c.name ?? "").toLowerCase().includes(calInput.toLowerCase()))
+                if (fuzzy) {
+                  calendarId = fuzzy.id
+                  resolvedCalendarName = fuzzy.name
+                } else {
+                  spinner.stop(`Calendar "${calInput}" not found`)
+                  const available = cals.map((c: any) => `  ${c.name ?? c.id}`).join("\n")
+                  if (available) prompts.log.info(`Available calendars:\n${available}`)
+                  prompts.outro("Done")
+                  return
+                }
+              }
+            } catch {
+              // Fallback: treat input as raw ID
+              calendarId = calInput
+            }
+          }
+        }
+
         calendarResult = await calExec("create_event", {
           title,
           start_time: startTime,
@@ -3916,7 +3954,7 @@ const LeadsMeetCommand = cmd({
           location: args.location ?? undefined,
           timezone: "America/Chicago",
           ...(attendeeList.length > 0 ? { attendees: attendeeList } : {}),
-          ...(args.calendar ? { calendar_id: args.calendar } : {}),
+          ...(calendarId ? { calendar_id: calendarId } : {}),
         }, accountOpts)
         spinner.stop(`${success("✓")} Calendar event created`)
       } catch (err: any) {
@@ -3967,8 +4005,10 @@ const LeadsMeetCommand = cmd({
       printKV("When", `${formatDate(startTime)} ${formatTime(startTime)}`)
       printKV("Duration", `${args.duration} min`)
       if (args.location) printKV("Location", args.location as string)
-      if (args.calendar) printKV("Calendar ID", args.calendar as string)
-      if (calendarResult?.event_url) printKV("Calendar", calendarResult.event_url)
+      if (resolvedCalendarName) printKV("Calendar", resolvedCalendarName)
+      else if (args.calendar) printKV("Calendar", args.calendar as string)
+      if (args.account) printKV("Account", args.account as string)
+      if (calendarResult?.event_url) printKV("Link", calendarResult.event_url)
       printKV(
         "Synced",
         args["no-calendar"] ? dim("skipped") : calendarResult ? success("✓ Google Calendar") : dim("failed"),
