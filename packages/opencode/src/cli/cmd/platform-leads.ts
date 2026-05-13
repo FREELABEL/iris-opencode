@@ -5405,7 +5405,7 @@ const LeadsPulseAllCommand = cmd({
             ])
             if (tasksRes.status === "fulfilled" && tasksRes.value?.ok) {
               const td = ((await tasksRes.value.json()) as any)?.data ?? []
-              const tasks: any[] = Array.isArray(td) ? td : []
+              const tasks: any[] = Array.isArray(td) ? td : (td?.tasks ?? [])
               const now = new Date()
               tasksCompleted = tasks.filter((t: any) => t.status === "completed" || t.completed).length
               const pending = tasks.filter((t: any) => t.status !== "completed" && !t.completed)
@@ -5413,9 +5413,10 @@ const LeadsPulseAllCommand = cmd({
               tasksPending = pending.length
             }
             if (reqRes.status === "fulfilled" && reqRes.value?.ok) {
-              const rd = ((await reqRes.value.json()) as any)?.data ?? {}
-              reqPassing = rd.passing ?? rd.passed ?? 0
-              reqTotal = rd.total ?? 0
+              const rd = (await reqRes.value.json()) as any
+              const rData = rd?.data ?? rd ?? {}
+              reqPassing = rData.passing ?? rData.passed ?? 0
+              reqTotal = rData.total ?? 0
             }
           }
 
