@@ -399,7 +399,7 @@ const CalendarCalendarsCommand = cmd({
       return
     }
 
-    const cals: any[] = result.calendars ?? []
+    const cals: any[] = result.calendars ?? result.data?.calendars ?? []
     for (const cal of cals) {
       const primary = cal.primary ? ` ${success("* primary")}` : ""
       console.log(`  ${bold(cal.name || cal.id)}${primary}`)
