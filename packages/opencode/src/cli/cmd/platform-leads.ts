@@ -2104,6 +2104,9 @@ const LeadsPulseCommand = cmd({
         printKV("Signals", sigLine)
         if (meetSig && meetS !== null && meetS !== undefined && meetS < 40) {
           console.log(`    ${dim(`No upcoming meetings — run: iris leads meet ${leadId} --at ...`)}`)
+          if (lead.email) {
+            console.log(`    ${dim(`Tip: iris leads sync-calendar ${leadId} --calendar <name>  — import meetings from Google Calendar`)}`)
+          }
         }
       }
 
@@ -3839,7 +3842,7 @@ const LeadsMeetCommand = cmd({
       })
       .option("account", { type: "string", describe: "Google account email (multi-account)" })
       .option("integration-id", { type: "number", describe: "specific integration record ID" })
-      .option("calendar", { type: "string", describe: "calendar ID (e.g. 'primary', 'work@group.calendar.google.com')" })
+      .option("calendar", { type: "string", describe: "calendar name or ID (e.g. 'Meetings', 'primary')", demandOption: "specify --calendar (name or ID)" })
       .option("attendees", { type: "array", string: true, describe: "additional attendee emails" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -3965,7 +3968,7 @@ const LeadsMeetCommand = cmd({
           activity_icon: "calendar",
           activity_data: JSON.stringify({
             calendar_event_id: calendarResult?.event_id ?? calendarResult?.id ?? null,
-            calendar_id: calendarId ?? "primary",
+            calendar_id: calendarId ?? null,
             calendar_name: resolvedCalendarName ?? null,
             event_url: calendarResult?.event_url ?? calendarResult?.htmlLink ?? null,
             account: (args.account as string) ?? null,
@@ -4102,6 +4105,178 @@ const LeadsMeetingsCommand = cmd({
       console.log()
       printDivider()
       prompts.outro(`${dim(`iris leads meet ${leadId} --at …`)}  ·  ${dim(`iris leads pulse ${leadId}`)}`)
+    } catch (err: any) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err.message)
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Sync Calendar — import untracked calendar events as lead notes
+// ============================================================================
+
+const LeadsSyncCalendarCommand = cmd({
+  command: "sync-calendar <id>",
+  aliases: ["cal-sync"],
+  describe: "import untracked Google Calendar events as lead notes (feeds Pulse scoring)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
+      .option("days", { type: "number", default: 90, describe: "look-back window in days" })
+      .option("future-days", { type: "number", default: 30, describe: "look-ahead window in days" })
+      .option("account", { type: "string", describe: "Google account email (multi-account)" })
+      .option("calendar", { type: "string", describe: "calendar name or ID", demandOption: "specify --calendar (name or ID)" })
+      .option("dry-run", { type: "boolean", default: false, describe: "show what would be imported without creating notes" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
+
+    const resolved = await resolveLeadId(String(args.id))
+    if (!resolved) {
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+    const { leadId, lead } = resolved
+    const leadName = lead.name ?? lead.first_name ?? `Lead #${leadId}`
+    const leadEmail = lead.email
+
+    if (!leadEmail) {
+      prompts.log.error(`Lead #${leadId} has no email — cannot match calendar events`)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    prompts.intro(`◈  Sync Calendar — ${leadName}`)
+    const spinner = prompts.spinner()
+    spinner.start("Fetching calendar events…")
+
+    try {
+      const days = args.days as number
+      const futureDays = args["future-days"] as number
+      const { past, upcoming } = await fetchLeadCalendarEvents(
+        { name: leadName, email: leadEmail, id: leadId },
+        { days, futureDays },
+      )
+      const allEvents = [...upcoming, ...past]
+      spinner.stop(`${allEvents.length} matching events found`)
+
+      if (allEvents.length === 0) {
+        prompts.log.info("No calendar events found for this lead.")
+        prompts.outro("Done")
+        return
+      }
+
+      // Fetch existing notes to dedup by calendar_event_id
+      spinner.start("Checking existing notes…")
+      const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
+      const leadData = leadRes.ok ? (await leadRes.json() as any)?.data : null
+      const existingNotes: any[] = leadData?.notes ?? []
+      const trackedIds = new Set<string>()
+      for (const note of existingNotes) {
+        try {
+          const ad = typeof note.activity_data === "string" ? JSON.parse(note.activity_data) : note.activity_data
+          if (ad?.calendar_event_id) trackedIds.add(ad.calendar_event_id)
+        } catch { /* skip unparseable */ }
+      }
+      spinner.stop(`${trackedIds.size} events already tracked`)
+
+      // Filter out already-tracked events
+      const toImport = allEvents.filter((ev: any) => {
+        const evId = ev.id ?? ev.event_id
+        return evId && !trackedIds.has(evId)
+      })
+
+      if (toImport.length === 0) {
+        prompts.log.info(success("All calendar events already tracked."))
+        prompts.outro("Done")
+        return
+      }
+
+      if (args["dry-run"]) {
+        console.log()
+        console.log(`  ${bold("Would import")} ${highlight(String(toImport.length))} events:`)
+        for (const ev of toImport) {
+          const start = ev.start || ev.start_time || ""
+          const attendees = (ev.attendees ?? []).map((a: any) => a.email ?? a).filter(Boolean)
+          console.log(`    ${success("+")} ${formatDate(start)} ${formatTime(start)}  ${ev.summary || ev.title || "(no title)"}`)
+          if (attendees.length > 0) console.log(`      ${dim(attendees.join(", "))}`)
+        }
+        console.log()
+        printDivider()
+        prompts.log.info(`${toImport.length} events would be imported, ${allEvents.length - toImport.length} already tracked`)
+        prompts.outro(`Remove --dry-run to import`)
+        return
+      }
+
+      // Import events as notes
+      spinner.start(`Importing ${toImport.length} events…`)
+      let imported = 0
+      let failed = 0
+      for (const ev of toImport) {
+        const evId = ev.id ?? ev.event_id
+        const evTitle = ev.summary || ev.title || "(no title)"
+        const start = ev.start || ev.start_time || ""
+        const end = ev.end || ev.end_time || ""
+        const attendees = (ev.attendees ?? []).map((a: any) => a.email ?? a).filter(Boolean)
+        const noteMsg = [
+          `Calendar event: ${evTitle}`,
+          `Date: ${formatDate(start)} ${formatTime(start)}`,
+          attendees.length > 0 ? `Attendees: ${attendees.join(", ")}` : null,
+          ev.location ? `Location: ${ev.location}` : null,
+        ].filter(Boolean).join("\n")
+
+        try {
+          await irisFetch(`/api/v1/leads/${leadId}/notes`, {
+            method: "POST",
+            body: JSON.stringify({
+              message: noteMsg,
+              type: "calendar_discovery",
+              activity_type: "meeting",
+              activity_icon: "calendar",
+              activity_data: JSON.stringify({
+                calendar_event_id: evId,
+                start_time: start,
+                end_time: end,
+                title: evTitle,
+                attendees,
+                event_url: ev.html_link ?? ev.htmlLink ?? null,
+                source: "sync-calendar",
+              }),
+            }),
+          })
+          imported++
+        } catch {
+          failed++
+        }
+      }
+      spinner.stop(`${success("✓")} ${imported} imported${failed > 0 ? `, ${failed} failed` : ""}`)
+
+      if (args.json) {
+        console.log(JSON.stringify({
+          lead_id: leadId,
+          events_found: allEvents.length,
+          already_tracked: allEvents.length - toImport.length,
+          imported,
+          failed,
+        }, null, 2))
+      } else {
+        printDivider()
+        printKV("Events found", String(allEvents.length))
+        printKV("Already tracked", String(allEvents.length - toImport.length))
+        printKV("Imported", success(String(imported)))
+        if (failed > 0) printKV("Failed", String(failed))
+        printDivider()
+      }
+
+      prompts.outro(`${dim(`iris leads pulse ${leadId}`)}`)
     } catch (err: any) {
       spinner.stop("Error", 1)
       prompts.log.error(err.message)
@@ -5291,10 +5466,10 @@ const LeadsKBCommand = cmd({
 const LeadsPulseAllCommand = cmd({
   command: "pulse-all",
   aliases: ["scorecard", "health"],
-  describe: "run pulse on all Won + Active leads — scorecard with deal health, gates, and gaps",
+  describe: "run pulse on all Won, Active & In Negotiation leads — scorecard with deal health, gates, and gaps",
   builder: (yargs) =>
     yargs
-      .option("status", { describe: "filter by status (comma-separated, e.g. Won,Active)", type: "string", default: "Won,Active" })
+      .option("status", { describe: "filter by status (comma-separated, e.g. Won,Active,In Negotiation)", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
       .option("hydrate", {
         describe: "auto-send follow-ups to eligible leads (past 48h throttle)",
@@ -5340,9 +5515,12 @@ const LeadsPulseAllCommand = cmd({
       const leads: any[] = results.flat()
 
       // Skip junk leads (no email, social emails, self)
+      // Exception: Negotiating leads with phone numbers are always eligible (hand-picked, not scraped)
       const eligible = leads.filter((l) => {
-        if (!l.email) return false
-        if (l.email.endsWith("@instagram.com") || l.email.endsWith("@twitter.com")) return false
+        if (!l.email && !l.phone) return false
+        const isSocialEmail = l.email?.endsWith("@instagram.com") || l.email?.endsWith("@twitter.com")
+        const isNegotiating = l.status === "Negotiating" || l.status === "In Negotiation"
+        if (isSocialEmail && !(isNegotiating && l.phone)) return false
         if (l.name === `Lead #${l.id}`) return false
         return true
       })
@@ -7562,6 +7740,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsSyncCommsCommand)
       .command(LeadsMeetCommand)
       .command(LeadsMeetingsCommand)
+      .command(LeadsSyncCalendarCommand)
       .command(LeadsNotesCommand)
       .command(LeadsNoteCommand)
       .command(LeadsTasksCommand)
