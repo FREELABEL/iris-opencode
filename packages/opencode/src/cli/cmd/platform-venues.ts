@@ -64,6 +64,7 @@ const ListCommand = cmd({
       .option("limit", { describe: "max results", type: "number", default: 20 })
       .option("search", { alias: "q", describe: "search query", type: "string" })
       .option("type", { describe: "venue type (studio/venue/restaurant/bar/store/coffee-shop)", type: "string" })
+      .option("sort", { describe: "sort order: name, trending, rating, newest", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro("◈  Venues") }
@@ -78,6 +79,7 @@ const ListCommand = cmd({
       const params = new URLSearchParams({ limit: String(args.limit) })
       if (args.search) params.set("query", args.search)
       if (args.type) params.set("type", args.type)
+      if (args.sort) params.set("sort", args.sort)
 
       const res = await irisFetch(`/api/v1/venues?${params}`)
       const ok = await handleApiError(res, "List venues")
@@ -95,7 +97,13 @@ const ListCommand = cmd({
       if (items.length === 0) { prompts.log.warn("No venues found"); prompts.outro("Done"); return }
 
       printDivider()
-      for (const v of items) { printVenue(v); console.log() }
+      for (const v of items) {
+        printVenue(v)
+        if (args.sort === "trending" && v.search_count) {
+          console.log(`    ${highlight(`[${v.search_count} searches]`)}`)
+        }
+        console.log()
+      }
       printDivider()
 
       prompts.outro(dim("iris venues get <id>  |  iris venues pull <id>"))
@@ -147,6 +155,8 @@ const GetCommand = cmd({
       printKV("Rating", v.rating)
       printKV("Instagram", v.instagram)
       printKV("Google Place ID", v.google_place_id)
+      printKV("Search Count", v.search_count)
+      printKV("Last Searched", v.last_searched_at)
       if (v.description) { console.log(); console.log(`  ${dim("Description:")} ${String(v.description).slice(0, 200)}`) }
       console.log()
       printDivider()
@@ -561,11 +571,38 @@ const SearchCommand = cmd({
 
       if (spinner) spinner.stop(`${places.length} venue(s) found`)
 
+      // Check each result against existing venues for dedup
+      const dedupSpinner = args.json ? null : prompts.spinner()
+      if (dedupSpinner) dedupSpinner.start("Checking for duplicates…")
+
+      const enrichedPlaces: Array<any & { _existing?: any; _isNew: boolean }> = []
+      for (const p of places) {
+        const placeId = p.cid || p.place_id || null
+        let existing: any = null
+
+        if (placeId) {
+          try {
+            const checkRes = await irisFetch(`/api/v1/venues?query=${encodeURIComponent(p.title || "")}&limit=5`)
+            if (checkRes.ok) {
+              const checkRaw = (await checkRes.json()) as any
+              const candidates: any[] = checkRaw?.data?.data ?? checkRaw?.data ?? []
+              existing = candidates.find((c: any) => c.google_place_id === placeId) || null
+            }
+          } catch { /* ignore lookup failures */ }
+        }
+
+        enrichedPlaces.push({ ...p, _existing: existing, _isNew: !existing })
+      }
+      if (dedupSpinner) dedupSpinner.stop("Dedup complete")
+
       if (!args.save) {
-        // Display-only mode
+        // Display-only mode with dedup badges
         printDivider()
-        for (const p of places) {
-          console.log(`  ${bold(p.title || "Unknown")}`)
+        for (const p of enrichedPlaces) {
+          const badge = p._existing
+            ? highlight(`[EXISTS x${p._existing.search_count || 1}]`)
+            : success("[NEW]")
+          console.log(`  ${bold(p.title || "Unknown")}  ${badge}`)
           if (p.address) console.log(`    ${dim(p.address)}`)
           const meta = [p.rating ? `★ ${p.rating}` : null, p.phone, p.website].filter(Boolean)
           if (meta.length) console.log(`    ${dim(meta.join("  ·  "))}`)
@@ -576,12 +613,22 @@ const SearchCommand = cmd({
         return
       }
 
-      // Save mode — create venues from results
+      // Save mode — create or touch venues
       const saveSpinner = prompts.spinner()
-      saveSpinner.start("Creating venue records…")
+      saveSpinner.start("Creating/updating venue records…")
       let created = 0
+      let touched = 0
 
-      for (const p of places) {
+      for (const p of enrichedPlaces) {
+        if (p._existing) {
+          // Venue exists — increment touch via PUT
+          try {
+            await irisFetch(`/api/v1/venues/${p._existing.id}`, { method: "PUT", body: JSON.stringify({}) })
+            touched++
+          } catch { /* skip */ }
+          continue
+        }
+
         const payload: Record<string, unknown> = {
           name: p.title,
           type: args.type,
@@ -589,6 +636,7 @@ const SearchCommand = cmd({
           phone: p.phone || null,
           website_url: p.website || null,
           rating: p.rating || null,
+          google_place_id: p.cid || p.place_id || null,
           data_source: "searchPlaces",
         }
         // Try to parse city/state from address
@@ -606,13 +654,14 @@ const SearchCommand = cmd({
         } catch { /* skip individual failures */ }
       }
 
-      saveSpinner.stop(`${success("✓")} Created ${created}/${places.length} venues`)
+      const summary = [created > 0 ? `${created} created` : null, touched > 0 ? `${touched} touched` : null].filter(Boolean).join(", ")
+      saveSpinner.stop(`${success("✓")} ${summary || "No changes"}`)
 
       if (args.json) {
-        console.log(JSON.stringify({ created, total: places.length, places }, null, 2))
+        console.log(JSON.stringify({ created, touched, total: places.length, places }, null, 2))
       }
 
-      prompts.outro(dim("iris venues list"))
+      prompts.outro(dim("iris venues list --sort trending"))
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -725,6 +774,182 @@ const EnrichCommand = cmd({
 })
 
 // ============================================================================
+// Discover — find venues based on artist touring patterns
+// ============================================================================
+
+const DiscoverCommand = cmd({
+  command: "discover <artist>",
+  describe: "discover venues based on where similar artists perform",
+  builder: (yargs) =>
+    yargs
+      .positional("artist", { describe: "artist name (e.g. 'SSG Splurge')", type: "string", demandOption: true })
+      .option("genre", { describe: "genre for better matching", type: "string" })
+      .option("seed-artists", { describe: "comma-separated similar artists to seed search", type: "string" })
+      .option("limit", { describe: "max venues per city", type: "number", default: 5 })
+      .option("save", { describe: "auto-create venue records", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Venue Discovery: ${args.artist}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Finding similar artists and touring cities…")
+
+    try {
+      const userId = await resolveUserId()
+
+      // Step 1: Use AI to find similar artists + their touring cities
+      const genreHint = args.genre ? ` in the ${args.genre} genre` : ""
+      const seedHint = args["seed-artists"] ? ` (also consider: ${args["seed-artists"]})` : ""
+      const aiPrompt = `List 3-5 artists similar to "${args.artist}"${genreHint}${seedHint} and for each, list 2-3 cities where they commonly perform live. Return ONLY valid JSON in this format: [{"artist":"Name","cities":["City, ST"]}]. No markdown, no explanation.`
+
+      const aiRes = await irisFetch("/api/v1/tools/execute", {
+        method: "POST",
+        body: JSON.stringify({
+          tool: "deepResearch",
+          params: { query: aiPrompt, model: "gpt-4.1-nano" },
+          user_id: userId || 193,
+        }),
+      }, IRIS_API)
+
+      if (!aiRes.ok) {
+        if (spinner) spinner.stop("AI lookup failed", 1)
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+
+      const aiRaw = (await aiRes.json()) as any
+      const aiText = aiRaw?.result?.text ?? aiRaw?.result?.content ?? aiRaw?.data?.text ?? JSON.stringify(aiRaw?.result ?? "")
+
+      // Parse JSON from AI response (may be wrapped in markdown code blocks)
+      let artistData: Array<{ artist: string; cities: string[] }> = []
+      try {
+        const jsonStr = aiText.replace(/```json?\n?/g, "").replace(/```/g, "").trim()
+        artistData = JSON.parse(jsonStr)
+      } catch {
+        if (spinner) spinner.stop("Failed to parse artist data", 1)
+        if (!args.json) prompts.log.error("AI returned unparseable response")
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+
+      if (spinner) spinner.stop(`${artistData.length} similar artists found`)
+
+      // Collect unique cities
+      const allCities = [...new Set(artistData.flatMap((a) => a.cities))]
+
+      if (!args.json) {
+        console.log()
+        console.log(`  ${dim("Similar artists:")} ${artistData.map((a) => a.artist).join(", ")}`)
+        console.log(`  ${dim("Touring cities:")} ${allCities.join(", ")}`)
+        console.log()
+      }
+
+      // Step 2: Search for venues in each city
+      const cityResults: Record<string, any[]> = {}
+      for (const city of allCities) {
+        const citySpinner = args.json ? null : prompts.spinner()
+        if (citySpinner) citySpinner.start(`Searching venues in ${city}…`)
+
+        try {
+          const searchRes = await irisFetch("/api/v1/tools/execute", {
+            method: "POST",
+            body: JSON.stringify({
+              tool: "searchPlaces",
+              params: { query: `live music venues in ${city}`, location: city },
+              user_id: userId || 193,
+            }),
+          }, IRIS_API)
+
+          if (searchRes.ok) {
+            const searchRaw = (await searchRes.json()) as any
+            const toolResult = searchRaw?.result ?? searchRaw?.data ?? searchRaw
+            const venues: any[] = (toolResult?.results ?? toolResult?.places ?? []).slice(0, args.limit)
+            cityResults[city] = venues
+            if (citySpinner) citySpinner.stop(`${venues.length} venue(s) in ${city}`)
+          } else {
+            if (citySpinner) citySpinner.stop(`${city}: search failed`, 1)
+            cityResults[city] = []
+          }
+        } catch {
+          if (citySpinner) citySpinner.stop(`${city}: error`, 1)
+          cityResults[city] = []
+        }
+      }
+
+      // Step 3: Display results grouped by city
+      if (args.json && !args.save) {
+        console.log(JSON.stringify({ artist: args.artist, similar_artists: artistData, venues_by_city: cityResults }, null, 2))
+        return
+      }
+
+      if (!args.json) {
+        printDivider()
+        for (const [city, venues] of Object.entries(cityResults)) {
+          console.log(`  ${bold(city)}  ${dim(`(${venues.length} venues)`)}`)
+          for (const v of venues) {
+            console.log(`    ${v.title || "Unknown"}  ${v.rating ? dim(`★ ${v.rating}`) : ""}`)
+            if (v.address) console.log(`      ${dim(v.address)}`)
+          }
+          console.log()
+        }
+        printDivider()
+      }
+
+      // Step 4: Save if requested
+      if (args.save) {
+        const saveSpinner = prompts.spinner()
+        saveSpinner.start("Saving venue records…")
+        let created = 0
+        let touched = 0
+
+        for (const [, venues] of Object.entries(cityResults)) {
+          for (const p of venues) {
+            const payload: Record<string, unknown> = {
+              name: p.title,
+              type: "venue",
+              address: p.address || null,
+              phone: p.phone || null,
+              website_url: p.website || null,
+              rating: p.rating || null,
+              google_place_id: p.cid || p.place_id || null,
+              data_source: "searchPlaces",
+            }
+            const addrParts = (p.address || "").split(",").map((s: string) => s.trim())
+            if (addrParts.length >= 2) {
+              payload.city = addrParts[addrParts.length - 2] || null
+              const stateZip = addrParts[addrParts.length - 1] || ""
+              const stateMatch = stateZip.match(/^([A-Z]{2})\b/)
+              if (stateMatch) payload.state = stateMatch[1]
+            }
+
+            try {
+              const createRes = await irisFetch("/api/v1/venues", { method: "POST", body: JSON.stringify(payload) })
+              if (createRes.ok) {
+                const body = (await createRes.json()) as any
+                if (body?.message?.includes("already exists")) touched++
+                else created++
+              }
+            } catch { /* skip */ }
+          }
+        }
+
+        const summary = [created > 0 ? `${created} created` : null, touched > 0 ? `${touched} touched` : null].filter(Boolean).join(", ")
+        saveSpinner.stop(`${success("✓")} ${summary || "No changes"}`)
+      }
+
+      if (!args.json) prompts.outro(dim("iris venues list --sort trending"))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -744,6 +969,7 @@ export const PlatformVenuesCommand = cmd({
       .command(DeleteCommand)
       .command(SearchCommand)
       .command(EnrichCommand)
+      .command(DiscoverCommand)
       .demandCommand(),
   async handler() {},
 })
