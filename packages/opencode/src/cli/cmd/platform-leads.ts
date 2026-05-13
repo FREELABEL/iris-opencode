@@ -314,9 +314,11 @@ const LeadsListCommand = cmd({
 
       // Trim to requested limit
       leads = leads.slice(0, args.limit)
-      if (!args.all && !args.status) {
+      if (!args.all && !args.status && !args.search) {
         const suffix = prospectedCount > 0 ? dim(` (${prospectedCount} Prospected hidden — use --all to include)`) : ""
         spinner.stop(`${leads.length} lead(s)${suffix}`)
+      } else if (args.search && totalFromApi > leads.length) {
+        spinner.stop(`Showing ${leads.length} of ${totalFromApi} results for "${args.search}"`)
       } else {
         spinner.stop(`${leads.length} lead(s)`)
       }

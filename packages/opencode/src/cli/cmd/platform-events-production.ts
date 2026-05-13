@@ -28,8 +28,14 @@ async function loadSubResources(eventId: number) {
 }
 
 function to12h(t: string): string {
-  if (!t) return ""
-  const [h, m] = t.split(":").map(Number)
+  if (!t || typeof t !== "string") return ""
+  // Already in 12h format (e.g. "7:30 PM") — return as-is
+  if (/[AP]M$/i.test(t.trim())) return t.trim()
+  if (!t.includes(":")) return ""
+  const parts = t.split(":")
+  const h = parseInt(parts[0], 10)
+  const m = parseInt(parts[1] ?? "0", 10)
+  if (isNaN(h) || isNaN(m)) return ""
   const ampm = h >= 12 ? "PM" : "AM"
   const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h
   return `${h12}:${String(m).padStart(2, "0")} ${ampm}`
@@ -98,14 +104,20 @@ const OverviewCmd = cmd({
     if (timeline.length === 0) {
       for (const s of stages) {
         for (const st of (s.set_times ?? s.event_stage_set_times ?? [])) {
-          timeline.push({ time: st.start_time, title: st.title, status: "pending", stage: s.title })
+          timeline.push({ time: st.start_time ?? st.time, title: st.profile_name ?? st.title ?? st.name ?? "TBA", status: "pending", stage: s.title })
         }
       }
       // Add production timeline from metadata
       for (const pt of (event.metadata?.production_timeline ?? [])) {
         timeline.push({ time: pt.time, title: pt.task, status: "pending", isProd: true })
       }
-      timeline.sort((a: any, b: any) => (a.time || "").localeCompare(b.time || ""))
+      // Sort: items with times first (by time), then items without times
+      timeline.sort((a: any, b: any) => {
+        if (!a.time && !b.time) return 0
+        if (!a.time) return 1
+        if (!b.time) return -1
+        return (a.time || "").localeCompare(b.time || "")
+      })
     }
 
     if (timeline.length > 0) {
@@ -116,8 +128,8 @@ const OverviewCmd = cmd({
       for (const item of timeline) {
         const isPast = item.time < nowTime
         const icon = item.status === "done" ? success("✓") : isPast ? dim("·") : "○"
-        const timeStr = dim(to12h(item.time).padEnd(9))
-        const title = item.isProd ? dim(item.title) : item.title
+        const timeStr = dim((to12h(item.time) || "TBA").padEnd(9))
+        const title = item.isProd ? dim(item.title ?? "TBA") : (item.title ?? "TBA")
         console.log(`    ${icon} ${timeStr} ${title}`)
       }
     }
@@ -217,13 +229,18 @@ const RunsheetCmd = cmd({
       const stages = local.data.stages ?? local.data.event_stages ?? []
       for (const s of stages) {
         for (const st of (s.set_times ?? s.event_stage_set_times ?? [])) {
-          runsheet.push({ time: st.start_time, end: st.end_time, title: st.title, status: "pending", stage: s.title })
+          runsheet.push({ time: st.start_time ?? st.time, end: st.end_time, title: st.profile_name ?? st.title ?? st.name ?? "TBA", status: "pending", stage: s.title })
         }
       }
       for (const pt of (local.data.metadata?.production_timeline ?? [])) {
         runsheet.push({ time: pt.time, title: pt.task, status: "pending", isProd: true })
       }
-      runsheet.sort((a: any, b: any) => (a.time || "").localeCompare(b.time || ""))
+      runsheet.sort((a: any, b: any) => {
+        if (!a.time && !b.time) return 0
+        if (!a.time) return 1
+        if (!b.time) return -1
+        return (a.time || "").localeCompare(b.time || "")
+      })
     }
 
     // --add
@@ -296,8 +313,8 @@ const RunsheetCmd = cmd({
       else if (isPast) icon = dim("·")
 
       const num = dim(`${String(i + 1).padStart(2)}.`)
-      const time = dim(to12h(item.time || "").padEnd(9))
-      const label = isNow ? bold(item.title) : isNext ? highlight(item.title) : isPast && !isDone ? dim(item.title) : item.title
+      const time = dim((to12h(item.time || "") || "TBA").padEnd(9))
+      const label = isNow ? bold(item.title ?? "TBA") : isNext ? highlight(item.title ?? "TBA") : isPast && !isDone ? dim(item.title ?? "TBA") : (item.title ?? "TBA")
       const stage = item.stage && !item.isProd ? dim(` [${item.stage}]`) : ""
       const nowLabel = isNow ? ` ${highlight("← NOW")}` : isNext ? ` ${dim("← NEXT")}` : ""
 

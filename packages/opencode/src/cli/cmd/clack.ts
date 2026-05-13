@@ -5,13 +5,20 @@ import * as _prompts from "@clack/prompts"
 
 const _quiet = !process.stdout.isTTY
 const _noop = (() => {}) as (...args: any[]) => any
-const _noopSpinner = { start: _noop, stop: _noop, message: _noop }
 
-export const intro = _quiet ? _noop : _prompts.intro
-export const outro = _quiet ? _noop : _prompts.outro
-export const spinner = _quiet ? (() => _noopSpinner) as typeof _prompts.spinner : _prompts.spinner
+// In non-TTY (MCP, piped), output plain text to stderr so callers still see messages
+const _plainLog = (msg: string) => { if (msg) process.stderr.write(String(msg) + "\n") }
+const _plainSpinner = {
+  start: (msg?: string) => { if (msg) _plainLog(msg) },
+  stop: (msg?: string, _code?: number) => { if (msg) _plainLog(msg) },
+  message: (msg?: string) => { if (msg) _plainLog(msg) },
+}
+
+export const intro = _quiet ? ((title?: string) => { if (title) _plainLog(String(title)) }) as typeof _prompts.intro : _prompts.intro
+export const outro = _quiet ? ((msg?: string) => { if (msg) _plainLog(String(msg)) }) as typeof _prompts.outro : _prompts.outro
+export const spinner = _quiet ? (() => _plainSpinner) as unknown as typeof _prompts.spinner : _prompts.spinner
 export const log = _quiet
-  ? ({ info: _noop, warn: _noop, error: _noop, success: _noop, step: _noop, message: _noop } as typeof _prompts.log)
+  ? ({ info: _plainLog, warn: _plainLog, error: _plainLog, success: _plainLog, step: _plainLog, message: _plainLog } as typeof _prompts.log)
   : _prompts.log
 
 // Pass through everything else unchanged

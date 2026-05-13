@@ -227,9 +227,10 @@ const CalendarAddCommand = cmd({
     const params: Record<string, unknown> = {
       title: args.title,
       start_time: args.at,
+      start_datetime: args.at,
       timezone: "America/Chicago",
     }
-    if (args.end) params.end_time = args.end
+    if (args.end) { params.end_time = args.end; params.end_datetime = args.end }
     if (args.location) params.location = args.location
     if (args.description) params.description = args.description
     if (args.calendar) params.calendar_id = args.calendar

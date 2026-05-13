@@ -77,7 +77,7 @@ const ListCommand = cmd({
     if (!args.json) { UI.empty(); prompts.intro("◈  Events") }
 
     const token = await requireAuth()
-    if (!token) { if (!args.json) prompts.outro("Done"); return }
+    if (!token) { if (args.json) { console.log(JSON.stringify({ error: "Not authenticated" })); } else { prompts.outro("Done"); } return }
 
     const spinner = args.json ? null : prompts.spinner()
     if (spinner) spinner.start("Loading…")
@@ -91,7 +91,7 @@ const ListCommand = cmd({
 
       const res = await irisFetch(`/api/v1/events?${params}`)
       const ok = await handleApiError(res, "List events")
-      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (args.json) { console.log(JSON.stringify({ error: "API error" })); } else { prompts.outro("Done"); } return }
 
       const data = (await res.json()) as { data?: any[] }
       const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
@@ -1168,7 +1168,12 @@ const TicketsPushCommand = cmd({
       }
 
       const localData = JSON.parse(readFileSync(filepath, "utf-8"))
-      const localTickets: any[] = localData.tickets ?? localData
+      const localTickets: any[] = (localData.tickets ?? localData).map((t: any) => {
+        // Normalize common field aliases so "name" works as "title", price coerced to string
+        if (t.name && !t.title) t.title = t.name
+        if (t.price != null) t.price = String(t.price)
+        return t
+      })
 
       // 2. Fetch live tickets
       spinner.start("Comparing local vs live…")
@@ -1344,7 +1349,11 @@ const TicketsDiffCommand = cmd({
       }
 
       const localData = JSON.parse(readFileSync(filepath, "utf-8"))
-      const localTickets: any[] = localData.tickets ?? localData
+      const localTickets: any[] = (localData.tickets ?? localData).map((t: any) => {
+        if (t.name && !t.title) t.title = t.name
+        if (t.price != null) t.price = String(t.price)
+        return t
+      })
 
       // Fetch live
       const liveTickets = await fetchTickets(args["event-id"])
@@ -1778,21 +1787,33 @@ const PreflightCommand = cmd({
     const sp = prompts.spinner()
     sp.start("Loading event…")
 
-    // Fetch event data
-    const eventRes = await irisFetch(`/api/v1/events/${args["event-id"]}`)
-    if (!eventRes.ok) { await handleApiError(eventRes, "Get event"); sp.stop("Failed", 1); prompts.outro("Done"); return }
-    const event = ((await eventRes.json()) as any)?.data ?? {}
-    sp.stop(bold(event.title || `Event #${args["event-id"]}`))
+    let event: any
+    let stages: any[]
+    let tickets: any[]
+    let vendors: any[]
 
-    // Fetch sub-resources in parallel
-    const [stagesRes, ticketsRes, vendorsRes] = await Promise.all([
-      irisFetch(`/api/v1/events/${args["event-id"]}/stages`).catch(() => null),
-      irisFetch(`/api/v1/events/${args["event-id"]}/tickets`).catch(() => null),
-      irisFetch(`/api/v1/events/${args["event-id"]}/vendors`).catch(() => null),
-    ])
-    const stages: any[] = stagesRes?.ok ? ((await stagesRes.json()) as any)?.data ?? [] : []
-    const tickets: any[] = ticketsRes?.ok ? ((await ticketsRes.json()) as any)?.data ?? [] : []
-    const vendors: any[] = vendorsRes?.ok ? ((await vendorsRes.json()) as any)?.data ?? [] : []
+    try {
+      // Fetch event data
+      const eventRes = await irisFetch(`/api/v1/events/${args["event-id"]}`)
+      if (!eventRes.ok) { await handleApiError(eventRes, "Get event"); sp.stop("Failed", 1); prompts.outro("Done"); return }
+      event = ((await eventRes.json()) as any)?.data ?? {}
+      sp.stop(bold(event.title || `Event #${args["event-id"]}`))
+
+      // Fetch sub-resources in parallel
+      const [stagesRes, ticketsRes, vendorsRes] = await Promise.all([
+        irisFetch(`/api/v1/events/${args["event-id"]}/stages`).catch(() => null),
+        irisFetch(`/api/v1/events/${args["event-id"]}/tickets`).catch(() => null),
+        irisFetch(`/api/v1/events/${args["event-id"]}/vendors`).catch(() => null),
+      ])
+      stages = stagesRes?.ok ? ((await stagesRes.json()) as any)?.data ?? [] : []
+      tickets = ticketsRes?.ok ? ((await ticketsRes.json()) as any)?.data ?? [] : []
+      vendors = vendorsRes?.ok ? ((await vendorsRes.json()) as any)?.data ?? [] : []
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+      return
+    }
 
     sp.start("Running checks…")
 
@@ -1988,18 +2009,30 @@ const AuditCommand = cmd({
     const sp = prompts.spinner()
     sp.start("Loading event…")
 
-    const eventRes = await irisFetch(`/api/v1/events/${args["event-id"]}`)
-    if (!eventRes.ok) { await handleApiError(eventRes, "Get event"); sp.stop("Failed", 1); prompts.outro("Done"); return }
-    const event = ((await eventRes.json()) as any)?.data ?? {}
+    let event: any
+    let stages: any[]
+    let tickets: any[]
+    let vendors: any[]
 
-    const [stagesRes, ticketsRes, vendorsRes] = await Promise.all([
-      irisFetch(`/api/v1/events/${args["event-id"]}/stages`).catch(() => null),
-      irisFetch(`/api/v1/events/${args["event-id"]}/tickets`).catch(() => null),
-      irisFetch(`/api/v1/events/${args["event-id"]}/vendors`).catch(() => null),
-    ])
-    const stages: any[] = stagesRes?.ok ? ((await stagesRes.json()) as any)?.data ?? [] : []
-    const tickets: any[] = ticketsRes?.ok ? ((await ticketsRes.json()) as any)?.data ?? [] : []
-    const vendors: any[] = vendorsRes?.ok ? ((await vendorsRes.json()) as any)?.data ?? [] : []
+    try {
+      const eventRes = await irisFetch(`/api/v1/events/${args["event-id"]}`)
+      if (!eventRes.ok) { await handleApiError(eventRes, "Get event"); sp.stop("Failed", 1); prompts.outro("Done"); return }
+      event = ((await eventRes.json()) as any)?.data ?? {}
+
+      const [stagesRes, ticketsRes, vendorsRes] = await Promise.all([
+        irisFetch(`/api/v1/events/${args["event-id"]}/stages`).catch(() => null),
+        irisFetch(`/api/v1/events/${args["event-id"]}/tickets`).catch(() => null),
+        irisFetch(`/api/v1/events/${args["event-id"]}/vendors`).catch(() => null),
+      ])
+      stages = stagesRes?.ok ? ((await stagesRes.json()) as any)?.data ?? [] : []
+      tickets = ticketsRes?.ok ? ((await ticketsRes.json()) as any)?.data ?? [] : []
+      vendors = vendorsRes?.ok ? ((await vendorsRes.json()) as any)?.data ?? [] : []
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+      return
+    }
 
     sp.stop(bold(event.title || `Event #${args["event-id"]}`))
 

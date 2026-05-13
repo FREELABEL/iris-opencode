@@ -307,8 +307,18 @@ const PushCommand = cmd({
       spinner.start(`Pushing ${basename(filepath)}…`)
 
       const entity = JSON.parse(readFileSync(filepath, "utf-8"))
+
+      // Validate skills_required is an array if present
+      const skills = entity.skills_required ?? entity.skills
+      if (skills != null && !Array.isArray(skills)) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`skills_required must be an array (e.g. ["design", "marketing"]), got ${typeof skills}`)
+        prompts.outro("Done")
+        return
+      }
+
       const payload: Record<string, unknown> = {
-        title: entity.title, description: entity.description, skills_required: entity.skills_required ?? entity.skills,
+        title: entity.title, description: entity.description, skills_required: skills,
         price_min: entity.price_min ?? entity.min_budget, price_max: entity.price_max ?? entity.max_budget, application_deadline: entity.application_deadline ?? entity.deadline,
         funding_goal_cents: entity.funding_goal_cents, equity_pool_bps: entity.equity_pool_bps,
         roles: entity.roles, pitch_sections: entity.pitch_sections,
