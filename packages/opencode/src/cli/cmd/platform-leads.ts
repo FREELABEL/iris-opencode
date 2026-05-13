@@ -1930,7 +1930,12 @@ const LeadsPulseCommand = cmd({
         default: false,
       })
       .option("to", { describe: "with --hydrate: redirect email to this address (for testing)", type: "string" })
-      .option("force", { describe: "with --hydrate: ignore 48h throttle window", type: "boolean", default: false })
+      .option("force", { describe: "with --hydrate/--recap: ignore throttle window", type: "boolean", default: false })
+      .option("recap", {
+        describe: "generate + send professional status update email to this lead",
+        type: "boolean",
+        default: false,
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -2084,6 +2089,9 @@ const LeadsPulseCommand = cmd({
         const fmt = (v: number | null | undefined) => (v === null || v === undefined ? dim("—") : `${v}/100`)
         const kbSig = sigs.knowledge_completeness
         const kbLabel = kbSig ? `KB ${kbSig.docs_count ?? 0}/${kbSig.docs_total ?? 8} docs (${fmt(kbSig.score)})` : `KB ${dim("—")}`
+        const meetSig = sigs.meeting_engagement
+        const meetS = meetSig?.score
+        const meetLabel = meetSig?.details ? `meet ${fmt(meetS)} ${dim(meetSig.details)}` : `meet ${fmt(meetS)}`
         const sigLine = [
           `req ${fmt(reqS)}`,
           `live ${fmt(liveS)}`,
@@ -2091,8 +2099,12 @@ const LeadsPulseCommand = cmd({
           `deal ${fmt(dealS)}`,
           `cfg ${fmt(cfgS)}`,
           kbLabel,
+          meetLabel,
         ].join(dim(" · "))
         printKV("Signals", sigLine)
+        if (meetSig && meetS !== null && meetS !== undefined && meetS < 40) {
+          console.log(`    ${dim(`No upcoming meetings — run: iris leads meet ${leadId} --at ...`)}`)
+        }
       }
 
       // Onboarding progress — compact inline display
@@ -3592,10 +3604,219 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
         }
       }
 
+      // ── Recap: professional status update email for any lead with email ──
+      const RECAP_WINDOW_HOURS = 168 // 7 days
+      if (email && !email.endsWith("@instagram.com") && !email.endsWith("@twitter.com")) {
+        // Determine last outreach timestamp (same logic as hydrate)
+        let lastRecapOutreach: Date | null = null
+        const commsSignalRecap = pulseReadiness?.signals?.comms_freshness ?? {}
+        if (commsSignalRecap.last_outbound_at) {
+          lastRecapOutreach = new Date(commsSignalRecap.last_outbound_at)
+        }
+        if (channels) {
+          for (const ch of channels) {
+            for (const msg of ch.messages ?? []) {
+              const isOutbound =
+                ch.name === "iMessage"
+                  ? msg.from_me
+                  : ch.name === "Gmail"
+                    ? !(msg.from ?? "").toLowerCase().includes(email.toLowerCase())
+                    : false
+              if (isOutbound) {
+                const msgDate = new Date(msg.ts ?? msg.date ?? 0)
+                if (!lastRecapOutreach || msgDate > lastRecapOutreach) lastRecapOutreach = msgDate
+              }
+            }
+          }
+        }
+
+        const hoursSinceLastRecap = lastRecapOutreach ? (Date.now() - lastRecapOutreach.getTime()) / (1000 * 60 * 60) : Infinity
+        const forceRecap = !!(args as any).force
+
+        if ((args as any).recap) {
+          console.log()
+          if (hoursSinceLastRecap >= RECAP_WINDOW_HOURS || forceRecap) {
+            console.log(`  ${bold("Recap")}`)
+            console.log(
+              `  ${UI.Style.TEXT_WARNING}Last outreach: ${lastRecapOutreach ? `${Math.floor(hoursSinceLastRecap)}h ago` : "never"}${UI.Style.TEXT_NORMAL}  ${dim(`(${RECAP_WINDOW_HOURS}h window)`)}`,
+            )
+
+            try {
+              // Fetch extra context for recap
+              const [onboardRes, reqSummaryRes] = await Promise.allSettled([
+                irisFetch(`/api/v1/leads/${leadId}/onboarding`),
+                irisFetch(`/api/v1/leads/${leadId}/requirements/summary`),
+              ])
+
+              const onboardData = onboardRes.status === "fulfilled" && onboardRes.value?.ok
+                ? ((await onboardRes.value.json()) as any)?.data ?? null
+                : null
+              const reqData = reqSummaryRes.status === "fulfilled" && reqSummaryRes.value?.ok
+                ? ((await reqSummaryRes.value.json()) as any)?.data ?? null
+                : null
+
+              // Build recap sections
+              const firstName = (lead.name ?? lead.first_name ?? "").split(" ")[0] || "there"
+              const scopeShort = (dealHealth?.scope ?? "our services").slice(0, 120)
+              const amount = dealHealth?.amount ?? ""
+              const proposalLink = dealHealth?.proposal_url ?? ""
+              const contractLink = dealHealth?.contract_signing_url ?? ""
+
+              // Onboarding summary
+              let onboardingSummary = ""
+              if (onboardData) {
+                const steps = onboardData.steps ?? onboardData.items ?? []
+                const done = steps.filter((s: any) => s.completed || s.status === "complete")
+                const total = steps.length
+                const doneNames = done.map((s: any) => s.name ?? s.title ?? "").filter(Boolean).slice(0, 5).join(", ")
+                onboardingSummary = total > 0
+                  ? `Onboarding ${Math.round((done.length / total) * 100)}% complete (${done.length}/${total}). Done: ${doneNames || "N/A"}.`
+                  : ""
+              }
+
+              // Requirements summary
+              let reqSummary = ""
+              if (reqData) {
+                const passing = reqData.passing ?? reqData.passed ?? 0
+                const total = reqData.total ?? 0
+                reqSummary = total > 0 ? `Deliverables: ${passing}/${total} passing.` : ""
+              }
+
+              // KB summary from pulse
+              const kbSignal = pulseReadiness?.signals?.knowledge_completeness ?? {}
+              const kbDocs = kbSignal.docs_count ?? 0
+              const kbTotal = kbSignal.total_expected ?? 8
+              const kbSummary = `Knowledge base: ${kbDocs}/${kbTotal} sections populated.`
+
+              // Tasks summary
+              const completedTasks = leadTasks.filter((t: any) => t.status === "completed" || t.completed)
+              const pendingTasks = leadTasks.filter((t: any) => t.status === "pending" || t.status === "in_progress" || (!t.completed && t.status !== "completed"))
+              const pendingNames = pendingTasks.slice(0, 3).map((t: any) => `'${(t.title ?? t.name ?? "").slice(0, 40)}'`).join(", ")
+              const tasksSummary = leadTasks.length > 0
+                ? `Tasks: ${completedTasks.length} completed, ${pendingTasks.length} pending.${pendingNames ? ` Pending: ${pendingNames}` : ""}`
+                : ""
+
+              // Recent notes (from activities)
+              const noteActivities = activities.filter((a: any) => a.type === "note" || a.activity_type === "note").slice(0, 3)
+              const recentNotes = noteActivities.map((n: any) => (n.title ?? n.description ?? n.content ?? "").slice(0, 60)).filter(Boolean).join("; ")
+
+              // Payment status line
+              const totalPaid = stripeData?.total_paid ?? 0
+              const activeSubs = stripeData?.summary?.active_subscriptions ?? 0
+              let paymentStatus = ""
+              if (totalPaid > 0) paymentStatus = `Total paid to date: $${totalPaid}. Active subscriptions: ${activeSubs}.`
+              else if (dealHealth?.has_payment_gate && !dealHealth.payment_received) paymentStatus = "Payment gate created but unpaid."
+              else paymentStatus = "No payment activity yet."
+
+              const aiPrompt = [
+                `Status update email to ${firstName} re: "${scopeShort}".`,
+                `Client: ${name} (${lead.company ?? ""}).`,
+                amount ? `Amount: $${amount}. ${paymentStatus}` : paymentStatus,
+                onboardingSummary,
+                reqSummary,
+                kbSummary,
+                tasksSummary,
+                recentNotes ? `Notes: ${recentNotes}` : "",
+                proposalLink ? `Proposal: ${proposalLink}` : "",
+                contractLink ? `Contract: ${contractLink}` : "",
+                `Cover: accomplishments, what's next, what we need from them.`,
+                `Include links if available. Under 300 words. Warm but professional.`,
+                `No pulse scores or internal metrics. Sign off as "IRIS AI — on behalf of the IRIS team"`,
+              ].filter(Boolean).join("\n").slice(0, 995)
+
+              const bloqId = (lead.bloq_ids ?? [])[0] ?? 40
+              const genRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/generate-email`, {
+                method: "POST",
+                body: JSON.stringify({
+                  prompt: aiPrompt,
+                  tone: "professional",
+                  include_cta: true,
+                  max_length: "short",
+                  bloq_id: bloqId,
+                  strategy_template_id: 37,
+                }),
+              })
+
+              if (!genRes.ok) {
+                const errBody = await genRes.json().catch(() => ({}))
+                console.log(`  ${dim(`AI generation failed: ${errBody.message ?? errBody.error ?? genRes.status}`)}`)
+              } else {
+                const genData = (await genRes.json()) as any
+                const draft = genData.draft ?? genData.data?.draft ?? genData.data ?? genData
+                const emailSubject = draft.subject ?? `Project Update — ${scopeShort}`
+                const emailBody = draft.body ?? draft.message ?? draft.content ?? ""
+
+                if (!emailBody) {
+                  console.log(`  ${dim("AI returned empty draft — skipping")}`)
+                } else {
+                  const sendTo = (args as any).to ?? email
+                  const isRedirected = !!(args as any).to
+
+                  // Preview
+                  console.log(
+                    `  ${dim("To:")} ${sendTo}${isRedirected ? `  ${highlight("(redirected from " + email + ")")}` : ""}`,
+                  )
+                  console.log(`  ${dim("Subject:")} ${emailSubject}`)
+                  console.log(`  ${dim("─".repeat(50))}`)
+                  for (const line of emailBody.split("\n")) {
+                    console.log(`  ${dim(line)}`)
+                  }
+                  console.log(`  ${dim("─".repeat(50))}`)
+                  console.log()
+
+                  if ((args as any)["dry-run"] || (args as any).dryRun) {
+                    console.log(`  ${highlight("DRY RUN — recap email NOT sent")}`)
+                    console.log(`  ${dim("Remove --dry-run to send")}`)
+                  } else {
+                    const qsBody: Record<string, unknown> = {
+                      channel: "email",
+                      message: emailBody,
+                      subject: emailSubject,
+                      bloq_id: bloqId,
+                      strategy_template_id: 37,
+                    }
+                    if (isRedirected) qsBody.test_email = sendTo
+
+                    const qsRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/quicksend`, {
+                      method: "POST",
+                      body: JSON.stringify(qsBody),
+                    })
+
+                    if (qsRes.ok) {
+                      const qsData = (await qsRes.json()) as any
+                      if (qsData.success || qsData.message_id) {
+                        console.log(`  ${success("Sent recap email")}  ${dim("to " + sendTo)}`)
+                      } else if (qsData.status === "pending_approval") {
+                        console.log(
+                          `  ${highlight("Recap draft queued for approval")}  ${dim("review: iris leads outreach approve")}`,
+                        )
+                      } else {
+                        console.log(`  ${dim("Recap queued")}`)
+                      }
+                    } else {
+                      const errBody = await qsRes.json().catch(() => ({}))
+                      console.log(`  ${dim(`Send failed: ${errBody.message ?? qsRes.status}`)}`)
+                    }
+                  }
+                }
+              }
+            } catch (e: any) {
+              console.log(`  ${dim(`Recap error: ${e.message}`)}`)
+            }
+          } else {
+            const nextIn = Math.ceil(RECAP_WINDOW_HOURS - hoursSinceLastRecap)
+            console.log()
+            console.log(
+              `  ${dim(`Recap: last outreach ${Math.floor(hoursSinceLastRecap)}h ago — next eligible in ${nextIn}h`)}  ${dim("(use --force to override)")}`,
+            )
+          }
+        }
+      }
+
       console.log()
       printDivider()
       prompts.outro(
-        `${dim(`iris leads meet ${leadId} --at …`)}  ·  ${dim(`iris leads meetings ${leadId}`)}  ·  ${dim(`iris leads note ${leadId} "…"`)}`,
+        `${dim(`iris leads pulse ${leadId} --recap`)}  ·  ${dim(`iris leads meet ${leadId} --at …`)}  ·  ${dim(`iris leads note ${leadId} "…"`)}`,
       )
     } catch (err) {
       spinner.stop("Error", 1)
@@ -5036,10 +5257,17 @@ const LeadsPulseAllCommand = cmd({
         default: false,
       })
       .option("dry-run", {
-        describe: "with --hydrate: preview emails without sending",
+        describe: "with --hydrate/--recap: preview emails without sending",
         type: "boolean",
         default: false,
       })
+      .option("recap", {
+        describe: "send professional status update emails to all eligible leads",
+        type: "boolean",
+        default: false,
+      })
+      .option("to", { describe: "with --hydrate/--recap: redirect all emails to this address (for testing)", type: "string" })
+      .option("force", { describe: "with --hydrate/--recap: ignore throttle window", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -5093,6 +5321,7 @@ const LeadsPulseAllCommand = cmd({
         totalPaid: number
         proposalUrl: string | null
         kbCount: number
+        recapEligible: boolean
       }
       const rows: PulseRow[] = []
 
@@ -5170,6 +5399,7 @@ const LeadsPulseAllCommand = cmd({
             totalPaid: stripe.total_paid ?? 0,
             proposalUrl: deal?.proposal_url ?? null,
             kbCount: sigs.knowledge_completeness?.docs_count ?? 0,
+            recapEligible: !!(lead.email && !lead.email.endsWith("@instagram.com") && !lead.email.endsWith("@twitter.com")),
           })
         } catch {
           rows.push({
@@ -5193,6 +5423,7 @@ const LeadsPulseAllCommand = cmd({
             totalPaid: 0,
             proposalUrl: null,
             kbCount: 0,
+            recapEligible: !!(lead.email && !lead.email.endsWith("@instagram.com") && !lead.email.endsWith("@twitter.com")),
           })
         }
       }
@@ -5410,9 +5641,136 @@ const LeadsPulseAllCommand = cmd({
         }
       }
 
+      // Recap summary + execution
+      const RECAP_WINDOW_HOURS = 168
+      const recapReady = rows.filter((r) => r.recapEligible)
+      if (recapReady.length > 0) {
+        console.log()
+        console.log(`  ${bold("Recap ready")} ${dim(`(${recapReady.length} leads with email)`)}`)
+        for (const r of recapReady.slice(0, 10)) {
+          console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim(r.email)}`)
+        }
+        if (recapReady.length > 10) console.log(`    ${dim(`... and ${recapReady.length - 10} more`)}`)
+        if (!args.recap) {
+          console.log(`  ${dim("Run with --recap to send status updates (or --recap --dry-run to preview)")}`)
+        }
+      }
+
+      // If --recap, send recap emails to each eligible lead
+      if (args.recap && recapReady.length > 0) {
+        console.log()
+        console.log(`  ${bold("Sending recaps...")}`)
+        for (const r of recapReady) {
+          try {
+            // Check throttle via comms signal
+            const readRes = await irisFetch(`/api/v1/leads/${r.id}/readiness`).catch(() => null)
+            const readData = readRes?.ok ? ((await readRes.json()) as any)?.data : null
+            const lastOut = readData?.signals?.comms_freshness?.last_outbound_at
+            const hoursSince = lastOut ? (Date.now() - new Date(lastOut).getTime()) / (1000 * 60 * 60) : Infinity
+
+            if (hoursSince < RECAP_WINDOW_HOURS && !args.force) {
+              const nextIn = Math.ceil(RECAP_WINDOW_HOURS - hoursSince)
+              console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim(`next eligible in ${nextIn}h`)}`)
+              continue
+            }
+
+            // Fetch extra context
+            const [onboardRes, reqSummaryRes] = await Promise.allSettled([
+              irisFetch(`/api/v1/leads/${r.id}/onboarding`),
+              irisFetch(`/api/v1/leads/${r.id}/requirements/summary`),
+            ])
+            const onboardData = onboardRes.status === "fulfilled" && onboardRes.value?.ok
+              ? ((await onboardRes.value.json()) as any)?.data ?? null
+              : null
+            const reqData = reqSummaryRes.status === "fulfilled" && reqSummaryRes.value?.ok
+              ? ((await reqSummaryRes.value.json()) as any)?.data ?? null
+              : null
+
+            // Build condensed recap prompt
+            let onboardingSummary = ""
+            if (onboardData) {
+              const steps = onboardData.steps ?? onboardData.items ?? []
+              const done = steps.filter((s: any) => s.completed || s.status === "complete")
+              onboardingSummary = steps.length > 0 ? `Onboarding: ${done.length}/${steps.length} complete.` : ""
+            }
+            let reqSummary = ""
+            if (reqData) {
+              const passing = reqData.passing ?? reqData.passed ?? 0
+              const total = reqData.total ?? 0
+              reqSummary = total > 0 ? `Deliverables: ${passing}/${total} passing.` : ""
+            }
+            const kbDocs = readData?.signals?.knowledge_completeness?.docs_count ?? 0
+
+            const aiPrompt = [
+              `Write a professional status update email to ${r.name.split(" ")[0] || "there"} about their project.`,
+              `Client: ${r.name} (${r.company})`,
+              r.amount ? `Agreement: $${r.amount}` : "",
+              onboardingSummary,
+              reqSummary,
+              `KB: ${kbDocs} sections populated.`,
+              r.proposalUrl ? `Proposal: ${r.proposalUrl}` : "",
+              `Cover: accomplishments, what's next, what we need from them.`,
+              `Under 300 words. Warm but professional. Do NOT mention pulse scores.`,
+              `Sign off as "IRIS AI — on behalf of the IRIS team"`,
+            ].filter(Boolean).join("\n")
+
+            const genRes = await irisFetch(`/api/v1/leads/${r.id}/outreach/generate-email`, {
+              method: "POST",
+              body: JSON.stringify({
+                prompt: aiPrompt,
+                tone: "professional",
+                include_cta: true,
+                max_length: "short",
+                bloq_id: 40,
+                strategy_template_id: 37,
+              }),
+            })
+            if (!genRes.ok) {
+              console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim("AI generation failed")}`)
+              continue
+            }
+            const genData = (await genRes.json()) as any
+            const draft = genData.draft ?? genData.data?.draft ?? genData.data ?? genData
+            const subject = draft.subject ?? `Project Update — ${r.company || r.name}`
+            const emailBody = draft.body ?? draft.message ?? draft.content ?? ""
+
+            if (!emailBody) {
+              console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim("Empty draft")}`)
+              continue
+            }
+
+            if (args["dry-run"] || args.dryRun) {
+              console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${highlight("DRY RUN")}  ${dim(subject.slice(0, 60))}`)
+            } else {
+              const sendTo = args.to ?? r.email
+              const qsBody: Record<string, unknown> = {
+                channel: "email",
+                message: emailBody,
+                subject,
+                bloq_id: 40,
+                strategy_template_id: 37,
+              }
+              if (args.to) qsBody.test_email = sendTo
+
+              const qsRes = await irisFetch(`/api/v1/leads/${r.id}/outreach/quicksend`, {
+                method: "POST",
+                body: JSON.stringify(qsBody),
+              })
+              if (qsRes.ok) {
+                console.log(`    ${success("+")}  ${r.name}  ${dim(subject.slice(0, 60))}`)
+              } else {
+                console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim("Send failed")}`)
+              }
+            }
+          } catch (e: any) {
+            console.log(`    ${dim(`#${r.id}`)}  ${r.name}  ${dim(e.message?.slice(0, 40))}`)
+          }
+        }
+      }
+
       console.log()
       printDivider()
-      prompts.outro(dim("iris leads pulse <id>  ·  iris leads gate-all -a 125  ·  iris leads pulse-all --hydrate"))
+      prompts.outro(dim("iris leads pulse <id>  ·  iris leads pulse-all --recap --dry-run  ·  iris leads gate-all -a 125"))
     } catch (e: any) {
       spinner.stop("Error", 1)
       console.error(e.message)
