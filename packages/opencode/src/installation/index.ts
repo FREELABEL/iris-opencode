@@ -143,6 +143,8 @@ export namespace Installation {
       const tmpDir = path.join(binDir, ".iris-update-tmp")
 
       // Use a script file to avoid Bun template literal interpolation issues
+      const home = process.env.HOME || process.env.USERPROFILE || "/tmp"
+      const irisDir = path.join(home, ".iris")
       const script = `#!/bin/bash
 set -e
 mkdir -p "${tmpDir}"
@@ -162,6 +164,91 @@ mv "${tmpDir}/iris" "${binDir}/iris"
 rm -rf "${tmpDir}"
 # Verify the new binary works
 "${binDir}/iris" --version
+
+# ─── Post-update: Update daemon/bridge code ───
+BRIDGE_DIR="${irisDir}/bridge"
+if [ -d "$BRIDGE_DIR" ] && [ -d "$BRIDGE_DIR/.git" ]; then
+  echo "Updating Hive daemon..."
+  (cd "$BRIDGE_DIR" && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null) || true
+fi
+
+# ─── Post-update: Fix stale API URLs in daemon config ───
+CONFIG_FILE="${irisDir}/config.json"
+if [ -f "$CONFIG_FILE" ]; then
+  # Replace any stale DO/heyiris URLs with freelabel.net
+  if grep -qE 'ondigitalocean\\.app|main\\.heyiris\\.io|apiv2\\.heyiris\\.io' "$CONFIG_FILE" 2>/dev/null; then
+    echo "Fixing stale API URL in daemon config..."
+    sed -i.bak \\
+      -e 's|https://[^"]*ondigitalocean\\.app[^"]*|https://freelabel.net|g' \\
+      -e 's|https://main\\.heyiris\\.io[^"]*|https://freelabel.net|g' \\
+      -e 's|https://apiv2\\.heyiris\\.io[^"]*|https://freelabel.net|g' \\
+      "$CONFIG_FILE" && rm -f "$CONFIG_FILE.bak"
+  fi
+fi
+
+# ─── Post-update: Scaffold MCP config if missing ───
+MCP_CONFIG="${irisDir}/mcp.json"
+if [ ! -f "$MCP_CONFIG" ]; then
+  echo "Scaffolding MCP config..."
+  cat > "$MCP_CONFIG" << 'MCPEOF'
+{
+  "mcpServers": {
+    "iris-local": {
+      "_comment": "Local IRIS tools — filesystem, SDK, project setup",
+      "command": "iris",
+      "args": ["mcp", "serve"],
+      "enabled": true
+    },
+    "iris-platform": {
+      "_comment": "Remote IRIS platform — agents, integrations, workflows",
+      "type": "remote",
+      "url": "https://heyiris.io/mcp",
+      "enabled": false
+    }
+  }
+}
+MCPEOF
+fi
+
+# ─── Post-update: Enable iris-local MCP if it was scaffolded as disabled ───
+if [ -f "$MCP_CONFIG" ] && grep -q '"enabled": false' "$MCP_CONFIG" 2>/dev/null; then
+  # Only enable iris-local, leave iris-platform disabled
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import json, sys
+with open('$MCP_CONFIG') as f: cfg = json.load(f)
+changed = False
+if 'mcpServers' in cfg and 'iris-local' in cfg['mcpServers']:
+    if cfg['mcpServers']['iris-local'].get('enabled') == False:
+        cfg['mcpServers']['iris-local']['enabled'] = True
+        changed = True
+if changed:
+    with open('$MCP_CONFIG', 'w') as f: json.dump(cfg, f, indent=2)
+    print('Enabled iris-local MCP server')
+" 2>/dev/null || true
+  fi
+fi
+
+# ─── Post-update: Restart daemon if it was running ───
+DAEMON_SOCK="${irisDir}/daemon.sock"
+if [ -S "$DAEMON_SOCK" ]; then
+  echo "Restarting Hive daemon with updated code..."
+  DAEMON_PID=$(lsof -ti :3200 2>/dev/null || true)
+  if [ -n "$DAEMON_PID" ]; then
+    kill "$DAEMON_PID" 2>/dev/null || true
+    sleep 2
+  fi
+  rm -f "$DAEMON_SOCK"
+  if [ -f "$BRIDGE_DIR/daemon.js" ]; then
+    nohup node "$BRIDGE_DIR/daemon.js" > "$BRIDGE_DIR/daemon.log" 2>&1 &
+    sleep 3
+    if [ -S "$DAEMON_SOCK" ]; then
+      echo "Daemon restarted successfully"
+    else
+      echo "Daemon restart failed. Check: iris-daemon logs"
+    fi
+  fi
+fi
 `
       const scriptPath = path.join(tmpDir + "-script.sh")
       await import("fs").then(fs => {
@@ -199,8 +286,8 @@ rm -rf "${tmpDir}"
       }
     }
 
-    const home = process.env.HOME || process.env.USERPROFILE || "/tmp"
-    const result = await cmd.cwd(home).quiet().throws(false)
+    const homeDir = process.env.HOME || process.env.USERPROFILE || "/tmp"
+    const result = await cmd.cwd(homeDir).quiet().throws(false)
     log.info("upgraded", {
       method: isIris() ? "iris-installer" : method,
       target,
@@ -211,7 +298,7 @@ rm -rf "${tmpDir}"
       throw new UpgradeFailedError({
         stderr: result.stderr.toString("utf8"),
       })
-    await $`${process.execPath} --version`.cwd(home).nothrow().quiet().text()
+    await $`${process.execPath} --version`.cwd(homeDir).nothrow().quiet().text()
   }
 
   export const VERSION = typeof OPENCODE_VERSION === "string" ? OPENCODE_VERSION : "local"

@@ -35,7 +35,7 @@ Options:
         --skip-bridge       Skip Coding Agent Bridge installation
         --skip-sandbox      Skip Docker Sandbox installation
         --skip-remotion     Skip Remotion video framework installation
-        --api-url <url>     Set IRIS API URL (default: https://web.heyiris.io)
+        --api-url <url>     Set IRIS API URL (default: https://freelabel.net)
         --token <token>     Pre-seed SDK token (skip interactive auth)
         --user-id <id>      Pre-seed user ID (used with --token)
         --only-code         Only install IRIS CLI (skip SDK, app, MCP, bridge, sandbox)
@@ -61,7 +61,7 @@ only_docs_mode=false
 skip_bridge=false
 skip_sandbox=false
 skip_remotion=false
-iris_api_url="https://web.heyiris.io"
+iris_api_url="https://freelabel.net"
 pre_token="${IRIS_SDK_TOKEN:-}"
 pre_user_id="${IRIS_USER_ID:-}"
 
@@ -767,7 +767,7 @@ scaffold_mcp_config() {
       "_comment": "Local IRIS tools — filesystem, SDK, project setup",
       "command": "iris",
       "args": ["mcp", "serve"],
-      "enabled": false
+      "enabled": true
     },
     "iris-platform": {
       "_comment": "Remote IRIS platform — agents, integrations, workflows",

@@ -346,6 +346,7 @@ const IntegrationsExecCommand = cmd({
       .option("check-amount", { describe: "shorthand: sets params.check_amount", type: "number" })
       .option("stage-filter", { describe: "shorthand: sets params.stage_filter", type: "string" })
       .option("integration-id", { describe: "target a specific integration record ID (multi-account)", type: "number" })
+      .option("account", { alias: "a", describe: "target account by email (e.g. alex@freelabel.net)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -366,6 +367,32 @@ const IntegrationsExecCommand = cmd({
     if (args["check-amount"] !== undefined) params.check_amount = args["check-amount"]
     if (args["stage-filter"]) params.stage_filter = args["stage-filter"]
 
+    // Resolve --account to integration_id (if provided and no explicit --integration-id)
+    let integrationId = args["integration-id"] as number | undefined
+    if (args.account && !integrationId) {
+      const needle = String(args.account).toLowerCase()
+      try {
+        const listRes = await irisFetch(`/api/v1/users/${userId}/integrations`)
+        if (listRes.ok) {
+          const listData = (await listRes.json()) as any
+          const items: any[] = listData?.connections ?? listData?.data ?? listData ?? []
+          const match = items.find((i: any) => {
+            if (String(i.type ?? "").toLowerCase() !== String(args.type).toLowerCase()) return false
+            const email = String(i.account_email ?? "").toLowerCase()
+            const name = String(i.name ?? "").toLowerCase()
+            return email === needle || name === needle || email.includes(needle) || name.includes(needle)
+          })
+          if (match) integrationId = Number(match.id)
+        }
+      } catch { /* fall through */ }
+      if (!integrationId) {
+        prompts.log.error(`No ${args.type} integration found for account "${args.account}"`)
+        process.exitCode = 1
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+    }
+
     const spinner = args.json ? null : prompts.spinner()
     if (spinner) spinner.start(`Executing ${args.type}.${args.function}…`)
 
@@ -375,7 +402,7 @@ const IntegrationsExecCommand = cmd({
         action: args.function,
         params,
       }
-      if (args["integration-id"]) body.integration_id = args["integration-id"]
+      if (integrationId) body.integration_id = integrationId
 
       const res = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
         method: "POST",

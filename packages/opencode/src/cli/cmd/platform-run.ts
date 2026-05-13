@@ -282,7 +282,7 @@ async function executeMacosLocal(
  * the first match. If multiple exist, the user should disambiguate
  * with --integration-id directly.
  */
-async function resolveAccountToIntegrationId(
+export async function resolveAccountToIntegrationId(
   userId: number,
   normalizedType: string,
   account: string,
