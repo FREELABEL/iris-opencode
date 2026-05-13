@@ -58,26 +58,31 @@ const ListCommand = cmd({
   aliases: ["ls"],
   describe: "list marketplace opportunities",
   builder: (yargs) =>
-    yargs.option("limit", { describe: "max results", type: "number", default: 20 }),
+    yargs
+      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro("◈  Marketplace Opportunities")
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    if (!args.json) prompts.intro("◈  Marketplace Opportunities")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
 
     try {
       const params = new URLSearchParams({ per_page: String(args.limit) })
       const res = await irisFetch(`/api/v1/marketplace/opportunities?${params}`)
       const ok = await handleApiError(res, "List opportunities")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
       const items: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
-      spinner.stop(`${items.length} opportunity(ies)`)
+
+      if (args.json) { console.log(JSON.stringify(items, null, 2)); return }
+
+      spinner!.stop(`${items.length} opportunity(ies)`)
 
       if (items.length === 0) { prompts.log.warn("No opportunities found"); prompts.outro("Done"); return }
 
@@ -87,9 +92,9 @@ const ListCommand = cmd({
 
       prompts.outro(dim("iris opportunities get <id>  |  iris opportunities pull <id>"))
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      if (!args.json) prompts.outro("Done")
     }
   },
 })
@@ -98,25 +103,30 @@ const GetCommand = cmd({
   command: "get <id>",
   describe: "show opportunity details",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "opportunity ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "opportunity ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Opportunity #${args.id}`)
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    if (!args.json) prompts.intro(`◈  Opportunity #${args.id}`)
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
 
     try {
       const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`)
       const ok = await handleApiError(res, "Get opportunity")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
       const o = data?.data ?? data
-      spinner.stop(String(o.title ?? `#${o.id}`))
+
+      if (args.json) { console.log(JSON.stringify(o, null, 2)); return }
+
+      spinner!.stop(String(o.title ?? `#${o.id}`))
 
       printDivider()
       printKV("ID", o.id)
@@ -132,7 +142,7 @@ const GetCommand = cmd({
 
       prompts.outro(dim(`iris opportunities pull ${args.id}`))
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -208,9 +218,9 @@ const CreateCommand = cmd({
       const ok = await handleApiError(res, "Create opportunity")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      const data = (await res.json()) as { data?: any }
-      const o = data?.data ?? data
-      spinner.stop(`${success("✓")} Created: ${bold(String(o.title ?? o.id))}`)
+      const data = (await res.json()) as any
+      const o = data?.data?.opportunity ?? data?.opportunity ?? data?.data ?? data
+      spinner.stop(`${success("✓")} Created: ${bold(String(o.title ?? o.id ?? "opportunity"))}`)
 
       printDivider()
       printKV("ID", o.id)
@@ -526,7 +536,9 @@ const DeleteCommand = cmd({
   command: "delete <id>",
   describe: "delete an opportunity",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "opportunity ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "opportunity ID", type: "number", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Opportunity #${args.id}`)
@@ -534,8 +546,10 @@ const DeleteCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const confirmed = await prompts.confirm({ message: `Delete opportunity #${args.id}?` })
-    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Delete opportunity #${args.id}?` })
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")
