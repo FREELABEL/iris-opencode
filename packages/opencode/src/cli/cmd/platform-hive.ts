@@ -338,7 +338,8 @@ const HiveDeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("slug", { describe: "project slug or ID", type: "string", demandOption: true })
-      .option("user-id", { describe: "user ID", type: "number" }),
+      .option("user-id", { describe: "user ID", type: "number" })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Delete Project")
@@ -349,8 +350,10 @@ const HiveDeleteCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
-    const confirm = await prompts.confirm({ message: `Delete project "${args.slug}" and its GitHub repo? This cannot be undone.` })
-    if (!confirm || prompts.isCancel(confirm)) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirm = await prompts.confirm({ message: `Delete project "${args.slug}" and its GitHub repo? This cannot be undone.` })
+      if (!confirm || prompts.isCancel(confirm)) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")
@@ -983,7 +986,8 @@ const HiveCancelCommand = cmd({
     yargs
       .positional("task-id", { describe: "task ID to cancel (omit for interactive)", type: "string" })
       .option("all", { describe: "cancel ALL pending tasks", type: "boolean", default: false })
-      .option("stale", { describe: "cancel tasks older than 1 hour", type: "boolean", default: false }),
+      .option("stale", { describe: "cancel tasks older than 1 hour", type: "boolean", default: false })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Cancel Tasks")
@@ -1013,8 +1017,10 @@ const HiveCancelCommand = cmd({
 
         spinner.stop(`Found ${tasks.length} task(s) to cancel`)
 
-        const confirm = await prompts.confirm({ message: `Cancel ${tasks.length} task(s)?` })
-        if (!confirm || prompts.isCancel(confirm)) { prompts.outro("Cancelled"); return }
+        if (!args.force) {
+          const confirm = await prompts.confirm({ message: `Cancel ${tasks.length} task(s)?` })
+          if (!confirm || prompts.isCancel(confirm)) { prompts.outro("Cancelled"); return }
+        }
 
         let cancelled = 0
         for (const t of tasks) {
@@ -1183,13 +1189,16 @@ const HiveResumeCommand = cmd({
 const HivePurgeCommand = cmd({
   command: "purge",
   describe: "cancel ALL pending tasks + clear daemon state (emergency)",
-  builder: (yargs) => yargs,
-  async handler() {
+  builder: (yargs) =>
+    yargs.option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
+  async handler(args) {
     UI.empty()
     prompts.intro("◈  Purge All Tasks")
 
-    const confirm = await prompts.confirm({ message: "Cancel ALL pending tasks on this node? This is irreversible." })
-    if (!confirm || prompts.isCancel(confirm)) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirm = await prompts.confirm({ message: "Cancel ALL pending tasks on this node? This is irreversible." })
+      if (!confirm || prompts.isCancel(confirm)) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Purging…")
@@ -2977,7 +2986,9 @@ const HiveDomainsRemoveCommand = cmd({
   aliases: ["rm", "delete"],
   describe: "remove a domain mapping",
   builder: (yargs) =>
-    yargs.positional("domain", { describe: "domain to remove", type: "string", demandOption: true }),
+    yargs
+      .positional("domain", { describe: "domain to remove", type: "string", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Remove Domain Mapping")
@@ -3003,9 +3014,11 @@ const HiveDomainsRemoveCommand = cmd({
 
       spinner.stop(`Found: ${domain} → ${mapping.proxy_target || `page #${mapping.page_id}`}`)
 
-      const confirmed = await prompts.confirm({ message: `Delete mapping for ${bold(domain)}?` })
-      if (!confirmed || prompts.isCancel(confirmed)) {
-        prompts.outro("Cancelled"); return
+      if (!args.force) {
+        const confirmed = await prompts.confirm({ message: `Delete mapping for ${bold(domain)}?` })
+        if (!confirmed || prompts.isCancel(confirmed)) {
+          prompts.outro("Cancelled"); return
+        }
       }
 
       spinner.start("Deleting domain mapping…")

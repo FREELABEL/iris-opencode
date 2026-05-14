@@ -1412,7 +1412,7 @@ const LeadsDeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "lead ID", type: "number", demandOption: true })
-      .option("yes", { describe: "skip confirmation prompt", type: "boolean", alias: "y", default: false }),
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Lead #${args.id}`)
@@ -1423,7 +1423,7 @@ const LeadsDeleteCommand = cmd({
       return
     }
 
-    let confirmed: boolean | symbol = args.yes
+    let confirmed: boolean | symbol = args.force
     if (!confirmed) {
       if (isNonInteractive()) {
         prompts.log.error("Refusing to delete without --yes in non-interactive mode.")
@@ -1476,7 +1476,7 @@ const LeadsMergeCommand = cmd({
         array: true,
         demandOption: true,
       })
-      .option("yes", { describe: "skip confirmation prompt", type: "boolean", alias: "y", default: false }),
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     const removeIds: number[] = (args.remove as number[]) ?? []
@@ -1532,7 +1532,7 @@ const LeadsMergeCommand = cmd({
       }
 
       // Confirm
-      let confirmed: boolean | symbol = args.yes
+      let confirmed: boolean | symbol = args.force
       if (!confirmed) {
         if (isNonInteractive()) {
           prompts.log.error("Refusing to merge without --yes in non-interactive mode.")
@@ -2104,6 +2104,9 @@ const LeadsPulseCommand = cmd({
         printKV("Signals", sigLine)
         if (meetSig && meetS !== null && meetS !== undefined && meetS < 40) {
           console.log(`    ${dim(`No upcoming meetings — run: iris leads meet ${leadId} --at ...`)}`)
+          if (lead.email) {
+            console.log(`    ${dim(`Tip: iris leads sync-calendar ${leadId} --calendar <name>  — import meetings from Google Calendar`)}`)
+          }
         }
       }
 
@@ -3700,27 +3703,17 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
               const noteActivities = activities.filter((a: any) => a.type === "note" || a.activity_type === "note").slice(0, 3)
               const recentNotes = noteActivities.map((n: any) => (n.title ?? n.description ?? n.content ?? "").slice(0, 60)).filter(Boolean).join("; ")
 
-              // Payment status line
-              const totalPaid = stripeData?.total_paid ?? 0
-              const activeSubs = stripeData?.summary?.active_subscriptions ?? 0
-              let paymentStatus = ""
-              if (totalPaid > 0) paymentStatus = `Total paid to date: $${totalPaid}. Active subscriptions: ${activeSubs}.`
-              else if (dealHealth?.has_payment_gate && !dealHealth.payment_received) paymentStatus = "Payment gate created but unpaid."
-              else paymentStatus = "No payment activity yet."
-
               const aiPrompt = [
-                `Status update email to ${firstName} re: "${scopeShort}".`,
+                `Production status update email to ${firstName} re: "${scopeShort}".`,
                 `Client: ${name} (${lead.company ?? ""}).`,
-                amount ? `Amount: $${amount}. ${paymentStatus}` : paymentStatus,
                 onboardingSummary,
                 reqSummary,
                 kbSummary,
                 tasksSummary,
                 recentNotes ? `Notes: ${recentNotes}` : "",
-                proposalLink ? `Proposal: ${proposalLink}` : "",
-                contractLink ? `Contract: ${contractLink}` : "",
-                `Cover: accomplishments, what's next, what we need from them.`,
-                `Include links if available. Under 300 words. Warm but professional.`,
+                `Focus ONLY on production progress — what we built, what's next, what we need from them.`,
+                `Do NOT mention pricing, payments, invoices, billing, or agreements.`,
+                `Under 300 words. Warm but professional.`,
                 `No pulse scores or internal metrics. Sign off as "IRIS AI — on behalf of the IRIS team"`,
               ].filter(Boolean).join("\n").slice(0, 995)
 
@@ -3849,6 +3842,7 @@ const LeadsMeetCommand = cmd({
       })
       .option("account", { type: "string", describe: "Google account email (multi-account)" })
       .option("integration-id", { type: "number", describe: "specific integration record ID" })
+      .option("calendar", { type: "string", describe: "calendar name or ID (e.g. 'Meetings', 'primary')", demandOption: "specify --calendar (name or ID)" })
       .option("attendees", { type: "array", string: true, describe: "additional attendee emails" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -3896,16 +3890,54 @@ const LeadsMeetCommand = cmd({
     const spinner = prompts.spinner()
 
     let calendarResult: any = null
+    let resolvedCalendarName: string | undefined
+    let calendarId: string | undefined
+    const attendeeList: string[] = []
+    if (lead.email) attendeeList.push(lead.email)
+    if (args.attendees) attendeeList.push(...(args.attendees as string[]))
+
     if (!args["no-calendar"]) {
       spinner.start("Creating calendar event…")
       try {
-        const attendeeList: string[] = []
-        if (lead.email) attendeeList.push(lead.email)
-        if (args.attendees) attendeeList.push(...(args.attendees as string[]))
-
         const accountOpts: { integrationId?: number; account?: string } = {}
         if (args.integrationId ?? args["integration-id"]) accountOpts.integrationId = Number(args.integrationId ?? args["integration-id"])
         if (args.account) accountOpts.account = args.account as string
+
+        // Resolve calendar name → ID (e.g. "Meetings" → "abc123@group.calendar.google.com")
+        if (args.calendar) {
+          const calInput = args.calendar as string
+          // If it looks like an ID already (contains @ or is "primary"), use directly
+          if (calInput === "primary" || calInput.includes("@")) {
+            calendarId = calInput
+          } else {
+            // Resolve by display name
+            try {
+              const calsResult = await calExec("get_calendars", {}, accountOpts)
+              const cals: any[] = calsResult?.calendars ?? calsResult?.data?.calendars ?? []
+              const match = cals.find((c: any) => (c.name ?? "").toLowerCase() === calInput.toLowerCase())
+              if (match) {
+                calendarId = match.id
+                resolvedCalendarName = match.name
+              } else {
+                // Fuzzy: partial match
+                const fuzzy = cals.find((c: any) => (c.name ?? "").toLowerCase().includes(calInput.toLowerCase()))
+                if (fuzzy) {
+                  calendarId = fuzzy.id
+                  resolvedCalendarName = fuzzy.name
+                } else {
+                  spinner.stop(`Calendar "${calInput}" not found`)
+                  const available = cals.map((c: any) => `  ${c.name ?? c.id}`).join("\n")
+                  if (available) prompts.log.info(`Available calendars:\n${available}`)
+                  prompts.outro("Done")
+                  return
+                }
+              }
+            } catch {
+              // Fallback: treat input as raw ID
+              calendarId = calInput
+            }
+          }
+        }
 
         calendarResult = await calExec("create_event", {
           title,
@@ -3915,6 +3947,7 @@ const LeadsMeetCommand = cmd({
           location: args.location ?? undefined,
           timezone: "America/Chicago",
           ...(attendeeList.length > 0 ? { attendees: attendeeList } : {}),
+          ...(calendarId ? { calendar_id: calendarId } : {}),
         }, accountOpts)
         spinner.stop(`${success("✓")} Calendar event created`)
       } catch (err: any) {
@@ -3933,6 +3966,18 @@ const LeadsMeetCommand = cmd({
           type: "meeting_scheduled",
           activity_type: "meeting",
           activity_icon: "calendar",
+          activity_data: JSON.stringify({
+            calendar_event_id: calendarResult?.event_id ?? calendarResult?.id ?? null,
+            calendar_id: calendarId ?? null,
+            calendar_name: resolvedCalendarName ?? null,
+            event_url: calendarResult?.event_url ?? calendarResult?.htmlLink ?? null,
+            account: (args.account as string) ?? null,
+            start_time: startTime,
+            end_time: endTime,
+            title,
+            attendees: attendeeList,
+            location: (args.location as string) ?? null,
+          }),
         }),
       })
     } catch {}
@@ -3965,7 +4010,10 @@ const LeadsMeetCommand = cmd({
       printKV("When", `${formatDate(startTime)} ${formatTime(startTime)}`)
       printKV("Duration", `${args.duration} min`)
       if (args.location) printKV("Location", args.location as string)
-      if (calendarResult?.event_url) printKV("Calendar", calendarResult.event_url)
+      if (resolvedCalendarName) printKV("Calendar", resolvedCalendarName)
+      else if (args.calendar) printKV("Calendar", args.calendar as string)
+      if (args.account) printKV("Account", args.account as string)
+      if (calendarResult?.event_url) printKV("Link", calendarResult.event_url)
       printKV(
         "Synced",
         args["no-calendar"] ? dim("skipped") : calendarResult ? success("✓ Google Calendar") : dim("failed"),
@@ -4057,6 +4105,178 @@ const LeadsMeetingsCommand = cmd({
       console.log()
       printDivider()
       prompts.outro(`${dim(`iris leads meet ${leadId} --at …`)}  ·  ${dim(`iris leads pulse ${leadId}`)}`)
+    } catch (err: any) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err.message)
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Sync Calendar — import untracked calendar events as lead notes
+// ============================================================================
+
+const LeadsSyncCalendarCommand = cmd({
+  command: "sync-calendar <id>",
+  aliases: ["cal-sync"],
+  describe: "import untracked Google Calendar events as lead notes (feeds Pulse scoring)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
+      .option("days", { type: "number", default: 90, describe: "look-back window in days" })
+      .option("future-days", { type: "number", default: 30, describe: "look-ahead window in days" })
+      .option("account", { type: "string", describe: "Google account email (multi-account)" })
+      .option("calendar", { type: "string", describe: "calendar name or ID", demandOption: "specify --calendar (name or ID)" })
+      .option("dry-run", { type: "boolean", default: false, describe: "show what would be imported without creating notes" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
+
+    const resolved = await resolveLeadId(String(args.id))
+    if (!resolved) {
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+    const { leadId, lead } = resolved
+    const leadName = lead.name ?? lead.first_name ?? `Lead #${leadId}`
+    const leadEmail = lead.email
+
+    if (!leadEmail) {
+      prompts.log.error(`Lead #${leadId} has no email — cannot match calendar events`)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    prompts.intro(`◈  Sync Calendar — ${leadName}`)
+    const spinner = prompts.spinner()
+    spinner.start("Fetching calendar events…")
+
+    try {
+      const days = args.days as number
+      const futureDays = args["future-days"] as number
+      const { past, upcoming } = await fetchLeadCalendarEvents(
+        { name: leadName, email: leadEmail, id: leadId },
+        { days, futureDays },
+      )
+      const allEvents = [...upcoming, ...past]
+      spinner.stop(`${allEvents.length} matching events found`)
+
+      if (allEvents.length === 0) {
+        prompts.log.info("No calendar events found for this lead.")
+        prompts.outro("Done")
+        return
+      }
+
+      // Fetch existing notes to dedup by calendar_event_id
+      spinner.start("Checking existing notes…")
+      const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
+      const leadData = leadRes.ok ? (await leadRes.json() as any)?.data : null
+      const existingNotes: any[] = leadData?.notes ?? []
+      const trackedIds = new Set<string>()
+      for (const note of existingNotes) {
+        try {
+          const ad = typeof note.activity_data === "string" ? JSON.parse(note.activity_data) : note.activity_data
+          if (ad?.calendar_event_id) trackedIds.add(ad.calendar_event_id)
+        } catch { /* skip unparseable */ }
+      }
+      spinner.stop(`${trackedIds.size} events already tracked`)
+
+      // Filter out already-tracked events
+      const toImport = allEvents.filter((ev: any) => {
+        const evId = ev.id ?? ev.event_id
+        return evId && !trackedIds.has(evId)
+      })
+
+      if (toImport.length === 0) {
+        prompts.log.info(success("All calendar events already tracked."))
+        prompts.outro("Done")
+        return
+      }
+
+      if (args["dry-run"]) {
+        console.log()
+        console.log(`  ${bold("Would import")} ${highlight(String(toImport.length))} events:`)
+        for (const ev of toImport) {
+          const start = ev.start || ev.start_time || ""
+          const attendees = (ev.attendees ?? []).map((a: any) => a.email ?? a).filter(Boolean)
+          console.log(`    ${success("+")} ${formatDate(start)} ${formatTime(start)}  ${ev.summary || ev.title || "(no title)"}`)
+          if (attendees.length > 0) console.log(`      ${dim(attendees.join(", "))}`)
+        }
+        console.log()
+        printDivider()
+        prompts.log.info(`${toImport.length} events would be imported, ${allEvents.length - toImport.length} already tracked`)
+        prompts.outro(`Remove --dry-run to import`)
+        return
+      }
+
+      // Import events as notes
+      spinner.start(`Importing ${toImport.length} events…`)
+      let imported = 0
+      let failed = 0
+      for (const ev of toImport) {
+        const evId = ev.id ?? ev.event_id
+        const evTitle = ev.summary || ev.title || "(no title)"
+        const start = ev.start || ev.start_time || ""
+        const end = ev.end || ev.end_time || ""
+        const attendees = (ev.attendees ?? []).map((a: any) => a.email ?? a).filter(Boolean)
+        const noteMsg = [
+          `Calendar event: ${evTitle}`,
+          `Date: ${formatDate(start)} ${formatTime(start)}`,
+          attendees.length > 0 ? `Attendees: ${attendees.join(", ")}` : null,
+          ev.location ? `Location: ${ev.location}` : null,
+        ].filter(Boolean).join("\n")
+
+        try {
+          await irisFetch(`/api/v1/leads/${leadId}/notes`, {
+            method: "POST",
+            body: JSON.stringify({
+              message: noteMsg,
+              type: "calendar_discovery",
+              activity_type: "meeting",
+              activity_icon: "calendar",
+              activity_data: JSON.stringify({
+                calendar_event_id: evId,
+                start_time: start,
+                end_time: end,
+                title: evTitle,
+                attendees,
+                event_url: ev.html_link ?? ev.htmlLink ?? null,
+                source: "sync-calendar",
+              }),
+            }),
+          })
+          imported++
+        } catch {
+          failed++
+        }
+      }
+      spinner.stop(`${success("✓")} ${imported} imported${failed > 0 ? `, ${failed} failed` : ""}`)
+
+      if (args.json) {
+        console.log(JSON.stringify({
+          lead_id: leadId,
+          events_found: allEvents.length,
+          already_tracked: allEvents.length - toImport.length,
+          imported,
+          failed,
+        }, null, 2))
+      } else {
+        printDivider()
+        printKV("Events found", String(allEvents.length))
+        printKV("Already tracked", String(allEvents.length - toImport.length))
+        printKV("Imported", success(String(imported)))
+        if (failed > 0) printKV("Failed", String(failed))
+        printDivider()
+      }
+
+      prompts.outro(`${dim(`iris leads pulse ${leadId}`)}`)
     } catch (err: any) {
       spinner.stop("Error", 1)
       prompts.log.error(err.message)
@@ -5246,10 +5466,10 @@ const LeadsKBCommand = cmd({
 const LeadsPulseAllCommand = cmd({
   command: "pulse-all",
   aliases: ["scorecard", "health"],
-  describe: "run pulse on all Won + Active leads — scorecard with deal health, gates, and gaps",
+  describe: "run pulse on all Won, Active & In Negotiation leads — scorecard with deal health, gates, and gaps",
   builder: (yargs) =>
     yargs
-      .option("status", { describe: "filter by status (comma-separated, e.g. Won,Active)", type: "string", default: "Won,Active" })
+      .option("status", { describe: "filter by status (comma-separated, e.g. Won,Active,In Negotiation)", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
       .option("hydrate", {
         describe: "auto-send follow-ups to eligible leads (past 48h throttle)",
@@ -5268,6 +5488,11 @@ const LeadsPulseAllCommand = cmd({
       })
       .option("to", { describe: "with --hydrate/--recap: redirect all emails to this address (for testing)", type: "string" })
       .option("force", { describe: "with --hydrate/--recap: ignore throttle window", type: "boolean", default: false })
+      .option("prepare", {
+        describe: "list lowest-pulse leads with top action items",
+        type: "boolean",
+        default: false,
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
@@ -5290,9 +5515,12 @@ const LeadsPulseAllCommand = cmd({
       const leads: any[] = results.flat()
 
       // Skip junk leads (no email, social emails, self)
+      // Exception: Negotiating leads with phone numbers are always eligible (hand-picked, not scraped)
       const eligible = leads.filter((l) => {
-        if (!l.email) return false
-        if (l.email.endsWith("@instagram.com") || l.email.endsWith("@twitter.com")) return false
+        if (!l.email && !l.phone) return false
+        const isSocialEmail = l.email?.endsWith("@instagram.com") || l.email?.endsWith("@twitter.com")
+        const isNegotiating = l.status === "Negotiating" || l.status === "In Negotiation"
+        if (isSocialEmail && !(isNegotiating && l.phone)) return false
         if (l.name === `Lead #${l.id}`) return false
         return true
       })
@@ -5322,6 +5550,12 @@ const LeadsPulseAllCommand = cmd({
         proposalUrl: string | null
         kbCount: number
         recapEligible: boolean
+        tasksPending: number
+        tasksOverdue: number
+        tasksCompleted: number
+        reqPassing: number
+        reqTotal: number
+        meetingScore: number | null
       }
       const rows: PulseRow[] = []
 
@@ -5338,6 +5572,31 @@ const LeadsPulseAllCommand = cmd({
           const dealBody = dealRes?.ok ? ((await dealRes.json()) as any) : null
           const deal = dealBody?.data ?? dealBody
           const stripe = stripeRes?.ok ? (((await stripeRes.json()) as any)?.data ?? {}) : {}
+
+          // Extra fetches for --prepare (tasks + requirements)
+          let tasksPending = 0, tasksOverdue = 0, tasksCompleted = 0
+          let reqPassing = 0, reqTotal = 0
+          if (args.prepare) {
+            const [tasksRes, reqRes] = await Promise.allSettled([
+              irisFetch(`/api/v1/leads/${lead.id}/tasks`),
+              irisFetch(`/api/v1/leads/${lead.id}/requirements/summary`),
+            ])
+            if (tasksRes.status === "fulfilled" && tasksRes.value?.ok) {
+              const td = ((await tasksRes.value.json()) as any)?.data ?? []
+              const tasks: any[] = Array.isArray(td) ? td : (td?.tasks ?? [])
+              const now = new Date()
+              tasksCompleted = tasks.filter((t: any) => t.status === "completed" || t.completed).length
+              const pending = tasks.filter((t: any) => t.status !== "completed" && !t.completed)
+              tasksOverdue = pending.filter((t: any) => t.due_date && new Date(t.due_date) < now).length
+              tasksPending = pending.length
+            }
+            if (reqRes.status === "fulfilled" && reqRes.value?.ok) {
+              const rd = (await reqRes.value.json()) as any
+              const rData = rd?.data ?? rd ?? {}
+              reqPassing = rData.passing ?? rData.passed ?? 0
+              reqTotal = rData.total ?? 0
+            }
+          }
 
           const sigs = readData?.signals ?? {}
           const dealChecks = sigs.deal_health?.checks ?? {}
@@ -5400,6 +5659,12 @@ const LeadsPulseAllCommand = cmd({
             proposalUrl: deal?.proposal_url ?? null,
             kbCount: sigs.knowledge_completeness?.docs_count ?? 0,
             recapEligible: !!(lead.email && !lead.email.endsWith("@instagram.com") && !lead.email.endsWith("@twitter.com")),
+            tasksPending,
+            tasksOverdue,
+            tasksCompleted,
+            reqPassing,
+            reqTotal,
+            meetingScore: sigs.meeting_engagement?.score ?? null,
           })
         } catch {
           rows.push({
@@ -5424,12 +5689,95 @@ const LeadsPulseAllCommand = cmd({
             proposalUrl: null,
             kbCount: 0,
             recapEligible: !!(lead.email && !lead.email.endsWith("@instagram.com") && !lead.email.endsWith("@twitter.com")),
+            tasksPending: 0,
+            tasksOverdue: 0,
+            tasksCompleted: 0,
+            reqPassing: 0,
+            reqTotal: 0,
+            meetingScore: null,
           })
         }
       }
 
       // Sort by pulse score descending
       rows.sort((a, b) => b.pulse - a.pulse)
+
+      // --prepare: detailed lowest-pulse list with tasks, requirements, and 3 action items
+      if (args.prepare) {
+        const sorted = [...rows].sort((a, b) => a.pulse - b.pulse) // ascending (worst first)
+        console.log()
+        console.log(`  ${bold("Prepare — Lowest Pulse Leads")} ${dim(`(${sorted.length} leads)`)}`)
+        console.log(dim("  " + "=".repeat(100)))
+
+        for (const r of sorted) {
+          const pulseColor =
+            r.pulse >= 90 ? UI.Style.TEXT_SUCCESS : r.pulse >= 50 ? UI.Style.TEXT_WARNING : UI.Style.TEXT_DANGER
+          const pulseStr = `${pulseColor}${r.pulse}/100${UI.Style.TEXT_NORMAL}`
+
+          // Billing badge
+          let billingBadge = ""
+          switch (r.billingStatus) {
+            case "active": billingBadge = `${UI.Style.TEXT_SUCCESS}Active${UI.Style.TEXT_NORMAL}`; break
+            case "past_due": billingBadge = `${UI.Style.TEXT_DANGER}PAST DUE${UI.Style.TEXT_NORMAL}`; break
+            case "pending": billingBadge = `${UI.Style.TEXT_WARNING}Pending${UI.Style.TEXT_NORMAL}`; break
+            case "no_sub": billingBadge = `${UI.Style.TEXT_DANGER}NO SUB${UI.Style.TEXT_NORMAL}`; break
+            default: billingBadge = `${UI.Style.TEXT_DANGER}No Gate${UI.Style.TEXT_NORMAL}`
+          }
+
+          // Stats line
+          const taskStr = r.tasksPending > 0
+            ? `${r.tasksOverdue > 0 ? `${UI.Style.TEXT_DANGER}${r.tasksOverdue} overdue${UI.Style.TEXT_NORMAL} · ` : ""}${r.tasksPending} pending · ${r.tasksCompleted} done`
+            : dim("no tasks")
+          const reqStr = r.reqTotal > 0
+            ? `${r.reqPassing === r.reqTotal ? UI.Style.TEXT_SUCCESS : r.reqPassing === 0 ? UI.Style.TEXT_DANGER : UI.Style.TEXT_WARNING}${r.reqPassing}/${r.reqTotal} passing${UI.Style.TEXT_NORMAL}`
+            : dim("no reqs")
+          const kbStr = r.kbCount > 0
+            ? `${r.kbCount >= 8 ? UI.Style.TEXT_SUCCESS : UI.Style.TEXT_WARNING}${r.kbCount}/8 KB${UI.Style.TEXT_NORMAL}`
+            : `${UI.Style.TEXT_DANGER}0/8 KB${UI.Style.TEXT_NORMAL}`
+          const meetStr = r.meetingScore !== null
+            ? `${r.meetingScore >= 80 ? UI.Style.TEXT_SUCCESS : UI.Style.TEXT_WARNING}mtg ${r.meetingScore}${UI.Style.TEXT_NORMAL}`
+            : dim("no mtg")
+
+          // Build top 3 actions
+          const actions: string[] = []
+          if (r.kbCount === 0) actions.push(`iris leads kb ${r.id} --generate`)
+          if (r.billingStatus === "no_sub" || r.billingStatus === "no_gate") actions.push(`iris leads payment-gate ${r.id} -a …`)
+          if (r.billingStatus === "past_due") actions.push(`iris leads pulse ${r.id} --hydrate`)
+          if (r.reqTotal === 0) actions.push(`iris leads requirements run ${r.id}`)
+          else if (r.reqPassing < r.reqTotal) actions.push(`iris leads requirements run ${r.id}`)
+          if (!r.contentAgent) actions.push(`iris leads content-engine create ${r.id}`)
+          if (r.comms !== null && r.comms < 30) actions.push(`iris leads pulse ${r.id} --recap`)
+          if (r.meetingScore === null) actions.push(`iris leads meet ${r.id} --at …`)
+          if (r.tasksOverdue > 0) actions.push(`iris leads tasks ${r.id}`)
+          if (r.hydrationEligible) actions.push(`iris leads pulse ${r.id} --hydrate`)
+          // Deduplicate and take top 3
+          const uniqueActions = [...new Set(actions)].slice(0, 3)
+
+          // Render
+          console.log()
+          console.log(`  ${dim(`#${r.id}`.padEnd(8))}${bold(r.name)}  ${pulseStr}  ${billingBadge}`)
+          console.log(`  ${"".padEnd(8)}${dim("Tasks:")} ${taskStr}  ${dim("|")}  ${dim("Reqs:")} ${reqStr}  ${dim("|")}  ${kbStr}  ${dim("|")}  ${meetStr}`)
+          if (uniqueActions.length > 0) {
+            for (let i = 0; i < uniqueActions.length; i++) {
+              console.log(`  ${"".padEnd(8)}${UI.Style.TEXT_WARNING}${i + 1}.${UI.Style.TEXT_NORMAL} ${dim(uniqueActions[i]!)}`)
+            }
+          } else {
+            console.log(`  ${"".padEnd(8)}${UI.Style.TEXT_SUCCESS}On track${UI.Style.TEXT_NORMAL}`)
+          }
+        }
+
+        console.log()
+        console.log(dim("  " + "-".repeat(100)))
+        const avgPulse = rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.pulse, 0) / rows.length) : 0
+        const failing = rows.filter((r) => r.band === "failing").length
+        const totalOverdue = rows.reduce((s, r) => s + r.tasksOverdue, 0)
+        const totalPending = rows.reduce((s, r) => s + r.tasksPending, 0)
+        console.log(`  Avg Pulse: ${avgPulse}/100  |  ${UI.Style.TEXT_DANGER}${failing} failing${UI.Style.TEXT_NORMAL}  |  Tasks: ${totalPending} pending${totalOverdue > 0 ? `, ${UI.Style.TEXT_DANGER}${totalOverdue} overdue${UI.Style.TEXT_NORMAL}` : ""}`)
+        console.log()
+        printDivider()
+        prompts.outro(dim("iris leads pulse-all --recap --dry-run  ·  iris leads pulse-all --hydrate"))
+        return
+      }
 
       // Compute billing summary
       const activeSubs = rows.filter((r) => r.billingStatus === "active")
@@ -5702,15 +6050,14 @@ const LeadsPulseAllCommand = cmd({
             const kbDocs = readData?.signals?.knowledge_completeness?.docs_count ?? 0
 
             const aiPrompt = [
-              `Write a professional status update email to ${r.name.split(" ")[0] || "there"} about their project.`,
+              `Production status update email to ${r.name.split(" ")[0] || "there"} about their project.`,
               `Client: ${r.name} (${r.company})`,
-              r.amount ? `Agreement: $${r.amount}` : "",
               onboardingSummary,
               reqSummary,
               `KB: ${kbDocs} sections populated.`,
-              r.proposalUrl ? `Proposal: ${r.proposalUrl}` : "",
-              `Cover: accomplishments, what's next, what we need from them.`,
-              `Under 300 words. Warm but professional. Do NOT mention pulse scores.`,
+              `Focus ONLY on production progress — what we built, what's next, what we need from them.`,
+              `Do NOT mention pricing, payments, invoices, billing, or agreements.`,
+              `Under 300 words. Warm but professional. No pulse scores or internal metrics.`,
               `Sign off as "IRIS AI — on behalf of the IRIS team"`,
             ].filter(Boolean).join("\n")
 
@@ -7393,6 +7740,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsSyncCommsCommand)
       .command(LeadsMeetCommand)
       .command(LeadsMeetingsCommand)
+      .command(LeadsSyncCalendarCommand)
       .command(LeadsNotesCommand)
       .command(LeadsNoteCommand)
       .command(LeadsTasksCommand)

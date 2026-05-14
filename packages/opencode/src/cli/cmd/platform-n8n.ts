@@ -504,9 +504,9 @@ const N8nDispatchCommand = cmd({
       },
       dj: {
         title: "SOM: DJ Outreach",
-        prompt: `dj limit=${args.limit} boardId=${args["board-id"]} strategy=DJ Outreach | V1 igAccount=thebeatbox__`,
+        prompt: `dj limit=${args.limit} boardId=${args["board-id"]} strategy=DJ Outreach | V2 igAccount=thebeatbox__`,
         igAccount: "thebeatbox__",
-        strategy: "DJ Outreach | V1",
+        strategy: "DJ Outreach | V2",
       },
     }
 

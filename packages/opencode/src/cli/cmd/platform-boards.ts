@@ -552,7 +552,9 @@ const BoardsDeleteCommand = cmd({
   command: "delete <id>",
   describe: "delete a board item",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "item ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "item ID", type: "number", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Item #${args.id}`)
@@ -560,8 +562,10 @@ const BoardsDeleteCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const confirmed = await prompts.confirm({ message: `Delete item #${args.id}? This cannot be undone.` })
-    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Delete item #${args.id}? This cannot be undone.` })
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")

@@ -890,7 +890,8 @@ const WorkflowsDeleteCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "workflow ID", type: "number", demandOption: true })
-      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Delete Workflow #${args.id}`)
@@ -901,8 +902,10 @@ const WorkflowsDeleteCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
-    const confirmed = await prompts.confirm({ message: `Delete workflow #${args.id}? This cannot be undone.` })
-    if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    if (!args.force) {
+      const confirmed = await prompts.confirm({ message: `Delete workflow #${args.id}? This cannot be undone.` })
+      if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
+    }
 
     const spinner = prompts.spinner()
     spinner.start("Deleting…")

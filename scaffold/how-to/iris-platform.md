@@ -164,15 +164,15 @@ curl -X DELETE ".../items/{itemId}"
 - [ ] Add domain mapping in DB (proxy or page mode)
 - [ ] Add Cloudflare Worker route for subdomain
 - [ ] Give client SDK key
-- [ ] Test health: `curl https://subdomain.heyiris.io/api/health`
-- [ ] Test proxy: `curl https://subdomain.heyiris.io/`
-- [ ] Test CRUD: `curl https://subdomain.heyiris.io/api/v1/public/bloqs/{id}/items`
+- [ ] Test health: `curl https://subdomain.freelabel.net/api/health`
+- [ ] Test proxy: `curl https://subdomain.freelabel.net/`
+- [ ] Test CRUD: `curl https://subdomain.freelabel.net/api/v1/public/bloqs/{id}/items`
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| "Application not found" | Worker route missing | Add `*subdomain.heyiris.io/*` in Cloudflare |
+| "Application not found" | Worker route missing | Add subdomain route in Cloudflare |
 | HTML loads, JS/CSS 404 | Old deploy without catch-all route | Redeploy iris-api |
 | CRUD returns 422 | Missing `type` field | Add `"type": "default"` to POST body |
 | Stale proxy target | 5-min domain mapping cache | Wait 5 min or clear cache |
