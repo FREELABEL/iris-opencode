@@ -997,7 +997,20 @@ install_bridge() {
     if [ -d "$bridge_dir" ] && [ -f "$bridge_dir/index.js" ] && [ -f "$bridge_dir/daemon.js" ]; then
         # Update existing installation
         print_message info "${MUTED}Bridge already installed, updating...${NC}"
-        (cd "$bridge_dir" && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null) || true
+        if ! (cd "$bridge_dir" && git reset --hard HEAD 2>/dev/null && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null); then
+            # git pull failed (dirty tree, conflicts, detached HEAD) — nuke and re-clone
+            print_message info "${MUTED}Bridge update failed, re-cloning...${NC}"
+            rm -rf "$bridge_dir"
+            git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null && \
+                (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || true
+        fi
+        # Safety check: if daemon.js still has stale DO URL, force re-clone
+        if grep -q 'ondigitalocean\.app' "$bridge_dir/daemon.js" 2>/dev/null; then
+            print_message info "${MUTED}Stale daemon detected, re-cloning...${NC}"
+            rm -rf "$bridge_dir"
+            git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null && \
+                (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || true
+        fi
         bridge_updated=true
     else
         # Fresh clone from public repo
