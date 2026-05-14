@@ -156,7 +156,7 @@ import { PlatformMyResourceCommand } from "./cli/cmd/platform-my-resource"
 
 ## API Endpoints Reference
 
-### FL-API (`apiv2.heyiris.io`)
+### FL-API (`raichu.heyiris.io`)
 
 | Resource | List | Get | Create |
 |----------|------|-----|--------|
