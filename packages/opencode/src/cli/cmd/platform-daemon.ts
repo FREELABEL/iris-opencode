@@ -144,7 +144,7 @@ const DaemonLogsCommand = cmd({
         const out = execSync(`tail -n ${lines} "${logFile}"`, { timeout: 5000 }).toString()
         if (out) console.log(out)
       } else {
-        const child = spawn("tail", ["-n", String(lines), "-f", logFile], { stdio: "inherit" })
+        const child = spawn("tail", ["-n", String(lines), "-F", logFile], { stdio: "inherit" })
         process.on("SIGINT", () => { child.kill(); process.exit(0) })
       }
     }
