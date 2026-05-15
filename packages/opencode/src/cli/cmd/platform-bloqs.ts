@@ -76,12 +76,11 @@ const BloqsListCommand = cmd({
       // Client-side filter fallback if API doesn't support search param
       if (args.search && bloqs.length > 0) {
         const q = args.search.toLowerCase()
-        const filtered = bloqs.filter((b) => {
+        bloqs = bloqs.filter((b) => {
           const name = String(b.name ?? "").toLowerCase()
           const desc = String(b.description ?? "").toLowerCase()
           return name.includes(q) || desc.includes(q)
         })
-        if (filtered.length > 0) bloqs = filtered
       }
       spinner.stop(`${bloqs.length} bloq(s)${args.search ? ` matching "${args.search}"` : ""}`)
 
@@ -947,6 +946,22 @@ const BloqsComposeCommand = cmd({
   },
 })
 
+const BloqsSearchCommand = cmd({
+  command: "search <query>",
+  aliases: ["find", "q"],
+  describe: "search bloqs by name or description",
+  builder: (yargs) =>
+    yargs
+      .positional("query", { describe: "search term", type: "string", demandOption: true })
+      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    // Delegate to list with --search flag
+    await BloqsListCommand.handler({ ...args, search: args.query } as any)
+  },
+})
+
 const BloqsRenameCommand = cmd({
   command: "rename <type> <id> [name]",
   aliases: ["mv"],
@@ -1087,6 +1102,7 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsAddItemCommand)
       .command(BloqsComposeCommand)
       .command(BloqsRenameCommand)
+      .command(BloqsSearchCommand)
       .demandCommand(),
   async handler() {},
 })

@@ -3371,7 +3371,7 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
             nextAction = `Send payment follow-up — gate unpaid, last outreach ${hoursSince === Infinity ? "never" : `${Math.floor(hoursSince)}h ago`}`
             actionPriority = "high"
           } else {
-            nextAction = `Wait for payment — follow-up sent ${Math.floor(hoursSince)}h ago (next eligible in ${Math.ceil(48 - hoursSince)}h)`
+            nextAction = `Wait for payment — follow-up sent ${Math.floor(hoursSince)}h ago (next eligible in ${Math.ceil(24 - hoursSince)}h)`
             actionPriority = "low"
           }
         }
@@ -3443,8 +3443,8 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
         }
       }
 
-      // ── Hydration: auto-send payment follow-up if gate is unpaid + 48h since last outreach ──
-      const HYDRATION_WINDOW_HOURS = 48
+      // ── Hydration: auto-send payment follow-up if gate is unpaid + 24h since last outreach ──
+      const HYDRATION_WINDOW_HOURS = 24
       const stripeHasPaidForHydration = (stripeData?.total_paid ?? 0) > 0 || (stripeData?.summary?.active_subscriptions ?? 0) > 0
       if (dealHealth?.has_payment_gate && !dealHealth.payment_received && !stripeHasPaidForHydration && !dealHealth.deal_complete && email) {
         // Determine last outreach timestamp
@@ -5472,7 +5472,7 @@ const LeadsPulseAllCommand = cmd({
       .option("status", { describe: "filter by status (comma-separated, e.g. Won,Active,In Negotiation)", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
       .option("hydrate", {
-        describe: "auto-send follow-ups to eligible leads (past 48h throttle)",
+        describe: "auto-send follow-ups to eligible leads (past 24h throttle)",
         type: "boolean",
         default: false,
       })
