@@ -9140,3 +9140,201 @@ const LeadsRequirementsCommand = cmd({
       .demandCommand(),
   async handler() {},
 })
+
+// ============================================================================
+// iris pulse — top-level convenience wrapper
+// Combines diary digest + pulse-all scorecard + ungated leads
+// ============================================================================
+
+export const PlatformPulseCommand = cmd({
+  command: "pulse",
+  aliases: ["daily"],
+  describe: "daily pulse — diary digest + lead scorecard + ungated leads",
+  builder: (yargs) =>
+    yargs
+      .option("status", { describe: "filter by lead status", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
+      .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
+      .option("notify", { describe: "send pulse summary to yourself via iMessage", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const lines: string[] = []
+
+    // ── 1. Daily diary digest ──────────────────────────────────────
+    try {
+      const { readdirSync, readFileSync: readF } = await import("fs")
+      const { join: pJoin } = await import("path")
+
+      const diaryDir = pJoin(process.cwd(), "daily-diary")
+      let diaryFiles: string[] = []
+      try {
+        diaryFiles = readdirSync(diaryDir).filter((f: string) => f.endsWith(".md")).sort().reverse()
+      } catch { /* no diary dir */ }
+
+      // Last 2 days of diary entries
+      const now = new Date()
+      const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000)
+      const cutoff = twoDaysAgo.toISOString().slice(0, 10)
+
+      const recentFiles = diaryFiles.filter((f: string) => f.slice(0, 10) >= cutoff).slice(0, 5)
+
+      if (recentFiles.length > 0) {
+        console.log(bold("\n  Recent Work"))
+        console.log(dim("  ─────────────────────────────────"))
+
+        for (const file of recentFiles) {
+          const content = readF(pJoin(diaryDir, file), "utf8")
+          // Extract title from first # heading or filename
+          const titleMatch = content.match(/^#\s+(.+)/m)
+          const title = titleMatch?.[1] || file.replace(/\.md$/, "")
+
+          // Extract summary section or first paragraph
+          const summaryMatch = content.match(/##\s*Summary\s*\n([\s\S]*?)(?=\n##|\n$)/i)
+          let summary = ""
+          if (summaryMatch) {
+            summary = summaryMatch[1].trim().split("\n").slice(0, 2).join(" ").trim()
+          } else {
+            // First non-heading, non-empty paragraph
+            const paragraphs = content.split("\n\n").filter((p: string) => p.trim() && !p.startsWith("#"))
+            summary = (paragraphs[0] || "").trim().split("\n").slice(0, 2).join(" ").slice(0, 120)
+          }
+
+          const datePrefix = file.slice(0, 10)
+          console.log(`  ${highlight(datePrefix)}  ${title}`)
+          if (summary) console.log(`    ${dim(summary.slice(0, 120))}`)
+          lines.push(`${datePrefix}: ${title}`)
+        }
+        console.log()
+      }
+    } catch (err: any) {
+      console.log(dim(`  (diary unavailable: ${err.message})`))
+    }
+
+    // ── 2. Pulse-all scorecard ─────────────────────────────────────
+    console.log(bold("  Lead Pulse Scorecard"))
+    console.log(dim("  ─────────────────────────────────"))
+
+    const spinner = prompts.spinner()
+    const statuses = args.status.split(",").map((s: string) => s.trim())
+    spinner.start(`Loading ${statuses.join(" + ")} leads...`)
+
+    try {
+      const fetches = statuses.map(async (status: string) => {
+        const params = new URLSearchParams({ status, per_page: "200" })
+        if (args.bloq) params.set("bloq_id", String(args.bloq))
+        const res = await irisFetch(`/api/v1/leads?${params}`)
+        if (!res.ok) return []
+        const body = await res.json().catch(() => ({}))
+        return body?.data ?? []
+      })
+      const batches = await Promise.all(fetches)
+      const allLeads: any[] = batches.flat()
+
+      // Deduplicate and filter junk
+      const seen = new Set<number>()
+      const leads = allLeads.filter((l: any) => {
+        if (seen.has(l.id)) return false
+        seen.add(l.id)
+        if (!l.email && !l.phone) return false
+        if (!l.full_name && !l.company) return false
+        return true
+      })
+
+      spinner.stop(`${leads.length} leads loaded`)
+
+      if (leads.length === 0) {
+        console.log(dim("  No active leads found."))
+      } else {
+        // Fetch pulse for each lead (parallel, max 10 concurrent)
+        const pulseResults: Array<{ id: number; name: string; pulse: number; band: string }> = []
+        const batchSize = 10
+        for (let i = 0; i < leads.length; i += batchSize) {
+          const batch = leads.slice(i, i + batchSize)
+          const results = await Promise.all(batch.map(async (lead: any) => {
+            try {
+              const res = await irisFetch(`/api/v1/leads/${lead.id}/readiness`)
+              if (!res.ok) return { id: lead.id, name: lead.full_name || lead.company || `#${lead.id}`, pulse: 0, band: "unknown" }
+              const body = await res.json().catch(() => ({}))
+              const data = body?.data ?? {}
+              return { id: lead.id, name: lead.full_name || lead.company || `#${lead.id}`, pulse: data.score ?? 0, band: data.band ?? "unknown" }
+            } catch {
+              return { id: lead.id, name: lead.full_name || lead.company || `#${lead.id}`, pulse: 0, band: "error" }
+            }
+          }))
+          pulseResults.push(...results)
+        }
+
+        // Sort by pulse ascending (worst first)
+        pulseResults.sort((a, b) => a.pulse - b.pulse)
+
+        const bandEmoji: Record<string, string> = { failing: "X", warning: "!", healthy: "+" }
+        for (const r of pulseResults.slice(0, 20)) {
+          const marker = bandEmoji[r.band] || "?"
+          const score = String(r.pulse).padStart(3)
+          console.log(`  [${marker}] ${score}/100  ${r.name} (#${r.id})`)
+          lines.push(`[${marker}] ${r.pulse}/100 ${r.name}`)
+        }
+        if (pulseResults.length > 20) {
+          console.log(dim(`  ... and ${pulseResults.length - 20} more`))
+        }
+      }
+    } catch (err: any) {
+      spinner.stop("Failed to load leads")
+      console.error(`  Error: ${err.message}`)
+    }
+
+    // ── 3. Ungated leads (dry-run) ─────────────────────────────────
+    console.log()
+    console.log(bold("  Ungated Leads"))
+    console.log(dim("  ─────────────────────────────────"))
+
+    try {
+      const gateRes = await irisFetch(`/api/v1/deals/active?per_page=200`)
+      if (gateRes.ok) {
+        const gateBody = await gateRes.json().catch(() => ({}))
+        const deals: any[] = gateBody?.data?.deals ?? []
+        const ungated = deals.filter((d: any) => !d.has_gate)
+        if (ungated.length > 0) {
+          for (const d of ungated.slice(0, 10)) {
+            console.log(`  ${d.lead_name || `Lead #${d.lead_id}`} — no payment gate`)
+            lines.push(`UNGATED: ${d.lead_name || `Lead #${d.lead_id}`}`)
+          }
+        } else {
+          console.log(dim("  All active deals are gated."))
+        }
+      } else {
+        console.log(dim("  (deals endpoint unavailable)"))
+      }
+    } catch {
+      console.log(dim("  (deals check skipped)"))
+    }
+
+    console.log()
+
+    // ── 4. --notify: send summary via iMessage ─────────────────────
+    if (args.notify && lines.length > 0) {
+      const summary = `IRIS Daily Pulse (${new Date().toLocaleDateString()})\n\n${lines.join("\n")}`
+      try {
+        const bridgeUrl = BRIDGE_URL || "http://localhost:3200"
+        const notifyRes = await fetch(`${bridgeUrl}/api/imessage/direct-send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to: "self", text: summary }),
+          signal: AbortSignal.timeout(10000),
+        })
+        if (notifyRes.ok) {
+          console.log(success("  Pulse summary sent to your iMessage"))
+        } else {
+          console.log(dim("  (notify failed: bridge returned " + notifyRes.status + ")"))
+        }
+      } catch (err: any) {
+        console.log(dim(`  (notify failed: ${err.message})`))
+      }
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify({ diary: lines.slice(0, 5), timestamp: new Date().toISOString() }, null, 2))
+    }
+  },
+})

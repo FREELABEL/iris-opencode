@@ -31,7 +31,7 @@ import { SessionCommand } from "./cli/cmd/session"
 // IRIS Platform commands
 import { PlatformChatCommand } from "./cli/cmd/platform-chat"
 import { PlatformAgentsCommand } from "./cli/cmd/platform-agents"
-import { PlatformLeadsCommand, PlatformDealsCommand } from "./cli/cmd/platform-leads"
+import { PlatformLeadsCommand, PlatformDealsCommand, PlatformPulseCommand } from "./cli/cmd/platform-leads"
 import { PlatformDialerCommand } from "./cli/cmd/platform-dialer"
 import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
@@ -57,6 +57,7 @@ import { PlatformEventsCommand } from "./cli/cmd/platform-events"
 import { PlatformVenuesCommand } from "./cli/cmd/platform-venues"
 import { PlatformProgramsCommand } from "./cli/cmd/platform-programs"
 import { PlatformRemotionCommand } from "./cli/cmd/platform-remotion"
+import { PlatformReleaseCommand } from "./cli/cmd/platform-release"
 import { PlatformHiveCommand } from "./cli/cmd/platform-hive"
 import { PlatformClipsCommand } from "./cli/cmd/platform-clips"
 import { PlatformOutreachCommand } from "./cli/cmd/platform-outreach"
@@ -215,6 +216,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAgentsCommand))
   .command(reg(PlatformLeadsCommand))
   .command(reg(PlatformDealsCommand))
+  .command(reg(PlatformPulseCommand))
   .command(reg(PlatformDialerCommand))
   .command(reg(PlatformWorkflowsCommand))
   .command(reg(PlatformBloqsCommand))
@@ -240,6 +242,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformVenuesCommand))
   .command(reg(PlatformProgramsCommand))
   .command(reg(PlatformRemotionCommand))
+  .command(reg(PlatformReleaseCommand))
   .command(reg(PlatformHiveCommand))
   .command(reg(PlatformClipsCommand))
   .command(reg(PlatformOutreachCommand))

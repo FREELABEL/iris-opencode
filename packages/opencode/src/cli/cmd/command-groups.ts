@@ -69,6 +69,7 @@ export const CATEGORIES: Record<string, CommandCategory> = {
 
 export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   // CRM & Sales
+  pulse: "crm",
   leads: "crm",
   "leads:meeting": "crm",
   deals: "crm",
@@ -111,6 +112,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   copycat: "pages",
   "editorial": "pages",
   remotion: "pages",
+  release: "pages",
   "cloud:upload": "pages",
 
   // Agents & Automation
