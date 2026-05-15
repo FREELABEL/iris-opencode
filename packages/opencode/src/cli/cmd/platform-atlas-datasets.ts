@@ -138,7 +138,9 @@ const SchemaCreateCommand = cmd({
       }
     }
 
-    const body: Record<string, any> = { name: args.name, fields }
+    // Normalize: wrap bare arrays so API receives { fields: [...] }
+    const normalizedFields = Array.isArray(fields) ? { fields } : fields
+    const body: Record<string, any> = { name: args.name, fields: normalizedFields }
     if (args.slug) body.slug = args.slug
     if (args.bloq != null) body.bloq_id = args.bloq
 
