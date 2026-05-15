@@ -98,6 +98,13 @@ export const UpgradeCommand = {
       if (bridgeResult.includes("bridge-updated")) {
         prompts.log.info("Bridge updated")
       }
+
+      // Fix stale API URLs in daemon config (pre-Railway migration)
+      const configFile = `${home}/.iris/config.json`
+      const fixResult = await $`test -f ${configFile} && grep -qE 'ondigitalocean\\.app|main\\.heyiris\\.io|apiv2\\.heyiris\\.io' ${configFile} 2>/dev/null && sed -i.bak -e 's|https://[^"]*ondigitalocean\\.app[^"]*|https://freelabel.net|g' -e 's|https://main\\.heyiris\\.io[^"]*|https://freelabel.net|g' -e 's|https://apiv2\\.heyiris\\.io[^"]*|https://freelabel.net|g' ${configFile} && rm -f ${configFile}.bak && echo "config-fixed"`.nothrow().quiet().text()
+      if (fixResult.includes("config-fixed")) {
+        prompts.log.info("Fixed stale API URL → freelabel.net")
+      }
     }
 
     prompts.outro("Done")

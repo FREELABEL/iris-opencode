@@ -997,7 +997,20 @@ install_bridge() {
     if [ -d "$bridge_dir" ] && [ -f "$bridge_dir/index.js" ] && [ -f "$bridge_dir/daemon.js" ]; then
         # Update existing installation
         print_message info "${MUTED}Bridge already installed, updating...${NC}"
-        (cd "$bridge_dir" && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null) || true
+        if ! (cd "$bridge_dir" && git reset --hard HEAD 2>/dev/null && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null); then
+            # git pull failed (dirty tree, conflicts, detached HEAD) — nuke and re-clone
+            print_message info "${MUTED}Bridge update failed, re-cloning...${NC}"
+            rm -rf "$bridge_dir"
+            git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null && \
+                (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || true
+        fi
+        # Safety check: if daemon.js still has stale DO URL, force re-clone
+        if grep -q 'ondigitalocean\.app' "$bridge_dir/daemon.js" 2>/dev/null; then
+            print_message info "${MUTED}Stale daemon detected, re-cloning...${NC}"
+            rm -rf "$bridge_dir"
+            git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null && \
+                (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || true
+        fi
         bridge_updated=true
     else
         # Fresh clone from public repo
@@ -1062,6 +1075,19 @@ has_node_key() {
 
 case "${1:-status}" in
     start)
+        # Auto-update daemon code before starting
+        if [ -d "$BRIDGE_DIR/.git" ]; then
+            (cd "$BRIDGE_DIR" && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null) || true
+        fi
+        # Fix stale API URLs in config (pre-Railway migration)
+        if [ -f "$IRIS_CONFIG" ] && grep -qE 'ondigitalocean\.app|main\.heyiris\.io|apiv2\.heyiris\.io' "$IRIS_CONFIG" 2>/dev/null; then
+            echo "Fixing stale API URL in config..."
+            sed -i.bak \
+                -e 's|https://[^"]*ondigitalocean\.app[^"]*|https://freelabel.net|g' \
+                -e 's|https://main\.heyiris\.io[^"]*|https://freelabel.net|g' \
+                -e 's|https://apiv2\.heyiris\.io[^"]*|https://freelabel.net|g' \
+                "$IRIS_CONFIG" && rm -f "$IRIS_CONFIG.bak"
+        fi
         if ! has_node_key; then
             # Self-heal: auto-register if SDK token exists
             if [ -f "$HOME/.iris/sdk/.env" ]; then
@@ -2460,7 +2486,7 @@ Wait for their answer. Based on what they pick, IMMEDIATELY run the correspondin
 - Agent: Ask what it should do in one sentence, then run: iris agents create
 - Multi-Agent Workflow: Ask what to automate in one sentence, then run: iris workflows list
 - Web Page: Ask what the page is for, then run: iris pages create --slug SLUG --title 'TITLE' --template landing
-  After creation, the public URL is shown in CLI output (main.heyiris.io/p/SLUG). Auto-publishes on create.
+  After creation, the public URL is shown in CLI output (freelabel.net/p/SLUG). Auto-publishes on create.
   To add more components: iris pages pull SLUG, edit pages/SLUG.json, iris pages push SLUG.
   Run: iris pages component-registry — to see ALL available component types.
   VALID component types (use ONLY these exact names): Hero, SiteNavigation, SiteFooter, AnnouncementBanner, TestimonialsSection, TeamSection, ContactSection, LogoMarquee, FeatureShowcase, ComparisonMatrix, ClientGrid, CareersListing, PortfolioGallery, ProductGrid, ServiceMenu, EventGrid, FundingTiers, BeforeAfter, MapSection, NewsletterSignup, StepWizard, FileUpload, ShoppingCart, OrderConfirmation.

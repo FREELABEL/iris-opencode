@@ -3076,6 +3076,260 @@ const HiveDomainsCommand = cmd({
 })
 
 // ============================================================================
+// Dashboard — unified status view
+// ============================================================================
+
+function formatDuration(ms: number): string {
+  if (ms < 0) return "0s"
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rs = s % 60
+  if (m < 60) return `${m}m ${rs}s`
+  const h = Math.floor(m / 60)
+  const rm = m % 60
+  return `${h}h ${rm}m`
+}
+
+function formatTime(dateStr: string): string {
+  try {
+    const d = new Date(dateStr)
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+  } catch { return "" }
+}
+
+function dashTimeUntil(dateStr: string | null | undefined): string {
+  if (!dateStr) return ""
+  const now = Date.now()
+  const target = new Date(String(dateStr)).getTime()
+  const diff = target - now
+  if (isNaN(target)) return ""
+  if (diff < 0) return "overdue"
+  if (diff < 60_000) return `${Math.round(diff / 1000)}s`
+  if (diff < 3600_000) return `${Math.round(diff / 60_000)}m`
+  if (diff < 86400_000) {
+    const h = Math.floor(diff / 3600_000)
+    const m = Math.round((diff % 3600_000) / 60_000)
+    return `${h}h ${m}m`
+  }
+  return `${Math.round(diff / 86400_000)}d`
+}
+
+const HiveDashboardCommand = cmd({
+  command: "dashboard",
+  aliases: ["dash"],
+  describe: "unified status view — daemon, schedules, tasks",
+  builder: (yargs) =>
+    yargs
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("watch", { alias: "w", describe: "refresh every 10 seconds", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    const renderDashboard = async () => {
+      if (args.watch) {
+        // Clear screen for watch mode
+        process.stdout.write("\x1B[2J\x1B[0f")
+      }
+
+      if (!args.json) {
+        UI.empty()
+        console.log(`  ${bold("IRIS Hive Dashboard")}`)
+        printDivider()
+      }
+
+      const token = await requireAuth()
+      if (!token) { if (!args.json) console.log(dim("  Not authenticated")); return }
+
+      const userId = await requireUserId(args["user-id"])
+      if (!userId) { if (!args.json) console.log(dim("  No user ID")); return }
+
+      // ── Parallel fetches ─────────────────────────────────────────────
+      const [daemonResult, schedulesResult, historyResult] = await Promise.all([
+        // 1. Local daemon status
+        (async () => {
+          try {
+            const [qRes, hRes] = await Promise.all([
+              bridgeFetch("/daemon/queue").catch(() => null),
+              bridgeFetch("/daemon/health").catch(() => null),
+            ])
+            if (!qRes || !qRes.ok) return null
+            const queue = await qRes.json() as Record<string, unknown>
+            const health = hRes && hRes.ok ? await hRes.json() as Record<string, unknown> : {}
+            return { queue, health }
+          } catch { return null }
+        })(),
+
+        // 2. Scheduled jobs (fl-api)
+        (async () => {
+          try {
+            const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?per_page=50&status=scheduled`)
+            if (!res.ok) return []
+            const data = await res.json() as Record<string, any>
+            return (data?.data ?? []) as any[]
+          } catch { return [] }
+        })(),
+
+        // 3. Recent task history (iris-api)
+        (async () => {
+          try {
+            const res = await hiveFetch(`/api/v6/nodes/tasks?limit=10&sort=-created_at`)
+            if (!res.ok) return []
+            const data = await res.json() as Record<string, any>
+            return (data?.data ?? data?.tasks ?? []) as any[]
+          } catch { return [] }
+        })(),
+      ])
+
+      // ── JSON output ──────────────────────────────────────────────────
+      if (args.json) {
+        const daemon = daemonResult ? {
+          status: daemonResult.health.paused ? "paused" : "online",
+          node_name: daemonResult.health.node_name ?? null,
+          active_tasks: daemonResult.queue.active_tasks ?? 0,
+          tasks: daemonResult.queue.tasks ?? [],
+        } : { status: "offline", node_name: null, active_tasks: 0, tasks: [] }
+
+        console.log(JSON.stringify({
+          daemon,
+          scheduled_jobs: schedulesResult.slice(0, 10).map((s: any) => ({
+            id: s.id,
+            name: s.name ?? s.task_name,
+            frequency: s.frequency,
+            next_run_at: s.next_run_at,
+          })),
+          recent_history: historyResult.slice(0, 10).map((t: any) => ({
+            id: t.id,
+            type: t.type ?? t.task_type,
+            status: t.status,
+            created_at: t.created_at,
+          })),
+        }, null, 2))
+        return
+      }
+
+      // ── Daemon section ───────────────────────────────────────────────
+      if (daemonResult) {
+        const q = daemonResult.queue
+        const h = daemonResult.health
+        const daemonStatus = h.paused
+          ? highlight("paused")
+          : success("online")
+        const activeTasks = Number(q.active_tasks ?? 0)
+        const taskLabel = activeTasks > 0
+          ? `${activeTasks} active task${activeTasks !== 1 ? "s" : ""}`
+          : "idle"
+        console.log(`  ${bold("Daemon")}    ${daemonStatus} | ${taskLabel}`)
+
+        const nodeName = h.node_name ?? h.hostname ?? ""
+        const platform = h.platform ?? ""
+        const mem = h.memory_gb ? `${h.memory_gb}GB` : ""
+        if (nodeName) {
+          const parts = [nodeName, platform, mem].filter(Boolean).join(" | ")
+          console.log(`  ${bold("Node")}      ${dim(parts)}`)
+        }
+
+        // Show running tasks
+        const tasks = (q.tasks ?? []) as Record<string, unknown>[]
+        if (tasks.length > 0) {
+          console.log()
+          console.log(`  ${bold(`Running Tasks (${tasks.length})`)}`)
+          for (const t of tasks) {
+            const id = dim(String(t.id ?? "").substring(0, 12) + "...")
+            const title = String(t.title ?? t.type ?? "unknown")
+            const uptime = t.uptime_s ? formatDuration(Number(t.uptime_s) * 1000) : ""
+            console.log(`    ${id} ${title.padEnd(20)} ${dim(uptime)}`)
+          }
+        }
+      } else {
+        console.log(`  ${bold("Daemon")}    ${dim("offline")}`)
+      }
+
+      // ── Scheduled Jobs section ───────────────────────────────────────
+      const activeSchedules = schedulesResult
+        .filter((s: any) => s.status === "scheduled" && s.next_run_at)
+        .sort((a: any, b: any) => new Date(a.next_run_at).getTime() - new Date(b.next_run_at).getTime())
+        .slice(0, 5)
+
+      if (activeSchedules.length > 0) {
+        console.log()
+        console.log(`  ${bold(`Scheduled Jobs (next ${activeSchedules.length})`)}`)
+        for (const s of activeSchedules) {
+          const id = dim(`#${s.id}`.padEnd(6))
+          const name = String(s.name ?? s.task_name ?? "").slice(0, 20)
+          const freq = dim(String(s.frequency ?? "").replace(/_/g, " ").padEnd(14))
+          const until = dashTimeUntil(s.next_run_at)
+          const untilStr = until === "overdue"
+            ? `${UI.Style.TEXT_DANGER}overdue${UI.Style.TEXT_NORMAL}`
+            : `next: ${until}`
+          console.log(`    ${id} ${name.padEnd(20)} ${freq} ${dim(untilStr)}`)
+        }
+      } else if (schedulesResult.length > 0) {
+        console.log()
+        console.log(`  ${bold("Scheduled Jobs")}  ${dim("none due")}`)
+      }
+
+      // ── Recent History section ───────────────────────────────────────
+      const recentTasks = historyResult.slice(0, 5)
+      if (recentTasks.length > 0) {
+        console.log()
+        console.log(`  ${bold(`Recent History (last ${recentTasks.length})`)}`)
+        for (const t of recentTasks) {
+          const taskType = String(t.type ?? t.task_type ?? t.title ?? "task").slice(0, 18)
+          const status = String(t.status ?? "").toLowerCase()
+          let statusStr: string
+          if (status === "completed") statusStr = `${UI.Style.TEXT_SUCCESS}completed${UI.Style.TEXT_NORMAL}`
+          else if (status === "failed") statusStr = `${UI.Style.TEXT_DANGER}failed${UI.Style.TEXT_NORMAL}`
+          else if (status === "running") statusStr = `${UI.Style.TEXT_HIGHLIGHT}running${UI.Style.TEXT_NORMAL}`
+          else statusStr = dim(status)
+
+          // Duration
+          let dur = ""
+          if (t.started_at && t.completed_at) {
+            const ms = new Date(t.completed_at).getTime() - new Date(t.started_at).getTime()
+            dur = formatDuration(ms)
+          } else if (t.duration_s) {
+            dur = formatDuration(Number(t.duration_s) * 1000)
+          }
+
+          const time = formatTime(t.completed_at ?? t.created_at ?? "")
+          console.log(`    ${taskType.padEnd(18)} ${statusStr.padEnd(22)} ${dim(dur.padEnd(10))} ${dim(time)}`)
+        }
+      }
+
+      printDivider()
+
+      if (args.watch) {
+        console.log(dim(`  Refreshing every 10s — Ctrl+C to stop`))
+      }
+    }
+
+    // ── Watch mode ───────────────────────────────────────────────────────
+    if (args.watch) {
+      await renderDashboard()
+      const interval = setInterval(async () => {
+        try {
+          await renderDashboard()
+        } catch (err) {
+          console.error(err instanceof Error ? err.message : String(err))
+        }
+      }, 10_000)
+
+      // Keep process alive until Ctrl+C
+      process.on("SIGINT", () => {
+        clearInterval(interval)
+        console.log()
+        process.exit(0)
+      })
+
+      // Wait indefinitely
+      await new Promise(() => {})
+    } else {
+      await renderDashboard()
+    }
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -3132,6 +3386,8 @@ export const PlatformHiveCommand = cmd({
       .command(HiveCredentialsCommand)
       // Domain management
       .command(HiveDomainsCommand)
+      // Unified dashboard
+      .command(HiveDashboardCommand)
       .demandCommand(),
   async handler() {},
 })

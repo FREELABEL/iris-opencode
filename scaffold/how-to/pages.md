@@ -25,7 +25,7 @@ iris pages create --slug my-page --title "My Page" --seo-description "Page descr
 ```
 
 This creates a page with a Hero + SiteFooter and auto-publishes it.
-The public URL is shown in the output: `main.heyiris.io/p/my-page`
+The public URL is shown in the output: `freelabel.net/p/my-page`
 
 ## Add Components
 
@@ -102,4 +102,4 @@ cat pages/component-showcase.json   # 28 components with full props
 
 - **Blank page?** You used an invalid component type. Run `iris pages component-registry` to check.
 - **Auth error on pages list?** The CLI routes pages through iris-api. If auth fails, the service token may need refreshing.
-- **Page URL format:** `main.heyiris.io/p/{slug}` — NOT `heyiris.io/p/{slug}` (that domain doesn't route /p/).
+- **Page URL format:** `freelabel.net/p/{slug}` — served by iris-api on Railway.

@@ -73,8 +73,8 @@ curl -X POST "https://raichu.heyiris.io/api/v1/leads/<lead_id>/payment-gate" \
 
 This creates:
 - A **CustomRequest** (invoice) with the scope and amount
-- A **proposal page** at `https://main.heyiris.io/proposal/<token>` — shows scope, deliverables, line items, total, and a "Sign & Accept" form
-- A **contract** at `https://main.heyiris.io/sign/<token>` — 1099-style contractor agreement with digital signature
+- A **proposal page** at `https://freelabel.net/proposal/<token>` — shows scope, deliverables, line items, total, and a "Sign & Accept" form
+- A **contract** at `https://freelabel.net/sign/<token>` — 1099-style contractor agreement with digital signature
 - A **Stripe checkout session** — payment link
 - A **payment gate outreach step** on the lead's timeline
 - **3 auto-reminder steps** at D+1, D+3, and D+7
@@ -84,9 +84,9 @@ The response contains all the URLs:
 {
   "step": {
     "data": {
-      "contract_signing_url": "https://main.heyiris.io/sign/abc123...",
+      "contract_signing_url": "https://freelabel.net/sign/abc123...",
       "stripe_checkout_url": "https://...",
-      "proposal_url": "https://main.heyiris.io/proposal/def456..."
+      "proposal_url": "https://freelabel.net/proposal/def456..."
     }
   }
 }

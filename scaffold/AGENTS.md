@@ -53,7 +53,7 @@ When the user asks something that might match a recipe, **read the recipe file f
 ## Critical Rules
 
 - **NEVER use curl or call APIs directly.** Use `iris` CLI commands.
-- **NEVER guess or hallucinate URLs.** Always read URLs from CLI output. Page URLs follow: `main.heyiris.io/p/{slug}`
+- **NEVER guess or hallucinate URLs.** Always read URLs from CLI output. Page URLs follow: `freelabel.net/p/{slug}`
 - **NEVER invent component type names.** Run `iris pages component-registry` first. Invalid types render blank.
 - **READ CLI output carefully.** Use exact values shown — don't make up IDs, URLs, or status values.
 
@@ -77,7 +77,7 @@ When building or editing pages with `iris pages`, follow these rules:
 
 1. **Run `iris pages component-registry`** before adding components to see all valid types
 2. **Use `iris pages pull component-showcase`** as a reference for working component JSON
-3. **Page URLs** are shown in CLI output — format: `main.heyiris.io/p/{slug}`
+3. **Page URLs** are shown in CLI output — format: `freelabel.net/p/{slug}`
 
 **Valid component types (use ONLY these exact names):**
 Hero, SiteNavigation, SiteFooter, AnnouncementBanner, TestimonialsSection, TeamSection, ContactSection, LogoMarquee, FeatureShowcase, ComparisonMatrix, ClientGrid, CareersListing, PortfolioGallery, ProductGrid, ServiceMenu, EventGrid, FundingTiers, BeforeAfter, MapSection, NewsletterSignup, StepWizard, FileUpload, ShoppingCart, OrderConfirmation
