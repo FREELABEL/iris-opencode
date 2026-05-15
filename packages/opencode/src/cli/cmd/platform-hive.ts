@@ -3144,7 +3144,7 @@ const HiveDashboardCommand = cmd({
       if (!userId) { if (!args.json) console.log(dim("  No user ID")); return }
 
       // ── Parallel fetches ─────────────────────────────────────────────
-      const [daemonResult, schedulesResult, historyResult] = await Promise.all([
+      const [daemonResult, schedulesResult, historyResult, pendingResult, allJobsResult] = await Promise.all([
         // 1. Local daemon status
         (async () => {
           try {
@@ -3159,7 +3159,7 @@ const HiveDashboardCommand = cmd({
           } catch { return null }
         })(),
 
-        // 2. Scheduled jobs (fl-api)
+        // 2. Scheduled jobs — all active statuses (fl-api)
         (async () => {
           try {
             const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?per_page=50&status=scheduled`)
@@ -3169,7 +3169,7 @@ const HiveDashboardCommand = cmd({
           } catch { return [] }
         })(),
 
-        // 3. Recent task history (iris-api)
+        // 3. Recent task history (iris-api node tasks)
         (async () => {
           try {
             const res = await hiveFetch(`/api/v6/nodes/tasks?limit=10&sort=-created_at`)
@@ -3178,7 +3178,34 @@ const HiveDashboardCommand = cmd({
             return (data?.data ?? data?.tasks ?? []) as any[]
           } catch { return [] }
         })(),
+
+        // 4. Pending cloud tasks
+        (async () => {
+          try {
+            const res = await nodeFetch("/api/v6/node-agent/tasks/pending")
+            if (!res.ok) return []
+            const data = await res.json() as Record<string, any>
+            return (data?.tasks ?? []) as any[]
+          } catch { return [] }
+        })(),
+
+        // 5. All jobs including running/completed for summary stats
+        (async () => {
+          try {
+            const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?all=1&per_page=200`)
+            if (!res.ok) return []
+            const data = await res.json() as Record<string, any>
+            return (data?.data ?? []) as any[]
+          } catch { return [] }
+        })(),
       ])
+
+      // ── Compute summary stats ─────────────────────────────────────────
+      const jobsByStatus = { scheduled: 0, running: 0, paused: 0, completed: 0, failed: 0 }
+      for (const j of allJobsResult) {
+        const s = String(j.status ?? "").toLowerCase()
+        if (s in jobsByStatus) (jobsByStatus as any)[s]++
+      }
 
       // ── JSON output ──────────────────────────────────────────────────
       if (args.json) {
@@ -3191,6 +3218,8 @@ const HiveDashboardCommand = cmd({
 
         console.log(JSON.stringify({
           daemon,
+          summary: jobsByStatus,
+          pending_tasks: pendingResult.length,
           scheduled_jobs: schedulesResult.slice(0, 10).map((s: any) => ({
             id: s.id,
             name: s.name ?? s.task_name,
@@ -3207,11 +3236,21 @@ const HiveDashboardCommand = cmd({
         return
       }
 
+      // ── Summary line ─────────────────────────────────────────────────
+      const summaryParts: string[] = []
+      if (jobsByStatus.scheduled > 0) summaryParts.push(`${jobsByStatus.scheduled} scheduled`)
+      if (jobsByStatus.running > 0) summaryParts.push(`${jobsByStatus.running} running`)
+      if (jobsByStatus.paused > 0) summaryParts.push(`${jobsByStatus.paused} paused`)
+      if (pendingResult.length > 0) summaryParts.push(`${pendingResult.length} queued`)
+      if (summaryParts.length > 0) {
+        console.log(`  ${bold("Jobs")}      ${summaryParts.join(" | ")}`)
+      }
+
       // ── Daemon section ───────────────────────────────────────────────
       if (daemonResult) {
         const q = daemonResult.queue
         const h = daemonResult.health
-        const daemonStatus = h.paused
+        const daemonStatus = (h as any).paused
           ? highlight("paused")
           : success("online")
         const activeTasks = Number(q.active_tasks ?? 0)
@@ -3220,9 +3259,9 @@ const HiveDashboardCommand = cmd({
           : "idle"
         console.log(`  ${bold("Daemon")}    ${daemonStatus} | ${taskLabel}`)
 
-        const nodeName = h.node_name ?? h.hostname ?? ""
-        const platform = h.platform ?? ""
-        const mem = h.memory_gb ? `${h.memory_gb}GB` : ""
+        const nodeName = (h as any).node_name ?? (h as any).hostname ?? ""
+        const platform = (h as any).platform ?? ""
+        const mem = (h as any).memory_gb ? `${(h as any).memory_gb}GB` : ""
         if (nodeName) {
           const parts = [nodeName, platform, mem].filter(Boolean).join(" | ")
           console.log(`  ${bold("Node")}      ${dim(parts)}`)
@@ -3237,11 +3276,26 @@ const HiveDashboardCommand = cmd({
             const id = dim(String(t.id ?? "").substring(0, 12) + "...")
             const title = String(t.title ?? t.type ?? "unknown")
             const uptime = t.uptime_s ? formatDuration(Number(t.uptime_s) * 1000) : ""
-            console.log(`    ${id} ${title.padEnd(20)} ${dim(uptime)}`)
+            console.log(`    ${success("▶")} ${id} ${title.padEnd(20)} ${dim(uptime)}`)
           }
         }
       } else {
         console.log(`  ${bold("Daemon")}    ${dim("offline")}`)
+      }
+
+      // ── Pending cloud tasks ──────────────────────────────────────────
+      if (pendingResult.length > 0) {
+        console.log()
+        console.log(`  ${bold(`Queued Tasks (${pendingResult.length})`)}`)
+        for (const t of pendingResult.slice(0, 5)) {
+          const id = dim(String(t.id ?? "").substring(0, 12) + "...")
+          const title = String(t.title ?? t.type ?? "unknown")
+          const status = dim(String(t.status ?? "pending"))
+          console.log(`    ◌ ${id} ${title.padEnd(20)} ${status}`)
+        }
+        if (pendingResult.length > 5) {
+          console.log(dim(`    ... and ${pendingResult.length - 5} more`))
+        }
       }
 
       // ── Scheduled Jobs section ───────────────────────────────────────
