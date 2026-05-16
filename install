@@ -1237,6 +1237,14 @@ DCTL
         fi
     fi
 
+    # ── Install Playwright browser for SOM automation ──
+    if command -v npx >/dev/null 2>&1; then
+        print_message info "${MUTED}      Installing browser automation runtime...${NC}"
+        (cd "$bridge_dir" && npx playwright install chromium 2>/dev/null) || {
+            print_message info "${MUTED}      Playwright browser install deferred — run: cd ~/.iris/bridge && npx playwright install chromium${NC}"
+        }
+    fi
+
     if [ "$bridge_updated" = "true" ]; then
         print_message info "${GREEN}[5/7]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}updated${NC}"
     else

@@ -2677,6 +2677,112 @@ const HiveCredentialsAddCommand = cmd({
   },
 })
 
+const HiveCredentialsUploadCommand = cmd({
+  command: "upload",
+  describe: "upload a browser session file (shortcut for add --type browser_session)",
+  builder: (yargs) =>
+    yargs
+      .option("platform", { describe: "platform (instagram, linkedin, twitter, youtube)", type: "string", demandOption: true })
+      .option("account", { describe: "account handle (e.g. thebeatbox__)", type: "string" })
+      .option("file", { describe: "path to session JSON file", type: "string", demandOption: true })
+      .option("bloq", { describe: "bloq/project ID", type: "number", demandOption: true }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const userId = await requireUserId()
+    if (!userId) return
+
+    const fs = require("fs")
+    const filePath = String(args.file)
+    if (!fs.existsSync(filePath)) {
+      console.error(`File not found: ${filePath}`)
+      return
+    }
+
+    let credentials: any
+    try {
+      credentials = JSON.parse(fs.readFileSync(filePath, "utf8"))
+    } catch (e: any) {
+      console.error(`Failed to read session file: ${e.message}`)
+      return
+    }
+
+    const cookieCount = credentials?.cookies?.length ?? Object.keys(credentials).length
+    console.log(dim(`  Read ${cookieCount} cookies from ${filePath}`))
+
+    const res = await hiveFetch("/api/v1/project-credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        bloq_id: args.bloq,
+        platform: args.platform,
+        credential_type: "browser_session",
+        credentials: JSON.stringify(credentials),
+        user_id: userId,
+        account: args.account || null,
+      }),
+    })
+    const ok = await handleApiError(res, "Upload credential")
+    if (!ok) return
+
+    printDivider()
+    printKV("Platform", args.platform)
+    if (args.account) printKV("Account", args.account)
+    printKV("Bloq", args.bloq)
+    printKV("Cookies", cookieCount)
+    printDivider()
+    console.log(success("Session uploaded — Hive nodes will use it automatically"))
+    console.log("")
+  },
+})
+
+const HiveCredentialsSaveSessionCommand = cmd({
+  command: "save-session",
+  aliases: ["connect"],
+  describe: "open a browser, log in, and auto-upload session to project vault",
+  builder: (yargs) =>
+    yargs
+      .option("platform", { describe: "platform (instagram, linkedin, twitter, youtube)", type: "string", demandOption: true })
+      .option("bloq", { describe: "bloq/project ID", type: "number", demandOption: true })
+      .option("account", { describe: "account handle", type: "string" }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const userId = await requireUserId()
+    if (!userId) return
+
+    const path = require("path")
+    const os = require("os")
+    const { execSync } = require("child_process")
+
+    const bridgeDir = path.join(os.homedir(), ".iris", "bridge")
+    const connectScript = path.join(bridgeDir, "installers", "connect-session.js")
+    const fs = require("fs")
+
+    if (!fs.existsSync(connectScript)) {
+      console.error("Bridge not installed. Run: curl -fsSL https://heyiris.io/install-code | bash")
+      return
+    }
+
+    const apiUrl = process.env.IRIS_API_URL ?? "https://freelabel.net"
+    const apiToken = await getBridgeToken()
+
+    console.log(dim(`  Opening browser for ${args.platform} login...`))
+    console.log(dim(`  Log in, handle any 2FA, then the window will close automatically.\n`))
+
+    try {
+      execSync(
+        `node "${connectScript}" --platform ${args.platform} --project ${args.bloq} --user-id ${userId} --api-url ${apiUrl} --token "${apiToken || ""}"`,
+        { stdio: "inherit" }
+      )
+    } catch {
+      console.error("Session capture failed. Try again or use: iris hive credentials upload --file <path>")
+    }
+  },
+})
+
 const HiveCredentialsRemoveCommand = cmd({
   command: "remove <id>",
   describe: "revoke a project credential",
@@ -2694,6 +2800,43 @@ const HiveCredentialsRemoveCommand = cmd({
   },
 })
 
+const HiveSeedCommand = cmd({
+  command: "seed",
+  describe: "seed default campaign templates for your account",
+  builder: (yargs) =>
+    yargs.option("defaults", { describe: "seed default templates", type: "boolean", default: true }),
+  async handler() {
+    UI.empty()
+    prompts.intro("Seed Campaign Templates")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId()
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Seeding default templates...")
+
+    try {
+      const res = await hiveFetch("/api/v1/campaign-templates/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      })
+      const ok = await handleApiError(res, "Seed templates")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as any
+      spinner.stop(success(`${data.count ?? 0} template(s) — ${data.message}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
 const HiveCredentialsCommand = cmd({
   command: "credentials",
   aliases: ["creds"],
@@ -2702,6 +2845,8 @@ const HiveCredentialsCommand = cmd({
     yargs
       .command(HiveCredentialsListCommand)
       .command(HiveCredentialsAddCommand)
+      .command(HiveCredentialsUploadCommand)
+      .command(HiveCredentialsSaveSessionCommand)
       .command(HiveCredentialsRemoveCommand)
       .demandCommand(),
   async handler() {},
@@ -3438,6 +3583,8 @@ export const PlatformHiveCommand = cmd({
       .command(HiveExecCommand)
       // Credentials
       .command(HiveCredentialsCommand)
+      // Template seeding
+      .command(HiveSeedCommand)
       // Domain management
       .command(HiveDomainsCommand)
       // Unified dashboard
