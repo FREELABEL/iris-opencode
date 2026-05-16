@@ -14,6 +14,12 @@ function bridgeHeaders(): Record<string, string> {
   return token ? { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" }
 }
 
+interface OutreachStep {
+  step: number
+  title: string
+  is_completed: boolean
+}
+
 interface InboxEntry {
   lead_id: number
   lead_name: string
@@ -22,6 +28,9 @@ interface InboxEntry {
   preview: string
   timestamp: string | null
   metadata?: Record<string, unknown>
+  outreach_steps?: OutreachStep[]
+  outreach_total?: number
+  outreach_done?: number
 }
 
 const CHANNEL_ICONS: Record<string, string> = {
@@ -66,6 +75,7 @@ export const PlatformInboxCommand: any = cmd({
       .option("channel", { describe: "filter: ig, email, imessage, crm, calendar", type: "string" })
       .option("bloq", { describe: "scope to a bloq/board ID", type: "number" })
       .option("status", { describe: "filter by reply status (replied, pending, all)", type: "string" })
+      .option("outreach", { describe: "show only leads with pending outreach steps", type: "boolean", default: false })
       .option("search", { describe: "full-text search across messages", type: "string" })
       .option("limit", { describe: "max leads to scan", type: "number", default: 25 })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
@@ -252,6 +262,48 @@ export const PlatformInboxCommand: any = cmd({
       liveSpinner.stop(`${entries.length} messages scanned`)
     }
 
+    // ── Fetch outreach steps per lead (if --outreach flag or --bloq) ──
+    const showOutreach = args.outreach || bloqFilter
+    if (showOutreach) {
+      const uniqueLeadIds = [...new Set(entries.map(e => e.lead_id))]
+      const stepsByLead = new Map<number, OutreachStep[]>()
+
+      await Promise.allSettled(uniqueLeadIds.map(async (leadId) => {
+        try {
+          const res = await irisFetch(`/api/v1/leads/${leadId}/outreach-steps?limit=20`)
+          if (res.ok) {
+            const body = (await res.json()) as any
+            const raw = Array.isArray(body?.data) ? body.data : (body?.data?.steps ?? [])
+            const steps: OutreachStep[] = raw.map((s: any) => ({
+              step: s.order ?? s.step ?? 0,
+              title: s.title ?? `Step ${s.order ?? '?'}`,
+              is_completed: !!(s.is_completed ?? s.completed),
+            }))
+            stepsByLead.set(leadId, steps)
+          }
+        } catch { /* non-fatal */ }
+      }))
+
+      // Attach to entries
+      for (const entry of entries) {
+        const steps = stepsByLead.get(entry.lead_id)
+        if (steps && steps.length > 0) {
+          entry.outreach_steps = steps
+          entry.outreach_total = steps.length
+          entry.outreach_done = steps.filter(s => s.is_completed).length
+        }
+      }
+
+      // If --outreach flag, filter to only leads with pending steps
+      if (args.outreach) {
+        const leadsWithPending = new Set<number>()
+        for (const [leadId, steps] of stepsByLead) {
+          if (steps.some(s => !s.is_completed)) leadsWithPending.add(leadId)
+        }
+        entries = entries.filter(e => leadsWithPending.has(e.lead_id))
+      }
+    }
+
     // ── Filter & sort ──
     entries = entries
       .filter(e => e.timestamp)
@@ -298,13 +350,28 @@ export const PlatformInboxCommand: any = cmd({
 
     // Group by lead for display, but show in chronological order
     const displayLimit = 50
+    const seenLeadOutreach = new Set<number>()
     for (const entry of entries.slice(0, displayLimit)) {
       const icon = CHANNEL_ICONS[entry.channel] ?? "●"
       const age = dim(timeAgo(entry.timestamp))
       const dir = entry.direction === "inbound" ? "←" : "→"
       const name = bold(entry.lead_name.slice(0, 20))
       const preview = entry.preview.replace(/\n/g, " ").slice(0, 80)
-      console.log(`  ${icon} ${name}  ${dir}  ${preview}  ${age}`)
+
+      // Outreach step badge (show once per lead)
+      let outreachBadge = ""
+      if (showOutreach && entry.outreach_steps && !seenLeadOutreach.has(entry.lead_id)) {
+        seenLeadOutreach.add(entry.lead_id)
+        const badges = entry.outreach_steps.map((s, i) => {
+          const n = i + 1
+          const total = entry.outreach_total ?? entry.outreach_steps!.length
+          if (s.is_completed) return `\x1b[32m[${n}/${total} ✓]\x1b[0m`
+          return `\x1b[33m[${n}/${total} pending]\x1b[0m`
+        })
+        outreachBadge = " " + badges.join(" ")
+      }
+
+      console.log(`  ${icon} ${name}  ${dir}  ${preview}  ${age}${outreachBadge}`)
     }
 
     if (entries.length > displayLimit) {
@@ -312,6 +379,6 @@ export const PlatformInboxCommand: any = cmd({
     }
 
     console.log()
-    prompts.outro(`${dim("iris inbox --days 30")}  ·  ${dim("iris leads pulse <id>")}`)
+    prompts.outro(`${dim("iris inbox --outreach")}  ·  ${dim("iris inbox --bloq 355")}  ·  ${dim("iris leads pulse <id>")}`)
   },
 })

@@ -34,7 +34,7 @@ export const cli = {
       let _raw = _fs.readFileSync(_envPath, "utf-8")
       if (_raw.charCodeAt(0) === 0xFEFF) _raw = _raw.slice(1) // strip BOM
       for (const line of _raw.split("\n")) {
-        const m = line.match(/^(IRIS_API_URL|IRIS_FL_API_URL)\s*=\s*(.+)/)
+        const m = line.match(/^(IRIS_API_URL|IRIS_FL_API_URL|IRIS_API_KEY)\s*=\s*(.+)/)
         if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim()
       }
     }

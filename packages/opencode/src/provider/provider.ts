@@ -37,6 +37,21 @@ import { createPerplexity } from "@ai-sdk/perplexity"
 import { createVercel } from "@ai-sdk/vercel"
 import { ProviderTransform } from "./transform"
 
+// Sync preload IRIS_API_KEY from ~/.iris/sdk/.env into process.env
+// Must run at module load time BEFORE async provider state initializes
+try {
+  const _fs = require("fs")
+  const _envPath = `${require("os").homedir()}/.iris/sdk/.env`
+  if (_fs.existsSync(_envPath)) {
+    let _raw = _fs.readFileSync(_envPath, "utf-8")
+    if (_raw.charCodeAt(0) === 0xfeff) _raw = _raw.slice(1)
+    for (const _line of _raw.split("\n")) {
+      const _m = _line.match(/^(IRIS_API_KEY)\s*=\s*(.+)/)
+      if (_m && !process.env[_m[1]]) process.env[_m[1]] = _m[2].trim()
+    }
+  }
+} catch {}
+
 export namespace Provider {
   const log = Log.create({ service: "provider" })
 
@@ -103,6 +118,33 @@ export namespace Provider {
       return {
         autoload: Object.keys(input.models).length > 0,
         options: hasKey ? {} : { apiKey: "public" },
+      }
+    },
+    async iris() {
+      // Resolve SDK token: stored auth > env var > ~/.iris/sdk/.env
+      const apiKey = await (async () => {
+        const stored = await Auth.get("iris")
+        if (stored?.type === "api" && stored.key) return stored.key
+        if (process.env.IRIS_API_KEY) return process.env.IRIS_API_KEY
+        try {
+          const homedir = process.env.HOME ?? process.env.USERPROFILE ?? ""
+          const envPath = `${homedir}/.iris/sdk/.env`
+          const file = Bun.file(envPath)
+          if (await file.exists()) {
+            let raw = await file.text()
+            if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1)
+            for (const line of raw.split("\n")) {
+              const m = line.match(/^IRIS_API_KEY\s*=\s*(.+)/)
+              if (m) return m[1].trim()
+            }
+          }
+        } catch {}
+        return undefined
+      })()
+
+      return {
+        autoload: Boolean(apiKey),
+        options: apiKey ? { apiKey, includeUsage: true } : {},
       }
     },
     openai: async () => {
@@ -631,6 +673,63 @@ export namespace Provider {
       }
     }
 
+    // Inject IRIS provider — branded models served through iris-api proxy
+    {
+      const irisBaseUrl =
+        process.env.IRIS_API_URL ?? process.env.IRIS_LOCAL_URL ?? "https://freelabel.net"
+      const irisApiUrl = `${irisBaseUrl}/api/v6/openai`
+
+      const makeIrisModel = (
+        modelKey: string,
+        name: string,
+        opts?: { reasoning?: boolean; toolcall?: boolean },
+      ): Model => ({
+        id: modelKey,
+        providerID: "iris",
+        name,
+        family: "iris",
+        api: { id: `iris/${modelKey}`, url: irisApiUrl, npm: "@ai-sdk/openai-compatible" },
+        status: "active",
+        headers: {},
+        options: {},
+        cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+        limit: { context: 131072, output: 16384 },
+        capabilities: {
+          temperature: true,
+          reasoning: opts?.reasoning ?? false,
+          attachment: false,
+          toolcall: opts?.toolcall ?? true,
+          input: { text: true, audio: false, image: false, video: false, pdf: false },
+          output: { text: true, audio: false, image: false, video: false, pdf: false },
+          interleaved: false,
+        },
+        release_date: "2026-05-15",
+        variants: {},
+      })
+
+      database["iris"] = {
+        id: "iris",
+        name: "IRIS",
+        source: "custom",
+        env: ["IRIS_API_KEY"],
+        options: {},
+        models: {
+          "iris-ai": makeIrisModel("iris-ai", "IRIS AI"),
+          "iris-ai-reasoning": makeIrisModel("iris-ai-reasoning", "IRIS AI Reasoning", { reasoning: true }),
+          "grok-4.3": makeIrisModel("grok-4.3", "Grok 4.3"),
+          "gpt-4o-mini": makeIrisModel("gpt-4o-mini", "GPT-4o Mini"),
+          "gpt-4.1-nano": makeIrisModel("gpt-4.1-nano", "GPT-4.1 Nano"),
+          "gpt-5-nano": makeIrisModel("gpt-5-nano", "GPT-5 Nano"),
+          "do-120b": makeIrisModel("do-120b", "DO GPT-OSS 120B", { toolcall: false }),
+          "do-20b": makeIrisModel("do-20b", "DO GPT-OSS 20B", { toolcall: false }),
+          "qwen3-32b": makeIrisModel("qwen3-32b", "Qwen3 32B"),
+          "qwen3-coder": makeIrisModel("qwen3-coder", "Qwen3 Coder Flash"),
+          "gemma-4": makeIrisModel("gemma-4", "Gemma 4", { toolcall: false }),
+          "ministral-14b": makeIrisModel("ministral-14b", "Ministral 14B", { toolcall: false }),
+        },
+      }
+    }
+
     function mergeProvider(providerID: string, provider: Partial<Info>) {
       const existing = providers[providerID]
       if (existing) {
@@ -727,8 +826,22 @@ export namespace Provider {
       database[providerID] = parsed
     }
 
-    // load env
+    // load env — ensure IRIS_API_KEY is available before the env loop
     const env = Env.all()
+    if (!env["IRIS_API_KEY"]) {
+      try {
+        const _fs = require("fs")
+        const _envPath = `${require("os").homedir()}/.iris/sdk/.env`
+        if (_fs.existsSync(_envPath)) {
+          let _raw = _fs.readFileSync(_envPath, "utf-8")
+          if (_raw.charCodeAt(0) === 0xfeff) _raw = _raw.slice(1)
+          for (const _line of _raw.split("\n")) {
+            const _m = _line.match(/^(IRIS_API_KEY)\s*=\s*(.+)/)
+            if (_m) { env[_m[1]] = _m[2].trim(); break }
+          }
+        }
+      } catch {}
+    }
     for (const [providerID, provider] of Object.entries(database)) {
       if (disabled.has(providerID)) continue
       const apiKey = provider.env.map((item) => env[item]).find(Boolean)
