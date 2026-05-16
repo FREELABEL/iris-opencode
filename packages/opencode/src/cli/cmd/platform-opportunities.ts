@@ -60,6 +60,7 @@ const ListCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("profile-id", { describe: "filter by profile PK", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -73,6 +74,7 @@ const ListCommand = cmd({
 
     try {
       const params = new URLSearchParams({ per_page: String(args.limit) })
+      if (args["profile-id"]) params.set("profile_id", String(args["profile-id"]))
       const res = await irisFetch(`/api/v1/marketplace/opportunities?${params}`)
       const ok = await handleApiError(res, "List opportunities")
       if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
@@ -164,7 +166,9 @@ const CreateCommand = cmd({
       .option("equity-pool-pct", { describe: "equity pool percentage (e.g. 5 for 5%)", type: "number" })
       .option("roles-file", { describe: "path to roles JSON array (key/title/count/pay_type/pay_amount/equity_bps/description)", type: "string" })
       .option("pitch-file", { describe: "path to pitch sections JSON array ({heading, body})", type: "string" })
-      .option("preview", { describe: "create in preview mode (banner shown, applications/investments disabled)", type: "boolean" }),
+      .option("preview", { describe: "create in preview mode (banner shown, applications/investments disabled)", type: "boolean" })
+      .option("profile-id", { describe: "attach to a profile (PK)", type: "number" })
+      .option("profile", { describe: "attach to a profile (slug — resolves to PK)", type: "string" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Opportunity")
@@ -191,11 +195,25 @@ const CreateCommand = cmd({
       skills = skillsInput || undefined
     }
 
+    // Resolve profile slug → PK if --profile provided
+    let profilePk: number | undefined = args["profile-id"] as number | undefined
+    if (!profilePk && args.profile) {
+      const profileRes = await irisFetch(`/api/v1/profile/${args.profile}`)
+      if (profileRes.ok) {
+        const pd = (await profileRes.json()) as any
+        const p = pd?.data ?? pd
+        profilePk = p?.pk
+        if (profilePk) prompts.log.info(`Profile: ${p.name} (pk ${profilePk})`)
+      }
+      if (!profilePk) { prompts.log.error(`Profile '${args.profile}' not found`); prompts.outro("Done"); return }
+    }
+
     const spinner = prompts.spinner()
     spinner.start("Creating…")
 
     try {
       const payload: Record<string, unknown> = { title, description }
+      if (profilePk) payload.profile_id = profilePk
       if (skills) payload.skills_required = skills.split(",").map((s: string) => s.trim())
       if (args["min-budget"]) payload.price_min = args["min-budget"]
       if (args["max-budget"]) payload.price_max = args["max-budget"]
@@ -480,6 +498,55 @@ const LinkLeadCommand = cmd({
   },
 })
 
+const LinkProfileCommand = cmd({
+  command: "link-profile <id> <profileSlug>",
+  describe: "attach an opportunity to a profile (sets opportunity.profile_id)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "opportunity ID", type: "number", demandOption: true })
+      .positional("profileSlug", { describe: "profile slug or PK (use 0 to unlink)", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Link Opportunity #${args.id} → Profile ${args.profileSlug}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+
+    let profilePk: number | null = null
+    if (args.profileSlug !== "0") {
+      spinner.start("Resolving profile…")
+      const profileRes = await irisFetch(`/api/v1/profile/${args.profileSlug}`)
+      if (!profileRes.ok) { spinner.stop("Failed", 1); prompts.log.error(`Profile '${args.profileSlug}' not found`); prompts.outro("Done"); return }
+      const pd = (await profileRes.json()) as any
+      const p = pd?.data ?? pd
+      profilePk = p?.pk
+      if (!profilePk) { spinner.stop("Failed", 1); prompts.log.error("Could not resolve profile PK"); prompts.outro("Done"); return }
+      spinner.stop(`${p.name} (pk ${profilePk})`)
+    }
+
+    const spinner2 = prompts.spinner()
+    spinner2.start(profilePk ? `Linking to profile ${profilePk}…` : "Unlinking…")
+
+    try {
+      const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ profile_id: profilePk }),
+      })
+      const ok = await handleApiError(res, "Update opportunity")
+      if (!ok) { spinner2.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner2.stop(`${success("✓")} ${profilePk ? `Linked to profile pk ${profilePk}` : "Unlinked"}`)
+      prompts.outro(dim(`iris opportunities get ${args.id}  |  iris profile show ${args.profileSlug}`))
+    } catch (err) {
+      spinner2.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const PreviewCommand = cmd({
   command: "preview <id>",
   describe: "toggle preview_mode on an opportunity (banner shown, applications/investments disabled)",
@@ -724,6 +791,7 @@ export const PlatformOpportunitiesCommand = cmd({
       .command(DiffCommand)
       .command(PreviewCommand)
       .command(LinkLeadCommand)
+      .command(LinkProfileCommand)
       .command(DeleteCommand)
       .command(InterestCommand)
       .demandCommand(),

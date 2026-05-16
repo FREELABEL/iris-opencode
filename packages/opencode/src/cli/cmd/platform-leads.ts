@@ -20,9 +20,14 @@ import {
   resolveUserId,
 } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "fs"
 import { homedir } from "os"
 import { join, basename, isAbsolute } from "path"
+import { spawnSync } from "child_process"
+import {
+  aiGenerateCarouselProps,
+  resolveRemotionDir,
+} from "./platform-remotion"
 
 // ============================================================================
 // Sync helpers
@@ -7728,24 +7733,157 @@ const LeadsReviewCommand = cmd({
     yargs
       .positional("lead-id", { type: "number", demandOption: true })
       .option("send", { type: "boolean", describe: "email the review link to the client" })
-      .option("open", { type: "boolean", describe: "open the review page in your browser" }),
+      .option("open", { type: "boolean", describe: "open the review page in your browser" })
+      .option("slides", { type: "boolean", describe: "generate branded carousel slides as deliverables" })
+      .option("brand", { type: "string", default: "heyiris", describe: "brand slug for carousel theming" })
+      .option("mode", { type: "string", default: "feature", describe: "carousel content mode (feature|recruit)" }),
   async handler(args) {
     await requireAuth()
     const leadId = args["lead-id"]
 
     const spinner = prompts.spinner()
-    spinner.start("Generating review page...")
 
     try {
+      // ── Optional: Generate branded carousel slides ──
+      if (args.slides) {
+        // 1. Fetch lead details for context
+        spinner.start("Fetching lead details...")
+        const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
+        if (!leadRes.ok) {
+          spinner.stop("Failed to fetch lead")
+          return
+        }
+        const leadData = (await leadRes.json()) as any
+        const lead = leadData.data || leadData
+        const leadName = lead.name || lead.full_name || `Lead #${leadId}`
+
+        // Fetch existing deliverables for context
+        const delRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables`)
+        const delData = delRes.ok ? ((await delRes.json()) as any) : { data: [] }
+        const deliverables = delData.data || []
+        const deliverableTitles = deliverables
+          .map((d: any) => d.title || d.file_name)
+          .filter(Boolean)
+          .join(", ")
+
+        // Fetch recent notes
+        const notesRes = await irisFetch(`/api/v1/leads/${leadId}/notes?per_page=5`)
+        const notesData = notesRes.ok ? ((await notesRes.json()) as any) : { data: [] }
+        const recentNotes = (notesData.data || [])
+          .map((n: any) => n.body || n.content || "")
+          .filter(Boolean)
+          .join("\n")
+
+        const context = [
+          `Client: ${leadName}`,
+          deliverableTitles ? `Deliverables: ${deliverableTitles}` : "",
+          recentNotes ? `Project notes:\n${recentNotes}` : "",
+        ].filter(Boolean).join("\n\n")
+
+        spinner.stop(success(`Lead: ${leadName} (${deliverables.length} deliverables)`))
+
+        // 2. Resolve brand tokens
+        const brand = args.brand as string
+        const builtIn = ["freelabel", "discover", "heyiris", "beatbox", "emc_radio", "capital_collective"]
+        let brandOverrides: Record<string, string> = {}
+
+        if (!builtIn.includes(brand)) {
+          spinner.start(`Resolving ${brand} design tokens...`)
+          const tokenData = await fetchBrandTokens(brand)
+          if (tokenData) {
+            const semantic = (tokenData as any).semantic ?? {}
+            if (semantic.bg_page) brandOverrides.bgOverride = semantic.bg_page
+            if (semantic.bg_brand) brandOverrides.accentOverride = semantic.bg_brand
+            if (semantic.fg_primary) brandOverrides.textOverride = semantic.fg_primary
+            brandOverrides.handleOverride = `@${brand}`
+            spinner.stop(success(`Brand tokens: ${Object.keys(brandOverrides).length} overrides`))
+          } else {
+            spinner.stop(dim("No brand tokens found, using defaults"))
+          }
+        }
+
+        // 3. AI generates carousel content
+        const mode = (args.mode as string) === "recruit" ? "recruit" : "feature"
+        spinner.start(`AI writing carousel content (${mode} mode)...`)
+        const carouselProps = await aiGenerateCarouselProps(context, brand, mode as any)
+        if (!carouselProps) {
+          spinner.stop("AI generation failed")
+          prompts.outro("Done")
+          return
+        }
+        carouselProps.brand = builtIn.includes(brand) ? brand : "freelabel"
+        Object.assign(carouselProps, brandOverrides)
+        spinner.stop(success("Carousel content generated"))
+
+        // 4. Render 9 slides via Remotion
+        const rDir = resolveRemotionDir()
+        const outDir = join(rDir, `review-slides-${leadId}-${Date.now()}`)
+        mkdirSync(outDir, { recursive: true })
+
+        spinner.start("Rendering 9 carousel slides...")
+        let renderFailed = false
+        for (let i = 0; i < 9; i++) {
+          const outFile = join(outDir, `slide-${i}.png`)
+          const slideProps = { ...carouselProps, slideIndex: i }
+          const propsFile = join(outDir, `_props-${i}.json`)
+          writeFileSync(propsFile, JSON.stringify(slideProps))
+          const result = spawnSync(
+            "npx",
+            ["remotion", "still", `CarouselSlide${i}`, outFile, `--props=${propsFile}`],
+            { stdio: "pipe", env: process.env, cwd: rDir },
+          )
+          if (result.status !== 0) {
+            prompts.log.error(`Slide ${i}: ${result.stderr?.toString().slice(0, 200) ?? "unknown error"}`)
+            spinner.stop(`Slide ${i} failed`)
+            renderFailed = true
+            break
+          }
+        }
+        // Cleanup temp props files
+        for (let i = 0; i < 9; i++) { try { unlinkSync(join(outDir, `_props-${i}.json`)) } catch {} }
+
+        if (renderFailed) {
+          prompts.outro("Slide rendering failed — skipping upload")
+          return
+        }
+        spinner.stop(success("9 slides rendered"))
+
+        // 5. Upload each slide as a deliverable
+        spinner.start("Uploading slides as deliverables...")
+        let uploaded = 0
+        for (let i = 0; i < 9; i++) {
+          const slidePath = join(outDir, `slide-${i}.png`)
+          if (!existsSync(slidePath)) continue
+
+          const form = new FormData()
+          form.append("type", "file")
+          form.append("title", `Project Update - Slide ${i + 1} of 9`)
+          form.append("file", Bun.file(slidePath))
+
+          const uploadRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables`, {
+            method: "POST",
+            body: form,
+          })
+          if (uploadRes.ok) uploaded++
+        }
+        spinner.stop(success(`${uploaded} slides uploaded as deliverables`))
+
+        // Cleanup rendered files
+        for (let i = 0; i < 9; i++) { try { unlinkSync(join(outDir, `slide-${i}.png`)) } catch {} }
+        try { require("fs").rmSync(outDir, { recursive: true, force: true }) } catch {}
+      }
+
+      // ── Generate review page (picks up new slide deliverables automatically) ──
+      spinner.start("Generating review page...")
       const res = await irisFetch(`/api/v1/leads/${leadId}/review-page`, { method: "POST" })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         spinner.stop("Failed")
-        console.error(`  Error: ${err.message || res.statusText}`)
+        console.error(`  Error: ${(err as any).message || res.statusText}`)
         return
       }
 
-      const body = await res.json()
+      const body = await res.json() as any
       const reviewUrl = body.data?.review_url
       const count = body.data?.deliverable_count || 0
 
@@ -7755,8 +7893,7 @@ const LeadsReviewCommand = cmd({
       console.log()
 
       if (args.open && reviewUrl) {
-        const { exec } = await import("child_process")
-        exec(`open "${reviewUrl}"`)
+        spawnSync("open", [reviewUrl], { stdio: "ignore" })
         console.log(dim("  Opening in browser..."))
       }
 
@@ -9338,12 +9475,13 @@ export const PlatformPulseCommand = cmd({
         // Sort by pulse ascending (worst first)
         pulseResults.sort((a, b) => a.pulse - b.pulse)
 
-        const bandEmoji: Record<string, string> = { failing: "X", warning: "!", healthy: "+" }
+        const bandEmoji: Record<string, string> = { failing: "🔴", warning: "🟡", healthy: "🟢" }
+        const scoreEmoji = (s: number) => s >= 70 ? "🟢" : s >= 40 ? "🟡" : "🔴"
         for (const r of pulseResults.slice(0, 20)) {
-          const marker = bandEmoji[r.band] || "?"
+          const marker = bandEmoji[r.band] || scoreEmoji(r.pulse)
           const score = String(r.pulse).padStart(3)
-          console.log(`  [${marker}] ${score}/100  ${r.name} (#${r.id})`)
-          lines.push(`[${marker}] ${r.pulse}/100 ${r.name}`)
+          console.log(`  ${marker} ${score}/100  ${r.name} (#${r.id})`)
+          lines.push(`${marker} ${r.pulse}/100 ${r.name}`)
         }
         if (pulseResults.length > 20) {
           console.log(dim(`  ... and ${pulseResults.length - 20} more`))
@@ -9367,8 +9505,8 @@ export const PlatformPulseCommand = cmd({
         const ungated = deals.filter((d: any) => !d.has_gate)
         if (ungated.length > 0) {
           for (const d of ungated.slice(0, 10)) {
-            console.log(`  ${d.lead_name || `Lead #${d.lead_id}`} — no payment gate`)
-            lines.push(`UNGATED: ${d.lead_name || `Lead #${d.lead_id}`}`)
+            console.log(`  ⚠️  ${d.lead_name || `Lead #${d.lead_id}`} — no payment gate`)
+            lines.push(`⚠️ ${d.lead_name || `Lead #${d.lead_id}`} — ungated`)
           }
         } else {
           console.log(dim("  All active deals are gated."))
@@ -9384,13 +9522,17 @@ export const PlatformPulseCommand = cmd({
 
     // ── 4. --notify: send summary via iMessage ─────────────────────
     if (args.notify && lines.length > 0) {
-      const summary = `IRIS Daily Pulse (${new Date().toLocaleDateString()})\n\n${lines.join("\n")}`
+      const summary = `📊 IRIS Pulse — ${new Date().toLocaleDateString()}\n\n${lines.join("\n")}`
       try {
         const bridgeUrl = BRIDGE_URL || "http://localhost:3200"
+        const bridgeKey = getBridgeToken()
         const notifyRes = await fetch(`${bridgeUrl}/api/imessage/direct-send`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ to: "self", text: summary }),
+          headers: {
+            "Content-Type": "application/json",
+            ...(bridgeKey ? { "X-Bridge-Key": bridgeKey } : {}),
+          },
+          body: JSON.stringify({ handle: "self", text: summary }),
           signal: AbortSignal.timeout(10000),
         })
         if (notifyRes.ok) {

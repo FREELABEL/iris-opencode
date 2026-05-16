@@ -212,6 +212,11 @@ const TOPIC_RECIPES: Record<string, string[]> = {
     "",
     "  # Good Deals planning",
     "  iris good-deals list",
+    "",
+    "  # LinkedIn outreach",
+    "  iris linkedin status",
+    "  iris linkedin search \"AI founder Austin\" --dry-run",
+    "  iris linkedin connect --board 302 --limit 10",
   ],
   compute: [
     "Common Workflows:",

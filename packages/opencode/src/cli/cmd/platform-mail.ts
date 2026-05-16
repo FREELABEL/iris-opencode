@@ -161,6 +161,7 @@ const MailSendCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("to", { type: "string", demandOption: true, describe: "recipient email" })
+      .option("from", { type: "string", alias: "f", describe: "sender email address (must be configured in Mail.app)" })
       .option("subject", { type: "string", alias: "s", demandOption: true })
       .option("body", { type: "string", alias: "b", demandOption: true })
       .option("cc", { type: "string", describe: "CC email address" })
@@ -180,6 +181,7 @@ const MailSendCommand = cmd({
       subject: args.subject,
       body_text: args.body,
     }
+    if (args.from) payload.from_email = args.from
     if (args.cc) payload.cc = args.cc
     if (args.attachment) payload.attachments = [args.attachment]
 

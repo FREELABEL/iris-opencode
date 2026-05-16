@@ -26,6 +26,7 @@ export const cli = {
 
 // Pre-load SDK env vars before setting constants (sync read at module load)
 // This ensures IRIS_API_URL from ~/.iris/sdk/.env is picked up
+// TODO: Once loadIrisSdkEnvSync is defined below, refactor this to use it
 {
   try {
     const _fs = require("fs"), _path = require("path")
@@ -34,8 +35,20 @@ export const cli = {
       let _raw = _fs.readFileSync(_envPath, "utf-8")
       if (_raw.charCodeAt(0) === 0xFEFF) _raw = _raw.slice(1) // strip BOM
       for (const line of _raw.split("\n")) {
-        const m = line.match(/^(IRIS_API_URL|IRIS_FL_API_URL)\s*=\s*(.+)/)
-        if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim()
+        const trimmed = line.trim()
+        if (!trimmed || trimmed.startsWith("#")) continue
+        const eq = trimmed.indexOf("=")
+        if (eq <= 0) continue
+        const key = trimmed.slice(0, eq).trim()
+        if (!["IRIS_API_URL", "IRIS_FL_API_URL", "IRIS_API_KEY"].includes(key)) continue
+        if (process.env[key]) continue
+        let rawValue = trimmed.slice(eq + 1).trim()
+        // Strip quotes
+        if ((rawValue.startsWith('"') && rawValue.endsWith('"')) ||
+            (rawValue.startsWith("'") && rawValue.endsWith("'"))) {
+          rawValue = rawValue.slice(1, -1)
+        }
+        process.env[key] = rawValue
       }
     }
   } catch {}
@@ -60,6 +73,61 @@ export const IRIS_API = PLATFORM_URLS.irisApi
 
 let _sdkEnvCache: Record<string, string> | undefined
 
+/**
+ * Strip quotes and inline comments from a .env value
+ * Examples:
+ *   "value"    → value
+ *   'value'    → value
+ *   value # comment → value
+ */
+function stripEnvQuotes(value: string): string {
+  // Remove inline # comments (but not # inside quotes)
+  let cleaned = value
+  const hashIndex = cleaned.indexOf("#")
+  if (hashIndex >= 0) {
+    cleaned = cleaned.slice(0, hashIndex).trim()
+  }
+  
+  // Strip surrounding quotes
+  if ((cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+      (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+    return cleaned.slice(1, -1)
+  }
+  
+  return cleaned
+}
+
+/**
+ * Synchronously load IRIS_API_KEY (and other SDK env vars) from ~/.iris/sdk/.env
+ * Handles BOM, strips quotes, filters comments.
+ * Safe to call multiple times (uses module-level cache).
+ * Used by provider.ts at module load time.
+ */
+export function loadIrisSdkEnvSync(): Record<string, string> {
+  const result: Record<string, string> = {}
+  try {
+    const fs = require("fs")
+    const path = require("path")
+    const envPath = path.join(require("os").homedir(), ".iris", "sdk", ".env")
+    if (fs.existsSync(envPath)) {
+      let raw = fs.readFileSync(envPath, "utf-8")
+      // Strip BOM if present
+      if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1)
+      for (const line of raw.split("\n")) {
+        const trimmed = line.trim()
+        if (!trimmed || trimmed.startsWith("#")) continue
+        const eq = trimmed.indexOf("=")
+        if (eq > 0) {
+          const key = trimmed.slice(0, eq).trim()
+          const rawValue = trimmed.slice(eq + 1).trim()
+          result[key] = stripEnvQuotes(rawValue)
+        }
+      }
+    }
+  } catch {}
+  return result
+}
+
 async function readSdkEnv(): Promise<Record<string, string>> {
   if (_sdkEnvCache) return _sdkEnvCache
   _sdkEnvCache = {}
@@ -75,7 +143,9 @@ async function readSdkEnv(): Promise<Record<string, string>> {
         if (!trimmed || trimmed.startsWith("#")) continue
         const eq = trimmed.indexOf("=")
         if (eq > 0) {
-          _sdkEnvCache[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim()
+          const key = trimmed.slice(0, eq).trim()
+          const rawValue = trimmed.slice(eq + 1).trim()
+          _sdkEnvCache[key] = stripEnvQuotes(rawValue)
         }
       }
     }
