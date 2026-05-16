@@ -2774,8 +2774,8 @@ const HiveCredentialsSaveSessionCommand = cmd({
 
     try {
       execSync(
-        `node "${connectScript}" --platform ${args.platform} --project ${args.bloq} --user-id ${userId} --api-url ${apiUrl} --token "${apiToken || ""}"`,
-        { stdio: "inherit" }
+        `node "${connectScript}" --platform ${args.platform} --project ${args.bloq} --user-id ${userId} --api-url ${apiUrl}`,
+        { stdio: "inherit", env: { ...process.env, FL_RAICHU_API_TOKEN: apiToken || "" } }
       )
     } catch {
       console.error("Session capture failed. Try again or use: iris hive credentials upload --file <path>")
