@@ -36,21 +36,16 @@ import { createTogetherAI } from "@ai-sdk/togetherai"
 import { createPerplexity } from "@ai-sdk/perplexity"
 import { createVercel } from "@ai-sdk/vercel"
 import { ProviderTransform } from "./transform"
+import { loadIrisSdkEnvSync } from "../cli/cmd/iris-api"
 
 // Sync preload IRIS_API_KEY from ~/.iris/sdk/.env into process.env
 // Must run at module load time BEFORE async provider state initializes
-try {
-  const _fs = require("fs")
-  const _envPath = `${require("os").homedir()}/.iris/sdk/.env`
-  if (_fs.existsSync(_envPath)) {
-    let _raw = _fs.readFileSync(_envPath, "utf-8")
-    if (_raw.charCodeAt(0) === 0xfeff) _raw = _raw.slice(1)
-    for (const _line of _raw.split("\n")) {
-      const _m = _line.match(/^(IRIS_API_KEY)\s*=\s*(.+)/)
-      if (_m && !process.env[_m[1]]) process.env[_m[1]] = _m[2].trim()
-    }
+{
+  const sdkEnv = loadIrisSdkEnvSync()
+  if (sdkEnv.IRIS_API_KEY && !process.env.IRIS_API_KEY) {
+    process.env.IRIS_API_KEY = sdkEnv.IRIS_API_KEY
   }
-} catch {}
+}
 
 export namespace Provider {
   const log = Log.create({ service: "provider" })
@@ -126,20 +121,9 @@ export namespace Provider {
         const stored = await Auth.get("iris")
         if (stored?.type === "api" && stored.key) return stored.key
         if (process.env.IRIS_API_KEY) return process.env.IRIS_API_KEY
-        try {
-          const homedir = process.env.HOME ?? process.env.USERPROFILE ?? ""
-          const envPath = `${homedir}/.iris/sdk/.env`
-          const file = Bun.file(envPath)
-          if (await file.exists()) {
-            let raw = await file.text()
-            if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1)
-            for (const line of raw.split("\n")) {
-              const m = line.match(/^IRIS_API_KEY\s*=\s*(.+)/)
-              if (m) return m[1].trim()
-            }
-          }
-        } catch {}
-        return undefined
+        // Fallback: re-load SDK env (in case it changed since module load)
+        const sdkEnv = loadIrisSdkEnvSync()
+        return sdkEnv.IRIS_API_KEY
       })()
 
       return {
@@ -829,18 +813,8 @@ export namespace Provider {
     // load env — ensure IRIS_API_KEY is available before the env loop
     const env = Env.all()
     if (!env["IRIS_API_KEY"]) {
-      try {
-        const _fs = require("fs")
-        const _envPath = `${require("os").homedir()}/.iris/sdk/.env`
-        if (_fs.existsSync(_envPath)) {
-          let _raw = _fs.readFileSync(_envPath, "utf-8")
-          if (_raw.charCodeAt(0) === 0xfeff) _raw = _raw.slice(1)
-          for (const _line of _raw.split("\n")) {
-            const _m = _line.match(/^(IRIS_API_KEY)\s*=\s*(.+)/)
-            if (_m) { env[_m[1]] = _m[2].trim(); break }
-          }
-        }
-      } catch {}
+      const sdkEnv = loadIrisSdkEnvSync()
+      if (sdkEnv.IRIS_API_KEY) env["IRIS_API_KEY"] = sdkEnv.IRIS_API_KEY
     }
     for (const [providerID, provider] of Object.entries(database)) {
       if (disabled.has(providerID)) continue

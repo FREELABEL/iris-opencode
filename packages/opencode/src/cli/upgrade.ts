@@ -6,7 +6,7 @@ import { Installation } from "@/installation"
 export async function upgrade() {
   // Skip auto-update for dev builds — version "0.0.0-dev-*" always mismatches
   // the latest release, causing the binary to be overwritten on every TUI launch
-  if (Installation.VERSION.includes("-dev-")) return
+  if (Installation.VERSION.startsWith("0.0.0-dev-")) return
 
   const config = await Config.global()
   const method = await Installation.method()

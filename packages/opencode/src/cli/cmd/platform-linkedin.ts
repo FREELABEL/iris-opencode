@@ -31,7 +31,8 @@ const StatusCommand = cmd({
   describe: "Show LinkedIn campaign config and metrics",
   builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
-    await requireAuth()
+    const token = await requireAuth()
+    if (!token) return
     prompts.intro(`${bold("iris linkedin")} status`)
 
     const res = await irisFetch("/api/v1/leads/stats?bloq_id=302")
@@ -69,7 +70,8 @@ const SearchCommand = cmd({
       .option("dry-run", { describe: "Show what would be dispatched", type: "boolean" })
       .option("limit", { describe: "Max profiles to scrape", type: "number", default: 20 }),
   async handler(args) {
-    await requireAuth()
+    const token = await requireAuth()
+    if (!token) return
     const query = (args as any).query as string
     const limit = (args as any).limit as number
     const dryRun = (args as any)["dry-run"] as boolean
@@ -116,7 +118,8 @@ const OutreachCommand = cmd({
       .option("live", { describe: "Actually send (default: dry-run)", type: "boolean", default: false })
       .option("strategy", { describe: "Strategy name", type: "string", default: "LinkedIn Founder Outreach | V1" }),
   async handler(args) {
-    await requireAuth()
+    const token = await requireAuth()
+    if (!token) return
     const boardId = (args as any).boardId as number
     const limit = (args as any).limit as number
     const live = (args as any).live as boolean
@@ -168,7 +171,8 @@ const ConnectCommand = cmd({
       .option("query", { describe: "Search query for discovery", type: "string" })
       .option("live", { describe: "Actually send (default: dry-run)", type: "boolean", default: false }),
   async handler(args) {
-    await requireAuth()
+    const token = await requireAuth()
+    if (!token) return
     const boardId = (args as any).board as number
     const limit = (args as any).limit as number
     const live = (args as any).live as boolean
@@ -245,7 +249,8 @@ const CheckRepliesCommand = cmd({
       .option("limit", { describe: "Max conversations to scan", type: "number", default: 20 })
       .option("dry-run", { describe: "Show matches without tagging", type: "boolean" }),
   async handler(args) {
-    await requireAuth()
+    const token = await requireAuth()
+    if (!token) return
     const boardId = (args as any).board as number
     const limit = (args as any).limit as number
     const dryRun = (args as any)["dry-run"] as boolean

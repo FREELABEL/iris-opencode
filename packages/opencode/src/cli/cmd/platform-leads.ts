@@ -9532,7 +9532,7 @@ export const PlatformPulseCommand = cmd({
             "Content-Type": "application/json",
             ...(bridgeKey ? { "X-Bridge-Key": bridgeKey } : {}),
           },
-          body: JSON.stringify({ handle: "+17139127520", text: summary }),
+          body: JSON.stringify({ handle: "self", text: summary }),
           signal: AbortSignal.timeout(10000),
         })
         if (notifyRes.ok) {
