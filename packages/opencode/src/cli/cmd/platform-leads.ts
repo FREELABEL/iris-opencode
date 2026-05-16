@@ -7717,6 +7717,75 @@ const LeadsContentEngineCommand = cmd({
 })
 
 // ============================================================================
+// ============================================================================
+// iris leads review — generate client review page
+// ============================================================================
+
+const LeadsReviewCommand = cmd({
+  command: "review <lead-id>",
+  describe: "generate a client-facing review page from deliverables",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { type: "number", demandOption: true })
+      .option("send", { type: "boolean", describe: "email the review link to the client" })
+      .option("open", { type: "boolean", describe: "open the review page in your browser" }),
+  async handler(args) {
+    await requireAuth()
+    const leadId = args["lead-id"]
+
+    const spinner = prompts.spinner()
+    spinner.start("Generating review page...")
+
+    try {
+      const res = await irisFetch(`/api/v1/leads/${leadId}/review-page`, { method: "POST" })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        spinner.stop("Failed")
+        console.error(`  Error: ${err.message || res.statusText}`)
+        return
+      }
+
+      const body = await res.json()
+      const reviewUrl = body.data?.review_url
+      const count = body.data?.deliverable_count || 0
+
+      spinner.stop(`Review page ready (${count} deliverables)`)
+      console.log()
+      console.log(`  ${bold("Review URL:")} ${reviewUrl}`)
+      console.log()
+
+      if (args.open && reviewUrl) {
+        const { exec } = await import("child_process")
+        exec(`open "${reviewUrl}"`)
+        console.log(dim("  Opening in browser..."))
+      }
+
+      if (args.send) {
+        console.log(dim("  Sending review link via deliverables email..."))
+        const sendRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables/send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            deliverable_ids: [],
+            message_mode: "ai",
+            custom_context: `Please review your deliverables at: ${reviewUrl}`,
+            subject: "Your Project Review is Ready",
+          }),
+        })
+        if (sendRes.ok) {
+          console.log(success("  Review link emailed to client"))
+        } else {
+          console.log(dim("  (email send failed — " + sendRes.status + ")"))
+        }
+      }
+    } catch (err: any) {
+      spinner.stop("Failed")
+      console.error(`  Error: ${err.message}`)
+    }
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -7764,6 +7833,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsOnboardAllCommand)
       .command(LeadsDispositionCommand)
       .command(LeadsContentEngineCommand)
+      .command(LeadsReviewCommand)
       .demandCommand(),
   async handler() {},
 })
