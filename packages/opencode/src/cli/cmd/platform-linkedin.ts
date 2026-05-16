@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, dim, bold } from "./iris-api"
 
 // ============================================================================
 // LinkedIn CLI — LinkedIn outreach campaign management
@@ -13,13 +13,22 @@ import { irisFetch, requireAuth, handleApiError, dim, bold } from "./iris-api"
 // ============================================================================
 
 async function dispatchHiveTask(taskPayload: Record<string, unknown>): Promise<any> {
-  const res = await irisFetch("/api/v6/tools/execute", {
+  const userId = await requireUserId()
+  if (!userId) return null
+  const { type, action, board_id, limit, dry_run, ...rest } = taskPayload
+  // Build prompt with mode= so the SOM executor routes to the correct spec
+  const promptParts = [`custom mode=${action || "outreach"} board=${board_id} limit=${limit || 20}`]
+  if (dry_run) promptParts.push("dry=1")
+  const res = await irisFetch("/api/v6/nodes/tasks", {
     method: "POST",
     body: JSON.stringify({
-      tool: "dispatch_hive_task",
-      parameters: taskPayload,
+      user_id: userId,
+      title: `${action || type || "som"}`,
+      type: (type as string) || "som",
+      prompt: promptParts.join(" "),
+      config: { action, board_id, limit, dry_run, ...rest },
     }),
-  })
+  }, IRIS_API)
   const ok = await handleApiError(res, "dispatch_hive_task")
   if (!ok) return null
   return await res.json()
@@ -268,8 +277,8 @@ const CheckRepliesCommand = cmd({
       dry_run: dryRun ?? false,
     })
 
-    if (result?.data?.task_id) {
-      console.log(`  Task dispatched: ${bold(result.data.task_id)}`)
+    if (result?.task?.id) {
+      console.log(`  Task dispatched: ${bold(result.task.id)}`)
     } else {
       console.log(`  ${dim("No Hive node available -- task queued")}`)
     }
