@@ -9475,12 +9475,13 @@ export const PlatformPulseCommand = cmd({
         // Sort by pulse ascending (worst first)
         pulseResults.sort((a, b) => a.pulse - b.pulse)
 
-        const bandEmoji: Record<string, string> = { failing: "X", warning: "!", healthy: "+" }
+        const bandEmoji: Record<string, string> = { failing: "🔴", warning: "🟡", healthy: "🟢" }
+        const scoreEmoji = (s: number) => s >= 70 ? "🟢" : s >= 40 ? "🟡" : "🔴"
         for (const r of pulseResults.slice(0, 20)) {
-          const marker = bandEmoji[r.band] || "?"
+          const marker = bandEmoji[r.band] || scoreEmoji(r.pulse)
           const score = String(r.pulse).padStart(3)
-          console.log(`  [${marker}] ${score}/100  ${r.name} (#${r.id})`)
-          lines.push(`[${marker}] ${r.pulse}/100 ${r.name}`)
+          console.log(`  ${marker} ${score}/100  ${r.name} (#${r.id})`)
+          lines.push(`${marker} ${r.pulse}/100 ${r.name}`)
         }
         if (pulseResults.length > 20) {
           console.log(dim(`  ... and ${pulseResults.length - 20} more`))
@@ -9504,8 +9505,8 @@ export const PlatformPulseCommand = cmd({
         const ungated = deals.filter((d: any) => !d.has_gate)
         if (ungated.length > 0) {
           for (const d of ungated.slice(0, 10)) {
-            console.log(`  ${d.lead_name || `Lead #${d.lead_id}`} — no payment gate`)
-            lines.push(`UNGATED: ${d.lead_name || `Lead #${d.lead_id}`}`)
+            console.log(`  ⚠️  ${d.lead_name || `Lead #${d.lead_id}`} — no payment gate`)
+            lines.push(`⚠️ ${d.lead_name || `Lead #${d.lead_id}`} — ungated`)
           }
         } else {
           console.log(dim("  All active deals are gated."))
@@ -9521,7 +9522,7 @@ export const PlatformPulseCommand = cmd({
 
     // ── 4. --notify: send summary via iMessage ─────────────────────
     if (args.notify && lines.length > 0) {
-      const summary = `IRIS Daily Pulse (${new Date().toLocaleDateString()})\n\n${lines.join("\n")}`
+      const summary = `📊 IRIS Pulse — ${new Date().toLocaleDateString()}\n\n${lines.join("\n")}`
       try {
         const bridgeUrl = BRIDGE_URL || "http://localhost:3200"
         const bridgeKey = getBridgeToken()
