@@ -185,22 +185,211 @@ const RepliesCommand = cmd({
   },
 })
 
+// -- follow-up --
+const FollowUpCommand = cmd({
+  command: "follow-up",
+  describe: "Reply to a lead's DM (manual by default, --ai for auto-generated)",
+  builder: (yargs) =>
+    yargs
+      .option("lead", { describe: "Lead ID to follow up with", type: "number", demandOption: true })
+      .option("ai", { describe: "Generate reply with AI and send automatically", type: "boolean", default: false })
+      .option("message", { describe: "Custom message to send (skips AI)", type: "string" })
+      .option("account", { describe: "IG account to send from", type: "string", default: "heyiris.io" })
+      .option("dry-run", { describe: "Type message but don't send", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const leadId = (args as any).lead as number
+    const useAi = (args as any).ai as boolean
+    const customMessage = (args as any).message as string | undefined
+    const account = (args as any).account as string
+    const dryRun = (args as any)["dry-run"] as boolean
+
+    prompts.intro(`${bold("iris instagram")} follow-up`)
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching lead details...")
+
+    // Fetch lead with notes
+    let lead: any = null
+    try {
+      const res = await irisFetch(`/api/v1/leads/${leadId}`, {}, RAICHU)
+      if (!res.ok) { spinner.stop("Error"); console.log(`  Lead #${leadId} not found (${res.status})`); return }
+      const data = (await res.json()) as any
+      lead = data?.data ?? data
+    } catch (err: any) {
+      spinner.stop("Error"); console.log(`  ${err.message}`); return
+    }
+
+    // Extract IG handle from lead
+    const igHandle = lead.nickname
+      || (lead.name?.startsWith("@") ? lead.name.slice(1) : null)
+      || lead.name
+      || ""
+
+    if (!igHandle) {
+      spinner.stop("Error"); console.log("  No IG handle found on this lead"); return
+    }
+
+    spinner.stop(`Lead: ${lead.name || igHandle} (@${igHandle})`)
+
+    // Show conversation context
+    const notes = (lead.notes || []).slice(0, 10)
+    const replyNotes = notes.filter((n: any) => {
+      const msg = (n.message || n.content || "").toLowerCase()
+      return msg.includes("[inbox reply]") || msg.includes("reply")
+    })
+
+    if (replyNotes.length > 0 || notes.length > 0) {
+      console.log("")
+      console.log(`  ${bold("Conversation Context:")}`)
+      const displayNotes = replyNotes.length > 0 ? replyNotes : notes.slice(0, 5)
+      for (const note of displayNotes.slice(0, 5)) {
+        const msg = (note.message || note.content || "").slice(0, 100)
+        const age = timeAgo(note.created_at)
+        console.log(`    ${dim(age.padEnd(8))} ${msg}`)
+      }
+      console.log("")
+    }
+
+    // Determine message to send
+    let message = customMessage || ""
+
+    if (!message && useAi) {
+      // Generate AI reply
+      const aiSpinner = prompts.spinner()
+      aiSpinner.start("Generating reply...")
+      try {
+        const context = replyNotes.map((n: any) => n.message || n.content || "").join("\n")
+        const leadName = lead.name || igHandle
+        const aiRes = await irisFetch("/api/v6/chat/completions", {
+          method: "POST",
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [
+              {
+                role: "system",
+                content: `You are a friendly outreach assistant. Write a short, casual Instagram DM reply (1-3 sentences max). Be warm, direct, and conversational. No hashtags, no emojis spam. Sound like a real person following up on a conversation.`,
+              },
+              {
+                role: "user",
+                content: `Lead: ${leadName}\nIG Handle: @${igHandle}\nPrevious conversation:\n${context}\n\nWrite a brief follow-up reply to continue this conversation. Keep it under 200 chars.`,
+              },
+            ],
+            max_tokens: 150,
+          }),
+        }, IRIS_API)
+
+        if (aiRes.ok) {
+          const aiData = (await aiRes.json()) as any
+          message = aiData?.choices?.[0]?.message?.content?.trim() || ""
+        }
+      } catch {}
+
+      if (!message) {
+        aiSpinner.stop("AI generation failed")
+        console.log(`  Could not generate reply. Use --message "your text" instead.`)
+        return
+      }
+      aiSpinner.stop("Reply generated")
+    }
+
+    if (!message && !useAi) {
+      // Manual mode — dispatch task to open browser
+      console.log(`  ${bold("Manual mode")} — opening DM thread with @${igHandle}`)
+      console.log(`  The browser will open. Type your reply and send it manually.`)
+      console.log("")
+
+      const userId = await requireUserId()
+      if (!userId) return
+
+      const result = await dispatchHiveTask({
+        type: "som",
+        action: "instagram_follow_up",
+        board_id: lead.bloq_ids?.[0] || 38,
+        target_handle: igHandle,
+        ig_account: account,
+        manual_mode: true,
+      })
+
+      if (result?.task?.id) {
+        console.log(`  Task dispatched: ${bold(result.task.id)}`)
+        console.log(`  Browser will open on your daemon machine.`)
+      } else {
+        // Fallback: try to run locally
+        console.log(`  ${dim("No daemon available. Running locally...")}`)
+        const { execSync } = await import("child_process")
+        const somDir = process.env.SOM_DIR || `${process.env.HOME}/Sites/freelabel/fl-docker-dev/coding-agent-bridge/som`
+        const sessionFile = process.env.BROWSER_SESSION_FILE || `${process.env.HOME}/Sites/freelabel/tests/e2e/instagram-auth-${account}.json`
+        try {
+          execSync(
+            `TARGET_HANDLE=${igHandle} MANUAL_MODE=1 IG_ACCOUNT=${account} BROWSER_SESSION_FILE="${sessionFile}" npx playwright test instagram-follow-up.spec.ts --headed --timeout=600000`,
+            { cwd: somDir, stdio: "inherit" }
+          )
+        } catch { /* user closed browser */ }
+      }
+      prompts.outro("Done")
+      return
+    }
+
+    // Show the message and confirm
+    console.log(`  ${bold("To:")} @${igHandle}`)
+    console.log(`  ${bold("Message:")} "${message}"`)
+    if (dryRun) console.log(`  ${bold("Mode:")} DRY RUN (won't send)`)
+    console.log("")
+
+    if (!dryRun && !customMessage) {
+      // Ask for confirmation unless --message was explicit
+      const confirm = await prompts.confirm({ message: "Send this message?" })
+      if (!confirm) { prompts.outro("Cancelled"); return }
+    }
+
+    // Dispatch the follow-up task
+    const userId = await requireUserId()
+    if (!userId) return
+
+    const result = await dispatchHiveTask({
+      type: "som",
+      action: "instagram_follow_up",
+      board_id: lead.bloq_ids?.[0] || 38,
+      target_handle: igHandle,
+      message: message,
+      ig_account: account,
+      dry_run: dryRun,
+    })
+
+    if (result?.task?.id) {
+      console.log(`  Task dispatched: ${bold(result.task.id)}`)
+      console.log(`  ${dryRun ? "Will type but NOT send" : "Message will be sent"} via daemon.`)
+    } else {
+      console.log(`  ${dim("No Hive node available — task queued")}`)
+    }
+
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformInstagramCommand = cmd({
   command: "instagram",
-  describe: "Instagram inbox automation — check DM replies, tag leads",
+  describe: "Instagram inbox automation — check replies, view, follow up",
   builder: (yargs) =>
     yargs
       .command(CheckRepliesCommand)
       .command(RepliesCommand)
+      .command(FollowUpCommand)
       .demandCommand(0),
   async handler() {
     prompts.intro(`${bold("iris instagram")}`)
     console.log("  Subcommands:")
-    console.log("    check-replies  Dispatch inbox scan task (runs via Hive)")
-    console.log("    replies        View all DM replies across boards")
+    console.log("    check-replies  Scan inbox for new replies (via Hive)")
+    console.log("    replies        View leads who replied")
+    console.log("    follow-up      Reply to a lead's DM")
     console.log("")
-    console.log(`  ${dim("iris instagram check-replies --board 38 --limit 30")}`)
+    console.log(`  ${dim("iris instagram check-replies --board 38")}`)
     console.log(`  ${dim("iris instagram replies --board 38")}`)
+    console.log(`  ${dim("iris instagram follow-up --lead 21665")}`)
+    console.log(`  ${dim("iris instagram follow-up --lead 21665 --ai")}`)
+    console.log(`  ${dim("iris instagram follow-up --lead 21665 --message \"Hey! Let's connect\"")}`)
     prompts.outro("")
   },
 })
