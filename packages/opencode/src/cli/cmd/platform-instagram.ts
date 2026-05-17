@@ -221,11 +221,33 @@ const FollowUpCommand = cmd({
       spinner.stop("Error"); console.log(`  ${err.message}`); return
     }
 
-    // Extract IG handle from lead
-    const igHandle = lead.nickname
-      || (lead.name?.startsWith("@") ? lead.name.slice(1) : null)
-      || lead.name
-      || ""
+    // Extract IG handle from lead — check multiple sources
+    let igHandle = ""
+
+    // 1. contact_info.instagram (most authoritative)
+    const contactInfo = typeof lead.contact_info === "string"
+      ? JSON.parse(lead.contact_info || "{}") : (lead.contact_info || {})
+    if (contactInfo.instagram) {
+      igHandle = contactInfo.instagram.replace(/^@/, "")
+    }
+
+    // 2. Parse from notes (enrichment stores "@handle" in profile details note)
+    if (!igHandle) {
+      const notes = lead.notes || []
+      for (const note of notes) {
+        const msg = note.message || note.content || ""
+        const match = msg.match(/Instagram profile details:\s*@([a-zA-Z0-9._]+)/)
+        if (match) { igHandle = match[1]; break }
+        // Also check for "[inbox reply] IG reply from @handle"
+        const replyMatch = msg.match(/IG reply from @([a-zA-Z0-9._]+)/)
+        if (replyMatch) { igHandle = replyMatch[1]; break }
+      }
+    }
+
+    // 3. Nickname or name (fallback — often IS the handle on boards where leads are imported from IG)
+    if (!igHandle) {
+      igHandle = (lead.nickname || lead.name || "").replace(/^@/, "")
+    }
 
     if (!igHandle) {
       spinner.stop("Error"); console.log("  No IG handle found on this lead"); return
