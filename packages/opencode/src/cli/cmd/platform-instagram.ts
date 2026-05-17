@@ -262,18 +262,18 @@ const FollowUpCommand = cmd({
       try {
         const context = replyNotes.map((n: any) => n.message || n.content || "").join("\n")
         const leadName = lead.name || igHandle
-        const aiRes = await irisFetch("/api/v6/chat/completions", {
+        const aiRes = await irisFetch("/api/v6/openai/chat/completions", {
           method: "POST",
           body: JSON.stringify({
-            model: "gpt-4o-mini",
+            model: "iris/gpt-4o-mini",
             messages: [
               {
                 role: "system",
-                content: `You are a friendly outreach assistant. Write a short, casual Instagram DM reply (1-3 sentences max). Be warm, direct, and conversational. No hashtags, no emojis spam. Sound like a real person following up on a conversation.`,
+                content: `You are a friendly outreach assistant for a music/tech platform. Write a short, casual Instagram DM reply (1-3 sentences max). Be warm, direct, and conversational. No hashtags, no emoji spam. Sound like a real person following up on a conversation. Keep it under 200 characters.`,
               },
               {
                 role: "user",
-                content: `Lead: ${leadName}\nIG Handle: @${igHandle}\nPrevious conversation:\n${context}\n\nWrite a brief follow-up reply to continue this conversation. Keep it under 200 chars.`,
+                content: `Lead: ${leadName}\nIG Handle: @${igHandle}\nPrevious conversation:\n${context}\n\nWrite a brief follow-up reply to continue this conversation and move toward booking a call or next step.`,
               },
             ],
             max_tokens: 150,
