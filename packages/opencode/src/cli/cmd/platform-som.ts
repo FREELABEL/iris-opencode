@@ -2,6 +2,9 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, bold, dim, success, highlight } from "./iris-api"
+import * as fs from "fs"
+import * as os from "os"
+import * as pathNode from "path"
 
 // ============================================================================
 // SOM Campaign Overview + Edit — mirrors PHP som:overview and som:edit
@@ -390,6 +393,15 @@ const SomHelpCommand = cmd({
     console.log("  " + d("7.") + " AI prompt does the heavy lifting — template + personalization")
     console.log("")
 
+    console.log(b("LEDGER & DEBUG"))
+    console.log("  iris som ledger                     All campaigns, today")
+    console.log("  iris som ledger courses             One campaign")
+    console.log("  iris som ledger --retryable          Only retryable failures")
+    console.log("  iris som ledger --date 2026-05-16    Specific date")
+    console.log("  iris som retry courses               Show retryable leads + retry command")
+    console.log("  iris som debug courses 21995         Print debug command for one lead")
+    console.log("")
+
     console.log(b("TROUBLESHOOTING"))
     console.log("  \"All leads already have outreach\"  → Scrape fresh leads")
     console.log("  \"No Instagram handle — skipping\"   → Venue/business lead without IG")
@@ -638,6 +650,176 @@ const SomClearAiCommand = cmd({
   },
 })
 
+// ── Ledger command ──
+
+const LEDGER_DIR = pathNode.join(os.homedir(), ".iris", "som-ledger")
+
+const SomLedgerCommand = cmd({
+  command: "ledger [campaign]",
+  describe: "view per-lead outreach results from today's ledger",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "campaign name (omit for all)", type: "string" })
+      .option("date", { describe: "date (YYYY-MM-DD, default today)", type: "string" })
+      .option("retryable", { describe: "show only retryable failures", type: "boolean" })
+      .option("failures", { describe: "show only failures", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    const date = (args.date as string) || new Date().toISOString().slice(0, 10)
+    const campaign = args.campaign as string | undefined
+
+    // Find matching ledger files
+    let files: string[] = []
+    try {
+      const allFiles = fs.readdirSync(LEDGER_DIR).filter(f => f.endsWith(".jsonl") && f.includes(date))
+      if (campaign) {
+        files = allFiles.filter(f => f.startsWith(`${campaign}-`))
+      } else {
+        files = allFiles
+      }
+    } catch {
+      console.log(dim(`No ledger directory at ${LEDGER_DIR}`))
+      return
+    }
+
+    if (files.length === 0) {
+      console.log(dim(`No ledger files for ${campaign ?? "any campaign"} on ${date}`))
+      return
+    }
+
+    type Entry = { ts: string; campaign: string; lead_id: number | null; ig_handle: string | null; lead_name: string; step: number | null; result: string; retryable: boolean; error_detail: string | null; duration_s: number; dm_text: string | null; dry_run: boolean }
+    const allEntries: Entry[] = []
+
+    for (const file of files) {
+      const lines = fs.readFileSync(pathNode.join(LEDGER_DIR, file), "utf-8").trim().split("\n").filter(Boolean)
+      for (const line of lines) {
+        try { allEntries.push(JSON.parse(line)) } catch {}
+      }
+    }
+
+    // Apply filters
+    let entries = allEntries
+    if (args.retryable) entries = entries.filter(e => e.retryable && e.result !== "dm_sent")
+    if (args.failures) entries = entries.filter(e => e.result !== "dm_sent")
+
+    if (args.json) {
+      console.log(JSON.stringify(entries, null, 2))
+      return
+    }
+
+    // Summary
+    const sent = allEntries.filter(e => e.result === "dm_sent").length
+    const retryable = allEntries.filter(e => e.retryable && e.result !== "dm_sent").length
+    const permanent = allEntries.filter(e => !e.retryable && e.result !== "dm_sent").length
+
+    console.log("")
+    console.log(bold(`SOM Ledger — ${date}`))
+    console.log(`  ${allEntries.length} total  |  ${sent} sent  |  ${retryable} retryable  |  ${permanent} permanent`)
+    console.log("")
+
+    // Result breakdown
+    const resultCounts: Record<string, number> = {}
+    for (const e of allEntries) resultCounts[e.result] = (resultCounts[e.result] || 0) + 1
+    for (const [result, count] of Object.entries(resultCounts).sort((a, b) => b[1] - a[1])) {
+      const icon = result === "dm_sent" ? "+" : RETRYABLE_SET.has(result) ? "~" : "-"
+      console.log(`  ${icon} ${result.padEnd(22)} ${count}`)
+    }
+    console.log("")
+
+    // Per-entry listing
+    for (const e of entries) {
+      const icon = e.result === "dm_sent" ? "+" : e.retryable ? "~" : "-"
+      const id = e.lead_id ? `#${e.lead_id}` : ""
+      const handle = e.ig_handle ? `@${e.ig_handle}` : ""
+      const detail = e.error_detail ? dim(` (${e.error_detail.slice(0, 60)})`) : ""
+      const dur = e.duration_s > 0 ? dim(` ${e.duration_s.toFixed(0)}s`) : ""
+      console.log(`  ${icon} ${e.lead_name.padEnd(20)} ${e.result.padEnd(20)} ${id.padEnd(8)} ${handle}${dur}${detail}`)
+    }
+    console.log("")
+  },
+})
+
+const RETRYABLE_SET = new Set([
+  "no_dm_input", "no_ig_button", "no_send_message", "panel_failed",
+  "no_play_button", "outreach_timeout", "timeout", "browser_closed", "session_expired", "error",
+])
+
+// ── Retry command ──
+
+const SomRetryCommand = cmd({
+  command: "retry <campaign>",
+  describe: "show retryable failures from today's ledger and print retry command",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "campaign name", type: "string", demandOption: true })
+      .option("date", { describe: "date (YYYY-MM-DD, default today)", type: "string" }),
+  async handler(args) {
+    const date = (args.date as string) || new Date().toISOString().slice(0, 10)
+    const campaign = args.campaign as string
+    const ledgerFile = pathNode.join(LEDGER_DIR, `${campaign}-${date}.jsonl`)
+
+    if (!fs.existsSync(ledgerFile)) {
+      console.log(dim(`No ledger file: ${ledgerFile}`))
+      return
+    }
+
+    const lines = fs.readFileSync(ledgerFile, "utf-8").trim().split("\n").filter(Boolean)
+    type Entry = { lead_id: number | null; lead_name: string; result: string; retryable: boolean }
+    const entries: Entry[] = lines.map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+
+    const sentIds = new Set(entries.filter(e => e.result === "dm_sent").map(e => e.lead_id))
+    const retryable = entries.filter(e => e.retryable && e.lead_id && !sentIds.has(e.lead_id))
+    const uniqueIds = [...new Set(retryable.map(e => e.lead_id))]
+
+    if (uniqueIds.length === 0) {
+      console.log(dim("No retryable failures in today's ledger."))
+      return
+    }
+
+    console.log("")
+    console.log(bold(`SOM Retry — ${campaign} (${date})`))
+    console.log(`  ${uniqueIds.length} retryable leads:`)
+    console.log("")
+    for (const id of uniqueIds) {
+      const entry = retryable.find(e => e.lead_id === id)!
+      console.log(`    #${id} ${entry.lead_name.padEnd(20)} ${entry.result}`)
+    }
+    console.log("")
+    console.log(highlight("Run:"))
+    console.log(`  node som.js ${campaign} retry=1`)
+    console.log("")
+  },
+})
+
+// ── Debug command ──
+
+const SomDebugCommand = cmd({
+  command: "debug <campaign> <lead_id>",
+  describe: "launch single-lead debug mode with screenshots at every step",
+  builder: (yargs) =>
+    yargs
+      .positional("campaign", { describe: "campaign name", type: "string", demandOption: true })
+      .positional("lead_id", { describe: "lead ID to debug", type: "number", demandOption: true }),
+  async handler(args) {
+    const campaign = args.campaign as string
+    const leadId = args.lead_id as number
+
+    const allCampaigns = await loadCampaigns()
+    if (!allCampaigns[campaign]) {
+      prompts.log.error(`Unknown campaign: ${campaign}. Options: ${Object.keys(allCampaigns).join(", ")}`)
+      return
+    }
+
+    console.log("")
+    console.log(bold(`SOM Debug — ${campaign} lead #${leadId}`))
+    console.log(`  Screenshots will be saved to: ${LEDGER_DIR}/debug/`)
+    console.log("")
+    console.log(highlight("Run:"))
+    console.log(`  node som.js ${campaign} debug_lead=${leadId}`)
+    console.log("")
+  },
+})
+
 // ── Parent command ──
 
 export const PlatformSomCommand = cmd({
@@ -650,6 +832,9 @@ export const PlatformSomCommand = cmd({
       .command(SomToggleCommand)
       .command(SomStatusCommand)
       .command(SomHelpCommand)
+      .command(SomLedgerCommand)
+      .command(SomRetryCommand)
+      .command(SomDebugCommand)
       // Default to overview when no subcommand
       .option("campaign", { alias: "c", describe: "show only one campaign", type: "string" })
       .option("scripts", { alias: "s", describe: "show full script text", type: "boolean" })
