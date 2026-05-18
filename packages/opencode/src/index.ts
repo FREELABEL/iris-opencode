@@ -52,6 +52,7 @@ import { PlatformN8nCommand } from "./cli/cmd/platform-n8n"
 import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
 import { PlatformDiscoverCommand } from "./cli/cmd/platform-discover"
 import { PlatformOpportunitiesCommand } from "./cli/cmd/platform-opportunities"
+import { PlatformBountiesCommand } from "./cli/cmd/platform-bounties"
 import { PlatformTutorialsCommand } from "./cli/cmd/platform-tutorials"
 import { PlatformServicesCommand } from "./cli/cmd/platform-services"
 import { PlatformProductsCommand } from "./cli/cmd/platform-products"
@@ -75,6 +76,7 @@ import { PlatformRevenueCommand } from "./cli/cmd/platform-revenue"
 import { PlatformDeliverCommand } from "./cli/cmd/platform-deliver"
 import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedCommand, PlatformListAvailableCommand } from "./cli/cmd/platform-run"
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
+import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
@@ -239,6 +241,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformBoardsCommand))
   .command(reg(PlatformDiscoverCommand))
   .command(reg(PlatformOpportunitiesCommand))
+  .command(reg(PlatformBountiesCommand))
   .command(reg(PlatformTutorialsCommand))
   .command(reg(PlatformServicesCommand))
   .command(reg(PlatformProductsCommand))
@@ -264,6 +267,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDeliverCommand))
   .command(reg(PlatformRunCommand))
   .command(reg(PlatformTranscribeCommand))
+  .command(reg(PlatformDownloadCommand))
   .command(reg(PlatformConnectCommand))
   .command(reg(PlatformListConnectedCommand))
   .command(reg(PlatformListAvailableCommand))

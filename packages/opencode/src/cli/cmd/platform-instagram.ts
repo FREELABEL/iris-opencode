@@ -391,14 +391,159 @@ const FollowUpCommand = cmd({
   },
 })
 
+// -- drop-offer --
+const DropOfferCommand = cmd({
+  command: "drop-offer",
+  describe: "Send the V5 unapologetic offer to a warm lead (context-aware, reads chat history)",
+  builder: (yargs) =>
+    yargs
+      .option("lead", { describe: "Lead ID", type: "number", demandOption: true })
+      .option("account", { describe: "IG account to send from", type: "string", default: "heyiris.io" })
+      .option("dry-run", { describe: "Type message but don't send", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const leadId = (args as any).lead as number
+    const account = (args as any).account as string
+    const dryRun = (args as any)["dry-run"] as boolean
+
+    prompts.intro(`${bold("iris instagram")} drop-offer`)
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching lead details + conversation history...")
+
+    // Fetch lead with notes
+    let lead: any = null
+    try {
+      const res = await irisFetch(`/api/v1/leads/${leadId}`, {}, RAICHU)
+      if (!res.ok) { spinner.stop("Error"); console.log(`  Lead #${leadId} not found (${res.status})`); return }
+      const data = (await res.json()) as any
+      lead = data?.data ?? data
+    } catch (err: any) {
+      spinner.stop("Error"); console.log(`  ${err.message}`); return
+    }
+
+    // Extract IG handle (same resolution as follow-up)
+    let igHandle = ""
+    const contactInfo = typeof lead.contact_info === "string"
+      ? JSON.parse(lead.contact_info || "{}") : (lead.contact_info || {})
+    if (contactInfo.instagram) igHandle = contactInfo.instagram.replace(/^@/, "")
+    if (!igHandle) {
+      const notes = lead.notes || []
+      for (const note of notes) {
+        const msg = note.message || note.content || ""
+        const match = msg.match(/Instagram profile details:\s*@([a-zA-Z0-9._]+)/)
+        if (match) { igHandle = match[1]; break }
+        const replyMatch = msg.match(/IG reply from @([a-zA-Z0-9._]+)/)
+        if (replyMatch) { igHandle = replyMatch[1]; break }
+      }
+    }
+    if (!igHandle) igHandle = (lead.nickname || lead.name || "").replace(/^@/, "")
+    if (!igHandle) { spinner.stop("Error"); console.log("  No IG handle found on this lead"); return }
+
+    // Build conversation context from notes + outreach messages
+    const notes = (lead.notes || []).slice(0, 15)
+    const context = notes.map((n: any) => {
+      const msg = (n.message || n.content || "").slice(0, 200)
+      return msg
+    }).filter(Boolean).join("\n")
+
+    const leadName = lead.name || igHandle
+    spinner.stop(`Lead: ${leadName} (@${igHandle})`)
+
+    // Show conversation context
+    if (notes.length > 0) {
+      console.log("")
+      console.log(`  ${bold("Conversation History:")}`)
+      for (const note of notes.slice(0, 8)) {
+        const msg = (note.message || note.content || "").slice(0, 120)
+        const age = timeAgo(note.created_at)
+        console.log(`    ${dim(age.padEnd(8))} ${msg}`)
+      }
+      console.log("")
+    }
+
+    // Generate context-aware offer via AI
+    const aiSpinner = prompts.spinner()
+    aiSpinner.start("Generating context-aware offer...")
+    let message = ""
+    try {
+      const aiRes = await irisFetch("/api/v6/openai/chat/completions", {
+        method: "POST",
+        body: JSON.stringify({
+          model: "iris/gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content: `You are writing a direct, unapologetic business offer as an Instagram DM. This is the V5 "drop-offer" step — the lead has already been warmed up through organic conversation. Be direct, reference their specific project/industry, and end by asking for their email. Keep it under 5 sentences. CRITICAL: Review the chat history below. Do NOT repeat any facts, offers, or topics already discussed. Transition naturally from the conversation. If the human already made the offer verbally, say something like "just wanted to formalize what we talked about." NEVER use @usernames or Instagram handles.`,
+            },
+            {
+              role: "user",
+              content: `Lead: ${leadName}\nIG Handle: @${igHandle}\nIndustry/Project: ${lead.custom_fields?.ig_enrichment?.category || "AI/tech"}\n\nConversation history:\n${context}\n\nWrite the offer DM. End by asking for their email to send the invite.`,
+            },
+          ],
+          max_tokens: 250,
+        }),
+      }, IRIS_API)
+
+      if (aiRes.ok) {
+        const aiData = (await aiRes.json()) as any
+        message = aiData?.choices?.[0]?.message?.content?.trim() || ""
+      }
+    } catch {}
+
+    if (!message) {
+      aiSpinner.stop("AI generation failed")
+      console.log(`  Could not generate offer. Try iris instagram follow-up --lead ${leadId} --message "your offer"`)
+      return
+    }
+    aiSpinner.stop("Offer generated")
+
+    // Show and confirm
+    console.log(`  ${bold("To:")} @${igHandle}`)
+    console.log(`  ${bold("Offer:")} "${message}"`)
+    if (dryRun) console.log(`  ${bold("Mode:")} DRY RUN (won't send)`)
+    console.log("")
+
+    if (!dryRun) {
+      const confirm = await prompts.confirm({ message: "Send this offer?" })
+      if (!confirm) { prompts.outro("Cancelled"); return }
+    }
+
+    // Dispatch via Hive
+    const userId = await requireUserId()
+    if (!userId) return
+
+    const result = await dispatchHiveTask({
+      type: "som",
+      action: "instagram_follow_up",
+      board_id: lead.bloq_ids?.[0] || 38,
+      target_handle: igHandle,
+      message: message,
+      ig_account: account,
+      dry_run: dryRun,
+    })
+
+    if (result?.task?.id) {
+      console.log(`  Task dispatched: ${bold(result.task.id)}`)
+      console.log(`  ${dryRun ? "Will type but NOT send" : "Offer will be sent"} via daemon.`)
+    } else {
+      console.log(`  ${dim("No Hive node available — task queued")}`)
+    }
+
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformInstagramCommand = cmd({
   command: "instagram",
-  describe: "Instagram inbox automation — check replies, view, follow up",
+  describe: "Instagram inbox automation — check replies, view, follow up, drop offers",
   builder: (yargs) =>
     yargs
       .command(CheckRepliesCommand)
       .command(RepliesCommand)
       .command(FollowUpCommand)
+      .command(DropOfferCommand)
       .demandCommand(0),
   async handler() {
     prompts.intro(`${bold("iris instagram")}`)
@@ -406,12 +551,14 @@ export const PlatformInstagramCommand = cmd({
     console.log("    check-replies  Scan inbox for new replies (via Hive)")
     console.log("    replies        View leads who replied")
     console.log("    follow-up      Reply to a lead's DM")
+    console.log("    drop-offer     Send V5 context-aware offer to a warm lead")
     console.log("")
     console.log(`  ${dim("iris instagram check-replies --board 38")}`)
     console.log(`  ${dim("iris instagram replies --board 38")}`)
     console.log(`  ${dim("iris instagram follow-up --lead 21665")}`)
     console.log(`  ${dim("iris instagram follow-up --lead 21665 --ai")}`)
-    console.log(`  ${dim("iris instagram follow-up --lead 21665 --message \"Hey! Let's connect\"")}`)
+    console.log(`  ${dim("iris instagram drop-offer --lead 21665")}`)
+    console.log(`  ${dim("iris instagram drop-offer --lead 21665 --dry-run")}`)
     prompts.outro("")
   },
 })
