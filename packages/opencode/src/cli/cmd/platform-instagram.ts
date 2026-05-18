@@ -391,6 +391,140 @@ const FollowUpCommand = cmd({
   },
 })
 
+// -- inbox --
+const InboxCommand = cmd({
+  command: "inbox",
+  describe: "Read a single lead's DM thread (read-only, no sending)",
+  builder: (yargs) =>
+    yargs
+      .option("lead", { describe: "Lead ID (resolves IG handle from lead record)", type: "number" })
+      .option("handle", { describe: "IG handle directly (skip lead lookup)", type: "string" })
+      .option("account", { describe: "IG account to read from", type: "string", default: "heyiris.io" })
+      .option("json", { describe: "Output raw JSON", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const leadId = (args as any).lead as number | undefined
+    const directHandle = (args as any).handle as string | undefined
+    const account = (args as any).account as string
+    const jsonOut = (args as any).json as boolean
+
+    prompts.intro(`${bold("iris instagram")} inbox`)
+
+    let igHandle = directHandle?.replace(/^@/, "") || ""
+    let leadName = ""
+
+    // Resolve handle from lead if --lead provided
+    if (!igHandle && leadId) {
+      const spinner = prompts.spinner()
+      spinner.start("Fetching lead details...")
+      try {
+        const res = await irisFetch(`/api/v1/leads/${leadId}`, {}, RAICHU)
+        if (!res.ok) { spinner.stop("Error"); console.log(`  Lead #${leadId} not found (${res.status})`); return }
+        const data = (await res.json()) as any
+        const lead = data?.data ?? data
+        leadName = lead.name || lead.full_name || ""
+
+        // Same handle resolution as follow-up
+        const contactInfo = typeof lead.contact_info === "string"
+          ? JSON.parse(lead.contact_info || "{}") : (lead.contact_info || {})
+        if (contactInfo.instagram) igHandle = contactInfo.instagram.replace(/^@/, "")
+        if (!igHandle) {
+          for (const note of (lead.notes || [])) {
+            const msg = note.message || note.content || ""
+            const match = msg.match(/Instagram profile details:\s*@([a-zA-Z0-9._]+)/)
+            if (match) { igHandle = match[1]; break }
+            const replyMatch = msg.match(/IG reply from @([a-zA-Z0-9._]+)/)
+            if (replyMatch) { igHandle = replyMatch[1]; break }
+          }
+        }
+        if (!igHandle) igHandle = (lead.nickname || lead.name || "").replace(/^@/, "")
+        spinner.stop(`Lead: ${leadName || `#${leadId}`} (@${igHandle})`)
+      } catch (err: any) {
+        spinner.stop("Error"); console.log(`  ${err.message}`); return
+      }
+    }
+
+    if (!igHandle) {
+      console.log("  Provide --handle <username> or --lead <id>")
+      prompts.outro("")
+      return
+    }
+
+    console.log(`  Reading DMs with @${igHandle}...`)
+
+    // Try Hive dispatch first
+    const result = await dispatchHiveTask({
+      type: "som",
+      action: "instagram_inbox",
+      board_id: 0,
+      target_handle: igHandle,
+      ig_account: account,
+    })
+
+    if (result?.task?.id) {
+      console.log(`  Task dispatched: ${bold(result.task.id)}`)
+      console.log(`  Results will appear when the daemon completes.`)
+      prompts.outro("Done")
+      return
+    }
+
+    // Fallback: run locally
+    console.log(`  ${dim("No daemon available. Running locally...")}`)
+    const { execSync } = await import("child_process")
+    const somDir = process.env.SOM_DIR || `${process.env.HOME}/Sites/freelabel/fl-docker-dev/coding-agent-bridge/som`
+    const sessionFile = process.env.BROWSER_SESSION_FILE || `${somDir}/instagram-auth-${account}.json`
+
+    try {
+      const raw = execSync(
+        `TARGET_HANDLE=${igHandle} IG_ACCOUNT=${account} BROWSER_SESSION_FILE="${sessionFile}" npx playwright test instagram-inbox.spec.ts --headed --timeout=120000`,
+        { cwd: somDir, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+      )
+
+      // Parse JSON from stdout
+      const jsonMatch = raw.match(/--- INBOX_JSON_START ---\n([\s\S]*?)\n--- INBOX_JSON_END ---/)
+      if (jsonMatch) {
+        const data = JSON.parse(jsonMatch[1])
+
+        if (jsonOut) {
+          console.log(JSON.stringify(data, null, 2))
+          prompts.outro("")
+          return
+        }
+
+        // Formatted display
+        console.log("")
+        console.log(`  ${bold("DM Thread")} with @${data.handle}${data.display_name ? ` (${data.display_name})` : ""}`)
+        console.log(`  ${"─".repeat(60)}`)
+
+        for (const msg of data.messages) {
+          const senderLabel = msg.sender === "me" ? "\x1b[36mme\x1b[0m" : `\x1b[33m${msg.sender}\x1b[0m`
+          const ts = msg.timestamp ? ` ${dim(`[${msg.timestamp}]`)}` : ""
+          console.log(`  ${senderLabel}: ${msg.body}${ts}`)
+        }
+
+        console.log(`  ${"─".repeat(60)}`)
+        console.log(`  ${bold("Total:")} ${data.message_count} messages`)
+        if (data.last_message_from) {
+          console.log(`  ${bold("Last from:")} ${data.last_message_from} — "${(data.last_message || "").slice(0, 80)}"`)
+        }
+      } else {
+        console.log("  Could not parse thread output. Raw:")
+        console.log(raw.slice(-500))
+      }
+    } catch (err: any) {
+      const stderr = err.stderr || ""
+      if (stderr.includes("No session file") || stderr.includes("no cookies")) {
+        console.log(`  No session for @${account}. Run auth first.`)
+      } else {
+        console.log(`  Spec failed: ${stderr.slice(-200)}`)
+      }
+    }
+
+    prompts.outro("Done")
+  },
+})
+
 // -- drop-offer --
 const DropOfferCommand = cmd({
   command: "drop-offer",
@@ -542,6 +676,7 @@ export const PlatformInstagramCommand = cmd({
     yargs
       .command(CheckRepliesCommand)
       .command(RepliesCommand)
+      .command(InboxCommand)
       .command(FollowUpCommand)
       .command(DropOfferCommand)
       .demandCommand(0),
@@ -550,11 +685,14 @@ export const PlatformInstagramCommand = cmd({
     console.log("  Subcommands:")
     console.log("    check-replies  Scan inbox for new replies (via Hive)")
     console.log("    replies        View leads who replied")
+    console.log("    inbox          Read a single lead's DM thread")
     console.log("    follow-up      Reply to a lead's DM")
     console.log("    drop-offer     Send V5 context-aware offer to a warm lead")
     console.log("")
     console.log(`  ${dim("iris instagram check-replies --board 38")}`)
     console.log(`  ${dim("iris instagram replies --board 38")}`)
+    console.log(`  ${dim("iris instagram inbox --handle lakshya.sabharwal")}`)
+    console.log(`  ${dim("iris instagram inbox --lead 21982 --json")}`)
     console.log(`  ${dim("iris instagram follow-up --lead 21665")}`)
     console.log(`  ${dim("iris instagram follow-up --lead 21665 --ai")}`)
     console.log(`  ${dim("iris instagram drop-offer --lead 21665")}`)
