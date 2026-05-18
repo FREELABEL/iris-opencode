@@ -2097,6 +2097,11 @@ const LeadsPulseCommand = cmd({
         const meetSig = sigs.meeting_engagement
         const meetS = meetSig?.score
         const meetLabel = meetSig?.details ? `meet ${fmt(meetS)} ${dim(meetSig.details)}` : `meet ${fmt(meetS)}`
+        const delivSig = sigs.deliverable_completeness
+        const delivS = delivSig?.score
+        const delivLabel = delivSig
+          ? `deliv ${fmt(delivS)} ${dim(`${delivSig.passed ?? 0}/${delivSig.total ?? 8}`)}`
+          : `deliv ${dim("—")}`
         const sigLine = [
           `req ${fmt(reqS)}`,
           `live ${fmt(liveS)}`,
@@ -2105,6 +2110,7 @@ const LeadsPulseCommand = cmd({
           `cfg ${fmt(cfgS)}`,
           kbLabel,
           meetLabel,
+          delivLabel,
         ].join(dim(" · "))
         printKV("Signals", sigLine)
         if (meetSig && meetS !== null && meetS !== undefined && meetS < 40) {
@@ -2112,6 +2118,9 @@ const LeadsPulseCommand = cmd({
           if (lead.email) {
             console.log(`    ${dim(`Tip: iris leads sync-calendar ${leadId} --calendar <name>  — import meetings from Google Calendar`)}`)
           }
+        }
+        if (delivSig && delivS !== null && delivS !== undefined && delivS < 50) {
+          console.log(`    ${dim(`Missing deliverables (${delivSig.passed}/${delivSig.total}) — check: video, graphics, invoice, proposal, contract, test, review page`)}`)
         }
       }
 
@@ -4396,18 +4405,20 @@ const LeadsUpdatePaymentGateCommand = cmd({
       .positional("id", { describe: "lead ID", type: "number", demandOption: true })
       .option("amount", { alias: "a", describe: "new amount", type: "number" })
       .option("scope", { alias: "s", describe: "new scope of work", type: "string" })
+      .option("billing-type", { alias: "b", describe: "billing type", type: "string", choices: ["one_time", "monthly", "quarterly", "yearly"] })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
     if (!(await requireAuth())) return
 
-    if (!args.amount && !args.scope) {
-      prompts.log.error("Provide at least --amount or --scope to update")
+    if (!args.amount && !args.scope && !args.billingType) {
+      prompts.log.error("Provide at least --amount, --scope, or --billing-type to update")
       return
     }
 
     const body: Record<string, unknown> = {}
     if (args.amount) body.amount = args.amount
     if (args.scope) body.scope = args.scope
+    if (args.billingType) body.billing_type = args.billingType
 
     const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
       method: "PUT",
