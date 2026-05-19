@@ -2097,43 +2097,131 @@ const LeadsPulseCommand = cmd({
           printKV("Trend", `${dim(sparkline)}  ${dim(`(${history.length} snapshots)`)}`)
         }
 
-        // Per-signal breakdown — show what's pulling the score down/up.
+        // Per-signal breakdown — color-coded with effective weights.
         const sigs = pulseReadiness.signals ?? {}
+        const weights = pulseReadiness.weights_applied ?? {}
+
+        // Color a score value: green ≥75, yellow 40-74, red <40, gray null
+        const fmtScore = (v: number | null | undefined, label?: string) => {
+          if (v === null || v === undefined) return dim("—")
+          const text = label ?? `${v}/100`
+          if (v >= 75) return `${UI.Style.TEXT_SUCCESS}${text}${UI.Style.TEXT_NORMAL}`
+          if (v >= 40) return `${UI.Style.TEXT_WARNING}${text}${UI.Style.TEXT_NORMAL}`
+          return `${UI.Style.TEXT_DANGER}${text}${UI.Style.TEXT_NORMAL}`
+        }
+
         const reqS = sigs.requirements?.score
         const liveS = sigs.liveness?.score
         const commsS = sigs.comms_freshness?.score
         const dealS = sigs.deal_health?.score
         const cfgS = sigs.config?.score
-        const fmt = (v: number | null | undefined) => (v === null || v === undefined ? dim("—") : `${v}/100`)
         const kbSig = sigs.knowledge_completeness
-        const kbLabel = kbSig ? `KB ${kbSig.docs_count ?? 0}/${kbSig.docs_total ?? 8} docs (${fmt(kbSig.score)})` : `KB ${dim("—")}`
+        const kbScore = kbSig?.score
+        const kbLabel = kbSig ? `KB ${fmtScore(kbScore, `${kbSig.docs_count ?? 0}/${kbSig.docs_total ?? 8}`)}` : `KB ${dim("—")}`
         const meetSig = sigs.meeting_engagement
         const meetS = meetSig?.score
-        const meetLabel = meetSig?.details ? `meet ${fmt(meetS)} ${dim(meetSig.details)}` : `meet ${fmt(meetS)}`
+        const meetExtra = meetSig?.details ? ` ${dim(meetSig.details)}` : ""
         const delivSig = sigs.deliverable_completeness
         const delivS = delivSig?.score
-        const delivLabel = delivSig
-          ? `deliv ${fmt(delivS)} ${dim(`${delivSig.passed ?? 0}/${delivSig.total ?? 8}`)}`
-          : `deliv ${dim("—")}`
+        const delivExtra = delivSig ? ` ${dim(`${delivSig.passed ?? 0}/${delivSig.total ?? 8}`)}` : ""
+
         const sigLine = [
-          `req ${fmt(reqS)}`,
-          `live ${fmt(liveS)}`,
-          `comms ${fmt(commsS)}`,
-          `deal ${fmt(dealS)}`,
-          `cfg ${fmt(cfgS)}`,
+          `req ${fmtScore(reqS)}`,
+          `live ${fmtScore(liveS)}`,
+          `comms ${fmtScore(commsS)}`,
+          `deal ${fmtScore(dealS)}`,
+          `cfg ${fmtScore(cfgS)}`,
           kbLabel,
-          meetLabel,
-          delivLabel,
+          `meet ${fmtScore(meetS)}${meetExtra}`,
+          `deliv ${fmtScore(delivS)}${delivExtra}`,
         ].join(dim(" · "))
         printKV("Signals", sigLine)
-        if (meetSig && meetS !== null && meetS !== undefined && meetS < 40) {
-          console.log(`    ${dim(`No upcoming meetings — run: iris leads meet ${leadId} --at ...`)}`)
-          if (lead.email) {
-            console.log(`    ${dim(`Tip: iris leads sync-calendar ${leadId} --calendar <name>  — import meetings from Google Calendar`)}`)
+
+        // Fix-it hints — actionable commands for each weak signal (<50)
+        type FixHint = { signal: string; score: number | null | undefined; reason: string; fix: string }
+        const fixHints: FixHint[] = []
+
+        // Comms freshness
+        if (commsS !== null && commsS !== undefined && commsS < 50) {
+          const daysSince = sigs.comms_freshness?.days_since_inbound
+          const reason = daysSince ? `no inbound in ${daysSince}d` : "no recent messages"
+          fixHints.push({ signal: "comms", score: commsS, reason, fix: `iris leads note ${leadId} "called — discussed next steps"` })
+        }
+
+        // Deal health
+        if (dealS !== null && dealS !== undefined && dealS < 50) {
+          const checks = sigs.deal_health?.checks ?? {}
+          if (!checks.has_payment_gate) {
+            fixHints.push({ signal: "deal", score: dealS, reason: "no payment gate", fix: `iris leads payment-gate ${leadId} -a 500` })
+          } else if (!checks.payment_received) {
+            fixHints.push({ signal: "deal", score: dealS, reason: "payment gate unpaid", fix: `iris leads pulse ${leadId} --hydrate` })
+          } else {
+            fixHints.push({ signal: "deal", score: dealS, reason: "missing contract/proposal", fix: `iris leads upload ${leadId} ./proposal.pdf` })
           }
         }
-        if (delivSig && delivS !== null && delivS !== undefined && delivS < 50) {
-          console.log(`    ${dim(`Missing deliverables (${delivSig.passed}/${delivSig.total}) — check: video, graphics, invoice, proposal, contract, test, review page`)}`)
+
+        // Knowledge completeness
+        if (kbScore !== null && kbScore !== undefined && kbScore < 50) {
+          const count = kbSig?.docs_count ?? 0
+          fixHints.push({ signal: "KB", score: kbScore, reason: `${count}/8 docs`, fix: `iris leads kb ${leadId} add ./doc.md` })
+        }
+
+        // Meeting engagement
+        if (meetS !== null && meetS !== undefined && meetS < 50) {
+          fixHints.push({ signal: "meet", score: meetS, reason: "no upcoming meetings", fix: `iris leads meet ${leadId} --at "next Tuesday 2pm"` })
+        }
+
+        // Deliverable completeness
+        if (delivS !== null && delivS !== undefined && delivS < 50) {
+          const passed = delivSig?.passed ?? 0
+          const total = delivSig?.total ?? 8
+          fixHints.push({ signal: "deliv", score: delivS, reason: `${passed}/${total} deliverables`, fix: `iris leads upload ${leadId} ./deliverable.pdf` })
+        }
+
+        // Task completion
+        const taskS = sigs.task_completion?.score
+        if (taskS !== null && taskS !== undefined && taskS < 50) {
+          fixHints.push({ signal: "tasks", score: taskS, reason: "overdue or incomplete tasks", fix: `iris leads tasks ${leadId}` })
+        }
+
+        // Config
+        if (cfgS !== null && cfgS !== undefined && cfgS < 50) {
+          const missing: string[] = []
+          const cc = sigs.config?.checks ?? {}
+          if (!cc.has_email) missing.push("email")
+          if (!cc.has_company) missing.push("company")
+          if (!cc.has_bloq) missing.push("bloq")
+          fixHints.push({ signal: "cfg", score: cfgS, reason: `missing ${missing.join(", ") || "config"}`, fix: `iris leads edit ${leadId}` })
+        }
+
+        // Requirements
+        if (reqS !== null && reqS !== undefined && reqS < 50) {
+          fixHints.push({ signal: "req", score: reqS, reason: "failing requirements", fix: `iris leads requirements ${leadId}` })
+        }
+
+        // Content output
+        const contentS = sigs.content_output?.score
+        if (contentS !== null && contentS !== undefined && contentS < 50) {
+          fixHints.push({ signal: "content", score: contentS, reason: "low content output (30d)", fix: `iris leads content-engine create ${leadId}` })
+        }
+
+        // Response time
+        const respS = sigs.response_time?.score
+        if (respS !== null && respS !== undefined && respS < 50) {
+          const avg = sigs.response_time?.avg_response_minutes
+          const avgLabel = avg ? `avg reply ${Math.round(avg / 60)}h` : "slow replies"
+          fixHints.push({ signal: "response", score: respS, reason: avgLabel, fix: `iris leads note ${leadId} "responded to inquiry"` })
+        }
+
+        if (fixHints.length > 0) {
+          console.log()
+          console.log(`  ${bold("Fix It")}  ${dim(`(${fixHints.length} signals below 50)`)}`)
+          for (const h of fixHints) {
+            const scoreLabel = h.score !== null && h.score !== undefined ? `${h.score}/100` : "—"
+            const ew = weights[h.signal === "meet" ? "meeting_engagement" : h.signal === "deliv" ? "deliverable_completeness" : h.signal === "KB" ? "knowledge_completeness" : h.signal === "cfg" ? "config" : h.signal === "req" ? "requirements" : h.signal === "tasks" ? "task_completion" : h.signal === "content" ? "content_output" : h.signal === "response" ? "response_time" : h.signal]
+            const ewLabel = ew ? dim(` (${Math.round(ew * 100)}%)`) : ""
+            console.log(`    ${UI.Style.TEXT_DANGER}⚠${UI.Style.TEXT_NORMAL} ${h.signal} ${UI.Style.TEXT_DANGER}${scoreLabel}${UI.Style.TEXT_NORMAL}${ewLabel} — ${h.reason} → ${dim(h.fix)}`)
+          }
         }
       }
 

@@ -703,6 +703,109 @@ const PackageDeleteCommand = cmd({
 })
 
 // ============================================================================
+// Course & Certification subcommands
+// ============================================================================
+
+const CoursesListCommand = cmd({
+  command: "courses <program-id>",
+  describe: "list courses for a program",
+  builder: (yargs) => yargs.positional("program-id", { type: "number", demandOption: true }),
+  async handler(argv) {
+    await requireAuth()
+    const res = await irisFetch("/api/v1/courses?per_page=50")
+    if (!res.ok) { await handleApiError(res, "list courses"); return }
+    const body = await res.json() as Record<string, unknown>
+    const data = (body as any).data ?? []
+    if (!data.length) { prompts.outro("No courses found"); return }
+    for (const c of data) {
+      console.log(`  ${bold(String(c.title))}  ${dim(`#${c.id}`)}  ${dim(c.difficulty_level ?? "")}  chapters: ${c.chapter_count ?? 0}`)
+    }
+    prompts.outro(`${data.length} course(s)`)
+  },
+})
+
+const QuizCommand = cmd({
+  command: "quiz <course-id> <chapter-id>",
+  describe: "view quiz for a course chapter",
+  builder: (yargs) =>
+    yargs
+      .positional("course-id", { type: "number", demandOption: true })
+      .positional("chapter-id", { type: "number", demandOption: true }),
+  async handler(argv) {
+    await requireAuth()
+    const cid = argv["course-id"]
+    const chid = argv["chapter-id"]
+    const res = await irisFetch(`/api/v1/courses/${cid}/chapters/${chid}/quiz`)
+    if (!res.ok) { await handleApiError(res, "get quiz"); return }
+    const body = await res.json() as Record<string, unknown>
+    const data = (body as any).data
+    console.log(`\n  ${bold(data.chapter_title)} — Quiz`)
+    console.log(`  Passing score: ${data.passing_score}%  |  Questions: ${data.question_count}\n`)
+    for (let i = 0; i < data.questions.length; i++) {
+      const q = data.questions[i]
+      console.log(`  ${i + 1}. ${q.text}`)
+      for (let j = 0; j < q.options.length; j++) {
+        console.log(`     ${String.fromCharCode(65 + j)}) ${q.options[j]}`)
+      }
+      console.log()
+    }
+    prompts.outro("Done")
+  },
+})
+
+const CertificateCommand = cmd({
+  command: "certificate <course-id>",
+  describe: "view or issue your certificate for a course",
+  builder: (yargs) => yargs.positional("course-id", { type: "number", demandOption: true }),
+  async handler(argv) {
+    await requireAuth()
+    const cid = argv["course-id"]
+    // Try get existing
+    let res = await irisFetch(`/api/v1/courses/${cid}/certificate`)
+    if (res.ok) {
+      const body = await res.json() as Record<string, unknown>
+      const cert = (body as any).data
+      console.log(`\n  Certificate: ${bold(cert.certificate_badge?.toUpperCase())}`)
+      console.log(`  Score: ${cert.average_score}%`)
+      console.log(`  UUID: ${cert.uuid}`)
+      console.log(`  Issued: ${cert.issued_at}`)
+      prompts.outro("Done"); return
+    }
+    // Try issue
+    const confirm = await prompts.confirm({ message: "No certificate found. Issue one now?" })
+    if (!confirm) { prompts.outro("Cancelled"); return }
+    res = await irisFetch(`/api/v1/courses/${cid}/certificate`, { method: "POST" })
+    if (!res.ok) { await handleApiError(res, "issue certificate"); return }
+    const body = await res.json() as Record<string, unknown>
+    const cert = (body as any).data
+    console.log(`\n  ${success("Certificate issued!")}`)
+    console.log(`  Badge: ${bold(cert.certificate_badge?.toUpperCase())}`)
+    console.log(`  Score: ${cert.average_score}%`)
+    console.log(`  UUID: ${cert.uuid}`)
+    prompts.outro("Done")
+  },
+})
+
+const VerifyCertCommand = cmd({
+  command: "verify <uuid>",
+  describe: "verify a certificate by UUID (public)",
+  builder: (yargs) => yargs.positional("uuid", { type: "string", demandOption: true }),
+  async handler(argv) {
+    const res = await irisFetch(`/api/v1/certificates/verify/${argv.uuid}`)
+    if (!res.ok) { await handleApiError(res, "verify certificate"); return }
+    const body = await res.json() as Record<string, unknown>
+    const d = (body as any).data
+    console.log(`\n  ${bold("Certificate Verified")}`)
+    printKV("Recipient", d.recipient)
+    printKV("Course", d.course_title)
+    printKV("Badge", d.badge?.toUpperCase())
+    printKV("Score", `${d.average_score}%`)
+    printKV("Issued", d.issued_at)
+    prompts.outro("Done")
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -724,6 +827,10 @@ export const PlatformProgramsCommand = cmd({
       .command(PackageCreateCommand)
       .command(PackageUpdateCommand)
       .command(PackageDeleteCommand)
+      .command(CoursesListCommand)
+      .command(QuizCommand)
+      .command(CertificateCommand)
+      .command(VerifyCertCommand)
       .demandCommand(),
   async handler() {},
 })
