@@ -509,6 +509,42 @@ const UnpublishCmd = cmd({
   },
 })
 
+const PreviewCmd = cmd({
+  command: "preview <slug>",
+  describe: "generate a shareable preview URL for a draft page",
+  builder: (y) => y.positional("slug", { describe: "page slug", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Preview ${args.slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const sp = prompts.spinner()
+    sp.start("Generating preview link…")
+    try {
+      const page = await getBySlug(args.slug, false)
+      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!page.cache_key) {
+        sp.stop("No cache_key", 1)
+        prompts.log.error("Page has no cache_key — push content first to generate one.")
+        prompts.outro("Done")
+        return
+      }
+      const token = Buffer.from(`${page.id}:${page.cache_key}`).toString("base64")
+      const url = `${publicUrl(args.slug)}?preview=true&token=${token}`
+      sp.stop(success("Preview link ready"))
+      console.log()
+      console.log(`  ${highlight(url)}`)
+      console.log()
+      console.log(`  ${dim("Works for anyone, even logged out.")}`)
+      console.log(`  ${dim("Link expires when the page is next saved (cache_key rotates).")}`)
+      prompts.outro("Done")
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const CreateCmd = cmd({
   command: "create",
   describe: "create a new page",
@@ -1150,13 +1186,73 @@ const ScreenshotCmd = cmd({
 })
 
 // ============================================================================
+// Cache Clear — purge rendered page cache on iris-api
+// ============================================================================
+
+const CacheClearCmd = cmd({
+  command: "cache-clear [slug]",
+  aliases: ["cc", "purge"],
+  describe: "purge the rendered page cache on production (slug or --all)",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", describe: "page slug to purge" })
+      .option("all", { type: "boolean", default: false, describe: "flush ALL page caches" }),
+  async handler(args) {
+    UI.empty()
+    const slug = args.slug ? String(args.slug) : null
+    if (!slug && !args.all) {
+      prompts.log.error("Provide a slug or --all")
+      prompts.outro("Done")
+      return
+    }
+
+    prompts.intro(`◈  Cache clear${slug ? `: ${slug}` : " (all pages)"}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Purging…")
+    try {
+      const body: Record<string, unknown> = {}
+      if (slug) body.slug = slug
+      if (args.all) body.flush_all_html = true
+
+      const res = await irisFetch("/api/internal/cache/purge-page", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }, IRIS_API)
+
+      if (!res.ok) {
+        sp.stop("Failed")
+        prompts.log.error(`HTTP ${res.status}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as { purged?: string[] }
+      sp.stop(success("Purged"))
+      for (const entry of data.purged ?? []) {
+        prompts.log.success(entry)
+      }
+      if (slug) {
+        prompts.log.info(`Verify: ${dim(publicUrl(slug))}`)
+      }
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp.stop("Error")
+      prompts.log.error(e.message ?? String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
 export const PlatformPagesCommand = cmd({
   command: "pages",
   aliases: ["genesis"],
-  describe: "manage composable pages — list, view, get/set, pull/push/diff, publish, versions, qr, screenshot",
+  describe: "manage composable pages — list, view, get/set, pull/push/diff, publish, preview, versions, qr, screenshot",
   builder: (y) =>
     y
       .command(ListCmd)
@@ -1168,6 +1264,7 @@ export const PlatformPagesCommand = cmd({
       .command(DiffCmd)
       .command(PublishCmd)
       .command(UnpublishCmd)
+      .command(PreviewCmd)
       .command(CreateCmd)
       .command(ComponentsCmd)
       .command(ComposeCmd)
@@ -1176,6 +1273,7 @@ export const PlatformPagesCommand = cmd({
       .command(RollbackCmd)
       .command(QrCmd)
       .command(ScreenshotCmd)
+      .command(CacheClearCmd)
       .demandCommand(),
   async handler() {},
 })
