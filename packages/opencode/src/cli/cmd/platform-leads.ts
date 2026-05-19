@@ -9465,12 +9465,114 @@ const LeadsRequirementsCommand = cmd({
 // Combines diary digest + pulse-all scorecard + ungated leads
 // ============================================================================
 
+// ── Pulse Alert Rules ─────────────────────────────────────────────────────────
+
+const PulseAlertsListCommand = cmd({
+  command: "list",
+  describe: "list your pulse alert rules",
+  builder: (yargs) => yargs,
+  async handler() {
+    if (!(await requireAuth())) return
+    const spinner = prompts.spinner()
+    spinner.start("Loading alert rules…")
+    const res = await irisFetch("/api/v1/pulse/alerts")
+    if (!res.ok) { spinner.stop("Failed"); await handleApiError(res, "list alerts"); return }
+    const body = (await res.json()) as any
+    const rules = body?.data ?? []
+    spinner.stop(dim("loaded"))
+    if (rules.length === 0) {
+      console.log(`\n  ${dim("No alert rules configured.")}`)
+      console.log(`  ${dim("Create one:")} iris pulse alerts add --signal comms_freshness --below 40`)
+      return
+    }
+    console.log()
+    console.log(`  ${bold("Pulse Alert Rules")}  ${dim(`(${rules.length})`)}`)
+    for (const r of rules) {
+      const status = r.enabled ? success("ON") : dim("OFF")
+      const fired = r.last_fired_at ? dim(` last: ${r.last_fired_at}`) : ""
+      console.log(`    ${dim(`#${r.id}`)}  ${r.signal} ${r.operator}${r.threshold}  ×${r.consecutive}  → ${r.notify_channel}  ${status}${fired}`)
+    }
+    console.log()
+  },
+})
+
+const PulseAlertsAddCommand = cmd({
+  command: "add",
+  describe: "add a pulse alert rule",
+  builder: (yargs) =>
+    yargs
+      .option("signal", { alias: "s", type: "string", demandOption: true, describe: "signal name (e.g. comms_freshness, deal_health)" })
+      .option("below", { type: "number", describe: "alert when signal drops below this value" })
+      .option("above", { type: "number", describe: "alert when signal rises above this value" })
+      .option("for", { type: "number", default: 1, describe: "consecutive snapshots required" })
+      .option("notify", { type: "string", default: "discord", describe: "notification channel (discord|imessage|log)" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const threshold = args.below ?? args.above
+    if (threshold === undefined) {
+      prompts.log.error("Specify --below <N> or --above <N>")
+      return
+    }
+    const operator = args.below !== undefined ? "<" : ">"
+
+    const spinner = prompts.spinner()
+    spinner.start("Creating alert rule…")
+    const res = await irisFetch("/api/v1/pulse/alerts", {
+      method: "POST",
+      body: JSON.stringify({
+        signal: args.signal,
+        operator,
+        threshold,
+        consecutive: args.for,
+        notify_channel: args.notify,
+      }),
+    })
+    if (!res.ok) {
+      spinner.stop("Failed")
+      const err = await res.json().catch(() => ({})) as any
+      prompts.log.error(err?.message ?? `API returned ${res.status}`)
+      return
+    }
+    const body = (await res.json()) as any
+    const rule = body?.data
+    spinner.stop(success("Alert rule created"))
+    console.log(`    ${dim(`#${rule.id}`)}  ${rule.signal} ${rule.operator}${rule.threshold}  ×${rule.consecutive}  → ${rule.notify_channel}`)
+    console.log()
+  },
+})
+
+const PulseAlertsRemoveCommand = cmd({
+  command: "remove <id>",
+  describe: "remove a pulse alert rule",
+  builder: (yargs) => yargs.positional("id", { type: "number", demandOption: true }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const res = await irisFetch(`/api/v1/pulse/alerts/${args.id}`, { method: "DELETE" })
+    if (!res.ok) { await handleApiError(res, "remove alert"); return }
+    console.log(success(`  Alert rule #${args.id} removed`))
+  },
+})
+
+const PulseAlertsCommand = cmd({
+  command: "alerts",
+  describe: "manage pulse signal alert rules",
+  builder: (yargs) =>
+    yargs
+      .command(PulseAlertsListCommand)
+      .command(PulseAlertsAddCommand)
+      .command(PulseAlertsRemoveCommand)
+      .demandCommand(1, "specify: list, add, or remove"),
+  handler() {},
+})
+
 export const PlatformPulseCommand = cmd({
   command: "pulse",
   aliases: ["daily"],
   describe: "account health (default: your account) — use --admin for agency view",
   builder: (yargs) =>
     yargs
+      .command(PulseAlertsCommand)
       .option("admin", { describe: "agency view: diary digest + lead scorecard + ungated leads", type: "boolean", default: false })
       .option("status", { describe: "filter by lead status (admin mode)", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID (admin mode)", type: "number" })
