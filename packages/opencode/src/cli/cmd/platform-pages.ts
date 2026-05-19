@@ -318,11 +318,12 @@ const PullCmd = cmd({
 
 const PushCmd = cmd({
   command: "push <slug>",
-  describe: "upload local page JSON to API",
+  describe: "upload local page JSON to API (auto-drafts for safe preview)",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
-      .option("dir", { describe: "input directory", type: "string", default: "./pages" }),
+      .option("dir", { describe: "input directory", type: "string", default: "./pages" })
+      .option("live", { describe: "skip draft — push directly to live (dangerous)", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Push ${args.slug}`)
@@ -376,8 +377,27 @@ const PushCmd = cmd({
       })
       if (!(await handleApiError(res, "Push page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const cnt = jsonContent?.components?.length ?? 0
-      sp.stop(success(`Pushed (${cnt} components, new version)`))
-      prompts.outro(dim(`iris pages versions ${args.slug}`))
+
+      // Safe-by-default: unpublish after push so live page is untouched
+      if (!args.live && page.status === "published") {
+        await pagesFetch(`/api/v1/pages/${page.id}/unpublish`, { method: "POST" })
+        sp.stop(success(`Pushed (${cnt} components) → draft`))
+
+        // Re-fetch to get rotated cache_key for preview URL
+        const updated = await getBySlug(args.slug, false)
+        if (updated?.cache_key) {
+          const token = Buffer.from(`${updated.id}:${updated.cache_key}`).toString("base64")
+          const url = `${publicUrl(args.slug)}?preview=true&token=${token}`
+          console.log()
+          console.log(`  ${highlight("Preview:")} ${url}`)
+          console.log()
+          console.log(`  ${dim("Share with client, then: iris pages publish " + args.slug)}`)
+        }
+      } else {
+        sp.stop(success(`Pushed (${cnt} components, new version)`))
+      }
+
+      prompts.outro("Done")
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
