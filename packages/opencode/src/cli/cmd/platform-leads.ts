@@ -1573,7 +1573,12 @@ const LeadsMergeCommand = cmd({
       .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    const removeIds: number[] = (args.remove as number[]) ?? []
+    const removeIds: number[] = ((args.remove as number[]) ?? []).filter((id) => id !== args.keep)
+    if (removeIds.length === 0) {
+      prompts.log.error("Cannot merge a lead into itself.")
+      prompts.outro("Done")
+      return
+    }
     prompts.intro(`◈  Merge Leads → keep #${args.keep}, remove ${removeIds.map((id) => `#${id}`).join(", ")}`)
 
     const token = await requireAuth()
