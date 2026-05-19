@@ -7877,7 +7877,8 @@ const LeadsDemoVideoCommand = cmd({
     const pagesRes = await irisFetch("/api/v1/pages?per_page=200")
     if (!pagesRes.ok) { spinner.stop("Failed to fetch pages"); return }
     const pagesData = (await pagesRes.json()) as any
-    const allPages = pagesData.data || []
+    const rawData = pagesData.data || pagesData
+    const allPages = Array.isArray(rawData) ? rawData : (rawData.data || [])
     const matchingPages = allPages
       .filter((p: any) => p.slug?.startsWith(slugPrefix) && p.status === "published")
       .map((p: any) => ({ slug: p.slug, title: p.title }))
@@ -7959,25 +7960,33 @@ ${scenes}
     }
 
     // ── 4. Find & convert videos ──
-    spinner.start("Converting to MP4...")
+    // Playwright writes video after test completes — wait a moment
     const { readdirSync, statSync, copyFileSync } = require("fs")
-
-    // Find webm files in test-results/
     const trDir = join(root, "test-results")
+
+    // Wait up to 10 seconds for video file to appear
     let webmFile = ""
-    const walkDir = (dir: string) => {
-      try {
-        for (const entry of readdirSync(dir)) {
-          const full = join(dir, entry)
-          const st = statSync(full)
-          if (st.isDirectory()) walkDir(full)
-          else if (entry === "video.webm" && full.includes("demo-video-temp")) {
-            webmFile = full
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const walkDir = (dir: string) => {
+        try {
+          for (const entry of readdirSync(dir)) {
+            const full = join(dir, entry)
+            const st = statSync(full)
+            if (st.isDirectory()) walkDir(full)
+            else if (entry === "video.webm") {
+              // Check if file is recent (within last 5 minutes)
+              const age = Date.now() - st.mtimeMs
+              if (age < 300000) webmFile = full
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
+      walkDir(trDir)
+      if (webmFile) break
+      spawnSync("sleep", ["0.5"])
     }
-    walkDir(trDir)
+
+    spinner.start("Converting to MP4...")
 
     if (webmFile) {
       const mp4Path = join(outFullDir, `${slugPrefix}-walkthrough.mp4`)
