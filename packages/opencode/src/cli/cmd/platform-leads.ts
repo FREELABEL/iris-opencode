@@ -7835,6 +7835,198 @@ const LeadsContentEngineCommand = cmd({
 
 // ============================================================================
 // ============================================================================
+// iris leads demo-video — record Playwright walkthrough videos for a lead
+// ============================================================================
+
+const LeadsDemoVideoCommand = cmd({
+  command: "demo-video <lead-id>",
+  describe: "record walkthrough videos of a lead's Genesis pages (MP4, ready to share)",
+  aliases: ["video", "record"],
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { type: "number", demandOption: true })
+      .option("slug", { type: "string", describe: "override page slug prefix (default: derived from company name)" })
+      .option("open", { type: "boolean", default: true, describe: "open output folder in Finder" })
+      .option("note", { type: "boolean", default: true, describe: "add a note to the lead with video details" })
+      .option("slow-mo", { type: "number", default: 600, describe: "milliseconds between actions (lower = faster)" })
+      .option("width", { type: "number", default: 1440, describe: "viewport width" })
+      .option("height", { type: "number", default: 900, describe: "viewport height" }),
+  async handler(args) {
+    await requireAuth()
+    const leadId = args["lead-id"]
+
+    // ── 1. Resolve lead + pages ──
+    const spinner = prompts.spinner()
+    spinner.start("Fetching lead details...")
+
+    const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
+    if (!leadRes.ok) { spinner.stop("Failed to fetch lead"); return }
+    const leadData = (await leadRes.json()) as any
+    const lead = leadData.data || leadData
+    const leadName = lead.name || lead.full_name || `Lead #${leadId}`
+    const company = lead.company || leadName
+
+    // Determine slug prefix
+    let slugPrefix = args.slug || company
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "")
+
+    spinner.start(`Finding pages matching "${slugPrefix}"...`)
+
+    const pagesRes = await irisFetch("/api/v1/pages?per_page=200")
+    if (!pagesRes.ok) { spinner.stop("Failed to fetch pages"); return }
+    const pagesData = (await pagesRes.json()) as any
+    const allPages = pagesData.data || []
+    const matchingPages = allPages
+      .filter((p: any) => p.slug?.startsWith(slugPrefix) && p.status === "published")
+      .map((p: any) => ({ slug: p.slug, title: p.title }))
+
+    if (matchingPages.length === 0) {
+      spinner.stop(`No published pages matching "${slugPrefix}"`)
+      console.log(dim(`  Try: iris leads demo-video ${leadId} --slug <prefix>`))
+      return
+    }
+
+    spinner.stop(`Found ${matchingPages.length} pages for ${leadName}`)
+    for (const p of matchingPages) {
+      console.log(dim(`  ${p.slug} — ${p.title || ""}`))
+    }
+
+    // ── 2. Generate temp Playwright spec ──
+    const BASE_URL = "https://freelabel.net"
+    const slowMo = args["slow-mo"]
+    const w = args.width
+    const h = args.height
+    const outputDir = `test-results/demo-videos/${slugPrefix}`
+
+    const scenes = matchingPages.map((p: any, i: number) => {
+      const idx = String(i + 1).padStart(2, "0")
+      return `
+  // ── Scene ${i + 1}: ${p.title || p.slug} ──
+  console.log('Scene ${i + 1}: ${p.slug}');
+  await page.goto('${BASE_URL}/p/${p.slug}', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: '${outputDir}/screenshots/${idx}-${p.slug}.png', fullPage: true });
+  await page.evaluate(() => window.scrollBy({ top: 500, behavior: 'smooth' }));
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => window.scrollBy({ top: 500, behavior: 'smooth' }));
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  await page.waitForTimeout(800);`
+    }).join("\n")
+
+    const specContent = `import { test } from '@playwright/test';
+test.use({
+  video: { mode: 'on', size: { width: ${w}, height: ${h} } },
+  viewport: { width: ${w}, height: ${h} },
+  launchOptions: { slowMo: ${slowMo} },
+});
+test('${leadName} — Site Walkthrough', async ({ page }) => {
+  test.setTimeout(${matchingPages.length * 30} * 1000);
+${scenes}
+  console.log('Recording complete');
+});
+`
+    // Find project root (look for fl-docker-dev)
+    let root = process.cwd()
+    for (let i = 0; i < 10; i++) {
+      if (existsSync(join(root, "fl-docker-dev"))) break
+      const p = join(root, "..")
+      if (p === root) break
+      root = p
+    }
+
+    const specPath = join(root, "tests/e2e/_demo-video-temp.spec.ts")
+    const outFullDir = join(root, outputDir)
+
+    writeFileSync(specPath, specContent)
+    mkdirSync(join(outFullDir, "screenshots"), { recursive: true })
+
+    // ── 3. Run Playwright ──
+    spinner.start("Recording video walkthrough...")
+    const pw = spawnSync("npx", ["playwright", "test", specPath, "--reporter=list"], {
+      cwd: root,
+      stdio: "inherit",
+      timeout: matchingPages.length * 45 * 1000,
+    })
+
+    if (pw.status !== 0) {
+      spinner.stop("Playwright recording failed")
+      // Clean up temp file
+      try { unlinkSync(specPath) } catch {}
+      return
+    }
+
+    // ── 4. Find & convert videos ──
+    spinner.start("Converting to MP4...")
+    const { readdirSync, statSync, copyFileSync } = require("fs")
+
+    // Find webm files in test-results/
+    const trDir = join(root, "test-results")
+    let webmFile = ""
+    const walkDir = (dir: string) => {
+      try {
+        for (const entry of readdirSync(dir)) {
+          const full = join(dir, entry)
+          const st = statSync(full)
+          if (st.isDirectory()) walkDir(full)
+          else if (entry === "video.webm" && full.includes("demo-video-temp")) {
+            webmFile = full
+          }
+        }
+      } catch {}
+    }
+    walkDir(trDir)
+
+    if (webmFile) {
+      const mp4Path = join(outFullDir, `${slugPrefix}-walkthrough.mp4`)
+      const ff = spawnSync("ffmpeg", [
+        "-y", "-i", webmFile,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-movflags", "+faststart",
+        mp4Path,
+      ], { stdio: "pipe", timeout: 120000 })
+
+      if (ff.status === 0) {
+        const size = (statSync(mp4Path).size / (1024 * 1024)).toFixed(1)
+        spinner.stop(`Video saved: ${mp4Path} (${size} MB)`)
+      } else {
+        // ffmpeg not available — keep webm
+        copyFileSync(webmFile, join(outFullDir, `${slugPrefix}-walkthrough.webm`))
+        spinner.stop(`Video saved as webm (install ffmpeg for MP4 conversion)`)
+      }
+    } else {
+      spinner.stop("No video file found — check test-results/")
+    }
+
+    // Clean up temp spec
+    try { unlinkSync(specPath) } catch {}
+
+    // ── 5. Open in Finder ──
+    if (args.open) {
+      spawnSync("open", [outFullDir])
+    }
+
+    // ── 6. Add lead note ──
+    if (args.note) {
+      const pageList = matchingPages.map((p: any) => p.slug).join(", ")
+      const noteBody = `Demo video recorded: ${matchingPages.length} pages (${pageList}). Output: ${outputDir}/`
+      const noteRes = await irisFetch(`/api/v1/leads/${leadId}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: noteBody }),
+      })
+      if (noteRes.ok) {
+        console.log(success(`  Note added to lead #${leadId}`))
+      }
+    }
+
+    console.log(dim(`\n  iris leads demo-video ${leadId} --slug ${slugPrefix}`))
+  },
+})
+
+// ============================================================================
+// ============================================================================
 // iris leads review — generate client review page
 // ============================================================================
 
@@ -8082,6 +8274,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsOnboardAllCommand)
       .command(LeadsDispositionCommand)
       .command(LeadsContentEngineCommand)
+      .command(LeadsDemoVideoCommand)
       .command(LeadsReviewCommand)
       .demandCommand(),
   async handler() {},
