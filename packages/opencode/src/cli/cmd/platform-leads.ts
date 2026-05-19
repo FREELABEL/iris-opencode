@@ -9707,7 +9707,7 @@ const PulseAlertsAddCommand = cmd({
       .option("below", { type: "number", describe: "alert when signal drops below this value" })
       .option("above", { type: "number", describe: "alert when signal rises above this value" })
       .option("for", { type: "number", default: 1, describe: "consecutive snapshots required" })
-      .option("notify", { type: "string", default: "discord", describe: "notification channel (discord|imessage|log)" }),
+      .option("channel", { alias: "c", type: "string", default: "discord", describe: "notification channel (discord|imessage|log)" }),
   async handler(args) {
     if (!(await requireAuth())) return
 
@@ -9727,7 +9727,7 @@ const PulseAlertsAddCommand = cmd({
         operator,
         threshold,
         consecutive: args.for,
-        notify_channel: args.notify,
+        notify_channel: args.channel,
       }),
     })
     if (!res.ok) {
