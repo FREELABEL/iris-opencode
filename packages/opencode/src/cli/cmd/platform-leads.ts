@@ -9508,14 +9508,102 @@ export const PlatformPulseCommand = cmd({
         return
       } catch (err: any) {
         const isTimeout = err.name === "AbortError" || err.message?.includes("aborted")
-        spinner.stop(isTimeout ? "API timed out" : "Failed")
-        if (isTimeout) {
-          console.log()
-          console.log(`  ${dim("The readiness API is slow or unreachable.")}`)
-          console.log(`  ${dim("Try:")} ${highlight("iris pulse --admin")} ${dim("for lead-level scorecard")}`)
-          console.log(`  ${dim("  or")} ${highlight("iris init")}           ${dim("for setup checklist")}`)
-        } else {
+        if (!isTimeout) {
+          spinner.stop("Failed")
           console.error(`  Error: ${err.message}`)
+          return
+        }
+
+        // Fallback: aggregate per-lead scores (each is fast ~1s)
+        spinner.stop(dim("user endpoint slow — falling back to lead aggregation"))
+        const fallbackSpinner = prompts.spinner()
+        fallbackSpinner.start("Computing from your leads...")
+
+        try {
+          const meRes = await irisFetch("/api/v1/me")
+          const me = meRes.ok ? await meRes.json().catch(() => ({})) : {}
+          const leadsRes = await irisFetch(`/api/v1/leads?user_id=${userId}&per_page=50`)
+          const leadsBody = leadsRes.ok ? await leadsRes.json().catch(() => ({})) : {}
+          const myLeads: any[] = (leadsBody?.data ?? []).slice(0, 20)
+
+          if (myLeads.length === 0) {
+            fallbackSpinner.stop(dim("no leads found"))
+            console.log()
+            console.log(`  ${dim("No leads found for your account.")}`)
+            console.log(`  ${dim("Get started:")} ${highlight("iris init")}`)
+            return
+          }
+
+          const leadScores: Array<{ name: string; score: number; band: string; copy: Record<string, string> }> = []
+          const batchSize = 5
+          for (let i = 0; i < myLeads.length; i += batchSize) {
+            const batch = myLeads.slice(i, i + batchSize)
+            const results = await Promise.all(batch.map(async (lead: any) => {
+              try {
+                const r = await irisFetch(`/api/v1/leads/${lead.id}/readiness?include=copy`)
+                if (!r.ok) return null
+                const b = await r.json().catch(() => ({}))
+                const d = b?.data ?? {}
+                const sigs = d.signals ?? {}
+                const clientCopies: Record<string, string> = {}
+                for (const [k, v] of Object.entries(sigs)) {
+                  if (v && typeof v === "object" && (v as any).client_copy) {
+                    clientCopies[k] = (v as any).client_copy
+                  }
+                }
+                return { name: lead.full_name || lead.company || `#${lead.id}`, score: d.score ?? 0, band: d.band ?? "unknown", copy: clientCopies }
+              } catch { return null }
+            }))
+            leadScores.push(...results.filter(Boolean) as any[])
+          }
+
+          fallbackSpinner.stop(dim(`${leadScores.length} leads scored`))
+
+          // Average score across leads
+          const avgScore = leadScores.length > 0
+            ? Math.round(leadScores.reduce((s, l) => s + l.score, 0) / leadScores.length)
+            : 0
+          const avgBand = avgScore >= 90 ? "healthy" : avgScore >= 75 ? "attention" : avgScore >= 50 ? "at_risk" : "failing"
+          const bandLabel: Record<string, string> = { healthy: "Healthy", attention: "Attention", at_risk: "At Risk", failing: "Failing" }
+          const bandColor = (b: string, s: number) => b === "healthy" ? success(`${s}/100`) : b === "attention" ? highlight(`${s}/100`) : `${s}/100`
+
+          console.log()
+          console.log(`  ${bold("IRIS Health")}                              Score: ${bandColor(avgBand, avgScore)} [${bandLabel[avgBand] || avgBand}]`)
+          console.log(dim("  ─────────────────────────────────────────────"))
+
+          // Collect unique signal copies from the worst-scoring lead
+          const worst = [...leadScores].sort((a, b) => a.score - b.score)[0]
+          if (worst) {
+            const signalLabels: Record<string, string> = {
+              requirements: "Setup", liveness: "AI Agent", comms_freshness: "Comms", deal_health: "Billing",
+              config: "Integrations", scripts: "Outreach", task_completion: "Tasks", content_output: "Content",
+              knowledge_completeness: "Knowledge Base", meeting_engagement: "Meetings",
+            }
+            for (const [k, copy] of Object.entries(worst.copy)) {
+              const label = (signalLabels[k] || k).padEnd(18)
+              console.log(`  ${label} ${copy}`)
+            }
+          }
+
+          console.log()
+          // Per-lead breakdown
+          const scoreEmoji = (s: number) => s >= 70 ? "🟢" : s >= 40 ? "🟡" : "🔴"
+          for (const l of leadScores.sort((a, b) => a.score - b.score).slice(0, 10)) {
+            console.log(`  ${scoreEmoji(l.score)} ${String(l.score).padStart(3)}/100  ${l.name}`)
+          }
+
+          if (worst && worst.score < 60) {
+            const firstCopy = Object.values(worst.copy)[0]
+            if (firstCopy) {
+              console.log()
+              console.log(`  ${bold("Next step:")} ${firstCopy}`)
+            }
+          }
+          console.log()
+          console.log(`  ${dim("Tip:")} Run ${highlight("iris init")} to complete your setup checklist`)
+        } catch (fallbackErr: any) {
+          fallbackSpinner.stop("Fallback failed")
+          console.error(`  Error: ${fallbackErr.message}`)
         }
         return
       }
