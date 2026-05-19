@@ -9367,16 +9367,161 @@ const LeadsRequirementsCommand = cmd({
 export const PlatformPulseCommand = cmd({
   command: "pulse",
   aliases: ["daily"],
-  describe: "daily pulse — diary digest + lead scorecard + ungated leads",
+  describe: "account health (default: your account) — use --admin for agency view",
   builder: (yargs) =>
     yargs
-      .option("status", { describe: "filter by lead status", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
-      .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
+      .option("admin", { describe: "agency view: diary digest + lead scorecard + ungated leads", type: "boolean", default: false })
+      .option("status", { describe: "filter by lead status (admin mode)", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
+      .option("bloq", { alias: "b", describe: "filter by bloq ID (admin mode)", type: "number" })
       .option("notify", { describe: "send pulse summary to yourself via iMessage", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
 
+    // ── Default: User-first pulse (YOUR account health) ──────────
+    if (!args.admin) {
+      const userId = await resolveUserId()
+      if (!userId) {
+        prompts.log.error("Could not resolve user ID. Run `iris auth login` first.")
+        return
+      }
+
+      const spinner = prompts.spinner()
+      spinner.start("Loading your account health...")
+
+      try {
+        const ac = new AbortController()
+        const timer = setTimeout(() => ac.abort(), 15000)
+        const res = await irisFetch(`/api/v1/users/${userId}/readiness?include=copy`, { signal: ac.signal })
+        clearTimeout(timer)
+        if (!res.ok) {
+          spinner.stop("Failed to load readiness")
+          console.error(`  API returned ${res.status}`)
+          return
+        }
+        const body = await res.json().catch(() => ({}))
+        const data = body?.data ?? {}
+        spinner.stop(dim("ready"))
+
+        const score = data.score ?? 0
+        const band = data.band ?? "unknown"
+        const bandLabel: Record<string, string> = { healthy: "Healthy", attention: "Attention", at_risk: "At Risk", failing: "Failing" }
+        const bandColor = (b: string, s: number) => b === "healthy" ? success(`${s}/100`) : b === "attention" ? highlight(`${s}/100`) : `${s}/100`
+
+        console.log()
+        console.log(`  ${bold("IRIS Health")}                              Score: ${bandColor(band, score)} [${bandLabel[band] || band}]`)
+        console.log(dim("  ─────────────────────────────────────────────"))
+
+        const signals = data.signals ?? {}
+        const signalLabels: Record<string, string> = {
+          requirements: "Setup",
+          liveness: "AI Agent",
+          comms_freshness: "Comms",
+          deal_health: "Billing",
+          config: "Integrations",
+          scripts: "Outreach",
+          task_completion: "Tasks",
+          content_output: "Content",
+          knowledge_completeness: "Knowledge Base",
+          meeting_engagement: "Meetings",
+          response_time: "Response Time",
+          referral_network: "Network",
+          deliverable_completeness: "Deliverables",
+          opportunities: "Opportunities",
+        }
+
+        const lines: string[] = []
+        for (const [name, signal] of Object.entries(signals)) {
+          if (!signal || typeof signal !== "object") continue
+          const s = signal as any
+          const label = (signalLabels[name] || name).padEnd(18)
+          const sigScore = s.score ?? 0
+          const copy = s.client_copy || s.admin_copy || ""
+          const scoreStr = String(sigScore).padStart(3)
+          const emoji = sigScore >= 70 ? success(scoreStr) : sigScore >= 40 ? highlight(scoreStr) : scoreStr
+          console.log(`  ${label} ${copy.padEnd(45)} ${emoji}/100`)
+          lines.push(`${signalLabels[name] || name}: ${sigScore}/100 — ${copy}`)
+        }
+
+        console.log()
+
+        // Next step suggestion
+        const worstSignal = Object.entries(signals)
+          .filter(([, v]) => v && typeof v === "object" && (v as any).score !== undefined)
+          .sort(([, a], [, b]) => ((a as any).score ?? 100) - ((b as any).score ?? 100))[0]
+
+        if (worstSignal) {
+          const ws = worstSignal[1] as any
+          if ((ws.score ?? 100) < 60 && ws.client_copy) {
+            console.log(`  ${bold("Next step:")} ${ws.client_copy}`)
+            console.log()
+          }
+        }
+
+        // Init progress hint
+        try {
+          const { existsSync: ex, readFileSync: rf } = await import("fs")
+          const { join: pj } = await import("path")
+          const { homedir: hd } = await import("os")
+          const initPath = pj(hd(), ".iris", "init-progress.json")
+          if (ex(initPath)) {
+            const initData = JSON.parse(rf(initPath, "utf8"))
+            const steps = initData?.steps ?? {}
+            const done = Object.values(steps).filter((s: any) => s?.completed).length
+            if (done < 8) {
+              console.log(`  ${dim("Setup:")} ${done}/8 steps — run ${highlight("iris init")} to continue`)
+              console.log()
+            }
+          } else {
+            console.log(`  ${dim("Tip:")} Run ${highlight("iris init")} to complete your setup checklist`)
+            console.log()
+          }
+        } catch { /* ignore */ }
+
+        console.log(`  ${dim("Agency view:")} Run ${highlight("iris pulse --admin")} to see your clients`)
+
+        // --notify
+        if (args.notify && lines.length > 0) {
+          const summary = `IRIS Health — ${score}/100 [${bandLabel[band] || band}]\n\n${lines.join("\n")}`
+          try {
+            const bridgeUrl = BRIDGE_URL || "http://localhost:3200"
+            const bridgeKey = getBridgeToken()
+            const notifyRes = await fetch(`${bridgeUrl}/api/imessage/direct-send`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(bridgeKey ? { "X-Bridge-Key": bridgeKey } : {}),
+              },
+              body: JSON.stringify({ handle: "self", text: summary }),
+              signal: AbortSignal.timeout(10000),
+            })
+            if (notifyRes.ok) console.log(success("\n  Pulse summary sent to your iMessage"))
+            else console.log(dim(`\n  (notify failed: ${notifyRes.status})`))
+          } catch (err: any) {
+            console.log(dim(`\n  (notify failed: ${err.message})`))
+          }
+        }
+
+        if (args.json) {
+          console.log(JSON.stringify({ scope: "user", user_id: userId, score, band, signals, timestamp: new Date().toISOString() }, null, 2))
+        }
+        return
+      } catch (err: any) {
+        const isTimeout = err.name === "AbortError" || err.message?.includes("aborted")
+        spinner.stop(isTimeout ? "API timed out" : "Failed")
+        if (isTimeout) {
+          console.log()
+          console.log(`  ${dim("The readiness API is slow or unreachable.")}`)
+          console.log(`  ${dim("Try:")} ${highlight("iris pulse --admin")} ${dim("for lead-level scorecard")}`)
+          console.log(`  ${dim("  or")} ${highlight("iris init")}           ${dim("for setup checklist")}`)
+        } else {
+          console.error(`  Error: ${err.message}`)
+        }
+        return
+      }
+    }
+
+    // ── --admin: Agency view (original behavior) ─────────────────
     const lines: string[] = []
 
     // ── 1. Daily diary digest ──────────────────────────────────────
@@ -9403,17 +9548,14 @@ export const PlatformPulseCommand = cmd({
 
         for (const file of recentFiles) {
           const content = readF(pJoin(diaryDir, file), "utf8")
-          // Extract title from first # heading or filename
           const titleMatch = content.match(/^#\s+(.+)/m)
           const title = titleMatch?.[1] || file.replace(/\.md$/, "")
 
-          // Extract summary section or first paragraph
           const summaryMatch = content.match(/##\s*Summary\s*\n([\s\S]*?)(?=\n##|\n$)/i)
           let summary = ""
           if (summaryMatch) {
             summary = summaryMatch[1].trim().split("\n").slice(0, 2).join(" ").trim()
           } else {
-            // First non-heading, non-empty paragraph
             const paragraphs = content.split("\n\n").filter((p: string) => p.trim() && !p.startsWith("#"))
             summary = (paragraphs[0] || "").trim().split("\n").slice(0, 2).join(" ").slice(0, 120)
           }
@@ -9449,7 +9591,6 @@ export const PlatformPulseCommand = cmd({
       const batches = await Promise.all(fetches)
       const allLeads: any[] = batches.flat()
 
-      // Deduplicate and filter junk
       const seen = new Set<number>()
       const leads = allLeads.filter((l: any) => {
         if (seen.has(l.id)) return false
@@ -9464,14 +9605,13 @@ export const PlatformPulseCommand = cmd({
       if (leads.length === 0) {
         console.log(dim("  No active leads found."))
       } else {
-        // Fetch pulse for each lead (parallel, max 10 concurrent)
         const pulseResults: Array<{ id: number; name: string; pulse: number; band: string }> = []
         const batchSize = 10
         for (let i = 0; i < leads.length; i += batchSize) {
           const batch = leads.slice(i, i + batchSize)
           const results = await Promise.all(batch.map(async (lead: any) => {
             try {
-              const res = await irisFetch(`/api/v1/leads/${lead.id}/readiness`)
+              const res = await irisFetch(`/api/v1/leads/${lead.id}/readiness?include=copy`)
               if (!res.ok) return { id: lead.id, name: lead.full_name || lead.company || `#${lead.id}`, pulse: 0, band: "unknown" }
               const body = await res.json().catch(() => ({}))
               const data = body?.data ?? {}
@@ -9483,7 +9623,6 @@ export const PlatformPulseCommand = cmd({
           pulseResults.push(...results)
         }
 
-        // Sort by pulse ascending (worst first)
         pulseResults.sort((a, b) => a.pulse - b.pulse)
 
         const bandEmoji: Record<string, string> = { failing: "🔴", warning: "🟡", healthy: "🟢" }
@@ -9503,7 +9642,7 @@ export const PlatformPulseCommand = cmd({
       console.error(`  Error: ${err.message}`)
     }
 
-    // ── 3. Ungated leads (dry-run) ─────────────────────────────────
+    // ── 3. Ungated leads ─────────────────────────────────────────
     console.log()
     console.log(bold("  Ungated Leads"))
     console.log(dim("  ─────────────────────────────────"))
