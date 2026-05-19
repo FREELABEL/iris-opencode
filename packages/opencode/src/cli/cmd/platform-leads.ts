@@ -1557,35 +1557,48 @@ const LeadsMergeCommand = cmd({
       const mergeSpinner = prompts.spinner()
       mergeSpinner.start("Merging…")
 
-      // Copy notes from removed leads to the primary
-      for (const rid of removeIds) {
-        const r = leads[rid]
-        const notes: any[] = Array.isArray(r.notes) ? r.notes : []
-        for (const n of notes) {
-          const content = typeof n === "object" ? (n.content ?? JSON.stringify(n)) : String(n)
-          await irisFetch(`/api/v1/leads/${args.keep}/notes`, {
-            method: "POST",
-            body: JSON.stringify({ content: `[Merged from #${rid}] ${content}` }),
-          })
+      // Use server-side merge endpoint (transfers all FKs: notes, tasks, comms, outreach, invoices, etc.)
+      const mergeRes = await irisFetch(`/api/v1/leads/${args.keep}/merge`, {
+        method: "POST",
+        body: JSON.stringify({ remove: removeIds }),
+      }).catch(() => null)
+
+      if (mergeRes?.ok) {
+        const result = await mergeRes.json().catch(() => ({}))
+        mergeSpinner.stop(`${success("✓")} ${result.message ?? `Merged ${removeIds.length} lead(s) into #${args.keep}`}`)
+      } else {
+        // Fallback to legacy client-side merge if endpoint not available
+        mergeSpinner.stop(dim("Server merge unavailable — falling back to legacy merge"))
+        const legacySpinner = prompts.spinner()
+        legacySpinner.start("Legacy merge…")
+
+        for (const rid of removeIds) {
+          const r = leads[rid]
+          const notes: any[] = Array.isArray(r.notes) ? r.notes : []
+          for (const n of notes) {
+            const content = typeof n === "object" ? (n.content ?? JSON.stringify(n)) : String(n)
+            await irisFetch(`/api/v1/leads/${args.keep}/notes`, {
+              method: "POST",
+              body: JSON.stringify({ content: `[Merged from #${rid}] ${content}` }),
+            })
+          }
+
+          const updates: Record<string, unknown> = {}
+          for (const field of ["company", "phone", "website", "city", "state", "country"]) {
+            if (!primary[field] && r[field]) updates[field] = r[field]
+          }
+          if (Object.keys(updates).length > 0) {
+            await irisFetch(`/api/v1/leads/${args.keep}`, {
+              method: "PATCH",
+              body: JSON.stringify(updates),
+            })
+          }
+
+          await irisFetch(`/api/v1/leads/${rid}`, { method: "DELETE" })
         }
 
-        // If primary is missing fields, fill from the removed lead
-        const updates: Record<string, unknown> = {}
-        for (const field of ["company", "phone", "website", "city", "state", "country"]) {
-          if (!primary[field] && r[field]) updates[field] = r[field]
-        }
-        if (Object.keys(updates).length > 0) {
-          await irisFetch(`/api/v1/leads/${args.keep}`, {
-            method: "PATCH",
-            body: JSON.stringify(updates),
-          })
-        }
-
-        // Delete the removed lead
-        await irisFetch(`/api/v1/leads/${rid}`, { method: "DELETE" })
+        legacySpinner.stop(`${success("✓")} Merged ${removeIds.length} lead(s) into #${args.keep} (legacy)`)
       }
-
-      mergeSpinner.stop(`${success("✓")} Merged ${removeIds.length} lead(s) into #${args.keep}`)
       prompts.outro(dim(`iris leads get ${args.keep}`))
     } catch (err) {
       spinner.stop("Error", 1)
