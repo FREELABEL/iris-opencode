@@ -514,10 +514,21 @@ const LeadsGetCommand = cmd({
         console.log(`  ${dim("Tags:")}  ${tags.map((t: any) => highlight(t.name)).join("  ")}`)
       }
 
-      // Outreach summary
+      // Outreach summary (steps + messages)
       if ((l.outreach_steps_count ?? 0) > 0) {
         printKV("Outreach", `${l.completed_outreach_steps_count ?? 0} / ${l.outreach_steps_count} steps completed`)
       }
+      // Fetch outreach message stats (fire-and-forget display)
+      try {
+        const omRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/messages?limit=1`)
+        if (omRes.ok) {
+          const omBody = (await omRes.json()) as any
+          const st = omBody.stats ?? {}
+          if ((st.total ?? 0) > 0) {
+            printKV("DMs", `${st.outbound ?? 0} sent, ${st.inbound ?? 0} received, ${st.replied ?? 0} replied  ${dim(`iris leads outreach ${leadId}`)}`)
+          }
+        }
+      } catch { /* non-critical */ }
 
       // Notes — truncated by default, full with --notes flag (#57652)
       const notes: any[] = Array.isArray(l.notes) ? l.notes : []
@@ -898,6 +909,84 @@ const LeadsNotesCommand = cmd({
       prompts.outro(
         `${success("✓")} ${notes.length} note${notes.length === 1 ? "" : "s"}  ·  ${dim(`iris leads note ${leadId} "…"`)}`,
       )
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LeadsOutreachCommand = cmd({
+  command: "outreach <id>",
+  describe: "show outreach message history for a lead (DMs sent/received)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "string", demandOption: true })
+      .option("direction", { describe: "filter: inbound | outbound", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const leadId = Number(args.id)
+    if (isNaN(leadId)) {
+      prompts.log.error("Lead ID must be numeric")
+      process.exitCode = 1
+      return
+    }
+
+    prompts.intro(`◈  Outreach — Lead #${leadId}`)
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+
+    try {
+      const params = new URLSearchParams()
+      if (args.direction) params.set("direction", args.direction as string)
+      const qs = params.toString() ? `?${params}` : ""
+      const res = await irisFetch(`/api/v1/leads/${leadId}/outreach/messages${qs}`)
+      const ok = await handleApiError(res, "Get outreach messages")
+      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+
+      const body = (await res.json()) as any
+      const messages: any[] = body.messages ?? []
+      const stats = body.stats ?? {}
+
+      spinner.stop(`${messages.length} messages`)
+
+      if (args.json) {
+        console.log(JSON.stringify(body, null, 2))
+        return
+      }
+
+      printDivider()
+      console.log(`  ${bold("Outbound")}: ${stats.outbound ?? 0}    ${bold("Inbound")}: ${stats.inbound ?? 0}    ${bold("Replied")}: ${stats.replied ?? 0}`)
+      printDivider()
+
+      if (messages.length === 0) {
+        prompts.log.info("No outreach messages recorded yet.")
+        prompts.outro("Done")
+        return
+      }
+
+      for (const m of messages) {
+        const dir = m.direction === "outbound" ? "→ OUT" : "← IN"
+        const dirColor = m.direction === "outbound" ? highlight(dir) : success(dir)
+        const date = m.sent_at ?? m.created_at ?? ""
+        const account = m.channel_account ? `@${m.channel_account}` : ""
+        const status = m.status ?? ""
+        const meta = m.metadata ?? {}
+        const campaign = meta.campaign_name ? dim(` [${meta.campaign_name}]`) : ""
+
+        console.log(`  ${dirColor}  ${dim(date)}  ${account}  ${dim(status)}${campaign}`)
+        const text = (m.message ?? "").slice(0, 200)
+        if (text) console.log(`    ${text}${(m.message?.length ?? 0) > 200 ? "..." : ""}`)
+        console.log()
+      }
+
+      printDivider()
+      prompts.outro(`${messages.length} message${messages.length === 1 ? "" : "s"}`)
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -7834,9 +7923,303 @@ const LeadsContentEngineCommand = cmd({
 })
 
 // ============================================================================
+// ensureRequirementsForPages — shared by demo-video and review --full
+// ============================================================================
+
+/**
+ * Ensure every page in matchingPages has a corresponding requirement.
+ * Creates missing requirements with auto-generated Playwright specs.
+ * Returns all requirements (existing + newly created) with script_content.
+ */
+async function ensureRequirementsForPages(
+  leadId: number,
+  leadName: string,
+  matchingPages: Array<{ slug: string; title?: string }>,
+): Promise<{ created: number; total: number; requirements: Array<{ id: number; name: string; script_content: string }> }> {
+  const BASE_URL = "https://freelabel.net"
+
+  // 1. Fetch existing requirements
+  const reqListRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
+  const reqListData = reqListRes.ok ? ((await reqListRes.json()) as any) : { data: [] }
+  const existingReqs: any[] = reqListData.data || []
+
+  // 2. For each page, check if a requirement already exists (match by name containing slug)
+  let created = 0
+  for (const p of matchingPages) {
+    const alreadyExists = existingReqs.some((r: any) =>
+      r.name?.toLowerCase().includes(p.slug.toLowerCase())
+    )
+    if (alreadyExists) continue
+
+    const pageUrl = `${BASE_URL}/p/${p.slug}`
+    const reqName = `QA: ${p.title || p.slug}`
+    const scriptContent = generateRequirementSpec(leadName, leadId, pageUrl)
+
+    const createRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`, {
+      method: "POST",
+      body: JSON.stringify({ name: reqName, script_content: scriptContent }),
+    })
+    if (createRes.ok) created++
+  }
+
+  // 3. Re-fetch all requirements, then fetch script_content individually
+  const freshListRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
+  const freshListData = freshListRes.ok ? ((await freshListRes.json()) as any) : { data: [] }
+  const allReqs: any[] = freshListData.data || []
+
+  const requirements: Array<{ id: number; name: string; script_content: string }> = []
+  for (const req of allReqs) {
+    const detailRes = await irisFetch(`/api/v1/leads/${leadId}/requirements/${req.id}`)
+    if (detailRes.ok) {
+      const detail = (await detailRes.json()) as any
+      const script = detail.data?.script_content
+      if (script) {
+        requirements.push({ id: req.id, name: req.name, script_content: script })
+      }
+    }
+  }
+
+  return { created, total: requirements.length, requirements }
+}
+
+// ============================================================================
 // ============================================================================
 // iris leads demo-video — record Playwright walkthrough videos for a lead
 // ============================================================================
+
+/**
+ * Find video.webm files in a directory tree, returning the most recent one
+ * produced within the last 5 minutes.
+ */
+function findRecentWebm(searchDir: string): string {
+  const { readdirSync, statSync } = require("fs")
+  let webmFile = ""
+  const walkDir = (dir: string) => {
+    try {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry)
+        const st = statSync(full)
+        if (st.isDirectory()) walkDir(full)
+        else if (entry === "video.webm") {
+          const age = Date.now() - st.mtimeMs
+          if (age < 300000) webmFile = full
+        }
+      }
+    } catch {}
+  }
+  walkDir(searchDir)
+  return webmFile
+}
+
+/**
+ * Convert a webm to MP4 via ffmpeg. Falls back to copying webm if ffmpeg unavailable.
+ */
+function convertToMp4(webmFile: string, mp4Path: string): { mp4Path: string | null; webmPath: string | null } {
+  const { copyFileSync } = require("fs")
+  const ff = spawnSync("ffmpeg", [
+    "-y", "-i", webmFile,
+    "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-movflags", "+faststart",
+    mp4Path,
+  ], { stdio: "pipe", timeout: 120000 })
+
+  if (ff.status === 0) {
+    return { mp4Path, webmPath: null }
+  } else {
+    const webmOut = mp4Path.replace(/\.mp4$/, ".webm")
+    copyFileSync(webmFile, webmOut)
+    return { mp4Path: null, webmPath: webmOut }
+  }
+}
+
+/**
+ * Record a Playwright walkthrough video (synthetic scroll-through of pages) and convert to MP4.
+ * Used by `demo-video` standalone command.
+ */
+async function recordDemoWalkthrough(opts: {
+  slugPrefix: string
+  matchingPages: Array<{ slug: string; title?: string }>
+  leadName: string
+  root: string
+  slowMo?: number
+  width?: number
+  height?: number
+}): Promise<{ mp4Path: string | null; webmPath: string | null; error: string | null }> {
+  const { slugPrefix, matchingPages, leadName, root } = opts
+  const slowMo = opts.slowMo ?? 600
+  const w = opts.width ?? 1440
+  const h = opts.height ?? 900
+  const BASE_URL = "https://freelabel.net"
+  const outputDir = `test-results/demo-videos/${slugPrefix}`
+  const outFullDir = join(root, outputDir)
+
+  const scenes = matchingPages.map((p: any, i: number) => {
+    const idx = String(i + 1).padStart(2, "0")
+    return `
+  // Scene ${i + 1}: ${p.title || p.slug}
+  console.log('Scene ${i + 1}: ${p.slug}');
+  await page.goto('${BASE_URL}/p/${p.slug}', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: '${outputDir}/screenshots/${idx}-${p.slug}.png', fullPage: true });
+  await page.evaluate(() => window.scrollBy({ top: 500, behavior: 'smooth' }));
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => window.scrollBy({ top: 500, behavior: 'smooth' }));
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  await page.waitForTimeout(800);`
+  }).join("\n")
+
+  const specContent = `import { test } from '@playwright/test';
+test.use({
+  video: { mode: 'on', size: { width: ${w}, height: ${h} } },
+  viewport: { width: ${w}, height: ${h} },
+  launchOptions: { slowMo: ${slowMo} },
+});
+test('${leadName} — Site Walkthrough', async ({ page }) => {
+  test.setTimeout(${matchingPages.length * 30} * 1000);
+${scenes}
+  console.log('Recording complete');
+});
+`
+  const specPath = join(root, "tests/e2e/_demo-video-temp.spec.ts")
+  mkdirSync(join(outFullDir, "screenshots"), { recursive: true })
+  writeFileSync(specPath, specContent)
+
+  const pw = spawnSync("npx", ["playwright", "test", specPath, "--reporter=list"], {
+    cwd: root,
+    stdio: "inherit",
+    timeout: matchingPages.length * 45 * 1000,
+  })
+
+  if (pw.status !== 0) {
+    try { unlinkSync(specPath) } catch {}
+    return { mp4Path: null, webmPath: null, error: "Playwright recording failed" }
+  }
+
+  // Wait for video file
+  let webmFile = ""
+  for (let attempt = 0; attempt < 20; attempt++) {
+    webmFile = findRecentWebm(join(root, "test-results"))
+    if (webmFile) break
+    spawnSync("sleep", ["0.5"])
+  }
+
+  try { unlinkSync(specPath) } catch {}
+
+  if (!webmFile) {
+    return { mp4Path: null, webmPath: null, error: "No video file found in test-results/" }
+  }
+
+  const mp4Path = join(outFullDir, `${slugPrefix}-walkthrough.mp4`)
+  const converted = convertToMp4(webmFile, mp4Path)
+  return { ...converted, error: null }
+}
+
+/**
+ * Run actual Playwright requirement specs with video recording enabled.
+ * The video IS the proof that the specs passed — sourced directly from requirements.
+ * Returns pass/fail results alongside the video path.
+ */
+async function runRequirementsWithVideo(opts: {
+  leadId: number
+  leadName: string
+  slugPrefix: string
+  root: string
+  requirements: Array<{ id: number; name: string; script_content: string }>
+  width?: number
+  height?: number
+}): Promise<{
+  mp4Path: string | null
+  webmPath: string | null
+  passed: boolean
+  results: Array<{ name: string; passed: boolean }>
+  error: string | null
+}> {
+  const { leadId, leadName, slugPrefix, root, requirements } = opts
+  const w = opts.width ?? 1440
+  const h = opts.height ?? 900
+  const outputDir = `test-results/requirements-video/${slugPrefix}`
+  const outFullDir = join(root, outputDir)
+  mkdirSync(outFullDir, { recursive: true })
+
+  // Build a combined spec that wraps each requirement's script_content
+  // with video recording enabled, so the video proves the specs ran
+  const specParts: string[] = []
+  specParts.push(`import { test, expect } from '@playwright/test';`)
+  specParts.push(``)
+  specParts.push(`test.use({`)
+  specParts.push(`  video: { mode: 'on', size: { width: ${w}, height: ${h} } },`)
+  specParts.push(`  viewport: { width: ${w}, height: ${h} },`)
+  specParts.push(`});`)
+  specParts.push(``)
+
+  for (const req of requirements) {
+    // Extract only the test bodies from the script_content.
+    // If the script has its own imports/describe blocks, we inline the test blocks.
+    // Strip import lines and test.describe wrappers — we manage those ourselves.
+    let body = req.script_content
+
+    // Remove import lines (we provide our own)
+    body = body.replace(/^import\s+.*;\s*$/gm, "")
+    // Remove test.use blocks (we provide our own with video)
+    body = body.replace(/test\.use\(\{[\s\S]*?\}\);/g, "")
+
+    // If the script has test.describe, keep it (it nests fine)
+    // If it's bare test() calls, wrap in describe
+    const hasDescribe = /test\.describe\s*\(/.test(body)
+    if (hasDescribe) {
+      specParts.push(body.trim())
+    } else {
+      specParts.push(`test.describe('${req.name.replace(/'/g, "\\'")}', () => {`)
+      specParts.push(body.trim())
+      specParts.push(`});`)
+    }
+    specParts.push(``)
+  }
+
+  const specContent = specParts.join("\n")
+  const specPath = join(root, "tests/e2e/_requirements-video-temp.spec.ts")
+  writeFileSync(specPath, specContent)
+
+  // Run Playwright with JSON reporter for structured results + list for console
+  const totalTimeout = requirements.length * 60 * 1000 // 60s per requirement
+  const pw = spawnSync("npx", [
+    "playwright", "test", specPath,
+    "--reporter=list",
+  ], {
+    cwd: root,
+    stdio: "inherit",
+    timeout: Math.max(totalTimeout, 120000),
+  })
+
+  const allPassed = pw.status === 0
+
+  // Build result summary from exit code (detailed per-test results would need JSON reporter)
+  const results = requirements.map(r => ({
+    name: r.name,
+    passed: allPassed, // all-or-nothing from exit code; individual results in console output
+  }))
+
+  // Wait for video file
+  let webmFile = ""
+  for (let attempt = 0; attempt < 20; attempt++) {
+    webmFile = findRecentWebm(join(root, "test-results"))
+    if (webmFile) break
+    spawnSync("sleep", ["0.5"])
+  }
+
+  try { unlinkSync(specPath) } catch {}
+
+  if (!webmFile) {
+    return {
+      mp4Path: null, webmPath: null, passed: allPassed, results,
+      error: allPassed ? "Tests passed but no video captured" : "Tests failed — no video captured",
+    }
+  }
+
+  const mp4Path = join(outFullDir, `${slugPrefix}-requirements-proof.mp4`)
+  const converted = convertToMp4(webmFile, mp4Path)
+  return { ...converted, passed: allPassed, results, error: null }
+}
 
 const LeadsDemoVideoCommand = cmd({
   command: "demo-video <lead-id>",
@@ -7866,7 +8249,6 @@ const LeadsDemoVideoCommand = cmd({
     const leadName = lead.name || lead.full_name || `Lead #${leadId}`
     const company = lead.company || leadName
 
-    // Determine slug prefix
     let slugPrefix = args.slug || company
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
@@ -7894,42 +8276,7 @@ const LeadsDemoVideoCommand = cmd({
       console.log(dim(`  ${p.slug} — ${p.title || ""}`))
     }
 
-    // ── 2. Generate temp Playwright spec ──
-    const BASE_URL = "https://freelabel.net"
-    const slowMo = args["slow-mo"]
-    const w = args.width
-    const h = args.height
-    const outputDir = `test-results/demo-videos/${slugPrefix}`
-
-    const scenes = matchingPages.map((p: any, i: number) => {
-      const idx = String(i + 1).padStart(2, "0")
-      return `
-  // ── Scene ${i + 1}: ${p.title || p.slug} ──
-  console.log('Scene ${i + 1}: ${p.slug}');
-  await page.goto('${BASE_URL}/p/${p.slug}', { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2500);
-  await page.screenshot({ path: '${outputDir}/screenshots/${idx}-${p.slug}.png', fullPage: true });
-  await page.evaluate(() => window.scrollBy({ top: 500, behavior: 'smooth' }));
-  await page.waitForTimeout(1500);
-  await page.evaluate(() => window.scrollBy({ top: 500, behavior: 'smooth' }));
-  await page.waitForTimeout(1500);
-  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
-  await page.waitForTimeout(800);`
-    }).join("\n")
-
-    const specContent = `import { test } from '@playwright/test';
-test.use({
-  video: { mode: 'on', size: { width: ${w}, height: ${h} } },
-  viewport: { width: ${w}, height: ${h} },
-  launchOptions: { slowMo: ${slowMo} },
-});
-test('${leadName} — Site Walkthrough', async ({ page }) => {
-  test.setTimeout(${matchingPages.length * 30} * 1000);
-${scenes}
-  console.log('Recording complete');
-});
-`
-    // Find project root (look for fl-docker-dev)
+    // ── 2. Find project root ──
     let root = process.cwd()
     for (let i = 0; i < 10; i++) {
       if (existsSync(join(root, "fl-docker-dev"))) break
@@ -7938,78 +8285,80 @@ ${scenes}
       root = p
     }
 
-    const specPath = join(root, "tests/e2e/_demo-video-temp.spec.ts")
-    const outFullDir = join(root, outputDir)
-
-    writeFileSync(specPath, specContent)
-    mkdirSync(join(outFullDir, "screenshots"), { recursive: true })
-
-    // ── 3. Run Playwright ──
-    spinner.start("Recording video walkthrough...")
-    const pw = spawnSync("npx", ["playwright", "test", specPath, "--reporter=list"], {
-      cwd: root,
-      stdio: "inherit",
-      timeout: matchingPages.length * 45 * 1000,
-    })
-
-    if (pw.status !== 0) {
-      spinner.stop("Playwright recording failed")
-      // Clean up temp file
-      try { unlinkSync(specPath) } catch {}
-      return
+    // ── 3. Auto-create requirements for pages ──
+    spinner.start("Ensuring requirements exist for each page...")
+    const ensured = await ensureRequirementsForPages(leadId, leadName, matchingPages)
+    if (ensured.created > 0) {
+      spinner.stop(success(`${ensured.created} requirements auto-created (${ensured.total} total)`))
+    } else {
+      spinner.stop(success(`${ensured.total} requirements ready (none needed creating)`))
     }
 
-    // ── 4. Find & convert videos ──
-    // Playwright writes video after test completes — wait a moment
-    const { readdirSync, statSync, copyFileSync } = require("fs")
-    const trDir = join(root, "test-results")
+    // ── 4. Run requirement specs with video (preferred) or fallback to walkthrough ──
+    const requirementsWithScripts = ensured.requirements
+    let videoFile: string | null = null
+    let outputDir = `test-results/demo-videos/${slugPrefix}`
+    let outFullDir = join(root, outputDir)
 
-    // Wait up to 10 seconds for video file to appear
-    let webmFile = ""
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const walkDir = (dir: string) => {
-        try {
-          for (const entry of readdirSync(dir)) {
-            const full = join(dir, entry)
-            const st = statSync(full)
-            if (st.isDirectory()) walkDir(full)
-            else if (entry === "video.webm") {
-              // Check if file is recent (within last 5 minutes)
-              const age = Date.now() - st.mtimeMs
-              if (age < 300000) webmFile = full
-            }
-          }
-        } catch {}
-      }
-      walkDir(trDir)
-      if (webmFile) break
-      spawnSync("sleep", ["0.5"])
-    }
+    if (requirementsWithScripts.length > 0) {
+      spinner.start(`Running ${requirementsWithScripts.length} requirement specs (video recording)...`)
+      const result = await runRequirementsWithVideo({
+        leadId, leadName, slugPrefix, root,
+        requirements: requirementsWithScripts,
+        width: args.width, height: args.height,
+      })
 
-    spinner.start("Converting to MP4...")
+      const passLabel = result.passed ? "ALL PASSED" : "SOME FAILED"
 
-    if (webmFile) {
-      const mp4Path = join(outFullDir, `${slugPrefix}-walkthrough.mp4`)
-      const ff = spawnSync("ffmpeg", [
-        "-y", "-i", webmFile,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-movflags", "+faststart",
-        mp4Path,
-      ], { stdio: "pipe", timeout: 120000 })
-
-      if (ff.status === 0) {
-        const size = (statSync(mp4Path).size / (1024 * 1024)).toFixed(1)
-        spinner.stop(`Video saved: ${mp4Path} (${size} MB)`)
+      if (result.error) {
+        spinner.stop(dim(`Spec video: ${result.error}`))
       } else {
-        // ffmpeg not available — keep webm
-        copyFileSync(webmFile, join(outFullDir, `${slugPrefix}-walkthrough.webm`))
-        spinner.stop(`Video saved as webm (install ffmpeg for MP4 conversion)`)
+        videoFile = result.mp4Path || result.webmPath
+        outputDir = `test-results/requirements-video/${slugPrefix}`
+        outFullDir = join(root, outputDir)
+        if (videoFile) {
+          const { statSync } = require("fs")
+          const size = (statSync(videoFile).size / (1024 * 1024)).toFixed(1)
+          spinner.stop(success(`QA Proof video saved (${passLabel}) — ${size} MB`))
+        } else {
+          spinner.stop(`Specs ran (${passLabel}) but no video captured`)
+        }
+      }
+
+      // Report status back to API
+      for (const r of result.results) {
+        const reqMatch = requirementsWithScripts.find(rq => rq.name === r.name)
+        if (reqMatch) {
+          await irisFetch(`/api/v1/leads/${leadId}/requirements/${reqMatch.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              last_status: r.passed ? "passed" : "failed",
+              last_run_at: new Date().toISOString(),
+            }),
+          }).catch(() => {})
+        }
       }
     } else {
-      spinner.stop("No video file found — check test-results/")
+      // Fallback: no scripts, use walkthrough
+      spinner.start("Recording video walkthrough (no requirement scripts)...")
+      const result = await recordDemoWalkthrough({
+        slugPrefix, matchingPages, leadName, root,
+        slowMo: args["slow-mo"], width: args.width, height: args.height,
+      })
+      if (result.error) {
+        spinner.stop(result.error)
+        return
+      }
+      videoFile = result.mp4Path || result.webmPath
+      if (videoFile) {
+        const { statSync } = require("fs")
+        const size = (statSync(videoFile).size / (1024 * 1024)).toFixed(1)
+        spinner.stop(`Video saved: ${videoFile} (${size} MB)`)
+      } else {
+        spinner.stop("No video file produced")
+      }
     }
-
-    // Clean up temp spec
-    try { unlinkSync(specPath) } catch {}
 
     // ── 5. Open in Finder ──
     if (args.open) {
@@ -8019,7 +8368,7 @@ ${scenes}
     // ── 6. Add lead note ──
     if (args.note) {
       const pageList = matchingPages.map((p: any) => p.slug).join(", ")
-      const noteBody = `Demo video recorded: ${matchingPages.length} pages (${pageList}). Output: ${outputDir}/`
+      const noteBody = `QA proof video recorded: ${matchingPages.length} pages (${pageList}), ${requirementsWithScripts.length} requirement specs. Output: ${outputDir}/`
       const noteRes = await irisFetch(`/api/v1/leads/${leadId}/notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -8045,6 +8394,9 @@ const LeadsReviewCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("lead-id", { type: "number", demandOption: true })
+      .option("full", { type: "boolean", describe: "autonomous: detect pages, record video, generate review" })
+      .option("slug", { type: "string", describe: "override page slug prefix (default: from company name)" })
+      .option("skip-video", { type: "boolean", describe: "skip video recording (faster, link deliverables only)" })
       .option("send", { type: "boolean", describe: "email the review link to the client" })
       .option("open", { type: "boolean", describe: "open the review page in your browser" })
       .option("slides", { type: "boolean", describe: "generate branded carousel slides as deliverables" })
@@ -8057,6 +8409,221 @@ const LeadsReviewCommand = cmd({
     const spinner = prompts.spinner()
 
     try {
+      // ── Autonomous --full pipeline ──
+      if (args.full) {
+        const checklist: string[] = []
+
+        // Phase 1: Fetch lead + resolve slug
+        spinner.start("Fetching lead details...")
+        const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
+        if (!leadRes.ok) { spinner.stop("Failed to fetch lead"); return }
+        const leadData = (await leadRes.json()) as any
+        const lead = leadData.data || leadData
+        const leadName = lead.name || lead.full_name || `Lead #${leadId}`
+        const company = lead.company || leadName
+
+        let slugPrefix = (args.slug as string) || company
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/(^-|-$)/g, "")
+
+        if (!slugPrefix) {
+          spinner.stop("No company name on lead — use --slug to specify")
+          return
+        }
+        spinner.stop(success(`Lead: ${leadName} | slug prefix: ${slugPrefix}`))
+
+        // Phase 2: Discover pages
+        spinner.start(`Finding pages matching "${slugPrefix}"...`)
+        const pagesRes = await irisFetch("/api/v1/pages?per_page=200")
+        if (!pagesRes.ok) { spinner.stop("Failed to fetch pages"); return }
+        const pagesData = (await pagesRes.json()) as any
+        const rawPData = pagesData.data || pagesData
+        const allPages = Array.isArray(rawPData) ? rawPData : (rawPData.data || [])
+        const matchingPages = allPages
+          .filter((p: any) => p.slug?.startsWith(slugPrefix) && p.status === "published")
+          .map((p: any) => ({ slug: p.slug, title: p.title }))
+
+        if (matchingPages.length === 0) {
+          spinner.stop(`No published pages matching "${slugPrefix}"`)
+          checklist.push(`No pages found for "${slugPrefix}" — use --slug to override`)
+        } else {
+          spinner.stop(`Found ${matchingPages.length} pages`)
+        }
+
+        // Phase 3: Auto-create requirements for pages + run specs with video
+        let requirementsWithScripts: Array<{ id: number; name: string; script_content: string }> = []
+        let root = process.cwd()
+        for (let i = 0; i < 10; i++) {
+          if (existsSync(join(root, "fl-docker-dev"))) break
+          const p = join(root, "..")
+          if (p === root) break
+          root = p
+        }
+
+        if (matchingPages.length > 0) {
+          spinner.start("Ensuring requirements exist for each page...")
+          const ensured = await ensureRequirementsForPages(leadId, leadName, matchingPages)
+          requirementsWithScripts = ensured.requirements
+
+          if (ensured.created > 0) {
+            spinner.stop(success(`${ensured.created} requirements auto-created (${ensured.total} total)`))
+          } else {
+            spinner.stop(success(`${ensured.total} requirements ready`))
+          }
+
+          if (requirementsWithScripts.length > 0 && !args["skip-video"]) {
+            spinner.start(`Running ${requirementsWithScripts.length} requirement specs (video recording)...`)
+            const videoResult = await runRequirementsWithVideo({
+              leadId, leadName, slugPrefix, root,
+              requirements: requirementsWithScripts,
+            })
+
+            if (videoResult.error) {
+              spinner.stop(dim(`Video: ${videoResult.error}`))
+              checklist.push(`Video from specs failed — run manually: iris leads requirements run ${leadId}`)
+            } else {
+              const videoFile = videoResult.mp4Path || videoResult.webmPath
+              const passLabel = videoResult.passed ? "ALL PASSED" : "SOME FAILED"
+
+              if (videoFile) {
+                spinner.start("Uploading requirements proof video as deliverable...")
+                const form = new FormData()
+                form.append("type", "file")
+                form.append("title", `${leadName} — QA Proof (${passLabel})`)
+                form.append("file", Bun.file(videoFile))
+                const uploadRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables`, {
+                  method: "POST",
+                  body: form,
+                })
+                if (uploadRes.ok) {
+                  spinner.stop(success(`QA proof video uploaded (${passLabel})`))
+                } else {
+                  spinner.stop(dim("Video upload failed"))
+                  checklist.push(`Video upload failed — file at: ${videoFile}`)
+                }
+              }
+
+              if (!videoResult.passed) {
+                checklist.push(`Requirements specs FAILED — fix issues before sharing: iris leads requirements list ${leadId}`)
+              }
+
+              // Report status back to API
+              for (const r of videoResult.results) {
+                const reqMatch = requirementsWithScripts.find(rq => rq.name === r.name)
+                if (reqMatch) {
+                  await irisFetch(`/api/v1/leads/${leadId}/requirements/${reqMatch.id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      last_status: r.passed ? "passed" : "failed",
+                      last_run_at: new Date().toISOString(),
+                    }),
+                  }).catch(() => {})
+                }
+              }
+            }
+          } else if (args["skip-video"]) {
+            console.log(dim("  Skipping video (--skip-video)"))
+          } else if (requirementsWithScripts.length === 0) {
+            checklist.push(`No requirement scripts found — add specs: iris leads reqs create ${leadId} --name "QA" --url "https://..."`)
+          }
+        }
+
+        // Phase 4: Create link deliverables for each page (deduplicated, with requirement_id)
+        if (matchingPages.length > 0) {
+          const existingDelRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables`)
+          const existingDelData = existingDelRes.ok ? ((await existingDelRes.json()) as any) : { data: [] }
+          const existingDels = existingDelData.data || []
+          const existingUrls = new Set(existingDels.map((d: any) => d.external_url).filter(Boolean))
+
+          spinner.start("Creating link deliverables...")
+          let pagesAdded = 0
+          for (const p of matchingPages) {
+            const pageUrl = `https://freelabel.net/p/${p.slug}`
+            if (existingUrls.has(pageUrl)) continue
+            const body: Record<string, any> = {
+              type: "link",
+              title: p.title || p.slug,
+              external_url: pageUrl,
+            }
+            // Link deliverable to its requirement
+            const matchingReq = requirementsWithScripts.find(r => r.name?.toLowerCase().includes(p.slug.toLowerCase()))
+            if (matchingReq) body.requirement_id = matchingReq.id
+            const addRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            })
+            if (addRes.ok) pagesAdded++
+          }
+          spinner.stop(success(`${pagesAdded} new page deliverables (${matchingPages.length - pagesAdded} already existed)`))
+        }
+
+        // Phase 5: Pulse check
+        spinner.start("Checking pulse score...")
+        const pulseRes = await irisFetch(`/api/v1/leads/${leadId}/readiness`)
+        if (pulseRes.ok) {
+          const pulseData = (await pulseRes.json()) as any
+          const score = pulseData.data?.score ?? pulseData.score
+          if (score !== undefined && score < 40) {
+            checklist.push(`Pulse score ${score}/100 — address signals before sharing`)
+          }
+        }
+        spinner.stop(success("Pulse checked"))
+
+        // Phase 6: Generate review page
+        spinner.start("Generating review page...")
+        const reviewRes = await irisFetch(`/api/v1/leads/${leadId}/review-page`, { method: "POST" })
+        if (!reviewRes.ok) {
+          const err = await reviewRes.json().catch(() => ({}))
+          spinner.stop("Review page generation failed")
+          console.error(`  Error: ${(err as any).message || reviewRes.statusText}`)
+          checklist.push("Review page failed — ensure deliverables exist, then retry without --full")
+        } else {
+          const reviewBody = (await reviewRes.json()) as any
+          const reviewUrl = reviewBody.data?.review_url
+          const count = reviewBody.data?.deliverable_count || 0
+          spinner.stop(success(`Review page ready (${count} deliverables)`))
+          console.log()
+          console.log(`  ${bold("Review URL:")} ${reviewUrl}`)
+          console.log()
+
+          if (args.open && reviewUrl) {
+            spawnSync("open", [reviewUrl], { stdio: "ignore" })
+          }
+          if (args.send && reviewUrl) {
+            const sendRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables/send`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                deliverable_ids: [],
+                message_mode: "ai",
+                custom_context: `Please review your deliverables at: ${reviewUrl}`,
+                subject: "Your Project Review is Ready",
+              }),
+            })
+            if (sendRes.ok) {
+              console.log(success("  Review link emailed to client"))
+            } else {
+              console.log(dim("  (email send failed — " + sendRes.status + ")"))
+            }
+          }
+        }
+
+        // Phase 7: Checklist output
+        if (checklist.length > 0) {
+          console.log()
+          console.log(bold("  TODO (items that need attention):"))
+          for (const item of checklist) {
+            console.log(`  ${dim("•")} ${item}`)
+          }
+          console.log()
+        }
+
+        return
+      }
+
       // ── Optional: Generate branded carousel slides ──
       if (args.slides) {
         // 1. Fetch lead details for context
@@ -8262,6 +8829,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsSyncCalendarCommand)
       .command(LeadsNotesCommand)
       .command(LeadsNoteCommand)
+      .command(LeadsOutreachCommand)
       .command(LeadsTasksCommand)
       .command(LeadsPaymentGateCommand)
       .command(LeadsUpdatePaymentGateCommand)
