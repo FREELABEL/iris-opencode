@@ -8491,6 +8491,7 @@ const LeadsReviewCommand = cmd({
               const videoFile = videoResult.mp4Path || videoResult.webmPath
               const passLabel = videoResult.passed ? "ALL PASSED" : "SOME FAILED"
 
+              let proofVideoUrl: string | null = null
               if (videoFile) {
                 spinner.start("Uploading requirements proof video as deliverable...")
                 const form = new FormData()
@@ -8502,6 +8503,8 @@ const LeadsReviewCommand = cmd({
                   body: form,
                 })
                 if (uploadRes.ok) {
+                  const uploadData = (await uploadRes.json().catch(() => ({}))) as any
+                  proofVideoUrl = uploadData?.data?.deliverable?.url || uploadData?.data?.deliverable?.external_url || null
                   spinner.stop(success(`QA proof video uploaded (${passLabel})`))
                 } else {
                   spinner.stop(dim("Video upload failed"))
@@ -8513,17 +8516,19 @@ const LeadsReviewCommand = cmd({
                 checklist.push(`Requirements specs FAILED — fix issues before sharing: iris leads requirements list ${leadId}`)
               }
 
-              // Report status back to API
+              // Report status + proof video URL back to API
               for (const r of videoResult.results) {
                 const reqMatch = requirementsWithScripts.find(rq => rq.name === r.name)
                 if (reqMatch) {
+                  const patchBody: Record<string, any> = {
+                    last_status: r.passed ? "passed" : "failed",
+                    last_run_at: new Date().toISOString(),
+                  }
+                  if (proofVideoUrl) patchBody.proof_video_url = proofVideoUrl
                   await irisFetch(`/api/v1/leads/${leadId}/requirements/${reqMatch.id}`, {
                     method: "PATCH",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      last_status: r.passed ? "passed" : "failed",
-                      last_run_at: new Date().toISOString(),
-                    }),
+                    body: JSON.stringify(patchBody),
                   }).catch(() => {})
                 }
               }
