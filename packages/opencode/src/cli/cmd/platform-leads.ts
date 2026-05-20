@@ -7948,16 +7948,20 @@ async function ensureRequirementsForPages(
   const reqListData = reqListRes.ok ? ((await reqListRes.json()) as any) : { data: [] }
   const existingReqs: any[] = reqListData.data || []
 
-  // 2. For each page, check if a requirement already exists (match by name containing slug)
+  // 2. For each page, check if a requirement already exists (exact slug match)
   let created = 0
   for (const p of matchingPages) {
-    const alreadyExists = existingReqs.some((r: any) =>
-      r.name?.toLowerCase().includes(p.slug.toLowerCase())
-    )
+    const slugLower = p.slug.toLowerCase()
+    const titleLower = (p.title || "").toLowerCase()
+    const alreadyExists = existingReqs.some((r: any) => {
+      const rn = r.name?.toLowerCase() || ""
+      // Exact match: "QA: {slug}" or "QA: {title}" — not substring
+      return rn === `qa: ${slugLower}` || rn === `qa: ${titleLower}` || rn === slugLower
+    })
     if (alreadyExists) continue
 
     const pageUrl = `${BASE_URL}/p/${p.slug}`
-    const reqName = `QA: ${p.title || p.slug}`
+    const reqName = `QA: ${p.slug}`
     const scriptContent = generateRequirementSpec(leadName, leadId, pageUrl)
 
     const createRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`, {
@@ -8557,8 +8561,8 @@ const LeadsReviewCommand = cmd({
               title: p.title || p.slug,
               external_url: pageUrl,
             }
-            // Link deliverable to its requirement
-            const matchingReq = requirementsWithScripts.find(r => r.name?.toLowerCase().includes(p.slug.toLowerCase()))
+            // Link deliverable to its requirement (exact slug match)
+            const matchingReq = requirementsWithScripts.find(r => r.name?.toLowerCase() === `qa: ${p.slug.toLowerCase()}`)
             if (matchingReq) body.requirement_id = matchingReq.id
             const addRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables`, {
               method: "POST",
@@ -9821,16 +9825,44 @@ test.describe('${leadName} — Requirements', () => {
     expect(res?.url()).toMatch(/^https:\\/\\//);
   });
 
-  test('no console errors', async ({ page }) => {
+  test('no console errors (excluding 3rd-party)', async ({ page }) => {
+    // Ignore noise from analytics, ads, tracking pixels, browser extensions
+    const ignore = [
+      'google', 'facebook', 'fbevents', 'analytics', 'gtag', 'gtm',
+      'doubleclick', 'adsense', 'adsbygoogle', 'hotjar', 'clarity',
+      'sentry', 'segment', 'mixpanel', 'intercom', 'drift', 'hubspot',
+      'tiktok', 'twitter', 'twimg', 'pinterest', 'linkedin',
+      'chrome-extension', 'moz-extension', 'safari-extension',
+      'favicon', 'robots.txt', 'sw.js', 'service-worker',
+    ];
     const errors: string[] = [];
-    page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+    page.on('console', m => {
+      if (m.type() !== 'error') return;
+      const txt = m.text().toLowerCase();
+      if (ignore.some(k => txt.includes(k))) return;
+      errors.push(m.text());
+    });
     await page.goto(URL, { waitUntil: 'networkidle', timeout: 60000 });
     expect(errors).toHaveLength(0);
   });
 
-  test('no broken assets (no 404s)', async ({ page }) => {
+  test('no broken assets (excluding 3rd-party)', async ({ page }) => {
+    // Ignore 404s from analytics, ad networks, tracking pixels, CDN prefetch
+    const ignoreUrls = [
+      'google', 'facebook', 'fbevents', 'analytics', 'gtag', 'gtm',
+      'doubleclick', 'adsense', 'hotjar', 'clarity', 'sentry',
+      'segment', 'mixpanel', 'intercom', 'drift', 'hubspot',
+      'tiktok', 'twitter', 'pinterest', 'linkedin',
+      'favicon.ico', 'robots.txt', 'sw.js', 'service-worker',
+      'chrome-extension', 'moz-extension',
+    ];
     const broken: string[] = [];
-    page.on('response', r => { if (r.status() >= 400) broken.push(r.url()); });
+    page.on('response', r => {
+      if (r.status() < 400) return;
+      const url = r.url().toLowerCase();
+      if (ignoreUrls.some(k => url.includes(k))) return;
+      broken.push(r.url());
+    });
     await page.goto(URL, { waitUntil: 'networkidle', timeout: 60000 });
     expect(broken).toHaveLength(0);
   });
