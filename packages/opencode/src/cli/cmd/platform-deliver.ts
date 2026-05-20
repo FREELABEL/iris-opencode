@@ -217,7 +217,7 @@ export const DeliverCarouselCommand = cmd({
     let resolvedTaskIds: number[] = []
     let textItems: string[] = []
     let brandOverrides: Record<string, string> = {}
-    const builtIn = ["freelabel", "discover", "heyiris", "beatbox", "emc_radio", "capital_collective"]
+    const builtIn = ["freelabel", "discover", "heyiris", "beatbox", "emc_radio", "capital_collective", "vanguard"]
     const mode = (args.mode as string) === "recruit" ? "recruit" : "feature"
 
     if (args.props) {
