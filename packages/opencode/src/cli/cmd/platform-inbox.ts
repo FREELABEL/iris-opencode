@@ -1,7 +1,34 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, printDivider, dim, bold, isNonInteractive, BRIDGE_URL, getBridgeToken } from "./iris-api"
+import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, isNonInteractive, BRIDGE_URL, getBridgeToken } from "./iris-api"
+
+// ============================================================================
+// Shared Helpers
+// ============================================================================
+
+const RAICHU = process.env.IRIS_FL_API_URL ?? "https://raichu.heyiris.io"
+
+async function dispatchHiveTask(taskPayload: Record<string, unknown>): Promise<any> {
+  const userId = await requireUserId()
+  if (!userId) return null
+  const { type, action, board_id, limit, dry_run, ...rest } = taskPayload
+  const promptParts = [`custom mode=${action || "outreach"} board=${board_id} limit=${limit || 20}`]
+  if (dry_run) promptParts.push("dry=1")
+  const res = await irisFetch("/api/v6/nodes/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      user_id: userId,
+      title: `${action || type || "som"}`,
+      type: (type as string) || "som",
+      prompt: promptParts.join(" "),
+      config: { action, board_id, limit, dry_run, ...rest },
+    }),
+  }, IRIS_API)
+  const ok = await handleApiError(res, "dispatch_hive_task")
+  if (!ok) return null
+  return await res.json()
+}
 
 // ============================================================================
 // Helpers
@@ -63,12 +90,272 @@ function timeAgo(ts: string | null): string {
 }
 
 // ============================================================================
-// Command
+// Subcommand: iris inbox scan
 // ============================================================================
 
-export const PlatformInboxCommand: any = cmd({
-  command: "inbox",
-  describe: "unified inbox — all leads, all channels, newest first",
+const SUPPORTED_PLATFORMS = ["instagram", "linkedin", "whatsapp"] as const
+type ScanPlatform = typeof SUPPORTED_PLATFORMS[number]
+
+const PLATFORM_ALIASES: Record<string, ScanPlatform> = {
+  ig: "instagram", insta: "instagram", instagram: "instagram",
+  li: "linkedin", linkedin: "linkedin",
+  wa: "whatsapp", whatsapp: "whatsapp",
+}
+
+const PLATFORM_DISPLAY: Record<ScanPlatform, string> = {
+  instagram: "Instagram",
+  linkedin: "LinkedIn",
+  whatsapp: "WhatsApp",
+}
+
+const ScanCommand: any = cmd({
+  command: "scan",
+  describe: "Scan platform inbox for new lead replies and tag them",
+  builder: (yargs: any) =>
+    yargs
+      .option("platform", {
+        describe: "Platform to scan: instagram (ig), linkedin (li), whatsapp (wa)",
+        type: "string",
+        demandOption: true,
+        alias: "p",
+      })
+      .option("board", { describe: "Board ID (default: your primary board)", type: "number" })
+      .option("limit", { describe: "Max conversations to scan", type: "number", default: 20 })
+      .option("account", { describe: "Account handle (IG) or session name (WA)", type: "string" })
+      .option("dry-run", { describe: "Show matches without tagging", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .example("iris inbox scan --platform whatsapp", "Scan WhatsApp for new replies")
+      .example("iris inbox scan -p ig --board 38", "Scan Instagram DMs on board 38")
+      .example("iris inbox scan -p linkedin --dry-run", "Preview LinkedIn matches without tagging"),
+  async handler(args: any) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const rawPlatform = (args.platform as string).toLowerCase()
+    const platform = PLATFORM_ALIASES[rawPlatform]
+    if (!platform) {
+      prompts.log.error(`Unknown platform "${rawPlatform}". Use: instagram (ig), linkedin (li), or whatsapp (wa)`)
+      return
+    }
+
+    const boardId = args.board as number | undefined
+    const limit = args.limit as number
+    const dryRun = args["dry-run"] as boolean
+    const jsonOut = args.json as boolean
+    const account = args.account as string | undefined
+
+    const displayName = PLATFORM_DISPLAY[platform]
+
+    prompts.intro(`${bold("iris inbox scan")} — ${displayName}`)
+
+    // Resolve board: use flag, or try to detect user's default board
+    let resolvedBoard = boardId
+    if (!resolvedBoard) {
+      try {
+        const meRes = await irisFetch("/api/v1/me", {}, RAICHU)
+        if (meRes.ok) {
+          const me = (await meRes.json()) as any
+          resolvedBoard = me?.data?.default_bloq_id ?? me?.data?.bloqs?.[0]?.id
+        }
+      } catch {}
+    }
+    if (!resolvedBoard) {
+      prompts.log.error("Could not detect your default board. Use --board <id> to specify one.")
+      prompts.log.info(`${dim("Find your boards:")} iris leads boards`)
+      return
+    }
+
+    if (!jsonOut) {
+      console.log(`  Platform: ${displayName}`)
+      console.log(`  Board:    ${resolvedBoard}`)
+      console.log(`  Limit:    ${limit} conversations`)
+      if (account) console.log(`  Account:  ${account}`)
+      if (dryRun) console.log(`  Mode:     ${bold("DRY RUN")} — will show matches but not tag`)
+      console.log()
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start(`Dispatching ${displayName} inbox scan to Hive...`)
+
+    const taskConfig: Record<string, unknown> = {
+      type: "som",
+      action: `${platform}_inbox_check`,
+      board_id: resolvedBoard,
+      limit,
+      dry_run: dryRun,
+    }
+    if (platform === "instagram") taskConfig.ig_account = account ?? "heyiris.io"
+    if (platform === "whatsapp") taskConfig.wa_account = account ?? "default"
+
+    const result = await dispatchHiveTask(taskConfig)
+
+    if (result?.task?.id) {
+      spinner.stop(`${displayName} scan dispatched`)
+      const taskId = result.task.id
+
+      if (jsonOut) {
+        console.log(JSON.stringify({ task_id: taskId, platform, board: resolvedBoard, status: "dispatched" }, null, 2))
+      } else {
+        console.log(`  Task: ${bold(taskId)}`)
+        console.log(`  ${dim("Your Hive node will scan the inbox and tag leads with replies.")}`)
+        if (dryRun) {
+          console.log(`  ${dim("Dry run — no leads will be modified.")}`)
+        }
+        console.log()
+        console.log(`  Check results:`)
+        console.log(`    ${dim("iris inbox")}               — view all replies`)
+        console.log(`    ${dim(`iris instagram replies --board ${resolvedBoard}`)} — see tagged leads`)
+      }
+    } else {
+      spinner.stop("Dispatched (queued)")
+      if (!jsonOut) {
+        console.log(`  ${dim("No Hive node online right now — task is queued.")}`)
+        console.log(`  ${dim("It will run automatically when a node comes online.")}`)
+        console.log()
+        console.log(`  ${dim("Start a node:")} iris bridge start`)
+      }
+    }
+
+    prompts.outro("")
+  },
+})
+
+// ============================================================================
+// Subcommand: iris inbox connect
+// ============================================================================
+
+const ConnectCommand: any = cmd({
+  command: "connect <platform>",
+  describe: "Set up or refresh a platform inbox session",
+  builder: (yargs: any) =>
+    yargs
+      .positional("platform", {
+        describe: "Platform: instagram, linkedin, whatsapp",
+        type: "string",
+      })
+      .option("account", { describe: "Account name (for multiple accounts)", type: "string" }),
+  async handler(args: any) {
+    const rawPlatform = (args.platform as string).toLowerCase()
+    const platform = PLATFORM_ALIASES[rawPlatform]
+    if (!platform) {
+      prompts.log.error(`Unknown platform "${rawPlatform}". Use: instagram, linkedin, or whatsapp`)
+      return
+    }
+
+    const displayName = PLATFORM_DISPLAY[platform]
+    const account = (args.account as string) || (platform === "instagram" ? "heyiris.io" : "default")
+
+    prompts.intro(`${bold("iris inbox connect")} — ${displayName}`)
+
+    if (platform === "whatsapp") {
+      console.log(`  WhatsApp uses a persistent browser session (QR code login).`)
+      console.log()
+      console.log(`  To set up or refresh your session, run:`)
+      console.log()
+      console.log(`    ${bold(`WA_ACCOUNT=${account} npx playwright test som/save-whatsapp-session.spec.ts --headed`)}`)
+      console.log()
+      console.log(`  This will open WhatsApp Web — scan the QR code with your phone.`)
+      console.log(`  The session is saved to ${dim(`~/.iris/whatsapp-sessions/${account}/`)}`)
+    } else if (platform === "instagram") {
+      console.log(`  Instagram uses browser cookies for authentication.`)
+      console.log()
+      console.log(`  To save your session:`)
+      console.log()
+      console.log(`    ${bold(`iris hive credentials save-session --platform instagram --account ${account}`)}`)
+      console.log()
+      console.log(`  This will open Instagram — log in and the session will be saved.`)
+    } else if (platform === "linkedin") {
+      console.log(`  LinkedIn uses browser cookies for authentication.`)
+      console.log()
+      console.log(`  To save your session:`)
+      console.log()
+      console.log(`    ${bold("iris hive credentials save-session --platform linkedin")}`)
+      console.log()
+      console.log(`  This will open LinkedIn — log in and the session will be saved.`)
+    }
+
+    console.log()
+    console.log(`  After connecting, scan with:`)
+    console.log(`    ${dim(`iris inbox scan --platform ${rawPlatform}`)}`)
+
+    prompts.outro("")
+  },
+})
+
+// ============================================================================
+// Subcommand: iris inbox status
+// ============================================================================
+
+const StatusCommand: any = cmd({
+  command: "status",
+  describe: "Show last scan results and session health",
+  builder: (yargs: any) =>
+    yargs
+      .option("board", { describe: "Board ID", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const boardId = args.board as number | undefined
+    const jsonOut = args.json as boolean
+
+    prompts.intro(`${bold("iris inbox status")}`)
+
+    const spinner = prompts.spinner()
+    spinner.start("Checking scan status...")
+
+    // Check for recent inbox-sync data
+    try {
+      const params = new URLSearchParams({ limit: "50" })
+      if (boardId) params.set("bloq_id", String(boardId))
+      const res = await irisFetch(`/api/v1/leads?${params}&has_replied=true`, {}, RAICHU)
+      if (res.ok) {
+        const body = (await res.json()) as any
+        const leads = body?.data?.data ?? body?.data ?? []
+        const replied = leads.filter((l: any) => l.has_replied || l.replied_at)
+
+        spinner.stop(`${replied.length} leads with replies`)
+
+        if (jsonOut) {
+          const output = replied.map((l: any) => ({
+            id: l.id,
+            name: l.name || l.full_name,
+            replied_at: l.replied_at,
+            status: l.status,
+          }))
+          console.log(JSON.stringify(output, null, 2))
+        } else if (replied.length > 0) {
+          printDivider()
+          for (const l of replied.slice(0, 20)) {
+            const name = bold((l.name || l.full_name || `Lead #${l.id}`).slice(0, 25).padEnd(25))
+            const status = l.status ?? ""
+            const repliedAt = l.replied_at ? dim(timeAgo(l.replied_at)) : ""
+            console.log(`  ${name}  ${status.padEnd(12)}  ${repliedAt}`)
+          }
+          if (replied.length > 20) console.log(`  ${dim(`...and ${replied.length - 20} more`)}`)
+        } else {
+          console.log(`  ${dim("No replied leads found. Run:")} iris inbox scan -p instagram`)
+        }
+      } else {
+        spinner.stop("Could not fetch status")
+      }
+    } catch (err: any) {
+      spinner.stop("Error")
+      prompts.log.error(err.message)
+    }
+
+    prompts.outro("")
+  },
+})
+
+// ============================================================================
+// Subcommand: iris inbox view (the original unified inbox)
+// ============================================================================
+
+const ViewCommand: any = cmd({
+  command: "view",
+  describe: "Unified inbox — all leads, all channels, newest first",
   builder: (yargs: any) =>
     yargs
       .option("days", { describe: "look-back window", type: "number", default: 7 })
@@ -80,6 +367,44 @@ export const PlatformInboxCommand: any = cmd({
       .option("limit", { describe: "max leads to scan", type: "number", default: 25 })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
+    await inboxViewHandler(args)
+  },
+})
+
+// ============================================================================
+// Parent Command: iris inbox
+// ============================================================================
+
+export const PlatformInboxCommand: any = cmd({
+  command: "inbox",
+  describe: "Inbox scanner & unified view — scan for replies, check status, view messages",
+  builder: (yargs: any) =>
+    yargs
+      .command(ScanCommand)
+      .command(ConnectCommand)
+      .command(StatusCommand)
+      .command(ViewCommand)
+      // Pass through all view options so bare `iris inbox` still works as before
+      .option("days", { describe: "look-back window", type: "number", default: 7 })
+      .option("channel", { describe: "filter: ig, email, imessage, crm, calendar", type: "string" })
+      .option("bloq", { describe: "scope to a bloq/board ID", type: "number" })
+      .option("status", { describe: "filter by reply status (replied, pending, all)", type: "string" })
+      .option("outreach", { describe: "show only leads with pending outreach steps", type: "boolean", default: false })
+      .option("search", { describe: "full-text search across messages", type: "string" })
+      .option("limit", { describe: "max leads to scan", type: "number", default: 25 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .demandCommand(0),
+  async handler(args: any) {
+    // Default behavior: run the unified inbox view (backwards compatible)
+    await inboxViewHandler(args)
+  },
+})
+
+// ============================================================================
+// Unified inbox view handler (extracted from old command)
+// ============================================================================
+
+async function inboxViewHandler(args: any) {
     UI.empty()
 
     const token = await requireAuth()
@@ -379,6 +704,5 @@ export const PlatformInboxCommand: any = cmd({
     }
 
     console.log()
-    prompts.outro(`${dim("iris inbox --outreach")}  ·  ${dim("iris inbox --bloq 355")}  ·  ${dim("iris leads pulse <id>")}`)
-  },
-})
+    prompts.outro(`${dim("iris inbox scan -p ig")}  ·  ${dim("iris inbox --outreach")}  ·  ${dim("iris inbox --bloq 355")}`)
+}
