@@ -37,6 +37,7 @@ import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
 import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
+import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
 import { PlatformLinkedInCommand } from "./cli/cmd/platform-linkedin"
 import { PlatformInstagramCommand } from "./cli/cmd/platform-instagram"
@@ -59,6 +60,7 @@ import { PlatformProductsCommand } from "./cli/cmd/platform-products"
 import { PlatformEventsCommand } from "./cli/cmd/platform-events"
 import { PlatformVenuesCommand } from "./cli/cmd/platform-venues"
 import { PlatformProgramsCommand } from "./cli/cmd/platform-programs"
+import { PlatformMagazineCommand } from "./cli/cmd/platform-magazine"
 import { PlatformRemotionCommand } from "./cli/cmd/platform-remotion"
 import { PlatformReleaseCommand } from "./cli/cmd/platform-release"
 import { PlatformHiveCommand } from "./cli/cmd/platform-hive"
@@ -73,7 +75,7 @@ import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
 import { PlatformPaymentsCommand } from "./cli/cmd/platform-payments"
 import { PlatformRevenueCommand } from "./cli/cmd/platform-revenue"
-import { PlatformDeliverCommand } from "./cli/cmd/platform-deliver"
+import { PlatformDeliverCommand, DeliverCarouselCommand } from "./cli/cmd/platform-deliver"
 import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedCommand, PlatformListAvailableCommand } from "./cli/cmd/platform-run"
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
@@ -129,6 +131,7 @@ import { PlatformClaudeCommand } from "./cli/cmd/platform-claude"
 import { PlatformArticleQaCommand } from "./cli/cmd/platform-article-qa"
 import { PlatformMsgCommand } from "./cli/cmd/platform-msg"
 import { PlatformAffiliatesCommand } from "./cli/cmd/platform-affiliates"
+import { PlatformSkillCommand } from "./cli/cmd/platform-skill"
 import { GuideCommand } from "./cli/cmd/guide"
 import { registerCommand } from "./cli/cmd/command-groups"
 import { renderGroupedHelp } from "./cli/help-renderer"
@@ -227,6 +230,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformBloqsCommand))
   .command(reg(PlatformBrandsCommand))
   .command(reg(PlatformCopycatCommand))
+  .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
   .command(reg(PlatformLinkedInCommand))
   .command(reg(PlatformInstagramCommand))
@@ -249,6 +253,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformEventsCommand))
   .command(reg(PlatformVenuesCommand))
   .command(reg(PlatformProgramsCommand))
+  .command(reg(PlatformMagazineCommand))
   .command(reg(PlatformRemotionCommand))
   .command(reg(PlatformReleaseCommand))
   .command(reg(PlatformHiveCommand))
@@ -265,6 +270,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformInvoicesCommand))
   .command(reg(PlatformPaymentsCommand))
   .command(reg(PlatformRevenueCommand))
+  .command(reg(DeliverCarouselCommand))
   .command(reg(PlatformDeliverCommand))
   .command(reg(PlatformRunCommand))
   .command(reg(PlatformTranscribeCommand))
@@ -325,6 +331,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformArticleQaCommand))
   .command(reg(PlatformMsgCommand))
   .command(reg(PlatformAffiliatesCommand))
+  .command(reg(PlatformSkillCommand))
   .fail((msg) => {
     if (
       msg.startsWith("Unknown argument") ||
