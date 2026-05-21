@@ -228,15 +228,25 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
 // Variable Interpolation
 // ============================================================================
 
+/**
+ * Escape a string for safe inclusion in a single-quoted bash string.
+ * Replaces ' with '\'' (end quote, escaped quote, start quote).
+ */
+export function shellEscape(s: string): string {
+  return s.replace(/'/g, "'\\''")
+}
+
 export function interpolate(
   template: string,
   args: Record<string, unknown>,
   stepResults: Record<string, StepResult>,
+  shellSafe = false,
 ): string {
+  const escape = shellSafe ? shellEscape : (s: string) => s
   return template.replace(/\$\{\{(\s*[\w.\-]+\s*)\}\}/g, (_match, expr: string) => {
     const path = expr.trim().split(".")
     if (path[0] === "args" && path.length === 2) {
-      return String(args[path[1]] ?? "")
+      return escape(String(args[path[1]] ?? ""))
     }
     if (path[0] === "steps" && path.length === 3) {
       const stepId = path[1]
@@ -252,8 +262,7 @@ export function interpolate(
     }
     return ""
   })
-    // Backward compat: $ARGUMENTS
-    .replace(/\$ARGUMENTS/g, String(args._raw ?? ""))
+    .replace(/\$ARGUMENTS/g, escape(String(args._raw ?? "")))
 }
 
 // ============================================================================
@@ -637,7 +646,9 @@ export async function executeSkill(
     opts.onStepStart?.(step)
 
     // Interpolate code and body
-    const interpolatedCode = step.code ? interpolate(step.code, rawArgs, stepResults) : null
+    // Shell mode uses shellSafe=true to escape args (prevents injection from CLI-supplied values)
+    const isShell = step.mode === "shell"
+    const interpolatedCode = step.code ? interpolate(step.code, rawArgs, stepResults, isShell) : null
     const interpolatedBody = interpolate(step.body, rawArgs, stepResults)
 
     // Confirmation gate
