@@ -8024,7 +8024,16 @@ function findRecentWebm(searchDir: string): string {
  * Convert a webm to MP4 via ffmpeg. Falls back to copying webm if ffmpeg unavailable.
  */
 function convertToMp4(webmFile: string, mp4Path: string): { mp4Path: string | null; webmPath: string | null } {
-  const { copyFileSync } = require("fs")
+  const { copyFileSync, existsSync: fsExists } = require("fs")
+
+  // Ensure source file still exists (Playwright may clean up failed test artifacts)
+  if (!fsExists(webmFile)) {
+    return { mp4Path: null, webmPath: null }
+  }
+
+  // Ensure output directory exists
+  mkdirSync(require("path").dirname(mp4Path), { recursive: true })
+
   const ff = spawnSync("ffmpeg", [
     "-y", "-i", webmFile,
     "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-movflags", "+faststart",
@@ -8034,9 +8043,13 @@ function convertToMp4(webmFile: string, mp4Path: string): { mp4Path: string | nu
   if (ff.status === 0) {
     return { mp4Path, webmPath: null }
   } else {
-    const webmOut = mp4Path.replace(/\.mp4$/, ".webm")
-    copyFileSync(webmFile, webmOut)
-    return { mp4Path: null, webmPath: webmOut }
+    try {
+      const webmOut = mp4Path.replace(/\.mp4$/, ".webm")
+      copyFileSync(webmFile, webmOut)
+      return { mp4Path: null, webmPath: webmOut }
+    } catch {
+      return { mp4Path: null, webmPath: null }
+    }
   }
 }
 
@@ -9801,12 +9814,14 @@ export const LeadsSegmentCommand = cmd({
 // ============================================================================
 
 function generateRequirementSpec(leadName: string, leadId: number, url: string): string {
+  // Extract slug from URL for unique describe block titles
+  const slug = url.replace(/.*\/p\//, "").replace(/[?#].*/, "") || url
   return `// Auto-generated requirements for: ${leadName} (#${leadId})
 // URL: ${url}
 // Generated: ${new Date().toISOString().split("T")[0]}
 import { test, expect } from '@playwright/test';
 
-test.describe('${leadName} — Requirements', () => {
+test.describe('QA: ${slug}', () => {
   const URL = '${url}';
 
   test('site loads (HTTP < 400)', async ({ page }) => {
