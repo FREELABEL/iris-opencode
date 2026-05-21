@@ -41,6 +41,10 @@ function findLocalFile(dir: string, type: string, id: number | string): string |
   return existsSync(full) ? full : undefined
 }
 
+function stripHtml(s: string): string {
+  return s.replace(/<[^>]*>/g, "").trim()
+}
+
 function detectContentType(url: string): { type: string; mediaId?: string } {
   if (/youtube\.com|youtu\.be/.test(url)) {
     const id = url.match(/(?:v=|\/live\/|youtu\.be\/|\/shorts\/|\/embed\/)([^?&#]+)/)?.[1]
@@ -59,9 +63,12 @@ async function resolveProfileId(
   nameOrPk: string,
   userId: number,
 ): Promise<{ pk: number; name: string } | null> {
-  // Numeric = exact pk
-  if (/^\d+$/.test(nameOrPk)) {
+  // Numeric = exact pk (must be positive)
+  if (/^\d+$/.test(nameOrPk) && Number(nameOrPk) > 0) {
     return { pk: Number(nameOrPk), name: `Profile #${nameOrPk}` }
+  }
+  if (/^\d+$/.test(nameOrPk) && Number(nameOrPk) === 0) {
+    return null
   }
   // Search by name
   const params = new URLSearchParams({ search: nameOrPk })
@@ -303,6 +310,10 @@ const UploadCommand = cmd({
         metaSpinner.stop("Metadata fetch failed", 1)
       }
     }
+
+    // Sanitize inputs — strip HTML to prevent XSS
+    title = stripHtml(title)
+    description = stripHtml(description)
 
     if (!title) {
       prompts.log.error("Title is required. Use --title or provide a YouTube URL for auto-detection.")
