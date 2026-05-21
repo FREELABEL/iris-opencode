@@ -8560,9 +8560,9 @@ const LeadsReviewCommand = cmd({
         // Phase 4: Create link deliverables for each page (deduplicated, with requirement_id)
         if (matchingPages.length > 0) {
           const existingDelRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables`)
-          const existingDelData = existingDelRes.ok ? ((await existingDelRes.json()) as any) : { data: [] }
-          const existingDels = existingDelData.data || []
-          const existingUrls = new Set(existingDels.map((d: any) => d.external_url).filter(Boolean))
+          const existingDelData = existingDelRes.ok ? ((await existingDelRes.json()) as any) : { data: { deliverables: [] } }
+          const existingDels = existingDelData.data?.deliverables || existingDelData.data || []
+          const existingUrls = new Set((Array.isArray(existingDels) ? existingDels : []).map((d: any) => d.external_url).filter(Boolean))
 
           spinner.start("Creating link deliverables...")
           let pagesAdded = 0
