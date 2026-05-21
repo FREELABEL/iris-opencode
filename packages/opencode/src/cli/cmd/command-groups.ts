@@ -127,8 +127,8 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   personality: "agents",
   recall: "knowledge",
 
-  // Skills & Workflows
-  skill: "agents",
+  // Playbooks & Workflows
+  playbook: "agents",
 
   // Integrations & Tools
   integrations: "integrations",

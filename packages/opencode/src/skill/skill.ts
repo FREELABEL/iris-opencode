@@ -39,8 +39,10 @@ export namespace Skill {
     }),
   )
 
-  const OPENCODE_SKILL_GLOB = new Bun.Glob("{skill,skills}/**/SKILL.md")
+  // Scan patterns — playbooks first (new), then skills (legacy)
+  const PLAYBOOK_GLOB = new Bun.Glob("playbooks/**/PLAYBOOK.md")
   const CLAUDE_SKILL_GLOB = new Bun.Glob("skills/**/SKILL.md")
+  const OPENCODE_SKILL_GLOB = new Bun.Glob("{skill,skills}/**/SKILL.md")
 
   export const state = Instance.state(async () => {
     const skills: Record<string, Info> = {}
@@ -54,13 +56,9 @@ export namespace Skill {
       const parsed = Info.pick({ name: true, description: true }).safeParse(md.data)
       if (!parsed.success) return
 
-      // Warn on duplicate skill names
+      // First-found wins (playbooks scanned before skills = playbook takes priority)
       if (skills[parsed.data.name]) {
-        log.warn("duplicate skill name", {
-          name: parsed.data.name,
-          existing: skills[parsed.data.name].location,
-          duplicate: match,
-        })
+        return
       }
 
       skills[parsed.data.name] = {
@@ -70,47 +68,42 @@ export namespace Skill {
       }
     }
 
-    // Scan .claude/skills/ directories (project-level)
-    const claudeDirs = await Array.fromAsync(
-      Filesystem.up({
-        targets: [".claude"],
-        start: Instance.directory,
-        stop: Instance.worktree,
-      }),
-    )
-    // Also include global ~/.claude/skills/
-    const globalClaude = `${Global.Path.home}/.claude`
-    if (await exists(globalClaude)) {
-      claudeDirs.push(globalClaude)
-    }
-
-    for (const dir of claudeDirs) {
-      const matches = await Array.fromAsync(
-        CLAUDE_SKILL_GLOB.scan({
-          cwd: dir,
-          absolute: true,
-          onlyFiles: true,
-          followSymlinks: true,
-          dot: true,
-        }),
-      ).catch((error) => {
-        log.error("failed .claude directory scan for skills", { dir, error })
-        return []
-      })
-
-      for (const match of matches) {
-        await addSkill(match)
+    // Helper to scan a glob inside multiple directories
+    const scanGlob = async (glob: InstanceType<typeof Bun.Glob>, dirs: string[]) => {
+      for (const dir of dirs) {
+        const matches = await Array.fromAsync(
+          glob.scan({ cwd: dir, absolute: true, onlyFiles: true, followSymlinks: true, dot: true }),
+        ).catch(() => [])
+        for (const match of matches) {
+          await addSkill(match)
+        }
       }
     }
 
-    // Scan .opencode/skill/ directories
+    // Collect project-level directories (walk up from cwd to worktree root)
+    const irisDirs: string[] = []
+    const claudeDirs: string[] = []
+
+    for await (const dir of Filesystem.up({ targets: [".iris"], start: Instance.directory, stop: Instance.worktree })) {
+      irisDirs.push(dir)
+    }
+    for await (const dir of Filesystem.up({ targets: [".claude"], start: Instance.directory, stop: Instance.worktree })) {
+      claudeDirs.push(dir)
+    }
+
+    // Global dirs
+    const globalIris = `${Global.Path.home}/.iris`
+    if (await exists(globalIris)) irisDirs.push(globalIris)
+    const globalClaude = `${Global.Path.home}/.claude`
+    if (await exists(globalClaude)) claudeDirs.push(globalClaude)
+
+    // Scan in priority order: playbooks first, then skills (first-found wins)
+    await scanGlob(PLAYBOOK_GLOB, irisDirs)       // 1. .iris/playbooks/**/PLAYBOOK.md
+    await scanGlob(CLAUDE_SKILL_GLOB, claudeDirs)  // 2. .claude/skills/**/SKILL.md (legacy)
+
+    // Scan .opencode/skill/ directories (lowest priority)
     for (const dir of await Config.directories()) {
-      for await (const match of OPENCODE_SKILL_GLOB.scan({
-        cwd: dir,
-        absolute: true,
-        onlyFiles: true,
-        followSymlinks: true,
-      })) {
+      for await (const match of OPENCODE_SKILL_GLOB.scan({ cwd: dir, absolute: true, onlyFiles: true, followSymlinks: true })) {
         await addSkill(match)
       }
     }

@@ -133,7 +133,7 @@ import { PlatformClaudeCommand } from "./cli/cmd/platform-claude"
 import { PlatformArticleQaCommand } from "./cli/cmd/platform-article-qa"
 import { PlatformMsgCommand } from "./cli/cmd/platform-msg"
 import { PlatformAffiliatesCommand } from "./cli/cmd/platform-affiliates"
-import { PlatformSkillCommand } from "./cli/cmd/platform-skill"
+import { PlatformPlaybookCommand, PlatformSkillCommand } from "./cli/cmd/platform-playbook"
 import { GuideCommand } from "./cli/cmd/guide"
 import { registerCommand } from "./cli/cmd/command-groups"
 import { renderGroupedHelp } from "./cli/help-renderer"
@@ -333,7 +333,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformArticleQaCommand))
   .command(reg(PlatformMsgCommand))
   .command(reg(PlatformAffiliatesCommand))
-  .command(reg(PlatformSkillCommand))
+  .command(reg(PlatformPlaybookCommand))
+  .command(PlatformSkillCommand) // hidden alias for backward compat
   .fail((msg) => {
     if (
       msg.startsWith("Unknown argument") ||

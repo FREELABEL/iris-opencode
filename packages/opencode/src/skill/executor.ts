@@ -24,7 +24,7 @@ export interface ArgDef {
 export interface StepDef {
   id: string
   title: string
-  mode: "shell" | "ai" | "hive" | "skill" | "manual"
+  mode: "shell" | "ai" | "hive" | "hive-script" | "skill" | "manual" | "bloq-workflow" | "cloud-workflow" | "n8n" | "ai-graph" | "schedule"
   body: string
   code: string | null
   confirm: boolean
@@ -36,6 +36,10 @@ export interface StepDef {
   node: string | null
   skillRef: string | null
   skillArgs: string | null
+  workflowId: string | null
+  webhook: string | null
+  cron: string | null
+  input: Record<string, any> | null
 }
 
 export interface SkillPlan {
@@ -176,8 +180,12 @@ export function parseSteps(markdownBody: string): StepDef[] {
       condition: meta.if ?? null,
       model: meta.model ?? null,
       node: meta.node ?? null,
-      skillRef: meta.skill ?? null,
+      skillRef: meta.skill ?? meta.playbook ?? null,
       skillArgs: meta.args != null ? String(meta.args) : null,
+      workflowId: meta.workflow_id ?? null,
+      webhook: meta.webhook ?? null,
+      cron: meta.cron ?? null,
+      input: (meta.input && typeof meta.input === "object") ? meta.input : null,
     })
   }
 
@@ -549,6 +557,70 @@ async function executeHive(
 }
 
 // ============================================================================
+// Standardized Error Format (all remote modes use this)
+// ============================================================================
+
+function formatModeError(mode: string, stepId: string, status: number, body: string): string {
+  return `[Step: ${stepId}] FAILED: ${mode} returned HTTP ${status} — ${body.slice(0, 500)}`
+}
+
+// ============================================================================
+// hive-script: Node.js script using IRIS SDK, dispatched to Hive node
+// ============================================================================
+
+async function executeHiveScript(
+  code: string,
+  plan: SkillPlan,
+  step: StepDef,
+  userId: number,
+): Promise<{ output: string; exit_code: number }> {
+  try {
+    const { hiveFetch } = await import("../cli/cmd/platform-hive-nodes")
+
+    const createRes = await hiveFetch("/api/v6/nodes/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: userId,
+        title: `playbook:${plan.name}/${step.id}`,
+        type: "hive_script",
+        prompt: code,
+        node_id: step.node ?? "default",
+        config: { timeout_seconds: plan.timeout },
+        timeout_seconds: plan.timeout,
+      }),
+    })
+
+    if (!createRes.ok) {
+      const body = await createRes.text()
+      return { output: formatModeError("hive-script", step.id, createRes.status, body), exit_code: 1 }
+    }
+
+    const created = (await createRes.json()) as { task: { id: string; status: string } }
+    const taskId = created.task.id
+    const deadline = Date.now() + (plan.timeout + 30) * 1000
+    const terminal = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
+
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const r = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
+      if (!r.ok) continue
+      const body = (await r.json()) as { task: any }
+      const t = body.task
+      if (terminal.has(t.status)) {
+        const result = t.result ?? {}
+        const output = result.output ?? result.stdout ?? ""
+        return { output, exit_code: t.status === "succeeded" || t.status === "completed" ? 0 : 1 }
+      }
+    }
+
+    return { output: `[Step: ${step.id}] FAILED: hive-script task ${taskId} timed out`, exit_code: 124 }
+  } catch (e: any) {
+    return { output: `[Step: ${step.id}] FAILED: hive-script error — ${e.message}`, exit_code: 1 }
+  }
+}
+
+// ============================================================================
 // Main Executor
 // ============================================================================
 
@@ -727,7 +799,22 @@ export async function executeSkill(
           break
         }
 
-        case "skill": {
+        case "hive-script": {
+          // Node.js script using IRIS SDK, dispatched to a Hive node
+          const { resolveUserId: resolveUid } = await import("../cli/cmd/iris-api")
+          const uid = await resolveUid()
+          if (!uid) {
+            lastResult = { output: "Not authenticated — cannot dispatch to Hive", exit_code: 1 }
+          } else if (!interpolatedCode) {
+            lastResult = { output: "[Step: " + step.id + "] FAILED: hive-script step has no code block", exit_code: 1 }
+          } else {
+            lastResult = await executeHiveScript(interpolatedCode, plan, step, uid)
+          }
+          break
+        }
+
+        case "skill":
+        case "playbook": {
           if (!step.skillRef) {
             lastResult = { output: "No skill reference specified", exit_code: 1 }
             break
@@ -877,11 +964,15 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
       issues.push({ level: "error", message: "Shell step has no code block", stepId: step.id })
     }
 
+    if (step.mode === "hive-script" && !step.code) {
+      issues.push({ level: "error", message: "hive-script step has no code block (needs a JS script)", stepId: step.id })
+    }
+
     if (step.mode === "ai" && !step.body && !step.code) {
       issues.push({ level: "error", message: "AI step has no prompt body", stepId: step.id })
     }
 
-    if (step.mode === "skill" && !step.skillRef) {
+    if ((step.mode === "skill" || step.mode === "playbook") && !step.skillRef) {
       issues.push({ level: "error", message: "Skill step has no skill reference", stepId: step.id })
     }
 
@@ -892,7 +983,7 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
 
   // Check for circular skill references
   for (const step of plan.steps) {
-    if (step.mode === "skill" && step.skillRef === plan.name) {
+    if ((step.mode === "skill" || step.mode === "playbook") && step.skillRef === plan.name) {
       issues.push({ level: "error", message: "Circular self-reference detected", stepId: step.id })
     }
   }
