@@ -8566,9 +8566,11 @@ const LeadsReviewCommand = cmd({
 
           spinner.start("Creating link deliverables...")
           let pagesAdded = 0
+          let pagesSkipped = 0
+          let pagesFailed = 0
           for (const p of matchingPages) {
             const pageUrl = `https://freelabel.net/p/${p.slug}`
-            if (existingUrls.has(pageUrl)) continue
+            if (existingUrls.has(pageUrl)) { pagesSkipped++; continue }
             const body: Record<string, any> = {
               type: "link",
               title: p.title || p.slug,
@@ -8577,14 +8579,34 @@ const LeadsReviewCommand = cmd({
             // Link deliverable to its requirement (exact slug match)
             const matchingReq = requirementsWithScripts.find(r => r.name?.toLowerCase() === `qa: ${p.slug.toLowerCase()}`)
             if (matchingReq) body.requirement_id = matchingReq.id
-            const addRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables`, {
+            let addRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(body),
             })
-            if (addRes.ok) pagesAdded++
+            // Retry without requirement_id if column doesn't exist yet (migration pending)
+            if (!addRes.ok && body.requirement_id) {
+              const { requirement_id: _, ...bodyWithout } = body
+              addRes = await irisFetch(`/api/v1/leads/${leadId}/deliverables`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(bodyWithout),
+              })
+            }
+            if (addRes.ok) {
+              pagesAdded++
+            } else {
+              pagesFailed++
+              if (pagesFailed === 1) {
+                const errBody = await addRes.json().catch(() => ({}))
+                console.log(dim(`  Deliverable create failed (${addRes.status}): ${(errBody as any).message || addRes.statusText}`))
+              }
+            }
           }
-          spinner.stop(success(`${pagesAdded} new page deliverables (${matchingPages.length - pagesAdded} already existed)`))
+          const parts = [`${pagesAdded} new`]
+          if (pagesSkipped > 0) parts.push(`${pagesSkipped} existed`)
+          if (pagesFailed > 0) parts.push(`${pagesFailed} failed`)
+          spinner.stop(pagesAdded > 0 || pagesSkipped > 0 ? success(parts.join(", ")) : dim(parts.join(", ")))
         }
 
         // Phase 5: Pulse check
