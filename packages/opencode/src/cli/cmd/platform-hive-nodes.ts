@@ -10,7 +10,7 @@ import { irisFetch, requireAuth, requireUserId, dim, bold, success } from "./iri
 
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
 
-async function hiveFetch(path: string, options: RequestInit = {}) {
+export async function hiveFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
 }
 
@@ -44,14 +44,14 @@ function timeAgo(iso: string | null | undefined): string {
   return `${Math.floor(ms / 86_400_000)}d ago`
 }
 
-async function fetchNodes(userId: number): Promise<HiveNode[]> {
+export async function fetchNodes(userId: number): Promise<HiveNode[]> {
   const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}`)
   if (!res.ok) throw new Error(`Failed to fetch nodes: ${res.status} ${await res.text()}`)
   const data = (await res.json()) as { nodes: HiveNode[] }
   return data.nodes ?? []
 }
 
-async function resolveNode(userId: number, target: string): Promise<HiveNode | null> {
+export async function resolveNode(userId: number, target: string): Promise<HiveNode | null> {
   const nodes = await fetchNodes(userId)
   // Exact ID match first, then name (case-insensitive), then prefix
   return (

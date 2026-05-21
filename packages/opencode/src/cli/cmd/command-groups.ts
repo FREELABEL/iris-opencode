@@ -81,6 +81,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   som: "crm",
   invoices: "crm",
   deliver: "crm",
+  "deliver:carousel": "crm",
 
   // Atlas OS
   "atlas:ledger": "atlas",
@@ -145,15 +146,20 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   programs: "entities",
   discover: "entities",
   opportunities: "entities",
+  bounty: "entities",
+  bounties: "entities",
   tutorials: "entities",
   packages: "entities",
   profile: "entities",
+  magazine: "entities",
+  mag: "entities",
 
   // Communication
   msg: "communication",
   obs: "communication",
   phone: "communication",
   voice: "communication",
+  download: "communication",
   transcribe: "communication",
   mail: "communication",
   imessage: "communication",

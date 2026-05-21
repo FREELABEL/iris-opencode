@@ -16,7 +16,7 @@ const RAICHU = process.env.IRIS_FL_API_URL ?? process.env.FL_API_URL ?? "https:/
 const INLINE_CAMPAIGNS: Record<string, { board: number; strategy: string; ig: string; label: string; audience: string }> = {
   courses:      { board: 38,  strategy: "AI Course | V3",                  ig: "heyiris.io",        label: "AI Course Outreach",    audience: "AI builders, tech founders" },
   creators:     { board: 80,  strategy: "Creator Outreach | V1",           ig: "thediscoverpage_",  label: "Creator Outreach",      audience: "Artists, creators, hip-hop culture" },
-  beatbox:      { board: 224, strategy: "DJ Outreach | V2",                ig: "thebeatbox__",      label: "DJ Outreach",           audience: "DJs, producers, beatmakers" },
+  beatbox:      { board: 224, strategy: "DJ Outreach | V3",                ig: "thebeatbox__",      label: "DJ Outreach",           audience: "DJs, producers, beatmakers" },
   mayo:         { board: 176, strategy: "Mayo Outreach | V2",              ig: "hourdemayo",        label: "Mayo Outreach",         audience: "Creators, influencers, foodies" },
   venues:       { board: 292, strategy: "Venue Partnership | V1",          ig: "freelabelnet",      label: "Venue Partnership",     audience: "Cafes, venues, event spaces" },
   freelabelnet: { board: 355, strategy: "Artist Outreach | FFAT V1",       ig: "freelabelnet",      label: "FFAT Artists (Austin)", audience: "Visual artists, muralists, performers" },
@@ -138,7 +138,13 @@ const SomOverviewCommand = cmd({
         continue
       }
 
+      const stats = (strat.metadata as any)?.stats ?? {}
+      const replyRate = stats.reply_rate != null ? `${stats.reply_rate}%` : "-"
+      const convRate = stats.conversion_rate != null ? `${stats.conversion_rate}%` : "-"
+      const sent = stats.sent ?? 0
+      const statsLine = sent > 0 ? `  ${dim(`Sent: ${sent}  |  Reply: ${replyRate}  |  Conv: ${convRate}`)}` : ""
       console.log(`  Strategy: ${strat.name} (id:${strat.id}, ${strat.usage_count ?? 0} uses)`)
+      if (statsLine) console.log(statsLine)
 
       const steps = (strat.steps ?? []) as any[]
       if (steps.length === 0) {

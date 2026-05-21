@@ -704,12 +704,15 @@ export namespace Provider {
           "gpt-4o-mini": makeIrisModel("gpt-4o-mini", "GPT-4o Mini"),
           "gpt-4.1-nano": makeIrisModel("gpt-4.1-nano", "GPT-4.1 Nano"),
           "gpt-5-nano": makeIrisModel("gpt-5-nano", "GPT-5 Nano"),
+          "gpt-5.4-nano": makeIrisModel("gpt-5.4-nano", "GPT-5.4 Nano"),
           "do-120b": makeIrisModel("do-120b", "DO GPT-OSS 120B", { toolcall: false }),
           "do-20b": makeIrisModel("do-20b", "DO GPT-OSS 20B", { toolcall: false }),
           "qwen3-32b": makeIrisModel("qwen3-32b", "Qwen3 32B"),
           "qwen3-coder": makeIrisModel("qwen3-coder", "Qwen3 Coder Flash"),
           "gemma-4": makeIrisModel("gemma-4", "Gemma 4", { toolcall: false }),
           "ministral-14b": makeIrisModel("ministral-14b", "Ministral 14B", { toolcall: false }),
+          "deepseek-v4": makeIrisModel("deepseek-v4", "DeepSeek V4 Pro"),
+          "qwen3.5-397b": makeIrisModel("qwen3.5-397b", "Qwen3.5 397B MoE"),
         },
       }
     }

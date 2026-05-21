@@ -818,6 +818,98 @@ const BloqsAddItemCommand = cmd({
   },
 })
 
+const BloqsDeleteItemCommand = cmd({
+  command: "delete-item <item-id>",
+  aliases: ["rm-item", "remove-item"],
+  describe: "delete an item from a bloq list (soft delete, recoverable)",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID to delete", type: "number", demandOption: true })
+      .option("force", { describe: "skip confirmation", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Delete Item #${args["item-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    if (!args.force && !isNonInteractive()) {
+      const confirmed = await prompts.confirm({ message: "Delete this item? (soft delete — recoverable)" })
+      if (prompts.isCancel(confirmed) || !confirmed) { prompts.outro("Cancelled"); return }
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Deleting item…")
+
+    try {
+      const res = await irisFetch(
+        `/api/v1/user/bloqs/list/item/${args["item-id"]}`,
+        { method: "DELETE" },
+      )
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Delete item")
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Item deleted`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsMoveItemCommand = cmd({
+  command: "move-item <item-id> <target-list-id>",
+  describe: "move an item to a different list",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID to move", type: "number", demandOption: true })
+      .positional("target-list-id", { describe: "destination list ID", type: "number", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Move Item #${args["item-id"]} → List #${args["target-list-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Moving item…")
+
+    try {
+      const res = await irisFetch(
+        `/api/v1/user/bloqs/list/item/${args["item-id"]}`,
+        { method: "PUT", body: JSON.stringify({ bloq_list_id: args["target-list-id"] }) },
+      )
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Move item")
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Item moved to list #${args["target-list-id"]}`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const BloqsComposeCommand = cmd({
   command: "compose",
   describe: "create a knowledge base with AI-assisted structure",
@@ -1091,7 +1183,7 @@ function formatBytes(bytes: number): string {
 
 export const PlatformBloqsCommand = cmd({
   command: "bloqs",
-  aliases: ["kb", "knowledge", "memory", "projects"],
+  aliases: ["kb", "knowledge", "memory", "projects", "atlas"],
   describe: "manage knowledge bases (bloqs)",
   builder: (yargs) =>
     yargs
@@ -1100,6 +1192,8 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsCreateCommand)
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
+      .command(BloqsDeleteItemCommand)
+      .command(BloqsMoveItemCommand)
       .command(BloqsComposeCommand)
       .command(BloqsRenameCommand)
       .command(BloqsSearchCommand)

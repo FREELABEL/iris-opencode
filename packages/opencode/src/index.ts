@@ -108,6 +108,8 @@ import { PlatformBloqMembersCommand } from "./cli/cmd/platform-bloq-members"
 import { PlatformEvalCommand } from "./cli/cmd/platform-eval"
 import { PlatformSdkCallCommand } from "./cli/cmd/platform-sdk-call"
 import { PlatformDiaryCommand } from "./cli/cmd/platform-diary"
+// PlatformSkillsCommand (plural) is now merged into PlatformSkillCommand (singular)
+// Keep the old "skills" command as an alias that points to "skill remote"
 import { PlatformSkillsCommand } from "./cli/cmd/platform-skills"
 import { PlatformSopCommand } from "./cli/cmd/platform-sop"
 import { PlatformToolsCommand } from "./cli/cmd/platform-tools"
