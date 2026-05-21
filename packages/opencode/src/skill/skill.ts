@@ -8,6 +8,10 @@ import { Global } from "@/global"
 import { Filesystem } from "@/util/filesystem"
 import { exists } from "fs/promises"
 
+// Re-export v2 execution engine for convenience
+export { parsePlan, executeSkill, validatePlan, resolveArgs } from "./executor"
+export type { SkillPlan, StepDef, StepResult, SkillResult, ExecuteOptions } from "./executor"
+
 export namespace Skill {
   const log = Log.create({ service: "skill" })
   export const Info = z.object({
