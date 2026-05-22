@@ -127,7 +127,7 @@ function isDangerousCommand(code: string): boolean {
 // Parser
 // ============================================================================
 
-const STEP_HEADING = /^### step:(\S+)\s+(.+)$/gm
+const STEP_HEADING = /^### step:([\w-]+) +(.+)$/gm
 const FENCE = "\x60\x60\x60"  // three backticks, avoids bundler template literal issues
 const YAML_BLOCK_RE = new RegExp(`${FENCE}yaml\\n([\\s\\S]*?)${FENCE}`)
 const CODE_BLOCK_RE = new RegExp(`${FENCE}(\\w+)\\n([\\s\\S]*?)${FENCE}`)
@@ -185,7 +185,7 @@ export function parseSteps(markdownBody: string): StepDef[] {
       workflowId: meta.workflow_id != null ? String(meta.workflow_id) : null,
       webhook: meta.webhook ?? null,
       cron: meta.cron ?? null,
-      input: (meta.input && typeof meta.input === "object") ? meta.input : null,
+      input: (meta.input && typeof meta.input === "object" && !Array.isArray(meta.input)) ? meta.input : null,
     })
   }
 
@@ -711,6 +711,180 @@ async function executeCloudWorkflow(
 }
 
 // ============================================================================
+// n8n: webhook trigger or workflow API execution
+// ============================================================================
+
+async function executeN8n(
+  body: string,
+  step: StepDef,
+  timeoutMs: number,
+): Promise<{ output: string; exit_code: number }> {
+  try {
+    const n8nUrl = (process.env.N8N_URL ?? "http://localhost:5678").replace(/\/$/, "")
+
+    let url: string
+    let headers: Record<string, string> = { "Content-Type": "application/json" }
+
+    if (step.webhook) {
+      // Webhook mode — no auth needed (webhooks are public in n8n)
+      url = `${n8nUrl}${step.webhook}`
+    } else if (step.workflowId) {
+      // API mode — requires N8N_API_KEY
+      const apiKey = process.env.N8N_API_KEY
+      if (!apiKey) {
+        return { output: `[Step: ${step.id}] FAILED: n8n API mode requires N8N_API_KEY env var`, exit_code: 1 }
+      }
+      url = `${n8nUrl}/api/v1/workflows/${step.workflowId}/run`
+      headers["X-N8N-API-KEY"] = apiKey
+    } else {
+      return { output: `[Step: ${step.id}] FAILED: n8n step requires webhook or workflow_id`, exit_code: 1 }
+    }
+
+    const payload = step.input ?? (body ? { query: body } : {})
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+
+    if (!res.ok) {
+      const errBody = await res.text()
+      return { output: formatModeError("n8n", step.id, res.status, errBody), exit_code: 1 }
+    }
+
+    const data = await res.json()
+    return { output: JSON.stringify(data), exit_code: 0 }
+  } catch (e: any) {
+    return { output: `[Step: ${step.id}] FAILED: n8n error — ${e.message}`, exit_code: 1 }
+  }
+}
+
+// ============================================================================
+// langgraph: Python AI graphs via FastAPI
+// ============================================================================
+
+async function executeLanggraph(
+  body: string,
+  step: StepDef,
+  timeoutMs: number,
+): Promise<{ output: string; exit_code: number }> {
+  try {
+    const lgUrl = (process.env.LANGGRAPH_API_URL ?? "http://localhost:8001").replace(/\/$/, "")
+
+    const payload: Record<string, any> = {
+      workflow_id: step.workflowId ?? "basic_workflow",
+      input_data: step.input ?? { query: body },
+    }
+    if (step.model) payload.model = step.model
+
+    const res = await fetch(`${lgUrl}/execute-workflow`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+
+    if (!res.ok) {
+      const errBody = await res.text()
+      return { output: formatModeError("langgraph", step.id, res.status, errBody), exit_code: 1 }
+    }
+
+    const data = await res.json() as any
+    const executionId = data.execution_id
+
+    // If already complete
+    if (data.status === "success" || data.status === "completed") {
+      return { output: data.result?.ai_response ?? JSON.stringify(data.result ?? data), exit_code: 0 }
+    }
+    if (data.status === "error") {
+      return { output: `[Step: ${step.id}] FAILED: langgraph error — ${data.error ?? JSON.stringify(data)}`, exit_code: 1 }
+    }
+
+    // Poll for async result
+    if (executionId) {
+      const deadline = Date.now() + timeoutMs
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 2000))
+        const pollRes = await fetch(`${lgUrl}/workflow/${executionId}`, {
+          signal: AbortSignal.timeout(10000),
+        })
+        if (!pollRes.ok) continue
+        const pollData = await pollRes.json() as any
+        if (pollData.status === "success" || pollData.status === "completed") {
+          return { output: pollData.result?.ai_response ?? JSON.stringify(pollData.result ?? pollData), exit_code: 0 }
+        }
+        if (pollData.status === "error") {
+          return { output: `[Step: ${step.id}] FAILED: langgraph — ${pollData.error}`, exit_code: 1 }
+        }
+      }
+      return { output: `[Step: ${step.id}] FAILED: langgraph timed out (execution: ${executionId})`, exit_code: 124 }
+    }
+
+    return { output: data.result?.ai_response ?? JSON.stringify(data), exit_code: 0 }
+  } catch (e: any) {
+    return { output: `[Step: ${step.id}] FAILED: langgraph error — ${e.message}`, exit_code: 1 }
+  }
+}
+
+// ============================================================================
+// schedule: create a recurring cron trigger in bloq_scheduled_jobs
+// ============================================================================
+
+async function executeSchedule(
+  body: string,
+  step: StepDef,
+  plan: SkillPlan,
+): Promise<{ output: string; exit_code: number }> {
+  try {
+    const { irisFetch, IRIS_API } = await import("../cli/cmd/iris-api")
+    const { resolveUserId } = await import("../cli/cmd/iris-api")
+    const userId = await resolveUserId()
+    if (!userId) {
+      return { output: `[Step: ${step.id}] FAILED: not authenticated`, exit_code: 1 }
+    }
+
+    if (!step.cron) {
+      return { output: `[Step: ${step.id}] FAILED: schedule step requires cron expression`, exit_code: 1 }
+    }
+
+    const playbook = step.skillRef ?? plan.name
+    const payload = {
+      user_id: userId,
+      task_name: "hive_task_dispatch",
+      frequency: "custom",
+      prompt: `playbook:${playbook}`,
+      data: {
+        type: "hive_task_dispatch",
+        task_type: "playbook_run",
+        prompt: playbook,
+        args: step.input ?? {},
+        cron: step.cron,
+      },
+    }
+
+    const res = await irisFetch("/api/v1/campaign-templates", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }, IRIS_API)
+
+    if (!res.ok) {
+      const errBody = await res.text()
+      return { output: formatModeError("schedule", step.id, res.status, errBody), exit_code: 1 }
+    }
+
+    const data = await res.json() as any
+    const scheduleId = data.id ?? data.data?.id ?? "unknown"
+    return {
+      output: `Scheduled "${playbook}" with cron "${step.cron}" (ID: ${scheduleId})`,
+      exit_code: 0,
+    }
+  } catch (e: any) {
+    return { output: `[Step: ${step.id}] FAILED: schedule error — ${e.message}`, exit_code: 1 }
+  }
+}
+
+// ============================================================================
 // Main Executor
 // ============================================================================
 
@@ -926,6 +1100,24 @@ export async function executeSkill(
           break
         }
 
+        case "n8n": {
+          const n8nInput = step.input ? interpolateInput(step.input, rawArgs, stepResults) : null
+          lastResult = await executeN8n(interpolatedBody, { ...step, input: n8nInput }, plan.timeout * 1000)
+          break
+        }
+
+        case "langgraph": {
+          const lgInput = step.input ? interpolateInput(step.input, rawArgs, stepResults) : null
+          lastResult = await executeLanggraph(interpolatedBody, { ...step, input: lgInput }, plan.timeout * 1000)
+          break
+        }
+
+        case "schedule": {
+          const schedInput = step.input ? interpolateInput(step.input, rawArgs, stepResults) : null
+          lastResult = await executeSchedule(interpolatedBody, { ...step, input: schedInput }, plan)
+          break
+        }
+
         case "skill":
         case "playbook": {
           if (!step.skillRef) {
@@ -1091,12 +1283,28 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
       issues.push({ level: "error", message: `${step.mode} step requires workflow_id`, stepId: step.id })
     }
 
+    if (step.mode === "n8n" && !step.webhook && !step.workflowId) {
+      issues.push({ level: "error", message: "n8n step requires webhook or workflow_id", stepId: step.id })
+    }
+
+    if (step.mode === "langgraph" && !step.body && !step.input && !step.workflowId) {
+      issues.push({ level: "error", message: "langgraph step requires body, input, or workflow_id", stepId: step.id })
+    }
+
+    if (step.mode === "schedule" && !step.cron) {
+      issues.push({ level: "error", message: "schedule step requires cron expression", stepId: step.id })
+    }
+
     if (step.mode === "ai" && !step.body && !step.code) {
       issues.push({ level: "error", message: "AI step has no prompt body", stepId: step.id })
     }
 
     if ((step.mode === "skill" || step.mode === "playbook") && !step.skillRef) {
       issues.push({ level: "error", message: "Skill step has no skill reference", stepId: step.id })
+    }
+
+    if (typeof step.retry === "number" && step.retry < 0) {
+      issues.push({ level: "warning", message: `Negative retry (${step.retry}) — step will never execute`, stepId: step.id })
     }
 
     if (step.depends && !stepIds.has(step.depends) && !plan.steps.some((s) => s.id === step.depends)) {

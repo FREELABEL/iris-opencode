@@ -1516,3 +1516,585 @@ Please verify the deployment succeeded.
     expect(steps[3].mode).toBe("human")
   })
 })
+
+// ############################################################################
+//
+//  STRESS TEST BATTERY
+//
+//  Adversarial inputs, boundary conditions, type confusion, injection
+//  vectors, prototype pollution, and chaos testing. Goal: break every
+//  function that touches user-supplied data.
+//
+// ############################################################################
+
+// ============================================================================
+// Category 1: Input Boundary Testing
+// ============================================================================
+
+describe("STRESS: input boundaries", () => {
+  test("empty string markdown produces no steps", () => {
+    expect(parseSteps("")).toHaveLength(0)
+  })
+
+  test("step with extremely long title (10K chars)", () => {
+    const longTitle = "A".repeat(10000)
+    const md = `
+### step:long ${longTitle}
+
+\`\`\`yaml
+mode: shell
+\`\`\`
+
+\`\`\`bash
+echo ok
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps).toHaveLength(1)
+    expect(steps[0].title).toBe(longTitle)
+  })
+
+  test("step with empty ID is skipped (regex requires [\\w-]+)", () => {
+    const md = `
+### step: No ID Here
+
+\`\`\`yaml
+mode: shell
+\`\`\`
+
+\`\`\`bash
+echo hi
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps).toHaveLength(0)
+  })
+
+  test("50 steps in one markdown", () => {
+    let md = ""
+    for (let i = 0; i < 50; i++) {
+      md += `\n### step:s${i} Step ${i}\n\n\`\`\`yaml\nmode: shell\n\`\`\`\n\n\`\`\`bash\necho ${i}\n\`\`\`\n`
+    }
+    const steps = parseSteps(md)
+    expect(steps).toHaveLength(50)
+    expect(steps[49].id).toBe("s49")
+    expect(steps[49].code).toBe("echo 49")
+  })
+
+  test("interpolate with empty template", () => {
+    expect(interpolate("", {}, {})).toBe("")
+  })
+
+  test("interpolate with 100 variables", () => {
+    const args: Record<string, unknown> = {}
+    let template = ""
+    for (let i = 0; i < 100; i++) {
+      args[`v${i}`] = `val${i}`
+      template += `\${{args.v${i}}} `
+    }
+    const result = interpolate(template, args, {})
+    expect(result).toContain("val0")
+    expect(result).toContain("val99")
+  })
+
+  test("interpolate with extremely large arg value (100KB)", () => {
+    const bigValue = "x".repeat(100_000)
+    const result = interpolate("${{args.big}}", { big: bigValue }, {})
+    expect(result).toHaveLength(100_000)
+  })
+
+  test("interpolateInput with 5 levels of nesting", () => {
+    const input = { a: { b: { c: { d: { e: "${{args.val}}" } } } } }
+    const result = interpolateInput(input, { val: "deep" }, {})
+    expect(result.a.b.c.d.e).toBe("deep")
+  })
+
+  test("interpolateInput with empty object", () => {
+    const result = interpolateInput({}, {}, {})
+    expect(result).toEqual({})
+  })
+
+  test("interpolateInput with 100 keys", () => {
+    const input: Record<string, string> = {}
+    const args: Record<string, unknown> = {}
+    for (let i = 0; i < 100; i++) {
+      input[`k${i}`] = `\${{args.v${i}}}`
+      args[`v${i}`] = `val${i}`
+    }
+    const result = interpolateInput(input, args, {})
+    expect(result.k0).toBe("val0")
+    expect(result.k99).toBe("val99")
+  })
+})
+
+// ============================================================================
+// Category 2: Security — Injection Vectors
+// ============================================================================
+
+describe("STRESS: injection vectors", () => {
+  test("XSS in step title is preserved raw (parser doesn't sanitize)", () => {
+    const md = `
+### step:xss <script>alert(1)</script>
+
+\`\`\`yaml
+mode: shell
+\`\`\`
+
+\`\`\`bash
+echo ok
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps).toHaveLength(1)
+    expect(steps[0].title).toContain("<script>")
+  })
+
+  test("SQL injection in YAML meta values stored raw", () => {
+    const md = `
+### step:sql SQL Test
+
+\`\`\`yaml
+mode: shell
+node: "'; DROP TABLE users;--"
+\`\`\`
+
+\`\`\`bash
+echo ok
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps[0].node).toBe("'; DROP TABLE users;--")
+  })
+
+  test("command injection via interpolated args in shell mode IS escaped", () => {
+    const result = interpolate(
+      "echo '${{args.input}}'",
+      { input: "'; rm -rf / #" },
+      {},
+      true,
+    )
+    expect(result).not.toBe("echo ''; rm -rf / #'")
+    expect(result).toContain("\\'")
+  })
+
+  test("command injection via args in hive-script is NOT escaped (by design)", () => {
+    const result = interpolate(
+      "const x = '${{args.input}}'",
+      { input: "'; process.exit(1); '" },
+      {},
+      false,
+    )
+    expect(result).toBe("const x = ''; process.exit(1); ''")
+  })
+
+  test("path traversal in workflowId field is stored raw (server validates)", () => {
+    const md = `
+### step:traversal Traversal
+
+\`\`\`yaml
+mode: cloud-workflow
+workflow_id: "../../../admin/destroy"
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps[0].workflowId).toBe("../../../admin/destroy")
+  })
+
+  test("interpolateInput: arg with nested expression doesn't double-interpolate", () => {
+    const input = { msg: "${{args.outer}}" }
+    const args = { outer: "${{args.inner}}", inner: "LEAKED" }
+    const result = interpolateInput(input, args, {})
+    expect(result.msg).toBe("${{args.inner}}")
+  })
+
+  test("interpolateInput: __proto__ pollution attempt blocked", () => {
+    const input = { "__proto__": { "polluted": "yes" }, normal: "${{args.x}}" }
+    const result = interpolateInput(input, { x: "safe" }, {})
+    expect(result.normal).toBe("safe")
+    expect(({} as any).polluted).toBeUndefined()
+  })
+
+  test("interpolateInput: constructor pollution attempt blocked", () => {
+    const input = { "constructor": { "prototype": { "bad": true } }, ok: "fine" }
+    const result = interpolateInput(input, {}, {})
+    expect(result.ok).toBe("fine")
+    expect(({} as any).bad).toBeUndefined()
+  })
+})
+
+// ============================================================================
+// Category 3: Type Confusion
+// ============================================================================
+
+describe("STRESS: type confusion", () => {
+  test("mode as number in YAML", () => {
+    const md = `
+### step:num Numeric Mode
+
+\`\`\`yaml
+mode: 42
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps[0].mode).toBe(42 as any)
+  })
+
+  test("mode as boolean in YAML", () => {
+    const md = `
+### step:bool Bool Mode
+
+\`\`\`yaml
+mode: true
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps[0].mode).toBe(true as any)
+  })
+
+  test("workflow_id as float is parsed as string '3.14' by gray-matter", () => {
+    const md = `
+### step:float Float WF
+
+\`\`\`yaml
+mode: cloud-workflow
+workflow_id: 3.14
+\`\`\`
+`
+    const steps = parseSteps(md)
+    // gray-matter/YAML may parse 3.14 as string in some contexts
+    expect(steps[0].workflowId).toBe("3.14")
+  })
+
+  test("retry as negative number (maxAttempts = -4, loop won't execute)", () => {
+    const md = `
+### step:neg Negative Retry
+
+\`\`\`yaml
+mode: shell
+retry: -5
+\`\`\`
+
+\`\`\`bash
+echo ok
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps[0].retry).toBe(-5)
+  })
+
+  test("delay as string", () => {
+    const md = `
+### step:str-delay String Delay
+
+\`\`\`yaml
+mode: shell
+delay: "fast"
+\`\`\`
+
+\`\`\`bash
+echo ok
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps[0].delay).toBe("fast" as any)
+  })
+
+  test("input as YAML array is rejected (must be object, not array)", () => {
+    const md = `
+### step:arr Array Input
+
+\`\`\`yaml
+mode: cloud-workflow
+workflow_id: 1
+input:
+  - item1
+  - item2
+\`\`\`
+`
+    const steps = parseSteps(md)
+    // Fixed: arrays are now rejected by the !Array.isArray guard
+    expect(steps[0].input).toBeNull()
+  })
+
+  test("interpolateInput: null values in object pass through", () => {
+    const input = { a: null, b: "${{args.x}}" }
+    const result = interpolateInput(input, { x: "ok" }, {})
+    expect(result.a).toBeNull()
+    expect(result.b).toBe("ok")
+  })
+
+  test("interpolateInput: number and boolean leaves untouched", () => {
+    const input = { count: 42, active: true, ratio: 3.14, zero: 0, neg: -1 }
+    const result = interpolateInput(input, {}, {})
+    expect(result).toEqual({ count: 42, active: true, ratio: 3.14, zero: 0, neg: -1 })
+  })
+
+  test("validatePlan: unknown mode doesn't error (falls to default)", () => {
+    const plan = { ...basePlan, steps: [makeStep({ id: "unk", mode: "invented-mode" as any, code: "x" })] }
+    const issues = validatePlan(plan)
+    expect(issues.filter((i) => i.level === "error")).toHaveLength(0)
+  })
+})
+
+// ============================================================================
+// Category 4: State & Edge Cases in Validation
+// ============================================================================
+
+describe("STRESS: validation edge cases", () => {
+  test("forward dependency reference (depends on later step) is valid", () => {
+    const plan = {
+      ...basePlan,
+      steps: [
+        makeStep({ id: "second", code: "echo 2", depends: "first" }),
+        makeStep({ id: "first", code: "echo 1" }),
+      ],
+    }
+    const issues = validatePlan(plan)
+    expect(issues.filter((i) => i.message.includes("unknown step"))).toHaveLength(0)
+  })
+
+  test("transitive depends chain A->B->C is valid", () => {
+    const plan = {
+      ...basePlan,
+      steps: [
+        makeStep({ id: "a", code: "echo a" }),
+        makeStep({ id: "b", code: "echo b", depends: "a" }),
+        makeStep({ id: "c", code: "echo c", depends: "b" }),
+      ],
+    }
+    const issues = validatePlan(plan)
+    expect(issues.filter((i) => i.level === "error")).toHaveLength(0)
+  })
+
+  test("circular depends A->B->A is NOT caught (known gap)", () => {
+    const plan = {
+      ...basePlan,
+      steps: [
+        makeStep({ id: "a", code: "echo a", depends: "b" }),
+        makeStep({ id: "b", code: "echo b", depends: "a" }),
+      ],
+    }
+    const issues = validatePlan(plan)
+    // Validator doesn't detect depends cycles — executor processes in order anyway
+    expect(issues.filter((i) => i.message.includes("circular"))).toHaveLength(0)
+  })
+
+  test("negative retry is warned (step would never execute)", () => {
+    const plan = {
+      ...basePlan,
+      steps: [makeStep({ id: "neg", code: "echo x", retry: -5 })],
+    }
+    const issues = validatePlan(plan)
+    expect(issues.some((i) => i.message.includes("Negative retry"))).toBe(true)
+  })
+
+  test("100 unique steps: no false duplicate warning", () => {
+    const steps = Array.from({ length: 100 }, (_, i) =>
+      makeStep({ id: `s${i}`, code: `echo ${i}` })
+    )
+    const plan = { ...basePlan, steps }
+    const issues = validatePlan(plan)
+    expect(issues.filter((i) => i.message.includes("Duplicate"))).toHaveLength(0)
+  })
+})
+
+// ============================================================================
+// Category 5: Parser Chaos — Malformed Markdown
+// ============================================================================
+
+describe("STRESS: malformed markdown", () => {
+  test("yaml block with no closing fence -> fallback to manual", () => {
+    const md = `
+### step:broken Broken YAML
+
+\`\`\`yaml
+mode: shell
+`
+    const steps = parseSteps(md)
+    expect(steps).toHaveLength(1)
+    expect(steps[0].mode).toBe("manual")
+  })
+
+  test("code block with wrong language tag still captured", () => {
+    const md = `
+### step:py Python Step
+
+\`\`\`yaml
+mode: shell
+\`\`\`
+
+\`\`\`python
+print("hello")
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps[0].code).toBe('print("hello")')
+  })
+
+  test("multiple code blocks: only first non-yaml is captured", () => {
+    const md = `
+### step:multi Multi Code
+
+\`\`\`yaml
+mode: shell
+\`\`\`
+
+\`\`\`bash
+echo "first"
+\`\`\`
+
+\`\`\`bash
+echo "second"
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps[0].code).toBe('echo "first"')
+  })
+
+  test("yaml block with invalid YAML syntax -> fallback to manual", () => {
+    const md = `
+### step:badyaml Bad YAML
+
+\`\`\`yaml
+mode: shell
+  invalid: [yaml: {syntax
+\`\`\`
+
+\`\`\`bash
+echo ok
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps).toHaveLength(1)
+    expect(steps[0].mode).toBe("manual")
+  })
+
+  test("step heading with no title is skipped (regex requires same-line title)", () => {
+    const md = `
+### step:nospace
+
+\`\`\`yaml
+mode: shell
+\`\`\`
+
+\`\`\`bash
+echo ok
+\`\`\`
+`
+    const steps = parseSteps(md)
+    // Fixed: regex uses ` +` (space only) instead of `\s+` (which ate newlines)
+    expect(steps).toHaveLength(0)
+  })
+
+  test("YAML mode with leading/trailing spaces doesn't match switch cases", () => {
+    const md = `
+### step:spaces Spaces in Mode
+
+\`\`\`yaml
+mode: "  shell  "
+\`\`\`
+
+\`\`\`bash
+echo ok
+\`\`\`
+`
+    const steps = parseSteps(md)
+    expect(steps[0].mode).toBe("  shell  " as any)
+  })
+})
+
+// ============================================================================
+// Category 6: interpolateInput — Adversarial Values
+// ============================================================================
+
+describe("STRESS: interpolateInput adversarial", () => {
+  test("extra braces ${{{{ pass through unresolved (safe behavior)", () => {
+    const input = { msg: "${{{{args.x}}}}" }
+    const result = interpolateInput(input, { x: "caught" }, {})
+    // Regex requires [\w.\-] after ${{ — extra { doesn't match, so it's a no-op
+    // This is correct: malformed expressions are NOT interpolated
+    expect(result.msg).toBe("${{{{args.x}}}}")
+  })
+
+  test("unclosed ${{ with no }} passes through as-is", () => {
+    const input = { msg: "Hello ${{args.name" }
+    const result = interpolateInput(input, { name: "world" }, {})
+    expect(result.msg).toBe("Hello ${{args.name")
+  })
+
+  test("empty string arg value", () => {
+    const input = { msg: "Hello ${{args.name}}" }
+    const result = interpolateInput(input, { name: "" }, {})
+    expect(result.msg).toBe("Hello ")
+  })
+
+  test("arg value is string 'undefined'", () => {
+    const result = interpolateInput({ v: "${{args.x}}" }, { x: "undefined" }, {})
+    expect(result.v).toBe("undefined")
+  })
+
+  test("arg value is string 'null'", () => {
+    const result = interpolateInput({ v: "${{args.x}}" }, { x: "null" }, {})
+    expect(result.v).toBe("null")
+  })
+
+  test("arg value is actual undefined -> empty string", () => {
+    const result = interpolateInput({ v: "${{args.x}}" }, { x: undefined }, {})
+    expect(result.v).toBe("")
+  })
+
+  test("arg value is actual null -> empty string", () => {
+    const result = interpolateInput({ v: "${{args.x}}" }, { x: null }, {})
+    expect(result.v).toBe("")
+  })
+
+  test("arg value is number 0 -> '0'", () => {
+    const result = interpolateInput({ v: "${{args.x}}" }, { x: 0 }, {})
+    expect(result.v).toBe("0")
+  })
+
+  test("arg value is boolean false -> 'false'", () => {
+    const result = interpolateInput({ v: "${{args.x}}" }, { x: false }, {})
+    expect(result.v).toBe("false")
+  })
+
+  test("mixed array with nested objects and variables", () => {
+    const input = {
+      items: [
+        { name: "${{args.n}}", active: true },
+        "${{args.label}}",
+        42,
+        null,
+        [1, "${{args.inner}}"],
+      ],
+    }
+    const result = interpolateInput(input, { n: "Alex", label: "VIP", inner: "deep" }, {})
+    expect(result.items[0].name).toBe("Alex")
+    expect(result.items[1]).toBe("VIP")
+    expect(result.items[2]).toBe(42)
+    expect(result.items[3]).toBeNull()
+    expect(result.items[4]).toEqual([1, "deep"])
+  })
+
+  test("100 levels deep nesting doesn't blow the stack", () => {
+    let deep: any = { val: "${{args.x}}" }
+    for (let i = 0; i < 100; i++) deep = { child: deep }
+    const result = interpolateInput(deep, { x: "found" }, {})
+    let node: any = result
+    for (let i = 0; i < 100; i++) node = node.child
+    expect(node.val).toBe("found")
+  })
+
+  test("key ordering is preserved", () => {
+    const input = { z: "${{args.a}}", a: "${{args.b}}", m: "${{args.c}}" }
+    const result = interpolateInput(input, { a: "1", b: "2", c: "3" }, {})
+    expect(Object.keys(result)).toEqual(["z", "a", "m"])
+  })
+
+  test("does not mutate the original input object", () => {
+    const input = { msg: "${{args.x}}", nested: { val: "${{args.y}}" } }
+    const original = JSON.parse(JSON.stringify(input))
+    interpolateInput(input, { x: "replaced", y: "also" }, {})
+    expect(input).toEqual(original)
+  })
+})
