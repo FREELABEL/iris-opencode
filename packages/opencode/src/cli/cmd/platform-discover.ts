@@ -612,12 +612,166 @@ const ArtistsCommand = cmd({
 })
 
 // ============================================================================
+// Sections subcommand (config key: discover.sections)
+// ============================================================================
+
+const SECTION_NAMES = [
+  "newServices", "trendingServices", "featuredServices", "products",
+  "twitchLive", "topArtists", "studios", "programs", "sponsors",
+  "opportunities", "venues", "events", "learning", "agentTemplates",
+  "audioArticles", "producers", "instrumentals",
+] as const
+
+async function readSectionConfig(): Promise<Record<string, boolean>> {
+  const res = await irisFetch("/api/v1/platform-config/discover.sections")
+  if (!res.ok) return {}
+  const data = (await res.json()) as any
+  return data?.data?.value ?? {}
+}
+
+async function writeSectionConfig(sections: Record<string, boolean>): Promise<Response> {
+  return irisFetch("/api/v1/platform-config/discover.sections", {
+    method: "PUT",
+    body: JSON.stringify({ value: sections }),
+  })
+}
+
+const SectionsListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "show current section visibility toggles",
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Discover Sections")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+
+    try {
+      const sections = await readSectionConfig()
+      const enabled = SECTION_NAMES.filter((s) => sections[s] !== false)
+      const disabled = SECTION_NAMES.filter((s) => sections[s] === false)
+
+      spinner.stop(`${enabled.length} enabled, ${disabled.length} disabled`)
+
+      if (args.json) {
+        const full: Record<string, boolean> = {}
+        for (const s of SECTION_NAMES) full[s] = sections[s] !== false
+        console.log(JSON.stringify(full, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      for (const s of SECTION_NAMES) {
+        const on = sections[s] !== false
+        const icon = on ? "●" : "○"
+        const color = on ? success(icon) : dim(icon)
+        console.log(`  ${color}  ${on ? bold(s) : dim(s)}`)
+      }
+      printDivider()
+
+      prompts.outro(dim("iris discover sections enable <name>  |  iris discover sections disable <name>"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const SectionsEnableCommand = cmd({
+  command: "enable <name>",
+  aliases: ["on", "show"],
+  describe: "enable a section on the discover page",
+  builder: (yargs) =>
+    yargs.positional("name", { describe: "section name", type: "string", demandOption: true, choices: SECTION_NAMES as unknown as string[] }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Enable Section: ${args.name}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const sections = await readSectionConfig()
+      sections[args.name as string] = true
+
+      const putRes = await writeSectionConfig(sections)
+      const ok = await handleApiError(putRes, "Enable section")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} ${bold(String(args.name))} enabled`)
+      prompts.outro(dim("iris discover sections list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const SectionsDisableCommand = cmd({
+  command: "disable <name>",
+  aliases: ["off", "hide"],
+  describe: "disable a section on the discover page",
+  builder: (yargs) =>
+    yargs.positional("name", { describe: "section name", type: "string", demandOption: true, choices: SECTION_NAMES as unknown as string[] }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Disable Section: ${args.name}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const sections = await readSectionConfig()
+      sections[args.name as string] = false
+
+      const putRes = await writeSectionConfig(sections)
+      const ok = await handleApiError(putRes, "Disable section")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} ${bold(String(args.name))} disabled`)
+      prompts.outro(dim("iris discover sections list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const SectionsCommand = cmd({
+  command: "sections",
+  aliases: ["toggles"],
+  describe: "toggle discover page section visibility",
+  builder: (yargs) =>
+    yargs
+      .command(SectionsListCommand)
+      .command(SectionsEnableCommand)
+      .command(SectionsDisableCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root discover command
 // ============================================================================
 
 export const PlatformDiscoverCommand = cmd({
   command: "discover",
-  describe: "manage the Discover page — sponsors, streamers, producers, instrumentals, artists",
+  describe: "manage the Discover page — sponsors, streamers, producers, instrumentals, artists, sections",
   builder: (yargs) =>
     yargs
       .command(SponsorsCommand)
@@ -625,6 +779,7 @@ export const PlatformDiscoverCommand = cmd({
       .command(ProducersCommand)
       .command(InstrumentalsCommand)
       .command(ArtistsCommand)
+      .command(SectionsCommand)
       .demandCommand(),
   async handler() {},
 })
