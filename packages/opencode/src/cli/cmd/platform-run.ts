@@ -1018,6 +1018,11 @@ const ExecCommand = cmd({
       .positional("function", { type: "string", describe: "function (for integrations)" })
       .positional("params", { type: "string", array: true, default: [], describe: "key=value params" })
       .option("json", { type: "boolean" })
+      .option("params-json", {
+        alias: "p",
+        type: "string",
+        describe: "JSON params string (e.g. '{\"title\":\"My Event\"}'). Merged with key=value positional params.",
+      })
       .option("params-file", {
         type: "string",
         describe: "load params from a JSON file (merged with key=value params; key=value wins on conflict)",
@@ -1040,8 +1045,58 @@ const ExecCommand = cmd({
 
     const target = String(args.target)
     let fn = args.function ? String(args.function) : undefined
-    const rawParams = (args.params as string[]) ?? []
-    const cliParams = parseParams(rawParams)
+    // args.params can be:
+    // - string[] from positional: ["title=Test", "start_time=..."]
+    // - string from --params flag: '{"title":"Test"}' (yargs positional "params" shadows --params)
+    // Because the positional is named "params", yargs merges --params into the same key.
+    // We detect JSON strings in the array and parse them as structured params.
+    const rawParamsArg = args.params as string | string[] | undefined
+    let jsonFromFlag: Record<string, unknown> | null = null
+    let rawParams: string[] = []
+
+    if (typeof rawParamsArg === "string") {
+      // --params consumed as a single string value
+      if (rawParamsArg.startsWith("{")) {
+        try {
+          jsonFromFlag = JSON.parse(rawParamsArg)
+        } catch {
+          prompts.log.error("Invalid JSON in --params")
+          prompts.outro("Done")
+          return
+        }
+      } else {
+        rawParams = [rawParamsArg]
+      }
+    } else if (Array.isArray(rawParamsArg)) {
+      // Positional array — but --params may have pushed a JSON string into the array
+      for (const item of rawParamsArg) {
+        const s = String(item)
+        if (s.startsWith("{") && s.endsWith("}") && !jsonFromFlag) {
+          try {
+            jsonFromFlag = JSON.parse(s)
+            continue
+          } catch { /* not JSON */ }
+        }
+        rawParams.push(s)
+      }
+    }
+
+    // Also detect JSON strings that landed in positional args
+    let jsonFromPositional: Record<string, unknown> | null = null
+    const filteredRaw: string[] = []
+    for (const p of rawParams) {
+      if (p.startsWith("{") && p.endsWith("}")) {
+        try {
+          const parsed = JSON.parse(p)
+          if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+            jsonFromPositional = { ...(jsonFromPositional ?? {}), ...parsed }
+            continue
+          }
+        } catch { /* not JSON, treat as key=value */ }
+      }
+      filteredRaw.push(p)
+    }
+    const cliParams = parseParams(filteredRaw)
 
     // Merge --params-file (if provided) with CLI key=value params.
     // CLI key=value wins on conflict, so you can override file values inline.
@@ -1063,6 +1118,29 @@ const ExecCommand = cmd({
       }
     }
     params = { ...params, ...cliParams }
+
+    // Merge --params-json / -p (explicit JSON flag)
+    const jsonParamsRaw = args["params-json"] as string | undefined
+    if (jsonParamsRaw && typeof jsonParamsRaw === "string") {
+      try {
+        const parsed = JSON.parse(jsonParamsRaw)
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          params = { ...parsed, ...params }
+        }
+      } catch {
+        prompts.log.error("Invalid JSON in --params-json / -p")
+        prompts.outro("Done")
+        return
+      }
+    }
+
+    // Merge JSON from --params flag or positional detection
+    if (jsonFromFlag) {
+      params = { ...jsonFromFlag, ...params }
+    }
+    if (jsonFromPositional) {
+      params = { ...jsonFromPositional, ...params }
+    }
 
     try {
       if (isIntegration(target)) {
