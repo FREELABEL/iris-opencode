@@ -370,6 +370,8 @@ const PushCmd = cmd({
       if (local.seo_title) updateData.seo_title = local.seo_title
       if (local.seo_description) updateData.seo_description = local.seo_description
       if (local.og_image) updateData.og_image = local.og_image
+      if (local.owner_type) updateData.owner_type = local.owner_type
+      if (local.owner_id !== undefined) updateData.owner_id = local.owner_id
       // Never send status during push — use publish/unpublish commands instead.
       // Sending status=published here caused the page to briefly publish with OLD content
       // before createVersion saved the new json_content, poisoning the iris-api cache.
@@ -1383,6 +1385,60 @@ const CacheClearCmd = cmd({
 })
 
 // ============================================================================
+// Reassign — change page ownership (owner_type + owner_id)
+// ============================================================================
+
+const ReassignCmd = cmd({
+  command: "reassign <slug>",
+  aliases: ["chown"],
+  describe: "change page ownership (owner_type + owner_id)",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("owner-type", { describe: "owner type", type: "string", choices: ["system", "user", "bloq", "lead"], demandOption: true })
+      .option("owner-id", { describe: "owner ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Reassign ${args.slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const sp = prompts.spinner()
+    sp.start("Updating ownership…")
+    try {
+      const page = await getBySlug(args.slug, false)
+      if (!page) { sp.stop("Page not found", 1); prompts.outro("Done"); return }
+
+      const ownerType = args["owner-type"] as string
+      const ownerId = ownerType === "system" ? null : args["owner-id"]
+      if (ownerType !== "system" && !ownerId) {
+        sp.stop("Failed", 1)
+        prompts.log.error("--owner-id is required for non-system owner types")
+        prompts.outro("Done")
+        return
+      }
+
+      const updateData: Record<string, unknown> = { owner_type: ownerType, owner_id: ownerId }
+      const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
+        method: "PUT",
+        body: JSON.stringify(updateData),
+      })
+      if (!(await handleApiError(res, "Reassign"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      const updated = ((await res.json()) as any).data ?? {}
+      sp.stop(success(`Reassigned to ${ownerType}:${ownerId ?? "null"}`))
+      printDivider()
+      printKV("Page", `${updated.slug ?? args.slug} (#${updated.id ?? page.id})`)
+      printKV("Owner Type", updated.owner_type)
+      printKV("Owner ID", updated.owner_id ?? "null")
+      printDivider()
+      prompts.outro("Done")
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
@@ -1411,6 +1467,7 @@ export const PlatformPagesCommand = cmd({
       .command(RollbackCmd)
       .command(QrCmd)
       .command(ScreenshotCmd)
+      .command(ReassignCmd)
       .command(CacheClearCmd)
       .demandCommand(),
   async handler() {},
