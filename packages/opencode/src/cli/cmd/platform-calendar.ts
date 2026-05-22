@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { requireAuth, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, printDivider, printKV, dim, bold, success } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 
 // Google Calendar integration via iris-api execute-direct endpoint
@@ -478,6 +478,533 @@ const CalendarFreeCommand = cmd({
   },
 })
 
+// ── DEFAULT CALENDAR ─────────────────────────────────────────
+// Manages the default Google Calendar ID for the user/bloq.
+// Calls fl-api: GET/PATCH /api/v1/calendar-sync/default
+
+const CalendarDefaultGetCommand = cmd({
+  command: "get",
+  describe: "show your current default calendar",
+  builder: (yargs) =>
+    yargs
+      .option("bloq", { type: "number", describe: "bloq ID to check (otherwise user-level)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    prompts.intro("◈  Calendar — Default")
+
+    const qs = args.bloq ? `?bloq_id=${args.bloq}` : ""
+    const res = await irisFetch(`/api/v1/calendar-sync/default${qs}`)
+    const data = await res.json() as Record<string, any>
+
+    if (!res.ok) {
+      prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    printKV("Calendar ID", bold(data.calendar_id ?? "primary"))
+    printKV("Resolved from", data.resolved_from ?? "fallback")
+    if (data.user_default) printKV("User default", dim(data.user_default))
+    if (data.bloq_default) printKV("Bloq default", dim(data.bloq_default))
+    prompts.outro(`${success("✓")} Default calendar`)
+  },
+})
+
+const CalendarDefaultSetCommand = cmd({
+  command: "set <calendar-id>",
+  describe: "set your default calendar",
+  builder: (yargs) =>
+    yargs
+      .positional("calendar-id", { type: "string", demandOption: true, describe: "Google Calendar ID (use 'primary' for main)" })
+      .option("bloq", { type: "number", describe: "set default for a specific bloq (otherwise user-level)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    const calId = (args.calendarId ?? args["calendar-id"]) as string
+    prompts.intro(`◈  Calendar — Set Default → ${calId}`)
+
+    const body: Record<string, any> = { calendar_id: calId }
+    if (args.bloq) body.bloq_id = args.bloq
+
+    const res = await irisFetch("/api/v1/calendar-sync/default", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    })
+    const data = await res.json() as Record<string, any>
+
+    if (!res.ok) {
+      prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    printKV("Calendar", bold(calId))
+    if (args.bloq) printKV("Scope", `Bloq #${args.bloq}`)
+    else printKV("Scope", "User-level (all projects)")
+    prompts.outro(`${success("✓")} Default calendar updated`)
+  },
+})
+
+const CalendarDefaultCommand = cmd({
+  command: "default",
+  describe: "manage your default calendar for sync",
+  builder: (yargs) =>
+    yargs
+      .command(CalendarDefaultGetCommand)
+      .command(CalendarDefaultSetCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ── SCHEDULE (Smart Scheduler) ───────────────────────────────
+// Calls fl-api: POST /api/v1/scheduling/schedule-week
+
+const CalendarScheduleCommand = cmd({
+  command: "schedule",
+  aliases: ["plan"],
+  describe: "smart schedule — auto-place tasks & habits into your calendar",
+  builder: (yargs) =>
+    yargs
+      .option("dry-run", { type: "boolean", default: true, describe: "preview without writing to calendar (default: true)" })
+      .option("week", { type: "string", describe: "week start date YYYY-MM-DD (defaults to current week)" })
+      .option("execute", { type: "boolean", default: false, describe: "actually write events to Google Calendar" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    const dryRun = args.execute ? false : (args.dryRun ?? args["dry-run"] ?? true)
+    prompts.intro(`◈  Calendar — Smart Schedule${dryRun ? " (dry run)" : ""}`)
+
+    const body: Record<string, any> = { dry_run: dryRun }
+    if (args.week) body.week_start = args.week
+
+    const spin = prompts.spinner()
+    spin.start("Running smart scheduler...")
+
+    const res = await irisFetch("/api/v1/scheduling/schedule-week", {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    const data = await res.json() as Record<string, any>
+    spin.stop("Schedule computed")
+
+    if (!res.ok) {
+      prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    // Header
+    printKV("Week", data.week ?? "unknown")
+    printKV("Timezone", data.timezone ?? "UTC")
+    printKV("Mode", dryRun ? dim("dry run (use --execute to write to calendar)") : bold("LIVE — writing to Google Calendar"))
+    console.log()
+
+    // Placed items
+    const placed: any[] = data.schedule ?? []
+    if (placed.length > 0) {
+      console.log(`  ${bold(`Placed: ${placed.length} items`)}`)
+      printDivider()
+      let lastDate = ""
+      for (const item of placed) {
+        const d = item.scheduled_date ?? ""
+        if (d !== lastDate) {
+          console.log(`  ${bold(formatDate(d + "T00:00:00"))}`)
+          lastDate = d
+        }
+        const timeRange = `${item.scheduled_time} – ${item.scheduled_end}`
+        const src = dim(`(${item.source}, ${item.duration}min)`)
+        console.log(`    ${timeRange}  ${item.title} ${src}`)
+      }
+      console.log()
+    }
+
+    // Unplaced items
+    const unplaced: any[] = data.could_not_place ?? []
+    if (unplaced.length > 0) {
+      console.log(`  ${bold(`Could not place: ${unplaced.length} items`)}`)
+      for (const item of unplaced) {
+        console.log(`    ${dim("✗")} ${item.title} (${item.duration}min) — ${dim(item.reason ?? "no slot")}`)
+      }
+      console.log()
+    }
+
+    // Analytics
+    const a = data.analytics
+    if (a) {
+      printDivider()
+      console.log(`  ${bold("Analytics")}`)
+      printKV("  Available", `${a.total_available_hours ?? 0}h`)
+      printKV("  Meetings", `${a.meetings_hours ?? 0}h`)
+      printKV("  Tasks", `${a.tasks_hours ?? 0}h`)
+      printKV("  Habits", `${a.habits_hours ?? 0}h`)
+      const focusMet = a.focus_goal_met ? success("MET") : dim("NOT MET")
+      printKV("  Focus", `${a.focus_hours_actual ?? 0}h / ${a.focus_hours_goal ?? 0}h goal (${focusMet})`)
+      printKV("  Free", `${a.unscheduled_hours ?? 0}h`)
+      printKV("  Utilization", `${a.utilization_pct ?? 0}%`)
+    }
+
+    const verb = dryRun ? "would be scheduled" : "scheduled"
+    prompts.outro(`${success("✓")} ${placed.length} item${placed.length === 1 ? "" : "s"} ${verb}`)
+  },
+})
+
+// ── PREFS (Scheduling Preferences) ───────────────────────────
+// Calls fl-api: GET/PATCH /api/v1/scheduling/preferences
+
+const CalendarPrefsShowCommand = cmd({
+  command: "show",
+  aliases: ["get"],
+  describe: "show your scheduling preferences",
+  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    prompts.intro("◈  Calendar — Scheduling Preferences")
+
+    const res = await irisFetch("/api/v1/scheduling/preferences")
+    const data = await res.json() as Record<string, any>
+
+    if (!res.ok) {
+      prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    const p = data.preferences ?? {}
+    printKV("Work hours", `${p.work_hours_start ?? "09:00"} – ${p.work_hours_end ?? "17:00"}`)
+    printKV("Working days", (p.working_days ?? ["mon-fri"]).join(", "))
+    printKV("Energy peak", p.energy_peak ?? "morning")
+    printKV("Focus goal", `${p.focus_hours_goal ?? 120} min/week`)
+    printKV("Focus blocks", `${p.focus_block_min ?? 60}–${p.focus_block_max ?? 120} min`)
+    printKV("Break duration", `${p.break_duration ?? 15} min`)
+    printKV("Meeting buffer", `${p.meeting_buffer ?? 5} min`)
+    printKV("Lunch", `${p.lunch_window_start ?? "12:00"} – ${p.lunch_window_end ?? "13:00"}`)
+    if (p.max_meetings_per_day) printKV("Max meetings/day", String(p.max_meetings_per_day))
+    printKV("Auto-schedule", p.auto_schedule_enabled ? success("ON") : dim("OFF"))
+    prompts.outro(`${success("✓")} Preferences`)
+  },
+})
+
+const CalendarPrefsSetCommand = cmd({
+  command: "set",
+  describe: "update scheduling preferences",
+  builder: (yargs) =>
+    yargs
+      .option("work-hours", { type: "string", describe: "work hours range, e.g. '9am-6pm' or '09:00-18:00'" })
+      .option("energy-peak", { type: "string", choices: ["morning", "afternoon", "evening"] as const })
+      .option("focus-goal", { type: "number", describe: "weekly focus goal in minutes" })
+      .option("break", { type: "number", describe: "break duration between tasks (minutes)" })
+      .option("buffer", { type: "number", describe: "meeting buffer (minutes before/after)" })
+      .option("lunch", { type: "string", describe: "lunch window, e.g. '12:00-13:00'" })
+      .option("max-meetings", { type: "number", describe: "max meetings per day" })
+      .option("auto-schedule", { type: "boolean", describe: "enable/disable auto-scheduling" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    prompts.intro("◈  Calendar — Update Preferences")
+
+    const body: Record<string, any> = {}
+
+    if (args.workHours ?? args["work-hours"]) {
+      const wh = (args.workHours ?? args["work-hours"]) as string
+      const parts = wh.split("-").map((s: string) => s.trim())
+      if (parts.length === 2) {
+        body.work_hours_start = parseTimeString(parts[0])
+        body.work_hours_end = parseTimeString(parts[1])
+      }
+    }
+    if (args.energyPeak ?? args["energy-peak"]) body.energy_peak = args.energyPeak ?? args["energy-peak"]
+    if (args.focusGoal ?? args["focus-goal"]) body.focus_hours_goal = args.focusGoal ?? args["focus-goal"]
+    if (args.break != null) body.break_duration = args.break
+    if (args.buffer != null) body.meeting_buffer = args.buffer
+    if (args.lunch) {
+      const parts = (args.lunch as string).split("-").map((s: string) => s.trim())
+      if (parts.length === 2) {
+        body.lunch_window_start = parseTimeString(parts[0])
+        body.lunch_window_end = parseTimeString(parts[1])
+      }
+    }
+    if (args.maxMeetings ?? args["max-meetings"]) body.max_meetings_per_day = args.maxMeetings ?? args["max-meetings"]
+    if (args.autoSchedule != null || args["auto-schedule"] != null) body.auto_schedule_enabled = args.autoSchedule ?? args["auto-schedule"]
+
+    if (Object.keys(body).length === 0) {
+      prompts.log.warn("No preferences specified. Use --work-hours, --energy-peak, --focus-goal, etc.")
+      prompts.outro("Done")
+      return
+    }
+
+    const res = await irisFetch("/api/v1/scheduling/preferences", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    })
+    const data = await res.json() as Record<string, any>
+
+    if (!res.ok) {
+      prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    for (const [k, v] of Object.entries(body)) {
+      printKV(k, String(v))
+    }
+    prompts.outro(`${success("✓")} Preferences updated`)
+  },
+})
+
+const CalendarPrefsCommand = cmd({
+  command: "prefs",
+  aliases: ["preferences"],
+  describe: "manage scheduling preferences (work hours, energy, focus goals)",
+  builder: (yargs) =>
+    yargs
+      .command(CalendarPrefsShowCommand)
+      .command(CalendarPrefsSetCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ── HABITS ───────────────────────────────────────────────────
+// Calls fl-api: /api/v1/scheduling/habits
+
+const CalendarHabitsListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list your scheduling habits",
+  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    prompts.intro("◈  Calendar — Habits")
+
+    const res = await irisFetch("/api/v1/scheduling/habits")
+    const data = await res.json() as Record<string, any>
+
+    if (!res.ok) {
+      prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    const habits: any[] = data.habits ?? []
+    if (habits.length === 0) {
+      prompts.log.info("No habits yet. Create one: iris calendar habits add \"Deep work\" --duration 90 --freq 5")
+      prompts.outro("Done")
+      return
+    }
+
+    for (const h of habits) {
+      const status = h.is_active ? success("active") : dim("inactive")
+      const window = h.window_start && h.window_end ? ` ${h.window_start}–${h.window_end}` : ""
+      const days = h.preferred_days?.join(", ") ?? "any"
+      console.log(`  ${bold(h.title)} ${status}`)
+      console.log(`  ${dim(`${h.duration_minutes}min × ${h.frequency_per_week}/wk | ${h.category} | priority ${h.priority} | ${days}${window}`)}`)
+      console.log(`  ${dim(`id: ${h.id}`)}`)
+      console.log()
+    }
+    prompts.outro(`${success("✓")} ${habits.length} habit${habits.length === 1 ? "" : "s"}`)
+  },
+})
+
+const CalendarHabitsAddCommand = cmd({
+  command: "add <title>",
+  aliases: ["create"],
+  describe: "create a new scheduling habit",
+  builder: (yargs) =>
+    yargs
+      .positional("title", { type: "string", demandOption: true })
+      .option("duration", { type: "number", demandOption: true, describe: "duration in minutes" })
+      .option("freq", { type: "number", default: 1, describe: "times per week (1-7)" })
+      .option("category", { type: "string", choices: ["focus", "routine", "exercise", "admin", "break"] as const, default: "routine" as const })
+      .option("days", { type: "array", string: true, describe: "preferred days (monday, tuesday, ...)" })
+      .option("window", { type: "string", describe: "time window, e.g. '9am-12pm'" })
+      .option("priority", { type: "number", default: 5, describe: "1-10 (10 = highest)" })
+      .option("bloq", { type: "number", describe: "scope to a specific bloq/project" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    prompts.intro(`◈  Calendar — Add Habit "${args.title}"`)
+
+    const body: Record<string, any> = {
+      title: args.title,
+      duration_minutes: args.duration,
+      frequency_per_week: args.freq,
+      category: args.category,
+      priority: args.priority,
+    }
+    if (args.days) body.preferred_days = args.days
+    if (args.bloq) body.bloq_id = args.bloq
+    if (args.window) {
+      const parts = (args.window as string).split("-").map((s: string) => s.trim())
+      if (parts.length === 2) {
+        body.window_start = parseTimeString(parts[0])
+        body.window_end = parseTimeString(parts[1])
+      }
+    }
+
+    const res = await irisFetch("/api/v1/scheduling/habits", {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+    const data = await res.json() as Record<string, any>
+
+    if (!res.ok) {
+      prompts.log.error(data?.error ?? data?.message ?? `HTTP ${res.status}`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    const h = data.habit ?? {}
+    printKV("Title", bold(h.title))
+    printKV("Duration", `${h.duration_minutes} min`)
+    printKV("Frequency", `${h.frequency_per_week}x/week`)
+    printKV("Category", h.category)
+    printKV("Priority", String(h.priority))
+    if (h.id) printKV("ID", dim(String(h.id)))
+    prompts.outro(`${success("✓")} Habit created`)
+  },
+})
+
+const CalendarHabitsRemoveCommand = cmd({
+  command: "remove <id>",
+  aliases: ["delete", "rm"],
+  describe: "delete a scheduling habit",
+  builder: (yargs) =>
+    yargs.positional("id", { type: "number", demandOption: true }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    prompts.intro(`◈  Calendar — Remove Habit #${args.id}`)
+
+    const res = await irisFetch(`/api/v1/scheduling/habits/${args.id}`, { method: "DELETE" })
+    if (!res.ok) {
+      const data = await res.json() as Record<string, any>
+      prompts.log.error(data?.error ?? data?.message ?? `HTTP ${res.status}`)
+      prompts.outro("Done")
+      return
+    }
+    prompts.outro(`${success("✓")} Habit deleted`)
+  },
+})
+
+const CalendarHabitsCommand = cmd({
+  command: "habits",
+  describe: "manage recurring scheduling habits (focus time, routines, exercise)",
+  builder: (yargs) =>
+    yargs
+      .command(CalendarHabitsListCommand)
+      .command(CalendarHabitsAddCommand)
+      .command(CalendarHabitsRemoveCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ── ANALYTICS ────────────────────────────────────────────────
+const CalendarAnalyticsCommand = cmd({
+  command: "analytics",
+  aliases: ["stats"],
+  describe: "time distribution analytics for your calendar",
+  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    prompts.intro("◈  Calendar — Analytics")
+
+    const res = await irisFetch("/api/v1/scheduling/analytics")
+    const data = await res.json() as Record<string, any>
+
+    if (!res.ok) {
+      prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    const a = data.analytics ?? {}
+    printKV("Week", data.week ?? "current")
+    printDivider()
+    printKV("Available", `${a.total_available_hours ?? 0}h`)
+    printKV("Meetings", `${a.meetings_hours ?? 0}h`)
+    printKV("Tasks", `${a.tasks_hours ?? 0}h`)
+    printKV("Habits", `${a.habits_hours ?? 0}h`)
+    const focusMet = a.focus_goal_met ? success("MET") : dim("NOT MET")
+    printKV("Focus", `${a.focus_hours_actual ?? 0}h / ${a.focus_hours_goal ?? 0}h (${focusMet})`)
+    printKV("Free", `${a.unscheduled_hours ?? 0}h`)
+    printKV("Utilization", `${a.utilization_pct ?? 0}%`)
+    prompts.outro(`${success("✓")} Analytics`)
+  },
+})
+
+// ── HELPER ───────────────────────────────────────────────────
+function parseTimeString(s: string): string {
+  // Convert "9am", "2pm", "14:30" → "HH:mm"
+  s = s.trim().toLowerCase()
+  const ampm = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i)
+  if (ampm) {
+    let h = parseInt(ampm[1])
+    const m = ampm[2] ? parseInt(ampm[2]) : 0
+    if (ampm[3] === "pm" && h < 12) h += 12
+    if (ampm[3] === "am" && h === 12) h = 0
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
+  }
+  // Already HH:mm
+  if (/^\d{2}:\d{2}$/.test(s)) return s
+  return s
+}
+
 // ── ROOT COMMAND ──────────────────────────────────────────────
 export const PlatformCalendarCommand = cmd({
   command: "calendar",
@@ -493,6 +1020,11 @@ export const PlatformCalendarCommand = cmd({
       .command(CalendarDeleteCommand)
       .command(CalendarCalendarsCommand)
       .command(CalendarFreeCommand)
+      .command(CalendarDefaultCommand)
+      .command(CalendarScheduleCommand)
+      .command(CalendarPrefsCommand)
+      .command(CalendarHabitsCommand)
+      .command(CalendarAnalyticsCommand)
       .demandCommand(),
   async handler() {},
 })
