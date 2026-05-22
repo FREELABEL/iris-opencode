@@ -2117,6 +2117,172 @@ const AuditCommand = cmd({
 // Root command
 // ============================================================================
 
+// ============================================================================
+// Import from Instagram
+// ============================================================================
+
+const ImportIgCommand = cmd({
+  command: "import-ig <url>",
+  aliases: ["from-ig", "ig"],
+  describe: "create an event from an Instagram post URL (scrapes flyer, caption, location)",
+  builder: (yargs) =>
+    yargs
+      .positional("url", { describe: "Instagram post URL", type: "string", demandOption: true })
+      .option("title", { describe: "override event title (default: extracted from caption)", type: "string" })
+      .option("date", { describe: "event date YYYY-MM-DD (default: extracted from caption)", type: "string" })
+      .option("time", { describe: "event time HH:MM", type: "string" })
+      .option("venue", { describe: "venue name (default: extracted from location tag)", type: "string" })
+      .option("city", { describe: "city", type: "string" })
+      .option("state", { describe: "state", type: "string" })
+      .option("type", { describe: "event type", type: "string", default: "showcase" })
+      .option("bloq-id", { describe: "associated bloq ID", type: "number" })
+      .option("dry-run", { describe: "show extracted data without creating event", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`${bold("iris events")} import-ig`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const igUrl = String(args.url)
+    if (!igUrl.includes("instagram.com")) {
+      prompts.log.error("URL must be an Instagram post URL (instagram.com/p/... or instagram.com/reel/...)")
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Scraping Instagram post...")
+
+    try {
+      // Step 1: Scrape IG post via iris-api web scraper
+      const scrapeRes = await irisFetch("/api/v6/tools/execute", {
+        method: "POST",
+        body: JSON.stringify({
+          tool: "web_scraper",
+          input: { url: igUrl, extract: "all" }
+        })
+      })
+      const scrapeOk = await handleApiError(scrapeRes, "Scrape Instagram")
+      if (!scrapeOk) { spinner.stop("Scrape failed", 1); prompts.outro("Done"); return }
+
+      const scrapeData = (await scrapeRes.json()) as any
+      const result = scrapeData?.result ?? scrapeData?.data ?? scrapeData
+
+      // Extract data from scraped content
+      const caption = result?.text ?? result?.content ?? result?.description ?? ""
+      const images = result?.images ?? result?.media ?? []
+      const location = result?.location ?? result?.place ?? null
+      const flyerUrl = Array.isArray(images) && images.length > 0
+        ? (typeof images[0] === "string" ? images[0] : images[0]?.url ?? images[0]?.src)
+        : (result?.image ?? result?.thumbnail ?? null)
+
+      spinner.stop(success("Scraped"))
+
+      // Display extracted data
+      printDivider()
+      printKV("Source", igUrl)
+      printKV("Caption", caption ? caption.slice(0, 120) + (caption.length > 120 ? "..." : "") : dim("(none)"))
+      printKV("Flyer", flyerUrl ? highlight(flyerUrl.slice(0, 80)) : dim("(no image found)"))
+      printKV("Location", location ? String(location.name ?? location) : dim("(none)"))
+      printKV("Images", `${Array.isArray(images) ? images.length : 0} found`)
+      printDivider()
+
+      if (args["dry-run"]) {
+        if (args.json) { console.log(JSON.stringify({ caption, flyerUrl, images, location }, null, 2)) }
+        prompts.outro(dim("Dry run — no event created"))
+        return
+      }
+
+      // Step 2: Build event payload
+      const eventTitle = args.title || extractTitleFromCaption(caption) || "Untitled Event"
+      const eventDate = args.date || extractDateFromCaption(caption)
+      const eventVenue = args.venue || (location?.name ?? (typeof location === "string" ? location : null))
+
+      const spinner2 = prompts.spinner()
+      spinner2.start("Creating event...")
+
+      const payload: Record<string, unknown> = {
+        title: eventTitle,
+        description: caption,
+        status: "1",
+        event_type: args.type || "showcase",
+        flyer: flyerUrl,
+        external_source: igUrl,
+      }
+      if (eventDate) payload.start_date = eventDate
+      if (args.time) payload.start_time = args.time
+      if (eventVenue) payload.venue_name = eventVenue
+      if (args.city) payload.city = args.city
+      if (args.state) payload.state = args.state
+      if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
+
+      const res = await irisFetch("/api/v1/events", { method: "POST", body: JSON.stringify(payload) })
+      const ok = await handleApiError(res, "Create event")
+      if (!ok) { spinner2.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as any
+      const e = data?.event ?? data?.data ?? data
+      spinner2.stop(`${success("✓")} Created: ${bold(String(e.title ?? e.id))}`)
+
+      if (args.json) {
+        console.log(JSON.stringify(e, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      printKV("ID", e.id)
+      printKV("Title", e.title)
+      printKV("Date", e.start_date || dim("(not set — update with iris events update)"))
+      printKV("Venue", e.venue_name || dim("(not set)"))
+      printKV("Flyer", e.flyer ? highlight("attached") : dim("(not attached)"))
+      printKV("IG Source", igUrl)
+      printDivider()
+
+      prompts.outro(dim(`iris events get ${e.id}  |  iris events push ${e.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// Helper: extract a reasonable title from IG caption (first line or first sentence)
+function extractTitleFromCaption(caption: string): string | null {
+  if (!caption) return null
+  const firstLine = caption.split("\n")[0].trim()
+  if (firstLine.length > 5 && firstLine.length < 120) return firstLine
+  const firstSentence = caption.split(/[.!?]/)[0].trim()
+  if (firstSentence.length > 5 && firstSentence.length < 120) return firstSentence
+  return caption.slice(0, 80).trim()
+}
+
+// Helper: extract a date from caption text (looks for common patterns)
+function extractDateFromCaption(caption: string): string | null {
+  if (!caption) return null
+  // Match patterns like "May 29", "June 5th", "5/29/2026", "2026-05-29"
+  const isoMatch = caption.match(/(\d{4}-\d{2}-\d{2})/)
+  if (isoMatch) return isoMatch[1]
+  const slashMatch = caption.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/)
+  if (slashMatch) {
+    const year = slashMatch[3].length === 2 ? `20${slashMatch[3]}` : slashMatch[3]
+    return `${year}-${slashMatch[1].padStart(2, "0")}-${slashMatch[2].padStart(2, "0")}`
+  }
+  const months = ["january","february","march","april","may","june","july","august","september","october","november","december"]
+  const monthPattern = new RegExp(`(${months.join("|")})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:[,\\s]+(\\d{4}))?`, "i")
+  const monthMatch = caption.match(monthPattern)
+  if (monthMatch) {
+    const monthIdx = months.indexOf(monthMatch[1].toLowerCase()) + 1
+    const day = monthMatch[2].padStart(2, "0")
+    const year = monthMatch[3] || new Date().getFullYear().toString()
+    return `${year}-${String(monthIdx).padStart(2, "0")}-${day}`
+  }
+  return null
+}
+
 export const PlatformEventsCommand = cmd({
   command: "events",
   describe: "manage events, stages, vendors, tickets — pull, push, diff, CRUD, preflight, audit",
@@ -2160,6 +2326,8 @@ export const PlatformEventsCommand = cmd({
       .command(PreflightCommand)
       .command(AuditCommand)
       .command(ProductionCommand)
+      // Import from external sources
+      .command(ImportIgCommand)
       .demandCommand(),
   async handler() {},
 })
