@@ -1,0 +1,300 @@
+{
+  "id": 110,
+  "slug": "ncma-fort-worth-newsletter",
+  "title": "Newsletter — NCMA Fort Worth",
+  "seo_title": "NCMA Fort Worth Newsletter — Weekly Procurement Insights for Contract Professionals",
+  "seo_description": "Subscribe to the NCMA Fort Worth newsletter. Weekly insights on certification prep, procurement trends, government contracting news, and chapter events for Fort Worth metro professionals.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "user",
+  "owner_id": 193,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "light",
+      "backgroundColor": "#E8E8E8",
+      "branding": {
+        "name": "NCMA Fort Worth",
+        "primaryColor": "#003366",
+        "secondaryColor": "#4A90E2",
+        "faviconUrl": "https://www.ncmahq.org/images/about/ncma%20logo_new%20540pc_r%20(1).png",
+        "logoUrl": "https://www.ncmahq.org/images/about/ncma%20logo_new%20540pc_r%20(1).png"
+      }
+    },
+    "components": [
+      {
+        "type": "SiteNavigation",
+        "id": "ncma-nav",
+        "props": {
+          "logo": {
+            "imageUrl": "https://www.ncmahq.org/images/about/ncma%20logo_new%20540pc_r%20(1).png",
+            "url": "/p/ncma-fort-worth"
+          },
+          "themeMode": "light",
+          "accentColor": "red",
+          "links": [
+            {
+              "label": "Newsletter",
+              "url": "/p/ncma-fort-worth-newsletter"
+            },
+            {
+              "label": "Events",
+              "url": "/p/ncma-fort-worth-events"
+            },
+            {
+              "label": "About",
+              "url": "/p/ncma-fort-worth-about"
+            },
+            {
+              "label": "Opportunities",
+              "url": "/p/ncma-fort-worth-opportunities"
+            },
+            {
+              "label": "Sponsors",
+              "url": "/p/ncma-fort-worth-sponsors"
+            }
+          ],
+          "ctaButton": {
+            "text": "Join Chapter",
+            "url": "https://www.ncmahq.org/Web/Web/Membership/Membership%20Rates.aspx?hkey=42e60205-beff-44dc-a5f4-c25abd30ea3a"
+          }
+        }
+      },
+      {
+        "type": "BlogGrid",
+        "id": "articles",
+        "props": {
+          "paddingTop": "140px",
+          "themeMode": "light",
+          "heading": "Latest Newsletter Issues",
+          "description": "Catch up on recent articles and insights from the NCMA Fort Worth newsletter.",
+          "columns": 3,
+          "ctaText": "Subscribe for More →",
+          "ctaUrl": "#subscribe",
+          "items": [
+            {
+              "title": "The FAR Is Being Rewritten — What Fort Worth Contractors Must Know",
+              "description": "The first-ever comprehensive overhaul of the Federal Acquisition Regulation is underway. Plain language, stripped-down rules, faster acquisitions — here’s what it means for DFW.",
+              "imageUrl": "https://images.unsplash.com/photo-1450101499163-c8848c66ca85?w=600&h=340&fit=crop",
+              "tag": "Breaking: Regulatory",
+              "linkUrl": "/p/ncma-far-overhaul-2026"
+            },
+            {
+              "title": "SOCOM’s AI Revolution — What It Means for DFW Defense Contractors",
+              "description": "SOCOM is integrating AI and autonomy ‘at every level.’ New procurement pathways, expedited acquisition, and opportunities for DFW defense contractors.",
+              "imageUrl": "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&h=340&fit=crop",
+              "tag": "Defense & AI",
+              "linkUrl": "/p/ncma-socom-ai-autonomy-2026"
+            },
+            {
+              "title": "Maintaining Human Connection in an AI-Accelerated World",
+              "description": "As AI automates procurement workflows, the human skills of trust-building, negotiation, and relationship management become more valuable — not less.",
+              "imageUrl": "https://images.unsplash.com/photo-1521737711867-e3b97375f902?w=600&h=340&fit=crop",
+              "tag": "Leadership",
+              "linkUrl": "/p/ncma-human-connection-ai-2026"
+            },
+            {
+              "title": "Is CPCM Worth It? 3 Reasons to Get Certified in 2026",
+              "description": "The CPCM certification is the gold standard in contract management. Here’s why 2026 is the year to start your journey — and how Fort Worth professionals are getting it done.",
+              "imageUrl": "https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=600&h=340&fit=crop",
+              "tag": "Certification",
+              "linkUrl": "/p/ncma-cpcm-certification-2026"
+            },
+            {
+              "title": "AI Is Reshaping Procurement — What DFW Contractors Need to Know",
+              "description": "From automated compliance checks to predictive risk analysis, AI tools are changing how we manage contracts. A look at what’s here now and what’s coming next.",
+              "imageUrl": "https://images.unsplash.com/photo-1677442136019-21780ecad995?w=600&h=340&fit=crop",
+              "tag": "Industry Trends",
+              "linkUrl": "/p/ncma-ai-procurement-2026"
+            },
+            {
+              "title": "World Congress 2026 Preview — Lake Buena Vista, Jul 26–29",
+              "description": "Everything you need to know about NCMA’s premier annual conference: sessions, networking, early bird registration, and tips for first-time attendees.",
+              "imageUrl": "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=600&h=340&fit=crop",
+              "tag": "Events",
+              "linkUrl": "https://ncmahq.org/Web/Web/Events/World-Congress.aspx"
+            },
+            {
+              "title": "5 Skills Every Contract Manager Needs in 2026",
+              "description": "AI literacy, data analytics, negotiation psychology, cybersecurity basics, and cross-functional collaboration — the skills that will set you apart this year.",
+              "imageUrl": "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?w=600&h=340&fit=crop",
+              "tag": "Career Development",
+              "linkUrl": "/p/ncma-skills-contract-manager-2026"
+            },
+            {
+              "title": "CFCM vs CCCM — Which Certification Fits Your Career?",
+              "description": "Federal or commercial? CFCM is FAR-focused for government contracting. CCCM is UCC-focused for private sector. Here’s how to choose the right path.",
+              "imageUrl": "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?w=600&h=340&fit=crop",
+              "tag": "Certification",
+              "linkUrl": "/p/ncma-cfcm-vs-cccm"
+            },
+            {
+              "title": "FAR Update Alert — What Changed and What It Means for You",
+              "description": "A quick breakdown of the latest Federal Acquisition Regulation case updates. Compliance isn’t optional — it’s your competitive advantage.",
+              "imageUrl": "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?w=600&h=340&fit=crop",
+              "tag": "Compliance",
+              "linkUrl": "/p/ncma-far-update-2026"
+            }
+          ]
+        }
+      },
+      {
+        "type": "StatsCounter",
+        "id": "ncma-stats",
+        "props": {
+          "themeMode": "light",
+          "backgroundColor": "#F0F0F0",
+          "stats": [
+            {
+              "value": "Weekly",
+              "label": "EVERY TUESDAY"
+            },
+            {
+              "value": "94",
+              "label": "LOCAL MEMBERS"
+            },
+            {
+              "value": "20,000+",
+              "label": "NCMA NATIONWIDE"
+            },
+            {
+              "value": "Free",
+              "label": "ALWAYS"
+            }
+          ]
+        }
+      },
+      {
+        "type": "TestimonialsSection",
+        "id": "testimonials",
+        "props": {
+          "themeMode": "dark",
+          "heading": "What Members Are Saying",
+          "subheading": "Hear from contract management professionals across the DFW metro.",
+          "accentColor": "#4A90E2",
+          "layout": "grid",
+          "columns": 3,
+          "testimonials": [
+            {
+              "name": "Government Contracting Officer",
+              "role": "Fort Worth, TX",
+              "text": "The NCMA chapter events are the best networking I’ve found in DFW for procurement professionals. Real connections, not just business card exchanges.",
+              "rating": 5
+            },
+            {
+              "name": "Defense Industry Program Manager",
+              "role": "Arlington, TX",
+              "text": "The certification prep resources and study groups helped me pass my CPCM on the first try. Couldn’t have done it without this community.",
+              "rating": 5
+            },
+            {
+              "name": "Procurement Specialist",
+              "role": "Fort Worth, TX",
+              "text": "I look forward to the weekly newsletter — it’s the only one I actually read. The FAR updates alone save me hours of research every month.",
+              "rating": 5
+            }
+          ]
+        }
+      },
+      {
+        "type": "NewsletterSignup",
+        "id": "subscribe",
+        "props": {
+          "themeMode": "light",
+          "heading": "NCMA Fort Worth Newsletter",
+          "subheading": "Join 94 Fort Worth procurement professionals. Weekly insights on FAR updates, certifications, and DFW contracting news — every Tuesday.",
+          "placeholder": "your@email.com",
+          "buttonText": "Subscribe",
+          "successMessage": "Welcome! You’ll receive your first issue next Tuesday.",
+          "layout": "card",
+          "accentColor": "#003366"
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "ncma-footer",
+        "props": {
+          "companyName": "NCMA Fort Worth Chapter",
+          "themeMode": "light",
+          "links": [
+            {
+              "label": "Home",
+              "url": "/p/ncma-fort-worth"
+            },
+            {
+              "label": "Newsletter",
+              "url": "/p/ncma-fort-worth-newsletter"
+            },
+            {
+              "label": "Events",
+              "url": "/p/ncma-fort-worth-events"
+            },
+            {
+              "label": "Opportunities",
+              "url": "/p/ncma-fort-worth-opportunities"
+            },
+            {
+              "label": "NCMA National",
+              "url": "https://ncmahq.org/"
+            }
+          ],
+          "copyright": "2026 NCMA Fort Worth Chapter",
+          "logo": {
+            "text": "NCMA",
+            "tagline": "Fort Worth Chapter",
+            "imageUrl": "https://www.ncmahq.org/images/about/ncma%20logo_new%20540pc_r%20(1).png",
+            "imageHeight": "36px",
+            "accentDot": false
+          },
+          "columns": [
+            {
+              "title": "Chapter",
+              "links": [
+                {
+                  "label": "Home",
+                  "url": "/p/ncma-fort-worth"
+                },
+                {
+                  "label": "Newsletter",
+                  "url": "/p/ncma-fort-worth-newsletter"
+                },
+                {
+                  "label": "Events",
+                  "url": "/p/ncma-fort-worth-events"
+                },
+                {
+                  "label": "About",
+                  "url": "/p/ncma-fort-worth-about"
+                }
+              ]
+            },
+            {
+              "title": "Resources",
+              "links": [
+                {
+                  "label": "Opportunities",
+                  "url": "/p/ncma-fort-worth-opportunities"
+                },
+                {
+                  "label": "Sponsors",
+                  "url": "/p/ncma-fort-worth-sponsors"
+                },
+                {
+                  "label": "NCMA National",
+                  "url": "https://ncmahq.org/"
+                }
+              ]
+            }
+          ],
+          "socialLinks": [
+            {
+              "platform": "linkedin",
+              "url": "https://www.linkedin.com/company/ncma-fort-worth/"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -30,6 +30,7 @@ const MailSearchCommand = cmd({
       .option("limit", { type: "number", default: 10, describe: "max results" })
       .option("full", { type: "boolean", default: false, describe: "include full email body (up to 10000 chars)" })
       .option("max-body", { type: "number", default: 4000, describe: "max body chars (use with --full)" })
+      .option("attachments", { type: "boolean", default: false, describe: "list attachments on each email" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -51,6 +52,7 @@ const MailSearchCommand = cmd({
       params.set("max_body", String(args.maxBody ?? args["max-body"] ?? 4000))
     }
     if (args.subject) params.set("subject", args.subject)
+    if (args.attachments) params.set("include_attachments", "1")
 
     const res = await bridgeFetch(`/api/mail/search?${params}`)
     if (!res.ok) {
@@ -84,6 +86,14 @@ const MailSearchCommand = cmd({
         console.log()
         console.log(msg.body)
       }
+      if (msg.attachments?.length > 0) {
+        console.log(`  ${bold("Attachments")}  ${dim(`(${msg.attachments.length})`)}`)
+        for (const att of msg.attachments) {
+          const size = att.size > 1024 * 1024 ? `${(att.size / (1024 * 1024)).toFixed(1)}MB` : att.size > 1024 ? `${(att.size / 1024).toFixed(0)}KB` : `${att.size}B`
+          console.log(`    ${success("📎")} ${att.name}  ${dim(`${att.mime_type} · ${size}`)}`)
+          if (att.saved_path) console.log(`       ${dim(`→ ${att.saved_path}`)}`)
+        }
+      }
     }
     printDivider()
     prompts.outro(`${success("✓")} ${messages.length} email${messages.length === 1 ? "" : "s"} found`)
@@ -99,6 +109,7 @@ const MailReadCommand = cmd({
       .option("subject", { type: "string", alias: "s", describe: "filter by subject" })
       .option("days", { type: "number", default: 14, describe: "search last N days" })
       .option("max-body", { type: "number", default: 10000, describe: "max body chars" })
+      .option("save-attachments", { type: "boolean", default: false, describe: "download attachments to temp dir" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -110,13 +121,16 @@ const MailReadCommand = cmd({
       return
     }
 
+    const saveAttachments = args.saveAttachments ?? args["save-attachments"] ?? false
     const params = new URLSearchParams({
       from: args.query,
       days: String(args.days),
       limit: "1",
       include_body: "1",
+      include_attachments: "1",
       max_body: String(args.maxBody ?? args["max-body"] ?? 10000),
     })
+    if (saveAttachments) params.set("save_attachments", "1")
     if (args.subject) params.set("subject", args.subject)
 
     const res = await bridgeFetch(`/api/mail/search?${params}`)
@@ -147,6 +161,15 @@ const MailReadCommand = cmd({
     printKV("Date", msg.date)
     printKV("From", msg.sender)
     printKV("Subject", bold(msg.subject))
+    if (msg.attachments?.length > 0) {
+      console.log()
+      console.log(`  ${bold("Attachments")}  ${dim(`(${msg.attachments.length})`)}`)
+      for (const att of msg.attachments) {
+        const size = att.size > 1024 * 1024 ? `${(att.size / (1024 * 1024)).toFixed(1)}MB` : att.size > 1024 ? `${(att.size / 1024).toFixed(0)}KB` : `${att.size}B`
+        console.log(`    ${success("📎")} ${att.name}  ${dim(`${att.mime_type} · ${size}`)}`)
+        if (att.saved_path) console.log(`       ${dim(`Saved → ${att.saved_path}`)}`)
+      }
+    }
     printDivider()
     console.log()
     console.log(msg.body || dim("(no body)"))

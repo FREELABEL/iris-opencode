@@ -1,0 +1,46 @@
+{
+  "id": 203,
+  "slug": "ncma-eo-fixed-price-2026",
+  "title": "New EO with an Old Theme — Tom Reid, NCMA Fellow",
+  "seo_title": "New EO with an Old Theme — Tom Reid, NCMA Fellow — NCMA Fort Worth",
+  "seo_description": "NCMA Fellow Tom Reid analyzes the April 30, 2026 executive order directing agencies to migrate contracts to fixed-price arrangements.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "bloq",
+  "owner_id": 251,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "dark",
+      "backgroundColor": "#000000",
+      "branding": {
+        "name": "New EO with an Old Theme — Tom Reid, NCMA Fellow",
+        "primaryColor": "#34d399"
+      }
+    },
+    "components": [
+      {
+        "type": "Hero",
+        "id": "ncma-eo-fixed-price-2026-hero",
+        "props": {
+          "themeMode": "dark",
+          "title": "New EO with an Old Theme — Tom Reid, NCMA Fellow",
+          "subtitle": "NCMA Fellow Tom Reid analyzes the April 30, 2026 executive order directing agencies to migrate contracts to fixed-price arrangements.",
+          "labelText": "NEW",
+          "labelColor": "#34d399",
+          "textAlign": "center"
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "ncma-eo-fixed-price-2026-footer",
+        "props": {
+          "themeMode": "dark",
+          "brandName": "New EO with an Old Theme — Tom Reid, NCMA Fellow",
+          "links": []
+        }
+      }
+    ]
+  }
+}
