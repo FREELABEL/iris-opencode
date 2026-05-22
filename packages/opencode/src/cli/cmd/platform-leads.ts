@@ -255,7 +255,7 @@ const LeadsListCommand = cmd({
       .option("status", { describe: "filter by status", type: "string" })
       .option("search", { alias: "s", describe: "search query", type: "string" })
       .option("limit", { describe: "max results", type: "number", default: 20 })
-      .option("bloq-id", { describe: "filter by bloq (CRM)", type: "number" })
+      .option("bloq-id", { alias: "bloq", describe: "filter by bloq/project ID", type: "number" })
       .option("all", { describe: "include Prospected leads (hidden by default)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
