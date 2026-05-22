@@ -137,7 +137,7 @@ function formatDate(iso: string): string {
  * Returns events split into past and upcoming.
  */
 async function fetchLeadCalendarEvents(
-  lead: { name?: string; email?: string; id: number },
+  lead: { name?: string; email?: string; emails?: string[]; id: number },
   opts: { days?: number; futureDays?: number } = {},
 ): Promise<{ past: any[]; upcoming: any[] }> {
   const pastDays = opts.days ?? 30
@@ -154,12 +154,12 @@ async function fetchLeadCalendarEvents(
   else if (result?.data?.events) events = result.data.events
   else if (result?.data && Array.isArray(result.data)) events = result.data
 
-  // Client-side filter: match lead name or email in summary/description/attendees
+  // Client-side filter: match lead name or ANY email in summary/description/attendees
   const nameL = (lead.name ?? "").toLowerCase()
-  const emailL = (lead.email ?? "").toLowerCase()
+  const emailsToMatch = lead.emails?.length ? lead.emails : (lead.email ? [lead.email.toLowerCase()] : [])
   const filtered = events.filter((ev: any) => {
     const haystack = [ev.summary, ev.description, JSON.stringify(ev.attendees ?? [])].join(" ").toLowerCase()
-    if (emailL && haystack.includes(emailL)) return true
+    if (emailsToMatch.some((e) => haystack.includes(e))) return true
     if (nameL && nameL.length > 2 && haystack.includes(nameL)) return true
     return false
   })
@@ -1114,7 +1114,8 @@ const LeadsUpdateCommand = cmd({
         type: "string",
         choices: ["stripe", "mercury", "offline", "mixed"] as const,
       })
-      .option("chat-id", { describe: "link an iMessage chat ID (e.g. chat713220476491386040)", type: "string" }),
+      .option("chat-id", { describe: "link an iMessage chat ID (e.g. chat713220476491386040)", type: "string" })
+      .option("add-email", { describe: "add an alternate email address (for multi-email inbox scanning)", type: "string" }),
   async handler(args) {
     UI.empty()
 
@@ -1159,6 +1160,21 @@ const LeadsUpdateCommand = cmd({
         payload.contact_info = { chat_ids: ids }
       } catch {
         payload.contact_info = { chat_ids: [String(args["chat-id"])] }
+      }
+    }
+    // --add-email appends to contact_info.emails (fetches existing to avoid overwrite)
+    if (args["add-email"]) {
+      try {
+        const lr = await irisFetch(`/api/v1/leads/${leadId}`)
+        const existingLead = lr.ok ? (((await lr.json()) as any)?.data ?? {}) : {}
+        const ci = existingLead.contact_info ?? {}
+        const emails: string[] = Array.isArray(ci.emails) ? ci.emails : []
+        const newEmail = String(args["add-email"]).trim().toLowerCase()
+        if (!emails.map((e: string) => e.toLowerCase()).includes(newEmail)) emails.push(newEmail)
+        // Merge with any existing contact_info payload (e.g. from --chat-id)
+        payload.contact_info = { ...(payload.contact_info as Record<string, unknown> ?? {}), ...ci, emails }
+      } catch {
+        payload.contact_info = { ...(payload.contact_info as Record<string, unknown> ?? {}), emails: [String(args["add-email"]).trim()] }
       }
     }
 
@@ -1961,18 +1977,26 @@ const LeadsSyncCommsCommand = cmd({
         }
 
         // ── WhatsApp (via local bridge — Playwright persistent session) ──
-        if (phone) {
-          try {
-            const r = await fetch(
-              `${BRIDGE_BASE}/api/whatsapp/search?handle=${encodeURIComponent(phone)}&days=${days}&limit=${msgLimit}`,
-              { headers: bridgeHeaders(), signal: AbortSignal.timeout(15000) },
-            )
-            if (r.ok) {
-              const d = (await r.json()) as any
-              if (d?.messages?.length) channels.push({ name: "WhatsApp", messages: d.messages })
+        // Try phone first, fall back to name (contacts may be saved by name, not number)
+        if (phone || name) {
+          const waHandles = [phone, name].filter(Boolean)
+          for (const waHandle of waHandles) {
+            try {
+              const r = await fetch(
+                `${BRIDGE_BASE}/api/whatsapp/search?handle=${encodeURIComponent(waHandle)}&days=${days}&limit=${msgLimit}`,
+                { headers: bridgeHeaders(), signal: AbortSignal.timeout(15000) },
+              )
+              if (r.ok) {
+                const d = (await r.json()) as any
+                if (d?.messages?.length) {
+                  channels.push({ name: "WhatsApp", messages: d.messages })
+                  break // found messages, stop trying handles
+                }
+              }
+            } catch {
+              /* bridge offline or WA session expired → silent skip */
+              break
             }
-          } catch {
-            /* bridge offline or WA session expired → silent skip */
           }
         }
 
@@ -2172,10 +2196,22 @@ const LeadsPulseCommand = cmd({
       const phone = lead.phone ?? ""
       const name = lead.name ?? lead.first_name ?? `Lead #${leadId}`
 
+      // Resolve ALL known emails for this lead (primary + contact_info.emails + nurture_email)
+      const allEmails: string[] = []
+      if (email) allEmails.push(email.toLowerCase())
+      const ci = lead.contact_info ?? {}
+      if (ci.nurture_email && !allEmails.includes(ci.nurture_email.toLowerCase())) allEmails.push(ci.nurture_email.toLowerCase())
+      if (Array.isArray(ci.emails)) {
+        for (const e of ci.emails) {
+          if (e && !allEmails.includes(String(e).toLowerCase())) allEmails.push(String(e).toLowerCase())
+        }
+      }
+
       spinner.stop(bold(name))
       printDivider()
       printKV("ID", lead.id)
       printKV("Email", email || dim("(none)"))
+      if (allEmails.length > 1) printKV("Alt Emails", dim(allEmails.slice(1).join(", ")))
       printKV("Phone", phone || dim("(none)"))
       printKV("Status", lead.status)
       printKV("Company", lead.company)
@@ -2863,6 +2899,15 @@ const LeadsPulseCommand = cmd({
       const days = args.days as number
       const channels: { name: string; messages: any[]; error?: string }[] = []
 
+      // Timeout wrapper — prevents any single channel fetch from hanging the entire pulse (#104244)
+      const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+        return Promise.race([
+          promise,
+          new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)),
+        ])
+      }
+      const CHANNEL_TIMEOUT = 15000 // 15s per channel
+
       // Check if the lead has any contact info at all (#55721)
       if (!email && !phone) {
         channelSpinner.stop("No channels available")
@@ -2876,7 +2921,7 @@ const LeadsPulseCommand = cmd({
         // Gmail (via lead-specific Gmail threads endpoint — avoids MCP 422) (#55620)
         if (email) {
           fetches.push(
-            irisFetch(`/api/v1/leads/${leadId}/gmail-threads`)
+            withTimeout(irisFetch(`/api/v1/leads/${leadId}/gmail-threads`), CHANNEL_TIMEOUT, "Gmail")
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
@@ -2891,11 +2936,11 @@ const LeadsPulseCommand = cmd({
                         thread_id: t.gmail_thread_id ?? "",
                       }))
                     : []
-                  // Filter to only threads involving the lead's email (#55723)
+                  // Filter to only threads involving ANY of the lead's emails (#55723)
                   const filtered = msgs.filter((m: any) => {
                     if (!m.from) return true // keep if no from info
                     const fromLower = m.from.toLowerCase()
-                    return fromLower.includes(email.toLowerCase())
+                    return allEmails.some((e) => fromLower.includes(e))
                   })
                   channels.push({ name: "Gmail", messages: filtered })
                 } else {
@@ -2918,10 +2963,10 @@ const LeadsPulseCommand = cmd({
         const handle = phone || email
         if (handle) {
           fetches.push(
-            fetch(
+            withTimeout(fetch(
               `${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=${msgLimit}`,
               { headers: bridgeHeaders() },
-            )
+            ), CHANNEL_TIMEOUT, "iMessage")
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
@@ -2938,10 +2983,10 @@ const LeadsPulseCommand = cmd({
         } else if (name) {
           // Fallback: search by contact name via Contacts.app resolution
           fetches.push(
-            fetch(
+            withTimeout(fetch(
               `${BRIDGE_BASE}/api/imessage/search?name=${encodeURIComponent(name)}&days=${days}&limit=${msgLimit}`,
               { headers: bridgeHeaders() },
-            )
+            ), CHANNEL_TIMEOUT, "iMessage")
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
@@ -3028,31 +3073,47 @@ const LeadsPulseCommand = cmd({
           }
         }
 
-        // Apple Mail (via local bridge daemon)
-        if (email) {
+        // Apple Mail (via local bridge daemon) — scan ALL known emails
+        for (const scanEmail of allEmails.length > 0 ? allEmails : (email ? [email] : [])) {
           fetches.push(
-            fetch(
-              `${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=${msgLimit}&include_body=0`,
+            withTimeout(fetch(
+              `${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(scanEmail)}&days=${days}&limit=${msgLimit}&include_body=0&include_attachments=1`,
               { headers: bridgeHeaders() },
-            )
+            ), CHANNEL_TIMEOUT, `Apple Mail (${scanEmail})`)
               .then(async (r) => {
                 if (r.ok) {
                   const d = (await r.json()) as any
-                  channels.push({ name: "Apple Mail", messages: d?.messages ?? [] })
+                  const msgs = d?.messages ?? []
+                  // Merge into existing Apple Mail channel or create new
+                  const existing = channels.find((ch) => ch.name === "Apple Mail")
+                  if (existing) {
+                    // Dedup by date+subject
+                    for (const m of msgs) {
+                      if (!existing.messages.some((e: any) => e.date === m.date && e.subject === m.subject)) {
+                        existing.messages.push(m)
+                      }
+                    }
+                  } else {
+                    channels.push({ name: "Apple Mail", messages: msgs })
+                  }
                 } else {
                   const body = await r.text().catch(() => "")
-                  channels.push({ name: "Apple Mail", messages: [], error: body || `HTTP ${r.status}` })
+                  if (!channels.find((ch) => ch.name === "Apple Mail")) {
+                    channels.push({ name: "Apple Mail", messages: [], error: body || `HTTP ${r.status}` })
+                  }
                 }
               })
               .catch((e) => {
-                channels.push({ name: "Apple Mail", messages: [], error: e.message })
+                if (!channels.find((ch) => ch.name === "Apple Mail")) {
+                  channels.push({ name: "Apple Mail", messages: [], error: e.message })
+                }
               }),
           )
         }
 
         // Google Calendar meetings (search by lead name/email)
         fetches.push(
-          fetchLeadCalendarEvents({ name, email, id: leadId }, { days, futureDays: 90 })
+          withTimeout(fetchLeadCalendarEvents({ name, email, emails: allEmails, id: leadId }, { days, futureDays: 90 }), CHANNEL_TIMEOUT, "Calendar")
             .then(({ past, upcoming }) => {
               const allEvents = [...upcoming, ...past].map((ev) => ({
                 summary: ev.summary || "(no title)",
@@ -3212,7 +3273,8 @@ const LeadsPulseCommand = cmd({
       }
 
       // ── NEW: Communication Intelligence ──
-      // Sentiment analysis + response time metrics
+      // Sentiment analysis + response time metrics (#104244: per-section try-catch)
+      try {
       if (channels.length > 0) {
         const allMessages: Array<{ text: string; date: string; isOutbound: boolean; channel: string }> = []
 
@@ -3363,8 +3425,12 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
           printKV("  Their Avg Response", `${theirColor}${fmtH(avgTheirResponse)}${theirNormal}${bizNote}`)
         }
       }
+      } catch (sectionErr) {
+        console.log(`  ${dim(`Communication Intelligence: ${sectionErr instanceof Error ? sectionErr.message : String(sectionErr)}`)}`)
+      }
 
       // ── Team Context — who else is working with this lead ──
+      try {
       {
         // Extract unique team members from activities + outreach steps + tasks
         const teamMembers = new Map<string, { name: string; roles: Set<string>; lastActive: string }>()
@@ -3468,8 +3534,12 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
           if (sorted.length > 6) console.log(`    ${dim(`…and ${sorted.length - 6} more`)}`)
         }
       }
+      } catch (sectionErr) {
+        console.log(`  ${dim(`Team Context: ${sectionErr instanceof Error ? sectionErr.message : String(sectionErr)}`)}`)
+      }
 
       // ── Workflow & Outreach Status — sequences/automations running for this lead ──
+      try {
       {
         // Outreach steps (sequences)
         if (outreachSteps.length > 0) {
@@ -3518,6 +3588,9 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
           }
           if (leadWorkflows.length > 5) console.log(`    ${dim(`…and ${leadWorkflows.length - 5} more — iris workflows list`)}`)
         }
+      }
+      } catch (sectionErr) {
+        console.log(`  ${dim(`Workflow Status: ${sectionErr instanceof Error ? sectionErr.message : String(sectionErr)}`)}`)
       }
 
       // ── Product Usage — login frequency, feature adoption ──
@@ -4046,7 +4119,11 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
       )
     } catch (err) {
       spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
+      const errMsg = err instanceof Error ? err.message : String(err)
+      const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : ""
+      prompts.log.error(errMsg)
+      // Always print stack trace so MCP/piped contexts don't swallow errors (#104244)
+      if (errStack) console.error(dim(errStack))
       prompts.outro("Done")
     }
   },
