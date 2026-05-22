@@ -149,9 +149,13 @@ jobs:
           npm_config_engine_strict: false
 
       - name: Generate static Nuxt build
-        run: npx nuxt generate
+        run: NUXT_TELEMETRY_DISABLED=1 npx nuxt generate
         env:
           NODE_OPTIONS: --openssl-legacy-provider
+          SERVER_HOST: 0.0.0.0
+          SERVER_PORT: 3000
+          API_URL: https://raichu.heyiris.io
+          NUXT_TARGET: static
 
       - name: Copy web assets to Electron
         run: npx cap copy @capacitor-community/electron
