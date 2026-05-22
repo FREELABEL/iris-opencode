@@ -696,6 +696,79 @@ function generateInsights(stats: SessionStats): string[] {
   return insights.slice(0, 5) // Limit to 5 insights
 }
 
+export interface SessionSnapshot {
+  total_cost: number
+  tokens_input: number
+  tokens_output: number
+  tokens_reasoning: number
+  tokens_cache_read: number
+  tokens_cache_write: number
+  message_count: number
+  tool_usage: Record<string, number>
+  model_usage: Record<string, { messages: number; tokens: { input: number; output: number }; cost: number }>
+  primary_model: string | null
+  title: string
+  session_created_at: string | null
+  session_updated_at: string | null
+}
+
+export async function computeSessionSnapshot(sessionID: string): Promise<SessionSnapshot> {
+  const session = await Session.get(sessionID)
+  const messages = await Session.messages({ sessionID }).catch(() => [] as any[])
+
+  let totalCost = 0
+  const tokens = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
+  const toolUsage: Record<string, number> = {}
+  const modelUsage: Record<string, { messages: number; tokens: { input: number; output: number }; cost: number }> = {}
+
+  for (const message of messages) {
+    if (message.info.role === "assistant") {
+      totalCost += message.info.cost || 0
+
+      const modelKey = `${message.info.providerID}/${message.info.modelID}`
+      if (!modelUsage[modelKey]) {
+        modelUsage[modelKey] = { messages: 0, tokens: { input: 0, output: 0 }, cost: 0 }
+      }
+      modelUsage[modelKey].messages++
+      modelUsage[modelKey].cost += message.info.cost || 0
+
+      if (message.info.tokens) {
+        tokens.input += message.info.tokens.input || 0
+        tokens.output += message.info.tokens.output || 0
+        tokens.reasoning += message.info.tokens.reasoning || 0
+        tokens.cacheRead += message.info.tokens.cache?.read || 0
+        tokens.cacheWrite += message.info.tokens.cache?.write || 0
+        modelUsage[modelKey].tokens.input += message.info.tokens.input || 0
+        modelUsage[modelKey].tokens.output += (message.info.tokens.output || 0) + (message.info.tokens.reasoning || 0)
+      }
+    }
+
+    for (const part of message.parts) {
+      if (part.type === "tool" && part.tool) {
+        toolUsage[part.tool] = (toolUsage[part.tool] || 0) + 1
+      }
+    }
+  }
+
+  const primaryModel = Object.entries(modelUsage).sort(([, a], [, b]) => b.messages - a.messages)[0]?.[0] ?? null
+
+  return {
+    total_cost: totalCost,
+    tokens_input: tokens.input,
+    tokens_output: tokens.output,
+    tokens_reasoning: tokens.reasoning,
+    tokens_cache_read: tokens.cacheRead,
+    tokens_cache_write: tokens.cacheWrite,
+    message_count: messages.length,
+    tool_usage: toolUsage,
+    model_usage: modelUsage,
+    primary_model: primaryModel,
+    title: session.title,
+    session_created_at: session.time.created ? new Date(session.time.created).toISOString() : null,
+    session_updated_at: session.time.updated ? new Date(session.time.updated).toISOString() : null,
+  }
+}
+
 function formatNumber(num: number): string {
   if (num >= 1000000) {
     return (num / 1000000).toFixed(1) + "M"
