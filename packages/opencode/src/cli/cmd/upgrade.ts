@@ -99,6 +99,32 @@ export const UpgradeCommand = {
         prompts.log.info("Bridge updated")
       }
 
+      // Update desktop app if on macOS
+      if (process.platform === "darwin") {
+        const arch = process.arch === "arm64" ? "arm64" : "x64"
+        const appDir = `${home}/Applications`
+        const appPath = `${appDir}/IRIS.app`
+        const appUrl = `https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-app-darwin-${arch}.zip`
+        const updateApp = await $`
+          tmpdir=$(mktemp -d) &&
+          curl -sL --fail -o "$tmpdir/IRIS-app.zip" "${appUrl}" 2>/dev/null &&
+          rm -rf "${appPath}" 2>/dev/null;
+          mkdir -p "${appDir}" &&
+          unzip -q "$tmpdir/IRIS-app.zip" -d "${appDir}" 2>/dev/null &&
+          rm -rf "$tmpdir" &&
+          test -d "${appPath}" && echo "app-updated"
+        `.nothrow().quiet().text()
+        if (updateApp.includes("app-updated")) {
+          prompts.log.info("Desktop app updated")
+        } else {
+          // Check if app exists but update failed vs not available yet
+          const hasApp = await $`test -d "${appPath}" && echo "exists"`.nothrow().quiet().text()
+          if (!hasApp.includes("exists")) {
+            prompts.log.info("Desktop app not installed (run: iris install-app)")
+          }
+        }
+      }
+
       // Fix stale API URLs in daemon config (pre-Railway migration)
       const configFile = `${home}/.iris/config.json`
       const fixResult = await $`test -f ${configFile} && grep -qE 'ondigitalocean\\.app|main\\.heyiris\\.io|apiv2\\.heyiris\\.io' ${configFile} 2>/dev/null && sed -i.bak -e 's|https://[^"]*ondigitalocean\\.app[^"]*|https://freelabel.net|g' -e 's|https://main\\.heyiris\\.io[^"]*|https://freelabel.net|g' -e 's|https://apiv2\\.heyiris\\.io[^"]*|https://freelabel.net|g' ${configFile} && rm -f ${configFile}.bak && echo "config-fixed"`.nothrow().quiet().text()

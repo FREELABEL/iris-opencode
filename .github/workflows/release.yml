@@ -118,8 +118,72 @@ jobs:
             packages/opencode/dist/*.tar.gz
             packages/opencode/dist/*.zip
 
+  build-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - name: Checkout elon-web-ui
+        uses: actions/checkout@v4
+        with:
+          repository: FREELABEL/fl-elon-web-ui
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Generate static Nuxt build
+        run: npx nuxt generate
+        env:
+          NODE_OPTIONS: --openssl-legacy-provider
+
+      - name: Copy web assets to Electron
+        run: npx cap copy @capacitor-community/electron
+
+      - name: Install Electron dependencies
+        run: cd electron && npm ci
+
+      - name: Build Electron TypeScript
+        run: cd electron && npm run build
+
+      - name: Package desktop app
+        run: cd electron && npm run electron:pack
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release archive
+        run: |
+          cd electron/dist
+          if [ -d "mac-arm64" ]; then
+            cd mac-arm64 && zip -r ../../IRIS-app-darwin-arm64.zip IRIS.app && cd ..
+          elif [ -d "mac" ]; then
+            cd mac && zip -r ../../IRIS-app-darwin-${{ matrix.arch }}.zip IRIS.app && cd ..
+          fi
+          ls -la ../*.zip 2>/dev/null || echo "No zip created"
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-app-darwin-${{ matrix.arch }}
+          path: electron/IRIS-app-darwin-*.zip
+          if-no-files-found: warn
+
   release:
-    needs: build
+    needs: [build, build-desktop]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
@@ -158,6 +222,14 @@ jobs:
             exit 1
           fi
           echo "All required assets present"
+          # Desktop app artifacts are optional
+          for optional in IRIS-app-darwin-arm64.zip IRIS-app-darwin-x64.zip; do
+            if [ -f "artifacts/$optional" ]; then
+              echo "Desktop app found: $optional"
+            else
+              echo "::warning::Desktop app not found: $optional (optional)"
+            fi
+          done
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -170,5 +242,6 @@ jobs:
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
+            artifacts/IRIS-app-*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

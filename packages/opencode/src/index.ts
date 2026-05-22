@@ -7,6 +7,7 @@ import { AuthCommand } from "./cli/cmd/auth"
 import { AgentCommand } from "./cli/cmd/agent"
 import { UpgradeCommand } from "./cli/cmd/upgrade"
 import { UninstallCommand } from "./cli/cmd/uninstall"
+import { InstallAppCommand } from "./cli/cmd/install-app"
 import { ModelsCommand } from "./cli/cmd/models"
 import { UI } from "./cli/ui"
 import { Installation } from "./installation"
@@ -212,6 +213,7 @@ const cli = yargs(rawArgs)
   .command(reg(AgentCommand))
   .command(reg(UpgradeCommand))
   .command(reg(UninstallCommand))
+  .command(reg(InstallAppCommand))
   .command(reg(ServeCommand))
   .command(reg(WebCommand))
   .command(reg(ModelsCommand))
