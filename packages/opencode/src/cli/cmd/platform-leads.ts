@@ -1960,8 +1960,24 @@ const LeadsSyncCommsCommand = cmd({
           }
         }
 
+        // ── WhatsApp (via local bridge — Playwright persistent session) ──
+        if (phone) {
+          try {
+            const r = await fetch(
+              `${BRIDGE_BASE}/api/whatsapp/search?handle=${encodeURIComponent(phone)}&days=${days}&limit=${msgLimit}`,
+              { headers: bridgeHeaders(), signal: AbortSignal.timeout(15000) },
+            )
+            if (r.ok) {
+              const d = (await r.json()) as any
+              if (d?.messages?.length) channels.push({ name: "WhatsApp", messages: d.messages })
+            }
+          } catch {
+            /* bridge offline or WA session expired → silent skip */
+          }
+        }
+
         // ── Map channel results → atlas/comms/ingest payload (same shape as pulse) ──
-        const channelMap: Record<string, string> = { Gmail: "gmail", iMessage: "imessage", "Apple Mail": "apple_mail" }
+        const channelMap: Record<string, string> = { Gmail: "gmail", iMessage: "imessage", "Apple Mail": "apple_mail", WhatsApp: "whatsapp" }
         let leadIngested = 0
         for (const ch of channels) {
           const channelKey = channelMap[ch.name]
@@ -1975,6 +1991,14 @@ const LeadsSyncCommsCommand = cmd({
                 body: msg.text ?? "",
                 sent_at: msg.ts ?? msg.date ?? null,
                 metadata: { source: "comms_sync_task" },
+              }
+            } else if (ch.name === "WhatsApp") {
+              return {
+                direction: msg.from_me ? "outbound" : "inbound",
+                from_identifier: msg.from_me ? "me" : phone || email,
+                body: msg.text ?? "",
+                sent_at: msg.ts ?? msg.date ?? null,
+                metadata: { source: "comms_sync_task", platform: "whatsapp" },
               }
             } else if (ch.name === "Gmail") {
               return {
