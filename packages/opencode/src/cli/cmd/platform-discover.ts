@@ -302,6 +302,21 @@ async function writeConfigList(key: string, value: unknown[]): Promise<Response>
   })
 }
 
+async function readConfigObject(key: string): Promise<Record<string, unknown>> {
+  const res = await irisFetch(`/api/v1/platform-config/${key}`)
+  if (!res.ok) return {}
+  const data = (await res.json()) as any
+  const value = data?.data?.value
+  return (value && typeof value === "object" && !Array.isArray(value)) ? value : {}
+}
+
+async function writeConfigObject(key: string, value: Record<string, unknown>): Promise<Response> {
+  return irisFetch(`/api/v1/platform-config/${key}`, {
+    method: "PUT",
+    body: JSON.stringify({ value }),
+  })
+}
+
 // ============================================================================
 // Producers subcommand (config key: discover.producers)
 // ============================================================================
@@ -612,6 +627,222 @@ const ArtistsCommand = cmd({
 })
 
 // ============================================================================
+// Brands subcommand (config key: discover.brands)
+// ============================================================================
+
+// Default brand config — matches fl-api DiscoverContentController::getProfileConfiguration()
+const DEFAULT_BRANDS: Record<string, { name: string; alias: string; short_description: string; description: string; category: string }> = {
+  "mino marketing": { name: "Mino Marketing", alias: "marketing", short_description: "MKT", description: "Marketing & Advertising", category: "business" },
+  "freelabel": { name: "FREELABEL", alias: "news", short_description: "NEWS", description: "News & Media", category: "media" },
+  "noys": { name: "NOYS", alias: "music", short_description: "MUS", description: "Music & Audio", category: "entertainment" },
+  "capital collective": { name: "Capital Collective", alias: "entrepreneurship", short_description: "BIZ", description: "Business & Entrepreneurship", category: "business" },
+  "the know it alls": { name: "The Know It Alls", alias: "science-tech", short_description: "SCI", description: "Science & Technology", category: "education" },
+  "gastro": { name: "GASTRO", alias: "food-business", short_description: "FOOD", description: "Food & Business", category: "lifestyle" },
+  "rap cap": { name: "Rap Cap", alias: "urban-hiphop", short_description: "HIP", description: "Urban & Hip Hop", category: "music" },
+  "amradiolive": { name: "AMRadioLIVE", alias: "live-music", short_description: "LIVE", description: "Live Music & DJ", category: "entertainment" },
+  "entropy": { name: "Entropy", alias: "engineering-science", short_description: "ENG", description: "Engineering & Science", category: "education" },
+  "theniea": { name: "THENIEA", alias: "economics-environmental", short_description: "ECO", description: "Economic & Environmental", category: "education" },
+  "beatbox": { name: "Beatbox", alias: "beats-instrumentals", short_description: "BEATS", description: "Beats & Instrumentals", category: "music" },
+}
+
+async function readBrandsConfig(): Promise<Record<string, any>> {
+  const remote = await readConfigObject("discover.brands")
+  return Object.keys(remote).length > 0 ? remote : DEFAULT_BRANDS
+}
+
+const BrandsListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list brand categories on the discover page",
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Discover Brands")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+
+    try {
+      const brands = await readBrandsConfig()
+      const keys = Object.keys(brands)
+      const isCustom = Object.keys(await readConfigObject("discover.brands")).length > 0
+      spinner.stop(`${keys.length} brand(s)${isCustom ? "" : " (defaults)"}`)
+
+      if (args.json) {
+        console.log(JSON.stringify(brands, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      for (const [key, cfg] of Object.entries(brands) as [string, any][]) {
+        console.log(`  ${bold(cfg.name || key)}  ${dim(cfg.alias || "")}  ${dim(cfg.category || "")}`)
+      }
+      printDivider()
+
+      prompts.outro(dim("iris discover brands add <name>  |  iris discover brands remove <name>"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BrandsAddCommand = cmd({
+  command: "add <name>",
+  describe: "add a brand category to the discover page",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { describe: "profile name (lowercase, e.g. 'mino marketing')", type: "string", demandOption: true })
+      .option("alias", { describe: "URL alias slug", type: "string" })
+      .option("description", { describe: "category description", type: "string" })
+      .option("short-description", { describe: "short label (3-5 chars)", type: "string" })
+      .option("category", { describe: "category type", type: "string", choices: ["business", "media", "entertainment", "education", "lifestyle", "music", "technology"] }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Add Brand: ${args.name}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      // Read current (or defaults if no custom config)
+      const brands = await readBrandsConfig()
+      const key = String(args.name).toLowerCase()
+
+      if (brands[key]) {
+        spinner.stop(`${key} already exists`)
+        prompts.outro("Done")
+        return
+      }
+
+      const alias = args.alias || key.replace(/\s+/g, "-")
+      const desc = args.description || args.name
+      const shortDesc = args["short-description"] || alias.slice(0, 4).toUpperCase()
+      const category = args.category || "business"
+
+      brands[key] = {
+        name: args.name,
+        alias,
+        short_description: shortDesc,
+        description: desc,
+        category,
+      }
+
+      const putRes = await writeConfigObject("discover.brands", brands)
+      const ok = await handleApiError(putRes, "Add brand")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Added ${bold(String(args.name))}`)
+      printDivider()
+      printKV("Name", args.name)
+      printKV("Alias", alias)
+      printKV("Description", desc)
+      printKV("Category", category)
+      printDivider()
+      prompts.outro(dim("iris discover brands list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BrandsRemoveCommand = cmd({
+  command: "remove <name>",
+  aliases: ["rm", "delete"],
+  describe: "remove a brand category from the discover page",
+  builder: (yargs) =>
+    yargs.positional("name", { describe: "profile name to remove", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Remove Brand: ${args.name}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const brands = await readBrandsConfig()
+      const key = String(args.name).toLowerCase()
+
+      if (!brands[key]) {
+        spinner.stop(`${key} not found`)
+        prompts.outro("Done")
+        return
+      }
+
+      delete brands[key]
+
+      const putRes = await writeConfigObject("discover.brands", brands)
+      const ok = await handleApiError(putRes, "Remove brand")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Removed ${bold(String(args.name))}`)
+      prompts.outro(dim("iris discover brands list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BrandsResetCommand = cmd({
+  command: "reset",
+  describe: "reset brand categories to hardcoded defaults",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Reset Brands to Defaults")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Resetting…")
+
+    try {
+      // Write defaults explicitly to reset
+      const putRes = await writeConfigObject("discover.brands", DEFAULT_BRANDS as Record<string, unknown>)
+      const ok = await handleApiError(putRes, "Reset brands")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Brands reset to ${Object.keys(DEFAULT_BRANDS).length} defaults`)
+      prompts.outro(dim("iris discover brands list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BrandsCommand = cmd({
+  command: "brands",
+  aliases: ["categories"],
+  describe: "manage brand categories on the discover page content tab",
+  builder: (yargs) =>
+    yargs
+      .command(BrandsListCommand)
+      .command(BrandsAddCommand)
+      .command(BrandsRemoveCommand)
+      .command(BrandsResetCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Sections subcommand (config key: discover.sections)
 // ============================================================================
 
@@ -779,6 +1010,7 @@ export const PlatformDiscoverCommand = cmd({
       .command(ProducersCommand)
       .command(InstrumentalsCommand)
       .command(ArtistsCommand)
+      .command(BrandsCommand)
       .command(SectionsCommand)
       .demandCommand(),
   async handler() {},
