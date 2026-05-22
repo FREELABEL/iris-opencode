@@ -144,7 +144,9 @@ jobs:
           cache: 'npm'
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --engine-strict=false
+        env:
+          npm_config_engine_strict: false
 
       - name: Generate static Nuxt build
         run: npx nuxt generate
