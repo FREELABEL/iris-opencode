@@ -1203,16 +1203,16 @@ const BloqsAttachLeadCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
-      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true }),
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Attach Lead #${args["lead-id"]} → Bloq #${args["bloq-id"]}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Attach Lead #${args["lead-id"]} → Bloq #${args["bloq-id"]}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Attaching…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Attaching…")
 
     try {
       const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/attach-bloq`, {
@@ -1220,16 +1220,21 @@ const BloqsAttachLeadCommand = cmd({
         body: JSON.stringify({ bloq_id: args["bloq-id"] }),
       })
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Attach lead")
         prompts.outro("Done")
         return
       }
 
-      spinner.stop(`${success("✓")} Lead #${args["lead-id"]} attached to Bloq #${args["bloq-id"]}`)
+      const data = await res.json().catch(() => ({})) as Record<string, unknown>
+      if (args.json) { console.log(JSON.stringify({ success: true, bloq_id: args["bloq-id"], lead_id: args["lead-id"], ...data })); return }
+
+      if (spinner) spinner.stop(`${success("✓")} Lead #${args["lead-id"]} attached to Bloq #${args["bloq-id"]}`)
       prompts.outro(dim(`iris leads get ${args["lead-id"]}`))
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1243,16 +1248,16 @@ const BloqsDetachLeadCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
-      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true }),
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Detach Lead #${args["lead-id"]} from Bloq #${args["bloq-id"]}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Detach Lead #${args["lead-id"]} from Bloq #${args["bloq-id"]}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Detaching…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Detaching…")
 
     try {
       const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/detach-bloq`, {
@@ -1260,16 +1265,185 @@ const BloqsDetachLeadCommand = cmd({
         body: JSON.stringify({ bloq_id: args["bloq-id"] }),
       })
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Detach lead")
         prompts.outro("Done")
         return
       }
 
-      spinner.stop(`${success("✓")} Lead #${args["lead-id"]} detached from Bloq #${args["bloq-id"]}`)
+      const data = await res.json().catch(() => ({})) as Record<string, unknown>
+      if (args.json) { console.log(JSON.stringify({ success: true, bloq_id: args["bloq-id"], lead_id: args["lead-id"], ...data })); return }
+
+      if (spinner) spinner.stop(`${success("✓")} Lead #${args["lead-id"]} detached from Bloq #${args["bloq-id"]}`)
       prompts.outro(dim(`iris leads get ${args["lead-id"]}`))
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Contributors — list leads attached to a bloq
+// ============================================================================
+
+const BloqsContributorsCommand = cmd({
+  command: "contributors <bloq-id>",
+  aliases: ["contacts", "leads"],
+  describe: "list leads/contacts attached to this bloq project",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq #${args["bloq-id"]} Contributors`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
+
+    try {
+      const userId = await requireUserId()
+      if (!userId) { if (spinner) spinner.stop("Failed", 1); return }
+
+      const res = await irisFetch(`/api/v1/users/${userId}/leads?bloq_id=${args["bloq-id"]}&per_page=100`)
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "List contributors")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = await res.json() as Record<string, unknown>
+      const leads: any[] = (data as any)?.data ?? (data as any)?.leads ?? (Array.isArray(data) ? data : [])
+
+      if (args.json) { console.log(JSON.stringify(leads, null, 2)); return }
+
+      if (spinner) spinner.stop(`${leads.length} contributor(s)`)
+
+      if (leads.length === 0) {
+        prompts.log.warn("No leads attached to this bloq")
+        prompts.outro(dim(`iris bloqs attach-lead ${args["bloq-id"]} <lead-id>`))
+        return
+      }
+
+      console.log()
+      for (const lead of leads) {
+        const name = lead.name ?? lead.full_name ?? lead.company_name ?? "Unknown"
+        const email = lead.email ?? ""
+        const status = lead.status ?? lead.pivot?.status ?? ""
+        const idLabel = dim(`#${lead.id}`)
+        const emailLabel = email ? `  ${dim("→")} ${email}` : ""
+        const statusLabel = status ? `  ${dim(`[${status}]`)}` : ""
+        console.log(`  ${bold(String(name))}  ${idLabel}${emailLabel}${statusLabel}`)
+      }
+      console.log()
+      prompts.outro(dim(`iris bloqs attach-lead ${args["bloq-id"]} <lead-id>  |  iris bloqs detach-lead ${args["bloq-id"]} <lead-id>`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Items — list items in a bloq (with optional search)
+// ============================================================================
+
+const BloqsItemsCommand = cmd({
+  command: "items <bloq-id>",
+  describe: "list items in a bloq (optionally filter by list or search)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("list", { alias: "l", describe: "filter by list ID", type: "number" })
+      .option("search", { alias: "s", describe: "search items by keyword", type: "string" })
+      .option("status", { describe: "filter by status", type: "string" })
+      .option("limit", { describe: "max items to return", type: "number", default: 50 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq #${args["bloq-id"]} Items`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
+
+    try {
+      // Get items via bloq get endpoint (includes all lists with items)
+      {
+        const fallbackRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}`)
+        if (fallbackRes.ok) {
+          const bloq = await fallbackRes.json() as Record<string, any>
+          const lists = bloq?.data?.lists ?? bloq?.lists ?? []
+          let allItems: any[] = []
+          for (const list of lists) {
+            const listItems = list.items ?? []
+            for (const item of listItems) {
+              allItems.push({ ...item, list_id: list.id, list_name: list.name })
+            }
+          }
+
+          // Apply client-side filtering
+          if (args.search) {
+            const q = String(args.search).toLowerCase()
+            allItems = allItems.filter((i: any) =>
+              (i.title ?? "").toLowerCase().includes(q) ||
+              (i.content ?? "").toLowerCase().includes(q)
+            )
+          }
+          if (args.status) {
+            allItems = allItems.filter((i: any) => i.status === args.status)
+          }
+          if (args.list) {
+            allItems = allItems.filter((i: any) => i.list_id === args.list || i.bloq_list_id === args.list)
+          }
+          allItems = allItems.slice(0, args.limit as number)
+
+          if (args.json) { console.log(JSON.stringify(allItems, null, 2)); return }
+
+          if (spinner) spinner.stop(`${allItems.length} item(s)`)
+
+          if (allItems.length === 0) {
+            prompts.log.warn(args.search ? `No items matching "${args.search}"` : "No items found")
+            prompts.outro("Done")
+            return
+          }
+
+          console.log()
+          for (const item of allItems) {
+            const title = (item.title ?? item.content ?? "").slice(0, 80)
+            const statusLabel = item.status && item.status !== "active" ? `  ${dim(`[${item.status}]`)}` : ""
+            const listLabel = item.list_name ? dim(` (${item.list_name})`) : ""
+            console.log(`  ${dim(`#${item.id}`)}  ${title}${statusLabel}${listLabel}`)
+          }
+          console.log()
+          prompts.outro(dim("iris bloqs update-item <id> --status <status>"))
+          return
+        }
+
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: "Failed to load bloq" })); return }
+        prompts.log.error("Failed to load bloq items")
+        prompts.outro("Done")
+        return
+      }
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1290,10 +1464,10 @@ const BloqsUpdateItemCommand = cmd({
       .option("status", { describe: "set item status (active, pending, approved, rejected, todo, in-progress, done)", type: "string" })
       .option("title", { describe: "new title", type: "string" })
       .option("content", { describe: "new content", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Update Item #${args["item-id"]}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Update Item #${args["item-id"]}`) }
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
@@ -1398,6 +1572,8 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsAttachLeadCommand)
       .command(BloqsDetachLeadCommand)
       .command(BloqsUpdateItemCommand)
+      .command(BloqsContributorsCommand)
+      .command(BloqsItemsCommand)
       .demandCommand(),
   async handler() {},
 })
