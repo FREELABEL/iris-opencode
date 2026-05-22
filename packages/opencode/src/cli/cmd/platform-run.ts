@@ -1056,16 +1056,17 @@ const ExecCommand = cmd({
 
     if (typeof rawParamsArg === "string") {
       // --params consumed as a single string value
-      if (rawParamsArg.startsWith("{")) {
+      const paramStr: string = rawParamsArg
+      if (paramStr.startsWith("{")) {
         try {
-          jsonFromFlag = JSON.parse(rawParamsArg)
+          jsonFromFlag = JSON.parse(paramStr)
         } catch {
           prompts.log.error("Invalid JSON in --params")
           prompts.outro("Done")
           return
         }
       } else {
-        rawParams = [rawParamsArg]
+        rawParams = [paramStr]
       }
     } else if (Array.isArray(rawParamsArg)) {
       // Positional array — but --params may have pushed a JSON string into the array

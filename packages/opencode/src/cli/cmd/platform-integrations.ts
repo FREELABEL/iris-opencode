@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
 
 // ============================================================================
 // Helpers
@@ -407,7 +407,7 @@ const IntegrationsExecCommand = cmd({
       const res = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
         method: "POST",
         body: JSON.stringify(body),
-      })
+      }, IRIS_API)
       const data = await res.json() as Record<string, any>
 
       if (!res.ok) {
