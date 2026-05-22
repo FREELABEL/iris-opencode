@@ -17,7 +17,7 @@ import {
   type StepResult,
   type ExecuteOptions,
 } from "../../skill/executor"
-import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier } from "../../skill/e2e/runner"
+import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCoverage } from "../../skill/e2e/runner"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
 async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
@@ -517,12 +517,14 @@ const SkillHistoryCommand = cmd({
 // ============================================================================
 
 const SkillE2ECommand = cmd({
-  command: "e2e",
-  describe: "run end-to-end playbook tests",
+  command: "e2e [playbook]",
+  describe: "run end-to-end playbook tests (builtins + project playbooks)",
   builder: (yargs) =>
     yargs
+      .positional("playbook", { type: "string", describe: "test a specific playbook by name" })
       .option("tier", { type: "string", describe: "filter by tier: local, edge, cloud", choices: ["local", "edge", "cloud"] })
       .option("mode", { type: "string", describe: "filter by step mode (e.g. shell, hive-script)" })
+      .option("project", { type: "boolean", default: false, describe: "include project v2 playbooks" })
       .option("json", { type: "boolean", default: false, describe: "JSON output for CI/CD" })
       .option("verbose", { type: "boolean", default: false, describe: "print step outputs" }),
   async handler(args) {
@@ -534,12 +536,16 @@ const SkillE2ECommand = cmd({
     const sp = args.json ? null : prompts.spinner()
     sp?.start("  Probing services...")
 
-    const result = await runE2ESuite({
-      tier: args.tier as Tier | undefined,
-      mode: args.mode as string | undefined,
-      verbose: args.verbose as boolean,
-      json: args.json as boolean,
-    })
+    const result = await withInstance(() =>
+      runE2ESuite({
+        tier: args.tier as Tier | undefined,
+        mode: args.mode as string | undefined,
+        playbook: args.playbook as string | undefined,
+        project: args.project as boolean,
+        verbose: args.verbose as boolean,
+        json: args.json as boolean,
+      }),
+    )
 
     sp?.stop("  Services probed", 0)
 
@@ -562,10 +568,10 @@ const SkillE2ECommand = cmd({
     console.log(bold("  Tests:"))
     for (const test of result.tests) {
       const icon = test.status === "pass" ? success("✓") : test.status === "skip" ? dim("○") : "✗"
-      const tier = dim(` [${test.tier}]`)
+      const src = test.tier === "local" ? "" : dim(` [${test.tier}]`)
       const dur = test.duration_ms > 0 ? dim(` (${(test.duration_ms / 1000).toFixed(1)}s)`) : ""
       const reason = test.reason ? dim(` — ${test.reason}`) : ""
-      console.log(`    ${icon} ${bold(test.name)}${tier}${dur}${reason}`)
+      console.log(`    ${icon} ${bold(test.name)}${src}${dur}${reason}`)
 
       if (args.verbose && test.status !== "skip") {
         for (const [stepId, sr] of Object.entries(test.steps)) {
@@ -573,6 +579,15 @@ const SkillE2ECommand = cmd({
           console.log(`      ${stepIcon} ${stepId}`)
         }
       }
+    }
+
+    // Mode coverage
+    if (result.coverage.untested.length > 0) {
+      console.log()
+      console.log(bold("  Mode Coverage:"))
+      console.log(`    ${success("tested")}: ${result.coverage.tested.join(", ") || "(none)"}`)
+      console.log(`    ${dim("untested")}: ${result.coverage.untested.join(", ")}`)
+      console.log(dim(`    ${result.coverage.tested.length}/${result.coverage.total} modes exercised`))
     }
 
     printDivider()

@@ -1,12 +1,12 @@
 ---
-name: e2e-nested
+name: e2e-error-handling
 description: E2E test — multi-step error handling and on-error continue
 version: 2
 on-error: continue
 timeout: 30
 ---
 
-# E2E Nested / Error Handling Test
+# E2E Error Handling Test
 
 ### step:pass Passing Step
 
