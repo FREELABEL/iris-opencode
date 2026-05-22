@@ -17,6 +17,7 @@ import {
   type StepResult,
   type ExecuteOptions,
 } from "../../skill/executor"
+import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier } from "../../skill/e2e/runner"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
 async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
@@ -512,6 +513,77 @@ const SkillHistoryCommand = cmd({
 })
 
 // ============================================================================
+// iris playbook e2e — end-to-end test runner
+// ============================================================================
+
+const SkillE2ECommand = cmd({
+  command: "e2e",
+  describe: "run end-to-end playbook tests",
+  builder: (yargs) =>
+    yargs
+      .option("tier", { type: "string", describe: "filter by tier: local, edge, cloud", choices: ["local", "edge", "cloud"] })
+      .option("mode", { type: "string", describe: "filter by step mode (e.g. shell, hive-script)" })
+      .option("json", { type: "boolean", default: false, describe: "JSON output for CI/CD" })
+      .option("verbose", { type: "boolean", default: false, describe: "print step outputs" }),
+  async handler(args) {
+    if (!args.json) {
+      UI.empty()
+      prompts.intro("◈  Playbook E2E Tests")
+    }
+
+    const sp = args.json ? null : prompts.spinner()
+    sp?.start("  Probing services...")
+
+    const result = await runE2ESuite({
+      tier: args.tier as Tier | undefined,
+      mode: args.mode as string | undefined,
+      verbose: args.verbose as boolean,
+      json: args.json as boolean,
+    })
+
+    sp?.stop("  Services probed", 0)
+
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2))
+      if (result.failed > 0) process.exitCode = 1
+      return
+    }
+
+    // Service availability
+    printDivider()
+    console.log(bold("  Services:"))
+    for (const [name, available] of Object.entries(result.services)) {
+      const icon = available ? success("✓") : dim("○")
+      console.log(`    ${icon} ${name}`)
+    }
+    console.log()
+
+    // Test results
+    console.log(bold("  Tests:"))
+    for (const test of result.tests) {
+      const icon = test.status === "pass" ? success("✓") : test.status === "skip" ? dim("○") : "✗"
+      const tier = dim(` [${test.tier}]`)
+      const dur = test.duration_ms > 0 ? dim(` (${(test.duration_ms / 1000).toFixed(1)}s)`) : ""
+      const reason = test.reason ? dim(` — ${test.reason}`) : ""
+      console.log(`    ${icon} ${bold(test.name)}${tier}${dur}${reason}`)
+
+      if (args.verbose && test.status !== "skip") {
+        for (const [stepId, sr] of Object.entries(test.steps)) {
+          const stepIcon = sr.status === "success" ? success("✓") : sr.status === "skipped" ? dim("○") : "✗"
+          console.log(`      ${stepIcon} ${stepId}`)
+        }
+      }
+    }
+
+    printDivider()
+    const summary = `  ${result.passed} passed, ${result.failed} failed, ${result.skipped} skipped — ${(result.duration_ms / 1000).toFixed(1)}s`
+    console.log(result.failed === 0 ? success(summary) : summary)
+    prompts.outro(result.failed === 0 ? success("Done") : "Done (with failures)")
+    if (result.failed > 0) process.exitCode = 1
+  },
+})
+
+// ============================================================================
 // Helpers
 // ============================================================================
 
@@ -763,9 +835,11 @@ const SkillReviewCommand = cmd({
 
 const PlaybookSyncCommand = cmd({
   command: "sync",
-  describe: "sync playbooks to .claude/skills/ for Claude Code context",
+  describe: "sync playbooks to .claude/skills/ (and optionally to API with --api)",
   builder: (yargs) =>
-    yargs.option("json", { type: "boolean", default: false }),
+    yargs
+      .option("json", { type: "boolean", default: false })
+      .option("api", { type: "boolean", default: false, describe: "also push metadata to iris-api for frontend/API access" }),
   async handler(args) {
     await withInstance(async () => {
       const allPlaybooks = await Skill.all()
@@ -862,11 +936,47 @@ const PlaybookSyncCommand = cmd({
         }
       }
 
+      // --api: also push metadata to iris-api
+      let apiSynced = 0
+      if (args.api) {
+        const token = await requireAuth()
+        if (!token) {
+          if (!args.json) console.log(dim("  Skipping API sync — not authenticated"))
+        } else {
+          for (const info of allPlaybooks) {
+            if (!info.location.includes("/playbooks/") && !info.location.endsWith("PLAYBOOK.md")) continue
+            let plan
+            try { plan = await parsePlan(info) } catch { continue }
+
+            const payload = {
+              name: plan.name,
+              description: plan.description,
+              args_schema: plan.args,
+              steps_summary: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode })),
+              version: plan.version,
+            }
+
+            const res = await irisFetch("/api/v1/playbooks", {
+              method: "POST",
+              body: JSON.stringify(payload),
+            })
+
+            if (res.ok) {
+              apiSynced++
+              if (!args.json) console.log(`  ${success(">")} ${plan.name} → API`)
+            } else if (!args.json) {
+              console.log(dim(`  ! ${plan.name} → API failed (${res.status})`))
+            }
+          }
+        }
+      }
+
       if (args.json) {
-        console.log(JSON.stringify({ synced, skipped }))
+        console.log(JSON.stringify({ synced, skipped, api_synced: apiSynced }))
       } else {
         printDivider()
-        console.log(dim(`  ${synced} synced, ${skipped} skipped`))
+        const apiMsg = args.api ? `, ${apiSynced} to API` : ""
+        console.log(dim(`  ${synced} synced to .claude/skills/${apiMsg}, ${skipped} skipped`))
         prompts.outro(success("Done"))
       }
     })
@@ -887,6 +997,7 @@ export const PlatformPlaybookCommand = cmd({
       .command(SkillRunCommand)
       .command(SkillTestCommand)
       .command(SkillHistoryCommand)
+      .command(SkillE2ECommand)
       .command(PlaybookSyncCommand)
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
@@ -906,6 +1017,7 @@ export const PlatformSkillCommand = cmd({
       .command(SkillRunCommand)
       .command(SkillTestCommand)
       .command(SkillHistoryCommand)
+      .command(SkillE2ECommand)
       .command(PlaybookSyncCommand)
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
