@@ -867,6 +867,55 @@ const BloqsDeleteItemCommand = cmd({
   },
 })
 
+const BloqsCreateListCommand = cmd({
+  command: "create-list <bloq-id> <name>",
+  aliases: ["add-list", "new-list"],
+  describe: "create a new list on a bloq",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .positional("name", { describe: "list name", type: "string", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Create List on Bloq #${args["bloq-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Creating list…")
+
+    try {
+      const res = await irisFetch(
+        `/api/v1/user/bloqs/${args["bloq-id"]}/lists`,
+        {
+          method: "POST",
+          body: JSON.stringify({ name: args.name }),
+        },
+      )
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Create list")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as { data?: any }
+      const list = data?.data ?? data
+      spinner.stop(`${success("✓")} List created: ${bold(args.name)} (ID: ${list.id})`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const BloqsMoveItemCommand = cmd({
   command: "move-item <item-id> <target-list-id>",
   describe: "move an item to a different list",
@@ -1193,6 +1242,7 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
       .command(BloqsDeleteItemCommand)
+      .command(BloqsCreateListCommand)
       .command(BloqsMoveItemCommand)
       .command(BloqsComposeCommand)
       .command(BloqsRenameCommand)

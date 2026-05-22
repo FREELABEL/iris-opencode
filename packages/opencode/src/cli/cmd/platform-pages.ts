@@ -323,7 +323,8 @@ const PushCmd = cmd({
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
       .option("dir", { describe: "input directory", type: "string", default: "./pages" })
-      .option("live", { describe: "skip draft — push directly to live (dangerous)", type: "boolean", default: false }),
+      .option("live", { describe: "skip draft — push directly to live (dangerous)", type: "boolean", default: false })
+      .option("publish", { describe: "publish immediately after push", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Push ${args.slug}`)
@@ -369,7 +370,9 @@ const PushCmd = cmd({
       if (local.seo_title) updateData.seo_title = local.seo_title
       if (local.seo_description) updateData.seo_description = local.seo_description
       if (local.og_image) updateData.og_image = local.og_image
-      if (local.status) updateData.status = local.status
+      // Never send status during push — use publish/unpublish commands instead.
+      // Sending status=published here caused the page to briefly publish with OLD content
+      // before createVersion saved the new json_content, poisoning the iris-api cache.
 
       const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
         method: "PUT",
@@ -378,8 +381,19 @@ const PushCmd = cmd({
       if (!(await handleApiError(res, "Push page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const cnt = jsonContent?.components?.length ?? 0
 
+      // --publish: push + publish in one step
+      if (args.publish) {
+        const pubRes = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
+        if (!(await handleApiError(pubRes, "Publish"))) { sp.stop("Pushed but publish failed", 1); prompts.outro("Done"); return }
+        // Explicitly purge iris-api cache
+        await pagesFetch("/api/internal/cache/purge-page", {
+          method: "POST",
+          body: JSON.stringify({ slug: args.slug }),
+        }).catch(() => {})
+        sp.stop(success(`Pushed (${cnt} components) + published`))
+        console.log(`  ${highlight(publicUrl(args.slug))}`)
       // Safe-by-default: unpublish after push so live page is untouched
-      if (!args.live && page.status === "published") {
+      } else if (!args.live && page.status === "published") {
         await pagesFetch(`/api/v1/pages/${page.id}/unpublish`, { method: "POST" })
         sp.stop(success(`Pushed (${cnt} components) → draft`))
 
@@ -493,6 +507,11 @@ const PublishCmd = cmd({
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const res = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
       if (!(await handleApiError(res, "Publish"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      // Explicitly purge iris-api cache — fl-api's fire-and-forget purge may silently fail
+      await pagesFetch("/api/internal/cache/purge-page", {
+        method: "POST",
+        body: JSON.stringify({ slug: args.slug }),
+      }).catch(() => {})
       sp.stop(success("Published"))
       console.log(`  ${highlight(publicUrl(args.slug))}`)
       prompts.outro("Done")
@@ -639,6 +658,104 @@ const CreateCmd = cmd({
       printKV("URL", publicUrl(p))
       printDivider()
       prompts.outro(dim(`iris pages publish ${p.slug}`))
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const DuplicateCmd = cmd({
+  command: "duplicate <source>",
+  describe: "clone an existing page with a new slug",
+  builder: (y) =>
+    y
+      .positional("source", { describe: "source page slug to clone", type: "string", demandOption: true })
+      .option("slug", { describe: "new page slug", type: "string", demandOption: true })
+      .option("title", { describe: "new page title (defaults to source title)", type: "string" })
+      .option("publish", { describe: "publish immediately", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Duplicate ${args.source} → ${args.slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const sp = prompts.spinner()
+    sp.start("Cloning…")
+    try {
+      // Fetch source page with full JSON
+      const source = await getBySlug(args.source, true)
+      if (!source) { sp.stop("Source not found", 1); prompts.outro("Done"); return }
+
+      const jsonContent = source.json_content
+      if (!jsonContent) {
+        sp.stop("Source has no content", 1)
+        prompts.outro("Done")
+        return
+      }
+
+      // Update title in theme branding if it matches the source title
+      if (jsonContent.theme?.branding?.name === source.title && args.title) {
+        jsonContent.theme.branding.name = args.title
+      }
+
+      const title = args.title ?? source.title
+      const payload: Record<string, unknown> = {
+        slug: args.slug,
+        title,
+        seo_title: args.title ? title : source.seo_title,
+        seo_description: source.seo_description,
+        og_image: source.og_image,
+        owner_type: source.owner_type,
+        owner_id: source.owner_id,
+        status: "draft",
+        json_content: jsonContent,
+      }
+      const res = await pagesFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
+      if (!(await handleApiError(res, "Create page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = (await res.json()) as { data?: any }
+      const p = data?.data ?? data
+      sp.stop(success(`Cloned → #${p.id}`))
+
+      // Save local file
+      const dir = pagesDir("./pages")
+      const filePath = join(dir, `${args.slug}.json`)
+      const localData = {
+        id: p.id,
+        slug: args.slug,
+        title,
+        seo_title: payload.seo_title,
+        seo_description: payload.seo_description,
+        og_image: payload.og_image,
+        status: p.status,
+        owner_type: payload.owner_type,
+        owner_id: payload.owner_id,
+        json_content: jsonContent,
+      }
+      writeFileSync(filePath, JSON.stringify(localData, null, 2))
+
+      printDivider()
+      printKV("ID", p.id)
+      printKV("Slug", args.slug)
+      printKV("Source", args.source)
+      printKV("Components", (jsonContent.components?.length ?? 0).toString())
+      printKV("File", filePath)
+      printDivider()
+
+      if (args.publish) {
+        const pubRes = await pagesFetch(`/api/v1/pages/${p.id}/publish`, { method: "POST" })
+        if (await handleApiError(pubRes, "Publish")) {
+          await pagesFetch("/api/internal/cache/purge-page", {
+            method: "POST",
+            body: JSON.stringify({ slug: args.slug }),
+          }).catch(() => {})
+          console.log(`  ${success("Published")} ${highlight(publicUrl(args.slug))}`)
+        }
+      } else {
+        console.log(`  ${dim("Edit body:")} iris pages set ${args.slug} components[2].props.body "New content"`)
+        console.log(`  ${dim("Publish:")}  iris pages push ${args.slug} --publish`)
+      }
+
+      prompts.outro("Done")
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -1286,6 +1403,7 @@ export const PlatformPagesCommand = cmd({
       .command(UnpublishCmd)
       .command(PreviewCmd)
       .command(CreateCmd)
+      .command(DuplicateCmd)
       .command(ComponentsCmd)
       .command(ComposeCmd)
       .command(ComponentRegistryCmd)
