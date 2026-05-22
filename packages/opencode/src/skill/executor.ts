@@ -24,7 +24,7 @@ export interface ArgDef {
 export interface StepDef {
   id: string
   title: string
-  mode: "shell" | "ai" | "hive" | "hive-script" | "skill" | "manual" | "bloq-workflow" | "cloud-workflow" | "n8n" | "ai-graph" | "schedule"
+  mode: "shell" | "prompt" | "ai" | "hive" | "hive-script" | "skill" | "playbook" | "human" | "manual" | "cloud-workflow" | "cloud-agentic" | "n8n" | "langgraph" | "schedule"
   body: string
   code: string | null
   confirm: boolean
@@ -182,7 +182,7 @@ export function parseSteps(markdownBody: string): StepDef[] {
       node: meta.node ?? null,
       skillRef: meta.skill ?? meta.playbook ?? null,
       skillArgs: meta.args != null ? String(meta.args) : null,
-      workflowId: meta.workflow_id ?? null,
+      workflowId: meta.workflow_id != null ? String(meta.workflow_id) : null,
       webhook: meta.webhook ?? null,
       cron: meta.cron ?? null,
       input: (meta.input && typeof meta.input === "object") ? meta.input : null,
@@ -271,6 +271,29 @@ export function interpolate(
     return ""
   })
     .replace(/\$ARGUMENTS/g, escape(String(args._raw ?? "")))
+}
+
+/**
+ * Recursively interpolate ${{}} variables inside an input object.
+ * Unlike JSON.stringify→interpolate→JSON.parse, this is safe when
+ * interpolated values contain JSON-special characters (quotes, backslashes).
+ */
+export function interpolateInput(
+  obj: Record<string, any>,
+  args: Record<string, unknown>,
+  stepResults: Record<string, StepResult>,
+): Record<string, any> {
+  const walk = (val: unknown): unknown => {
+    if (typeof val === "string") return interpolate(val, args, stepResults)
+    if (Array.isArray(val)) return val.map(walk)
+    if (val !== null && typeof val === "object") {
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(val)) out[k] = walk(v)
+      return out
+    }
+    return val // numbers, booleans, null pass through
+  }
+  return walk(obj) as Record<string, any>
 }
 
 // ============================================================================
@@ -621,6 +644,73 @@ async function executeHiveScript(
 }
 
 // ============================================================================
+// cloud-workflow / cloud-agentic: v6 engine on iris-api
+// ============================================================================
+
+async function executeCloudWorkflow(
+  body: string,
+  step: StepDef,
+  userId: number,
+  agentic: boolean,
+  timeoutMs: number,
+): Promise<{ output: string; exit_code: number }> {
+  try {
+    const { irisFetch, IRIS_API } = await import("../cli/cmd/iris-api")
+
+    if (!step.workflowId) {
+      return { output: `[Step: ${step.id}] FAILED: cloud-workflow requires workflow_id`, exit_code: 1 }
+    }
+
+    const endpoint = agentic
+      ? `/api/v6/workspace/workflows/${step.workflowId}/execute-agentic`
+      : `/api/v6/workspace/workflows/${step.workflowId}/execute`
+
+    const payload: Record<string, any> = { user_id: userId }
+    if (body) payload.goal = body
+    if (step.input) Object.assign(payload, step.input)
+
+    const res = await irisFetch(endpoint, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }, IRIS_API)
+
+    if (!res.ok) {
+      const errBody = await res.text()
+      return { output: formatModeError(agentic ? "cloud-agentic" : "cloud-workflow", step.id, res.status, errBody), exit_code: 1 }
+    }
+
+    const data = await res.json() as any
+    const executionId = data.execution_id ?? data.workflow_execution_id ?? data.id
+
+    // If already complete, return immediately
+    if (data.status === "completed" || data.status === "success") {
+      return { output: JSON.stringify(data.result ?? data), exit_code: 0 }
+    }
+
+    // Poll for async result
+    if (executionId) {
+      const deadline = Date.now() + timeoutMs
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000))
+        const pollRes = await irisFetch(`/api/v6/workspace/${step.workflowId}/result`, {}, IRIS_API)
+        if (!pollRes.ok) continue
+        const pollData = await pollRes.json() as any
+        if (pollData.status === "completed" || pollData.status === "success" || pollData.status === "failed") {
+          const exitCode = pollData.status === "failed" ? 1 : 0
+          return { output: JSON.stringify(pollData.result ?? pollData), exit_code: exitCode }
+        }
+      }
+      return { output: `[Step: ${step.id}] FAILED: cloud-workflow timed out (execution: ${executionId})`, exit_code: 124 }
+    }
+
+    // Synchronous response
+    return { output: JSON.stringify(data.result ?? data), exit_code: 0 }
+  } catch (e: any) {
+    return { output: `[Step: ${step.id}] FAILED: cloud-workflow error — ${e.message}`, exit_code: 1 }
+  }
+}
+
+// ============================================================================
 // Main Executor
 // ============================================================================
 
@@ -776,6 +866,7 @@ export async function executeSkill(
           lastResult = await executeShell(interpolatedCode!, plan.timeout * 1000)
           break
 
+        case "prompt":
         case "ai": {
           // Build context from previous step outputs
           const context = Object.entries(stepResults)
@@ -809,6 +900,28 @@ export async function executeSkill(
             lastResult = { output: "[Step: " + step.id + "] FAILED: hive-script step has no code block", exit_code: 1 }
           } else {
             lastResult = await executeHiveScript(interpolatedCode, plan, step, uid)
+          }
+          break
+        }
+
+        case "cloud-workflow":
+        case "cloud-agentic": {
+          const { resolveUserId: resolveCwUid } = await import("../cli/cmd/iris-api")
+          const cwUid = await resolveCwUid()
+          if (!cwUid) {
+            lastResult = { output: "Not authenticated — cannot execute cloud workflow", exit_code: 1 }
+          } else {
+            const interpolatedInput = step.input
+              ? interpolateInput(step.input, rawArgs, stepResults)
+              : null
+            const stepWithInput = { ...step, input: interpolatedInput }
+            lastResult = await executeCloudWorkflow(
+              interpolatedBody,
+              stepWithInput,
+              cwUid,
+              step.mode === "cloud-agentic",
+              plan.timeout * 1000,
+            )
           }
           break
         }
@@ -852,6 +965,7 @@ export async function executeSkill(
           break
         }
 
+        case "human":
         case "manual":
         default: {
           // Print instructions, wait for user to confirm done
@@ -872,10 +986,15 @@ export async function executeSkill(
     }
 
     const duration = Date.now() - startTime
+    const MAX_OUTPUT = 10_000 // 10KB cap per step — prevents 80KB HTML blobs in JSON/checkpoints
+    const rawOutput = lastResult.output
+    const truncatedOutput = rawOutput.length > MAX_OUTPUT
+      ? rawOutput.slice(0, MAX_OUTPUT) + `\n\n[truncated — ${rawOutput.length} chars total]`
+      : rawOutput
     const sr: StepResult = {
       id: step.id,
       status: lastResult.exit_code === 0 ? "success" : "failed",
-      output: lastResult.output,
+      output: truncatedOutput,
       exit_code: lastResult.exit_code,
       duration_ms: duration,
       attempts: Math.min(maxAttempts, step.retry + 1),
@@ -966,6 +1085,10 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
 
     if (step.mode === "hive-script" && !step.code) {
       issues.push({ level: "error", message: "hive-script step has no code block (needs a JS script)", stepId: step.id })
+    }
+
+    if ((step.mode === "cloud-workflow" || step.mode === "cloud-agentic") && !step.workflowId) {
+      issues.push({ level: "error", message: `${step.mode} step requires workflow_id`, stepId: step.id })
     }
 
     if (step.mode === "ai" && !step.body && !step.code) {

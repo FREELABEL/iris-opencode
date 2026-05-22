@@ -518,17 +518,19 @@ const SkillHistoryCommand = cmd({
 function modeLabel(mode: string): string {
   switch (mode) {
     case "shell": return highlight("shell")
-    case "ai": return highlight("ai")
+    case "prompt":
+    case "ai": return highlight("prompt")
     case "hive": return highlight("hive")
     case "hive-script": return highlight("hive-script")
     case "skill":
     case "playbook": return highlight("playbook")
-    case "bloq-workflow": return highlight("bloq-workflow")
     case "cloud-workflow": return highlight("cloud-workflow")
+    case "cloud-agentic": return highlight("cloud-agentic")
     case "n8n": return highlight("n8n")
-    case "ai-graph": return highlight("ai-graph")
+    case "langgraph": return highlight("langgraph")
     case "schedule": return highlight("schedule")
-    case "manual": return dim("manual")
+    case "human":
+    case "manual": return dim("human")
     default: return dim(mode)
   }
 }
