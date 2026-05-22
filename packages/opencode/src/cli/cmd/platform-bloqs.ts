@@ -1193,6 +1193,154 @@ const BloqsRenameCommand = cmd({
 })
 
 // ============================================================================
+// Attach / Detach leads
+// ============================================================================
+
+const BloqsAttachLeadCommand = cmd({
+  command: "attach-lead <bloq-id> <lead-id>",
+  aliases: ["add-lead"],
+  describe: "attach a lead to this bloq project",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Attach Lead #${args["lead-id"]} → Bloq #${args["bloq-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Attaching…")
+
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/attach-bloq`, {
+        method: "POST",
+        body: JSON.stringify({ bloq_id: args["bloq-id"] }),
+      })
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Attach lead")
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Lead #${args["lead-id"]} attached to Bloq #${args["bloq-id"]}`)
+      prompts.outro(dim(`iris leads get ${args["lead-id"]}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsDetachLeadCommand = cmd({
+  command: "detach-lead <bloq-id> <lead-id>",
+  aliases: ["remove-lead"],
+  describe: "detach a lead from this bloq project",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Detach Lead #${args["lead-id"]} from Bloq #${args["bloq-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Detaching…")
+
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/detach-bloq`, {
+        method: "POST",
+        body: JSON.stringify({ bloq_id: args["bloq-id"] }),
+      })
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Detach lead")
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Lead #${args["lead-id"]} detached from Bloq #${args["bloq-id"]}`)
+      prompts.outro(dim(`iris leads get ${args["lead-id"]}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Update item (status, title, content)
+// ============================================================================
+
+const BloqsUpdateItemCommand = cmd({
+  command: "update-item <item-id>",
+  aliases: ["edit-item"],
+  describe: "update a bloq item (status, title, or content)",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID", type: "number", demandOption: true })
+      .option("status", { describe: "set item status (active, pending, approved, rejected, todo, in-progress, done)", type: "string" })
+      .option("title", { describe: "new title", type: "string" })
+      .option("content", { describe: "new content", type: "string" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Update Item #${args["item-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const payload: Record<string, unknown> = {}
+    if (args.status) payload.status = args.status
+    if (args.title) payload.title = args.title
+    if (args.content) payload.content = args.content
+
+    if (Object.keys(payload).length === 0) {
+      prompts.log.error("Provide at least one of: --status, --title, --content")
+      prompts.outro("Done")
+      process.exitCode = 2
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args["item-id"]}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Update item")
+        prompts.outro("Done")
+        return
+      }
+
+      const parts: string[] = []
+      if (args.status) parts.push(`status → ${args.status}`)
+      if (args.title) parts.push(`title updated`)
+      if (args.content) parts.push(`content updated`)
+
+      spinner.stop(`${success("✓")} Item #${args["item-id"]} updated (${parts.join(", ")})`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Helpers
 // ============================================================================
 
@@ -1247,6 +1395,9 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsComposeCommand)
       .command(BloqsRenameCommand)
       .command(BloqsSearchCommand)
+      .command(BloqsAttachLeadCommand)
+      .command(BloqsDetachLeadCommand)
+      .command(BloqsUpdateItemCommand)
       .demandCommand(),
   async handler() {},
 })

@@ -8953,6 +8953,90 @@ const LeadsReviewCommand = cmd({
 })
 
 // ============================================================================
+// Attach / Detach bloq
+// ============================================================================
+
+const LeadsAttachBloqCommand = cmd({
+  command: "attach-bloq <lead-id> <bloq-id>",
+  aliases: ["add-bloq"],
+  describe: "attach a lead to a bloq project",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Attach Lead #${args["lead-id"]} → Bloq #${args["bloq-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Attaching…")
+
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/attach-bloq`, {
+        method: "POST",
+        body: JSON.stringify({ bloq_id: args["bloq-id"] }),
+      })
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Attach bloq")
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Lead #${args["lead-id"]} attached to Bloq #${args["bloq-id"]}`)
+      prompts.outro(dim(`iris leads get ${args["lead-id"]}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LeadsDetachBloqCommand = cmd({
+  command: "detach-bloq <lead-id> <bloq-id>",
+  aliases: ["remove-bloq"],
+  describe: "detach a lead from a bloq project",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Detach Lead #${args["lead-id"]} from Bloq #${args["bloq-id"]}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Detaching…")
+
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/detach-bloq`, {
+        method: "POST",
+        body: JSON.stringify({ bloq_id: args["bloq-id"] }),
+      })
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        await handleApiError(res, "Detach bloq")
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Lead #${args["lead-id"]} detached from Bloq #${args["bloq-id"]}`)
+      prompts.outro(dim(`iris leads get ${args["lead-id"]}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -9003,6 +9087,8 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsContentEngineCommand)
       .command(LeadsDemoVideoCommand)
       .command(LeadsReviewCommand)
+      .command(LeadsAttachBloqCommand)
+      .command(LeadsDetachBloqCommand)
       .demandCommand(),
   async handler() {},
 })
