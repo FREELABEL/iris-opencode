@@ -843,6 +843,187 @@ const BrandsCommand = cmd({
 })
 
 // ============================================================================
+// Learning Profiles subcommand (config key: discover.learning_profiles)
+// ============================================================================
+
+const DEFAULT_LEARNING_PROFILES: Record<string, number> = {
+  "entropy": 9203690,
+  "theniea": 9203691,
+  "mino-marketing": 890795,
+  "capital-collective": 633213,
+  "gastro": 920342,
+  "freelabel": 635263,
+  "know-it-alls": 918887,
+  "iris-academy": 9207072,
+}
+
+async function readLearningProfiles(): Promise<Record<string, number>> {
+  const remote = await readConfigObject("discover.learning_profiles")
+  return Object.keys(remote).length > 0 ? remote as Record<string, number> : DEFAULT_LEARNING_PROFILES
+}
+
+const LearningListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list learning tab profiles",
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Learning Profiles")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+
+    try {
+      const profiles = await readLearningProfiles()
+      const isCustom = Object.keys(await readConfigObject("discover.learning_profiles")).length > 0
+      spinner.stop(`${Object.keys(profiles).length} profile(s)${isCustom ? "" : " (defaults)"}`)
+
+      if (args.json) {
+        console.log(JSON.stringify(profiles, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      for (const [key, id] of Object.entries(profiles)) {
+        console.log(`  ${bold(key)}  ${dim(`pk: ${id}`)}`)
+      }
+      printDivider()
+
+      prompts.outro(dim("iris discover learning add <key> <profile-id>"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LearningAddCommand = cmd({
+  command: "add <key> <profile-id>",
+  describe: "add a profile to the learning tab",
+  builder: (yargs) =>
+    yargs
+      .positional("key", { describe: "slug key (e.g. entropy)", type: "string", demandOption: true })
+      .positional("profile-id", { describe: "profile pk ID", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Add Learning Profile: ${args.key}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const profiles = await readLearningProfiles()
+      profiles[String(args.key)] = Number(args["profile-id"])
+
+      const putRes = await writeConfigObject("discover.learning_profiles", profiles as Record<string, unknown>)
+      const ok = await handleApiError(putRes, "Add learning profile")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Added ${bold(String(args.key))} (pk: ${args["profile-id"]})`)
+      prompts.outro(dim("iris discover learning list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LearningRemoveCommand = cmd({
+  command: "remove <key>",
+  aliases: ["rm", "delete"],
+  describe: "remove a profile from the learning tab",
+  builder: (yargs) =>
+    yargs.positional("key", { describe: "slug key to remove", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Remove Learning Profile: ${args.key}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Updating…")
+
+    try {
+      const profiles = await readLearningProfiles()
+      const key = String(args.key)
+
+      if (!(key in profiles)) {
+        spinner.stop(`${key} not found`)
+        prompts.outro("Done")
+        return
+      }
+
+      delete profiles[key]
+
+      const putRes = await writeConfigObject("discover.learning_profiles", profiles as Record<string, unknown>)
+      const ok = await handleApiError(putRes, "Remove learning profile")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Removed ${bold(key)}`)
+      prompts.outro(dim("iris discover learning list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LearningResetCommand = cmd({
+  command: "reset",
+  describe: "reset learning profiles to defaults",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Reset Learning Profiles")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Resetting…")
+
+    try {
+      const putRes = await writeConfigObject("discover.learning_profiles", DEFAULT_LEARNING_PROFILES as Record<string, unknown>)
+      const ok = await handleApiError(putRes, "Reset learning profiles")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Reset to ${Object.keys(DEFAULT_LEARNING_PROFILES).length} defaults`)
+      prompts.outro(dim("iris discover learning list"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LearningCommand = cmd({
+  command: "learning",
+  aliases: ["learn"],
+  describe: "manage learning tab profiles",
+  builder: (yargs) =>
+    yargs
+      .command(LearningListCommand)
+      .command(LearningAddCommand)
+      .command(LearningRemoveCommand)
+      .command(LearningResetCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Sections subcommand (config key: discover.sections)
 // ============================================================================
 
@@ -1011,6 +1192,7 @@ export const PlatformDiscoverCommand = cmd({
       .command(InstrumentalsCommand)
       .command(ArtistsCommand)
       .command(BrandsCommand)
+      .command(LearningCommand)
       .command(SectionsCommand)
       .demandCommand(),
   async handler() {},
