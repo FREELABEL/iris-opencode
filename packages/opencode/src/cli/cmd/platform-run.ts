@@ -1050,7 +1050,7 @@ const ExecCommand = cmd({
     // - string from --params flag: '{"title":"Test"}' (yargs positional "params" shadows --params)
     // Because the positional is named "params", yargs merges --params into the same key.
     // We detect JSON strings in the array and parse them as structured params.
-    const rawParamsArg = args.params as string | string[] | undefined
+    const rawParamsArg = (args as Record<string, unknown>)["params"] as string | string[] | undefined
     let jsonFromFlag: Record<string, unknown> | null = null
     let rawParams: string[] = []
 
