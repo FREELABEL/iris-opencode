@@ -1178,14 +1178,152 @@ const SectionsCommand = cmd({
 })
 
 // ============================================================================
+// Status command — full page snapshot for agent curation
+// ============================================================================
+
+const StatusCommand = cmd({
+  command: "status",
+  aliases: ["overview", "state"],
+  describe: "full snapshot of Discover page configuration (agent-ready)",
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Discover Page Status")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading full config…")
+
+    try {
+      // Fetch public discover-config (has sponsors, streamers, producers, instrumentals, featured artists, curator meta)
+      const configRes = await fetch(`${FL_API}/api/v1/public/discover-config`, {
+        headers: { Accept: "application/json" },
+      })
+      const configData = configRes.ok ? ((await configRes.json()) as any)?.data ?? {} : {}
+
+      // Fetch section toggles
+      const sections = await readSectionConfig()
+
+      // Fetch brands
+      const brands = await readBrandsConfig()
+
+      // Fetch learning profiles
+      const learning = await readLearningProfiles()
+
+      spinner.stop(success("Loaded"))
+
+      const sponsors: string[] = configData.sponsors ?? []
+      const streamers: string[] = configData.streamers ?? []
+      const producers: string[] = configData.producers ?? []
+      const instrumentals: any[] = configData.instrumentals ?? []
+      const featuredArtists: any[] = configData.featuredArtists ?? []
+      const curator = configData.curator ?? {}
+
+      if (args.json) {
+        console.log(JSON.stringify({
+          brands,
+          featuredArtists,
+          sponsors,
+          streamers,
+          producers,
+          instrumentals,
+          learning,
+          sections,
+          curator,
+        }, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      // Brands
+      console.log()
+      console.log(`  ${bold("BRANDS")} ${dim(`(${Object.keys(brands).length})`)}`)
+      for (const [key, cfg] of Object.entries(brands) as [string, any][]) {
+        console.log(`    ${cfg.name || key}  ${dim(cfg.category || "")}`)
+      }
+
+      // Featured Artists
+      console.log()
+      console.log(`  ${bold("FEATURED ARTISTS")} ${dim(`(${featuredArtists.length})`)}`)
+      if (featuredArtists.length === 0) {
+        console.log(`    ${dim("(none)")}`)
+      } else {
+        for (const a of featuredArtists) {
+          const name = typeof a === "string" ? a : (a.name ?? a.username ?? a)
+          console.log(`    ${name}`)
+        }
+      }
+      if (curator.last_run_at) {
+        console.log(`    ${dim(`Last curated: ${curator.last_run_at} by ${curator.last_run_by ?? "unknown"}`)}`)
+      }
+
+      // Sponsors
+      console.log()
+      console.log(`  ${bold("SPONSORS")} ${dim(`(${sponsors.length})`)}`)
+      for (const s of sponsors) console.log(`    ${s}`)
+      if (sponsors.length === 0) console.log(`    ${dim("(none)")}`)
+
+      // Streamers
+      console.log()
+      console.log(`  ${bold("STREAMERS")} ${dim(`(${streamers.length})`)}`)
+      for (const s of streamers) console.log(`    ${s}`)
+      if (streamers.length === 0) console.log(`    ${dim("(none)")}`)
+
+      // Producers
+      console.log()
+      console.log(`  ${bold("PRODUCERS")} ${dim(`(${producers.length})`)}`)
+      for (const p of producers) console.log(`    ${p}`)
+      if (producers.length === 0) console.log(`    ${dim("(none)")}`)
+
+      // Instrumentals
+      console.log()
+      console.log(`  ${bold("INSTRUMENTALS")} ${dim(`(${instrumentals.length})`)}`)
+      for (const i of instrumentals) {
+        const title = typeof i === "object" ? (i.title ?? `ID: ${i.id}`) : i
+        console.log(`    ${title}`)
+      }
+      if (instrumentals.length === 0) console.log(`    ${dim("(none)")}`)
+
+      // Learning Profiles
+      console.log()
+      console.log(`  ${bold("LEARNING PROFILES")} ${dim(`(${Object.keys(learning).length})`)}`)
+      for (const [key, id] of Object.entries(learning)) {
+        console.log(`    ${key}  ${dim(`pk: ${id}`)}`)
+      }
+
+      // Section Toggles
+      const enabledCount = SECTION_NAMES.filter((s) => sections[s] !== false).length
+      const disabledCount = SECTION_NAMES.length - enabledCount
+      console.log()
+      console.log(`  ${bold("SECTIONS")} ${dim(`(${enabledCount} on, ${disabledCount} off)`)}`)
+      for (const s of SECTION_NAMES) {
+        const on = sections[s] !== false
+        console.log(`    ${on ? success("●") : dim("○")}  ${on ? s : dim(s)}`)
+      }
+
+      console.log()
+      printDivider()
+      prompts.outro(dim("iris discover <brands|artists|sponsors|streamers|producers|instrumentals|learning|sections>"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root discover command
 // ============================================================================
 
 export const PlatformDiscoverCommand = cmd({
   command: "discover",
-  describe: "manage the Discover page — sponsors, streamers, producers, instrumentals, artists, sections",
+  describe: "manage the Discover page — status, brands, artists, sponsors, streamers, producers, instrumentals, learning, sections",
   builder: (yargs) =>
     yargs
+      .command(StatusCommand)
       .command(SponsorsCommand)
       .command(StreamersCommand)
       .command(ProducersCommand)
