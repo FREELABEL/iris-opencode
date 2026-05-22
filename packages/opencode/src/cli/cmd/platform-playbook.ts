@@ -956,10 +956,11 @@ const PlaybookSyncCommand = cmd({
               version: plan.version,
             }
 
+            const { IRIS_API } = await import("./iris-api")
             const res = await irisFetch("/api/v1/playbooks", {
               method: "POST",
               body: JSON.stringify(payload),
-            })
+            }, IRIS_API)
 
             if (res.ok) {
               apiSynced++
