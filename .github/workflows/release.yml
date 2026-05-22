@@ -135,7 +135,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: FREELABEL/fl-elon-web-ui
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CROSS_REPO_PAT }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
