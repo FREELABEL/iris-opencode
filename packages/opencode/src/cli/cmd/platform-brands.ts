@@ -62,15 +62,15 @@ const BrandsListCommand = cmd({
       .option("bloq", { describe: "filter by bloq id", type: "number" })
       .option("status", { describe: "active|archived|draft", type: "string" })
       .option("search", { describe: "search by name or slug", type: "string" })
-      .option("limit", { describe: "max results", type: "number", default: 50 }),
+      .option("limit", { describe: "max results", type: "number", default: 50 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  IRIS Brands")
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
-    const userId = await requireUserId(args["user-id"]); if (!userId) { prompts.outro("Done"); return }
+    if (!args.json) { UI.empty(); prompts.intro("◈  IRIS Brands") }
+    const token = await requireAuth(); if (!token) { if (!args.json) prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"]); if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading brands…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading brands…")
     try {
       const params = new URLSearchParams({ user_id: String(userId), per_page: String(args.limit) })
       if (args.bloq != null) params.set("bloq_id", String(args.bloq))
@@ -78,11 +78,18 @@ const BrandsListCommand = cmd({
       if (args.search) params.set("search", String(args.search))
 
       const res = await irisFetch(`/api/v1/brands?${params}`)
-      const ok = await handleApiError(res, "List brands"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "List brands"); prompts.outro("Done"); return
+      }
 
       const data = (await res.json()) as { data?: any }
       const brands: any[] = (data?.data?.data ?? data?.data ?? []) as any[]
-      spinner.stop(`${brands.length} brand(s)`)
+
+      if (args.json) { console.log(JSON.stringify(brands, null, 2)); return }
+
+      if (spinner) spinner.stop(`${brands.length} brand(s)`)
 
       if (brands.length === 0) {
         prompts.log.warn("No brands found")
@@ -98,7 +105,8 @@ const BrandsListCommand = cmd({
       printDivider()
       prompts.outro(`${dim("iris brands show <id>")}  ·  ${dim("iris brands create")}`)
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
