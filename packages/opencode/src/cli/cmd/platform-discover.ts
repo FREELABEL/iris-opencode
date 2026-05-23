@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API } from "./iris-api"
 
 // ============================================================================
 // Sponsors subcommand
@@ -1315,15 +1315,337 @@ const StatusCommand = cmd({
 })
 
 // ============================================================================
+// Stats command — content metrics + monetization visibility
+// ============================================================================
+
+const StatsCommand = cmd({
+  command: "stats",
+  aliases: ["metrics", "analytics"],
+  describe: "Discover page content stats, trending, monetization overview",
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Discover Page Stats")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Fetching stats…")
+
+    try {
+      const headers = { Accept: "application/json" }
+      const base = FL_API
+
+      // Fetch all stats in parallel
+      const [trendingRes, activeRes, videosRes, articlesRes, servicesRes, tutorialsRes] = await Promise.all([
+        fetch(`${base}/api/v1/discover/trending-content?limit=5`, { headers }).catch(() => null),
+        fetch(`${base}/api/v1/discover/active-profiles?limit=5`, { headers }).catch(() => null),
+        fetch(`${base}/api/v1/discover/recent-videos?limit=1`, { headers }).catch(() => null),
+        fetch(`${base}/api/v1/discover/recent-articles?limit=1`, { headers }).catch(() => null),
+        fetch(`${base}/api/v1/discover/recent-services?limit=1`, { headers }).catch(() => null),
+        fetch(`${base}/api/v1/discover/tutorials`, { headers }).catch(() => null),
+      ])
+
+      const trending = trendingRes?.ok ? ((await trendingRes.json()) as any) : {}
+      const active = activeRes?.ok ? ((await activeRes.json()) as any) : {}
+      const videos = videosRes?.ok ? ((await videosRes.json()) as any) : {}
+      const articles = articlesRes?.ok ? ((await articlesRes.json()) as any) : {}
+      const services = servicesRes?.ok ? ((await servicesRes.json()) as any) : {}
+      const tutorials = tutorialsRes?.ok ? ((await tutorialsRes.json()) as any) : {}
+
+      const videoTotal = videos?.data?.total ?? videos?.total ?? (videos?.data?.data?.length ?? 0)
+      const articleTotal = articles?.data?.total ?? articles?.total ?? (articles?.data?.data?.length ?? 0)
+      const serviceTotal = services?.data?.total ?? services?.total ?? (services?.data?.data?.length ?? 0)
+      const trendingItems: any[] = trending?.data?.data ?? trending?.data ?? []
+      const activeProfiles: any[] = active?.data?.data ?? active?.data ?? []
+      const tutorialItems: any[] = tutorials?.data?.data ?? tutorials?.data ?? []
+      const paidTutorials = tutorialItems.filter((t: any) => t.price_usd && Number(t.price_usd) > 0)
+
+      spinner.stop(success("Loaded"))
+
+      if (args.json) {
+        console.log(JSON.stringify({
+          content: { videos: videoTotal, articles: articleTotal, services: serviceTotal },
+          monetization: { paid_tutorials: paidTutorials.length, tutorials: paidTutorials.map((t: any) => ({ title: t.title, price: t.price_usd, type: t.type })) },
+          trending: trendingItems.slice(0, 5).map((t: any) => ({ title: t.title, views: t.views, profile: t.profile_name ?? t.name })),
+          active_creators: activeProfiles.slice(0, 5).map((p: any) => ({ name: p.name, uploads: p.content_count ?? p.upload_count })),
+        }, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      // Content Stats
+      console.log()
+      console.log(`  ${bold("CONTENT")}`)
+      console.log(`    Videos:    ${bold(String(videoTotal))}`)
+      console.log(`    Articles:  ${bold(String(articleTotal))}`)
+      console.log(`    Services:  ${bold(String(serviceTotal))}`)
+
+      // Monetization
+      console.log()
+      console.log(`  ${bold("MONETIZATION")}`)
+      if (paidTutorials.length > 0) {
+        console.log(`    Paid tutorials: ${bold(String(paidTutorials.length))}`)
+        for (const t of paidTutorials.slice(0, 5)) {
+          console.log(`      $${t.price_usd}  ${dim(t.title?.slice(0, 60) ?? "Untitled")}`)
+        }
+      } else {
+        console.log(`    Paid tutorials: ${dim("0 — use iris tutorials price to monetize")}`)
+      }
+
+      // Trending
+      if (trendingItems.length > 0) {
+        console.log()
+        console.log(`  ${bold("TRENDING")} ${dim("(last 30 days)")}`)
+        for (const [i, t] of trendingItems.slice(0, 5).entries()) {
+          const views = t.views ?? 0
+          const name = t.profile_name ?? t.name ?? ""
+          console.log(`    ${i + 1}. ${t.title?.slice(0, 50) ?? "Untitled"}  ${dim(`${views} views`)}  ${dim(name)}`)
+        }
+      }
+
+      // Active Creators
+      if (activeProfiles.length > 0) {
+        console.log()
+        console.log(`  ${bold("MOST ACTIVE CREATORS")} ${dim("(last 30 days)")}`)
+        for (const [i, p] of activeProfiles.slice(0, 5).entries()) {
+          const uploads = p.content_count ?? p.upload_count ?? 0
+          console.log(`    ${i + 1}. ${p.name ?? "Unknown"}  ${dim(`${uploads} uploads`)}`)
+        }
+      }
+
+      console.log()
+      printDivider()
+      prompts.outro(dim("iris discover status  |  iris tutorials price <type> <id>"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Curate command — AI-driven page curation
+// ============================================================================
+
+async function getFullDiscoverState(): Promise<Record<string, unknown>> {
+  const configRes = await fetch(`${FL_API}/api/v1/public/discover-config`, {
+    headers: { Accept: "application/json" },
+  })
+  const configData = configRes.ok ? ((await configRes.json()) as any)?.data ?? {} : {}
+  const sections = await readSectionConfig()
+  const brands = await readBrandsConfig()
+  const learning = await readLearningProfiles()
+
+  return {
+    brands,
+    featuredArtists: configData.featuredArtists ?? [],
+    sponsors: configData.sponsors ?? [],
+    streamers: configData.streamers ?? [],
+    producers: configData.producers ?? [],
+    instrumentals: configData.instrumentals ?? [],
+    learning,
+    sections,
+    curator: configData.curator ?? {},
+  }
+}
+
+const CurateCommand = cmd({
+  command: "curate",
+  aliases: ["auto"],
+  describe: "AI-driven curation — analyze page state and suggest or apply changes",
+  builder: (yargs) =>
+    yargs
+      .option("apply", { describe: "auto-apply AI suggestions", type: "boolean", default: false })
+      .option("dry-run", { describe: "show suggestions without applying (default)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Discover Curator")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Reading page state…")
+
+    try {
+      // Step 1: Get current page state
+      const state = await getFullDiscoverState()
+
+      // Step 2: Get live activity
+      spinner.message("Fetching live activity…")
+      const headers = { Accept: "application/json" }
+      const [trendingRes, activeRes] = await Promise.all([
+        fetch(`${FL_API}/api/v1/discover/trending-content?limit=10`, { headers }).catch(() => null),
+        fetch(`${FL_API}/api/v1/discover/active-profiles?limit=10`, { headers }).catch(() => null),
+      ])
+      const trending = trendingRes?.ok ? ((await trendingRes.json()) as any)?.data ?? [] : []
+      const activeProfiles = activeRes?.ok ? ((await activeRes.json()) as any)?.data ?? [] : []
+
+      // Step 3: Ask AI for curation suggestions
+      spinner.message("AI analyzing…")
+
+      const prompt = `You are the Discover Page Curator for FreeLABEL, a content platform for creators, brands, and businesses.
+
+CURRENT PAGE STATE:
+${JSON.stringify(state, null, 2)}
+
+TRENDING CONTENT (last 30 days):
+${JSON.stringify(Array.isArray(trending) ? trending.slice(0, 10) : (trending.data ?? []).slice(0, 10), null, 2)}
+
+ACTIVE CREATORS (last 30 days):
+${JSON.stringify(Array.isArray(activeProfiles) ? activeProfiles.slice(0, 10) : (activeProfiles.data ?? []).slice(0, 10), null, 2)}
+
+Analyze the page and suggest curation changes. Consider:
+1. Are featured artists still active? Should any be rotated?
+2. Are any sections disabled that should be enabled (or vice versa)?
+3. Are there active creators who should be featured?
+4. Are there brands with no content that should be removed?
+5. Any monetization opportunities (tutorials that should be priced)?
+
+Return a JSON object with this EXACT structure (include only changes needed, omit sections with no changes):
+{
+  "summary": "1-2 sentence summary of recommendations",
+  "actions": [
+    { "type": "artists_set", "usernames": ["list", "of", "suggested"], "reason": "why" },
+    { "type": "section_enable", "name": "sectionName", "reason": "why" },
+    { "type": "section_disable", "name": "sectionName", "reason": "why" },
+    { "type": "brand_remove", "name": "brand key", "reason": "why" },
+    { "type": "sponsor_add", "username": "handle", "reason": "why" }
+  ]
+}
+
+Return ONLY the JSON object, no markdown or explanation.`
+
+      const aiRes = await irisFetch("/api/v6/openai/chat/completions", {
+        method: "POST",
+        body: JSON.stringify({
+          model: "iris/gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.3,
+          max_tokens: 1500,
+        }),
+      }, IRIS_API)
+
+      if (!aiRes.ok) {
+        spinner.stop("AI call failed", 1)
+        await handleApiError(aiRes, "Curate")
+        prompts.outro("Done")
+        return
+      }
+
+      const aiData = (await aiRes.json()) as any
+      const content = aiData?.choices?.[0]?.message?.content ?? ""
+
+      let suggestions: any
+      try {
+        const jsonMatch = content.match(/\{[\s\S]*\}/)
+        suggestions = jsonMatch ? JSON.parse(jsonMatch[0]) : { summary: content, actions: [] }
+      } catch {
+        suggestions = { summary: content, actions: [] }
+      }
+
+      spinner.stop(success("Analysis complete"))
+
+      if (args.json) {
+        console.log(JSON.stringify(suggestions, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      // Display suggestions
+      console.log()
+      console.log(`  ${bold("AI RECOMMENDATION")}`)
+      console.log(`  ${suggestions.summary ?? "No summary"}`)
+      console.log()
+
+      const actions: any[] = suggestions.actions ?? []
+      if (actions.length === 0) {
+        console.log(`  ${dim("No changes suggested — page looks good!")}`)
+        prompts.outro("Done")
+        return
+      }
+
+      for (const [i, action] of actions.entries()) {
+        const icon = args.apply ? success("✓") : dim("→")
+        console.log(`  ${icon}  ${bold(action.type)}${action.name || action.username ? `: ${action.name || action.username}` : ""}`)
+        if (action.usernames) console.log(`     ${dim(action.usernames.join(", "))}`)
+        if (action.reason) console.log(`     ${dim(action.reason)}`)
+      }
+
+      if (args.apply) {
+        // Execute each action
+        console.log()
+        const applySpinner = prompts.spinner()
+        applySpinner.start("Applying changes…")
+        let applied = 0
+
+        for (const action of actions) {
+          try {
+            if (action.type === "artists_set" && Array.isArray(action.usernames)) {
+              await writeConfigList("discover.featured_profiles", action.usernames)
+              applied++
+            } else if (action.type === "section_enable" && action.name) {
+              const secs = await readSectionConfig()
+              secs[action.name] = true
+              await writeSectionConfig(secs)
+              applied++
+            } else if (action.type === "section_disable" && action.name) {
+              const secs = await readSectionConfig()
+              secs[action.name] = false
+              await writeSectionConfig(secs)
+              applied++
+            } else if (action.type === "brand_remove" && action.name) {
+              const br = await readBrandsConfig()
+              delete br[action.name]
+              await writeConfigObject("discover.brands", br)
+              applied++
+            } else if (action.type === "sponsor_add" && action.username) {
+              const sp = await readConfigList("discover.sponsors") as string[]
+              if (!sp.includes(action.username)) {
+                sp.push(action.username)
+                await writeConfigList("discover.sponsors", sp)
+              }
+              applied++
+            } else if (action.type === "sponsor_remove" && action.username) {
+              let sp = await readConfigList("discover.sponsors") as string[]
+              sp = sp.filter((s) => s !== action.username)
+              await writeConfigList("discover.sponsors", sp)
+              applied++
+            }
+          } catch { /* skip failed actions */ }
+        }
+
+        applySpinner.stop(`${success("✓")} ${applied}/${actions.length} actions applied`)
+      } else {
+        console.log()
+        console.log(`  ${dim("Dry run — use --apply to execute these changes")}`)
+      }
+
+      prompts.outro(dim("iris discover status"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root discover command
 // ============================================================================
 
 export const PlatformDiscoverCommand = cmd({
   command: "discover",
-  describe: "manage the Discover page — status, brands, artists, sponsors, streamers, producers, instrumentals, learning, sections",
+  describe: "manage the Discover page — status, curate, stats, brands, artists, sponsors, streamers, producers, instrumentals, learning, sections",
   builder: (yargs) =>
     yargs
       .command(StatusCommand)
+      .command(StatsCommand)
+      .command(CurateCommand)
       .command(SponsorsCommand)
       .command(StreamersCommand)
       .command(ProducersCommand)
