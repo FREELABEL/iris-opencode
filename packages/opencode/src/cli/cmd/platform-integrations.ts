@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
+import { PathwaysCommand } from "./platform-integrations-pathways"
 
 // ============================================================================
 // Helpers
@@ -517,6 +518,7 @@ export const PlatformIntegrationsCommand = cmd({
     yargs
       .command(IntegrationsListCommand)
       .command(IntegrationsExecCommand)
+      .command(PathwaysCommand)
       .command(IntegrationsConnectCommand)
       .command(IntegrationsShareCommand)
       .command(IntegrationsUnshareCommand)
