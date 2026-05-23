@@ -17,6 +17,7 @@ import {
   getBridgeToken,
 } from "./iris-api"
 import { exec } from "child_process"
+import { PathwaysCommand } from "./platform-integrations-pathways"
 
 // ============================================================================
 // Known integration types — anything else routes to V6 system tools.
@@ -1627,6 +1628,7 @@ export const PlatformRunCommand = cmd({
       .command(SetupCommand)
       .command(ConnectComposioCommand)
       .command(CleanupCommand)
+      .command(PathwaysCommand)
       .demandCommand(),
   async handler() {},
 })

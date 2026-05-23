@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, FL_API } from "./iris-api"
 
 // Endpoints (UsersResource):
 //   GET /api/v1/users               — list with filters
@@ -69,21 +69,36 @@ const UsersSearchCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("query", { type: "string", demandOption: true })
-      .option("limit", { type: "number", default: 20 }),
+      .option("limit", { type: "number", default: 20 })
+      .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Search: ${args.query}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Search: ${args.query}`) }
+    const token = await requireAuth(); if (!token) { if (!args.json) prompts.outro("Done"); return }
     const params = new URLSearchParams({ q: args.query, per_page: String(args.limit) })
-    const res = await irisFetch(`/api/v1/users/search?${params}`)
-    const ok = await handleApiError(res, "Search users")
-    if (!ok) { prompts.outro("Done"); return }
-    const data = (await res.json()) as any
+
+    // User search lives on fl-api (raichu.heyiris.io), not iris-api
+    // The endpoint may return 500 but still include valid data in the body
+    const res = await irisFetch(`/api/v1/users/search?${params}`, {}, FL_API)
+    const data = await res.json().catch(() => ({})) as any
     const users: any[] = data?.data ?? data?.users ?? (Array.isArray(data) ? data : [])
+
+    if (users.length === 0 && !res.ok) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+      await handleApiError(res, "Search users")
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) { console.log(JSON.stringify(users, null, 2)); return }
+
     printDivider()
-    for (const u of users) {
-      const name = u.full_name ?? u.user_name ?? u.name ?? u.email ?? `User #${u.id}`
-      console.log(`  ${bold(String(name))}  ${dim(`#${u.id}`)}  ${dim(String(u.email ?? ""))}`)
+    if (users.length === 0) {
+      prompts.log.warn(`No users matching "${args.query}"`)
+    } else {
+      for (const u of users) {
+        const name = u.full_name ?? u.user_name ?? u.name ?? u.email ?? `User #${u.id}`
+        console.log(`  ${bold(String(name))}  ${dim(`#${u.id}`)}  ${dim(String(u.email ?? ""))}`)
+      }
     }
     printDivider()
     prompts.outro(`${users.length} result(s)`)
