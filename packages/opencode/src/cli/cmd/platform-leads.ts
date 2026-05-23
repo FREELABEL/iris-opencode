@@ -4154,6 +4154,7 @@ const LeadsMeetCommand = cmd({
       .option("integration-id", { type: "number", describe: "specific integration record ID" })
       .option("calendar", { type: "string", describe: "calendar name or ID (e.g. 'Meetings', 'primary')", demandOption: "specify --calendar (name or ID)" })
       .option("attendees", { type: "array", string: true, describe: "additional attendee emails" })
+      .option("notify", { type: "boolean", default: false, describe: "send meeting invite email to the lead (opt-in)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -4305,10 +4306,43 @@ const LeadsMeetCommand = cmd({
       })
     } catch {}
 
+    // Send meeting invite email to lead (opt-in via --notify)
+    let emailSent = false
+    if (args.notify && lead.email) {
+      try {
+        const eventUrl = calendarResult?.event_url ?? calendarResult?.data?.response_data?.htmlLink ?? ""
+        const emailBody = [
+          `Hi ${lead.first_name ?? lead.name ?? "there"},`,
+          "",
+          `A meeting has been scheduled:`,
+          "",
+          `**${title}**`,
+          `Date: ${formatDate(startTime)} at ${formatTime(startTime)}`,
+          `Duration: ${args.duration} minutes`,
+          args.location ? `Location: ${args.location}` : "",
+          eventUrl ? `Calendar link: ${eventUrl}` : "",
+          args.notes ? `\nAgenda:\n${args.notes}` : "",
+          "",
+          "Looking forward to it!",
+        ].filter(Boolean).join("\n")
+
+        await irisFetch(`/api/v1/leads/${leadId}/email`, {
+          method: "POST",
+          body: JSON.stringify({
+            to: lead.email,
+            subject: title,
+            body: emailBody,
+            type: "meeting_invite",
+          }),
+        })
+        emailSent = true
+      } catch {}
+    }
+
     if (args.json) {
       console.log(
         JSON.stringify(
-          { lead_id: leadId, title, start: startTime, end: endTime, calendar: calendarResult ?? null },
+          { lead_id: leadId, title, start: startTime, end: endTime, calendar: calendarResult ?? null, email_sent: emailSent },
           null,
           2,
         ),
@@ -4330,6 +4364,9 @@ const LeadsMeetCommand = cmd({
       )
       printKV("Note", success("✓ saved"))
       printKV("Task", success("✓ created"))
+      if (args.notify) {
+        printKV("Email", emailSent ? success(`✓ sent to ${lead.email}`) : lead.email ? dim("failed") : dim("no email on lead"))
+      }
       printDivider()
     }
 
