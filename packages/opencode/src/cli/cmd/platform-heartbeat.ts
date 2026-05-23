@@ -91,8 +91,16 @@ const HeartbeatCommand = cmd({
       const weights = data.weights_applied ?? {}
       const clientLabels = data.client_labels ?? {}
       const history: any[] = data.history ?? []
+      const onboarding = data.onboarding ?? null
 
-      // Score header
+      // Onboarding checklist mode — for new users or users with < 50% setup
+      if (onboarding && onboarding.mode === "onboarding") {
+        renderOnboardingChecklist(data, onboarding, signals)
+        prompts.outro(`${dim("iris init")}  ${dim("|")}  ${dim("iris heartbeat --json")}`)
+        return
+      }
+
+      // Score header (monitoring mode)
       console.log()
       console.log(`  ${bold("Score:")} ${bold(String(score))}/100 (${bandLabel(band)})`)
 
@@ -101,6 +109,11 @@ const HeartbeatCommand = cmd({
         const trend = history.slice(0, 5).reverse().map((h: any) => h.score).join(" → ")
         const direction = history[0].score > history[1].score ? "improving" : history[0].score < history[1].score ? "declining" : "stable"
         console.log(`  ${dim(`Trend: ${trend} (${direction})`)}`)
+      }
+
+      // Onboarding progress (if available, even in monitoring mode)
+      if (onboarding && onboarding.total_count > 0) {
+        console.log(`  ${dim(`Setup: ${onboarding.completed_count}/${onboarding.total_count} steps complete`)}${onboarding.all_complete ? ` ${success("✓")}` : ""}`)
       }
 
       printDivider()
@@ -135,6 +148,80 @@ const HeartbeatCommand = cmd({
     }
   },
 })
+
+// ============================================================================
+// Onboarding checklist renderer
+// ============================================================================
+
+// Step order mapping: onboarding_step key -> display order + label
+const STEP_ORDER: Record<string, { order: number; label: string }> = {
+  brand: { order: 1, label: "Brand Setup" },
+  design_tokens: { order: 2, label: "Design Tokens" },
+  knowledge_base: { order: 3, label: "Knowledge Base" },
+  agent: { order: 4, label: "AI Agent" },
+  landing_page: { order: 5, label: "Landing Page" },
+  outreach: { order: 6, label: "Outreach Config" },
+  content: { order: 7, label: "Content Strategy" },
+  billing: { order: 8, label: "Billing" },
+}
+
+function renderOnboardingChecklist(
+  data: Record<string, any>,
+  onboarding: Record<string, any>,
+  signals: Record<string, any>,
+): void {
+  const completed = onboarding.completed_count ?? 0
+  const total = onboarding.total_count ?? 0
+
+  console.log()
+  console.log(`  ${bold("IRIS Setup")}                          [${completed}/${total} complete]`)
+  printDivider()
+
+  // Build step list from signals that have onboarding_step
+  const steps: Array<{ order: number; label: string; stepKey: string; completed: boolean; remediation: string | null }> = []
+
+  for (const [, signal] of Object.entries(signals)) {
+    const sig = signal as Record<string, any>
+    if (!sig || !sig.onboarding_step) continue
+
+    const stepKeys = Array.isArray(sig.onboarding_step) ? sig.onboarding_step : [sig.onboarding_step]
+    for (const stepKey of stepKeys) {
+      const meta = STEP_ORDER[stepKey as string]
+      if (!meta) continue
+      steps.push({
+        order: meta.order,
+        label: meta.label,
+        stepKey: stepKey as string,
+        completed: sig.completed ?? false,
+        remediation: sig.remediation ?? null,
+      })
+    }
+  }
+
+  // Sort by order and render
+  steps.sort((a, b) => a.order - b.order)
+
+  // Deduplicate by stepKey (config maps to brand + design_tokens)
+  const seen = new Set<string>()
+  for (const step of steps) {
+    if (seen.has(step.stepKey)) continue
+    seen.add(step.stepKey)
+
+    const check = step.completed ? success("[x]") : "[ ]"
+    const label = step.completed ? dim(step.label) : bold(step.label)
+    const action = !step.completed && step.remediation ? `  ${dim("-> " + step.remediation)}` : ""
+    console.log(`  ${check}  ${String(step.order).padStart(1)}. ${label}${action}`)
+  }
+
+  console.log()
+
+  // Next step hint
+  const nextStep = onboarding.next_step
+  if (nextStep) {
+    console.log(`  ${bold("Next:")} ${nextStep.label} — ${dim(nextStep.remediation ?? "iris init")}`)
+    console.log()
+  }
+}
 
 // ============================================================================
 // Signals subcommand — list available signals from registry

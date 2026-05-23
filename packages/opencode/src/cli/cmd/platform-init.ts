@@ -12,6 +12,7 @@ import {
   success,
   highlight,
   resolveUserId,
+  FL_API,
 } from "./iris-api"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { homedir } from "os"
@@ -422,17 +423,54 @@ const STEPS: StepDef[] = [
   },
 ]
 
+// ── Signal-to-step bridge ───────────────────────────────────────────────────
+// Maps heartbeat signal data to the flat keys that step.check() expects.
+// This bridges the heartbeat API response format into iris init's existing check pattern.
+
+const SIGNAL_STEP_MAP: Record<string, string> = {
+  config: "brand",           // config signal → brand + design_tokens steps
+  knowledge_completeness: "knowledge_base",
+  liveness: "agent",
+  deliverable_completeness: "landing_page",
+  scripts: "outreach",
+  content_output: "content",
+  deal_health: "billing",
+}
+
+function enrichApiDataFromSignals(apiData: any): any {
+  const signals = apiData?.signals ?? {}
+  const enriched = { ...apiData }
+
+  for (const [signalName, stepKey] of Object.entries(SIGNAL_STEP_MAP)) {
+    const sig = signals[signalName]
+    if (!sig || typeof sig !== "object") continue
+
+    // If the signal reports completed via onboarding threshold, mark the step
+    if (sig.completed && !enriched[stepKey]?.completed) {
+      enriched[stepKey] = { ...(enriched[stepKey] ?? {}), completed: true, from_signal: true }
+    }
+  }
+
+  // Bridge onboarding object for dashboard display
+  if (apiData?.onboarding) {
+    enriched._onboarding = apiData.onboarding
+  }
+
+  return enriched
+}
+
 // ── Fetch live readiness signals for dashboard state ────────────────────────
 
 async function fetchApiState(userId: number): Promise<any> {
   try {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 8000)
-    const res = await irisFetch(`/api/v1/users/${userId}/readiness`, { signal: controller.signal })
+    // Use heartbeat endpoint — includes onboarding progress, completion flags, and remediation hints
+    const res = await irisFetch(`/api/v1/users/${userId}/heartbeat?include=copy`, { signal: controller.signal }, FL_API)
     clearTimeout(timer)
     if (!res.ok) return {}
     const body = await res.json().catch(() => ({}))
-    return body?.data ?? {}
+    return body?.data ?? body ?? {}
   } catch {
     return {}
   }
@@ -480,7 +518,8 @@ export const PlatformInitCommand = cmd({
     // Fetch live API data for state enrichment
     const sp = prompts.spinner()
     sp.start("Checking account status...")
-    const apiData = await fetchApiState(userId)
+    const rawApiData = await fetchApiState(userId)
+    const apiData = enrichApiDataFromSignals(rawApiData)
     sp.stop(dim("ready"))
 
     // Build dashboard

@@ -6268,6 +6268,21 @@ const LeadsPulseAllCommand = cmd({
         `  KB: ${success(`${kbComplete} complete`)}  ${kbMissing > 0 ? `${UI.Style.TEXT_WARNING}${kbMissing} missing${UI.Style.TEXT_NORMAL}` : dim("0 missing")}  ${dim(`(iris leads kb <id> --generate)`)}`,
       )
 
+      // Onboarding summary — fetch heartbeat for each lead to check onboarding progress
+      // (lightweight: only uses cached heartbeat data already computed above)
+      const onboardingComplete = rows.filter((r) => r.pulse >= 60).length
+      const onboardingStuck = rows.filter((r) => r.pulse < 60 && r.pulse > 0)
+      if (onboardingStuck.length > 0) {
+        console.log()
+        console.log(`  ${bold("Onboarding")}  ${success(`${onboardingComplete} ready`)}  ${UI.Style.TEXT_WARNING ?? ""}${onboardingStuck.length} stuck${UI.Style.TEXT_NORMAL}`)
+        for (const r of onboardingStuck.slice(0, 5)) {
+          // Show the worst signal for this lead based on deal health
+          const stuckOn = r.deal !== null && r.deal < 60 ? "billing" : r.kbCount === 0 ? "knowledge_base" : r.comms !== null && r.comms < 30 ? "comms" : "setup"
+          console.log(`    ${dim(`#${r.id}`)}  ${r.name.padEnd(22)}${UI.Style.TEXT_WARNING ?? ""}stuck: ${stuckOn}${UI.Style.TEXT_NORMAL}`)
+        }
+        if (onboardingStuck.length > 5) console.log(`    ${dim(`... +${onboardingStuck.length - 5} more`)}`)
+      }
+
       // Hydration summary
       const hydrationReady = rows.filter((r) => r.hydrationEligible)
       if (hydrationReady.length > 0) {
