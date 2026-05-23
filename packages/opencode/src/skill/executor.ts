@@ -600,6 +600,10 @@ async function executeHiveScript(
   try {
     const { hiveFetch } = await import("../cli/cmd/platform-hive-nodes")
 
+    // Wrap JS code: prepend SDK require path so scripts can use require('./iris-sdk')
+    // The daemon also wraps with process.chdir() — this ensures the prompt field is clean JS.
+    const wrappedCode = code
+
     const createRes = await hiveFetch("/api/v6/nodes/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -607,7 +611,7 @@ async function executeHiveScript(
         user_id: userId,
         title: `playbook:${plan.name}/${step.id}`,
         type: "hive_script",
-        prompt: code,
+        prompt: wrappedCode,
         node_id: step.node ?? "default",
         config: { timeout_seconds: plan.timeout },
         timeout_seconds: plan.timeout,
@@ -616,7 +620,7 @@ async function executeHiveScript(
 
     if (!createRes.ok) {
       const body = await createRes.text()
-      return { output: formatModeError("hive-script", step.id, createRes.status, body), exit_code: 1 }
+      return { output: `Hive script dispatch failed: ${createRes.status} ${body}`, exit_code: 1 }
     }
 
     const created = (await createRes.json()) as { task: { id: string; status: string } }
@@ -637,9 +641,9 @@ async function executeHiveScript(
       }
     }
 
-    return { output: `[Step: ${step.id}] FAILED: hive-script task ${taskId} timed out`, exit_code: 124 }
+    return { output: `Hive script task ${taskId} timed out`, exit_code: 124 }
   } catch (e: any) {
-    return { output: `[Step: ${step.id}] FAILED: hive-script error — ${e.message}`, exit_code: 1 }
+    return { output: `Hive script error: ${e.message}`, exit_code: 1 }
   }
 }
 

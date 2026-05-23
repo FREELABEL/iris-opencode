@@ -334,6 +334,41 @@ echo "$\{{steps.health.output}}" | grep -q "ok\\|healthy\\|status"
 `,
   },
   {
+    name: "e2e-hive-script",
+    tier: "edge",
+    content: `---
+name: e2e-hive-script
+description: E2E test — hive-script mode (Node.js via daemon, requires auth + irisApi)
+version: 2
+on-error: continue
+timeout: 30
+---
+
+# E2E Hive Script Test
+
+### step:ping Hive Script Ping
+
+\`\`\`yaml
+mode: hive-script
+\`\`\`
+
+\`\`\`javascript
+console.log(JSON.stringify({ ok: true, pid: process.pid }))
+\`\`\`
+
+### step:verify Verify Output
+
+\`\`\`yaml
+mode: shell
+depends: ping
+\`\`\`
+
+\`\`\`bash
+echo "$\{{steps.ping.output}}" | grep -q '"ok"'
+\`\`\`
+`,
+  },
+  {
     name: "e2e-cloud-smoke",
     tier: "cloud",
     content: `---
@@ -377,6 +412,11 @@ const TIER_SERVICES: Record<Tier, string[]> = {
   local: [],
   edge: ["hive"],
   cloud: ["irisApi"],
+}
+
+// Some edge tests also need irisApi (hive-script dispatches through cloud)
+const EXTRA_SERVICES: Record<string, string[]> = {
+  "e2e-hive-script": ["irisApi"],
 }
 
 // ============================================================================
@@ -532,7 +572,9 @@ async function runOneTest(
   opts: E2ERunOptions,
 ): Promise<E2ETestResult> {
   const { info, tier, customPass } = entry
-  const requiredServices = TIER_SERVICES[tier] ?? []
+  const baseServices = TIER_SERVICES[tier] ?? []
+  const extraServices = EXTRA_SERVICES[info.name] ?? []
+  const requiredServices = [...new Set([...baseServices, ...extraServices])]
   const missingServices = requiredServices.filter((s) => !services[s])
 
   let plan: SkillPlan
