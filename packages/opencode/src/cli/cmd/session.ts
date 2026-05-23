@@ -180,10 +180,19 @@ export const SessionLinkCommand = cmd({
         return
       }
 
-      // Link
+      // Compute session snapshot for permanent cost tracking
+      let snapshot: any = null
+      try {
+        const { computeSessionSnapshot } = await import("./stats")
+        snapshot = await computeSessionSnapshot(sessionID!)
+      } catch {
+        // Session may be remote-only (no local data) — link without snapshot
+      }
+
+      // Link with snapshot
       const linkRes = await irisFetch(`/api/v1/users/${userId}/coding-sessions/${match.run_id}/link`, {
         method: "POST",
-        body: JSON.stringify({ bloq_item_id: args.itemId }),
+        body: JSON.stringify({ bloq_item_id: args.itemId, snapshot }),
       })
 
       if (!linkRes.ok) { await handleApiError(linkRes, "link session"); return }
@@ -192,6 +201,12 @@ export const SessionLinkCommand = cmd({
       console.log(success(`Linked session "${linkData.data.name}" to BloqItem #${args.itemId}`))
       console.log(`  Run ID: ${bold(match.run_id)}`)
       console.log(`  Provider: ${linkData.data.provider}`)
+      if (snapshot) {
+        const costStr = snapshot.total_cost > 0 ? `$${snapshot.total_cost.toFixed(2)}` : "$0.00"
+        const tokenStr = ((snapshot.tokens_input + snapshot.tokens_output) / 1000).toFixed(1) + "K"
+        const modelCount = Object.keys(snapshot.model_usage || {}).length
+        console.log(`  AI Cost: ${bold(costStr)} (${modelCount} model${modelCount !== 1 ? "s" : ""}, ${tokenStr} tokens)`)
+      }
       prompts.outro("Done")
     })
   },
