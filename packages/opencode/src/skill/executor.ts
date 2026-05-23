@@ -534,18 +534,21 @@ async function executeHive(
     // Dynamic import to avoid hard dependency
     const { hiveFetch } = await import("../cli/cmd/platform-hive-nodes")
 
+    const payload: Record<string, unknown> = {
+      user_id: userId,
+      title: `skill:${plan.name}/${step.id}`,
+      type: "sandbox_execute",
+      prompt: `#!/bin/bash\nset -e\n${code}`,
+      config: { timeout_seconds: plan.timeout },
+      timeout_seconds: plan.timeout,
+    }
+    // Only send node_id if it's a real UUID — "default" breaks FK constraint
+    if (step.node && step.node !== "default") payload.node_id = step.node
+
     const createRes = await hiveFetch("/api/v6/nodes/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: userId,
-        title: `skill:${plan.name}/${step.id}`,
-        type: "sandbox_execute",
-        node_id: step.node ?? "default",
-        prompt: `#!/bin/bash\nset -e\n${code}`,
-        config: { timeout_seconds: plan.timeout },
-        timeout_seconds: plan.timeout,
-      }),
+      body: JSON.stringify(payload),
     })
 
     if (!createRes.ok) {
@@ -604,18 +607,20 @@ async function executeHiveScript(
     // The daemon also wraps with process.chdir() — this ensures the prompt field is clean JS.
     const wrappedCode = code
 
+    const payload: Record<string, unknown> = {
+      user_id: userId,
+      title: `playbook:${plan.name}/${step.id}`,
+      type: "hive_script",
+      prompt: wrappedCode,
+      config: { timeout_seconds: plan.timeout },
+      timeout_seconds: plan.timeout,
+    }
+    if (step.node && step.node !== "default") payload.node_id = step.node
+
     const createRes = await hiveFetch("/api/v6/nodes/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: userId,
-        title: `playbook:${plan.name}/${step.id}`,
-        type: "hive_script",
-        prompt: wrappedCode,
-        node_id: step.node ?? "default",
-        config: { timeout_seconds: plan.timeout },
-        timeout_seconds: plan.timeout,
-      }),
+      body: JSON.stringify(payload),
     })
 
     if (!createRes.ok) {

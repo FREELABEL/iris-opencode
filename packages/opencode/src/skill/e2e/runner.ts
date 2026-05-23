@@ -364,7 +364,7 @@ depends: ping
 \`\`\`
 
 \`\`\`bash
-echo "$\{{steps.ping.output}}" | grep -q '"ok"'
+test "$\{{steps.ping.exit_code}}" = "0"
 \`\`\`
 `,
   },
