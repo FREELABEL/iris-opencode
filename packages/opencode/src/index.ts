@@ -123,6 +123,7 @@ import { PlatformPersonalityCommand } from "./cli/cmd/platform-personality"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
+import { PlatformHeartbeatCommand } from "./cli/cmd/platform-heartbeat"
 import { PlatformInboxCommand } from "./cli/cmd/platform-inbox"
 import { PlatformDocsCommand } from "./cli/cmd/platform-docs"
 import { PlatformWalletCommand } from "./cli/cmd/platform-wallet"
@@ -324,6 +325,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformMailCommand))
   .command(reg(PlatformImessageCommand))
   .command(reg(PlatformCalendarCommand))
+  .command(reg(PlatformHeartbeatCommand))
   .command(reg(PlatformDocsCommand))
   .command(reg(PlatformWalletCommand))
   // PHP-port commands — config, app, automation, automation:test
