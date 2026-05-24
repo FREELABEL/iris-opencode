@@ -286,9 +286,124 @@ const CheckRepliesCommand = cmd({
   },
 })
 
+// ============================================================================
+// Local Playwright commands — run on this machine, not via Hive
+// ============================================================================
+
+import { execSync } from "child_process"
+import { existsSync } from "fs"
+import { join } from "path"
+
+const FL_ROOT = join(process.env.HOME || "", "Sites", "freelabel")
+const E2E_DIR = join(FL_ROOT, "tests", "e2e")
+
+function runPlaywright(spec: string, env: Record<string, string> = {}, timeout = 180000): void {
+  const specPath = join(E2E_DIR, spec)
+  if (!existsSync(specPath)) {
+    console.log(`  Spec not found: ${specPath}`)
+    return
+  }
+  const envStr = Object.entries(env)
+    .filter(([_, v]) => v !== undefined && v !== "")
+    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .join(" ")
+  const cmd = `${envStr} npx playwright test ${specPath} --headed --timeout ${timeout}`
+  console.log(dim(`  $ ${cmd}\n`))
+  try {
+    execSync(cmd, { stdio: "inherit", cwd: FL_ROOT })
+  } catch {
+    // Playwright exits non-zero on test failure — don't crash CLI
+  }
+}
+
+const InboxCommand = cmd({
+  command: "inbox",
+  describe: "scan LinkedIn inbox for conversations and replies",
+  builder: (yargs) =>
+    yargs
+      .option("board", { alias: "b", describe: "board ID to match leads against", type: "number", default: 38 })
+      .option("limit", { alias: "l", describe: "max conversations to scan", type: "number", default: 20 })
+      .option("contact", { describe: "filter to a specific contact name", type: "string" }),
+  async handler(args) {
+    prompts.intro(`${bold("iris linkedin")} inbox`)
+    const env: Record<string, string> = {
+      BOARD_ID: String((args as any).board),
+      LIMIT: String((args as any).limit),
+    }
+    if ((args as any).contact) env.FILTER_CONTACT = (args as any).contact
+    runPlaywright("linkedin-inbox-check.spec.ts", env)
+  },
+})
+
+const PostCommand = cmd({
+  command: "post <text>",
+  describe: "post content to your LinkedIn feed",
+  builder: (yargs) =>
+    yargs
+      .positional("text", { describe: "post content", type: "string", demandOption: true })
+      .option("image", { describe: "path to image to attach", type: "string" })
+      .option("dry-run", { describe: "type but don't publish", type: "boolean", default: true }),
+  async handler(args) {
+    prompts.intro(`${bold("iris linkedin")} post`)
+    const text = (args as any).text as string
+    const dryRun = (args as any)["dry-run"] as boolean
+    console.log(`  Content: "${text.substring(0, 80)}${text.length > 80 ? "..." : ""}"`)
+    console.log(`  Mode: ${dryRun ? dim("DRY RUN") : bold("LIVE")}`)
+    const env: Record<string, string> = {
+      POST_CONTENT: text,
+      DRY_RUN: dryRun ? "1" : "0",
+    }
+    if ((args as any).image) env.POST_IMAGE = (args as any).image
+    runPlaywright("linkedin-post.spec.ts", env, 120000)
+  },
+})
+
+const SendCommand = cmd({
+  command: "send",
+  describe: "send LinkedIn DMs to leads on a board",
+  builder: (yargs) =>
+    yargs
+      .option("board", { alias: "b", describe: "board ID", type: "number", default: 38 })
+      .option("limit", { alias: "l", describe: "max leads to DM", type: "number", default: 5 })
+      .option("strategy", { alias: "s", describe: "strategy name", type: "string" })
+      .option("dry-run", { describe: "navigate but don't send", type: "boolean", default: true })
+      .option("warmup", { describe: "view profile before DM", type: "boolean", default: false }),
+  async handler(args) {
+    prompts.intro(`${bold("iris linkedin")} send`)
+    const dryRun = (args as any)["dry-run"] as boolean
+    console.log(`  Board: ${(args as any).board}`)
+    console.log(`  Limit: ${(args as any).limit}`)
+    console.log(`  Mode: ${dryRun ? dim("DRY RUN") : bold("LIVE")}`)
+    const env: Record<string, string> = {
+      PLATFORM: "linkedin",
+      MODE: "api",
+      BOARD_ID: String((args as any).board),
+      LIMIT: String((args as any).limit),
+      DRY_RUN: dryRun ? "1" : "0",
+      SOM_CAMPAIGN_NAME: "linkedin-cli",
+    }
+    if ((args as any).strategy) env.STRATEGY = (args as any).strategy
+    if ((args as any).warmup) env.WARMUP = "1"
+    runPlaywright("batch-with-login.spec.ts", env, 300000)
+  },
+})
+
+const SaveSessionCommand = cmd({
+  command: "save-session",
+  aliases: ["login"],
+  describe: "open LinkedIn login and save browser session",
+  builder: (yargs) => yargs,
+  async handler() {
+    prompts.intro(`${bold("iris linkedin")} save-session`)
+    console.log("  Opening browser — log in manually, session will be saved.\n")
+    runPlaywright("save-linkedin-session.spec.ts", {}, 300000)
+  },
+})
+
 export const PlatformLinkedInCommand = cmd({
   command: "linkedin",
-  describe: "LinkedIn outreach — search, outreach, connect campaigns",
+  aliases: ["li"],
+  describe: "LinkedIn outreach — inbox, post, send DMs, manage campaigns",
   builder: (yargs) =>
     yargs
       .command(StatusCommand)
@@ -296,6 +411,10 @@ export const PlatformLinkedInCommand = cmd({
       .command(OutreachCommand)
       .command(ConnectCommand)
       .command(CheckRepliesCommand)
+      .command(InboxCommand)
+      .command(PostCommand)
+      .command(SendCommand)
+      .command(SaveSessionCommand)
       .demandCommand(0),
   async handler(args) {
     // Default: show status
