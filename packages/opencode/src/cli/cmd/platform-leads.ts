@@ -9089,6 +9089,182 @@ const LeadsDetachBloqCommand = cmd({
 })
 
 // ============================================================================
+// Outreach Stats + Quotas
+// ============================================================================
+
+const LeadsStatsCommand = cmd({
+  command: "stats",
+  describe: "outreach stats — DMs, replies, pipeline, revenue",
+  builder: (yargs) =>
+    yargs
+      .option("board", { alias: "b", describe: "bloq/board ID", type: "number", demandOption: true })
+      .option("period", { alias: "p", describe: "time period", type: "string", choices: ["today", "week", "month", "quarter"], default: "week" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const res = await irisFetch(`/api/v1/outreach/metrics?bloq_id=${args.board}&period=${args.period}`)
+    if (!(await handleApiError(res, "Outreach stats"))) return
+
+    const result = await res.json().catch(() => ({})) as any
+    const data = result?.data ?? {}
+    const summary = data.summary ?? {}
+    const byType = data.by_type ?? {}
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
+
+    printDivider()
+    console.log(bold(`  Outreach Stats — Board ${args.board} (${args.period})`))
+    printDivider()
+    console.log()
+    printKV("Completed", String(summary.total_completed ?? 0))
+    printKV("Pending", String(summary.pending_count ?? 0))
+    printKV("Completion Rate", `${summary.completion_rate ?? 0}%`)
+    printKV("Avg/Day", String(summary.avg_per_day ?? 0))
+    printKV("Pipeline Value", `$${Number(summary.pipeline_value ?? 0).toLocaleString()}`)
+    printKV("Pipeline Leads", String(summary.pipeline_lead_count ?? 0))
+    printKV("Outreached Leads", String(summary.outreached_lead_count ?? 0))
+    if (summary.percent_change !== undefined) {
+      const arrow = summary.trend === "up" ? "↑" : summary.trend === "down" ? "↓" : "→"
+      printKV("Trend", `${arrow} ${summary.percent_change}%`)
+    }
+    console.log()
+
+    // By channel breakdown
+    const channels = Object.entries(byType).filter(([_, v]: any) => v.count > 0)
+    if (channels.length > 0) {
+      console.log(bold("  By Channel:"))
+      for (const [type, val] of channels) {
+        const v = val as any
+        console.log(`    ${type.padEnd(15)} ${String(v.count).padStart(4)}`)
+      }
+    }
+
+    // Quota progress if set
+    const quotaRes = await irisFetch(`/api/v1/outreach/quota?bloq_id=${args.board}`)
+    if (quotaRes.ok) {
+      const qData = (await quotaRes.json().catch(() => ({}))) as any
+      const quotas = qData.quotas ?? {}
+      const progress = qData.progress ?? {}
+      const pct = qData.percent ?? {}
+
+      if (Object.keys(quotas).length > 0) {
+        console.log()
+        console.log(bold("  Quota Progress:"))
+        if (quotas.dms_per_week) {
+          const bar = progressBar(pct.dms ?? 0)
+          console.log(`    DMs/week:     ${bar} ${progress.dms_this_week ?? 0}/${quotas.dms_per_week} (${pct.dms ?? 0}%)`)
+        }
+        if (quotas.replies_per_week) {
+          const bar = progressBar(pct.replies ?? 0)
+          console.log(`    Replies/week: ${bar} ${progress.replies_this_week ?? 0}/${quotas.replies_per_week} (${pct.replies ?? 0}%)`)
+        }
+        if (quotas.revenue_per_month) {
+          const bar = progressBar(pct.revenue ?? 0)
+          console.log(`    Revenue/mo:   ${bar} $${Number(progress.revenue_this_month ?? 0).toLocaleString()}/$${Number(quotas.revenue_per_month).toLocaleString()} (${pct.revenue ?? 0}%)`)
+        }
+        if (quotas.deals_per_month) {
+          const bar = progressBar(pct.deals ?? 0)
+          console.log(`    Deals/mo:     ${bar} ${progress.deals_this_month ?? 0}/${quotas.deals_per_month} (${pct.deals ?? 0}%)`)
+        }
+      }
+    }
+
+    console.log()
+    printDivider()
+  },
+})
+
+function progressBar(percent: number, width = 10): string {
+  const filled = Math.round((percent / 100) * width)
+  const empty = width - filled
+  return `${"█".repeat(filled)}${"░".repeat(empty)}`
+}
+
+const LeadsQuotaCommand = cmd({
+  command: "quota",
+  describe: "view or set outreach quotas for a board",
+  builder: (yargs) =>
+    yargs
+      .option("board", { alias: "b", describe: "bloq/board ID", type: "number", demandOption: true })
+      .option("dms", { describe: "DMs per week target", type: "number" })
+      .option("replies", { describe: "replies per week target", type: "number" })
+      .option("revenue", { describe: "revenue per month target ($)", type: "number" })
+      .option("deals", { describe: "deals per month target", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    // If any target flags provided, SET quota
+    if (args.dms !== undefined || args.replies !== undefined || args.revenue !== undefined || args.deals !== undefined) {
+      const body: Record<string, any> = { bloq_id: args.board }
+      if (args.dms !== undefined) body.dms_per_week = args.dms
+      if (args.replies !== undefined) body.replies_per_week = args.replies
+      if (args.revenue !== undefined) body.revenue_per_month = args.revenue
+      if (args.deals !== undefined) body.deals_per_month = args.deals
+
+      const setRes = await irisFetch("/api/v1/outreach/quota", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      if (!(await handleApiError(setRes, "Set quota"))) return
+      console.log(success("  Quotas updated"))
+      console.log()
+    }
+
+    // GET quota + progress
+    const res = await irisFetch(`/api/v1/outreach/quota?bloq_id=${args.board}`)
+    if (!(await handleApiError(res, "Get quota"))) return
+
+    const data = (await res.json().catch(() => ({}))) as any
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
+
+    const quotas = data.quotas ?? {}
+    const progress = data.progress ?? {}
+    const pct = data.percent ?? {}
+
+    if (Object.keys(quotas).length === 0) {
+      console.log(dim("  No quotas set. Use --dms, --replies, --revenue, --deals to set targets."))
+      console.log(dim(`  Example: iris leads quota -b ${args.board} --dms 50 --replies 10 --revenue 10000`))
+      return
+    }
+
+    printDivider()
+    console.log(bold(`  Outreach Quotas — Board ${args.board}`))
+    printDivider()
+    console.log()
+
+    if (quotas.dms_per_week) {
+      const bar = progressBar(pct.dms ?? 0, 20)
+      console.log(`  DMs/week:     ${bar} ${progress.dms_this_week ?? 0}/${quotas.dms_per_week} (${pct.dms ?? 0}%)`)
+    }
+    if (quotas.replies_per_week) {
+      const bar = progressBar(pct.replies ?? 0, 20)
+      console.log(`  Replies/week: ${bar} ${progress.replies_this_week ?? 0}/${quotas.replies_per_week} (${pct.replies ?? 0}%)`)
+    }
+    if (quotas.revenue_per_month) {
+      const bar = progressBar(pct.revenue ?? 0, 20)
+      console.log(`  Revenue/mo:   ${bar} $${Number(progress.revenue_this_month ?? 0).toLocaleString()}/$${Number(quotas.revenue_per_month).toLocaleString()} (${pct.revenue ?? 0}%)`)
+    }
+    if (quotas.deals_per_month) {
+      const bar = progressBar(pct.deals ?? 0, 20)
+      console.log(`  Deals/mo:     ${bar} ${progress.deals_this_month ?? 0}/${quotas.deals_per_month} (${pct.deals ?? 0}%)`)
+    }
+
+    console.log()
+    printDivider()
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -9141,6 +9317,8 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsReviewCommand)
       .command(LeadsAttachBloqCommand)
       .command(LeadsDetachBloqCommand)
+      .command(LeadsStatsCommand)
+      .command(LeadsQuotaCommand)
       .demandCommand(),
   async handler() {},
 })
