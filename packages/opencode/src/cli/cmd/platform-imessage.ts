@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success } from "./iris-api"
 import { execSync } from "child_process"
-import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards } from "../lib/imessage"
+import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody } from "../lib/imessage"
 import { resolveContactName, resolveContactNames } from "../lib/contacts"
 
 const ImessageSearchCommand = cmd({
@@ -73,35 +73,13 @@ const ImessageSearchCommand = cmd({
     const cutoffSeconds = args.since
       ? Math.max(0, Math.floor((Date.now() - new Date(String(args.since)).getTime()) / 1000))
       : (args.days as number) * 86400
-    const sql = `
-      SELECT
-        m.rowid,
-        datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
-        m.is_from_me,
-        REPLACE(REPLACE(m.text, char(10), ' '), char(13), ' ') as text
-      FROM message m
-      JOIN chat_message_join cmj ON m.rowid = cmj.message_id
-      JOIN chat c ON cmj.chat_id = c.rowid
-      WHERE ${whereClause}
-        AND m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoffSeconds}
-        AND m.text IS NOT NULL
-        AND m.text != ''
-      ORDER BY m.date DESC
-      LIMIT ${args.limit};
-    `.replace(/\n/g, " ").trim()
-
     try {
-      const raw = queryMessages(sql)
-      if (!raw) {
+      const messages = queryMessagesWithBody(whereClause, cutoffSeconds, args.limit as number)
+      if (!messages.length) {
         prompts.log.info(`No messages matching "${args.query}" in the last ${args.days} days`)
         prompts.outro("Done")
         return
       }
-
-      const messages = raw.split("\n").map((line) => {
-        const [id, date, fromMe, ...textParts] = line.split("|")
-        return { id, date, from_me: fromMe === "1", text: textParts.join("|") }
-      })
 
       if (args.json) {
         console.log(JSON.stringify(messages, null, 2))
@@ -163,35 +141,13 @@ const ImessageReadCommand = cmd({
     const cutoffSeconds = args.since
       ? Math.max(0, Math.floor((Date.now() - new Date(String(args.since)).getTime()) / 1000))
       : (args.days as number) * 86400
-    const sql = `
-      SELECT
-        m.rowid,
-        datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
-        m.is_from_me,
-        REPLACE(REPLACE(m.text, char(10), ' '), char(13), ' ') as text
-      FROM message m
-      JOIN chat_message_join cmj ON m.rowid = cmj.message_id
-      JOIN chat c ON cmj.chat_id = c.rowid
-      WHERE ${whereClause}
-        AND m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoffSeconds}
-        AND m.text IS NOT NULL
-        AND m.text != ''
-      ORDER BY m.date DESC
-      LIMIT ${args.last};
-    `.replace(/\n/g, " ").trim()
-
     try {
-      const raw = queryMessages(sql)
-      if (!raw) {
+      const messages = queryMessagesWithBody(whereClause, cutoffSeconds, args.last as number)
+      if (!messages.length) {
         prompts.log.info(`No messages matching "${args.query}"`)
         prompts.outro("Done")
         return
       }
-
-      const messages = raw.split("\n").map((line) => {
-        const [id, date, fromMe, ...textParts] = line.split("|")
-        return { id, date, from_me: fromMe === "1", text: textParts.join("|") }
-      })
 
       if (args.json) {
         console.log(JSON.stringify(messages, null, 2))

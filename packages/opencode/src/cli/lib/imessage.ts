@@ -79,6 +79,91 @@ export function query(sql: string): string {
 }
 
 /**
+ * Parse NSAttributedString binary blob to extract plain text.
+ * Modern macOS Messages.app stores content in attributedBody (BLOB) instead of text.
+ * The plain text string is embedded after the NSString type marker in the binary.
+ */
+export function parseAttributedBody(hexStr: string): string {
+  if (!hexStr) return ""
+  try {
+    const buf = Buffer.from(hexStr, "hex")
+    // Find NSString marker followed by a length byte and the text content.
+    // The pattern is: ...NSString\x01\x95\x84\x01\x2B<length><text>\x86...
+    // We look for the \x2B byte ('+') which precedes the length+text.
+    const text = buf.toString("utf-8", 0, buf.length)
+    // Strategy: find the text between the NSString length marker and the next control sequence.
+    // The attributedBody contains the raw string after a specific byte pattern.
+    const nsStringMarker = "NSString"
+    const markerIdx = text.indexOf(nsStringMarker)
+    if (markerIdx === -1) return ""
+
+    // After NSString, skip to the '+' marker which precedes the length byte + text
+    const afterMarker = buf.indexOf(0x2b, markerIdx + nsStringMarker.length)
+    if (afterMarker === -1) return ""
+
+    // The byte after '+' is the string length
+    const strLen = buf[afterMarker + 1]
+    if (!strLen || strLen === 0) return ""
+
+    // Extract the text
+    const start = afterMarker + 2
+    const end = start + strLen
+    if (end > buf.length) return ""
+
+    const extracted = buf.subarray(start, end).toString("utf-8")
+    // Clean up: remove trailing binary garbage
+    return extracted.replace(/[\x00-\x08\x0e-\x1f\x80-\xff]/g, "").trim()
+  } catch {
+    return ""
+  }
+}
+
+/**
+ * Query messages with attributedBody fallback.
+ * Returns messages even when text column is NULL (modern macOS Messages.app).
+ */
+export function queryMessagesWithBody(whereClause: string, cutoffSeconds: number, limit: number): Message[] {
+  // Query both text and hex-encoded attributedBody
+  const sql = `SELECT
+    m.rowid,
+    datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
+    m.is_from_me,
+    REPLACE(REPLACE(m.text, char(10), ' '), char(13), ' ') as text,
+    hex(m.attributedBody) as body_hex
+  FROM message m
+  JOIN chat_message_join cmj ON m.rowid = cmj.message_id
+  JOIN chat c ON cmj.chat_id = c.rowid
+  WHERE ${whereClause}
+    AND m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoffSeconds}
+    AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
+  ORDER BY m.date DESC
+  LIMIT ${limit};`.replace(/\n/g, " ").trim()
+
+  try {
+    const raw = query(sql)
+    if (!raw) return []
+
+    return raw.split("\n").map((line) => {
+      const [id, date, fromMe, textCol, bodyHex] = line.split("|")
+      // Prefer text column, fall back to parsing attributedBody
+      let msgText = textCol?.trim() || ""
+      if (!msgText && bodyHex) {
+        msgText = parseAttributedBody(bodyHex)
+      }
+      if (!msgText) return null
+      return {
+        id,
+        date,
+        from_me: fromMe === "1",
+        text: msgText.replace(/\n/g, " ").trim(),
+      } satisfies Message
+    }).filter(Boolean) as Message[]
+  } catch {
+    return []
+  }
+}
+
+/**
  * Normalize a phone/email/handle to a search-friendly format.
  * Phones: strip non-digits, take last 10 digits.
  */
@@ -90,6 +175,7 @@ export function normalizeHandle(handle: string): string {
 
 /**
  * Search messages by phone number, email, or chat identifier.
+ * Falls back to attributedBody when text column is NULL (modern macOS).
  */
 export function searchByHandle(handle: string, days = 30, limit = 50): Message[] {
   const search = normalizeHandle(handle)
@@ -98,12 +184,13 @@ export function searchByHandle(handle: string, days = 30, limit = 50): Message[]
   const sql = `SELECT
     m.rowid, m.text, m.is_from_me, m.date,
     datetime(m.date/1000000000 + strftime('%s','2001-01-01'), 'unixepoch', 'localtime') as sent_dt,
-    c.chat_identifier
+    c.chat_identifier,
+    hex(m.attributedBody) as body_hex
   FROM message m
   JOIN chat_message_join cmj ON m.rowid = cmj.message_id
   JOIN chat c ON cmj.chat_id = c.rowid
   WHERE c.chat_identifier LIKE '%${search}%'
-  AND m.text IS NOT NULL AND m.text != ''
+  AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
   AND m.date > (strftime('%s','now') - ${cutoffSeconds} - strftime('%s','2001-01-01')) * 1000000000
   ORDER BY m.date DESC LIMIT ${limit}`
 
@@ -114,9 +201,14 @@ export function searchByHandle(handle: string, days = 30, limit = 50): Message[]
     return raw.split("\n").map((line) => {
       const parts = line.split("|")
       if (parts.length < 5) return null
+      let text = parts[1]?.trim() || ""
+      if (!text && parts[6]) {
+        text = parseAttributedBody(parts[6])
+      }
+      if (!text) return null
       return {
         id: parts[0],
-        text: parts[1],
+        text,
         from_me: parts[2] === "1",
         date: parts[4],
         chat_identifier: parts[5] || search,
