@@ -128,14 +128,49 @@ const ImessageReadCommand = cmd({
     }
 
     if (!args.query?.trim()) {
-      prompts.log.error("Please provide a phone number or chat identifier")
+      prompts.log.error("Please provide a phone number, lead ID, or contact name")
       prompts.outro("Done")
       return
     }
 
-    const digits = args.query.replace(/\D/g, "")
-    const isPhone = digits.length >= 7
-    const normalized = isPhone ? normalizeHandle(args.query) : args.query
+    let digits = args.query.replace(/\D/g, "")
+    let isPhone = digits.length >= 7
+    let normalized = isPhone ? normalizeHandle(args.query) : args.query
+
+    // If not a phone number, try to resolve as lead ID or name
+    const isLeadId = /^\d+$/.test(args.query.trim()) && digits.length < 7
+    if (isLeadId || !isPhone) {
+      try {
+        const { irisFetch: _fetch } = await import("./iris-api")
+        if (isLeadId) {
+          const res = await _fetch(`/api/v1/leads/${args.query.trim()}`)
+          if (res.ok) {
+            const data = (await res.json()) as any
+            const lead = data?.data ?? data
+            if (lead?.phone) {
+              const name = lead.name || lead.nickname || `Lead #${args.query}`
+              if (!args.json) prompts.log.info(`Resolved lead #${args.query} → ${name} (${lead.phone})`)
+              normalized = normalizeHandle(lead.phone)
+              isPhone = true
+            }
+          }
+        } else {
+          const res = await _fetch(`/api/v1/leads?search=${encodeURIComponent(args.query)}&per_page=5`)
+          if (res.ok) {
+            const data = (await res.json()) as any
+            const leads = data?.data?.data ?? data?.data ?? []
+            const withPhone = Array.isArray(leads) ? leads.find((l: any) => l.phone) : null
+            if (withPhone) {
+              const name = withPhone.name || withPhone.nickname || args.query
+              if (!args.json) prompts.log.info(`Resolved "${args.query}" → ${name} (${withPhone.phone})`)
+              normalized = normalizeHandle(withPhone.phone)
+              isPhone = true
+            }
+          }
+        }
+      } catch {}
+    }
+
     const whereClause = isPhone
       ? `c.chat_identifier LIKE '%${normalized}%'`
       : `c.chat_identifier LIKE '%${args.query.replace(/'/g, "''")}%'`
@@ -254,7 +289,7 @@ const ImessageSendCommand = cmd({
   describe: "send an iMessage to a phone number or contact",
   builder: (yargs) =>
     yargs
-      .positional("handle", { type: "string", demandOption: true, describe: "phone number or Apple ID email" })
+      .positional("handle", { type: "string", demandOption: true, describe: "phone number, lead ID, or contact name" })
       .positional("message", { type: "string", demandOption: true, describe: "message text to send" }),
   async handler(args) {
     UI.empty()
@@ -266,11 +301,62 @@ const ImessageSendCommand = cmd({
       return
     }
 
-    // Normalize phone — prepend +1 if 10 digits
+    // Resolve handle: could be phone, lead ID, or contact name
     let handle = args.handle.trim()
     const digits = handle.replace(/\D/g, "")
-    if (digits.length === 10) handle = `+1${digits}`
-    else if (digits.length === 11 && digits.startsWith("1")) handle = `+${digits}`
+
+    // Check if it's a lead ID (pure number, < 7 digits — not a phone)
+    const isLeadId = /^\d+$/.test(handle) && digits.length < 7
+    const isPhone = !isLeadId && digits.length >= 7
+
+    if (isLeadId || (!isPhone && !handle.includes("@"))) {
+      // Resolve from CRM
+      try {
+        const { irisFetch: _fetch } = await import("./iris-api")
+        if (isLeadId) {
+          const res = await _fetch(`/api/v1/leads/${handle}`)
+          if (res.ok) {
+            const data = (await res.json()) as any
+            const lead = data?.data ?? data
+            if (lead?.phone) {
+              const name = lead.name || lead.nickname || `Lead #${handle}`
+              prompts.log.info(`Resolved lead #${handle} → ${name} (${lead.phone})`)
+              handle = lead.phone
+            } else {
+              prompts.log.error(`Lead #${handle} has no phone number`)
+              prompts.outro("Done")
+              return
+            }
+          } else {
+            prompts.log.error(`Lead #${handle} not found`)
+            prompts.outro("Done")
+            return
+          }
+        } else {
+          // Search by name
+          const res = await _fetch(`/api/v1/leads?search=${encodeURIComponent(handle)}&per_page=5`)
+          if (res.ok) {
+            const data = (await res.json()) as any
+            const leads = data?.data?.data ?? data?.data ?? []
+            const withPhone = Array.isArray(leads) ? leads.find((l: any) => l.phone) : null
+            if (withPhone) {
+              const name = withPhone.name || withPhone.nickname || handle
+              prompts.log.info(`Resolved "${handle}" → ${name} (${withPhone.phone})`)
+              handle = withPhone.phone
+            } else {
+              prompts.log.error(`No lead with phone found for "${handle}"`)
+              prompts.outro("Done")
+              return
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // Normalize phone — prepend +1 if 10 digits
+    const finalDigits = handle.replace(/\D/g, "")
+    if (finalDigits.length === 10) handle = `+1${finalDigits}`
+    else if (finalDigits.length === 11 && finalDigits.startsWith("1")) handle = `+${finalDigits}`
 
     // Clean up stray backslash escapes from upstream (MCP/shell) then escape for AppleScript
     const cleanMessage = args.message.replace(/\\([^\\])/g, "$1")
