@@ -18,8 +18,7 @@ const ImessageSearchCommand = cmd({
       .option("limit", { type: "number", default: 50, describe: "max messages" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  iMessage Search — "${args.query}"`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  iMessage Search — "${args.query}"`) }
 
     if (!isAvailable()) {
       prompts.log.error(diagnoseAccess())
@@ -83,7 +82,6 @@ const ImessageSearchCommand = cmd({
 
       if (args.json) {
         console.log(JSON.stringify(messages, null, 2))
-        prompts.outro("Done")
         return
       }
 
@@ -121,11 +119,16 @@ const ImessageReadCommand = cmd({
       .option("days", { type: "number", default: 30, describe: "search last N days" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  iMessage Read — "${args.query}"`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  iMessage Read — "${args.query}"`) }
 
     if (!isAvailable()) {
       prompts.log.error(diagnoseAccess())
+      prompts.outro("Done")
+      return
+    }
+
+    if (!args.query?.trim()) {
+      prompts.log.error("Please provide a phone number or chat identifier")
       prompts.outro("Done")
       return
     }
@@ -151,7 +154,6 @@ const ImessageReadCommand = cmd({
 
       if (args.json) {
         console.log(JSON.stringify(messages, null, 2))
-        prompts.outro("Done")
         return
       }
 
@@ -224,7 +226,6 @@ const ImessageChatsCommand = cmd({
 
       if (args.json) {
         console.log(JSON.stringify(chats, null, 2))
-        prompts.outro("Done")
         return
       }
 
@@ -336,7 +337,6 @@ const ImessageContactsCommand = cmd({
 
     if (args.json) {
       console.log(JSON.stringify(cards, null, 2))
-      prompts.outro("Done")
       return
     }
 
@@ -372,8 +372,7 @@ const ImessageMentionsCommand = cmd({
       .option("limit", { type: "number", default: 50, describe: "max mentions" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  @heyiris Mentions")
+    if (!args.json) { UI.empty(); prompts.intro("◈  @heyiris Mentions") }
 
     const mentionsDir = `${require("os").homedir()}/.iris/mentions`
     const { existsSync, readdirSync, readFileSync } = require("fs")
@@ -434,7 +433,6 @@ const ImessageMentionsCommand = cmd({
 
     if (args.json) {
       console.log(JSON.stringify(mentions, null, 2))
-      prompts.outro("Done")
       return
     }
 
@@ -476,8 +474,7 @@ const ImessageGroupsCommand = cmd({
       .option("limit", { type: "number", default: 30, describe: "max groups" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  iMessage Group Chats")
+    if (!args.json) { UI.empty(); prompts.intro("◈  iMessage Group Chats") }
 
     if (!isAvailable()) {
       prompts.log.error(diagnoseAccess())
@@ -499,7 +496,6 @@ const ImessageGroupsCommand = cmd({
         members: getGroupParticipants(g.guid),
       }))
       console.log(JSON.stringify(enriched, null, 2))
-      prompts.outro("Done")
       return
     }
 
@@ -529,8 +525,7 @@ const ImessageReadGroupCommand = cmd({
       .option("members", { type: "boolean", default: false, describe: "show participant list" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  iMessage Group — "${args.query}"`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  iMessage Group — "${args.query}"`) }
 
     if (!isAvailable()) {
       prompts.log.error(diagnoseAccess())
@@ -572,7 +567,6 @@ const ImessageReadGroupCommand = cmd({
 
     if (args.json) {
       console.log(JSON.stringify({ group, messages }, null, 2))
-      prompts.outro("Done")
       return
     }
 
