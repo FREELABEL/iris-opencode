@@ -9264,6 +9264,137 @@ const LeadsQuotaCommand = cmd({
   },
 })
 
+const LeadsAnalyzeCommand = cmd({
+  command: "analyze",
+  aliases: ["report"],
+  describe: "outreach analysis — messages sent, scripts used, performance trends",
+  builder: (yargs) =>
+    yargs
+      .option("board", { alias: "b", describe: "bloq/board ID", type: "number", demandOption: true })
+      .option("period", { alias: "p", describe: "time period", type: "string", choices: ["today", "week", "month", "quarter"], default: "week" })
+      .option("messages", { alias: "m", describe: "show recent messages sent", type: "boolean", default: true })
+      .option("limit", { alias: "l", describe: "max messages to show", type: "number", default: 10 })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const boardId = (args as any).board as number
+    const period = (args as any).period as string
+    const showMessages = (args as any).messages as boolean
+    const limit = (args as any).limit as number
+
+    printDivider()
+    console.log(bold(`  Outreach Analysis — Board ${boardId} (${period})`))
+    printDivider()
+
+    // 1. Performance metrics
+    const metricsRes = await irisFetch(`/api/v1/outreach/metrics?bloq_id=${boardId}&period=${period}`)
+    if (!(await handleApiError(metricsRes, "Outreach metrics"))) return
+    const metrics = ((await metricsRes.json()) as any).data || {}
+    const s = metrics.summary || {}
+
+    console.log()
+    console.log(bold("  Performance:"))
+    printKV("DMs Sent", String(s.total_completed ?? 0))
+    printKV("Avg/Day", String(s.avg_per_day ?? 0))
+    printKV("Completion Rate", `${s.completion_rate ?? 0}%`)
+    const arrow = s.trend === "up" ? "↑" : s.trend === "down" ? "↓" : "→"
+    printKV("Trend", `${arrow} ${s.percent_change ?? 0}% vs prior period`)
+    printKV("Pipeline", `$${Number(s.pipeline_value ?? 0).toLocaleString()}`)
+    printKV("Outreached", `${s.outreached_lead_count ?? 0} leads`)
+
+    // 2. Quota progress
+    const quotaRes = await irisFetch(`/api/v1/outreach/quota?bloq_id=${boardId}`)
+    if (quotaRes.ok) {
+      const qd = (await quotaRes.json()) as any
+      const q = qd.quotas || {}
+      const p = qd.progress || {}
+      const pct = qd.percent || {}
+      if (Object.keys(q).length > 0) {
+        console.log()
+        console.log(bold("  Quota Progress:"))
+        if (q.dms_per_week) console.log(`    DMs/week:  ${progressBar(pct.dms ?? 0)} ${p.dms_this_week ?? 0}/${q.dms_per_week} (${pct.dms ?? 0}%)`)
+        if (q.replies_per_week) console.log(`    Replies:   ${progressBar(pct.replies ?? 0)} ${p.replies_this_week ?? 0}/${q.replies_per_week} (${pct.replies ?? 0}%)`)
+        if (q.revenue_per_month) console.log(`    Revenue:   ${progressBar(pct.revenue ?? 0)} $${Number(p.revenue_this_month ?? 0).toLocaleString()}/$${Number(q.revenue_per_month).toLocaleString()} (${pct.revenue ?? 0}%)`)
+        if (q.deals_per_month) console.log(`    Deals:     ${progressBar(pct.deals ?? 0)} ${p.deals_this_month ?? 0}/${q.deals_per_month} (${pct.deals ?? 0}%)`)
+      }
+    }
+
+    // 3. Recent messages sent (so you can see what's going out and tweak scripts)
+    if (showMessages) {
+      console.log()
+      console.log(bold(`  Recent Messages Sent (last ${limit}):`))
+      // Fetch recent outreach messages by sampling recently-outreached leads
+      const leadsRes = await irisFetch(`/api/v1/leads?bloq_id=${boardId}&outreach_status=contacted&sort=updated_at&order=desc&per_page=${limit}`)
+      let shown = 0
+      if (leadsRes.ok) {
+        const leadsData = (await leadsRes.json()) as any
+        const leads = leadsData.data?.data || leadsData.data || []
+        for (const lead of (Array.isArray(leads) ? leads : []).slice(0, limit)) {
+          const omRes = await irisFetch(`/api/v1/leads/${lead.id}/outreach/messages?direction=outbound`)
+          if (!omRes.ok) continue
+          const omData = (await omRes.json()) as any
+          const msgs = (omData.messages || []).filter((m: any) => m.type === "instagram_dm" || m.type === "linkedin_dm")
+          const latest = msgs[msgs.length - 1]
+          if (latest) {
+            const date = (latest.sent_at || latest.created_at || "").substring(0, 16).replace("T", " ")
+            const ch = latest.type === "instagram_dm" ? "IG" : latest.type === "linkedin_dm" ? "LI" : "?"
+            const text = (latest.message || "").substring(0, 100)
+            const leadName = lead.name || lead.nickname || `#${lead.id}`
+            console.log(`    ${dim(date)} [${ch}] ${leadName}`)
+            console.log(`      "${text}${text.length >= 100 ? "..." : ""}"`)
+            shown++
+          }
+        }
+      }
+      if (shown === 0) {
+        // Fallback: local ledger
+        try {
+          const ledgerDir = join(homedir(), ".iris", "som-ledger")
+          if (!existsSync(ledgerDir)) throw new Error("no ledger")
+          const allFiles = require("fs").readdirSync(ledgerDir).filter((f: string) => f.endsWith(".jsonl")).sort().reverse()
+          for (const file of allFiles) {
+            if (shown >= limit) break
+            const lines = require("fs").readFileSync(join(ledgerDir, file), "utf8").split("\n").filter(Boolean).reverse()
+            for (const line of lines) {
+              if (shown >= limit) break
+              try {
+                const entry = JSON.parse(line)
+                if (entry.result === "dm_sent" && entry.board_id === boardId && !entry.dry_run) {
+                  const date = (entry.ts || "").substring(0, 16).replace("T", " ")
+                  const text = (entry.dm_text || "").substring(0, 100)
+                  console.log(`    ${dim(date)} ${entry.lead_name || "#" + entry.lead_id}`)
+                  console.log(`      "${text}${text.length >= 100 ? "..." : ""}"`)
+                  shown++
+                }
+              } catch {}
+            }
+          }
+        } catch {}
+        if (shown === 0) console.log(dim("    No recent messages found"))
+      }
+    }
+
+    // 4. By channel breakdown
+    const byType = metrics.by_type || {}
+    const channels = Object.entries(byType).filter(([_, v]: any) => v.count > 0)
+    if (channels.length > 0) {
+      console.log()
+      console.log(bold("  By Channel:"))
+      for (const [type, val] of channels) {
+        const v = val as any
+        console.log(`    ${type.padEnd(15)} ${String(v.count).padStart(4)}`)
+      }
+    }
+
+    console.log()
+    printDivider()
+
+    if ((args as any).json) {
+      console.log(JSON.stringify({ metrics: metrics.summary, quota: {}, messages: [] }, null, 2))
+    }
+  },
+})
+
 // ============================================================================
 // Root command
 // ============================================================================
@@ -9319,6 +9450,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsDetachBloqCommand)
       .command(LeadsStatsCommand)
       .command(LeadsQuotaCommand)
+      .command(LeadsAnalyzeCommand)
       .demandCommand(),
   async handler() {},
 })
