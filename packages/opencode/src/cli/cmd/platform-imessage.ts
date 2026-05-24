@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success } from "./iris-api"
 import { execSync } from "child_process"
-import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody } from "../lib/imessage"
+import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat } from "../lib/imessage"
 import { resolveContactName, resolveContactNames } from "../lib/contacts"
 
 const ImessageSearchCommand = cmd({
@@ -360,6 +360,193 @@ const ImessageContactsCommand = cmd({
   },
 })
 
+const ImessageGroupsCommand = cmd({
+  command: "groups",
+  aliases: ["group-chats", "gc"],
+  describe: "list group chats with names and participants",
+  builder: (yargs) =>
+    yargs
+      .option("days", { type: "number", default: 90, describe: "look back N days" })
+      .option("limit", { type: "number", default: 30, describe: "max groups" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  iMessage Group Chats")
+
+    if (!isAvailable()) {
+      prompts.log.error(diagnoseAccess())
+      prompts.outro("Done")
+      return
+    }
+
+    const groups = listGroupChats(args.days as number, args.limit as number)
+    if (!groups.length) {
+      prompts.log.info("No group chats found")
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      // Enrich with participants for JSON output
+      const enriched = groups.map(g => ({
+        ...g,
+        members: getGroupParticipants(g.guid),
+      }))
+      console.log(JSON.stringify(enriched, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    printDivider()
+    for (const group of groups) {
+      const name = bold(group.display_name || "(unnamed)")
+      const meta = dim(`${group.participants} members · ${group.message_count} msgs · ${group.last_message}`)
+      console.log(`  ${name}`)
+      console.log(`    ${meta}`)
+      console.log(`    ${dim(group.chat_identifier)}`)
+      console.log()
+    }
+    printDivider()
+    prompts.outro(`${success("✓")} ${groups.length} group chat${groups.length === 1 ? "" : "s"}\n  ${dim("iris imessage read-group <name-or-id>")}`)
+  },
+})
+
+const ImessageReadGroupCommand = cmd({
+  command: "read-group <query>",
+  aliases: ["rg"],
+  describe: "read messages from a group chat",
+  builder: (yargs) =>
+    yargs
+      .positional("query", { type: "string", demandOption: true, describe: "group name or chat identifier" })
+      .option("last", { type: "number", default: 20, describe: "number of recent messages" })
+      .option("days", { type: "number", default: 30, describe: "search last N days" })
+      .option("members", { type: "boolean", default: false, describe: "show participant list" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  iMessage Group — "${args.query}"`)
+
+    if (!isAvailable()) {
+      prompts.log.error(diagnoseAccess())
+      prompts.outro("Done")
+      return
+    }
+
+    // Resolve group by name or ID
+    const group = resolveGroupChat(args.query)
+    if (!group) {
+      prompts.log.error(`No group chat matching "${args.query}"`)
+      prompts.log.info(dim("Use: iris imessage groups — to list available group chats"))
+      prompts.outro("Done")
+      return
+    }
+
+    prompts.log.info(`${bold(group.display_name)} — ${group.participants} members, ${group.message_count} total msgs`)
+
+    // Show members if requested
+    if (args.members) {
+      const members = getGroupParticipants(group.guid)
+      const phoneMap = await resolveContactNames(members)
+      prompts.log.info(bold("Members:"))
+      for (const member of members) {
+        const name = phoneMap.get(member)
+        console.log(`    ${name ? `${bold(name)} ${dim(member)}` : dim(member)}`)
+      }
+      console.log()
+    }
+
+    const cutoffSeconds = (args.days as number) * 86400
+    const messages = readGroupMessages(group.guid, cutoffSeconds, args.last as number)
+
+    if (!messages.length) {
+      prompts.log.info(`No messages in the last ${args.days} days`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify({ group, messages }, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    // Resolve sender names
+    const senderHandles = [...new Set(messages.filter(m => !m.from_me && m.chat_identifier).map(m => m.chat_identifier!))]
+    const nameMap = await resolveContactNames(senderHandles)
+
+    const reversed = [...messages].reverse()
+    printDivider()
+    for (const msg of reversed) {
+      const sender = msg.from_me
+        ? bold("  You →")
+        : bold(`← ${nameMap.get(msg.chat_identifier || "") || msg.chat_identifier || "?"}`)
+      console.log(`  ${dim(msg.date)}  ${sender}  ${msg.text}`)
+    }
+    printDivider()
+    prompts.outro(`${success("✓")} ${messages.length} message${messages.length === 1 ? "" : "s"}`)
+  },
+})
+
+const ImessageSendGroupCommand = cmd({
+  command: "send-group <query> <message>",
+  aliases: ["sg"],
+  describe: "send a message to a group chat",
+  builder: (yargs) =>
+    yargs
+      .positional("query", { type: "string", demandOption: true, describe: "group name or chat identifier" })
+      .positional("message", { type: "string", demandOption: true, describe: "message text to send" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  iMessage Send Group — "${args.query}"`)
+
+    if (process.platform !== "darwin") {
+      prompts.log.error("iMessage is only available on macOS")
+      prompts.outro("Done")
+      return
+    }
+
+    // Resolve group
+    const group = resolveGroupChat(args.query)
+    if (!group) {
+      prompts.log.error(`No group chat matching "${args.query}"`)
+      prompts.log.info(dim("Use: iris imessage groups — to list available group chats"))
+      prompts.outro("Done")
+      return
+    }
+
+    prompts.log.info(`Sending to ${bold(group.display_name)} (${group.participants} members)`)
+
+    const cleanMessage = args.message.replace(/\\([^\\])/g, "$1")
+    const escapedMessage = cleanMessage
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+
+    // AppleScript: send to group chat by guid
+    const script = `
+tell application "Messages"
+    set targetChat to chat id "${group.guid}"
+    send "${escapedMessage}" to targetChat
+end tell`
+
+    const sp = prompts.spinner()
+    sp.start(`Sending to ${group.display_name}…`)
+
+    try {
+      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
+        encoding: "utf-8",
+        timeout: 15000,
+      })
+      sp.stop(success(`Sent to ${group.display_name}`))
+      console.log(`  ${dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)}`)
+      prompts.outro("Done")
+    } catch (err: any) {
+      sp.stop("Failed", 1)
+      prompts.log.error(`Send failed: ${err.message?.slice(0, 200)}`)
+      prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformImessageCommand = cmd({
   command: "imessage",
   aliases: ["sms", "messages"],
@@ -371,6 +558,9 @@ export const PlatformImessageCommand = cmd({
       .command(ImessageChatsCommand)
       .command(ImessageSendCommand)
       .command(ImessageContactsCommand)
+      .command(ImessageGroupsCommand)
+      .command(ImessageReadGroupCommand)
+      .command(ImessageSendGroupCommand)
       .demandCommand(),
   async handler() {},
 })

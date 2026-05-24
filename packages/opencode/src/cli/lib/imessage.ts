@@ -123,16 +123,18 @@ export function parseAttributedBody(hexStr: string): string {
  * Returns messages even when text column is NULL (modern macOS Messages.app).
  */
 export function queryMessagesWithBody(whereClause: string, cutoffSeconds: number, limit: number): Message[] {
-  // Query both text and hex-encoded attributedBody
+  // Query both text and hex-encoded attributedBody, plus sender handle for group chats
   const sql = `SELECT
     m.rowid,
     datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date,
     m.is_from_me,
     REPLACE(REPLACE(m.text, char(10), ' '), char(13), ' ') as text,
-    hex(m.attributedBody) as body_hex
+    hex(m.attributedBody) as body_hex,
+    COALESCE(h.id, '') as sender_handle
   FROM message m
   JOIN chat_message_join cmj ON m.rowid = cmj.message_id
   JOIN chat c ON cmj.chat_id = c.rowid
+  LEFT JOIN handle h ON m.handle_id = h.rowid
   WHERE ${whereClause}
     AND m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoffSeconds}
     AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
@@ -144,7 +146,7 @@ export function queryMessagesWithBody(whereClause: string, cutoffSeconds: number
     if (!raw) return []
 
     return raw.split("\n").map((line) => {
-      const [id, date, fromMe, textCol, bodyHex] = line.split("|")
+      const [id, date, fromMe, textCol, bodyHex, senderHandle] = line.split("|")
       // Prefer text column, fall back to parsing attributedBody
       let msgText = textCol?.trim() || ""
       if (!msgText && bodyHex) {
@@ -156,6 +158,7 @@ export function queryMessagesWithBody(whereClause: string, cutoffSeconds: number
         date,
         from_me: fromMe === "1",
         text: msgText.replace(/\n/g, " ").trim(),
+        chat_identifier: senderHandle || undefined,
       } satisfies Message
     }).filter(Boolean) as Message[]
   } catch {
@@ -252,6 +255,130 @@ export function listChats(days = 30, limit = 50): Chat[] {
     }).filter(Boolean) as Chat[]
   } catch {
     return []
+  }
+}
+
+// ── Group Chat Support (#106514) ──
+
+export interface GroupChat {
+  guid: string
+  display_name: string
+  chat_identifier: string
+  participants: number
+  message_count: number
+  last_message: string
+}
+
+/**
+ * List group chats with names, participant counts, and message counts.
+ */
+export function listGroupChats(days = 90, limit = 30): GroupChat[] {
+  const cutoffSeconds = days * 86400
+
+  const sql = `SELECT
+    c.guid,
+    COALESCE(c.display_name, c.room_name, '') as display_name,
+    c.chat_identifier,
+    (SELECT COUNT(*) FROM chat_handle_join chj WHERE chj.chat_id = c.rowid) as participants,
+    COUNT(m.rowid) as msg_count,
+    MAX(datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime')) as last_msg
+  FROM chat c
+  JOIN chat_message_join cmj ON c.rowid = cmj.chat_id
+  JOIN message m ON cmj.message_id = m.rowid
+  WHERE (SELECT COUNT(*) FROM chat_handle_join chj2 WHERE chj2.chat_id = c.rowid) > 1
+  AND m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoffSeconds}
+  GROUP BY c.guid
+  ORDER BY MAX(m.date) DESC
+  LIMIT ${limit}`
+
+  try {
+    const raw = query(sql)
+    if (!raw) return []
+    return raw.split("\n").map((line) => {
+      const parts = line.split("|")
+      if (parts.length < 6) return null
+      return {
+        guid: parts[0],
+        display_name: parts[1] || "(unnamed group)",
+        chat_identifier: parts[2],
+        participants: parseInt(parts[3], 10),
+        message_count: parseInt(parts[4], 10),
+        last_message: parts[5],
+      } satisfies GroupChat
+    }).filter(Boolean) as GroupChat[]
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Get participants of a group chat by guid or chat_identifier.
+ */
+export function getGroupParticipants(chatId: string): string[] {
+  const escaped = chatId.replace(/'/g, "''")
+  const sql = `SELECT h.id FROM chat_handle_join chj
+    JOIN handle h ON chj.handle_id = h.rowid
+    WHERE chj.chat_id = (
+      SELECT rowid FROM chat WHERE guid = '${escaped}'
+      OR chat_identifier = '${escaped}'
+      LIMIT 1
+    )`
+
+  try {
+    const raw = query(sql)
+    if (!raw) return []
+    return raw.split("\n").filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Read messages from a group chat by guid or chat_identifier.
+ * Falls back to attributedBody when text is NULL.
+ */
+export function readGroupMessages(chatId: string, cutoffSeconds: number, limit: number): Message[] {
+  const escaped = chatId.replace(/'/g, "''")
+  const whereClause = `(c.guid = '${escaped}' OR c.chat_identifier = '${escaped}')`
+  return queryMessagesWithBody(whereClause, cutoffSeconds, limit)
+}
+
+/**
+ * Resolve a group chat by partial name match or chat ID.
+ * Returns the guid if found.
+ */
+export function resolveGroupChat(search: string): GroupChat | null {
+  const escaped = search.replace(/'/g, "''")
+  const sql = `SELECT
+    c.guid,
+    COALESCE(c.display_name, c.room_name, '') as display_name,
+    c.chat_identifier,
+    (SELECT COUNT(*) FROM chat_handle_join chj WHERE chj.chat_id = c.rowid) as participants,
+    (SELECT COUNT(*) FROM chat_message_join cmj WHERE cmj.chat_id = c.rowid) as msg_count
+  FROM chat c
+  WHERE (c.display_name LIKE '%${escaped}%'
+    OR c.room_name LIKE '%${escaped}%'
+    OR c.guid LIKE '%${escaped}%'
+    OR c.chat_identifier LIKE '%${escaped}%')
+  AND (SELECT COUNT(*) FROM chat_handle_join chj2 WHERE chj2.chat_id = c.rowid) > 1
+  ORDER BY msg_count DESC
+  LIMIT 1`
+
+  try {
+    const raw = query(sql)
+    if (!raw) return null
+    const parts = raw.split("|")
+    if (parts.length < 5) return null
+    return {
+      guid: parts[0],
+      display_name: parts[1] || "(unnamed group)",
+      chat_identifier: parts[2],
+      participants: parseInt(parts[3], 10),
+      message_count: parseInt(parts[4], 10),
+      last_message: "",
+    }
+  } catch {
+    return null
   }
 }
 
