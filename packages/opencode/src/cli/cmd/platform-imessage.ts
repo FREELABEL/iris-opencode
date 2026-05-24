@@ -360,6 +360,112 @@ const ImessageContactsCommand = cmd({
   },
 })
 
+const ImessageMentionsCommand = cmd({
+  command: "mentions",
+  aliases: ["@", "wakeword"],
+  describe: "query @heyiris mentions from iMessage logs",
+  builder: (yargs) =>
+    yargs
+      .option("days", { type: "number", default: 30, describe: "look back N days" })
+      .option("sender", { type: "string", describe: "filter by sender phone or name" })
+      .option("lead", { type: "number", describe: "filter by lead ID" })
+      .option("limit", { type: "number", default: 50, describe: "max mentions" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  @heyiris Mentions")
+
+    const mentionsDir = `${require("os").homedir()}/.iris/mentions`
+    const { existsSync, readdirSync, readFileSync } = require("fs")
+
+    if (!existsSync(mentionsDir)) {
+      prompts.log.error(`Mentions directory not found: ${mentionsDir}`)
+      prompts.outro("Done")
+      return
+    }
+
+    // Read all JSONL files within date range
+    const cutoff = new Date(Date.now() - (args.days as number) * 86400 * 1000)
+    const files = readdirSync(mentionsDir)
+      .filter((f: string) => f.endsWith(".jsonl"))
+      .sort()
+      .filter((f: string) => {
+        const dateStr = f.replace(".jsonl", "")
+        return new Date(dateStr) >= cutoff
+      })
+
+    if (!files.length) {
+      prompts.log.info(`No mention logs in the last ${args.days} days`)
+      prompts.outro("Done")
+      return
+    }
+
+    // Parse all mentions
+    let mentions: any[] = []
+    for (const file of files) {
+      const lines = readFileSync(`${mentionsDir}/${file}`, "utf-8").split("\n").filter(Boolean)
+      for (const line of lines) {
+        try {
+          mentions.push(JSON.parse(line))
+        } catch {}
+      }
+    }
+
+    // Apply filters
+    if (args.sender) {
+      const s = String(args.sender).toLowerCase()
+      mentions = mentions.filter((m: any) =>
+        m.sender?.includes(s) || m.lead_name?.toLowerCase().includes(s)
+      )
+    }
+    if (args.lead) {
+      mentions = mentions.filter((m: any) => m.lead_id === args.lead)
+    }
+
+    // Sort newest first, apply limit
+    mentions.sort((a: any, b: any) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
+    mentions = mentions.slice(0, args.limit as number)
+
+    if (!mentions.length) {
+      prompts.log.info("No mentions found matching filters")
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(mentions, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    // Group by sender for summary
+    const bySender = new Map<string, number>()
+    for (const m of mentions) {
+      const key = m.lead_name || m.sender || "unknown"
+      bySender.set(key, (bySender.get(key) || 0) + 1)
+    }
+
+    prompts.log.info(bold(`${mentions.length} mention${mentions.length === 1 ? "" : "s"} from ${bySender.size} sender${bySender.size === 1 ? "" : "s"}`))
+    for (const [sender, count] of bySender) {
+      console.log(`    ${dim(`${count}x`)} ${sender}`)
+    }
+    console.log()
+
+    printDivider()
+    for (const m of mentions) {
+      const sender = m.lead_name ? bold(m.lead_name) : bold(m.sender || "?")
+      const leadTag = m.lead_id ? dim(` #${m.lead_id}`) : ""
+      const date = dim(new Date(m.ts).toLocaleString())
+      const groupTag = m.is_group ? dim(" [group]") : ""
+      console.log(`  ${date}  ${sender}${leadTag}${groupTag}`)
+      console.log(`    ${m.text}`)
+      console.log()
+    }
+    printDivider()
+    prompts.outro(`${success("✓")} ${mentions.length} mention${mentions.length === 1 ? "" : "s"}`)
+  },
+})
+
 const ImessageGroupsCommand = cmd({
   command: "groups",
   aliases: ["group-chats", "gc"],
@@ -558,6 +664,7 @@ export const PlatformImessageCommand = cmd({
       .command(ImessageChatsCommand)
       .command(ImessageSendCommand)
       .command(ImessageContactsCommand)
+      .command(ImessageMentionsCommand)
       .command(ImessageGroupsCommand)
       .command(ImessageReadGroupCommand)
       .command(ImessageSendGroupCommand)
