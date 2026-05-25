@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, BRIDGE_URL, bridgeFetch } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
@@ -2328,36 +2328,75 @@ const ImportCommand = cmd({
     spinner.start(`Scraping ${platform} page...`)
 
     try {
-      // Step 1: Scrape the URL via iris-api FireCrawl/web_scraper
-      const scrapeRes = await irisFetch("/api/v1/tools/execute", {
-        method: "POST",
-        body: JSON.stringify({ tool: "web_scraper", input: { url: String(args.url), extract: "all" } })
-      }, IRIS_API)
+      // Step 1: Scrape the URL — IG goes through bridge (Playwright), others through iris-api
+      let rawText = ""
+      let rawImages: string[] = []
+      let rawLocation: any = null
+      let rawTitle = ""
+      let images: string[] = []
+      let flyerUrl: string | null = null
 
-      if (!scrapeRes.ok) {
-        spinner.stop("Scrape failed", 1)
-        await handleApiError(scrapeRes, "Scrape URL")
-        prompts.outro("Done")
-        return
-      }
-
-      const scrapeData = (await scrapeRes.json()) as any
-      const result = scrapeData?.result ?? scrapeData?.data ?? scrapeData
-      const rawText = result?.text ?? result?.content ?? result?.description ?? result?.markdown ?? ""
-      const rawImages = result?.images ?? result?.media ?? []
-      const rawLocation = result?.location ?? result?.place ?? null
-      const rawTitle = result?.title ?? result?.og_title ?? ""
-
-      const images: string[] = []
-      if (Array.isArray(rawImages)) {
-        for (const img of rawImages) {
-          const u = typeof img === "string" ? img : img?.url ?? img?.src
-          if (u) images.push(u)
+      if (platform === "instagram") {
+        // Instagram: use bridge Playwright scraper (needs authenticated session)
+        try {
+          const bridgeRes = await bridgeFetch("/api/scrape/instagram", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: String(args.url) }),
+          })
+          if (!bridgeRes.ok) {
+            const errData = (await bridgeRes.json().catch(() => ({}))) as any
+            spinner.stop("Scrape failed", 1)
+            prompts.log.error(errData?.error ?? `Bridge returned HTTP ${bridgeRes.status}`)
+            if (errData?.error?.includes("session")) {
+              prompts.log.info(dim("Fix: iris hive credentials save-session --platform instagram"))
+            }
+            prompts.outro("Done")
+            return
+          }
+          const igData = (await bridgeRes.json()) as any
+          rawText = igData.caption ?? ""
+          rawTitle = rawText.split("\n")[0]?.slice(0, 100) ?? ""
+          images = igData.images ?? []
+          flyerUrl = igData.flyerUrl ?? (images.length > 0 ? images[0] : null)
+          rawLocation = igData.location ?? null
+          spinner.stop(success(`Scraped (via bridge, session: ${igData.sessionUsed ?? "default"})`))
+        } catch (err: any) {
+          spinner.stop("Bridge unavailable", 1)
+          prompts.log.error(`Could not reach bridge at ${BRIDGE_URL} — is it running?`)
+          prompts.log.info(dim("Start it: iris bridge start"))
+          prompts.outro("Done")
+          return
         }
-      }
-      const flyerUrl = images.length > 0 ? images[0] : (result?.image ?? result?.thumbnail ?? result?.og_image ?? null)
+      } else {
+        // Non-IG: use iris-api web scraper (Tavily → FireCrawl → native HTTP)
+        const scrapeRes = await irisFetch("/api/v1/tools/execute", {
+          method: "POST",
+          body: JSON.stringify({ tool: "webscraper", params: { url: String(args.url) }, user_id: 193 })
+        }, IRIS_API)
 
-      spinner.stop(success("Scraped"))
+        if (!scrapeRes.ok) {
+          spinner.stop("Scrape failed", 1)
+          await handleApiError(scrapeRes, "Scrape URL")
+          prompts.outro("Done")
+          return
+        }
+
+        const scrapeData = (await scrapeRes.json()) as any
+        const result = scrapeData?.result ?? scrapeData?.data ?? scrapeData
+        rawText = result?.text ?? result?.content ?? result?.description ?? result?.markdown ?? ""
+        rawTitle = result?.title ?? result?.og_title ?? ""
+        const rawImgArr = result?.images ?? result?.media ?? []
+        if (Array.isArray(rawImgArr)) {
+          for (const img of rawImgArr) {
+            const u = typeof img === "string" ? img : img?.url ?? img?.src
+            if (u) images.push(u)
+          }
+        }
+        rawLocation = result?.location ?? result?.place ?? null
+        flyerUrl = images.length > 0 ? images[0] : (result?.image ?? result?.thumbnail ?? result?.og_image ?? null)
+        spinner.stop(success("Scraped"))
+      }
 
       // Step 2: Use AI to extract structured event data from raw content
       spinner.start("AI extracting event details...")
@@ -2444,14 +2483,18 @@ Return this exact JSON structure (use null for unknown fields):
       const createSpinner = prompts.spinner()
       createSpinner.start("Creating event...")
 
+      // Truncate photo/flyer URLs to 255 chars (DB varchar limit)
+      const safePhoto = flyerUrl && flyerUrl.length <= 255 ? flyerUrl : null
       const payload: Record<string, unknown> = {
         title: eventTitle,
         description: eventDesc,
         status: "1",
         event_type: args.type || "showcase",
-        flyer: flyerUrl,
-        photo: flyerUrl,
         external_source: String(args.url),
+      }
+      if (safePhoto) {
+        payload.flyer = safePhoto
+        payload.photo = safePhoto
       }
       if (images.length > 1) payload.metadata = { gallery: images, ticket_url: ticketUrl, price, platform }
       if (eventDate) payload.start_date = eventDate
