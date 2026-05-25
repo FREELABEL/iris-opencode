@@ -9,7 +9,11 @@ import {
   dim,
   bold,
   success,
+  highlight,
+  printDivider,
+  printKV,
   FL_API,
+  IRIS_API,
 } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
@@ -771,6 +775,295 @@ const DiffCommand = cmd({
 })
 
 // ---------------------------------------------------------------------------
+// Event Content — Instagram import & flyer updates
+// ---------------------------------------------------------------------------
+
+async function scrapeInstagramPost(igUrl: string): Promise<{ caption: string; images: string[]; flyerUrl: string | null; location: any } | null> {
+  const scrapeRes = await irisFetch("/api/v1/tools/execute", {
+    method: "POST",
+    body: JSON.stringify({ tool: "web_scraper", input: { url: igUrl, extract: "all" } })
+  }, IRIS_API)
+  const ok = await handleApiError(scrapeRes, "Scrape Instagram")
+  if (!ok) return null
+
+  const scrapeData = (await scrapeRes.json()) as any
+  const result = scrapeData?.result ?? scrapeData?.data ?? scrapeData
+
+  const caption = result?.text ?? result?.content ?? result?.description ?? ""
+  const rawImages = result?.images ?? result?.media ?? []
+  const location = result?.location ?? result?.place ?? null
+
+  const images: string[] = []
+  if (Array.isArray(rawImages)) {
+    for (const img of rawImages) {
+      const url = typeof img === "string" ? img : img?.url ?? img?.src
+      if (url) images.push(url)
+    }
+  }
+
+  const flyerUrl = images.length > 0
+    ? images[0]
+    : (result?.image ?? result?.thumbnail ?? null)
+
+  return { caption, images, flyerUrl, location }
+}
+
+function extractTitleFromCaption(caption: string): string | null {
+  if (!caption) return null
+  const firstLine = caption.split("\n")[0].trim()
+  if (firstLine.length > 5 && firstLine.length < 120) return firstLine
+  const firstSentence = caption.split(/[.!?]/)[0].trim()
+  if (firstSentence.length > 5 && firstSentence.length < 120) return firstSentence
+  return caption.slice(0, 80).trim()
+}
+
+function extractDateFromCaption(caption: string): string | null {
+  if (!caption) return null
+  const isoMatch = caption.match(/(\d{4}-\d{2}-\d{2})/)
+  if (isoMatch) return isoMatch[1]
+  const slashMatch = caption.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/)
+  if (slashMatch) {
+    const year = slashMatch[3].length === 2 ? `20${slashMatch[3]}` : slashMatch[3]
+    return `${year}-${slashMatch[1].padStart(2, "0")}-${slashMatch[2].padStart(2, "0")}`
+  }
+  const months = ["january","february","march","april","may","june","july","august","september","october","november","december"]
+  const monthPattern = new RegExp(`(${months.join("|")})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:[,\\s]+(\\d{4}))?`, "i")
+  const monthMatch = caption.match(monthPattern)
+  if (monthMatch) {
+    const monthIdx = months.indexOf(monthMatch[1].toLowerCase()) + 1
+    const day = monthMatch[2].padStart(2, "0")
+    const year = monthMatch[3] || new Date().getFullYear().toString()
+    return `${year}-${String(monthIdx).padStart(2, "0")}-${day}`
+  }
+  return null
+}
+
+const EventImportFromIgCommand = cmd({
+  command: "import-from-ig <url>",
+  aliases: ["from-ig", "ig"],
+  describe: "create an event from an Instagram post URL (scrapes flyer, caption, location)",
+  builder: (yargs: any) =>
+    yargs
+      .positional("url", { describe: "Instagram post URL", type: "string", demandOption: true })
+      .option("title", { describe: "override event title", type: "string" })
+      .option("date", { describe: "event date YYYY-MM-DD", type: "string" })
+      .option("time", { describe: "event time HH:MM", type: "string" })
+      .option("venue", { describe: "venue name", type: "string" })
+      .option("city", { describe: "city", type: "string" })
+      .option("state", { describe: "state", type: "string" })
+      .option("type", { describe: "event type", type: "string", default: "showcase" })
+      .option("bloq-id", { describe: "associated bloq ID", type: "number" })
+      .option("dry-run", { describe: "show extracted data without creating event", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("iris content event")} import-from-ig`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const igUrl = String(args.url)
+    if (!igUrl.includes("instagram.com")) {
+      prompts.log.error("URL must be an Instagram post URL (instagram.com/p/... or instagram.com/reel/...)")
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Scraping Instagram post...")
+
+    try {
+      const scraped = await scrapeInstagramPost(igUrl)
+      if (!scraped) { spinner.stop("Scrape failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(success("Scraped"))
+
+      printDivider()
+      printKV("Source", igUrl)
+      printKV("Caption", scraped.caption ? scraped.caption.slice(0, 120) + (scraped.caption.length > 120 ? "..." : "") : dim("(none)"))
+      printKV("Flyer", scraped.flyerUrl ? highlight(scraped.flyerUrl.slice(0, 80)) : dim("(no image found)"))
+      printKV("Location", scraped.location ? String(scraped.location.name ?? scraped.location) : dim("(none)"))
+      printKV("Images", `${scraped.images.length} found`)
+      printDivider()
+
+      if (args["dry-run"]) {
+        if (args.json) { console.log(JSON.stringify(scraped, null, 2)) }
+        prompts.outro(dim("Dry run -- no event created"))
+        return
+      }
+
+      const eventTitle = args.title || extractTitleFromCaption(scraped.caption) || "Untitled Event"
+      const eventDate = args.date || extractDateFromCaption(scraped.caption)
+      const eventVenue = args.venue || (scraped.location?.name ?? (typeof scraped.location === "string" ? scraped.location : null))
+
+      const spinner2 = prompts.spinner()
+      spinner2.start("Creating event...")
+
+      const payload: Record<string, unknown> = {
+        title: eventTitle,
+        description: scraped.caption,
+        status: "1",
+        event_type: args.type || "showcase",
+        flyer: scraped.flyerUrl,
+        photo: scraped.flyerUrl,
+        external_source: igUrl,
+      }
+      if (scraped.images.length > 1) {
+        payload.metadata = { gallery: scraped.images }
+      }
+      if (eventDate) payload.start_date = eventDate
+      if (args.time) payload.start_time = args.time
+      if (eventVenue) payload.venue_name = eventVenue
+      if (args.city) payload.city = args.city
+      if (args.state) payload.state = args.state
+      if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
+
+      const res = await irisFetch("/api/v1/events", { method: "POST", body: JSON.stringify(payload) })
+      const createOk = await handleApiError(res, "Create event")
+      if (!createOk) { spinner2.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as any
+      const e = data?.event ?? data?.data ?? data
+      spinner2.stop(`${success("Created")}: ${bold(String(e.title ?? e.id))}`)
+
+      if (args.json) {
+        console.log(JSON.stringify(e, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      printKV("ID", e.id)
+      printKV("Title", e.title)
+      printKV("Date", e.start_date || dim("(not set)"))
+      printKV("Venue", e.venue_name || dim("(not set)"))
+      printKV("Flyer", e.flyer ? highlight("attached") : dim("(not attached)"))
+      printKV("Gallery", scraped.images.length > 1 ? `${scraped.images.length} images` : dim("single image"))
+      printKV("IG Source", igUrl)
+      printDivider()
+
+      prompts.outro(dim(`iris events get ${e.id}  |  iris events push ${e.id}`))
+    } catch (err: any) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const EventUpdateFlyerCommand = cmd({
+  command: "update-flyer <event-id> <url>",
+  aliases: ["flyer"],
+  describe: "pull flyer image from an Instagram post and attach it to an existing event",
+  builder: (yargs: any) =>
+    yargs
+      .positional("event-id", { describe: "event ID to update", type: "number", demandOption: true })
+      .positional("url", { describe: "Instagram post URL", type: "string", demandOption: true })
+      .option("gallery", { describe: "store all images as gallery in metadata", type: "boolean", default: true })
+      .option("dry-run", { describe: "show what would be updated without saving", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args: any) {
+    UI.empty()
+    prompts.intro(`${bold("iris content event")} update-flyer`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const eventId = Number(args["event-id"])
+    const igUrl = String(args.url)
+    if (!igUrl.includes("instagram.com")) {
+      prompts.log.error("URL must be an Instagram post URL")
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Scraping Instagram post for flyer...")
+
+    try {
+      const scraped = await scrapeInstagramPost(igUrl)
+      if (!scraped) { spinner.stop("Scrape failed", 1); prompts.outro("Done"); return }
+
+      if (!scraped.flyerUrl) {
+        spinner.stop("No images found in post", 1)
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(success("Scraped"))
+
+      printDivider()
+      printKV("Event ID", String(eventId))
+      printKV("Flyer URL", highlight(scraped.flyerUrl.slice(0, 80)))
+      printKV("Images", `${scraped.images.length} found`)
+      printDivider()
+
+      if (args["dry-run"]) {
+        if (args.json) {
+          console.log(JSON.stringify({ event_id: eventId, flyer: scraped.flyerUrl, gallery: scraped.images }, null, 2))
+        }
+        prompts.outro(dim("Dry run -- no changes made"))
+        return
+      }
+
+      const spinner2 = prompts.spinner()
+      spinner2.start(`Updating event #${eventId}...`)
+
+      const payload: Record<string, unknown> = {
+        flyer: scraped.flyerUrl,
+        photo: scraped.flyerUrl,
+        external_source: igUrl,
+      }
+      if (args.gallery && scraped.images.length > 1) {
+        payload.metadata = { gallery: scraped.images }
+      }
+
+      const res = await irisFetch(`/api/v1/events/${eventId}`, { method: "PUT", body: JSON.stringify(payload) })
+      const updateOk = await handleApiError(res, "Update event")
+      if (!updateOk) { spinner2.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as any
+      const e = data?.event ?? data?.data ?? data
+
+      const galleryCount = scraped.images.length > 1 ? ` + ${scraped.images.length} gallery images` : ""
+      spinner2.stop(`${success("Updated")} event #${eventId} with flyer${galleryCount}`)
+
+      if (args.json) {
+        console.log(JSON.stringify(e, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      printKV("ID", e.id ?? eventId)
+      printKV("Title", e.title ?? dim("(unknown)"))
+      printKV("Flyer", highlight("attached"))
+      printKV("Gallery", scraped.images.length > 1 ? `${scraped.images.length} images stored` : dim("single image"))
+      printKV("IG Source", igUrl)
+      printDivider()
+
+      prompts.outro(dim(`iris events get ${eventId}`))
+    } catch (err: any) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const EventSubCommand = cmd({
+  command: "event",
+  aliases: ["events"],
+  describe: "import and enrich event content from external sources (flyers, IG posts)",
+  builder: (yargs: any) =>
+    yargs
+      .command(EventImportFromIgCommand)
+      .command(EventUpdateFlyerCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ---------------------------------------------------------------------------
 // Root Command
 // ---------------------------------------------------------------------------
 
@@ -780,6 +1073,7 @@ export const PlatformContentCommand = cmd({
   describe: "Content management -- profiles, upload, list, pull/push/diff",
   builder: (yargs: any) =>
     yargs
+      .command(EventSubCommand)
       .command(ProfilesCommand)
       .command(UploadCommand)
       .command(ListCommand)

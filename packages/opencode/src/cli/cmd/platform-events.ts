@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
@@ -2124,7 +2124,7 @@ const AuditCommand = cmd({
 const ImportIgCommand = cmd({
   command: "import-ig <url>",
   aliases: ["from-ig", "ig"],
-  describe: "create an event from an Instagram post URL (scrapes flyer, caption, location)",
+  describe: "[moved] use: iris content event import-from-ig <url>",
   builder: (yargs) =>
     yargs
       .positional("url", { describe: "Instagram post URL", type: "string", demandOption: true })
@@ -2140,6 +2140,7 @@ const ImportIgCommand = cmd({
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
+    prompts.log.warn(dim("Moved: use `iris content event import-from-ig` (or update-flyer for existing events)"))
     prompts.intro(`${bold("iris events")} import-ig`)
 
     const token = await requireAuth()
@@ -2157,7 +2158,7 @@ const ImportIgCommand = cmd({
 
     try {
       // Step 1: Scrape IG post via iris-api web scraper
-      const scrapeRes = await irisFetch("/api/v6/tools/execute", {
+      const scrapeRes = await irisFetch("/api/v1/tools/execute", {
         method: "POST",
         body: JSON.stringify({
           tool: "web_scraper",
@@ -2283,9 +2284,338 @@ function extractDateFromCaption(caption: string): string | null {
   return null
 }
 
+// ============================================================================
+// Universal Import — scrape ANY event URL (IG, Eventbrite, Posh, Partiful, etc.)
+// ============================================================================
+
+function detectPlatform(url: string): string {
+  if (url.includes("instagram.com")) return "instagram"
+  if (url.includes("eventbrite.com")) return "eventbrite"
+  if (url.includes("posh.vip")) return "posh"
+  if (url.includes("partiful.com")) return "partiful"
+  if (url.includes("meetup.com")) return "meetup"
+  if (url.includes("lu.ma")) return "luma"
+  if (url.includes("dice.fm")) return "dice"
+  return "unknown"
+}
+
+const ImportCommand = cmd({
+  command: "import <url>",
+  aliases: ["scrape", "from-url"],
+  describe: "import an event from any URL — IG, Eventbrite, Posh, Partiful, Meetup, or any event page",
+  builder: (yargs) =>
+    yargs
+      .positional("url", { describe: "event page URL (any platform)", type: "string", demandOption: true })
+      .option("title", { describe: "override event title", type: "string" })
+      .option("date", { describe: "event date YYYY-MM-DD", type: "string" })
+      .option("time", { describe: "event time HH:MM", type: "string" })
+      .option("venue", { describe: "venue name", type: "string" })
+      .option("city", { describe: "city", type: "string" })
+      .option("state", { describe: "state", type: "string" })
+      .option("type", { describe: "event type", type: "string", default: "showcase" })
+      .option("bloq-id", { describe: "associated bloq ID", type: "number" })
+      .option("dry-run", { describe: "show extracted data without creating", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const platform = detectPlatform(String(args.url))
+    prompts.intro(`${bold("iris events")} import ${dim(`(${platform})`)}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start(`Scraping ${platform} page...`)
+
+    try {
+      // Step 1: Scrape the URL via iris-api FireCrawl/web_scraper
+      const scrapeRes = await irisFetch("/api/v1/tools/execute", {
+        method: "POST",
+        body: JSON.stringify({ tool: "web_scraper", input: { url: String(args.url), extract: "all" } })
+      }, IRIS_API)
+
+      if (!scrapeRes.ok) {
+        spinner.stop("Scrape failed", 1)
+        await handleApiError(scrapeRes, "Scrape URL")
+        prompts.outro("Done")
+        return
+      }
+
+      const scrapeData = (await scrapeRes.json()) as any
+      const result = scrapeData?.result ?? scrapeData?.data ?? scrapeData
+      const rawText = result?.text ?? result?.content ?? result?.description ?? result?.markdown ?? ""
+      const rawImages = result?.images ?? result?.media ?? []
+      const rawLocation = result?.location ?? result?.place ?? null
+      const rawTitle = result?.title ?? result?.og_title ?? ""
+
+      const images: string[] = []
+      if (Array.isArray(rawImages)) {
+        for (const img of rawImages) {
+          const u = typeof img === "string" ? img : img?.url ?? img?.src
+          if (u) images.push(u)
+        }
+      }
+      const flyerUrl = images.length > 0 ? images[0] : (result?.image ?? result?.thumbnail ?? result?.og_image ?? null)
+
+      spinner.stop(success("Scraped"))
+
+      // Step 2: Use AI to extract structured event data from raw content
+      spinner.start("AI extracting event details...")
+
+      const aiPrompt = `Extract event details from this scraped web page. Return ONLY a JSON object, no markdown.
+
+URL: ${args.url}
+Platform: ${platform}
+Page title: ${rawTitle}
+Content: ${rawText.slice(0, 3000)}
+Images found: ${images.length}
+
+Return this exact JSON structure (use null for unknown fields):
+{
+  "title": "event title",
+  "date": "YYYY-MM-DD or null",
+  "time": "HH:MM or null",
+  "venue": "venue name or null",
+  "city": "city or null",
+  "state": "state abbreviation or null",
+  "description": "1-2 sentence description",
+  "ticket_url": "ticket purchase URL or null",
+  "price": "price string like '$25' or 'Free' or null",
+  "organizer": "organizer name or null"
+}`
+
+      const aiRes = await irisFetch("/api/v6/openai/chat/completions", {
+        method: "POST",
+        body: JSON.stringify({
+          model: "iris/gpt-4o-mini",
+          messages: [{ role: "user", content: aiPrompt }],
+          temperature: 0.1,
+          max_tokens: 500,
+        }),
+      }, IRIS_API)
+
+      let extracted: any = {}
+      if (aiRes.ok) {
+        const aiData = (await aiRes.json()) as any
+        const content = aiData?.choices?.[0]?.message?.content ?? ""
+        try {
+          const jsonMatch = content.match(/\{[\s\S]*\}/)
+          if (jsonMatch) extracted = JSON.parse(jsonMatch[0])
+        } catch { /* AI didn't return valid JSON, use raw scraped data */ }
+      }
+
+      spinner.stop(success("Extracted"))
+
+      // Merge: CLI flags > AI extraction > raw scraped data
+      const eventTitle = args.title || extracted.title || rawTitle || "Untitled Event"
+      const eventDate = args.date || extracted.date || null
+      const eventTime = args.time || extracted.time || null
+      const eventVenue = args.venue || extracted.venue || (rawLocation?.name ?? (typeof rawLocation === "string" ? rawLocation : null))
+      const eventCity = args.city || extracted.city || null
+      const eventState = args.state || extracted.state || null
+      const eventDesc = extracted.description || rawText.slice(0, 500)
+      const ticketUrl = extracted.ticket_url || null
+      const price = extracted.price || null
+
+      // Display extracted data
+      printDivider()
+      printKV("Platform", platform)
+      printKV("Source", String(args.url).slice(0, 80))
+      printKV("Title", eventTitle)
+      printKV("Date", eventDate || dim("(not detected)"))
+      printKV("Time", eventTime || dim("(not detected)"))
+      printKV("Venue", eventVenue || dim("(not detected)"))
+      printKV("City", eventCity ? `${eventCity}${eventState ? `, ${eventState}` : ""}` : dim("(not detected)"))
+      printKV("Flyer", flyerUrl ? highlight(String(flyerUrl).slice(0, 60)) : dim("(none)"))
+      printKV("Price", price || dim("(not detected)"))
+      printKV("Tickets", ticketUrl ? highlight(String(ticketUrl).slice(0, 60)) : dim("(none)"))
+      printKV("Images", `${images.length} found`)
+      printDivider()
+
+      if (args["dry-run"]) {
+        if (args.json) {
+          console.log(JSON.stringify({ platform, title: eventTitle, date: eventDate, time: eventTime, venue: eventVenue, city: eventCity, state: eventState, description: eventDesc, flyer: flyerUrl, ticket_url: ticketUrl, price, images, source: args.url }, null, 2))
+        }
+        prompts.outro(dim("Dry run — no event created"))
+        return
+      }
+
+      // Step 3: Create the event
+      const createSpinner = prompts.spinner()
+      createSpinner.start("Creating event...")
+
+      const payload: Record<string, unknown> = {
+        title: eventTitle,
+        description: eventDesc,
+        status: "1",
+        event_type: args.type || "showcase",
+        flyer: flyerUrl,
+        photo: flyerUrl,
+        external_source: String(args.url),
+      }
+      if (images.length > 1) payload.metadata = { gallery: images, ticket_url: ticketUrl, price, platform }
+      if (eventDate) payload.start_date = eventDate
+      if (eventTime) payload.start_time = eventTime
+      if (eventVenue) payload.venue_name = eventVenue
+      if (eventCity) payload.city = eventCity
+      if (eventState) payload.state = eventState
+      if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
+
+      const createRes = await irisFetch("/api/v1/events", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+
+      if (!createRes.ok) {
+        createSpinner.stop("Failed", 1)
+        await handleApiError(createRes, "Create event")
+        prompts.outro("Done")
+        return
+      }
+
+      const eventData = (await createRes.json()) as any
+      const eventId = eventData?.data?.id ?? eventData?.id
+
+      createSpinner.stop(`${success("✓")} Event #${eventId} created`)
+
+      if (args.json) {
+        console.log(JSON.stringify({ event_id: eventId, platform, title: eventTitle, flyer: flyerUrl }, null, 2))
+      }
+
+      prompts.outro(dim(`iris events get ${eventId}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Search — find events across platforms via EventSearchIntegrationService
+// ============================================================================
+
+const SearchCommand = cmd({
+  command: "search <query..>",
+  aliases: ["find", "discover"],
+  describe: "search for events across Eventbrite, Meetup, Luma, Posh, Partiful",
+  builder: (yargs) =>
+    yargs
+      .positional("query", { describe: "search query", type: "string", array: true, demandOption: true })
+      .option("platform", { describe: "filter by platform", type: "string", choices: ["eventbrite", "meetup", "luma", "posh", "partiful", "all"], default: "all" })
+      .option("location", { describe: "location filter (e.g. 'Dallas TX')", type: "string" })
+      .option("limit", { describe: "max results", type: "number", default: 10 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const queryStr = (args.query as string[]).join(" ")
+    prompts.intro(`${bold("iris events")} search: ${queryStr}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Searching event platforms...")
+
+    try {
+      // Use iris-api EventSearchIntegrationService
+      const searchParams: Record<string, unknown> = {
+        query: queryStr,
+        limit: args.limit,
+      }
+      if (args.location) searchParams.location = args.location
+
+      // Determine which platforms to search
+      const platformVal = String(args.platform)
+      let platforms = ["eventbrite", "meetup", "luma"]
+      if (platformVal !== "all") {
+        platforms = [platformVal]
+      }
+      searchParams.platforms = platforms
+
+      // Add Posh and Partiful as custom Serper searches if selected
+      const extraPlatforms: { name: string; site: string }[] = []
+      if (platformVal === "all" || platformVal === "posh") {
+        extraPlatforms.push({ name: "posh", site: "site:posh.vip" })
+      }
+      if (platformVal === "all" || platformVal === "partiful") {
+        extraPlatforms.push({ name: "partiful", site: "site:partiful.com/e/" })
+      }
+
+      // Call EventSearch integration on iris-api
+      const searchRes = await irisFetch("/api/v6/integrations/execute", {
+        method: "POST",
+        body: JSON.stringify({
+          integration: "event_search",
+          action: "search",
+          parameters: searchParams,
+        }),
+      }, IRIS_API)
+
+      let results: any[] = []
+      if (searchRes.ok) {
+        const searchData = (await searchRes.json()) as any
+        results = searchData?.result?.results ?? searchData?.data?.results ?? searchData?.results ?? []
+      }
+
+      // Search Posh/Partiful via web search if needed
+      for (const extra of extraPlatforms) {
+        try {
+          const extraRes = await irisFetch("/api/v6/integrations/execute", {
+            method: "POST",
+            body: JSON.stringify({
+              integration: "event_search",
+              action: `search_${extra.name}`,
+              parameters: { ...searchParams, platforms: undefined },
+            }),
+          }, IRIS_API)
+          if (extraRes.ok) {
+            const extraData = (await extraRes.json()) as any
+            const extraResults = extraData?.result?.results ?? extraData?.data?.results ?? []
+            results.push(...extraResults)
+          }
+        } catch { /* platform not supported yet, skip */ }
+      }
+
+      spinner.stop(`${results.length} result(s)`)
+
+      if (results.length === 0) {
+        prompts.log.info(dim("No events found. Try a different query or location."))
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) {
+        console.log(JSON.stringify(results, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      for (const [i, r] of results.slice(0, Number(args.limit)).entries()) {
+        const title = r.title ?? r.name ?? "Untitled"
+        const link = r.link ?? r.url ?? ""
+        const snippet = r.snippet ?? r.description ?? ""
+        const platform = r.platform ?? detectPlatform(link)
+        console.log(`  ${bold(`${i + 1}.`)} ${title}`)
+        console.log(`     ${dim(platform)}  ${highlight(link.slice(0, 70))}`)
+        if (snippet) console.log(`     ${dim(snippet.slice(0, 100))}`)
+        console.log()
+      }
+      printDivider()
+
+      prompts.outro(dim("iris events import <url>  — import any result"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformEventsCommand = cmd({
   command: "events",
-  describe: "manage events, stages, vendors, tickets — pull, push, diff, CRUD, preflight, audit",
+  describe: "manage events, stages, vendors, tickets — pull, push, diff, CRUD, import, search, preflight, audit",
   builder: (yargs) =>
     yargs
       .command(ListCommand)
@@ -2326,7 +2656,9 @@ export const PlatformEventsCommand = cmd({
       .command(PreflightCommand)
       .command(AuditCommand)
       .command(ProductionCommand)
-      // Import from external sources
+      // Import & Search
+      .command(ImportCommand)
+      .command(SearchCommand)
       .command(ImportIgCommand)
       .demandCommand(),
   async handler() {},
