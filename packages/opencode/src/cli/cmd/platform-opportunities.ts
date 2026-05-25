@@ -61,6 +61,7 @@ const ListCommand = cmd({
     yargs
       .option("limit", { describe: "max results", type: "number", default: 20 })
       .option("profile-id", { describe: "filter by profile PK", type: "number" })
+      .option("bounties", { describe: "show only clip campaigns (bounties)", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -75,6 +76,7 @@ const ListCommand = cmd({
     try {
       const params = new URLSearchParams({ per_page: String(args.limit) })
       if (args["profile-id"]) params.set("profile_id", String(args["profile-id"]))
+      if (args.bounties) params.set("bounty_type", "video_views")
       const res = await irisFetch(`/api/v1/marketplace/opportunities?${params}`)
       const ok = await handleApiError(res, "List opportunities")
       if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
@@ -168,7 +170,13 @@ const CreateCommand = cmd({
       .option("pitch-file", { describe: "path to pitch sections JSON array ({heading, body})", type: "string" })
       .option("preview", { describe: "create in preview mode (banner shown, applications/investments disabled)", type: "boolean" })
       .option("profile-id", { describe: "attach to a profile (PK)", type: "number" })
-      .option("profile", { describe: "attach to a profile (slug — resolves to PK)", type: "string" }),
+      .option("profile", { describe: "attach to a profile (slug — resolves to PK)", type: "string" })
+      // Bounty / Clip Campaign fields
+      .option("bounty", { describe: "create as a clip campaign (bounty)", type: "boolean" })
+      .option("bounty-type", { describe: "bounty type (video_views, audio_streams, social_impressions, ugc_views)", type: "string", default: "video_views", choices: ["video_views", "audio_streams", "social_impressions", "ugc_views"] })
+      .option("rate-per-mille", { describe: "pay rate per 1K views in cents (e.g. 500 = $5)", type: "number" })
+      .option("budget", { describe: "total campaign budget in dollars (e.g. 10000)", type: "number" })
+      .option("per-creator-cap", { describe: "max payout per creator in dollars (e.g. 500)", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Opportunity")
@@ -231,6 +239,15 @@ const CreateCommand = cmd({
         payload.pitch_sections = JSON.parse(readFileSync(pitchPath, "utf-8"))
       }
       if (args.preview) payload.preview_mode = true
+
+      // Bounty / Clip Campaign fields
+      if (args.bounty) {
+        payload.bounty_type = args["bounty-type"] || "video_submission"
+        payload.is_public = true
+        if (args["rate-per-mille"]) payload.rate_per_mille_cents = Number(args["rate-per-mille"])
+        if (args.budget) payload.budget_pool_cents = Math.round(Number(args.budget) * 100)
+        if (args["per-creator-cap"]) payload.per_creator_cap_cents = Math.round(Number(args["per-creator-cap"]) * 100)
+      }
 
       const res = await irisFetch("/api/v1/marketplace/opportunities", { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create opportunity")
