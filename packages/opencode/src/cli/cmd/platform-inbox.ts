@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, isNonInteractive, BRIDGE_URL, getBridgeToken } from "./iris-api"
+import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, isNonInteractive, bridgeFetch } from "./iris-api"
 
 // ============================================================================
 // Shared Helpers
@@ -34,12 +34,6 @@ async function dispatchHiveTask(taskPayload: Record<string, unknown>): Promise<a
 // Helpers
 // ============================================================================
 
-const BRIDGE_BASE = BRIDGE_URL
-
-function bridgeHeaders(): Record<string, string> {
-  const token = getBridgeToken()
-  return token ? { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" }
-}
 
 interface OutreachStep {
   step: number
@@ -534,7 +528,7 @@ async function inboxViewHandler(args: any) {
         if ((!channelFilter || channelFilter === "imessage") && (phone || email)) {
           try {
             const handle = phone || email
-            const r = await fetch(`${BRIDGE_BASE}/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=10`, { headers: bridgeHeaders() })
+            const r = await bridgeFetch(`/api/imessage/search?handle=${encodeURIComponent(handle)}&days=${days}&limit=10`)
             if (r.ok) {
               const d = (await r.json()) as any
               const msgs = (d?.messages ?? []).slice(0, 10)
@@ -579,7 +573,7 @@ async function inboxViewHandler(args: any) {
         // Apple Mail via bridge
         if ((!channelFilter || channelFilter === "email") && email) {
           try {
-            const r = await fetch(`${BRIDGE_BASE}/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=10&include_body=0`, { headers: bridgeHeaders() })
+            const r = await bridgeFetch(`/api/mail/search?from=${encodeURIComponent(email)}&days=${days}&limit=10&include_body=0`)
             if (r.ok) {
               const d = (await r.json()) as any
               const msgs = (d?.messages ?? []).slice(0, 10)
