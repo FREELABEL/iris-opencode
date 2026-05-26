@@ -946,11 +946,12 @@ function timeAgo(iso: string | null | undefined): string {
 }
 
 const HiveTasksCommand = cmd({
-  command: "tasks [subcommand]",
+  command: "tasks [subcommand] [task-id]",
   describe: "list pending/running tasks on your node",
   builder: (yargs) =>
     yargs
-      .positional("subcommand", { describe: "get <id> or logs <id>", type: "string" })
+      .positional("subcommand", { describe: "get or logs", type: "string" })
+      .positional("task-id", { describe: "task ID (for get/logs)", type: "string" })
       .option("status", { describe: "filter by status", type: "string", choices: ["pending", "running", "completed", "failed", "all"], default: "all" })
       .option("type", { describe: "filter by task type (discover, som_batch, etc.)", type: "string" })
       .option("history", { describe: "include completed tasks (last 48h)", type: "boolean", default: false })
@@ -966,7 +967,7 @@ const HiveTasksCommand = cmd({
 
     // ── iris hive tasks get <id> ──
     if (sub === "get" || sub === "logs") {
-      const taskId = extraArgs[1] || extraArgs[0]
+      const taskId = args["task-id"] as string || extraArgs[extraArgs.length - 1]
       if (!taskId) {
         prompts.log.error("Usage: iris hive tasks get <task-id>")
         return
