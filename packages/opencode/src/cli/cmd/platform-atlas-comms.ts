@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, getBridgeToken } from "./iris-api"
 
 // ============================================================================
 // Atlas Comms CLI — Unified cross-channel lead communications log
@@ -79,6 +79,34 @@ function ingestImessage(lead: any): any[] {
     } catch { /* SQLite access may fail — skip silently */ }
   }
   return items
+}
+
+// ── Discord ingestion (via bridge) ──
+
+async function ingestDiscord(lead: any): Promise<any[]> {
+  if (!lead.discord && !lead.name) return []
+  const searchTerm = lead.discord || lead.name
+  try {
+    const token = getBridgeToken()
+    const headers: Record<string, string> = { Accept: "application/json" }
+    if (token) headers["X-Bridge-Key"] = token
+
+    const res = await fetch(`${BRIDGE_URL}/api/discord/search?q=${encodeURIComponent(searchTerm)}&limit=50`, {
+      headers,
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) return []
+    const data = (await res.json()) as any
+    const messages = data?.messages ?? []
+    return messages.map((m: any) => ({
+      direction: "inbound" as const,
+      from_identifier: m.author?.username || searchTerm,
+      body: m.content,
+      sent_at: m.timestamp,
+      external_message_id: `discord_${m.id}`,
+      metadata: { channel_name: m.channel_name, guild_name: m.guild_name },
+    }))
+  } catch { return [] }
 }
 
 // ── WhatsApp ingestion (via local SQLite) ──
@@ -240,7 +268,7 @@ const CommsIngestCommand = cmd({
 
     const lead = resolved.lead
     const channel = String(args.channel).toLowerCase()
-    const channels = channel === "all" ? ["imessage", "whatsapp", "gmail"] : [channel]
+    const channels = channel === "all" ? ["imessage", "whatsapp", "discord", "gmail"] : [channel]
 
     let totalNew = 0
     let totalSkipped = 0
@@ -253,6 +281,8 @@ const CommsIngestCommand = cmd({
         items = ingestImessage(lead)
       } else if (ch === "whatsapp") {
         items = ingestWhatsapp(lead)
+      } else if (ch === "discord") {
+        items = await ingestDiscord(lead)
       } else if (ch === "gmail" || ch === "apple_mail") {
         items = await ingestGmail(lead)
       } else {

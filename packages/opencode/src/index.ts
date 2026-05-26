@@ -123,6 +123,7 @@ import { PlatformPersonalityCommand } from "./cli/cmd/platform-personality"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformWhatsappCommand } from "./cli/cmd/platform-whatsapp"
+import { PlatformDiscordCommand } from "./cli/cmd/platform-discord"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
 import { PlatformHeartbeatCommand } from "./cli/cmd/platform-heartbeat"
 import { PlatformInboxCommand } from "./cli/cmd/platform-inbox"
@@ -293,6 +294,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformCampaignCommand))
   .command(reg(PlatformDaemonCommand))
   .command(reg(PlatformChannelsCommand))
+  .command(reg(PlatformDiscordCommand))
   .command(reg(PlatformDoctorCommand))
   .command(reg(PlatformObsCommand))
   .command(reg(PlatformOnboardCommand))

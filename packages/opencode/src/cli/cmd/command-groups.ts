@@ -168,6 +168,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   mail: "communication",
   imessage: "communication",
   whatsapp: "communication",
+  discord: "communication",
   calendar: "communication",
 
   // Finance
