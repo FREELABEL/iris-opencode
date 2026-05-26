@@ -122,6 +122,7 @@ import { PlatformRecallCommand } from "./cli/cmd/platform-recall"
 import { PlatformPersonalityCommand } from "./cli/cmd/platform-personality"
 import { PlatformMailCommand } from "./cli/cmd/platform-mail"
 import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
+import { PlatformWhatsappCommand } from "./cli/cmd/platform-whatsapp"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
 import { PlatformHeartbeatCommand } from "./cli/cmd/platform-heartbeat"
 import { PlatformInboxCommand } from "./cli/cmd/platform-inbox"
@@ -324,6 +325,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformPersonalityCommand))
   .command(reg(PlatformMailCommand))
   .command(reg(PlatformImessageCommand))
+  .command(reg(PlatformWhatsappCommand))
   .command(reg(PlatformCalendarCommand))
   .command(reg(PlatformHeartbeatCommand))
   .command(reg(PlatformDocsCommand))

@@ -95,6 +95,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   "good-deals": "atlas",
 
   // Knowledge & Content
+  content: "knowledge",
   bloqs: "knowledge",
   memory: "knowledge",
   boards: "knowledge",
@@ -166,6 +167,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   transcribe: "communication",
   mail: "communication",
   imessage: "communication",
+  whatsapp: "communication",
   calendar: "communication",
 
   // Finance

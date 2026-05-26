@@ -50,7 +50,7 @@ interface OutreachStep {
 interface InboxEntry {
   lead_id: number
   lead_name: string
-  channel: "ig" | "email" | "imessage" | "crm" | "calendar"
+  channel: "ig" | "email" | "imessage" | "whatsapp" | "crm" | "calendar"
   direction: "inbound" | "outbound"
   preview: string
   timestamp: string | null
@@ -64,6 +64,7 @@ const CHANNEL_ICONS: Record<string, string> = {
   ig: "\x1b[35m◉\x1b[0m",       // purple
   email: "\x1b[34m✉\x1b[0m",    // blue
   imessage: "\x1b[32m◈\x1b[0m", // green
+  whatsapp: "\x1b[32m◉\x1b[0m", // green
   crm: "\x1b[90m●\x1b[0m",      // gray
   calendar: "\x1b[33m◆\x1b[0m", // yellow
 }
@@ -72,6 +73,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   ig: "IG",
   email: "Email",
   imessage: "iMessage",
+  whatsapp: "WhatsApp",
   crm: "CRM",
   calendar: "Calendar",
 }
@@ -359,7 +361,7 @@ const ViewCommand: any = cmd({
   builder: (yargs: any) =>
     yargs
       .option("days", { describe: "look-back window", type: "number", default: 7 })
-      .option("channel", { describe: "filter: ig, email, imessage, crm, calendar", type: "string" })
+      .option("channel", { describe: "filter: ig, email, imessage, whatsapp, crm, calendar", type: "string" })
       .option("bloq", { describe: "scope to a bloq/board ID", type: "number" })
       .option("status", { describe: "filter by reply status (replied, pending, all)", type: "string" })
       .option("outreach", { describe: "show only leads with pending outreach steps", type: "boolean", default: false })
@@ -386,7 +388,7 @@ export const PlatformInboxCommand: any = cmd({
       .command(ViewCommand)
       // Pass through all view options so bare `iris inbox` still works as before
       .option("days", { describe: "look-back window", type: "number", default: 7 })
-      .option("channel", { describe: "filter: ig, email, imessage, crm, calendar", type: "string" })
+      .option("channel", { describe: "filter: ig, email, imessage, whatsapp, crm, calendar", type: "string" })
       .option("bloq", { describe: "scope to a bloq/board ID", type: "number" })
       .option("status", { describe: "filter by reply status (replied, pending, all)", type: "string" })
       .option("outreach", { describe: "show only leads with pending outreach steps", type: "boolean", default: false })
@@ -548,6 +550,28 @@ async function inboxViewHandler(args: any) {
               }
             }
           } catch { /* bridge may be offline */ }
+        }
+
+        // WhatsApp via local SQLite
+        if ((!channelFilter || channelFilter === "whatsapp") && phone) {
+          try {
+            const wa = require("../lib/whatsapp")
+            if (wa.isAvailable()) {
+              const msgs = wa.searchByPhone(phone, days, 10)
+              for (const msg of msgs) {
+                entries.push({ lead_id: leadId, lead_name: leadName, channel: "whatsapp" as const, direction: msg.from_me ? "outbound" : "inbound", preview: (msg.text ?? "").slice(0, 120), timestamp: msg.date ?? null })
+              }
+              if (msgs.length > 0) {
+                commsToIngest.push({ channel: "whatsapp", items: msgs.map((msg: any) => ({
+                  direction: msg.from_me ? "outbound" : "inbound",
+                  from_identifier: msg.from_me ? "me" : (wa.extractPhone(msg.from_jid) || phone),
+                  body: msg.text ?? "",
+                  sent_at: msg.date ?? null,
+                  metadata: { source: "inbox_scan", from_jid: msg.from_jid },
+                })) })
+              }
+            }
+          } catch { /* WhatsApp DB not accessible */ }
         }
 
         // Apple Mail via bridge

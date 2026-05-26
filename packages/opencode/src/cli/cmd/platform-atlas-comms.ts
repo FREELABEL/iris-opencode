@@ -81,6 +81,25 @@ function ingestImessage(lead: any): any[] {
   return items
 }
 
+// ── WhatsApp ingestion (via local SQLite) ──
+
+function ingestWhatsapp(lead: any): any[] {
+  const { searchByPhone, normalizePhone, extractPhone } = require("../lib/whatsapp")
+  if (!lead.phone) return []
+
+  try {
+    const messages = searchByPhone(lead.phone, 90, 100)
+    return messages.map((m: any) => ({
+      direction: m.from_me ? "outbound" : "inbound",
+      from_identifier: m.from_me ? "me" : (extractPhone(m.from_jid) || lead.phone),
+      body: m.text,
+      sent_at: m.date,
+      external_message_id: `whatsapp_${m.id}`,
+      metadata: { from_jid: m.from_jid, push_name: m.push_name },
+    }))
+  } catch { return [] }
+}
+
 // ── Gmail ingestion (via bridge or integration) ──
 
 async function ingestGmail(lead: any): Promise<any[]> {
@@ -221,7 +240,7 @@ const CommsIngestCommand = cmd({
 
     const lead = resolved.lead
     const channel = String(args.channel).toLowerCase()
-    const channels = channel === "all" ? ["imessage", "gmail"] : [channel]
+    const channels = channel === "all" ? ["imessage", "whatsapp", "gmail"] : [channel]
 
     let totalNew = 0
     let totalSkipped = 0
@@ -232,6 +251,8 @@ const CommsIngestCommand = cmd({
       let items: any[] = []
       if (ch === "imessage") {
         items = ingestImessage(lead)
+      } else if (ch === "whatsapp") {
+        items = ingestWhatsapp(lead)
       } else if (ch === "gmail" || ch === "apple_mail") {
         items = await ingestGmail(lead)
       } else {
