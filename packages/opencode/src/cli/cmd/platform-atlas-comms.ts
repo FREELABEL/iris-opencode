@@ -154,11 +154,32 @@ async function ingestDiscord(lead: any): Promise<any[]> {
 // ── WhatsApp ingestion (via local SQLite) ──
 
 function ingestWhatsapp(lead: any): any[] {
-  const { searchByPhone, normalizePhone, extractPhone } = require("../lib/whatsapp")
-  if (!lead.phone) return []
+  const { searchByPhone, searchByName, normalizePhone, extractPhone } = require("../lib/whatsapp")
+  if (!lead.phone && !lead.name) return []
 
   try {
-    const messages = searchByPhone(lead.phone, 90, 100)
+    // Try phone first, then fall back to name search (handles WhatsApp contact name mismatches)
+    let messages = lead.phone ? searchByPhone(lead.phone, 90, 100) : []
+    if (messages.length === 0 && lead.name) {
+      // Extract all name variants: full name, nickname, parenthetical aliases, dash-separated parts
+      const fullName = lead.name || ""
+      const nameParts = [
+        fullName,
+        lead.nickname,
+        fullName.split(" ")[0], // first name
+        ...(fullName.match(/\(([^)]+)\)/g) || []).map((m: string) => m.replace(/[()]/g, "")), // (Maxx) -> Maxx
+        ...(fullName.split(/\s*[—–-]\s*/).filter((p: string) => p.length > 2)), // "Name — CatoDrive" -> ["Name", "CatoDrive"]
+      ].filter(Boolean)
+      // Deduplicate and remove very short tokens
+      const seen = new Set<string>()
+      for (const n of nameParts) {
+        const key = n.toLowerCase().trim()
+        if (key.length < 3 || seen.has(key)) continue
+        seen.add(key)
+        messages = searchByName(n.trim(), 90, 100)
+        if (messages.length > 0) break
+      }
+    }
     return messages.map((m: any) => ({
       direction: m.from_me ? "outbound" : "inbound",
       from_identifier: m.from_me ? "me" : (extractPhone(m.from_jid) || lead.phone),
