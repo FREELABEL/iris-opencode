@@ -40,7 +40,6 @@ interface OutreachStep {
 interface InboxEntry {
   lead_id: number
   lead_name: string
-  channel: "ig" | "email" | "imessage" | "whatsapp" | "discord" | "slack" | "telegram" | "crm" | "calendar"
   channel: "ig" | "email" | "gmail" | "imessage" | "whatsapp" | "discord" | "slack" | "telegram" | "crm" | "calendar"
   direction: "inbound" | "outbound"
   preview: string
@@ -583,6 +582,53 @@ async function inboxViewHandler(args: any) {
               }
             }
           } catch { /* bridge may be offline */ }
+        }
+
+        // Slack via API (if connected)
+        if ((!channelFilter || channelFilter === "slack") && (lead.slack || lead.name)) {
+          try {
+            const { getToken: slackToken, searchMessages: slackSearch } = await import("../lib/slack")
+            const token = await slackToken()
+            if (token) {
+              const searchTerm = lead.slack || lead.name || lead.nickname || ""
+              if (searchTerm) {
+                const msgs = await slackSearch(token, searchTerm, 10)
+                for (const msg of msgs) {
+                  entries.push({ lead_id: leadId, lead_name: leadName, channel: "slack" as const, direction: "inbound", preview: (msg.text ?? "").slice(0, 120), timestamp: msg.timestamp ?? null })
+                }
+              }
+            }
+          } catch { /* Slack not connected */ }
+        }
+
+        // Gmail via API (if connected)
+        if ((!channelFilter || channelFilter === "gmail") && email) {
+          try {
+            const { getToken: gmailToken, searchMessages: gmailSearch } = await import("../lib/gmail")
+            const token = await gmailToken()
+            if (token) {
+              const msgs = await gmailSearch(token, `from:${email} OR to:${email}`, 10)
+              for (const msg of msgs) {
+                entries.push({ lead_id: leadId, lead_name: leadName, channel: "gmail" as const, direction: msg.from?.includes(email) ? "inbound" : "outbound", preview: (msg.subject ?? msg.snippet ?? "").slice(0, 120), timestamp: msg.date ?? null })
+              }
+            }
+          } catch { /* Gmail not connected */ }
+        }
+
+        // Discord via bridge (if bot connected)
+        if ((!channelFilter || channelFilter === "discord") && (lead.discord || lead.name)) {
+          try {
+            const searchTerm = lead.discord || lead.name || ""
+            if (searchTerm) {
+              const r = await bridgeFetch(`/api/discord/search?q=${encodeURIComponent(searchTerm)}&limit=10`)
+              if (r.ok) {
+                const d = (await r.json()) as any
+                for (const msg of (d?.messages ?? [])) {
+                  entries.push({ lead_id: leadId, lead_name: leadName, channel: "discord" as const, direction: "inbound", preview: (msg.content ?? "").slice(0, 120), timestamp: msg.timestamp ?? null })
+                }
+              }
+            }
+          } catch { /* Discord not connected */ }
         }
 
         // Fire-and-forget: persist to DB + Redis (dedup hash prevents duplicates)

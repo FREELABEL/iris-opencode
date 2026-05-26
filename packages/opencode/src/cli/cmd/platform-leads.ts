@@ -2217,6 +2217,67 @@ const LeadsPulseCommand = cmd({
       printKV("Status", lead.status)
       printKV("Company", lead.company)
 
+      // Auto-ingest comms before scoring (fire-and-forget, non-blocking)
+      // This ensures pulse sees fresh comms data from iMessage, WhatsApp, etc.
+      try {
+        const identifiers: string[] = []
+        if (phone) identifiers.push(phone)
+        if (email) identifiers.push(email)
+        if (identifiers.length > 0) {
+          // iMessage ingest
+          try {
+            const { isAvailable: imAvail, searchByHandle } = require("../lib/imessage")
+            if (imAvail()) {
+              for (const ident of identifiers) {
+                const msgs = searchByHandle(ident, 30, 50)
+                if (msgs.length > 0) {
+                  irisFetch("/api/v1/atlas/comms/ingest", {
+                    method: "POST",
+                    body: JSON.stringify({
+                      lead_id: leadId, channel: "imessage",
+                      items: msgs.map((m: any) => ({
+                        direction: m.from_me ? "outbound" : "inbound",
+                        from_identifier: m.from_me ? "me" : (m.chat_identifier || ident),
+                        body: m.text, sent_at: m.date,
+                        external_message_id: `imessage_${m.id}`,
+                      })),
+                    }),
+                  }).catch(() => {})
+                }
+              }
+            }
+          } catch {}
+          // WhatsApp ingest
+          try {
+            const wa = require("../lib/whatsapp")
+            if (wa.isAvailable()) {
+              let waMsgs = phone ? wa.searchByPhone(phone, 30, 50) : []
+              if (waMsgs.length === 0 && name) {
+                const names = [name, name.split(" ")[0], ...(name.match(/\(([^)]+)\)/g) || []).map((m: string) => m.replace(/[()]/g, "")), ...(name.split(/\s*[—–-]\s*/).filter((p: string) => p.length > 2))].filter(Boolean)
+                for (const n of names) {
+                  waMsgs = wa.searchByName(n.trim(), 30, 50)
+                  if (waMsgs.length > 0) break
+                }
+              }
+              if (waMsgs.length > 0) {
+                irisFetch("/api/v1/atlas/comms/ingest", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    lead_id: leadId, channel: "whatsapp",
+                    items: waMsgs.map((m: any) => ({
+                      direction: m.from_me ? "outbound" : "inbound",
+                      from_identifier: m.from_me ? "me" : (wa.extractPhone(m.from_jid) || phone),
+                      body: m.text, sent_at: m.date,
+                      external_message_id: `whatsapp_${m.id}`,
+                    })),
+                  }),
+                }).catch(() => {})
+              }
+            }
+          } catch {}
+        }
+      } catch { /* non-fatal — pulse still works without fresh comms */ }
+
       // Pulse readiness score — single source of truth.
       // Same number the cron snapshots and the daily digest emails.
       // Replaces the old inline 7-field completeness % calc.
