@@ -81,6 +81,27 @@ function ingestImessage(lead: any): any[] {
   return items
 }
 
+// ── Slack ingestion (via Slack API) ──
+
+async function ingestSlack(lead: any): Promise<any[]> {
+  if (!lead.slack && !lead.name) return []
+  const searchTerm = lead.slack || lead.name
+  try {
+    const { getToken, searchMessages } = await import("../lib/slack")
+    const token = await getToken()
+    if (!token) return []
+    const messages = await searchMessages(token, searchTerm, 50)
+    return messages.map((m: any) => ({
+      direction: "inbound" as const,
+      from_identifier: m.username || searchTerm,
+      body: m.text,
+      sent_at: m.timestamp,
+      external_message_id: `slack_${m.ts}`,
+      metadata: { slack_ts: m.ts },
+    }))
+  } catch { return [] }
+}
+
 // ── Discord ingestion (via bridge) ──
 
 async function ingestDiscord(lead: any): Promise<any[]> {
@@ -268,7 +289,7 @@ const CommsIngestCommand = cmd({
 
     const lead = resolved.lead
     const channel = String(args.channel).toLowerCase()
-    const channels = channel === "all" ? ["imessage", "whatsapp", "discord", "gmail"] : [channel]
+    const channels = channel === "all" ? ["imessage", "whatsapp", "discord", "slack", "gmail"] : [channel]
 
     let totalNew = 0
     let totalSkipped = 0
@@ -283,6 +304,8 @@ const CommsIngestCommand = cmd({
         items = ingestWhatsapp(lead)
       } else if (ch === "discord") {
         items = await ingestDiscord(lead)
+      } else if (ch === "slack") {
+        items = await ingestSlack(lead)
       } else if (ch === "gmail" || ch === "apple_mail") {
         items = await ingestGmail(lead)
       } else {

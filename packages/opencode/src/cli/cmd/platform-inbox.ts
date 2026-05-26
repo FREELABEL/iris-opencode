@@ -44,7 +44,7 @@ interface OutreachStep {
 interface InboxEntry {
   lead_id: number
   lead_name: string
-  channel: "ig" | "email" | "imessage" | "whatsapp" | "discord" | "crm" | "calendar"
+  channel: "ig" | "email" | "imessage" | "whatsapp" | "discord" | "slack" | "crm" | "calendar"
   direction: "inbound" | "outbound"
   preview: string
   timestamp: string | null
@@ -60,6 +60,7 @@ const CHANNEL_ICONS: Record<string, string> = {
   imessage: "\x1b[32m◈\x1b[0m", // green
   whatsapp: "\x1b[32m◉\x1b[0m", // green
   discord: "\x1b[35m◈\x1b[0m",  // purple
+  slack: "\x1b[36m◈\x1b[0m",    // cyan
   crm: "\x1b[90m●\x1b[0m",      // gray
   calendar: "\x1b[33m◆\x1b[0m", // yellow
 }
@@ -70,6 +71,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   imessage: "iMessage",
   whatsapp: "WhatsApp",
   discord: "Discord",
+  slack: "Slack",
   crm: "CRM",
   calendar: "Calendar",
 }
@@ -357,7 +359,7 @@ const ViewCommand: any = cmd({
   builder: (yargs: any) =>
     yargs
       .option("days", { describe: "look-back window", type: "number", default: 7 })
-      .option("channel", { describe: "filter: ig, email, imessage, whatsapp, discord, crm, calendar", type: "string" })
+      .option("channel", { describe: "filter: ig, email, imessage, whatsapp, discord, slack, crm, calendar", type: "string" })
       .option("bloq", { describe: "scope to a bloq/board ID", type: "number" })
       .option("status", { describe: "filter by reply status (replied, pending, all)", type: "string" })
       .option("outreach", { describe: "show only leads with pending outreach steps", type: "boolean", default: false })
@@ -384,7 +386,7 @@ export const PlatformInboxCommand: any = cmd({
       .command(ViewCommand)
       // Pass through all view options so bare `iris inbox` still works as before
       .option("days", { describe: "look-back window", type: "number", default: 7 })
-      .option("channel", { describe: "filter: ig, email, imessage, whatsapp, discord, crm, calendar", type: "string" })
+      .option("channel", { describe: "filter: ig, email, imessage, whatsapp, discord, slack, crm, calendar", type: "string" })
       .option("bloq", { describe: "scope to a bloq/board ID", type: "number" })
       .option("status", { describe: "filter by reply status (replied, pending, all)", type: "string" })
       .option("outreach", { describe: "show only leads with pending outreach steps", type: "boolean", default: false })
