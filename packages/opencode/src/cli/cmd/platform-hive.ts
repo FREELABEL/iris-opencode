@@ -956,11 +956,13 @@ const HiveTasksCommand = cmd({
       .option("history", { describe: "include completed tasks (last 48h)", type: "boolean", default: false })
       .option("since", { describe: "time window (e.g. 24h, 7d)", type: "string", default: "48h" })
       .option("limit", { describe: "max tasks to show", type: "number", default: 20 })
-      .option("tail", { describe: "lines of output to show (for logs)", type: "number", default: 50 }),
+      .option("tail", { describe: "lines of output to show (for logs)", type: "number", default: 50 })
+      .option("user-id", { describe: "user ID", type: "number" }),
   async handler(args) {
     UI.empty()
     const sub = args.subcommand as string | undefined
     const extraArgs = args._ as string[]
+    const userId = await requireUserId(args["user-id"] as number | undefined)
 
     // ── iris hive tasks get <id> ──
     if (sub === "get" || sub === "logs") {
@@ -974,7 +976,7 @@ const HiveTasksCommand = cmd({
       spinner.start("Loading…")
 
       try {
-        const res = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?detailed=1`)
+        const res = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?detailed=1&user_id=${userId}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = await res.json() as Record<string, unknown>
         const t = (data.task ?? data.data ?? data) as Record<string, unknown>
@@ -1053,6 +1055,7 @@ const HiveTasksCommand = cmd({
       if (showHistory) {
         try {
           const params = new URLSearchParams()
+          params.set("user_id", String(userId))
           params.set("since", args.since as string ?? "48h")
           params.set("limit", String(args.limit ?? 20))
           if (args.status && args.status !== "all") params.set("status", args.status as string)
