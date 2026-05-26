@@ -124,7 +124,7 @@ export async function getMessages(token: string, channelId: string, limit = 50):
   })
 
   // Build a user cache for display names
-  const userIds = new Set((data.messages ?? []).map((m: any) => m.user).filter(Boolean))
+  const userIds = new Set<string>((data.messages ?? []).map((m: any) => m.user).filter(Boolean))
   const userMap = await resolveUsers(token, [...userIds])
 
   return (data.messages ?? []).map((m: any) => ({
