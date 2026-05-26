@@ -1,0 +1,205 @@
+{
+  "id": 205,
+  "slug": "ncma-test-duplicate-052226",
+  "title": "TEST: Duplicate Command Verification",
+  "seo_title": "TEST: Duplicate Command Verification",
+  "seo_description": "How artificial intelligence is transforming contract management and procurement for Dallas-Fort Worth government contractors and defense industry professionals.",
+  "og_image": "https://www.ncmahq.org/images/about/ncma%20logo_new%20540pc_r%20(1).png",
+  "status": "draft",
+  "owner_type": "bloq",
+  "owner_id": 38,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "light",
+      "backgroundColor": "#ffffff",
+      "branding": {
+        "name": "NCMA Fort Worth",
+        "primaryColor": "#003366",
+        "faviconUrl": "https://www.ncmahq.org/images/about/ncma%20logo_new%20540pc_r%20(1).png",
+        "logoUrl": "https://www.ncmahq.org/images/about/ncma%20logo_new%20540pc_r%20(1).png"
+      }
+    },
+    "components": [
+      {
+        "type": "SiteNavigation",
+        "id": "ncma-nav",
+        "props": {
+          "logo": {
+            "imageUrl": "https://www.ncmahq.org/images/about/ncma%20logo_new%20540pc_r%20(1).png",
+            "url": "/p/ncma-fort-worth"
+          },
+          "themeMode": "light",
+          "accentColor": "red",
+          "links": [
+            {
+              "label": "Newsletter",
+              "url": "/p/ncma-fort-worth-newsletter"
+            },
+            {
+              "label": "Events",
+              "url": "/p/ncma-fort-worth-events"
+            },
+            {
+              "label": "About",
+              "url": "/p/ncma-fort-worth-about"
+            },
+            {
+              "label": "Opportunities",
+              "url": "/p/ncma-fort-worth-opportunities"
+            },
+            {
+              "label": "Sponsors",
+              "url": "/p/ncma-fort-worth-sponsors"
+            }
+          ],
+          "ctaButton": {
+            "text": "Join Chapter",
+            "url": "https://www.linkedin.com/in/ncma-north-texas-79422993/"
+          }
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "article-hero",
+        "props": {
+          "themeMode": "dark",
+          "title": "AI Is Reshaping Procurement",
+          "subtitle": "What DFW Contractors Need to Know About the Technology Transforming Contract Management",
+          "labelText": "INDUSTRY TRENDS",
+          "labelColor": "#e8a838",
+          "backgroundImage": "https://images.unsplash.com/photo-1677442136019-21780ecad995?w=1920&q=80",
+          "overlayOpacity": 0.6,
+          "textAlign": "center",
+          "minHeight": "500px",
+          "fullHeight": false,
+          "secondaryButtonText": "Back to Newsletter",
+          "secondaryButtonUrl": "/p/ncma-fort-worth-newsletter",
+          "secondaryButtonVariant": "ghost"
+        }
+      },
+      {
+        "type": "EditorialSection",
+        "id": "article-body",
+        "props": {
+          "themeMode": "light",
+          "backgroundColor": "#ffffff",
+          "showTopRule": true,
+          "headingSize": "lg",
+          "paddingY": "48px",
+          "maxWidth": "740px",
+          "label": "MAY 2026 — SOURCES: LOCKHEED MARTIN CAREERS, GSA, DAU",
+          "heading": "Real Tools, Real Contracts, Real Impact",
+          "body": "AI in procurement is no longer theoretical. In May 2026, Lockheed Martin's Fort Worth facility posted multiple Supply Chain and Subcontract Management positions requiring experience with Tableau, ERP systems, and data analytics platforms. Procurement Engineer roles at the same facility list \"advanced experience with related software and tools\" as a core requirement. The message from DFW's largest defense employer is clear: if you manage contracts, you need to manage data.\n\n**What's Actually Being Used in DFW**\n\nThree categories of AI tools are now in active use across the DFW defense contracting corridor:\n\n**Contract analytics platforms** like Agiloft, Icertis, and ContractPodAi are being deployed by mid-to-large contractors to automate clause extraction, obligation tracking, and compliance monitoring. Lockheed Martin Aeronautics in Fort Worth has integrated AI and machine learning across its operations, with its AI Center of Excellence driving adoption into supply chain workflows.\n\n**CMMC compliance automation** is the most urgent AI application for DFW contractors in 2026. With CMMC Phase 2 going live in November 2026 — requiring third-party certification for Level 2 contractors — tools that automate NIST SP 800-171 gap assessments are in high demand. Contractors must achieve a minimum score of 88 out of 110 points (80% compliance). Fewer than 100 authorized C3PAOs serve an estimated 80,000 contractors needing Level 2 certification, creating a bottleneck that AI-assisted self-assessment tools can help address.\n\n**Spend analytics and market intelligence** tools are reshaping how contracting officers evaluate pricing. GSA has published guidance on using AI for market research in the acquisition planning phase, and the DAU (Defense Acquisition University) curriculum now includes modules on AI-assisted acquisition.\n\n**What This Means for Your Career at Lockheed, Bell, or RTX**\n\nLockheed Martin's current Fort Worth job postings tell the story: Supply Chain Level 4 and Level 5 roles now list Tableau and advanced data tools alongside traditional FAR/DFARS knowledge. Bell's procurement engineering roles increasingly reference automation. RTX's Raytheon division has publicly invested in AI-driven supply chain optimization.\n\nThe contract managers getting promoted in DFW are the ones who can do both: interpret FAR Part 15 AND build a Tableau dashboard showing subcontractor performance trends.\n\n**3 Things You Can Do This Week**\n\n1. Search Lockheed Martin's Fort Worth job postings at lockheedmartinjobs.com — read the skills sections to see exactly what they're hiring for\n2. Take DAU's free online course on AI in acquisition (CLM 059) at dau.edu\n3. If your company handles CUI, start your CMMC Level 2 self-assessment now at dodcio.defense.gov/CMMC — the November 2026 deadline is 6 months away\n\n*Sources: Lockheed Martin Careers (lockheedmartinjobs.com, May 2026), GSA CMMC Guide (gsa.gov, Feb 2026), DoD CIO CMMC Program (dodcio.defense.gov), GovCon Giants CMMC Timeline (govcongiants.com).*"
+        }
+      },
+      {
+        "type": "NewsletterSignup",
+        "id": "subscribe",
+        "props": {
+          "themeMode": "light",
+          "heading": "NCMA Fort Worth Newsletter",
+          "subheading": "Join 500+ Fort Worth procurement professionals. Weekly insights on FAR updates, certifications, and DFW contracting news — every Tuesday.",
+          "placeholder": "your@email.com",
+          "buttonText": "Subscribe",
+          "successMessage": "Welcome! You'll receive your first issue next Tuesday.",
+          "layout": "card",
+          "accentColor": "#003366"
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "ncma-footer",
+        "props": {
+          "companyName": "NCMA Fort Worth Chapter",
+          "themeMode": "light",
+          "links": [
+            {
+              "label": "Home",
+              "url": "/p/ncma-fort-worth"
+            },
+            {
+              "label": "Newsletter",
+              "url": "/p/ncma-fort-worth-newsletter"
+            },
+            {
+              "label": "Events",
+              "url": "/p/ncma-fort-worth-events"
+            },
+            {
+              "label": "Opportunities",
+              "url": "/p/ncma-fort-worth-opportunities"
+            },
+            {
+              "label": "NCMA National",
+              "url": "https://ncmahq.org/"
+            }
+          ],
+          "copyright": "2026 NCMA Fort Worth Chapter",
+          "logo": {
+            "text": "NCMA",
+            "tagline": "Fort Worth Chapter",
+            "imageUrl": "https://www.ncmahq.org/images/about/ncma%20logo_new%20540pc_r%20(1).png",
+            "imageHeight": "36px",
+            "accentDot": false
+          },
+          "columns": [
+            {
+              "title": "Chapter",
+              "links": [
+                {
+                  "label": "Home",
+                  "url": "/p/ncma-fort-worth"
+                },
+                {
+                  "label": "Newsletter",
+                  "url": "/p/ncma-fort-worth-newsletter"
+                },
+                {
+                  "label": "Events",
+                  "url": "/p/ncma-fort-worth-events"
+                },
+                {
+                  "label": "About",
+                  "url": "/p/ncma-fort-worth-about"
+                }
+              ]
+            },
+            {
+              "title": "Resources",
+              "links": [
+                {
+                  "label": "Opportunities",
+                  "url": "/p/ncma-fort-worth-opportunities"
+                },
+                {
+                  "label": "Sponsors",
+                  "url": "/p/ncma-fort-worth-sponsors"
+                },
+                {
+                  "label": "NCMA National",
+                  "url": "https://ncmahq.org/"
+                },
+                {
+                  "label": "ncmadallas.org",
+                  "url": "https://ncmadallas.org/"
+                }
+              ]
+            }
+          ],
+          "socialLinks": [
+            {
+              "platform": "linkedin",
+              "url": "https://www.linkedin.com/in/ncma-north-texas-79422993/"
+            },
+            {
+              "platform": "facebook",
+              "url": "https://facebook.com/NCMANorthTexas"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

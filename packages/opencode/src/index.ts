@@ -41,7 +41,6 @@ import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
 import { PlatformLinkedInCommand } from "./cli/cmd/platform-linkedin"
-import { PlatformInstagramCommand } from "./cli/cmd/platform-instagram"
 import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
 import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
 import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
@@ -245,7 +244,6 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
   .command(reg(PlatformLinkedInCommand))
-  .command(reg(PlatformInstagramCommand))
   .command(reg(PlatformBloqContextCommand))
   .command(reg(PlatformAtlasLedgerCommand))
   .command(reg(PlatformAtlasStaffCommand))

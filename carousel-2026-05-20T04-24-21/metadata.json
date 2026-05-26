@@ -1,0 +1,19 @@
+{
+  "lead_id": 15743,
+  "brand": "vanguard",
+  "mode": "feature",
+  "generated_at": "2026-05-20T04:24:26.864Z",
+  "source": "tasks",
+  "task_ids": [],
+  "task_texts": [
+    "case pipeline",
+    "settlement engine",
+    "QB export"
+  ],
+  "topic": null,
+  "from": null,
+  "prompt": "Write for law firms, emphasize ROI",
+  "props_path": "/Users/AlexMayo/Sites/freelabel/iris-code/carousel-2026-05-20T04-24-21/props.json",
+  "ai_model": "gpt-4o-mini",
+  "brand_overrides": {}
+}
