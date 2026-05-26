@@ -156,6 +156,7 @@ else
   unzip -o "${assetName}"
 fi
 chmod +x iris
+xattr -cr iris 2>/dev/null || true
 # cd out of tmpDir BEFORE deleting it (avoids 'cwd deleted' errors)
 cd "${binDir}"
 # Remove old binary first (avoids overwriting a running executable)
