@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
   irisFetch,
+  IRIS_API,
   requireAuth,
   handleApiError,
   printDivider,
@@ -10819,7 +10820,7 @@ const ReqScheduleCommand = cmd({
     const res = await irisFetch(`/api/v1/scheduled-jobs`, {
       method: "POST",
       body: JSON.stringify(body),
-    })
+    }, IRIS_API)
     if (!(await handleApiError(res, "Schedule requirements"))) return
 
     const result = await res.json().catch(() => ({}))

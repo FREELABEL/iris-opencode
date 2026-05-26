@@ -200,7 +200,7 @@ const BoardsCreateCommand = cmd({
       .option("bloq-id", { describe: "bloq ID (required)", type: "number", demandOption: true })
       .option("title", { describe: "item title", type: "string" })
       .option("description", { describe: "item description", type: "string" })
-      .option("type", { describe: "item type (default/research/content/diary)", type: "string" }),
+      .option("type", { describe: "item type", type: "string", choices: ["default", "research", "content"], default: "default" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Board Item")
@@ -221,11 +221,12 @@ const BoardsCreateCommand = cmd({
     spinner.start("Creating item…")
 
     try {
-      const payload: Record<string, unknown> = { title }
-      if (args.description) payload.description = args.description
-      if (args.type) payload.type = args.type
+      const userId = await resolveUserId()
+      if (!userId) { spinner.stop("Failed — no user ID", 1); prompts.outro("Done"); return }
 
-      const res = await irisFetch(`/api/v1/bloqs/${args["bloq-id"]}/items`, {
+      const payload: Record<string, unknown> = { title, content: args.description || title, type: args.type || "task" }
+
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items`, {
         method: "POST",
         body: JSON.stringify(payload),
       })
