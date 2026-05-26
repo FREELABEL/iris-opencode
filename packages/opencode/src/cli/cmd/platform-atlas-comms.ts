@@ -81,6 +81,27 @@ function ingestImessage(lead: any): any[] {
   return items
 }
 
+// ── Gmail ingestion (via Google API) ──
+
+async function ingestGmailApi(lead: any): Promise<any[]> {
+  if (!lead.email) return []
+  try {
+    const { getToken: getGmailToken, searchMessages: gmailSearch } = await import("../lib/gmail")
+    const token = await getGmailToken()
+    if (!token) return []
+    const messages = await gmailSearch(token, `from:${lead.email} OR to:${lead.email}`, 50)
+    return messages.map((m: any) => ({
+      direction: m.from?.includes(lead.email) ? "inbound" as const : "outbound" as const,
+      from_identifier: m.from || lead.email,
+      subject: m.subject,
+      body: m.body_text || m.snippet,
+      sent_at: m.date,
+      external_message_id: `gmail_${m.id}`,
+      metadata: { gmail_thread_id: m.thread_id, gmail_message_id: m.id },
+    }))
+  } catch { return [] }
+}
+
 // ── Slack ingestion (via Slack API) ──
 
 async function ingestSlack(lead: any): Promise<any[]> {
@@ -289,7 +310,7 @@ const CommsIngestCommand = cmd({
 
     const lead = resolved.lead
     const channel = String(args.channel).toLowerCase()
-    const channels = channel === "all" ? ["imessage", "whatsapp", "discord", "slack", "gmail"] : [channel]
+    const channels = channel === "all" ? ["imessage", "whatsapp", "discord", "slack", "gmail", "gmail_api"] : [channel]
 
     let totalNew = 0
     let totalSkipped = 0
@@ -306,6 +327,8 @@ const CommsIngestCommand = cmd({
         items = await ingestDiscord(lead)
       } else if (ch === "slack") {
         items = await ingestSlack(lead)
+      } else if (ch === "gmail_api") {
+        items = await ingestGmailApi(lead)
       } else if (ch === "gmail" || ch === "apple_mail") {
         items = await ingestGmail(lead)
       } else {

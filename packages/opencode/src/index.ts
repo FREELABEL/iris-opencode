@@ -125,6 +125,7 @@ import { PlatformImessageCommand } from "./cli/cmd/platform-imessage"
 import { PlatformWhatsappCommand } from "./cli/cmd/platform-whatsapp"
 import { PlatformDiscordCommand } from "./cli/cmd/platform-discord"
 import { PlatformSlackCommand } from "./cli/cmd/platform-slack"
+import { PlatformGmailCommand } from "./cli/cmd/platform-gmail"
 import { PlatformCalendarCommand } from "./cli/cmd/platform-calendar"
 import { PlatformHeartbeatCommand } from "./cli/cmd/platform-heartbeat"
 import { PlatformInboxCommand } from "./cli/cmd/platform-inbox"
@@ -297,6 +298,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformChannelsCommand))
   .command(reg(PlatformDiscordCommand))
   .command(reg(PlatformSlackCommand))
+  .command(reg(PlatformGmailCommand))
   .command(reg(PlatformDoctorCommand))
   .command(reg(PlatformObsCommand))
   .command(reg(PlatformOnboardCommand))

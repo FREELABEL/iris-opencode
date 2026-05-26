@@ -44,7 +44,7 @@ interface OutreachStep {
 interface InboxEntry {
   lead_id: number
   lead_name: string
-  channel: "ig" | "email" | "imessage" | "whatsapp" | "discord" | "slack" | "crm" | "calendar"
+  channel: "ig" | "email" | "gmail" | "imessage" | "whatsapp" | "discord" | "slack" | "crm" | "calendar"
   direction: "inbound" | "outbound"
   preview: string
   timestamp: string | null
@@ -57,6 +57,7 @@ interface InboxEntry {
 const CHANNEL_ICONS: Record<string, string> = {
   ig: "\x1b[35m◉\x1b[0m",       // purple
   email: "\x1b[34m✉\x1b[0m",    // blue
+  gmail: "\x1b[31m✉\x1b[0m",    // red
   imessage: "\x1b[32m◈\x1b[0m", // green
   whatsapp: "\x1b[32m◉\x1b[0m", // green
   discord: "\x1b[35m◈\x1b[0m",  // purple
@@ -68,6 +69,7 @@ const CHANNEL_ICONS: Record<string, string> = {
 const CHANNEL_LABELS: Record<string, string> = {
   ig: "IG",
   email: "Email",
+  gmail: "Gmail",
   imessage: "iMessage",
   whatsapp: "WhatsApp",
   discord: "Discord",
