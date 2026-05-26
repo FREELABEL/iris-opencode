@@ -94,19 +94,20 @@ export const UpgradeCommand = {
       }
 
       // Update bridge if it's a git repo and Node is available
-      const bridgeResult = await $`test -d ${bridgeDir}/.git && cd ${bridgeDir} && git pull --quiet && npm install --production --silent 2>/dev/null && echo "bridge-updated"`.nothrow().quiet().text()
-      if (bridgeResult.includes("bridge-updated")) {
-        prompts.log.info("Bridge updated")
-        // Restart daemon so it picks up new bridge code
-        try {
+      try {
+        const { execSync } = await import("child_process")
+        const { existsSync } = await import("fs")
+        if (existsSync(`${bridgeDir}/.git`)) {
+          execSync("git pull --quiet && npm install --production --silent 2>/dev/null", { cwd: bridgeDir, timeout: 60000, stdio: "pipe" })
+          prompts.log.info("Bridge updated")
+          // Restart daemon so it picks up new bridge code
           const daemonCtl = `${home}/.iris/bin/iris-daemon`
-          const { existsSync } = await import("fs")
           if (existsSync(daemonCtl)) {
-            await $`${daemonCtl} restart`.nothrow().quiet()
+            execSync(`"${daemonCtl}" restart`, { timeout: 10000, stdio: "pipe" })
             prompts.log.info("Daemon restarted")
           }
-        } catch {}
-      }
+        }
+      } catch { /* bridge update is non-critical */ }
 
       // Update desktop app if on macOS (non-critical — don't crash update if this fails)
       if (process.platform === "darwin") {
