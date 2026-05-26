@@ -4,7 +4,7 @@ import { UI } from "../ui"
 import { dim, bold, success, getBridgeToken } from "./iris-api"
 import { join } from "path"
 import { homedir } from "os"
-import { existsSync } from "fs"
+import { existsSync, readFileSync } from "fs"
 import { execSync, spawn } from "child_process"
 
 function printDivider() {
@@ -93,11 +93,40 @@ const DaemonStatusCommand = cmd({
       }
     } catch {}
 
+    // Read status.json for cloud + heartbeat health (written by daemon)
+    const statusPath = join(homedir(), ".iris", "status.json")
+    if (existsSync(statusPath)) {
+      try {
+        const st = JSON.parse(readFileSync(statusPath, "utf-8"))
+        if (daemonUp) {
+          printKV("Cloud", st.status === "active" ? success("connected") : `OFFLINE — ${st.error || "unknown"}`)
+          if (st.heartbeat) {
+            const hbState = st.heartbeat.state === "closed"
+              ? success(`healthy (${st.heartbeat.fail_count} failures)`)
+              : `${st.heartbeat.state} (${st.heartbeat.fail_count} failures)`
+            printKV("Heartbeat", hbState)
+          }
+          printKV("Node ID", st.node_id || "not registered")
+          if (st.running_tasks !== undefined) printKV("Tasks", `${st.running_tasks} active`)
+          if (st.uptime_s) printKV("Uptime", `${Math.floor(st.uptime_s / 60)}m`)
+          printDivider()
+        }
+      } catch {}
+    }
+
     if (!daemonUp) {
       printDivider()
       printKV("Status", "offline")
+      // Show last error from status.json if available
+      if (existsSync(statusPath)) {
+        try {
+          const st = JSON.parse(readFileSync(statusPath, "utf-8"))
+          if (st.error) printKV("Last error", st.error)
+        } catch {}
+      }
       printDivider()
-      prompts.log.info(dim("Start with: iris daemon start"))
+      prompts.log.info(dim("Fix: iris daemon restart"))
+      prompts.log.info(dim("Or:  curl -fsSL https://heyiris.io/install-code | bash"))
     }
 
     prompts.outro("Done")

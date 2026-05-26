@@ -97,31 +97,30 @@ export const UpgradeCommand = {
       const bridgeResult = await $`test -d ${bridgeDir}/.git && cd ${bridgeDir} && git pull --quiet && npm install --production --silent 2>/dev/null && echo "bridge-updated"`.nothrow().quiet().text()
       if (bridgeResult.includes("bridge-updated")) {
         prompts.log.info("Bridge updated")
+        // Restart daemon so it picks up new bridge code
+        try {
+          const daemonCtl = `${home}/.iris/bin/iris-daemon`
+          const { existsSync } = await import("fs")
+          if (existsSync(daemonCtl)) {
+            await $`${daemonCtl} restart`.nothrow().quiet()
+            prompts.log.info("Daemon restarted")
+          }
+        } catch {}
       }
 
-      // Update desktop app if on macOS
+      // Update desktop app if on macOS (non-critical — don't crash update if this fails)
       if (process.platform === "darwin") {
-        const arch = process.arch === "arm64" ? "arm64" : "x64"
-        const appDir = `${home}/Applications`
-        const appPath = `${appDir}/IRIS.app`
-        const appUrl = `https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-app-darwin-${arch}.zip`
-        const updateApp = await $`
-          tmpdir=$(mktemp -d) &&
-          curl -sL --fail -o "$tmpdir/IRIS-app.zip" "${appUrl}" 2>/dev/null &&
-          rm -rf "${appPath}" 2>/dev/null;
-          mkdir -p "${appDir}" &&
-          unzip -q "$tmpdir/IRIS-app.zip" -d "${appDir}" 2>/dev/null &&
-          rm -rf "$tmpdir" &&
-          test -d "${appPath}" && echo "app-updated"
-        `.nothrow().quiet().text()
-        if (updateApp.includes("app-updated")) {
-          prompts.log.info("Desktop app updated")
-        } else {
-          // Check if app exists but update failed vs not available yet
-          const hasApp = await $`test -d "${appPath}" && echo "exists"`.nothrow().quiet().text()
-          if (!hasApp.includes("exists")) {
-            prompts.log.info("Desktop app not installed (run: iris install-app)")
+        try {
+          const arch = process.arch === "arm64" ? "arm64" : "x64"
+          const appDir = `${home}/Applications`
+          const appPath = `${appDir}/IRIS.app`
+          const appUrl = `https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-app-darwin-${arch}.zip`
+          const updateApp = await $`tmpdir=$(mktemp -d) && curl -sL --fail -o "$tmpdir/IRIS-app.zip" "${appUrl}" 2>/dev/null && rm -rf "${appPath}" 2>/dev/null; mkdir -p "${appDir}" && unzip -q "$tmpdir/IRIS-app.zip" -d "${appDir}" 2>/dev/null && rm -rf "$tmpdir" && test -d "${appPath}" && echo "app-updated"`.nothrow().quiet().text()
+          if (updateApp.includes("app-updated")) {
+            prompts.log.info("Desktop app updated")
           }
+        } catch {
+          // Desktop app update is non-critical — continue with rest of update
         }
       }
 
