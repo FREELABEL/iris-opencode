@@ -915,26 +915,123 @@ async function bridgeFetch(path: string, opts: RequestInit = {}) {
 
 // ── iris hive tasks ─────────────────────────────────────────────────────
 
+function formatDuration(ms: number | null | undefined): string {
+  if (!ms) return "—"
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  return `${m}m ${s % 60}s`
+}
+
+function taskStatusBadge(status: string): string {
+  switch (status) {
+    case "completed": return success("✓ completed")
+    case "failed": return "\x1b[31m✗ failed\x1b[0m"
+    case "running": case "dispatched": return "\x1b[34m▶ running\x1b[0m"
+    case "pending": return dim("◌ pending")
+    case "timeout": return "\x1b[33m⏱ timeout\x1b[0m"
+    default: return dim(status)
+  }
+}
+
+function timeAgo(iso: string | null | undefined): string {
+  if (!iso) return ""
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins = Math.round(diff / 60000)
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.round(hrs / 24)}d ago`
+}
+
 const HiveTasksCommand = cmd({
-  command: "tasks",
+  command: "tasks [subcommand]",
   describe: "list pending/running tasks on your node",
   builder: (yargs) =>
     yargs
-      .option("status", { describe: "filter by status", type: "string", choices: ["pending", "running", "all"], default: "all" }),
+      .positional("subcommand", { describe: "get <id> or logs <id>", type: "string" })
+      .option("status", { describe: "filter by status", type: "string", choices: ["pending", "running", "completed", "failed", "all"], default: "all" })
+      .option("type", { describe: "filter by task type (discover, som_batch, etc.)", type: "string" })
+      .option("history", { describe: "include completed tasks (last 48h)", type: "boolean", default: false })
+      .option("since", { describe: "time window (e.g. 24h, 7d)", type: "string", default: "48h" })
+      .option("limit", { describe: "max tasks to show", type: "number", default: 20 })
+      .option("tail", { describe: "lines of output to show (for logs)", type: "number", default: 50 }),
   async handler(args) {
     UI.empty()
-    prompts.intro("◈  Hive Tasks")
+    const sub = args.subcommand as string | undefined
+    const extraArgs = args._ as string[]
 
+    // ── iris hive tasks get <id> ──
+    if (sub === "get" || sub === "logs") {
+      const taskId = extraArgs[1] || extraArgs[0]
+      if (!taskId) {
+        prompts.log.error("Usage: iris hive tasks get <task-id>")
+        return
+      }
+      prompts.intro(`◈  Task ${String(taskId).substring(0, 12)}…`)
+      const spinner = prompts.spinner()
+      spinner.start("Loading…")
+
+      try {
+        const res = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?detailed=1`)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json() as Record<string, unknown>
+        const t = (data.task ?? data.data ?? data) as Record<string, unknown>
+        spinner.stop(taskStatusBadge(String(t.status ?? "unknown")))
+        printDivider()
+
+        printKV("Type", String(t.type ?? "—"))
+        printKV("Title", String(t.title ?? "—"))
+        printKV("Status", taskStatusBadge(String(t.status ?? "—")))
+        printKV("Duration", formatDuration(t.duration_ms as number))
+        if (t.created_at) printKV("Created", `${new Date(String(t.created_at)).toLocaleTimeString()} (${timeAgo(String(t.created_at))})`)
+        if (t.started_at) printKV("Started", new Date(String(t.started_at)).toLocaleTimeString())
+        if (t.completed_at) printKV("Completed", new Date(String(t.completed_at)).toLocaleTimeString())
+        if (t.progress) printKV("Progress", `${t.progress}%${t.progress_message ? ` — ${t.progress_message}` : ""}`)
+        if (t.error) {
+          console.log()
+          console.log(bold("  Error"))
+          printDivider()
+          console.log(`  \x1b[31m${String(t.error).substring(0, 500)}\x1b[0m`)
+        }
+        if (t.prompt) {
+          console.log()
+          console.log(bold("  Prompt"))
+          printDivider()
+          console.log(dim(`  ${String(t.prompt).substring(0, 200)}`))
+        }
+
+        // Output (from result)
+        const result = t.result as Record<string, unknown> | null
+        const output = result?.output ?? (typeof result === "string" ? result : null)
+        if (output) {
+          console.log()
+          console.log(bold("  Output"))
+          printDivider()
+          const lines = String(output).split("\n")
+          const tailN = sub === "logs" ? (args.tail as number ?? 50) : 30
+          const display = lines.slice(-tailN)
+          if (lines.length > tailN) console.log(dim(`  ... ${lines.length - tailN} lines truncated`))
+          for (const line of display) {
+            console.log(`  ${line}`)
+          }
+        }
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+      }
+      prompts.outro("Done")
+      return
+    }
+
+    // ── iris hive tasks (list) ──
+    prompts.intro("◈  Hive Tasks")
     const spinner = prompts.spinner()
     spinner.start("Loading tasks…")
 
     try {
-      // Cloud: pending tasks from iris-api
-      const pendingRes = await nodeFetch("/api/v6/node-agent/tasks/pending")
-      const pendingData = await pendingRes.json() as Record<string, unknown>
-      const pendingTasks = (pendingData.tasks ?? []) as Record<string, unknown>[]
-
-      // Local: running tasks from bridge daemon
+      // Live: running tasks from bridge daemon
       let runningTasks: Record<string, unknown>[] = []
       try {
         const queueRes = await bridgeFetch("/daemon/queue")
@@ -942,32 +1039,80 @@ const HiveTasksCommand = cmd({
         runningTasks = (queueData.tasks ?? []) as Record<string, unknown>[]
       } catch { /* bridge not running */ }
 
-      spinner.stop(`${pendingTasks.length} pending, ${runningTasks.length} running`)
+      // Cloud: pending tasks
+      let pendingTasks: Record<string, unknown>[] = []
+      try {
+        const pendingRes = await nodeFetch("/api/v6/node-agent/tasks/pending")
+        const pendingData = await pendingRes.json() as Record<string, unknown>
+        pendingTasks = (pendingData.tasks ?? []) as Record<string, unknown>[]
+      } catch { /* may not have node key */ }
+
+      // History: recent completed/failed tasks from iris-api
+      let historyTasks: Record<string, unknown>[] = []
+      const showHistory = args.history || args.status === "completed" || args.status === "failed" || args.status === "all" || args.type
+      if (showHistory) {
+        try {
+          const params = new URLSearchParams()
+          params.set("since", args.since as string ?? "48h")
+          params.set("limit", String(args.limit ?? 20))
+          if (args.status && args.status !== "all") params.set("status", args.status as string)
+          if (args.type) params.set("type", args.type as string)
+          const histRes = await hiveFetch(`/api/v6/nodes/tasks?${params}`)
+          if (histRes.ok) {
+            const histData = await histRes.json() as Record<string, unknown>
+            historyTasks = (histData.tasks ?? []) as Record<string, unknown>[]
+          }
+        } catch { /* auth issue or endpoint not available */ }
+      }
+
+      const totalCount = runningTasks.length + pendingTasks.length + historyTasks.length
+      spinner.stop(`${runningTasks.length} running, ${pendingTasks.length} pending${showHistory ? `, ${historyTasks.length} recent` : ""}`)
       printDivider()
 
+      // Running
       if (runningTasks.length > 0) {
         console.log(bold("  Running:"))
         for (const t of runningTasks) {
-          const id = dim(String(t.id ?? "").substring(0, 12) + "…")
-          const title = bold(String(t.title ?? t.type ?? "unknown"))
+          const id = dim(String(t.id ?? "").substring(0, 12))
+          const type = String(t.type ?? t.title ?? "unknown")
           const uptime = t.uptime_s ? dim(`${t.uptime_s}s`) : ""
-          console.log(`    ${success("▶")} ${id}  ${title}  ${uptime}`)
+          console.log(`    \x1b[34m▶\x1b[0m ${id}  ${bold(type)}  ${uptime}`)
         }
         console.log()
       }
 
+      // Pending
       if (pendingTasks.length > 0) {
-        console.log(bold("  Pending (cloud):"))
+        console.log(bold("  Pending:"))
         for (const t of pendingTasks) {
-          const id = dim(String(t.id ?? "").substring(0, 12) + "…")
-          const title = String(t.title ?? "unknown")
-          const status = dim(String(t.status ?? ""))
-          console.log(`    ◌ ${id}  ${title}  ${status}`)
+          const id = dim(String(t.id ?? "").substring(0, 12))
+          const title = String(t.title ?? t.type ?? "unknown")
+          console.log(`    ◌ ${id}  ${title}`)
+        }
+        console.log()
+      }
+
+      // History
+      if (historyTasks.length > 0) {
+        console.log(bold("  Recent:"))
+        for (const t of historyTasks) {
+          // Skip tasks already shown as running/pending
+          const tid = String(t.id ?? "")
+          if (runningTasks.some(r => String(r.id) === tid)) continue
+          if (pendingTasks.some(p => String(p.id) === tid)) continue
+
+          const id = dim(tid.substring(0, 12))
+          const type = String(t.type ?? "unknown").padEnd(14)
+          const badge = taskStatusBadge(String(t.status ?? ""))
+          const dur = formatDuration(t.duration_ms as number)
+          const ago = timeAgo(String(t.completed_at ?? t.created_at ?? ""))
+          console.log(`    ${id}  ${type}  ${badge}  ${dim(dur)}  ${dim(ago)}`)
         }
       }
 
-      if (pendingTasks.length === 0 && runningTasks.length === 0) {
+      if (totalCount === 0) {
         console.log(dim("  No tasks. Node is idle."))
+        if (!showHistory) console.log(dim("  Use --history to see completed tasks."))
       }
     } catch (err) {
       spinner.stop("Error", 1)
@@ -3224,7 +3369,7 @@ const HiveDomainsCommand = cmd({
 // Dashboard — unified status view
 // ============================================================================
 
-function formatDuration(ms: number): string {
+function dashFormatDuration(ms: number): string {
   if (ms < 0) return "0s"
   const s = Math.floor(ms / 1000)
   if (s < 60) return `${s}s`
@@ -3420,7 +3565,7 @@ const HiveDashboardCommand = cmd({
           for (const t of tasks) {
             const id = dim(String(t.id ?? "").substring(0, 12) + "...")
             const title = String(t.title ?? t.type ?? "unknown")
-            const uptime = t.uptime_s ? formatDuration(Number(t.uptime_s) * 1000) : ""
+            const uptime = t.uptime_s ? dashFormatDuration(Number(t.uptime_s) * 1000) : ""
             console.log(`    ${success("▶")} ${id} ${title.padEnd(20)} ${dim(uptime)}`)
           }
         }
@@ -3485,9 +3630,9 @@ const HiveDashboardCommand = cmd({
           let dur = ""
           if (t.started_at && t.completed_at) {
             const ms = new Date(t.completed_at).getTime() - new Date(t.started_at).getTime()
-            dur = formatDuration(ms)
+            dur = dashFormatDuration(ms)
           } else if (t.duration_s) {
-            dur = formatDuration(Number(t.duration_s) * 1000)
+            dur = dashFormatDuration(Number(t.duration_s) * 1000)
           }
 
           const time = formatTime(t.completed_at ?? t.created_at ?? "")

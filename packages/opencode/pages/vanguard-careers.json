@@ -1,0 +1,237 @@
+{
+  "id": 172,
+  "slug": "vanguard-careers",
+  "title": "Careers | Vanguard Healthcare Solutions",
+  "seo_title": "Careers | Vanguard Healthcare Solutions",
+  "seo_description": "Join the front lines of healthcare transformation. Explore career opportunities at Vanguard Healthcare Solutions.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "bloq",
+  "owner_id": 38,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "light",
+      "backgroundColor": "#ffffff",
+      "branding": {
+        "name": "Vanguard Healthcare Solutions",
+        "primaryColor": "#143A82",
+        "secondaryColor": "#4380C8"
+      }
+    },
+    "components": [
+      {
+        "type": "SiteNavigation",
+        "id": "vhcs-nav",
+        "props": {
+          "themeMode": "light",
+          "logo": {
+            "imageUrl": "https://freelabel.net/img/brands/vanguard/vhcs-logo-full.png",
+            "accentDot": false,
+            "url": "/p/vanguard"
+          },
+          "links": [
+            {
+              "label": "About",
+              "url": "/p/vanguard-about"
+            },
+            {
+              "label": "Our Network",
+              "url": "/p/vanguard-network"
+            },
+            {
+              "label": "Pathways AI",
+              "url": "/p/vanguard-pathways-ai"
+            },
+            {
+              "label": "Invest",
+              "url": "/p/vanguard-invest"
+            },
+            {
+              "label": "Partners",
+              "url": "/p/vanguard-partners"
+            },
+            {
+              "label": "Careers",
+              "url": "/p/vanguard-careers"
+            },
+            {
+              "label": "Contact",
+              "url": "/p/vanguard-contact"
+            }
+          ],
+          "ctaButton": {
+            "text": "Join the Network",
+            "url": "/p/vanguard-contact"
+          },
+          "ctaColor": "#4380C8",
+          "transparent": true
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "careers-hero",
+        "props": {
+          "themeMode": "dark",
+          "title": "Reimagine your career at Vanguard.",
+          "subtitle": "Join the front lines of healthcare transformation. We're building the future of independent medicine — and we need people who want to build it with us.",
+          "backgroundGradient": "from-slate-900 via-blue-950 to-slate-900",
+          "textAlign": "center",
+          "fullHeight": false
+        }
+      },
+      {
+        "type": "EditorialSection",
+        "id": "careers-intro",
+        "props": {
+          "themeMode": "light",
+          "heading": "Why Vanguard?",
+          "content": "At Vanguard Healthcare Solutions, you will work alongside a smart, driven team that goes the extra mile to get the job done right for our patients and physicians. We offer the excitement and opportunity of a fast-growing healthcare company with the stability of an experienced management team, a strong client base, and a proven track record of success.\n\nWe are always looking for people to bring their diverse talents, perspectives and career experiences to help us create the future of healthcare.",
+          "align": "center",
+          "accentColor": "#143A82"
+        }
+      },
+      {
+        "type": "ValuePillars",
+        "id": "careers-perks",
+        "props": {
+          "themeMode": "light",
+          "heading": "What it's like to work here.",
+          "accentColor": "#4380C8",
+          "columns": 3,
+          "pillars": [
+            {
+              "icon": "M13 10V3L4 14h7v7l9-11h-7z",
+              "title": "Fast-Moving",
+              "description": "We operate like a startup with the backing of a publicly traded holding company. Speed and decisiveness matter."
+            },
+            {
+              "icon": "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z",
+              "title": "Collaborative",
+              "description": "Six subsidiaries, one network. You'll work across clinical, technology, and business teams from day one."
+            },
+            {
+              "icon": "M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z",
+              "title": "Technology-Forward",
+              "description": "Pathways AI is our agentic OS powering the entire PI ecosystem. You'll be working with cutting-edge tools every day."
+            }
+          ]
+        }
+      },
+      {
+        "type": "ContactSection",
+        "id": "careers-form",
+        "props": {
+          "themeMode": "light",
+          "heading": "Apply Now",
+          "subheading": "Interested in joining the team? Send us your resume and tell us what you're looking for.",
+          "accentColor": "#143A82",
+          "layout": "split",
+          "showForm": true,
+          "submitLabel": "Submit Application",
+          "contactInfo": [
+            {
+              "type": "email",
+              "label": "Careers Email",
+              "value": "info@vanguardhcs.com",
+              "link": "mailto:info@vanguardhcs.com"
+            },
+            {
+              "type": "phone",
+              "label": "Phone",
+              "value": "(469) 955-3570",
+              "link": "tel:+14699553570"
+            },
+            {
+              "type": "address",
+              "label": "Headquarters",
+              "value": "Dallas, Texas"
+            }
+          ]
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "vhcs-footer",
+        "props": {
+          "themeMode": "dark",
+          "logo": {
+            "imageUrl": "https://freelabel.net/img/brands/vanguard/vhcs-logo-full.png",
+            "tagline": "One Network. End-to-End Solutions for Independent Medicine.",
+            "accentDot": false
+          },
+          "columns": [
+            {
+              "title": "Company",
+              "links": [
+                {
+                  "label": "Home",
+                  "url": "/p/vanguard"
+                },
+                {
+                  "label": "About",
+                  "url": "/p/vanguard-about"
+                },
+                {
+                  "label": "Our Network",
+                  "url": "/p/vanguard-network"
+                },
+                {
+                  "label": "Pathways AI",
+                  "url": "/p/vanguard-pathways-ai"
+                },
+                {
+                  "label": "Invest",
+                  "url": "/p/vanguard-invest"
+                },
+                {
+                  "label": "Partners",
+                  "url": "/p/vanguard-partners"
+                },
+                {
+                  "label": "Careers",
+                  "url": "/p/vanguard-careers"
+                },
+                {
+                  "label": "Contact",
+                  "url": "/p/vanguard-contact"
+                }
+              ]
+            },
+            {
+              "title": "Subsidiaries",
+              "links": [
+                {
+                  "label": "Pathways Injury Consultants",
+                  "url": "https://www.pathwaysinjuryconsultants.com"
+                },
+                {
+                  "label": "ProPath Training",
+                  "url": "https://www.propathtraining.com"
+                },
+                {
+                  "label": "Pathways AI",
+                  "url": "https://www.pathwaysai.com"
+                },
+                {
+                  "label": "Pathways Advisors",
+                  "url": "https://www.pathwaysadvisors.com"
+                },
+                {
+                  "label": "Pathways Mgmt of Texas",
+                  "url": "#"
+                },
+                {
+                  "label": "Vanguard Venture Group",
+                  "url": "#"
+                }
+              ]
+            }
+          ],
+          "copyright": "© 2025 Vanguard Healthcare Solutions, LLC. All rights reserved."
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "id": 198,
+  "slug": "affiliate-program",
+  "title": "IRIS Affiliate Program",
+  "seo_title": "IRIS Affiliate Program",
+  "seo_description": "Join the IRIS affiliate program. Earn 15-30 percent recurring commissions on every referral.",
+  "og_image": null,
+  "status": "published",
+  "owner_type": "bloq",
+  "owner_id": 38,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "dark",
+      "backgroundColor": "#000000",
+      "branding": {
+        "name": "IRIS Affiliate Program",
+        "primaryColor": "#34d399"
+      }
+    },
+    "components": [
+      {
+        "type": "Hero",
+        "id": "affiliate-program-hero",
+        "props": {
+          "themeMode": "dark",
+          "title": "IRIS Affiliate Program",
+          "subtitle": "Join the IRIS affiliate program. Earn 15-30 percent recurring commissions on every referral.",
+          "labelText": "NEW",
+          "labelColor": "#34d399",
+          "textAlign": "center"
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "affiliate-program-footer",
+        "props": {
+          "themeMode": "dark",
+          "brandName": "IRIS Affiliate Program",
+          "links": []
+        }
+      }
+    ]
+  }
+}

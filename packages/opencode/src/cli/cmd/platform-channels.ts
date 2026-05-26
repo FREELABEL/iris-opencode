@@ -346,105 +346,170 @@ const ChannelsDisconnectCommand = cmd({
 const ChannelsStatusCommand = cmd({
   command: "status",
   describe: "health check across all messaging channels",
-  async handler() {
-    UI.empty()
-    prompts.intro("◈  Channel Health")
+  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const jsonOut = (args as any).json as boolean
+    if (!jsonOut) { UI.empty(); prompts.intro("◈  Channel Health — All Channels") }
 
-    const checks: { name: string; ok: boolean; detail: string }[] = []
+    const checks: { name: string; icon: string; ok: boolean; detail: string; connect: string }[] = []
 
-    // Bridge health
+    // ── iMessage (local SQLite) ──
     try {
-      const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(2000) })
-      if (res.ok) {
-        const data = (await res.json()) as any
-        checks.push({ name: "Bridge", ok: true, detail: `running on :3200` })
-
-        const msg = data?.messaging ?? {}
-
-        // Discord
-        if (msg.discord?.status === "running") {
-          const bots = msg.discord.bots ?? []
-          const readyBots = bots.filter((b: any) => b.ready)
-          checks.push({
-            name: "Discord",
-            ok: readyBots.length > 0,
-            detail: `${readyBots.length}/${bots.length} bot(s) ready`,
-          })
-        } else {
-          checks.push({ name: "Discord", ok: false, detail: "not connected" })
-        }
-
-        // iMessage
-        if (msg.imessage?.running) {
-          checks.push({
-            name: "iMessage",
-            ok: true,
-            detail: `${msg.imessage.conversations} convos, ${msg.imessage.messages_processed} msgs`,
-          })
-        }
-
-        // Telegram
-        if (msg.telegram?.status === "running") {
-          checks.push({ name: "Telegram", ok: true, detail: msg.telegram.username ?? "connected" })
-        }
+      const { isAvailable: imAvail } = require("../lib/imessage")
+      if (imAvail()) {
+        const { listChats } = require("../lib/imessage")
+        const chats = listChats(7, 999)
+        checks.push({ name: "iMessage", icon: "💬", ok: true, detail: `${chats.length} chats (7d)`, connect: "" })
       } else {
-        checks.push({ name: "Bridge", ok: false, detail: "not responding" })
+        checks.push({ name: "iMessage", icon: "💬", ok: false, detail: "Full Disk Access required", connect: "System Settings > Privacy > Full Disk Access" })
       }
     } catch {
-      checks.push({ name: "Bridge", ok: false, detail: "not running (start: iris bridge start)" })
+      checks.push({ name: "iMessage", icon: "💬", ok: false, detail: "not available (macOS only)", connect: "" })
     }
 
-    // iris-api health
+    // ── WhatsApp (local SQLite) ──
     try {
-      const res = await fetch(`${PLATFORM_URLS.irisApi}/api/health`, {
-        signal: AbortSignal.timeout(5000),
-        headers: { Accept: "application/json" },
-      })
-      checks.push({
-        name: "iris-api",
-        ok: res.ok,
-        detail: res.ok ? "healthy" : `HTTP ${res.status}`,
-      })
+      const { isAvailable: waAvail, listChats: waChats } = require("../lib/whatsapp")
+      if (waAvail()) {
+        const chats = waChats(7, 999)
+        checks.push({ name: "WhatsApp", icon: "📱", ok: true, detail: `${chats.length} chats (7d)`, connect: "" })
+      } else {
+        checks.push({ name: "WhatsApp", icon: "📱", ok: false, detail: "WhatsApp desktop not installed or no access", connect: "Install WhatsApp desktop + grant Full Disk Access" })
+      }
     } catch {
-      checks.push({ name: "iris-api", ok: false, detail: "unreachable" })
+      checks.push({ name: "WhatsApp", icon: "📱", ok: false, detail: "not available", connect: "" })
     }
 
-    // Discord webhook endpoint
+    // ── Gmail (OAuth via fl-api) ──
+    try {
+      const { getToken: gmailToken } = await import("../lib/gmail")
+      const token = await gmailToken()
+      if (token) {
+        // Quick validation — fetch labels
+        const res = await fetch("https://www.googleapis.com/gmail/v1/users/me/labels?maxResults=1", {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(5000),
+        })
+        checks.push({ name: "Gmail", icon: "📧", ok: res.ok, detail: res.ok ? "connected (OAuth)" : "token expired", connect: "iris channels connect gmail" })
+      } else {
+        checks.push({ name: "Gmail", icon: "📧", ok: false, detail: "not connected", connect: "iris channels connect gmail" })
+      }
+    } catch {
+      checks.push({ name: "Gmail", icon: "📧", ok: false, detail: "not connected", connect: "iris channels connect gmail" })
+    }
+
+    // ── Apple Mail (bridge) ──
     try {
       const token = getBridgeToken()
-      const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" }
-      const bridgeSecret = process.env.DISCORD_BRIDGE_SECRET
-      if (bridgeSecret) headers["X-Bridge-Secret"] = bridgeSecret
-
-      const res = await fetch(`${PLATFORM_URLS.irisApi}/api/v6/channels/discord`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ t: "HEALTH_CHECK", d: { content: "", author: { id: "health", username: "health", bot: true } } }),
-        signal: AbortSignal.timeout(5000),
-      })
-      checks.push({
-        name: "Discord webhook",
-        ok: res.ok,
-        detail: res.ok ? "accepting requests" : `HTTP ${res.status}`,
-      })
+      const headers: Record<string, string> = { Accept: "application/json" }
+      if (token) headers["X-Bridge-Key"] = token
+      const res = await fetch(`${BRIDGE_URL}/api/mail/search?from=test&days=1&limit=1`, { headers, signal: AbortSignal.timeout(3000) })
+      checks.push({ name: "Apple Mail", icon: "📨", ok: res.ok || res.status === 200, detail: res.ok ? "bridge connected" : "bridge error", connect: "iris bridge start" })
     } catch {
-      checks.push({ name: "Discord webhook", ok: false, detail: "unreachable" })
+      checks.push({ name: "Apple Mail", icon: "📨", ok: false, detail: "bridge not running", connect: "iris bridge start" })
     }
 
-    // Display results
+    // ── Slack (OAuth via fl-api) ──
+    try {
+      const { getToken: slackToken } = await import("../lib/slack")
+      const token = await slackToken()
+      if (token) {
+        const res = await fetch("https://slack.com/api/auth.test", {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(5000),
+        })
+        const data = res.ok ? await res.json() as any : null
+        checks.push({ name: "Slack", icon: "💬", ok: !!data?.ok, detail: data?.ok ? `@${data.user} in ${data.team}` : "token invalid", connect: "iris channels connect slack" })
+      } else {
+        checks.push({ name: "Slack", icon: "💬", ok: false, detail: "not connected", connect: "iris channels connect slack" })
+      }
+    } catch {
+      checks.push({ name: "Slack", icon: "💬", ok: false, detail: "not connected", connect: "iris channels connect slack" })
+    }
+
+    // ── Discord (bridge bot) ──
+    try {
+      const token = getBridgeToken()
+      const headers: Record<string, string> = { Accept: "application/json" }
+      if (token) headers["X-Bridge-Key"] = token
+      const res = await fetch(`${BRIDGE_URL}/api/discord/guilds`, { headers, signal: AbortSignal.timeout(3000) })
+      if (res.ok) {
+        const data = await res.json() as any
+        checks.push({ name: "Discord", icon: "🎮", ok: true, detail: `${data.count} server(s)`, connect: "" })
+      } else {
+        const err = await res.json().catch(() => ({})) as any
+        checks.push({ name: "Discord", icon: "🎮", ok: false, detail: err?.error?.includes("No Discord") ? "no bot connected" : `HTTP ${res.status}`, connect: "iris channels connect discord" })
+      }
+    } catch {
+      checks.push({ name: "Discord", icon: "🎮", ok: false, detail: "bridge not running", connect: "iris bridge start" })
+    }
+
+    // ── Telegram (bridge bot) ──
+    try {
+      const token = getBridgeToken()
+      const headers: Record<string, string> = { Accept: "application/json" }
+      if (token) headers["X-Bridge-Key"] = token
+      const res = await fetch(`${BRIDGE_URL}/api/telegram/info`, { headers, signal: AbortSignal.timeout(3000) })
+      if (res.ok) {
+        const data = await res.json() as any
+        if (data.connected) {
+          checks.push({ name: "Telegram", icon: "✈️", ok: true, detail: `@${data.username} (${data.cached_messages} cached msgs)`, connect: "" })
+        } else {
+          checks.push({ name: "Telegram", icon: "✈️", ok: false, detail: "no bot connected", connect: "iris channels connect telegram" })
+        }
+      } else {
+        checks.push({ name: "Telegram", icon: "✈️", ok: false, detail: "bridge endpoint missing", connect: "iris bridge restart" })
+      }
+    } catch {
+      checks.push({ name: "Telegram", icon: "✈️", ok: false, detail: "bridge not running", connect: "iris bridge start" })
+    }
+
+    // ── Instagram (browser session) ──
+    try {
+      const fs = require("fs")
+      const path = require("path")
+      const somDir = path.join(process.env.HOME, "Sites/freelabel/fl-docker-dev/coding-agent-bridge/som")
+      const testsDir = path.join(process.env.HOME, "Sites/freelabel/tests/e2e")
+      const candidates = ["instagram-auth-thediscoverpage_.json", "instagram-auth-freelabelnet.json", "instagram-auth-heyiris.io.json", "instagram-auth.json"]
+      let found = false
+      for (const f of candidates) {
+        if (fs.existsSync(path.join(somDir, f)) || fs.existsSync(path.join(testsDir, f))) { found = true; break }
+      }
+      checks.push({ name: "Instagram", icon: "📷", ok: found, detail: found ? "session file found" : "no saved session", connect: "iris hive credentials save-session --platform instagram" })
+    } catch {
+      checks.push({ name: "Instagram", icon: "📷", ok: false, detail: "not available", connect: "" })
+    }
+
+    // ── JSON output ──
+    if (jsonOut) {
+      console.log(JSON.stringify(checks.map(c => ({ name: c.name, ok: c.ok, detail: c.detail, connect: c.connect || undefined })), null, 2))
+      return
+    }
+
+    // ── Display ──
+    const connected = checks.filter(c => c.ok).length
+    const total = checks.length
+
     printDivider()
     for (const c of checks) {
       const icon = c.ok ? success("✓") : "✗"
-      console.log(`  ${icon} ${bold(c.name)}  ${dim(c.detail)}`)
+      const connectHint = !c.ok && c.connect ? `  ${dim(c.connect)}` : ""
+      console.log(`  ${icon} ${c.icon} ${bold(c.name.padEnd(12))}  ${c.ok ? success(c.detail) : c.detail}${connectHint}`)
     }
     printDivider()
 
-    const allOk = checks.every((c) => c.ok)
-    if (allOk) {
-      prompts.log.success("All channels healthy")
+    if (connected === total) {
+      prompts.log.success(`All ${total} channels connected`)
     } else {
-      const failed = checks.filter((c) => !c.ok)
-      prompts.log.warn(`${failed.length} issue(s) found`)
+      prompts.log.info(`${connected}/${total} channels connected`)
+      const disconnected = checks.filter(c => !c.ok)
+      if (disconnected.length > 0) {
+        console.log()
+        console.log(`  ${dim("To connect:")}`)
+        for (const c of disconnected) {
+          if (c.connect) console.log(`    ${c.icon} ${c.name}: ${highlight(c.connect)}`)
+        }
+      }
     }
 
     prompts.outro("Done")

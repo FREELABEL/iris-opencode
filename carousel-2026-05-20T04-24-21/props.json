@@ -1,0 +1,53 @@
+{
+  "brand": "vanguard",
+  "headline": "Transform Your Law Firm's Efficiency",
+  "subtitle": "Discover tools that enhance your operations and boost your bottom line.",
+  "category": "USE CASE",
+  "authorName": "Vanguard",
+  "tips": [
+    {
+      "title": "The Old Way Was Slow",
+      "body": "Managing case files took days, causing delays in client service and revenue collection."
+    },
+    {
+      "title": "Streamlined Case Management",
+      "body": "Now, with our case pipeline, you can manage multiple cases simultaneously, reducing turnaround time and increasing client satisfaction."
+    },
+    {
+      "title": "Simple Setup Process",
+      "body": "Just input your case details, and the pipeline organizes everything for you, allowing you to focus on winning cases."
+    },
+    {
+      "title": "Perfect for Law Firms",
+      "body": "If you're a law firm looking to optimize case management and improve cash flow, these tools are designed for you."
+    }
+  ],
+  "stats": [
+    {
+      "value": "30%",
+      "label": "TIME SAVED"
+    },
+    {
+      "value": "5",
+      "label": "CASES MANAGED"
+    },
+    {
+      "value": "$10K",
+      "label": "REVENUE INCREASE"
+    }
+  ],
+  "statsHeadline": "RESULTS YOU CAN EXPECT",
+  "statsSubtitle": "Experience a significant impact on your practice's efficiency and revenue.",
+  "checklistTitle": "What This Unlocks",
+  "checklistItems": [
+    "Manage cases in real-time",
+    "Quickly generate settlement reports",
+    "Export data to QuickBooks",
+    "Improve client communication",
+    "Accelerate revenue collection"
+  ],
+  "ctaHeadline": "Ready to Boost Your Firm's ROI?",
+  "ctaBody": "Take the first step towards transforming your operations. Implement these tools to see immediate results.",
+  "ctaButtonText": "Get Started",
+  "ctaSubtext": "www.vanguard.com/get-started"
+}

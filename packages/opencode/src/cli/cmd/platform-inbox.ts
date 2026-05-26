@@ -3,9 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, isNonInteractive, bridgeFetch } from "./iris-api"
 
-// ============================================================================
 // Shared Helpers
-// ============================================================================
 
 const RAICHU = process.env.IRIS_FL_API_URL ?? "https://raichu.heyiris.io"
 
@@ -30,9 +28,7 @@ async function dispatchHiveTask(taskPayload: Record<string, unknown>): Promise<a
   return await res.json()
 }
 
-// ============================================================================
 // Helpers
-// ============================================================================
 
 
 interface OutreachStep {
@@ -45,6 +41,7 @@ interface InboxEntry {
   lead_id: number
   lead_name: string
   channel: "ig" | "email" | "imessage" | "whatsapp" | "discord" | "slack" | "telegram" | "crm" | "calendar"
+  channel: "ig" | "email" | "gmail" | "imessage" | "whatsapp" | "discord" | "slack" | "telegram" | "crm" | "calendar"
   direction: "inbound" | "outbound"
   preview: string
   timestamp: string | null
@@ -57,6 +54,7 @@ interface InboxEntry {
 const CHANNEL_ICONS: Record<string, string> = {
   ig: "\x1b[35m◉\x1b[0m",       // purple
   email: "\x1b[34m✉\x1b[0m",    // blue
+  gmail: "\x1b[31m✉\x1b[0m",    // red
   imessage: "\x1b[32m◈\x1b[0m", // green
   whatsapp: "\x1b[32m◉\x1b[0m", // green
   discord: "\x1b[35m◈\x1b[0m",  // purple
@@ -69,6 +67,7 @@ const CHANNEL_ICONS: Record<string, string> = {
 const CHANNEL_LABELS: Record<string, string> = {
   ig: "IG",
   email: "Email",
+  gmail: "Gmail",
   imessage: "iMessage",
   whatsapp: "WhatsApp",
   discord: "Discord",
@@ -91,9 +90,7 @@ function timeAgo(ts: string | null): string {
   return `${Math.floor(days / 7)}w ago`
 }
 
-// ============================================================================
 // Subcommand: iris inbox scan
-// ============================================================================
 
 const SUPPORTED_PLATFORMS = ["instagram", "linkedin", "whatsapp"] as const
 type ScanPlatform = typeof SUPPORTED_PLATFORMS[number]
@@ -222,9 +219,7 @@ const ScanCommand: any = cmd({
   },
 })
 
-// ============================================================================
 // Subcommand: iris inbox connect
-// ============================================================================
 
 const ConnectCommand: any = cmd({
   command: "connect <platform>",
@@ -284,9 +279,7 @@ const ConnectCommand: any = cmd({
   },
 })
 
-// ============================================================================
 // Subcommand: iris inbox status
-// ============================================================================
 
 const StatusCommand: any = cmd({
   command: "status",
@@ -351,9 +344,7 @@ const StatusCommand: any = cmd({
   },
 })
 
-// ============================================================================
 // Subcommand: iris inbox view (the original unified inbox)
-// ============================================================================
 
 const ViewCommand: any = cmd({
   command: "view",
@@ -373,9 +364,7 @@ const ViewCommand: any = cmd({
   },
 })
 
-// ============================================================================
 // Parent Command: iris inbox
-// ============================================================================
 
 export const PlatformInboxCommand: any = cmd({
   command: "inbox",
@@ -402,9 +391,7 @@ export const PlatformInboxCommand: any = cmd({
   },
 })
 
-// ============================================================================
 // Unified inbox view handler (extracted from old command)
-// ============================================================================
 
 async function inboxViewHandler(args: any) {
     UI.empty()

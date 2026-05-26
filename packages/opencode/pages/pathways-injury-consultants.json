@@ -1,0 +1,438 @@
+{
+  "id": 186,
+  "slug": "pathways-injury-consultants",
+  "title": "Pathways Injury Consultants | Concierge Case Management",
+  "seo_title": "Pathways Injury Consultants | Personal Injury Concierge Case Management",
+  "seo_description": "Personal injury consultants offering concierge case management. One point of contact for all of your questions and needs. (833) 314-6587",
+  "og_image": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/pathways-icon.png",
+  "status": "published",
+  "owner_type": "bloq",
+  "owner_id": 38,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "light",
+      "backgroundColor": "#ffffff",
+      "branding": {
+        "name": "Pathways Injury Consultants",
+        "primaryColor": "#1e3a5f",
+        "secondaryColor": "#6ba4bc",
+        "faviconUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/pathways-logo-2.png"
+      }
+    },
+    "components": [
+      {
+        "type": "SiteNavigation",
+        "id": "pic-nav",
+        "props": {
+          "logo": {
+            "text": null,
+            "url": "/p/pathways-injury-consultants",
+            "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/pathways-logo-2.png",
+            "imageHeight": "40px",
+            "accentDot": false
+          },
+          "links": [
+            {
+              "label": "About Us",
+              "url": "#about"
+            },
+            {
+              "label": "Services",
+              "url": "#services"
+            },
+            {
+              "label": "For Attorneys",
+              "url": "#attorneys"
+            },
+            {
+              "label": "For Patients",
+              "url": "#patients"
+            },
+            {
+              "label": "Vanguard Healthcare",
+              "url": "/p/vanguard"
+            }
+          ],
+          "ctaButton": {
+            "text": "Free Consultation",
+            "url": "/p/vanguard-contact"
+          },
+          "ctaColor": "#6ba4bc",
+          "themeMode": "light"
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "pic-hero",
+        "props": {
+          "title": "Personal injury consultants offering concierge case management",
+          "subtitleLines": [
+            {
+              "text": "One point of contact for all of your questions and needs.",
+              "class": "text-xl md:text-2xl text-blue-100 font-medium"
+            }
+          ],
+          "backgroundImage": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/header-home-alt-1.jpg",
+          "overlayGradient": "linear-gradient(to right, rgba(30,58,95,0.88), rgba(30,58,95,0.7), rgba(30,58,95,0.3))",
+          "primaryButtonText": "For Attorneys",
+          "primaryButtonUrl": "#attorneys",
+          "primaryButtonVariant": "white",
+          "secondaryButtonText": "For Patients",
+          "secondaryButtonUrl": "#patients",
+          "secondaryButtonVariant": "outline",
+          "textAlign": "left",
+          "fullHeight": true,
+          "showScrollIndicator": true,
+          "themeMode": "dark"
+        }
+      },
+      {
+        "type": "SplitContent",
+        "id": "pic-what-we-do",
+        "props": {
+          "title": "We offer the full spectrum of accident-related medical treatments and services",
+          "content": "**WHAT WE DO**\n\nIn the aftermath of an accident, we offer a wide range of services to ensure better patient outcomes and happier clients who can get back to their everyday life as quickly as possible.\n\n---\n\n**Hours:** Monday – Friday, 8 a.m. to 5 p.m.\n\n**Location:** 18383 Preston Road, Suite 110, Dallas, Texas 75252\n\n**Call Center:** (833) 314-6587",
+          "mediaUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/PIC-Magazine-Cover.jpg",
+          "mediaAlt": "Pathways Injury Consultants - Provider Guide 2023 Edition",
+          "mediaPosition": "right",
+          "markdown": true,
+          "verticalAlign": "top",
+          "maxWidth": "6xl",
+          "themeMode": "light"
+        }
+      },
+      {
+        "type": "SplitAccordion",
+        "id": "pic-services",
+        "props": {
+          "heading": "Our Services",
+          "subheading": "Comprehensive personal injury medical treatments and case management.",
+          "imagePosition": "left",
+          "accentColor": "#6ba4bc",
+          "themeMode": "light",
+          "defaultImage": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/home3.jpg",
+          "items": [
+            {
+              "title": "Spinal Injuries",
+              "description": "Spinal injuries can occur in an auto accident when the force of the collision causes sudden and severe impacts or jolts to the body, leading to damage to the spinal cord, vertebrae, or surrounding tissues.",
+              "bullets": [
+                "Vertebral fractures & disc herniation",
+                "Spinal cord damage assessment",
+                "Coordinated specialist treatment plans"
+              ],
+              "linkText": "Learn more",
+              "linkUrl": "#",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/home3.jpg"
+            },
+            {
+              "title": "Extremity Injuries",
+              "description": "Common ways to injure an extremity in an auto accident include direct impact, such as striking the steering wheel, dashboard, or doors, as well as from flying debris or the force of the collision.",
+              "bullets": [
+                "Fractures & soft tissue injuries",
+                "Joint & ligament damage",
+                "Surgical & non-surgical treatment paths"
+              ],
+              "linkText": "Learn more",
+              "linkUrl": "#",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/home2.jpg"
+            },
+            {
+              "title": "Chiropractic & Physical Therapy",
+              "description": "Chiropractic therapy can help alleviate pain, restore mobility, and promote healing by addressing musculoskeletal issues often associated with accident-related injuries.",
+              "bullets": [
+                "Pain management & mobility restoration",
+                "Targeted rehabilitation programs",
+                "Long-term recovery planning"
+              ],
+              "linkText": "Learn more",
+              "linkUrl": "#",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/header-home-alt-1.jpg"
+            },
+            {
+              "title": "Concussion & Head Injury",
+              "description": "98% of patients with concussions go undiagnosed. 62% of all clinic patients arrive with minor traumatic brain injuries, yet only around 4% receive the necessary diagnosis and treatment.",
+              "bullets": [
+                "Comprehensive neurological evaluation",
+                "Cognitive & behavioral assessment",
+                "Ongoing monitoring & treatment"
+              ],
+              "linkText": "Learn more",
+              "linkUrl": "#",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/PIC-Magazine-Cover.jpg"
+            },
+            {
+              "title": "Trauma & Chronic Pain",
+              "description": "Auto accidents can cause physical trauma leading to chronic pain. Emotional trauma can also contribute to persistent pain by causing muscle tension and increased pain sensitivity.",
+              "bullets": [
+                "Multimodal pain management",
+                "Physical & emotional trauma treatment",
+                "Long-term pain prevention strategies"
+              ],
+              "linkText": "Learn more",
+              "linkUrl": "#",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/home3.jpg"
+            },
+            {
+              "title": "Plastic Surgery",
+              "description": "Reconstructive and plastic surgery services for accident victims who have sustained facial or body injuries requiring surgical intervention.",
+              "bullets": [
+                "Facial reconstruction",
+                "Scar revision & treatment",
+                "Restoring form and function"
+              ],
+              "linkText": "Learn more",
+              "linkUrl": "#",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/home2.jpg"
+            },
+            {
+              "title": "Dental Trauma",
+              "description": "Dental injuries from auto accidents can range from chipped or cracked teeth to complete tooth avulsion. Comprehensive restorative care for accident-related dental injuries.",
+              "bullets": [
+                "Emergency dental treatment",
+                "Restorative & prosthetic dentistry",
+                "Long-term dental rehabilitation"
+              ],
+              "linkText": "Learn more",
+              "linkUrl": "#",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/header-home-alt-1.jpg"
+            },
+            {
+              "title": "Eye Trauma",
+              "description": "Eye injuries can include corneal abrasions, retinal detachment, and orbital fractures. Prompt specialist evaluation is critical for preserving vision.",
+              "bullets": [
+                "Emergency ophthalmology referral",
+                "Surgical & non-surgical intervention",
+                "Vision preservation protocols"
+              ],
+              "linkText": "Learn more",
+              "linkUrl": "#",
+              "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/PIC-Magazine-Cover.jpg"
+            }
+          ]
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "pic-consult-cta",
+        "props": {
+          "title": "Free consultation",
+          "subtitle": "Consulting for newly injured patients",
+          "primaryButtonText": "Book Here",
+          "primaryButtonUrl": "/p/vanguard-contact",
+          "primaryButtonVariant": "white",
+          "textAlign": "center",
+          "fullHeight": false,
+          "backgroundGradient": "linear-gradient(135deg, #0369a1, #075985)",
+          "themeMode": "dark",
+          "backgroundColor": "#0284c7"
+        }
+      },
+      {
+        "type": "ProcessTimeline",
+        "id": "pic-process",
+        "props": {
+          "heading": "Pathways Injury Consultants provides unified case management.",
+          "subheading": "From attorney referral to complete medical records delivery.",
+          "accentColor": "#6ba4bc",
+          "themeMode": "light",
+          "steps": [
+            {
+              "number": "1",
+              "title": "Attorney Referral",
+              "description": "Attorney identifies a client who needs medical treatment and refers them to the Pathways network."
+            },
+            {
+              "number": "2",
+              "title": "LOP Request",
+              "description": "Letter of Protection is established, allowing the patient to receive treatment with payment deferred until case settlement."
+            },
+            {
+              "number": "3",
+              "title": "Case Management Via One Centralized Location",
+              "description": "All treatments, appointments, and records are coordinated through a single point of contact at Pathways."
+            },
+            {
+              "number": "4",
+              "title": "Complete Medical Records Delivered to Attorney",
+              "description": "Comprehensive, litigation-ready medical documentation is compiled and delivered for settlement negotiations."
+            }
+          ]
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "pic-oversight",
+        "props": {
+          "title": "Professional oversight by experts in personal injury case management",
+          "primaryButtonText": "Oversight Committee",
+          "primaryButtonUrl": "#about",
+          "primaryButtonVariant": "emerald",
+          "backgroundImage": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/home2.jpg",
+          "overlayGradient": "linear-gradient(to right, rgba(30,58,95,0.85), rgba(30,58,95,0.6), rgba(30,58,95,0.3))",
+          "textAlign": "left",
+          "fullHeight": false,
+          "themeMode": "dark"
+        }
+      },
+      {
+        "type": "SplitContent",
+        "id": "pic-about",
+        "props": {
+          "title": "Smart choices for established attorneys and victims of car, truck and motorcycle accidents",
+          "content": "Our team serves as a seamless extension of your personal injury case by providing one point of contact for all your healthcare questions. Our patient navigation specialists are by your clients' side through their entire healthcare journey.",
+          "mediaUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/header-home-alt-1.jpg",
+          "mediaAlt": "Medical professional",
+          "mediaPosition": "left",
+          "markdown": false,
+          "verticalAlign": "center",
+          "maxWidth": "6xl",
+          "rounded": true,
+          "themeMode": "light"
+        }
+      },
+      {
+        "type": "StatsSection",
+        "id": "pic-stats",
+        "props": {
+          "themeMode": "light",
+          "accentColor": "#6ba4bc",
+          "stats": [
+            {
+              "value": "54+",
+              "label": "Team Members"
+            },
+            {
+              "value": "300+",
+              "label": "Years of Experience"
+            },
+            {
+              "value": "8,000+",
+              "label": "Cases Managed"
+            }
+          ]
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "pic-footer",
+        "props": {
+          "logo": {
+            "text": "Pathways Injury Consultants",
+            "tagline": "Personal injury consultants offering concierge case management. One point of contact for all of your questions and needs.",
+            "imageUrl": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/footer-logo.png",
+            "imageHeight": "50px",
+            "accentDot": false
+          },
+          "columns": [
+            {
+              "title": "Sitemap",
+              "links": [
+                {
+                  "label": "About Us",
+                  "url": "#about"
+                },
+                {
+                  "label": "Our Staff",
+                  "url": "#about"
+                },
+                {
+                  "label": "Patients",
+                  "url": "#patients"
+                },
+                {
+                  "label": "Attorneys",
+                  "url": "#attorneys"
+                },
+                {
+                  "label": "FAQ",
+                  "url": "#"
+                },
+                {
+                  "label": "Contact",
+                  "url": "/p/vanguard-contact"
+                }
+              ]
+            },
+            {
+              "title": "Services",
+              "links": [
+                {
+                  "label": "Spinal Injuries",
+                  "url": "#services"
+                },
+                {
+                  "label": "Extremity Injuries",
+                  "url": "#services"
+                },
+                {
+                  "label": "Chiropractic & Physical Therapy",
+                  "url": "#services"
+                },
+                {
+                  "label": "Concussion & Head Injuries",
+                  "url": "#services"
+                },
+                {
+                  "label": "Trauma & Chronic Pain",
+                  "url": "#services"
+                },
+                {
+                  "label": "Plastic Surgery",
+                  "url": "#services"
+                },
+                {
+                  "label": "Dental Trauma",
+                  "url": "#services"
+                },
+                {
+                  "label": "Eye Trauma",
+                  "url": "#services"
+                }
+              ]
+            },
+            {
+              "title": "Contact",
+              "links": [
+                {
+                  "label": "(833) 314-6587",
+                  "url": "tel:8333146587"
+                },
+                {
+                  "label": "info@pathwaysinjuryconsultants.com",
+                  "url": "mailto:info@pathwaysinjuryconsultants.com"
+                },
+                {
+                  "label": "18383 Preston Road, Suite 110, Dallas, TX 75252",
+                  "url": "#"
+                }
+              ]
+            }
+          ],
+          "copyright": "© 2026 Pathways Injury Consultants. All rights reserved.",
+          "themeMode": "dark",
+          "bottomLinks": [
+            {
+              "label": "Home",
+              "url": "/p/pathways-injury-consultants"
+            },
+            {
+              "label": "Privacy Policy",
+              "url": "#"
+            },
+            {
+              "label": "HIPAA Disclosure",
+              "url": "#"
+            },
+            {
+              "label": "Contact",
+              "url": "/p/vanguard-contact"
+            }
+          ]
+        }
+      }
+    ],
+    "og_image": "https://iris-cdn.sfo3.cdn.digitaloceanspaces.com/cloud-files/pic/pathways-icon.png"
+  }
+}
