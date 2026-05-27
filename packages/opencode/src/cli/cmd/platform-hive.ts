@@ -4023,6 +4023,269 @@ const HivePanesCommand = cmd({
 })
 
 // ============================================================================
+// iris hive watch — live tail of swarm events
+// ============================================================================
+
+const HiveWatchCommand = cmd({
+  command: "watch [session]",
+  describe: "live tail of a running swarm's director events",
+  builder: (yargs) =>
+    yargs
+      .positional("session", { describe: "session name or prefix", type: "string" })
+      .option("raw", { describe: "show raw JSON events", type: "boolean", default: false }),
+  async handler(args) {
+    const { TmuxSession } = await import("../../tmux/session-manager")
+    let targetSession = args.session as string | undefined
+
+    // If no session, pick one
+    if (!targetSession) {
+      const sessions = await TmuxSession.fetchBridgeSessions()
+      if (sessions.length === 0) {
+        try {
+          await TmuxSession.ensureTmux()
+          const local = await TmuxSession.listSessions()
+          if (local.length === 0) {
+            console.log("No active swarm sessions")
+            return
+          }
+          targetSession = local[0].name
+        } catch {
+          console.log("No active swarm sessions (daemon not running?)")
+          return
+        }
+      } else if (sessions.length === 1) {
+        targetSession = sessions[0].name
+      } else {
+        const selected = await prompts.select({
+          message: "Select session to watch",
+          options: sessions.map((s) => ({
+            label: `${s.name} (${s.panes.length} panes)${s.type ? ` [${s.type}]` : ""}`,
+            value: s.name,
+          })),
+        })
+        if (typeof selected !== "string") return
+        targetSession = selected
+      }
+    }
+
+    // Resolve partial name
+    if (targetSession && !targetSession.startsWith("iris-")) {
+      const sessions = await TmuxSession.fetchBridgeSessions()
+      const match = sessions.find(
+        (s) => s.name.includes(targetSession!) || s.name.endsWith(targetSession!)
+      )
+      if (match) targetSession = match.name
+    }
+
+    console.log(`${bold("Watching")} ${highlight(targetSession!)}  (Ctrl+C to stop)\n`)
+
+    const BRIDGE = process.env.IRIS_BRIDGE_URL ?? "http://localhost:3200"
+    const bridgeKey = getBridgeToken()
+    let lastEventCount = 0
+
+    // Poll events every 2s
+    const poll = setInterval(async () => {
+      try {
+        const headers: Record<string, string> = {}
+        if (bridgeKey) headers["X-Bridge-Key"] = bridgeKey
+
+        const res = await fetch(
+          `${BRIDGE}/daemon/tmux/sessions/${targetSession}/events?limit=100`,
+          { headers, signal: AbortSignal.timeout(3000) }
+        )
+        if (!res.ok) return
+
+        const data = (await res.json()) as { events: any[]; total: number }
+        const newEvents = data.events.slice(lastEventCount)
+        lastEventCount = data.events.length
+
+        for (const e of newEvents) {
+          if (args.raw) {
+            console.log(JSON.stringify(e))
+            continue
+          }
+          const ts = e.ts ? new Date(e.ts).toLocaleTimeString("en-US", { hour12: false }) : ""
+          const prefix = dim(`[${ts}]`)
+
+          switch (e.type) {
+            case "start":
+              console.log(`${prefix} ${success("START")} ${e.goal?.substring(0, 100)}`)
+              if (e.workers) {
+                for (const w of e.workers as any[]) {
+                  console.log(`${prefix}   ${highlight(w.role)} (pane ${w.index})`)
+                }
+              }
+              break
+            case "round": {
+              const workers = (e.workers as any[] || [])
+                .map((w: any) => {
+                  const status = w.alive ? "\x1b[32m●\x1b[0m" : "\x1b[90m○\x1b[0m"
+                  return `${status} ${w.role} (${w.lines}L)`
+                })
+                .join("  ")
+              console.log(`${prefix} ${bold(`Round ${e.round}/${e.maxRounds}`)}  ${workers}`)
+              // Show last line of each worker
+              for (const w of e.workers as any[] || []) {
+                if (w.lastLine) {
+                  console.log(`${prefix}   ${dim(w.role + ":")} ${dim(w.lastLine.substring(0, 100))}`)
+                }
+              }
+              break
+            }
+            case "decision":
+              console.log(`${prefix} ${highlight("DECISION")} ${e.decision?.substring(0, 120)}`)
+              break
+            case "send":
+              console.log(`${prefix} ${"\x1b[33m→ SEND\x1b[0m"} ${e.role} (pane ${e.pane}): ${e.text?.substring(0, 80)}`)
+              break
+            case "done":
+              console.log(`${prefix} ${success("✓ DONE")} ${e.summary}`)
+              console.log(`${prefix} ${dim(`Completed in ${Math.round((e.elapsedMs || 0) / 1000)}s`)}`)
+              clearInterval(poll)
+              break
+            case "timeout":
+              console.log(`${prefix} ${"\x1b[33m⏱ TIMEOUT\x1b[0m"} after ${Math.round((e.elapsedMs || 0) / 1000)}s`)
+              clearInterval(poll)
+              break
+            case "all_workers_exited":
+              console.log(`${prefix} ${dim("All workers exited")} (round ${e.round})`)
+              clearInterval(poll)
+              break
+            case "session_dead":
+              console.log(`${prefix} ${"\x1b[31mSession died\x1b[0m"}`)
+              clearInterval(poll)
+              break
+            default:
+              console.log(`${prefix} ${e.type}: ${JSON.stringify(e).substring(0, 100)}`)
+          }
+        }
+
+        // Check if session still exists
+        const alive = await TmuxSession.isAlive(targetSession!).catch(() => false)
+        if (!alive && newEvents.length === 0) {
+          console.log(dim("\nSession ended."))
+          clearInterval(poll)
+          process.exit(0)
+        }
+      } catch {
+        // Bridge unavailable — try direct tmux check
+      }
+    }, 2000)
+
+    // Handle Ctrl+C
+    process.on("SIGINT", () => {
+      clearInterval(poll)
+      console.log(dim("\nStopped watching."))
+      process.exit(0)
+    })
+
+    // Keep alive
+    await new Promise(() => {})
+  },
+})
+
+// ============================================================================
+// iris hive logs — persistent session history from ledger
+// ============================================================================
+
+const HiveLogsCommand = cmd({
+  command: "logs [session]",
+  aliases: ["history"],
+  describe: "show session history from the tmux ledger",
+  builder: (yargs) =>
+    yargs
+      .positional("session", { describe: "session name to show events for (omit for all)", type: "string" })
+      .option("source", { describe: "filter by source", type: "string", choices: ["pusher", "a2a", "mesh", "cli"] })
+      .option("type", { describe: "filter by task type", type: "string" })
+      .option("status", { describe: "filter by status", type: "string", choices: ["running", "completed", "failed"] })
+      .option("limit", { alias: "n", describe: "max entries", type: "number", default: 30 })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const session = args.session as string | undefined
+    const BRIDGE = process.env.IRIS_BRIDGE_URL ?? "http://localhost:3200"
+    const bridgeKey = getBridgeToken()
+
+    // If session specified, show events for that session
+    if (session) {
+      try {
+        const headers: Record<string, string> = {}
+        if (bridgeKey) headers["X-Bridge-Key"] = bridgeKey
+
+        const res = await fetch(`${BRIDGE}/daemon/tmux/sessions/${session}/events?limit=100`, {
+          headers,
+          signal: AbortSignal.timeout(5000),
+        })
+        if (res.ok) {
+          const data = (await res.json()) as { events: any[] }
+          if (args.json) {
+            console.log(JSON.stringify(data.events, null, 2))
+            return
+          }
+          if (data.events.length === 0) {
+            console.log(`No events for ${session}`)
+            return
+          }
+          console.log(`${bold(session)} — ${data.events.length} events\n`)
+          for (const e of data.events) {
+            const ts = e.ts ? new Date(e.ts).toLocaleTimeString("en-US", { hour12: false }) : ""
+            console.log(`  ${dim(ts)} ${e.type.padEnd(12)} ${JSON.stringify(e).substring(0, 100)}`)
+          }
+          return
+        }
+      } catch {}
+    }
+
+    // Show ledger (all sessions history)
+    try {
+      const params = new URLSearchParams()
+      params.set("limit", String(args.limit))
+      if (args.source) params.set("source", args.source as string)
+      if (args.type) params.set("type", args.type as string)
+      if (args.status) params.set("status", args.status as string)
+
+      const headers: Record<string, string> = {}
+      if (bridgeKey) headers["X-Bridge-Key"] = bridgeKey
+
+      const res = await fetch(`${BRIDGE}/daemon/tmux/ledger?${params}`, {
+        headers,
+        signal: AbortSignal.timeout(5000),
+      })
+      if (!res.ok) {
+        console.log("Daemon bridge unavailable (is daemon running?)")
+        return
+      }
+
+      const data = (await res.json()) as { entries: any[] }
+      if (args.json) {
+        console.log(JSON.stringify(data.entries, null, 2))
+        return
+      }
+
+      if (data.entries.length === 0) {
+        console.log("No session history yet")
+        return
+      }
+
+      console.log(`${bold("Session History")} (${data.entries.length} entries)\n`)
+
+      for (const e of data.entries) {
+        const status = e.status === "completed" ? success("✓") : e.status === "failed" ? "\x1b[31m✗\x1b[0m" : "\x1b[34m▶\x1b[0m"
+        const source = (e.source || "?").padEnd(7)
+        const type = (e.type || "?").padEnd(14)
+        const title = (e.title || "—").substring(0, 40).padEnd(42)
+        const dur = e.durationMs ? dim(`${Math.round(e.durationMs / 1000)}s`) : dim("—")
+        const time = e.created ? dim(new Date(e.created).toLocaleTimeString("en-US", { hour12: false })) : ""
+
+        console.log(`  ${status} ${source} ${type} ${title} ${dur}  ${time}`)
+      }
+      console.log("")
+    } catch (err) {
+      console.log(`Error: ${err instanceof Error ? err.message : err}`)
+    }
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -4096,6 +4359,8 @@ export const PlatformHiveCommand = cmd({
       .command(HiveSwarmCommand)
       .command(HiveAttachCommand)
       .command(HivePanesCommand)
+      .command(HiveWatchCommand)
+      .command(HiveLogsCommand)
       .demandCommand(),
   async handler() {},
 })
