@@ -422,6 +422,7 @@ const AgentsUpdateCommand = cmd({
       .option("name", { describe: "new name", type: "string" })
       .option("description", { describe: "new description", type: "string" })
       .option("model", { describe: "new model", type: "string" })
+      .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, co-pilot, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "co-pilot", "briefing"] })
       .option("reset-health", { describe: "reset health_status to healthy and clear consecutive_failures", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -438,13 +439,14 @@ const AgentsUpdateCommand = cmd({
     if (args.name) payload.name = args.name
     if (args.description) payload.description = args.description
     if (args.model) payload.model = args.model
+    if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
     if (args["reset-health"]) {
       payload.health_status = "healthy"
       payload.consecutive_failures = 0
     }
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --name, --description, --model, or --reset-health")
+      prompts.log.warn("Nothing to update. Use --name, --description, --model, --heartbeat-mode, or --reset-health")
       prompts.outro("Done")
       return
     }

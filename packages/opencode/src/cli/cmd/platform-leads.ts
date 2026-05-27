@@ -5283,6 +5283,8 @@ const LeadsTasksListCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("pending", { describe: "show only pending (incomplete) tasks", type: "boolean", default: false })
+      .option("source", { describe: "filter by source (e.g. heartbeat_copilot)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -5293,7 +5295,11 @@ const LeadsTasksListCommand = cmd({
     const spinner = prompts.spinner()
     spinner.start("Loading tasks…")
     try {
-      const res = await irisFetch(`/api/v1/leads/${args.id}/tasks`)
+      const params = new URLSearchParams()
+      if (args.pending) params.set("pending", "true")
+      if (args.source) params.set("source", args.source as string)
+      const qs = params.toString() ? `?${params.toString()}` : ""
+      const res = await irisFetch(`/api/v1/leads/${args.id}/tasks${qs}`)
       const ok = await handleApiError(res, "List tasks")
       if (!ok) {
         spinner.stop("Failed", 1)
@@ -5301,14 +5307,19 @@ const LeadsTasksListCommand = cmd({
         return
       }
       const data = ((await res.json()) as any)?.data
-      const tasks: any[] = data?.tasks ?? data ?? []
+      let tasks: any[] = data?.tasks ?? data ?? []
+
+      // Client-side filters (in case API doesn't support them)
+      if (args.pending) tasks = tasks.filter((t: any) => !t.is_completed)
+      if (args.source) tasks = tasks.filter((t: any) => t.source === args.source)
+
       spinner.stop(`${tasks.length} task(s)`)
       if (args.json) {
         console.log(JSON.stringify(tasks, null, 2))
         return
       }
       if (tasks.length === 0) {
-        prompts.log.info("No tasks yet")
+        prompts.log.info(args.pending ? "No pending tasks" : "No tasks yet")
         prompts.outro(dim(`iris leads tasks create ${args.id} --title "Follow up"`))
         return
       }
@@ -5320,11 +5331,19 @@ const LeadsTasksListCommand = cmd({
           !t.is_completed && t.due_date && new Date(t.due_date) < new Date()
             ? ` ${UI.Style.TEXT_DANGER}OVERDUE${UI.Style.TEXT_NORMAL}`
             : ""
-        console.log(`  ${check} ${bold(t.title)}  ${dim(`#${t.id}`)}${due}${overdue}`)
+        const src = t.source ? dim(` [${t.source}]`) : ""
+        const agent = t.agent_id ? dim(` agent:#${t.agent_id}`) : ""
+        console.log(`  ${check} ${bold(t.title)}  ${dim(`#${t.id}`)}${src}${agent}${due}${overdue}`)
         if (t.description) console.log(`    ${dim(t.description.slice(0, 120))}`)
       }
       printDivider()
-      prompts.outro(dim(`iris leads tasks create ${args.id} --title "..."`))
+      // Show helpful next commands based on context
+      const copilotTasks = tasks.filter((t: any) => t.source === "heartbeat_copilot" && !t.is_completed)
+      if (copilotTasks.length > 0) {
+        prompts.outro(dim(`${copilotTasks.length} co-pilot task(s) awaiting approval — iris leads tasks approve ${args.id} <task-id>`))
+      } else {
+        prompts.outro(dim(`iris leads tasks create ${args.id} --title "..."`))
+      }
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -5478,9 +5497,98 @@ const LeadsTasksAssignCommand = cmd({
   },
 })
 
+const LeadsTasksApproveCommand = cmd({
+  command: "approve <lead-id> <task-id>",
+  describe: "approve a co-pilot task for agent execution",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { type: "number", demandOption: true })
+      .positional("task-id", { type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
+    const spinner = prompts.spinner()
+    spinner.start("Approving task…")
+    try {
+      const res = await irisFetch(`/api/v6/workspace/heartbeat/tasks/${args["task-id"]}/approve`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      }, IRIS_API)
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        const errText = await res.text().catch(() => "")
+        prompts.log.error(`HTTP ${res.status}: ${errText.slice(0, 200)}`)
+        prompts.outro("Done")
+        return
+      }
+      const data = (await res.json()) as any
+      if (!data.success) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(data.message || "Approval failed")
+        prompts.outro("Done")
+        return
+      }
+      const d = data.data
+      spinner.stop(success(`✓ Task #${d.task_id} approved — ${d.jobs_created} job(s) created (${d.workflow_type})`))
+      if (d.job_ids?.length) {
+        prompts.log.info(dim(`Job IDs: ${d.job_ids.join(", ")}`))
+      }
+      prompts.outro(dim(`iris leads tasks list ${args["lead-id"]} --pending`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+const LeadsTasksDismissCommand = cmd({
+  command: "dismiss <lead-id> <task-id>",
+  describe: "dismiss a co-pilot task (sets 48h cooldown on the signal)",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { type: "number", demandOption: true })
+      .positional("task-id", { type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
+    const spinner = prompts.spinner()
+    spinner.start("Dismissing task…")
+    try {
+      const res = await irisFetch(`/api/v6/workspace/heartbeat/tasks/${args["task-id"]}/dismiss`, {
+        method: "DELETE",
+      }, IRIS_API)
+      if (!res.ok) {
+        spinner.stop("Failed", 1)
+        const errText = await res.text().catch(() => "")
+        prompts.log.error(`HTTP ${res.status}: ${errText.slice(0, 200)}`)
+        prompts.outro("Done")
+        return
+      }
+      const data = (await res.json()) as any
+      if (!data.success) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(data.message || "Dismiss failed")
+        prompts.outro("Done")
+        return
+      }
+      spinner.stop(success(`✓ Task #${args["task-id"]} dismissed (48h cooldown set)`))
+      prompts.outro(dim(`iris leads tasks list ${args["lead-id"]} --pending`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
 const LeadsTasksCommand = cmd({
   command: "tasks",
-  describe: "manage tasks for leads — list, create, complete, delete, assign",
+  describe: "manage tasks for leads — list, create, complete, delete, assign, approve, dismiss",
   builder: (yargs) =>
     yargs
       .command(LeadsTasksListCommand)
@@ -5488,6 +5596,8 @@ const LeadsTasksCommand = cmd({
       .command(LeadsTasksCompleteCommand)
       .command(LeadsTasksDeleteCommand)
       .command(LeadsTasksAssignCommand)
+      .command(LeadsTasksApproveCommand)
+      .command(LeadsTasksDismissCommand)
       .demandCommand(),
   async handler() {},
 })
