@@ -45,7 +45,9 @@ async function runLocalWhisper(
     return
   }
   if (!whisper) {
-    prompts.log.error("whisper-cli not found. Install: brew install whisper-cpp")
+    prompts.log.error("Local transcription requires whisper-cpp.")
+    prompts.log.info("Install:  brew install whisper-cpp")
+    prompts.log.info("Or use a YouTube URL — server-side transcription doesn't need local tools.")
     return
   }
 

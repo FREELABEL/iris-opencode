@@ -449,5 +449,20 @@ export const PlatformObsCommand = cmd({
       .command(StatusCmd)
       .command(DashboardCmd)
       .demandCommand(1, "specify: connect, scenes, scene, stream, record, marker, mute, inputs, status, dashboard"),
-  async handler() {},
+  async handler(args) {
+    // If no subcommand given, show usage (yargs demandCommand may not output on all platforms)
+    console.log("iris obs — control OBS Studio")
+    console.log("")
+    console.log("Commands:")
+    console.log("  connect [url]    connect to OBS WebSocket")
+    console.log("  scenes           list available scenes")
+    console.log("  scene <name>     switch to a scene")
+    console.log("  stream start|stop  start/stop streaming")
+    console.log("  record start|stop  start/stop recording")
+    console.log("  marker [text]    insert a chapter marker")
+    console.log("  mute <source>    toggle mute on an audio source")
+    console.log("  inputs           list all input sources")
+    console.log("  status           show OBS connection status")
+    console.log("  dashboard        live dashboard with stats")
+  },
 })

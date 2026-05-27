@@ -891,7 +891,7 @@ const SearchCommand = cmd({
           body: JSON.stringify({
             tool: "searchPlaces",
             params: { query: args.query, location: locationHint },
-            user_id: userId || 193,
+            user_id: userId,
           }),
         }, IRIS_API)
         const ok = await handleApiError(res, "Search venues")

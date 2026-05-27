@@ -42,7 +42,8 @@ const TYPE_COLOR: Record<string, string> = {
 }
 
 function typeLabel(type: string): string {
-  return TYPE_LABEL[type] ?? type
+  if (!type) return "Skill"
+  return TYPE_LABEL[type] ?? type.replace(/_/g, " ")
 }
 
 function typeColored(type: string): string {

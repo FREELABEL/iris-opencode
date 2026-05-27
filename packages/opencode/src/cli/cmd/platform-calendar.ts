@@ -84,12 +84,26 @@ const CalendarListCommand = cmd({
 
     const now = new Date()
     const end = new Date(now.getTime() + (args.days as number) * 86400000)
-    const result = await calExec("get_events", {
-      max_results: args.limit,
-      time_min: now.toISOString(),
-      time_max: end.toISOString(),
-      ...(args.calendar ? { calendar_id: args.calendar } : {}),
-    }, getAccountOpts(args))
+    let result: any
+    try {
+      result = await calExec("get_events", {
+        max_results: args.limit,
+        time_min: now.toISOString(),
+        time_max: end.toISOString(),
+        ...(args.calendar ? { calendar_id: args.calendar } : {}),
+      }, getAccountOpts(args))
+    } catch (err: any) {
+      const msg = err.message ?? String(err)
+      if (msg.includes("Array to string") || msg.includes("Composio")) {
+        prompts.log.error("Google Calendar integration error (Composio backend issue)")
+        prompts.log.info("Try: iris integrations list  — check if Google Calendar is connected")
+        prompts.log.info("Or: iris calendar list --account your@gmail.com")
+      } else {
+        prompts.log.error(msg.slice(0, 200))
+      }
+      prompts.outro("Done")
+      return
+    }
 
     if (!result?.success) {
       prompts.log.error(result?.error ?? "Failed to fetch events")
