@@ -277,6 +277,32 @@ const StatusCmd = cmd({
         ? success(`${signupsRes.meta?.total_count ?? signupsRes.data?.length ?? 0} records`)
         : "FAIL")
       printKV("Page URL", publicUrl(slug))
+
+      // Check if bloq has members (digest recipients)
+      try {
+        const pageRes = await dashFetch(`/api/v1/pages/by-slug/${client}`)
+        if (pageRes.ok) {
+          const pageData = (await pageRes.json()) as any
+          const ownerId = pageData?.data?.owner_id
+          if (ownerId) {
+            const membersRes = await dashFetch(`/api/v1/bloqs/${ownerId}/members`)
+            if (membersRes.ok) {
+              const membersData = (await membersRes.json()) as any
+              const members = membersData?.data ?? []
+              if (members.length === 0) {
+                prompts.log.warn(`No members on bloq #${ownerId} — only the owner gets the daily digest email.`)
+                prompts.log.warn(`Clients won't receive traffic stats. Add members:`)
+                prompts.log.warn(dim(`  iris bloq members add ${ownerId} --user <client_user_id>`))
+              } else {
+                printKV("Digest Recipients", success(`${members.length} member(s) will receive daily stats`))
+              }
+            }
+          }
+        }
+      } catch {
+        // Non-fatal — skip member check
+      }
+
       printDivider()
       prompts.outro("Done")
     } catch (err) {

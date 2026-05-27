@@ -95,6 +95,7 @@ import { PlatformOnboardFlowsCommand } from "./cli/cmd/platform-onboard-flows"
 import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
 import { PlatformContractsCommand } from "./cli/cmd/platform-contracts"
 import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
+import { PlatformDashboardCommand } from "./cli/cmd/platform-dashboard"
 import { PlatformSitesCommand } from "./cli/cmd/platform-sites"
 import { PlatformDomainsCommand } from "./cli/cmd/platform-domains"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
@@ -309,6 +310,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformProposalsCommand))
   .command(reg(PlatformContractsCommand))
   .command(reg(PlatformPagesCommand))
+  .command(reg(PlatformDashboardCommand))
   .command(reg(PlatformSitesCommand))
   .command(reg(PlatformDomainsCommand))
   .command(reg(PlatformPagesBatchCommand))
