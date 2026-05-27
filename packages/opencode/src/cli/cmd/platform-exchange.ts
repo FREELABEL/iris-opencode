@@ -110,16 +110,17 @@ const ExchangeListCommand = cmd({
     }
 
     console.log()
-    console.log(bold("  Bounty   Status     Category    Title"))
-    console.log(dim("  " + "─".repeat(75)))
+    console.log(bold("  Bounty   Funded  Status     Category    Title"))
+    console.log(dim("  " + "─".repeat(80)))
 
     for (const l of data.listings) {
       const bounty = highlight(dollars(l.bounty_cents).padEnd(8))
+      const funded = l.escrow_id ? success("Yes".padEnd(7)) : dim("No".padEnd(7))
       const status = statusColor((l.status || "").padEnd(10))
       const cat = dim((l.category || "other").padEnd(11))
-      const title = l.title?.substring(0, 40) || "Untitled"
+      const title = l.title?.substring(0, 35) || "Untitled"
       const id = dim(`#${(l.id || "").substring(0, 8)}`)
-      console.log(`  ${bounty} ${status} ${cat} ${title}  ${id}`)
+      console.log(`  ${bounty} ${funded} ${status} ${cat} ${title}  ${id}`)
       if (l.skills_required?.length) {
         console.log(`  ${dim("         skills: " + l.skills_required.join(", "))}`)
       }
@@ -232,8 +233,19 @@ const ExchangePostCommand = cmd({
     console.log(`  ${bold("Category:")} ${l.category}`)
     if (l.repo_url) console.log(`  ${bold("Repo:")}     ${l.repo_url}`)
     if (skills?.length) console.log(`  ${bold("Skills:")}   ${skills.join(", ")}`)
+
+    // Show Stripe Checkout URL if escrow was created (pay on post)
+    const checkoutUrl = l.metadata?.checkout_url
+    if (checkoutUrl) {
+      console.log()
+      console.log(`  ${highlight("Fund your bounty:")} ${checkoutUrl}`)
+      console.log(dim("  Listing shows as 'Funded' after payment. Claimers require funded bounties."))
+      // Auto-open on macOS
+      try { require("child_process").execSync(`open "${checkoutUrl.replace(/"/g, '')}"`, { stdio: "ignore" }) } catch {}
+    }
+
     console.log()
-    prompts.outro(dim("Share: iris exchange show " + l.id.substring(0, 8)))
+    prompts.outro(dim("Share: iris hive exchange show " + l.id.substring(0, 8)))
   },
 })
 
