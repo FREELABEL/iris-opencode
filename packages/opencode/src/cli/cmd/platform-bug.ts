@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, FL_API, IRIS_API, resolveUserId } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, resolveUserId, requireUserId } from "./iris-api"
+import { hiveFetch } from "./platform-hive-nodes"
 import { homedir, platform, release, arch, hostname, userInfo } from "os"
 import { join } from "path"
 import { existsSync, readFileSync } from "fs"
@@ -162,6 +163,16 @@ const ReportCommand = cmd({
         describe: "error output (optional)",
         type: "string",
       })
+      .option("bounty", {
+        alias: "b",
+        describe: "post as exchange listing with bounty in dollars (e.g. --bounty 25)",
+        type: "number",
+      })
+      .option("repo", {
+        describe: "repo URL for exchange listing (used with --bounty)",
+        type: "string",
+      })
+      .option("user-id", { describe: "user ID (for exchange listing)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     // Combine positional title words + any passthrough args (after --)
@@ -253,6 +264,50 @@ const ReportCommand = cmd({
     } catch (e: any) {
       console.error(`Failed to submit bug: ${e.message}`)
       process.exit(1)
+    }
+
+    // Phase 2: IRIS Contribute — also create an exchange listing if --bounty is set
+    if (args.bounty && (args.bounty as number) > 0) {
+      const bountyDollars = args.bounty as number
+      const bountyCents = Math.round(bountyDollars * 100)
+
+      try {
+        const userId = await requireUserId(args["user-id"] as number | undefined)
+        if (!userId) return
+
+        const res = await hiveFetch(`/api/v6/exchange/listings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: userId,
+            title: `[BUG] ${title}`,
+            description: `${description}\n\n---\nSeverity: ${severity}\nFiled via: iris bug --bounty ${bountyDollars}`,
+            bounty_cents: bountyCents,
+            category: "bug_fix",
+            repo_url: args.repo || null,
+            max_claim_hours: 48,
+            expires_days: 14,
+          }),
+        })
+
+        if (res.ok) {
+          const data = (await res.json()) as { listing: any }
+          if (!args.json) {
+            console.log()
+            console.log(success(`  Exchange listing created: ${highlight(`$${bountyDollars.toFixed(2)}`)} bounty`))
+            console.log(dim(`  ID: ${data.listing.id}`))
+            console.log(dim(`  View: iris hive exchange show ${data.listing.id.substring(0, 8)}`))
+          }
+        } else {
+          if (!args.json) {
+            console.log(dim(`  Exchange listing failed (HTTP ${res.status}) — bug still filed`))
+          }
+        }
+      } catch {
+        if (!args.json) {
+          console.log(dim("  Exchange listing failed — bug still filed"))
+        }
+      }
     }
   },
 })

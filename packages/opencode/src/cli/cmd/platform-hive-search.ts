@@ -94,15 +94,16 @@ function searchLocalImessage(query: string): SearchResult[] {
     if (!existsSync(dbPath)) return []
 
     // SQLite query — search message text
-    const q = query.replace(/'/g, "''")
+    const q = query.replace(/'/g, "''").replace(/[%_\\]/g, (c) => "\\" + c)
     const sql = `SELECT m.text, m.date/1000000000 + 978307200 as unix_ts, h.id as handle
       FROM message m
       LEFT JOIN handle h ON m.handle_id = h.ROWID
-      WHERE m.text LIKE '%${q}%'
+      WHERE m.text LIKE '%${q}%' ESCAPE '\\\\'
       ORDER BY m.date DESC
       LIMIT 20`
 
-    const output = execSync(`sqlite3 "${dbPath}" "${sql}"`, {
+    const output = execSync(`sqlite3 "${dbPath}"`, {
+      input: sql,
       timeout: 10000,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
