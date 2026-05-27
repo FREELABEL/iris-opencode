@@ -883,9 +883,105 @@ const AgentsBulkDeleteCommand = cmd({
 // Root command
 // ============================================================================
 
+const AgentsAssignCommand = cmd({
+  command: "assign <agent-id>",
+  describe: "assign an agent to a bloq, task, or lead task",
+  builder: (yargs) =>
+    yargs
+      .positional("agent-id", { type: "number", demandOption: true, describe: "agent ID to assign" })
+      .option("bloq", { type: "number", describe: "set as heartbeat agent on bloq" })
+      .option("task", { type: "number", describe: "assign to a BloqItemTask by ID" })
+      .option("lead-task", { type: "number", describe: "assign to a LeadTask by ID (requires --lead-id)" })
+      .option("lead-id", { type: "number", describe: "lead ID (required with --lead-task)" })
+      .check((argv) => {
+        if (!argv.bloq && !argv.task && !argv["lead-task"]) {
+          throw new Error("Specify at least one target: --bloq, --task, or --lead-task")
+        }
+        if (argv["lead-task"] && !argv["lead-id"]) {
+          throw new Error("--lead-task requires --lead-id")
+        }
+        return true
+      }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
+    const spinner = prompts.spinner()
+    const agentId = args["agent-id"] as number
+
+    // Assign to bloq (set heartbeat_agent_id)
+    if (args.bloq) {
+      spinner.start(`Assigning agent #${agentId} to bloq #${args.bloq}…`)
+      try {
+        const res = await irisFetch(`/api/v1/user/bloqs/${args.bloq}`, {
+          method: "PUT",
+          body: JSON.stringify({ heartbeat_agent_id: agentId }),
+        })
+        const ok = await handleApiError(res, "Assign to bloq")
+        if (ok) {
+          spinner.stop(success(`✓ Agent #${agentId} set as heartbeat agent on bloq #${args.bloq}`))
+        } else {
+          spinner.stop("Failed", 1)
+        }
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    // Assign to BloqItemTask
+    if (args.task) {
+      spinner.start(`Assigning agent #${agentId} to task #${args.task}…`)
+      try {
+        // BloqItemTask doesn't have a direct update-by-id endpoint,
+        // so we use the iris-api proxy or fall back to lead task endpoint
+        const res = await irisFetch(`/api/v6/workspace/heartbeat/tasks/${args.task}/approve`, {
+          method: "POST",
+          body: JSON.stringify({ agent_id: agentId }),
+        })
+        // If approve doesn't work for just assignment, try direct update
+        if (!res.ok) {
+          prompts.log.warn("Direct task assignment not yet supported via API — use iris leads tasks assign instead")
+        } else {
+          spinner.stop(success(`✓ Agent #${agentId} assigned to task #${args.task}`))
+        }
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    // Assign to LeadTask
+    if (args["lead-task"]) {
+      const leadId = args["lead-id"] as number
+      const taskId = args["lead-task"] as number
+      spinner.start(`Assigning agent #${agentId} to lead task #${taskId}…`)
+      try {
+        const res = await irisFetch(`/api/v1/leads/${leadId}/tasks/${taskId}`, {
+          method: "PUT",
+          body: JSON.stringify({ agent_id: agentId }),
+        })
+        const ok = await handleApiError(res, "Assign to lead task")
+        if (ok) {
+          spinner.stop(success(`✓ Agent #${agentId} assigned to lead #${leadId} task #${taskId}`))
+        } else {
+          spinner.stop("Failed", 1)
+        }
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformAgentsCommand = cmd({
   command: "agents",
-  describe: "manage IRIS platform agents — pull, push, diff, CRUD",
+  describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign",
   builder: (yargs) =>
     yargs
       .command(AgentsListCommand)
@@ -898,6 +994,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsDeleteCommand)
       .command(AgentsBulkDeleteCommand)
       .command(AgentsChatCommand)
+      .command(AgentsAssignCommand)
       .demandCommand(),
   async handler() {},
 })

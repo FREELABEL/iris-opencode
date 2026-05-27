@@ -5442,15 +5442,52 @@ const LeadsTasksDeleteCommand = cmd({
   },
 })
 
+const LeadsTasksAssignCommand = cmd({
+  command: "assign <lead-id> <task-id>",
+  describe: "assign an agent to an existing task",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { type: "number", demandOption: true })
+      .positional("task-id", { type: "number", demandOption: true })
+      .option("agent-id", { alias: "a", type: "number", demandOption: true, describe: "agent ID to assign" }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
+    const spinner = prompts.spinner()
+    spinner.start("Assigning agent…")
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/tasks/${args["task-id"]}`, {
+        method: "PUT",
+        body: JSON.stringify({ agent_id: args["agent-id"] }),
+      })
+      const ok = await handleApiError(res, "Assign agent")
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
+      spinner.stop(success(`✓ Agent #${args["agent-id"]} assigned to task #${args["task-id"]}`))
+      prompts.outro(dim(`iris leads tasks list ${args["lead-id"]}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
 const LeadsTasksCommand = cmd({
   command: "tasks",
-  describe: "manage tasks for leads — list, create, complete, delete",
+  describe: "manage tasks for leads — list, create, complete, delete, assign",
   builder: (yargs) =>
     yargs
       .command(LeadsTasksListCommand)
       .command(LeadsTasksCreateCommand)
       .command(LeadsTasksCompleteCommand)
       .command(LeadsTasksDeleteCommand)
+      .command(LeadsTasksAssignCommand)
       .demandCommand(),
   async handler() {},
 })
