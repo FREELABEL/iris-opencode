@@ -16,6 +16,16 @@ import {
   HiveEnrollCommandExport,
   HiveSshSetupCommandExport,
 } from "./platform-hive-enroll"
+import {
+  HiveSendCommand,
+  HiveSentCommand,
+} from "./platform-hive-send"
+import {
+  HiveInboxCommand,
+} from "./platform-hive-inbox"
+import {
+  HiveSearchCommand,
+} from "./platform-hive-search"
 
 // Use iris-api base for Hive endpoints
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
@@ -3677,6 +3687,112 @@ const HiveDashboardCommand = cmd({
   },
 })
 
+// ── iris hive api-keys ──────────────────────────────────────────────────
+
+const HiveApiKeysCommand = cmd({
+  command: "api-keys [action]",
+  describe: "manage partner API keys for webhook triggers",
+  builder: (yargs) =>
+    yargs
+      .positional("action", { describe: "create, list, or revoke", type: "string", default: "list" })
+      .option("name", { describe: "partner name (for create)", type: "string" })
+      .option("scopes", { describe: "comma-separated task types (for create)", type: "string" })
+      .option("user-id", { describe: "user ID", type: "number" })
+      .option("key-id", { describe: "key ID to revoke", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    const action = args.action as string
+    const userId = await requireUserId(args["user-id"] as number | undefined)
+
+    if (action === "create") {
+      prompts.intro("◈  Create Partner API Key")
+      const name = args.name as string
+      if (!name) {
+        prompts.log.error("Usage: iris hive api-keys create --name 'Partner Name' --scopes discover,som_batch")
+        return
+      }
+      const scopes = args.scopes ? (args.scopes as string).split(",").map(s => s.trim()) : []
+      const spinner = prompts.spinner()
+      spinner.start("Creating API key…")
+
+      try {
+        const res = await hiveFetch("/api/v6/nodes/partner-api-keys", {
+          method: "POST",
+          body: JSON.stringify({ partner_name: name, scopes, user_id: userId }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`)
+        const data = await res.json() as Record<string, unknown>
+        spinner.stop(success("Created"))
+        printDivider()
+        printKV("Partner", name)
+        printKV("Scopes", scopes.length > 0 ? scopes.join(", ") : "all (unrestricted)")
+        console.log()
+        console.log(bold("  API Key (save this — it won't be shown again):"))
+        printDivider()
+        console.log(`  ${highlight(String(data.api_key ?? data.plaintext_key ?? "?"))}`)
+        console.log()
+        console.log(dim("  Usage:"))
+        console.log(dim(`  curl -X POST https://freelabel.net/api/v1/webhooks/hive/trigger \\`))
+        console.log(dim(`    -H "X-API-Key: ${String(data.api_key ?? 'pk_live_...').substring(0, 20)}..." \\`))
+        console.log(dim(`    -H "Content-Type: application/json" \\`))
+        console.log(dim(`    -d '{"task_type":"discover","prompt":"import-yt-feed"}'`))
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+      }
+      prompts.outro("Done")
+      return
+    }
+
+    if (action === "revoke") {
+      prompts.intro("◈  Revoke API Key")
+      const keyId = args["key-id"] as number
+      if (!keyId) {
+        prompts.log.error("Usage: iris hive api-keys revoke --key-id 123")
+        return
+      }
+      const spinner = prompts.spinner()
+      spinner.start("Revoking…")
+      try {
+        const res = await hiveFetch(`/api/v6/nodes/partner-api-keys/${keyId}`, { method: "DELETE" })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        spinner.stop(success("Revoked"))
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+      }
+      prompts.outro("Done")
+      return
+    }
+
+    // Default: list
+    prompts.intro("◈  Partner API Keys")
+    const spinner = prompts.spinner()
+    spinner.start("Loading…")
+    try {
+      const res = await hiveFetch(`/api/v6/nodes/partner-api-keys?user_id=${userId}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json() as Record<string, unknown>
+      const keys = (data.keys ?? []) as Record<string, unknown>[]
+      spinner.stop(`${keys.length} key(s)`)
+      printDivider()
+      if (keys.length === 0) {
+        console.log(dim("  No API keys. Create one: iris hive api-keys create --name 'Partner Name'"))
+      }
+      for (const k of keys) {
+        const scopes = Array.isArray(k.scopes) && k.scopes.length > 0 ? k.scopes.join(", ") : "all"
+        const active = k.active ? success("active") : dim("revoked")
+        const lastUsed = k.last_used_at ? timeAgo(String(k.last_used_at)) : dim("never")
+        console.log(`  #${k.id}  ${bold(String(k.partner_name))}  ${active}  scopes: ${dim(scopes)}  last used: ${lastUsed}  prefix: ${dim(String(k.key_prefix ?? ""))}`)
+      }
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+    prompts.outro("Done")
+  },
+})
+
 // ============================================================================
 // Root command
 // ============================================================================
@@ -3738,6 +3854,13 @@ export const PlatformHiveCommand = cmd({
       .command(HiveDomainsCommand)
       // Unified dashboard
       .command(HiveDashboardCommand)
+      // Partner API keys
+      .command(HiveApiKeysCommand)
+      // Cross-node send/inbox/search
+      .command(HiveSendCommand)
+      .command(HiveSentCommand)
+      .command(HiveInboxCommand)
+      .command(HiveSearchCommand)
       .demandCommand(),
   async handler() {},
 })
