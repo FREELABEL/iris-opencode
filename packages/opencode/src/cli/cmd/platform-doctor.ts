@@ -176,7 +176,8 @@ export const PlatformDoctorCommand = cmd({
     // ── 2. Platform APIs ──
     sp.start("Checking platform APIs…")
     const [flApi, irisApi, irisHealth] = await Promise.all([
-      checkEndpoint("fl-api (raichu)", "/api/health", FL_API),
+      // fl-api health is a public endpoint — do NOT send auth token (causes 503 on fl-api)
+      checkEndpoint("fl-api (raichu)", `${FL_API}/api/health`),
       checkEndpoint("iris-api", "/api/health", IRIS_API),
       checkEndpoint("iris-api deep health", "/api/health?deep=true", IRIS_API),
     ])
