@@ -1,7 +1,7 @@
 import { createSignal, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { irisFetch, resolveUserId } from "../../iris-api"
-import type { IrisAgent, IrisWorkflow, IrisWorkflowDetail, AtlasList, AtlasItem, IrisContact, IrisPage } from "./types"
+import type { IrisAgent, IrisWorkflow, IrisWorkflowDetail, AtlasList, AtlasItem, IrisContact, IrisPage, IrisHiveSession } from "./types"
 import { IRIS_API } from "../../iris-api"
 import os from "os"
 import path from "path"
@@ -24,6 +24,7 @@ interface IrisDataStore {
   atlas: AtlasList[]
   contacts: IrisContact[]
   pages: IrisPage[]
+  hiveSessions: IrisHiveSession[]
 }
 
 function relativeTime(iso: string | null | undefined): string {
@@ -168,6 +169,7 @@ export function useIrisData() {
     atlas: [],
     contacts: [],
     pages: [],
+    hiveSessions: [],
   })
 
   let _userId: number | null = null
@@ -464,15 +466,36 @@ export function useIrisData() {
     fetchBloqData(bloqId)
   }
 
+  // ── Hive sessions (local daemon bridge) ──
+  const BRIDGE_URL = process.env.IRIS_BRIDGE_URL ?? "http://localhost:3200"
+
+  async function fetchHiveSessions() {
+    try {
+      const res = await fetch(`${BRIDGE_URL}/daemon/tmux/sessions`, {
+        signal: AbortSignal.timeout(3000),
+      })
+      if (!res.ok) return
+      const json = (await res.json()) as { sessions: IrisHiveSession[] }
+      setData("hiveSessions", reconcile(json.sessions || []))
+    } catch {
+      // Daemon not running — clear sessions
+      if (data.hiveSessions.length > 0) setData("hiveSessions", [])
+    }
+  }
+
   // Initial fetch
   fetchBloqList()
+  fetchHiveSessions()
 
   // Poll every 30s — refresh data for current bloq
   const interval = setInterval(() => {
     if (data.selectedBloqId) fetchBloqData(data.selectedBloqId)
   }, 30_000)
+  // Poll hive sessions every 5s (local, fast)
+  const hiveInterval = setInterval(fetchHiveSessions, 5_000)
   onCleanup(() => {
     clearInterval(interval)
+    clearInterval(hiveInterval)
     import("fs").then((fs) => {
       try { fs.unlinkSync(PLATFORM_CONTEXT_PATH) } catch {}
     })

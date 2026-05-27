@@ -81,3 +81,21 @@ export interface IrisContact {
   leadScore: number
   isHot: boolean
 }
+
+export interface IrisHivePane {
+  index: number
+  pid: number
+  command: string
+  active: boolean
+  role: string | null
+  output?: string
+}
+
+export interface IrisHiveSession {
+  name: string
+  created: string
+  attached: boolean
+  panes: IrisHivePane[]
+  taskId: string | null
+  type: string | null
+}

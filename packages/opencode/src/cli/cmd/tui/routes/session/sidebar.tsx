@@ -12,7 +12,7 @@ import { TodoItem } from "../../component/todo-item"
 import { useIrisData } from "../../iris/api"
 import type { IrisAgent, IrisWorkflow, IrisWorkflowDetail, AtlasItem, IrisContact, IrisPage } from "../../iris/types"
 
-type SidebarTab = "agents" | "workflows" | "contacts" | "pages" | "atlas" | "session"
+type SidebarTab = "agents" | "workflows" | "contacts" | "pages" | "atlas" | "session" | "hive"
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   agents: "Agents",
@@ -21,9 +21,10 @@ const TAB_LABELS: Record<SidebarTab, string> = {
   pages: "Pages",
   atlas: "Atlas",
   session: "Sess",
+  hive: "Hive",
 }
 
-const TABS: SidebarTab[] = ["atlas", "agents", "contacts", "workflows", "pages", "session"]
+const TABS: SidebarTab[] = ["atlas", "agents", "hive", "contacts", "workflows", "pages", "session"]
 
 export function Sidebar(props: { sessionID: string }) {
   const sync = useSync()
@@ -717,6 +718,47 @@ export function Sidebar(props: { sessionID: string }) {
                     </For>
                   </box>
                 </Show>
+              </Match>
+
+              {/* ── HIVE ── */}
+              <Match when={activeTab() === "hive"}>
+                <box gap={1}>
+                  <Show
+                    when={iris.data.hiveSessions.length > 0}
+                    fallback={
+                      <text fg={theme.textMuted}>No active tmux sessions</text>
+                    }
+                  >
+                    <For each={iris.data.hiveSessions}>
+                      {(session) => (
+                        <box>
+                          <box flexDirection="row" gap={1}>
+                            <text fg={theme.text}>
+                              <b>{session.name}</b>
+                            </text>
+                            <text fg={theme.textMuted}>
+                              {session.panes.length} pane{session.panes.length !== 1 ? "s" : ""}
+                            </text>
+                          </box>
+                          <For each={session.panes}>
+                            {(pane, i) => {
+                              const prefix = i() === session.panes.length - 1 ? "└─" : "├─"
+                              const roleLabel = pane.role || `pane ${pane.index}`
+                              return (
+                                <text fg={theme.textMuted}>
+                                  {"  "}{prefix} [{pane.index}] {roleLabel}  {pane.command || "—"}
+                                </text>
+                              )
+                            }}
+                          </For>
+                        </box>
+                      )}
+                    </For>
+                  </Show>
+                  <text fg={theme.textMuted}>
+                    attach: iris hive attach
+                  </text>
+                </box>
               </Match>
 
               {/* ── SESSION ── */}

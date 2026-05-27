@@ -301,6 +301,39 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
             required: ["command"],
           },
         },
+        {
+          name: "hive_sessions",
+          description: "List all active tmux sessions managed by IRIS Hive. Shows session names, pane counts, and task metadata.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {},
+          },
+        },
+        {
+          name: "hive_panes",
+          description: "Get status and recent output from a Hive tmux session's panes. Use this to monitor what agents in a swarm are doing.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              session: { type: "string", description: "Session name (e.g. iris-swarm-abc12345)" },
+              lines: { type: "number", description: "Lines of output per pane (default: 20)" },
+            },
+            required: ["session"],
+          },
+        },
+        {
+          name: "hive_send_input",
+          description: "Send text input to a specific pane in a running Hive tmux session. Use this for agent-to-agent communication.",
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              session: { type: "string", description: "Session name" },
+              pane: { type: "number", description: "Pane index (0-based)" },
+              text: { type: "string", description: "Text to send (Enter is appended automatically)" },
+            },
+            required: ["session", "pane", "text"],
+          },
+        },
       ],
     }))
 
@@ -362,6 +395,53 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
             }
           }
           return { content: [{ type: "text" as const, text: `Error: ${msg}` }], isError: true }
+        }
+      }
+
+      // ── Hive tmux tools (proxy through daemon bridge at localhost:3200) ──
+      const BRIDGE = process.env.IRIS_BRIDGE_URL ?? "http://localhost:3200"
+
+      if (name === "hive_sessions") {
+        try {
+          const res = await fetch(`${BRIDGE}/daemon/tmux/sessions`, { signal: AbortSignal.timeout(5000) })
+          if (!res.ok) return { content: [{ type: "text" as const, text: `Bridge error: ${res.statusText}` }], isError: true }
+          const data = await res.json()
+          return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] }
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: `Daemon bridge unavailable (is iris daemon running?): ${e instanceof Error ? e.message : e}` }], isError: true }
+        }
+      }
+
+      if (name === "hive_panes") {
+        const session = args?.session as string
+        const lines = (args?.lines as number) ?? 20
+        if (!session) return { content: [{ type: "text" as const, text: "Error: session is required" }], isError: true }
+        try {
+          const res = await fetch(`${BRIDGE}/daemon/tmux/sessions/${session}/panes?lines=${lines}`, { signal: AbortSignal.timeout(5000) })
+          if (!res.ok) return { content: [{ type: "text" as const, text: `Error: ${res.statusText}` }], isError: true }
+          const data = await res.json()
+          return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] }
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: `Daemon bridge unavailable: ${e instanceof Error ? e.message : e}` }], isError: true }
+        }
+      }
+
+      if (name === "hive_send_input") {
+        const session = args?.session as string
+        const pane = (args?.pane as number) ?? 0
+        const text = args?.text as string
+        if (!session || text === undefined) return { content: [{ type: "text" as const, text: "Error: session and text are required" }], isError: true }
+        try {
+          const res = await fetch(`${BRIDGE}/daemon/tmux/sessions/${session}/input`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pane, text }),
+            signal: AbortSignal.timeout(5000),
+          })
+          if (!res.ok) return { content: [{ type: "text" as const, text: `Error: ${res.statusText}` }], isError: true }
+          return { content: [{ type: "text" as const, text: `Sent to ${session}:${pane}` }] }
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: `Daemon bridge unavailable: ${e instanceof Error ? e.message : e}` }], isError: true }
         }
       }
 

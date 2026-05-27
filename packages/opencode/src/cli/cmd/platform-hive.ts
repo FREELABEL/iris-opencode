@@ -26,6 +26,9 @@ import {
 import {
   HiveSearchCommand,
 } from "./platform-hive-search"
+import {
+  ExchangeCommand,
+} from "./platform-exchange"
 
 // Use iris-api base for Hive endpoints
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
@@ -4087,6 +4090,8 @@ export const PlatformHiveCommand = cmd({
       .command(HiveSentCommand)
       .command(HiveInboxCommand)
       .command(HiveSearchCommand)
+      // IRIS Exchange — distributed task marketplace
+      .command(ExchangeCommand)
       // tmux swarm orchestration
       .command(HiveSwarmCommand)
       .command(HiveAttachCommand)
