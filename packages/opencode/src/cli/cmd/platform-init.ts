@@ -421,6 +421,89 @@ const STEPS: StepDef[] = [
       return true
     },
   },
+  {
+    key: "dashboard",
+    label: "Dashboard",
+    check: (p) => {
+      if (p.steps.dashboard?.completed) return { completed: true, summary: p.steps.dashboard.slug ?? "created" }
+      return { completed: false, summary: "not created" }
+    },
+    run: async (progress, userId) => {
+      const brandSlug = progress.steps.brand?.brand_slug
+      const brandName = progress.steps.brand?.brand_name
+      if (!brandSlug) {
+        console.log(`  ${dim("Complete the Brand step first to create a dashboard.")}`)
+        return false
+      }
+
+      const sp = prompts.spinner()
+      const slug = `${brandSlug}-dashboard`
+      const title = brandName || brandSlug.split("-").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
+
+      // Init app bloq
+      sp.start("Creating dashboard app...")
+      const initRes = await irisFetch(`/api/v1/app-data/${slug}/init`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      }, process.env.IRIS_API_URL ?? "https://freelabel.net")
+      if (!initRes.ok) {
+        sp.stop("Dashboard app creation failed", 1)
+        return false
+      }
+      sp.stop(success("Dashboard app ready"))
+
+      // Fetch design tokens for brand theming
+      let primaryColor = "#34d399"
+      try {
+        const tokensRes = await irisFetch(`/api/v1/public/brands/${brandSlug}/design-tokens`, {},
+          process.env.IRIS_API_URL ?? "https://freelabel.net")
+        if (tokensRes.ok) {
+          const tData = await tokensRes.json() as any
+          primaryColor = tData?.data?.colors?.primary ?? tData?.colors?.primary ?? primaryColor
+        }
+      } catch {}
+
+      // Create page
+      sp.start("Creating dashboard page...")
+      const pageRes = await irisFetch("/api/v1/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slug,
+          title: `${title} Operations Dashboard`,
+          seo_title: `${title} Operations Dashboard`,
+          seo_description: `Operations dashboard for ${title}.`,
+          owner_type: "bloq",
+          owner_id: 38,
+          status: "draft",
+          auto_publish: true,
+          json_content: {
+            version: "2.0", type: "dashboard",
+            theme: { mode: "light", backgroundColor: "#f8fafc", branding: { name: title, primaryColor, description: `${title} Dashboard` } },
+            layout: { type: "dashboard", pageTitle: "Operations", pageIcon: "chart-bar", themeMode: "light" },
+            components: [
+              { type: "WidgetWorkspaceBanner", id: "banner-1", props: { title: `${title} Operations`, subtitle: "Site traffic, signups, and analytics.", themeMode: "light" } },
+              { type: "WidgetStatsRow", id: "stats", props: { columns: 4, themeMode: "light", dataSource: `/api/v1/app-data/${slug}/stats`, stats: [{ label: "Total Views", value: "...", icon: "eye" }, { label: "Signups", value: "...", icon: "users" }, { label: "Pages", value: "...", icon: "layout" }, { label: "Today", value: "...", icon: "trending-up" }] } },
+              { type: "DataTable", id: "signups-table", props: { title: "Signups", dataSource: `/api/v1/app-data/${slug}/signups`, columns: [{ key: "email", label: "Email", sortable: true }, { key: "full_name", label: "Name", sortable: true }, { key: "source", label: "Source", type: "status" }], searchable: true, sortable: true, paginated: true, pageSize: 20, emptyMessage: "No signups yet.", themeMode: "light" } },
+            ],
+          },
+        }),
+      })
+
+      if (pageRes.ok || (await pageRes.text()).includes("already been taken")) {
+        sp.stop(success("Dashboard page ready"))
+      } else {
+        sp.stop("Page creation failed — run: iris dashboard create --client " + brandSlug, 1)
+      }
+
+      console.log(`  ${dim("URL:")} ${highlight(`https://freelabel.net/p/${slug}`)}`)
+
+      progress.steps.dashboard = { completed: true, slug }
+      saveProgress(progress)
+      return true
+    },
+  },
 ]
 
 // ── Signal-to-step bridge ───────────────────────────────────────────────────
@@ -435,6 +518,7 @@ const SIGNAL_STEP_MAP: Record<string, string> = {
   scripts: "outreach",
   content_output: "content",
   deal_health: "billing",
+  dashboard_active: "dashboard",
 }
 
 function enrichApiDataFromSignals(apiData: any): any {
