@@ -246,7 +246,7 @@ const MarketplaceInstallCommand = cmd({
       if (installRes.status === 401 || installRes.status === 403) {
         installSpinner.stop("Authentication required", 1)
         prompts.log.warn("Your token may be expired or invalid.")
-        prompts.log.info(`Refresh:  ${UI.Style.TEXT_HIGHLIGHT}export IRIS_API_TOKEN=<your-token>${UI.Style.TEXT_NORMAL}`)
+        prompts.log.info(`Fix:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login${UI.Style.TEXT_NORMAL}  or set IRIS_API_KEY env var`)
         prompts.outro("Done")
         return
       }

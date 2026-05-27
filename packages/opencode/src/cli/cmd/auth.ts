@@ -381,6 +381,18 @@ async function irisLoginFlow(forceReauth: boolean): Promise<boolean> {
     // Also store in the opencode auth system so resolveToken() finds it first
     await Auth.set("iris", { type: "api", key: sdkToken })
 
+    // Regenerate onboarding prompt with current user identity
+    try {
+      const email = loginData?.data?.user?.email ?? "user"
+      const promptPath = path.join(IRIS_DIR, ".onboarding-prompt")
+      if (fs.existsSync(promptPath)) {
+        let prompt = fs.readFileSync(promptPath, "utf-8")
+        // Replace any hardcoded user identity with current user
+        prompt = prompt.replace(/authenticated as \S+ \(user ID: \d+\)/, `authenticated as ${email} (user ID: ${userId})`)
+        fs.writeFileSync(promptPath, prompt, { mode: 0o600 })
+      }
+    } catch { /* non-critical */ }
+
     verifySpinner.stop("Authenticated!")
     if (dashboard) {
       prompts.log.info(`Dashboard: ${UI.Style.TEXT_HIGHLIGHT}${dashboard}${UI.Style.TEXT_NORMAL}`)
