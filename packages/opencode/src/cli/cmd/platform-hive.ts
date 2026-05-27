@@ -3794,6 +3794,232 @@ const HiveApiKeysCommand = cmd({
 })
 
 // ============================================================================
+// tmux swarm / attach / panes
+// ============================================================================
+
+// BRIDGE_URL already declared above — reuse it
+
+const HiveSwarmCommand = cmd({
+  command: "swarm <prompt>",
+  describe: "launch a multi-agent swarm (one tmux pane per role)",
+  builder: (yargs) =>
+    yargs
+      .positional("prompt", { describe: "task description", type: "string", demandOption: true })
+      .option("roles", { describe: "comma-separated agent roles", type: "string", default: "researcher,writer,reviewer" })
+      .option("agents", { describe: "comma-separated agent IDs (one per role)", type: "string" })
+      .option("model", { describe: "model for all agents", type: "string", default: "gpt-4.1-nano" })
+      .option("user-id", { type: "number" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("Hive Swarm")
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) return
+
+    const roleNames = (args.roles as string).split(",").map((r: string) => r.trim()).filter(Boolean)
+    const agentIds = args.agents ? (args.agents as string).split(",").map((a: string) => parseInt(a.trim())) : []
+
+    const roles = roleNames.map((name: string, i: number) => ({
+      name,
+      agent_id: agentIds[i] || null,
+      prompt_override: null,
+    }))
+
+    const spinner = prompts.spinner()
+    spinner.start("Dispatching swarm...")
+
+    try {
+      const res = await hiveFetch(`/api/v6/nodes/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "swarm",
+          prompt: args.prompt,
+          title: `Swarm: ${args.prompt}`.substring(0, 100),
+          user_id: userId,
+          config: {
+            roles,
+            model: args.model,
+          },
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as Record<string, unknown>
+        spinner.stop("Failed", 1)
+        prompts.log.error(`API error: ${(err as any).error || res.statusText}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const data = await res.json() as Record<string, unknown>
+      spinner.stop("Swarm dispatched")
+
+      if (args.json) {
+        console.log(JSON.stringify(data, null, 2))
+      } else {
+        prompts.log.success(`Task ID: ${(data as any).task?.id || (data as any).id || "unknown"}`)
+        prompts.log.info(`Roles: ${roleNames.join(", ")} (${roleNames.length} panes)`)
+        prompts.log.info(`Model: ${args.model}`)
+        printDivider()
+        prompts.log.info("View panes: iris hive panes")
+        prompts.log.info("Attach:     iris hive attach")
+      }
+    } catch (err) {
+      spinner.stop("Failed", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+
+    prompts.outro("Done")
+  },
+})
+
+const HiveAttachCommand = cmd({
+  command: "attach [session]",
+  describe: "attach to a running tmux session (power user)",
+  builder: (yargs) =>
+    yargs
+      .positional("session", { describe: "session name or task ID prefix", type: "string" })
+      .option("pane", { describe: "pane index to focus", type: "number" }),
+  async handler(args) {
+    const { TmuxSession } = await import("../../tmux/session-manager")
+
+    try {
+      await TmuxSession.ensureTmux()
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err))
+      return
+    }
+
+    let targetSession = args.session as string | undefined
+
+    if (!targetSession) {
+      // List sessions and let user pick
+      const sessions = await TmuxSession.listSessions()
+      if (sessions.length === 0) {
+        console.log("No active tmux sessions")
+        return
+      }
+
+      const selected = await prompts.select({
+        message: "Select session to attach",
+        options: sessions.map((s) => ({
+          label: `${s.name} (${s.panes.length} panes)`,
+          value: s.name,
+        })),
+      })
+
+      if (typeof selected !== "string") return
+      targetSession = selected
+    }
+
+    // Resolve partial session name
+    if (targetSession && !targetSession.startsWith("iris-")) {
+      const sessions = await TmuxSession.listSessions()
+      const match = sessions.find(
+        (s) => s.name.includes(targetSession!) || s.name.endsWith(targetSession!)
+      )
+      if (match) targetSession = match.name
+    }
+
+    if (args.pane !== undefined) {
+      // Select specific pane before attaching
+      const { execSync } = await import("child_process")
+      execSync(`tmux -L iris select-pane -t ${targetSession}:0.${args.pane}`, { stdio: "ignore" })
+    }
+
+    TmuxSession.attachSession(targetSession!)
+  },
+})
+
+const HivePanesCommand = cmd({
+  command: "panes [session]",
+  describe: "show pane status for tmux sessions",
+  builder: (yargs) =>
+    yargs
+      .positional("session", { describe: "session name (default: all)", type: "string" })
+      .option("output", { alias: "o", describe: "show last N lines of each pane", type: "number", default: 5 })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    // Try daemon bridge first (has richer metadata), fall back to direct tmux
+    const { TmuxSession } = await import("../../tmux/session-manager")
+    const sessionFilter = args.session as string | undefined
+
+    let sessions: Array<{ name: string; panes: Array<{ index: number; role: string | null; command: string; output?: string }> }> = []
+
+    // Try bridge
+    const bridgeSessions = await TmuxSession.fetchBridgeSessions()
+    if (bridgeSessions.length > 0) {
+      for (const s of bridgeSessions) {
+        if (sessionFilter && !s.name.includes(sessionFilter)) continue
+        const detail = await TmuxSession.fetchBridgePanes(s.name, args.output as number)
+        sessions.push({
+          name: s.name,
+          panes: (detail?.panes || s.panes).map((p) => ({
+            index: p.index,
+            role: p.role,
+            command: p.command,
+            output: (p as any).output || "",
+          })),
+        })
+      }
+    } else {
+      // Direct tmux fallback
+      try {
+        await TmuxSession.ensureTmux()
+        const all = await TmuxSession.listSessions()
+        for (const s of all) {
+          if (sessionFilter && !s.name.includes(sessionFilter)) continue
+          const panes = await Promise.all(
+            s.panes.map(async (p) => ({
+              index: p.index,
+              role: p.role,
+              command: p.command,
+              output: await TmuxSession.captureOutput(s.name, p.index, args.output as number),
+            }))
+          )
+          sessions.push({ name: s.name, panes })
+        }
+      } catch {
+        console.log("No tmux sessions found (daemon not running?)")
+        return
+      }
+    }
+
+    if (sessions.length === 0) {
+      console.log(sessionFilter ? `No sessions matching "${sessionFilter}"` : "No active tmux sessions")
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(sessions, null, 2))
+      return
+    }
+
+    for (const s of sessions) {
+      console.log(`\n${bold(s.name)}  (${s.panes.length} pane${s.panes.length > 1 ? "s" : ""})`)
+      for (const p of s.panes) {
+        const roleLabel = p.role ? highlight(p.role) : dim(`pane ${p.index}`)
+        const cmdLabel = dim(p.command || "—")
+        const prefix = p.index === s.panes.length - 1 ? "└─" : "├─"
+        console.log(`  ${prefix} [${p.index}] ${roleLabel}  ${cmdLabel}`)
+        if (p.output) {
+          const lines = p.output
+            .split("\n")
+            .filter((l: string) => l.trim())
+            .slice(-(args.output as number))
+          for (const line of lines) {
+            console.log(`  ${p.index === s.panes.length - 1 ? " " : "│"}   ${dim(line.substring(0, 120))}`)
+          }
+        }
+      }
+    }
+    console.log("")
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -3861,6 +4087,10 @@ export const PlatformHiveCommand = cmd({
       .command(HiveSentCommand)
       .command(HiveInboxCommand)
       .command(HiveSearchCommand)
+      // tmux swarm orchestration
+      .command(HiveSwarmCommand)
+      .command(HiveAttachCommand)
+      .command(HivePanesCommand)
       .demandCommand(),
   async handler() {},
 })

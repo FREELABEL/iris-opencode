@@ -160,12 +160,34 @@ async function readSdkEnv(): Promise<Record<string, string>> {
 async function resolveToken(): Promise<string> {
   // 1. Try stored auth (iris auth login)
   const stored = await Auth.get("iris")
-  if (stored?.type === "api" && stored.key) return stored.key
+  if (stored?.type === "api" && stored.key) {
+    if (process.argv.includes("--print-logs")) console.error("[auth] token source: iris auth store")
+    return stored.key
+  }
   // 2. Env var
-  if (process.env.IRIS_API_KEY) return process.env.IRIS_API_KEY
+  if (process.env.IRIS_API_KEY) {
+    if (process.argv.includes("--print-logs")) console.error("[auth] token source: IRIS_API_KEY env var")
+    return process.env.IRIS_API_KEY
+  }
   // 3. Read from ~/.iris/sdk/.env (written by iris-login installer)
   const sdkEnv = await readSdkEnv()
-  return sdkEnv["IRIS_API_KEY"] ?? ""
+  if (sdkEnv["IRIS_API_KEY"]) {
+    if (process.argv.includes("--print-logs")) console.error("[auth] token source: ~/.iris/sdk/.env")
+    return sdkEnv["IRIS_API_KEY"]
+  }
+  // 4. Read node_api_key from ~/.iris/config.json as last resort (used by hive commands)
+  try {
+    const fs = require("fs"), path = require("path")
+    const configPath = path.join(require("os").homedir(), ".iris", "config.json")
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+      if (config.node_api_key) {
+        if (process.argv.includes("--print-logs")) console.error("[auth] token source: ~/.iris/config.json node_api_key")
+        return config.node_api_key
+      }
+    }
+  } catch {}
+  return ""
 }
 
 // ============================================================================
@@ -206,9 +228,13 @@ export async function irisFetch(
 export async function requireAuth(): Promise<string | null> {
   const token = await resolveToken()
   if (!token) {
-    prompts.log.warn("You are not logged in to the IRIS Platform.")
+    prompts.log.warn("Not authenticated. No token found in any of:")
+    prompts.log.info("  1. iris auth store (run: iris auth login)")
+    prompts.log.info("  2. IRIS_API_KEY env var")
+    prompts.log.info("  3. ~/.iris/sdk/.env")
+    prompts.log.info("  4. ~/.iris/config.json (node_api_key)")
     prompts.log.info(
-      `Run:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login${UI.Style.TEXT_NORMAL}  (select "IRIS Platform")`,
+      `\nFix:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login${UI.Style.TEXT_NORMAL}  or set IRIS_API_KEY`,
     )
     return null
   }
