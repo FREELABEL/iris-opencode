@@ -97,10 +97,25 @@ const HiveNodesListCommand = cmd({
       return
     }
 
+    // Detect local node for "(you)" marker
+    let localNodeId: string | null = null
+    try {
+      const fs = require("fs"), path = require("path")
+      const configPath = path.join(require("os").homedir(), ".iris", "config.json")
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+        localNodeId = config.node_id || null
+      }
+    } catch {}
+    // Fallback: match by hostname
+    const thisHostname = require("os").hostname()
+
     console.log()
     console.log(bold("  Name                          Status       Active  Last heartbeat   IP"))
     console.log(dim("  " + "─".repeat(80)))
     for (const n of nodes) {
+      const isLocal = n.id === localNodeId || n.name.includes(thisHostname)
+      const youTag = isLocal ? success(" (you)") : ""
       const name = n.name.padEnd(28)
       const status = statusBadge(n.connection_status).padEnd(22)
       const active = String(n.active_tasks ?? 0).padStart(2)
@@ -108,7 +123,7 @@ const HiveNodesListCommand = cmd({
       const slot = `${active}/${cap}`.padEnd(7)
       const heartbeat = timeAgo(n.last_heartbeat_at).padEnd(15)
       const ip = n.last_ip ?? dim("—")
-      console.log(`  ${name}  ${status}  ${slot}  ${heartbeat}  ${ip}`)
+      console.log(`  ${name}${youTag}  ${status}  ${slot}  ${heartbeat}  ${ip}`)
       console.log(`    ${dim("id:")} ${n.id}`)
     }
     console.log()
