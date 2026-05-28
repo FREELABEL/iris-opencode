@@ -713,6 +713,13 @@ export namespace Provider {
           "ministral-14b": makeIrisModel("ministral-14b", "Ministral 14B", { toolcall: false }),
           "deepseek-v4": makeIrisModel("deepseek-v4", "DeepSeek V4 Pro"),
           "qwen3.5-397b": makeIrisModel("qwen3.5-397b", "Qwen3.5 397B MoE"),
+          // OpenCode Zen free models
+          "big-pickle": makeIrisModel("big-pickle", "Big Pickle"),
+          "deepseek-v4-flash": makeIrisModel("deepseek-v4-flash", "DeepSeek V4 Flash"),
+          "mimo-v2.5": makeIrisModel("mimo-v2.5", "MiMo V2.5"),
+          "nemotron-3-super": makeIrisModel("nemotron-3-super", "Nemotron 3 Super"),
+          "grok-code": makeIrisModel("grok-code", "Grok Code Fast 1"),
+          "glm-4.7": makeIrisModel("glm-4.7", "GLM 4.7"),
         },
       }
     }

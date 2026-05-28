@@ -33,8 +33,8 @@ export function DialogModel(props: { providerID?: string }) {
 
   const options = createMemo(() => {
     const q = query()
-    const favorites = showExtra() ? local.model.favorite() : []
-    const recents = local.model.recent()
+    const favorites = showExtra() ? local.model.favorite().filter((item) => item.providerID === "iris") : []
+    const recents = local.model.recent().filter((item) => item.providerID === "iris")
 
     const recentList = showExtra()
       ? recents.filter(
@@ -105,7 +105,7 @@ export function DialogModel(props: { providerID?: string }) {
     })
 
     const providerOptions = pipe(
-      sync.data.provider,
+      sync.data.provider.filter((x) => x.id === "iris"),
       sortBy(
         (provider) => provider.id !== "opencode",
         (provider) => provider.name,
