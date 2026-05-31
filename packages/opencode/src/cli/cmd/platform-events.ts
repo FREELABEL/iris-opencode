@@ -2656,6 +2656,142 @@ const SearchCommand = cmd({
   },
 })
 
+// ============================================================================
+// Sales — revenue dashboard for an event
+// ============================================================================
+
+const SalesCommand = cmd({
+  command: "sales <event-id>",
+  aliases: ["revenue", "payments"],
+  describe: "show ticket sales, revenue, and guest list for an event",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Loading sales data…")
+    try {
+      const status = String(args.status || "all")
+      const res = await irisFetch(`/api/v1/events/${eventId}/purchases?status=${status}`)
+      const ok = await handleApiError(res, "Get sales")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const purchases = data.purchases || []
+      const stats = data.stats || {}
+
+      // Also fetch event info
+      const eventRes = await irisFetch(`/api/v1/events/${eventId}`)
+      const eventData = eventRes.ok ? ((await eventRes.json()) as any) : {}
+      const event = eventData.data || eventData
+
+      spinner.stop(success(`Sales for event #${eventId}`))
+
+      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+      // Header
+      printDivider()
+      console.log(bold(String(event.title || `Event #${eventId}`)))
+      if (event.event_date) console.log(dim(`${event.event_date} — ${event.venue_name || ""}, ${event.city || ""} ${event.state || ""}`))
+      printDivider()
+
+      // Revenue stats
+      console.log(bold("  REVENUE"))
+      console.log(`  Gross:       ${highlight(`$${stats.gross_revenue || "0.00"}`)}`)
+      console.log(`  Stripe fees: ${dim(`-$${stats.stripe_fees_est || "0.00"}`)}`)
+      console.log(`  Net:         ${success(`$${stats.net_revenue_est || "0.00"}`)}`)
+      console.log()
+
+      // Purchase stats
+      console.log(bold("  TICKETS"))
+      console.log(`  Completed: ${stats.completed || 0}  |  Pending: ${stats.pending || 0}  |  Checked in: ${stats.checked_in || 0}`)
+      console.log()
+
+      // Purchase list
+      if (purchases.length > 0) {
+        console.log(bold("  PURCHASES"))
+        for (const p of purchases) {
+          const statusIcon = p.status === "completed" ? "✓" : p.status === "pending" ? "⏳" : "✗"
+          const checkedIn = p.is_checked_in ? " [checked in]" : ""
+          console.log(`  ${statusIcon} ${p.buyer_email || "?"} — ${p.ticket_title || "?"} × ${p.quantity} — $${p.amount || "?"}${checkedIn}`)
+        }
+      } else {
+        console.log(dim("  No purchases found."))
+      }
+
+      printDivider()
+
+      // Checkout URLs
+      const ticketsRes = await irisFetch(`/api/v1/events/${eventId}/tickets`)
+      if (ticketsRes.ok) {
+        const ticketsData = (await ticketsRes.json()) as any
+        const tickets = ticketsData.data || ticketsData || []
+        if (tickets.length > 0) {
+          console.log(bold("  CHECKOUT LINKS"))
+          for (const t of tickets) {
+            if (t.checkout_url) {
+              console.log(`  ${t.title} ($${t.price}): ${highlight(t.checkout_url)}`)
+            }
+          }
+          printDivider()
+        }
+      }
+
+      prompts.outro(dim(`iris events resolve ${eventId}  — fix pending purchases`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .option("status", { describe: "filter: all, completed, pending", type: "string", default: "all" })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+// ============================================================================
+// Resolve — fix pending purchases by checking Stripe
+// ============================================================================
+
+const ResolveCommand = cmd({
+  command: "resolve <event-id>",
+  aliases: ["fix-pending"],
+  describe: "check Stripe and complete any pending purchases",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Checking Stripe for pending purchases…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/purchases/resolve`, { method: "POST" })
+      const ok = await handleApiError(res, "Resolve pending")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+
+      spinner.stop(success(`Checked ${data.total_checked || 0} pending purchases`))
+
+      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+      printDivider()
+      console.log(`  Resolved (paid):   ${success(String(data.resolved || 0))}`)
+      console.log(`  Still pending:     ${dim(String(data.still_pending || 0))}`)
+      console.log()
+
+      for (const r of data.results || []) {
+        const icon = r.status === "completed" ? "✓" : "⏳"
+        console.log(`  ${icon} ${r.email} — ${r.status}`)
+      }
+      printDivider()
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
 export const PlatformEventsCommand = cmd({
   command: "events",
   describe: "manage events, stages, vendors, tickets — pull, push, diff, CRUD, import, search, preflight, audit",
@@ -2695,6 +2831,9 @@ export const PlatformEventsCommand = cmd({
       .command(AddLeadCommand)
       .command(UpdateLeadCommand)
       .command(RemoveLeadCommand)
+      // Sales & Revenue
+      .command(SalesCommand)
+      .command(ResolveCommand)
       // Production QA
       .command(PreflightCommand)
       .command(AuditCommand)
