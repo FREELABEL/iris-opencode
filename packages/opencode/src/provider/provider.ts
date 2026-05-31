@@ -116,14 +116,26 @@ export namespace Provider {
       }
     },
     async iris() {
-      // Resolve SDK token: stored auth > env var > ~/.iris/sdk/.env
+      // Resolve SDK token. ~/.iris/sdk/.env (IRIS_API_KEY) is the canonical token —
+      // every legit writer (`iris auth login` / `iris auth --token`) writes BOTH the
+      // .env and the opencode auth.json "iris" key together. So if auth.json's copy
+      // differs, it is STALE (e.g. an old key left by a prior install). Prefer the
+      // canonical token and self-heal auth.json, otherwise the chat authes with the
+      // stale key → "Unauthorized: token not authorized for this endpoint".
       const apiKey = await (async () => {
-        const stored = await Auth.get("iris")
-        if (stored?.type === "api" && stored.key) return stored.key
-        if (process.env.IRIS_API_KEY) return process.env.IRIS_API_KEY
-        // Fallback: re-load SDK env (in case it changed since module load)
         const sdkEnv = loadIrisSdkEnvSync()
-        return sdkEnv.IRIS_API_KEY
+        const canonical = sdkEnv.IRIS_API_KEY || process.env.IRIS_API_KEY
+        const stored = await Auth.get("iris")
+        const storedKey = stored?.type === "api" ? stored.key : undefined
+        if (canonical) {
+          // Reconcile a stale/missing auth.json copy from the canonical token.
+          if (storedKey !== canonical) {
+            await Auth.set("iris", { type: "api", key: canonical }).catch(() => {})
+          }
+          return canonical
+        }
+        // No managed token present — fall back to whatever auth.json holds.
+        return storedKey
       })()
 
       return {

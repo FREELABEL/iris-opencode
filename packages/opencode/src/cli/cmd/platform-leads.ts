@@ -21,7 +21,7 @@ import {
   resolveUserId,
 } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
-import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "fs"
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync } from "fs"
 import { homedir } from "os"
 import { join, basename, isAbsolute } from "path"
 import { spawnSync } from "child_process"
@@ -1587,7 +1587,8 @@ const LeadsMergeCommand = cmd({
         array: true,
         demandOption: true,
       })
-      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
+      .option("yes", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
+      .option("dry-run", { describe: "preview what will be merged without executing", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     const removeIds: number[] = ((args.remove as number[]) ?? []).filter((id) => id !== args.keep)
@@ -1634,6 +1635,21 @@ const LeadsMergeCommand = cmd({
       }
       printDivider()
 
+      // Collect all unique emails across all leads being merged
+      const allEmails = new Set<string>()
+      if (primary.email) allEmails.add(primary.email.toLowerCase())
+      for (const rid of removeIds) {
+        const r = leads[rid]
+        if (r.email) allEmails.add(r.email.toLowerCase())
+        const ci = r.contact_info ?? {}
+        if (ci.email) allEmails.add(ci.email.toLowerCase())
+        const extraEmails: string[] = Array.isArray(ci.emails) ? ci.emails : []
+        for (const e of extraEmails) {
+          if (e) allEmails.add(e.toLowerCase())
+        }
+      }
+      const alternateEmails = [...allEmails].filter((e) => e !== (primary.email ?? "").toLowerCase())
+
       // Show what notes/data will be merged
       const notesToMerge: string[] = []
       for (const rid of removeIds) {
@@ -1646,9 +1662,20 @@ const LeadsMergeCommand = cmd({
       if (notesToMerge.length > 0) {
         console.log(`  ${dim(`${notesToMerge.length} note(s) will be copied to #${args.keep}`)}`)
       }
+      if (alternateEmails.length > 0) {
+        console.log(`  ${dim(`${alternateEmails.length} alternate email(s) will be preserved: ${alternateEmails.join(", ")}`)}`)
+      }
+
+      // Dry-run mode — show preview and exit
+      if (args.dryRun) {
+        console.log()
+        console.log(`  ${bold("Dry run")} — no changes made`)
+        prompts.outro("Done")
+        return
+      }
 
       // Confirm
-      let confirmed: boolean | symbol = args.force
+      let confirmed: boolean | symbol = args.yes
       if (!confirmed) {
         if (isNonInteractive()) {
           prompts.log.error("Refusing to merge without --yes in non-interactive mode.")
@@ -1671,7 +1698,7 @@ const LeadsMergeCommand = cmd({
       // Use server-side merge endpoint (transfers all FKs: notes, tasks, comms, outreach, invoices, etc.)
       const mergeRes = await irisFetch(`/api/v1/leads/${args.keep}/merge`, {
         method: "POST",
-        body: JSON.stringify({ remove: removeIds }),
+        body: JSON.stringify({ remove: removeIds, alternate_emails: alternateEmails }),
       }).catch(() => null)
 
       if (mergeRes?.ok) {
@@ -1708,8 +1735,33 @@ const LeadsMergeCommand = cmd({
           await irisFetch(`/api/v1/leads/${rid}`, { method: "DELETE" })
         }
 
+        // Legacy: preserve alternate emails via contact_info update
+        if (alternateEmails.length > 0) {
+          const ci = primary.contact_info ?? {}
+          ci.emails = [...new Set([...(ci.emails ?? []), ...alternateEmails])]
+          await irisFetch(`/api/v1/leads/${args.keep}`, {
+            method: "PATCH",
+            body: JSON.stringify({ contact_info: ci }),
+          })
+        }
+
         legacySpinner.stop(`${success("✓")} Merged ${removeIds.length} lead(s) into #${args.keep} (legacy)`)
       }
+
+      // Clean up orphaned local .iris/leads/ files for merged-away leads
+      try {
+        const syncDir = resolveSyncDir()
+        for (const rid of removeIds) {
+          const files = readdirSync(syncDir).filter((f: string) => f.startsWith(`${rid}-`) && f.endsWith(".json"))
+          for (const f of files) {
+            unlinkSync(join(syncDir, f))
+            console.log(`  ${dim(`Cleaned up local file: ${f}`)}`)
+          }
+        }
+      } catch (_) {
+        // sync dir may not exist — that's fine
+      }
+
       prompts.outro(dim(`iris leads get ${args.keep}`))
     } catch (err) {
       spinner.stop("Error", 1)

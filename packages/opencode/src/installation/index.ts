@@ -187,6 +187,50 @@ if [ -f "$CONFIG_FILE" ]; then
   fi
 fi
 
+# ─── Post-update: Sync IRIS chat token (opencode auth.json) from SDK .env ───
+# The chat provider resolves its token from opencode auth.json BEFORE ~/.iris/sdk/.env.
+# Every legit writer (iris auth login / --token) writes both together, so if auth.json's
+# "iris" key drifts from .env it is STALE — heal it here so the chat never authes with an
+# old key ("Unauthorized: token not authorized for this endpoint" on fresh client installs).
+ENV_FILE="${irisDir}/sdk/.env"
+AUTH_DIR="$XDG_DATA_HOME"
+if [ -z "$AUTH_DIR" ]; then AUTH_DIR="$HOME/.local/share"; fi
+AUTH_FILE="$AUTH_DIR/opencode/auth.json"
+if [ -f "$ENV_FILE" ] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$AUTH_FILE" "$ENV_FILE" <<'PYEOF' || true
+import json, os, sys
+auth_file, env_file = sys.argv[1], sys.argv[2]
+key = None
+try:
+    with open(env_file) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("IRIS_API_KEY="):
+                key = line.split("=", 1)[1].strip()
+                break
+except FileNotFoundError:
+    sys.exit(0)
+if not key:
+    sys.exit(0)
+data = {}
+if os.path.exists(auth_file):
+    try:
+        with open(auth_file) as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+cur = data.get("iris") or {}
+if cur.get("type") == "api" and cur.get("key") == key:
+    sys.exit(0)  # already in sync
+data["iris"] = {"type": "api", "key": key}
+os.makedirs(os.path.dirname(auth_file), exist_ok=True)
+with open(auth_file, "w") as f:
+    json.dump(data, f, indent=2)
+os.chmod(auth_file, 0o600)
+print("Synced IRIS chat token from SDK .env into auth.json")
+PYEOF
+fi
+
 # ─── Post-update: Scaffold MCP config if missing ───
 MCP_CONFIG="${irisDir}/mcp.json"
 if [ ! -f "$MCP_CONFIG" ]; then
