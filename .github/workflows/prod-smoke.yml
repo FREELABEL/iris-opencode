@@ -1,0 +1,29 @@
+name: Prod Smoke (auth + chat + installer)
+
+# Monitors the fresh-install → auth → chat → tools path that broke on real client
+# machines (June 2026 QA sweep). Runs on a schedule so a regression pages us within
+# hours instead of being found by the next client. Also runs on every push to main.
+#
+# Token-gated checks (chat auth) need the IRIS_SMOKE_TOKEN secret — a long-lived
+# `iris auth login` token. Without it those checks SKIP (not fail); the public checks
+# (installer flags, models, tools) still run. To enable the full run:
+#   gh secret set IRIS_SMOKE_TOKEN --repo FREELABEL/iris-opencode
+on:
+  schedule:
+    - cron: '0 */6 * * *' # every 6 hours
+  push:
+    branches: [main]
+    paths:
+      - 'tests/e2e/prod-smoke.sh'
+      - '.github/workflows/prod-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run prod smoke
+        env:
+          IRIS_API_KEY: ${{ secrets.IRIS_SMOKE_TOKEN }}
+        run: bash tests/e2e/prod-smoke.sh
