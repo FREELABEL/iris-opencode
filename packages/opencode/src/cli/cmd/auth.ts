@@ -687,6 +687,31 @@ export const AuthLogoutCommand = cmd({
     })
     if (prompts.isCancel(providerID)) throw new UI.CancelledError()
     await Auth.remove(providerID)
+
+    // The IRIS Platform token is ALSO cached in ~/.iris/sdk/.env (IRIS_API_KEY).
+    // `irisLoginStatus()` reads only that file, so without clearing it a logged-out
+    // user still sees "Already authenticated" on the next login and never re-auths
+    // (#117197). Strip the key line so logout actually logs out.
+    // NOTE: we intentionally do NOT touch node_api_key in config.json — that's the
+    // Hive compute-node identity, not the user auth token; clearing it would
+    // disconnect the daemon and require re-enrollment.
+    if (providerID === "iris") {
+      try {
+        if (fs.existsSync(SDK_ENV_PATH)) {
+          const cleaned = fs
+            .readFileSync(SDK_ENV_PATH, "utf-8")
+            .split("\n")
+            .filter((line) => !/^\s*IRIS_API_KEY=/.test(line))
+            .join("\n")
+          fs.writeFileSync(SDK_ENV_PATH, cleaned, { mode: 0o600 })
+        }
+      } catch (e) {
+        prompts.log.warn(
+          `Removed credential, but could not clear cached SDK token: ${e instanceof Error ? e.message : String(e)}`,
+        )
+      }
+    }
+
     prompts.outro("Logout successful")
   },
 })

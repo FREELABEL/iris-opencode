@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, success } from "./iris-api"
+import { irisFetch, IRIS_API, requireAuth, handleApiError, printDivider, dim, bold, success } from "./iris-api"
 
-// Endpoints (ToolsResource):
+// Endpoints (ToolsResource) — served by iris-api (freelabel.net), NOT fl-api.
+// irisFetch defaults to FL_API (raichu), where these 404 (#117199), so pass IRIS_API.
 //   GET  /api/v1/tools                  — list all tools
 //   POST /api/v1/tools/invoke           — invoke a tool
 
@@ -19,7 +20,7 @@ const ToolsListCommand = cmd({
     UI.empty()
     prompts.intro("◈  Tools Registry")
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
-    const res = await irisFetch(`/api/v1/tools`)
+    const res = await irisFetch(`/api/v1/tools`, {}, IRIS_API)
     const ok = await handleApiError(res, "List tools")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
@@ -57,7 +58,7 @@ const ToolsInvokeCommand = cmd({
     const res = await irisFetch(`/api/v1/tools/invoke`, {
       method: "POST",
       body: JSON.stringify({ tool: args.name, params }),
-    })
+    }, IRIS_API)
     const ok = await handleApiError(res, "Invoke tool")
     if (!ok) { prompts.outro("Done"); return }
     const data = await res.json()

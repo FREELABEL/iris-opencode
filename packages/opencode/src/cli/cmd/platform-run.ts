@@ -1664,3 +1664,32 @@ export const PlatformListAvailableCommand = cmd({
     return ListAvailableCommand.handler(args as any)
   },
 })
+
+// Top-level `exec` — restores the old `iris run <tool>` workflow that moved under
+// `integrations` when opencode took the `run` command (#117198). `iris exec searchPlaces ...`
+// or `iris exec gmail search_emails query=...` now works without nesting.
+export const PlatformExecCommand = cmd({
+  command: "exec <target> [function] [params..]",
+  aliases: ["call", "run-tool"],
+  describe: "execute an integration function or V6 system tool (alias for `integrations exec`)",
+  builder: (ExecCommand as any).builder,
+  async handler(args) {
+    return (ExecCommand as any).handler(args)
+  },
+})
+
+export const PlatformListToolsCommand = cmd({
+  command: "list-tools",
+  describe: "list available V6 system tools (alias for `integrations list-tools`)",
+  async handler(args) {
+    return (ListToolsCommand as any).handler(args)
+  },
+})
+
+export const PlatformListIntegrationsCommand = cmd({
+  command: "list-integrations",
+  describe: "list all integration types (alias for `integrations list-integrations`)",
+  async handler(args) {
+    return (ListIntegrationsCommand as any).handler(args)
+  },
+})
