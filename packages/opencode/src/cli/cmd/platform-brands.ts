@@ -725,8 +725,12 @@ function printTokenSummary(tokens: Record<string, unknown>): void {
     console.log(bold("Colors:"))
     for (const [group, shades] of Object.entries(tokens.colors as Record<string, unknown>)) {
       if (shades && typeof shades === "object") {
+        // Nested palette: group → { shade: value }
         const vals = Object.entries(shades as Record<string, string>).map(([k, v]) => `${k}=${v}`).join("  ")
         console.log(`  ${bold(group)}  ${dim(vals)}`)
+      } else if (shades != null) {
+        // Flat token: name → value
+        console.log(`  ${bold(group)}  ${dim(String(shades))}`)
       }
     }
     console.log()
@@ -735,8 +739,12 @@ function printTokenSummary(tokens: Record<string, unknown>): void {
     console.log(bold("Typography:"))
     for (const [role, cfg] of Object.entries(tokens.typography as Record<string, unknown>)) {
       if (cfg && typeof cfg === "object") {
+        // Nested role: { family, weights }
         const c = cfg as Record<string, unknown>
         console.log(`  ${bold(role)}  ${c.family}  ${dim(`weights: ${Array.isArray(c.weights) ? c.weights.join(",") : "?"}`)}`)
+      } else if (cfg != null) {
+        // Flat token: name → value
+        console.log(`  ${bold(role)}  ${dim(String(cfg))}`)
       }
     }
     console.log()

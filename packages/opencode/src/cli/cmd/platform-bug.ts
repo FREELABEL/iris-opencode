@@ -12,6 +12,36 @@ import { execSync } from "child_process"
 const BUG_REPORT_ENDPOINT = "/api/v1/public/bug-report"
 const BUG_BLOQ_ID = 297
 
+// Resolve a bug (record the fix/solution + commit) via PUBLIC endpoint — no auth required
+const bugResolveEndpoint = (itemId: number) => `/api/v1/public/bug-report/${itemId}/resolve`
+
+// Best-effort current git commit info from the cwd (used to stamp the fix that closed a bug)
+function detectGitCommit(): { hash?: string; url?: string } {
+  try {
+    const hash = execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim()
+    if (!hash) return {}
+
+    let url: string | undefined
+    try {
+      const remote = execSync("git config --get remote.origin.url", { stdio: ["ignore", "pipe", "ignore"] })
+        .toString()
+        .trim()
+      // Normalize git@github.com:Org/repo.git and https URLs into a browsable commit link
+      const m = remote.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/i)
+      if (m) {
+        const fullHash = execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim()
+        url = `https://github.com/${m[1]}/${m[2]}/commit/${fullHash}`
+      }
+    } catch {}
+
+    return { hash, url }
+  } catch {
+    return {}
+  }
+}
+
 // ============================================================================
 // System info collection
 // ============================================================================
@@ -393,7 +423,11 @@ const ListCommand = cmd({
         const severity = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1] ?? ""
         const sevTag = severity ? `  [${severity.toUpperCase()}]` : ""
         const status = item.status ? `  ${dim(item.status)}` : ""
-        console.log(`  ${bold(String(item.title))}  ${dim(`#${item.id}`)}${sevTag}${status}`)
+        // Surface the recorded fix (if any) so other machines can see what resolved it
+        const fixCommit = contentStr.match(/Fix commit:\*?\*?\s*`?([0-9a-f]{6,40})`?/i)?.[1]
+        const hasResolution = /###\s*✅?\s*Resolution/i.test(contentStr)
+        const fixTag = hasResolution ? `  ${success(`✓ FIXED${fixCommit ? ` ${fixCommit}` : ""}`)}` : ""
+        console.log(`  ${bold(String(item.title))}  ${dim(`#${item.id}`)}${sevTag}${status}${fixTag}`)
         if (contentStr) {
           // Show first meaningful line (skip markdown headers)
           const lines = String(contentStr).split("\n").filter((l: string) => l.trim() && !l.startsWith("**") && !l.startsWith("#"))
@@ -420,29 +454,126 @@ const ListCommand = cmd({
   },
 })
 
+// Record the fix/solution + commit on a bug via the PUBLIC resolve endpoint (no auth).
+// This stamps the resolution into the bug's content so every other machine sees what fixed it.
+async function resolveBug(
+  itemId: number,
+  body: { solution: string; fix_commit?: string; fix_commit_url?: string; resolver: string },
+): Promise<void> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15000)
+
+  let res: Response
+  try {
+    res = await fetch(`${FL_API}${bugResolveEndpoint(itemId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (e: any) {
+    clearTimeout(timeout)
+    if (e.name === "AbortError") throw new Error("Resolve timed out after 15s. Check your network and try again.")
+    throw new Error(`Network error recording resolution: ${e.message}`)
+  } finally {
+    clearTimeout(timeout)
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    throw new Error(`HTTP ${res.status}: ${text}`)
+  }
+}
+
 const CloseCommand = cmd({
   command: "close <id..>",
   aliases: ["done", "resolve", "complete"],
-  describe: "mark bug report(s) as completed/resolved",
+  describe: "mark bug report(s) as completed — optionally record the fix/solution + commit hash",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "bug item ID(s)", type: "number", array: true, demandOption: true })
-      .option("note", { alias: "n", describe: "resolution note", type: "string" })
+      .option("solution", {
+        alias: ["fix", "f"],
+        describe: "describe how it was fixed — recorded on the bug so other machines see it",
+        type: "string",
+      })
+      .option("commit", {
+        alias: "hash",
+        describe: "fix commit hash (auto-detected from git HEAD when --solution is given)",
+        type: "string",
+      })
+      .option("no-commit", { describe: "skip git commit auto-detection", type: "boolean", default: false })
+      .option("note", { alias: "n", describe: "(deprecated alias for --solution)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    const ids = (args.id as number[]).filter(Boolean)
+    if (ids.length === 0) {
+      console.error("No bug IDs provided")
+      process.exitCode = 1
+      return
+    }
+
+    // --note is the legacy flag; treat it as a solution if --solution wasn't given
+    const solution = (args.solution as string | undefined) ?? (args.note as string | undefined)
+
+    // ── Path A: record a fix (public resolve endpoint, no auth, sets status=done) ──
+    if (solution && solution.trim()) {
+      const sysInfo = collectSystemInfo()
+      const resolver = `${sysInfo.user}@${sysInfo.hostname}`
+
+      let fixCommit = args.commit as string | undefined
+      let fixCommitUrl: string | undefined
+      if (!fixCommit && !args["no-commit"]) {
+        const git = detectGitCommit()
+        fixCommit = git.hash
+        fixCommitUrl = git.url
+      }
+
+      const spinner = prompts.spinner()
+      spinner.start(`Recording fix for ${ids.length} bug(s)…`)
+
+      const results: Array<{ id: number; ok: boolean; error?: string }> = []
+      for (const bugId of ids) {
+        try {
+          await resolveBug(bugId, {
+            solution: solution.trim(),
+            fix_commit: fixCommit,
+            fix_commit_url: fixCommitUrl,
+            resolver,
+          })
+          results.push({ id: bugId, ok: true })
+        } catch (e: any) {
+          results.push({ id: bugId, ok: false, error: e.message })
+        }
+      }
+
+      const okCount = results.filter((r) => r.ok).length
+      const failCount = results.filter((r) => !r.ok).length
+
+      if (args.json) {
+        spinner.stop("")
+        console.log(JSON.stringify({ results, ok: okCount, failed: failCount, fix_commit: fixCommit ?? null }, null, 2))
+        return
+      }
+
+      if (failCount === 0) {
+        spinner.stop(`${success("✓")} ${okCount} bug(s) resolved`)
+      } else {
+        spinner.stop(`${okCount} resolved, ${failCount} failed`)
+        for (const r of results.filter((r) => !r.ok)) prompts.log.error(`#${r.id}: ${r.error}`)
+      }
+      if (fixCommit) console.log(`  ${dim("Fix commit:")} ${highlight(fixCommit)}`)
+      console.log(dim("  Other machines will see this fix via iris bug list --status=all"))
+      return
+    }
+
+    // ── Path B: plain close (no fix recorded) — authed status update ──
     const token = await requireAuth()
     if (!token) return
 
     // Bug bloq is owned by user 193 — use that as the route userId
     // so the ownership check in updateStatus passes
     const BUG_OWNER_USER_ID = 193
-    const ids = (args.id as number[]).filter(Boolean)
-
-    if (ids.length === 0) {
-      console.error("No bug IDs provided")
-      process.exitCode = 1
-      return
-    }
 
     const spinner = prompts.spinner()
     spinner.start(`Closing ${ids.length} bug(s)…`)
@@ -484,6 +615,7 @@ const CloseCommand = cmd({
         prompts.log.error(`#${r.id}: ${r.error}`)
       }
     }
+    console.log(dim("  Tip: iris bug close <id> --solution \"how you fixed it\" records the fix for other machines"))
     console.log(dim("  iris bug list --status=all  — view all bugs"))
   },
 })
