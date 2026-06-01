@@ -63,8 +63,18 @@ if [ -n "$TOKEN" ]; then
   [ "$c" = "401" ] \
     && pass "POST chat/completions with bogus token = 401 (auth is enforced)" \
     || fail "bogus token returned $c (expected 401 — auth may be wide open)"
+
+  echo "── clip_cutter is API-runnable without local Laravel (#117824) ──"
+  # dry_run = no actual ffmpeg work; just proves the daemon can run clip_cutter via the
+  # API with a token (the Class-A portability guarantee).
+  c=$(code -X POST "${FL_API:-https://raichu.heyiris.io}/api/v1/clips/cut-scheduled" \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d '{"brand":"discover","threshold":70,"dry_run":true}')
+  [ "$c" = "200" ] \
+    && pass "POST /api/v1/clips/cut-scheduled (dry_run) = 200 — clip_cutter runs server-side" \
+    || fail "clips/cut-scheduled = $c (expected 200 — clip_cutter may need local Laravel again)"
 else
-  skip "chat auth check" "no IRIS_API_KEY / IRIS_SMOKE_TOKEN"
+  skip "chat auth + clip_cutter checks" "no IRIS_API_KEY / IRIS_SMOKE_TOKEN"
 fi
 
 echo
