@@ -367,6 +367,7 @@ const LeadsListCommand = cmd({
 
 const LeadsGetCommand = cmd({
   command: "get <id>",
+  aliases: ["show"],
   describe: "show lead details (accepts numeric ID or name/email to search)",
   builder: (yargs) =>
     yargs
