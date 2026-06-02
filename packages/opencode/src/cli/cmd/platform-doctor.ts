@@ -173,6 +173,39 @@ export const PlatformDoctorCommand = cmd({
       sp.stop("Authenticated")
     }
 
+    // ── 1b. Credential sanity (#120000) ──
+    // Catch a stale/shared sdk/.env that authenticates you as someone else
+    // (e.g. a pre-seeded dev token left over from a non-interactive install).
+    try {
+      const sdkEnvPath = join(homedir(), ".iris", "sdk", ".env")
+      if (existsSync(sdkEnvPath)) {
+        const envText = readFileSync(sdkEnvPath, "utf-8")
+        const envUser = envText.match(/^IRIS_USER_ID=(.*)$/m)?.[1]?.trim()
+        let nodeUser: string | undefined
+        const cfgPath = join(homedir(), ".iris", "config.json")
+        if (existsSync(cfgPath)) {
+          try { nodeUser = String((JSON.parse(readFileSync(cfgPath, "utf-8")) as { user_id?: number | string }).user_id ?? "").trim() } catch {}
+        }
+        if (envUser && nodeUser && envUser !== nodeUser) {
+          allResults.push({
+            name: "Credentials",
+            ok: false,
+            detail: `sdk/.env user (${envUser}) ≠ this node's user (${nodeUser})`,
+            hint: "sdk/.env may hold another account's token — rm ~/.iris/sdk/.env then: iris auth login",
+          })
+        } else if (/pre-seeded/i.test(envText)) {
+          allResults.push({
+            name: "Credentials",
+            ok: false,
+            detail: "sdk/.env holds a pre-seeded token (not self-authenticated)",
+            hint: "confirm it's your own account, or rm ~/.iris/sdk/.env then: iris auth login",
+          })
+        } else {
+          allResults.push({ name: "Credentials", ok: true, detail: "sdk/.env scoped to this user" })
+        }
+      }
+    } catch {}
+
     // ── 2. Platform APIs ──
     sp.start("Checking platform APIs…")
     const [flApi, irisApi, irisHealth] = await Promise.all([

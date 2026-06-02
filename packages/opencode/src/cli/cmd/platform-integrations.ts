@@ -334,6 +334,79 @@ const IntegrationsDisconnectCommand = cmd({
   },
 })
 
+const IntegrationsSetupNativeCommand = cmd({
+  command: "setup-native <type>",
+  describe: "create a native API-key integration (mailjet, slack, smtp-email, …)",
+  builder: (yargs) =>
+    yargs
+      .positional("type", { describe: "integration type (mailjet, slack, smtp-email, mailchimp, …)", type: "string", demandOption: true })
+      .option("key", { describe: "API key / public key", type: "string" })
+      .option("secret", { describe: "API secret / private key", type: "string" })
+      .option("cred", { describe: "extra credential as key=value (repeatable)", type: "array" })
+      .option("name", { describe: "display name (defaults to the type)", type: "string" })
+      .option("category", { describe: "category (auto-detected from type if omitted)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Setup Native Integration: ${args.type}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Build credentials from flags. --key/--secret cover the common api_key/api_secret
+    // pair; --cred key=value adds anything else a given integration needs.
+    const credentials: Record<string, string> = {}
+    if (args.key) credentials.api_key = String(args.key)
+    if (args.secret) credentials.api_secret = String(args.secret)
+    for (const pair of ((args.cred as string[] | undefined) ?? [])) {
+      const s = String(pair)
+      const idx = s.indexOf("=")
+      if (idx > 0) credentials[s.slice(0, idx).trim()] = s.slice(idx + 1)
+    }
+
+    if (Object.keys(credentials).length === 0) {
+      if (args.json) console.log(JSON.stringify({ error: "no credentials provided" }))
+      else { prompts.log.error("No credentials. Use --key/--secret or --cred key=value"); prompts.outro("Done") }
+      process.exitCode = 1
+      return
+    }
+
+    const payload: Record<string, unknown> = {
+      name: args.name ?? String(args.type),
+      type: args.type,
+      status: "active",
+      credentials,
+    }
+    if (args.category) payload.category = args.category
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Creating integration…")
+    try {
+      // Native API-key integrations live on iris-api (it writes the encrypted
+      // Integration record directly, scoped to the {userId} in the path).
+      const res = await irisFetch(`/api/v1/users/${userId}/integrations/native`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }, IRIS_API)
+      const ok = await handleApiError(res, "Setup native integration")
+      if (!ok) { spinner?.stop("Failed", 1); process.exitCode = 1; if (!args.json) prompts.outro("Done"); return }
+
+      const data = (await res.json().catch(() => ({}))) as { data?: { id?: number; type?: string } }
+      if (args.json) { console.log(JSON.stringify(data)); return }
+      spinner?.stop(`${success("✓")} ${bold(String(args.type))} integration created${data?.data?.id ? ` (#${data.data.id})` : ""}`)
+      prompts.outro(dim("iris integrations list"))
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      process.exitCode = 1
+      if (args.json) console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      else { prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done") }
+    }
+  },
+})
+
 const IntegrationsExecCommand = cmd({
   command: "call <type> <function>",
   aliases: ["exec"],
@@ -520,6 +593,7 @@ export const PlatformIntegrationsCommand = cmd({
       .command(IntegrationsExecCommand)
       .command(PathwaysCommand)
       .command(IntegrationsConnectCommand)
+      .command(IntegrationsSetupNativeCommand)
       .command(IntegrationsShareCommand)
       .command(IntegrationsUnshareCommand)
       .command(IntegrationsDisconnectCommand)
