@@ -356,6 +356,11 @@ const AgentsChatCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
+    // The iris-api /chat/start endpoint resolves the user from the `userId` in the
+    // body (the SDK/platform token is an fl-api token that iris-api cannot validate
+    // via auth()->user()). Without it, non-system agents return 401 (#119559).
+    const userId = await requireUserId()
+
     const payload: Record<string, unknown> = {
       query: args.message,
       agentId: args.id,
@@ -363,6 +368,7 @@ const AgentsChatCommand = cmd({
       enableRAG: true,
       contextPayload: { source: "iris-cli" },
     }
+    if (userId) payload.userId = userId
     if (args.bloq) payload.bloqId = String(args.bloq)
 
     prompts.log.info(`Sending: ${dim(String(args.message).slice(0, 80))}`)
