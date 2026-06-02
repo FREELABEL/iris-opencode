@@ -1981,7 +1981,11 @@ const HiveScheduleListCommand = cmd({
     try {
       const res = await bridgeFetch("/schedules")
       if (!res.ok) {
-        prompts.log.warn("Schedule registry not available. Is the daemon running?")
+        if (res.status === 404) {
+          prompts.log.warn("This daemon build doesn't expose /schedules — update the daemon: iris daemon restart (or iris update)")
+        } else {
+          prompts.log.warn(`Schedule registry returned HTTP ${res.status}. Check the daemon: iris daemon status`)
+        }
         prompts.outro("Done")
         return
       }

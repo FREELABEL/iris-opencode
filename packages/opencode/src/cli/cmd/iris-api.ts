@@ -321,18 +321,21 @@ export async function resolveUserId(): Promise<number | null> {
     }
   }
 
-  // 3. Auto-resolve from /api/v1/me
-  try {
-    const res = await irisFetch("/api/v1/me")
-    if (res.ok) {
-      const data = (await res.json()) as { data?: { id?: number }; id?: number }
-      const id = data?.data?.id ?? data?.id
-      if (typeof id === "number") {
-        _cachedUserId = id
-        return id
+  // 3. Auto-resolve from the authenticated-user endpoint. /api/user is the live
+  //    fl-api route; /api/v1/me is kept as a fallback for older backends.
+  for (const ep of ["/api/user", "/api/v1/me"]) {
+    try {
+      const res = await irisFetch(ep)
+      if (res.ok) {
+        const data = (await res.json()) as { data?: { id?: number }; id?: number }
+        const id = data?.data?.id ?? data?.id
+        if (typeof id === "number") {
+          _cachedUserId = id
+          return id
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   _cachedUserId = null
   return null
