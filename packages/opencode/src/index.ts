@@ -356,14 +356,15 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAffiliatesCommand))
   .command(reg(PlatformPlaybookCommand))
   .command(PlatformSkillCommand) // hidden alias for backward compat
-  .fail((msg) => {
-    if (
-      msg.startsWith("Unknown argument") ||
-      msg.startsWith("Not enough non-option arguments") ||
-      msg.startsWith("Invalid values:")
-    ) {
-      cli.showHelp("log")
-    }
+  .fail((msg, err) => {
+    // A thrown error from inside a command handler — let the outer catch format it.
+    if (err) throw err
+    // Validation failures (missing required args, unknown flags, bad values, etc.):
+    // always surface the message and the command usage so the user knows what went
+    // wrong. Previously only three message prefixes triggered help, so failures like
+    // "Missing required argument: board" exited silently with no output (#119560).
+    if (msg) UI.error(msg)
+    cli.showHelp("log")
     process.exit(1)
   })
   .strict()
