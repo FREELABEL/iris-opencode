@@ -663,6 +663,12 @@ const ConnectCommand = cmd({
     y
       .positional("type", { type: "string", demandOption: true })
       .option("print-url", { type: "boolean", default: false, describe: "print the OAuth URL instead of opening a browser" })
+      .option("yes", {
+        alias: "y",
+        type: "boolean",
+        default: false,
+        describe: "skip the overwrite confirmation (non-interactive / agent use)",
+      })
       .option("name", {
         type: "string",
         describe: "label for this connection (e.g. \"Personal\" or \"Work\") — required when adding a 2nd account of the same type",
@@ -692,10 +698,25 @@ const ConnectCommand = cmd({
               prompts.log.warn(`You already have ${existing.length} ${type} connection(s): ${accounts}`)
               console.log(`  ${dim("Re-running connect WITHOUT --name will overwrite the existing record.")}`)
               console.log(`  ${dim("To add a second account, re-run with:")} ${highlight(`iris integrations connect ${type} --name="Personal"`)}`)
-              const proceed = await prompts.confirm({ message: "Continue and overwrite?", initialValue: false })
-              if (prompts.isCancel(proceed) || !proceed) {
+
+              // Non-interactive contexts (agents, CI, Claude Code `!`) have no TTY,
+              // so the clack confirm would hang forever. Require an explicit --yes
+              // to overwrite; otherwise fail fast with guidance instead of blocking.
+              const interactive = Boolean(process.stdin.isTTY)
+              if (args.yes) {
+                prompts.log.info("Overwriting existing connection (--yes)")
+              } else if (!interactive) {
+                prompts.log.error(
+                  `Existing ${type} connection found and no TTY for a prompt. Re-run with ${highlight("--yes")} to overwrite, or ${highlight("--name=\"Personal\"")} to add a new account.`,
+                )
                 prompts.outro("Cancelled")
                 return
+              } else {
+                const proceed = await prompts.confirm({ message: "Continue and overwrite?", initialValue: false })
+                if (prompts.isCancel(proceed) || !proceed) {
+                  prompts.outro("Cancelled")
+                  return
+                }
               }
             }
           }
