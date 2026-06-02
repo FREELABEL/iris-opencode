@@ -154,8 +154,16 @@ async function ingestDiscord(lead: any): Promise<any[]> {
 // ── WhatsApp ingestion (via local SQLite) ──
 
 function ingestWhatsapp(lead: any): any[] {
-  const { searchByPhone, searchByName, normalizePhone, extractPhone } = require("../lib/whatsapp")
-  if (!lead.phone && !lead.name) return []
+  const { searchByPhone, searchByName, normalizePhone, extractPhone, readGroupsForLead } = require("../lib/whatsapp")
+  // Linked GROUP chats (contact_info.whatsapp_groups) — read even when there's no 1:1 phone/name.
+  const groupItems: any[] = (() => {
+    try {
+      return readGroupsForLead(lead, 90, 100)
+    } catch {
+      return []
+    }
+  })()
+  if (!lead.phone && !lead.name) return groupItems
 
   try {
     // Try phone first, then fall back to name search (handles WhatsApp contact name mismatches)
@@ -180,7 +188,7 @@ function ingestWhatsapp(lead: any): any[] {
         if (messages.length > 0) break
       }
     }
-    return messages.map((m: any) => ({
+    const oneToOne = messages.map((m: any) => ({
       direction: m.from_me ? "outbound" : "inbound",
       from_identifier: m.from_me ? "me" : (extractPhone(m.from_jid) || lead.phone),
       body: m.text,
@@ -188,7 +196,9 @@ function ingestWhatsapp(lead: any): any[] {
       external_message_id: `whatsapp_${m.id}`,
       metadata: { from_jid: m.from_jid, push_name: m.push_name },
     }))
-  } catch { return [] }
+    // Merge 1:1 + linked-group messages; server dedups on external_message_id.
+    return [...oneToOne, ...groupItems]
+  } catch { return groupItems }
 }
 
 // ── Gmail ingestion (via bridge or integration) ──

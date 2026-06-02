@@ -411,3 +411,88 @@ export function resolveGroupChat(search: string): WAGroupChat | null {
     return null
   }
 }
+
+// ── Lead Group Integration ──
+
+/**
+ * A WhatsApp group message normalized into the atlas/comms ingest shape.
+ * `external_message_id` uses the message Z_PK (globally unique in the WA DB),
+ * so server-side dedup is collision-safe across 1:1 and group messages.
+ */
+export interface WAGroupCommItem {
+  direction: "inbound" | "outbound"
+  from_identifier: string
+  body: string
+  sent_at: string
+  external_message_id: string
+  metadata: { from_jid: string; push_name: string; group_pk: number; group_name: string }
+}
+
+type LeadLike = { phone?: string; contact_info?: { whatsapp_groups?: string[] } | null }
+
+/**
+ * Read messages from WhatsApp GROUP chats explicitly linked to a lead.
+ *
+ * Reads `lead.contact_info.whatsapp_groups` (array of group names), resolves
+ * each via `resolveGroupChat`, dedups by group PK, and returns normalized
+ * comms items tagged with the group name/pk. Gated on `isAvailable()` so it
+ * silently no-ops without Full Disk Access (or off macOS).
+ */
+export function readGroupsForLead(lead: LeadLike, days = 90, limit = 100): WAGroupCommItem[] {
+  if (!isAvailable()) return []
+  const names = Array.isArray(lead?.contact_info?.whatsapp_groups) ? lead!.contact_info!.whatsapp_groups! : []
+  if (names.length === 0) return []
+
+  const groups: WAGroupChat[] = []
+  const seenPks = new Set<number>()
+  for (const n of names) {
+    if (!n || typeof n !== "string") continue
+    const g = resolveGroupChat(n)
+    if (g && !seenPks.has(g.pk)) {
+      seenPks.add(g.pk)
+      groups.push(g)
+    }
+  }
+
+  const items: WAGroupCommItem[] = []
+  for (const g of groups) {
+    for (const m of readMessages(g.pk, days, limit)) {
+      items.push({
+        direction: m.from_me ? "outbound" : "inbound",
+        from_identifier: m.from_me ? "me" : extractPhone(m.from_jid) || m.push_name || "unknown",
+        body: m.text,
+        sent_at: m.date,
+        external_message_id: `whatsapp_${m.id}`,
+        metadata: { from_jid: m.from_jid, push_name: m.push_name, group_pk: g.pk, group_name: g.name },
+      })
+    }
+  }
+  return items
+}
+
+/**
+ * Suggest WhatsApp groups likely belonging to a lead: groups whose active
+ * members include the lead's phone number. Excludes already-linked groups.
+ * Powers the "auto-discover with confirm" UX — suggestions only, never ingested
+ * until the user links them via `iris leads link-whatsapp`.
+ */
+export function discoverGroupCandidatesForLead(lead: LeadLike, days = 90): WAGroupChat[] {
+  if (!isAvailable()) return []
+  if (!lead?.phone) return []
+  const leadDigits = normalizePhone(lead.phone)
+  if (leadDigits.length < 7) return []
+
+  const linked = new Set(
+    (Array.isArray(lead?.contact_info?.whatsapp_groups) ? lead!.contact_info!.whatsapp_groups! : [])
+      .filter((n): n is string => typeof n === "string")
+      .map((n) => n.toLowerCase().trim()),
+  )
+
+  const candidates: WAGroupChat[] = []
+  for (const g of listGroups(days, 40)) {
+    if (linked.has(g.name.toLowerCase().trim())) continue
+    const isMember = getGroupMembers(g.pk).some((m) => extractPhone(m.jid).replace("+", "").includes(leadDigits))
+    if (isMember) candidates.push(g)
+  }
+  return candidates
+}

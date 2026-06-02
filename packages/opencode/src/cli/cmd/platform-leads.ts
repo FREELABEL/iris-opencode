@@ -1116,6 +1116,7 @@ const LeadsUpdateCommand = cmd({
         choices: ["stripe", "mercury", "offline", "mixed"] as const,
       })
       .option("chat-id", { describe: "link an iMessage chat ID (e.g. chat713220476491386040)", type: "string" })
+      .option("whatsapp-group", { describe: 'link a WhatsApp group chat by name (e.g. "CatoDrive Tech Dev")', type: "string" })
       .option("add-email", { describe: "add an alternate email address (for multi-email inbox scanning)", type: "string" }),
   async handler(args) {
     UI.empty()
@@ -1152,15 +1153,30 @@ const LeadsUpdateCommand = cmd({
     if (args["revenue-type"]) payload.revenue_type = args["revenue-type"]
     if (args["payment-method"]) payload.payment_method = args["payment-method"]
     // #57668: --chat-id appends to contact_info.chat_ids (fetches existing to avoid overwrite)
+    // Merge order: existing ci first, then any in-progress payload.contact_info, then the updated key —
+    // so other keys (whatsapp_groups, emails) are preserved when flags are combined.
     if (args["chat-id"]) {
       try {
         const lr = await irisFetch(`/api/v1/leads/${leadId}`)
         const ci = lr.ok ? (((await lr.json()) as any)?.data?.contact_info ?? {}) : {}
         const ids: string[] = Array.isArray(ci.chat_ids) ? ci.chat_ids : []
         if (!ids.includes(String(args["chat-id"]))) ids.push(String(args["chat-id"]))
-        payload.contact_info = { chat_ids: ids }
+        payload.contact_info = { ...ci, ...(payload.contact_info as Record<string, unknown> ?? {}), chat_ids: ids }
       } catch {
-        payload.contact_info = { chat_ids: [String(args["chat-id"])] }
+        payload.contact_info = { ...(payload.contact_info as Record<string, unknown> ?? {}), chat_ids: [String(args["chat-id"])] }
+      }
+    }
+    // --whatsapp-group appends to contact_info.whatsapp_groups (group names; resolved at read-time)
+    if (args["whatsapp-group"]) {
+      try {
+        const lr = await irisFetch(`/api/v1/leads/${leadId}`)
+        const ci = lr.ok ? (((await lr.json()) as any)?.data?.contact_info ?? {}) : {}
+        const groups: string[] = Array.isArray(ci.whatsapp_groups) ? ci.whatsapp_groups : []
+        const g = String(args["whatsapp-group"])
+        if (!groups.includes(g)) groups.push(g)
+        payload.contact_info = { ...ci, ...(payload.contact_info as Record<string, unknown> ?? {}), whatsapp_groups: groups }
+      } catch {
+        payload.contact_info = { ...(payload.contact_info as Record<string, unknown> ?? {}), whatsapp_groups: [String(args["whatsapp-group"])] }
       }
     }
     // --add-email appends to contact_info.emails (fetches existing to avoid overwrite)
@@ -1172,8 +1188,8 @@ const LeadsUpdateCommand = cmd({
         const emails: string[] = Array.isArray(ci.emails) ? ci.emails : []
         const newEmail = String(args["add-email"]).trim().toLowerCase()
         if (!emails.map((e: string) => e.toLowerCase()).includes(newEmail)) emails.push(newEmail)
-        // Merge with any existing contact_info payload (e.g. from --chat-id)
-        payload.contact_info = { ...(payload.contact_info as Record<string, unknown> ?? {}), ...ci, emails }
+        // Merge with any existing contact_info payload (e.g. from --chat-id / --whatsapp-group)
+        payload.contact_info = { ...ci, ...(payload.contact_info as Record<string, unknown> ?? {}), emails }
       } catch {
         payload.contact_info = { ...(payload.contact_info as Record<string, unknown> ?? {}), emails: [String(args["add-email"]).trim()] }
       }
@@ -1213,6 +1229,124 @@ const LeadsUpdateCommand = cmd({
       prompts.outro(dim(`iris leads get ${leadId}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LeadsLinkWhatsappCommand = cmd({
+  command: "link-whatsapp <id>",
+  aliases: ["link-wa"],
+  describe: "link WhatsApp group chat(s) to a lead so pulse/sync-comms ingest them (auto-suggests by member phone)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID, name, or email", type: "string", demandOption: true })
+      .option("all", { describe: "browse all recent WhatsApp groups, not just phone-matched suggestions", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+
+    const token = await requireAuth()
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
+
+    const resolved = await resolveLeadId(String(args.id))
+    if (!resolved) {
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+    const { leadId } = resolved
+
+    prompts.intro(`◈  Link WhatsApp group — Lead #${leadId}`)
+
+    const wa = require("../lib/whatsapp")
+    if (!wa.isAvailable()) {
+      prompts.log.error(wa.diagnoseAccess())
+      prompts.log.info("System Settings → Privacy & Security → Full Disk Access → enable your terminal, then restart it.")
+      prompts.outro("Done")
+      return
+    }
+
+    // Fetch lead for phone + existing linked groups
+    const spinner = prompts.spinner()
+    spinner.start("Scanning WhatsApp groups…")
+    let lead: any = {}
+    try {
+      const lr = await irisFetch(`/api/v1/leads/${leadId}`)
+      lead = lr.ok ? (((await lr.json()) as any)?.data ?? {}) : {}
+    } catch {
+      /* fall through with empty lead */
+    }
+    const existing: string[] = Array.isArray(lead?.contact_info?.whatsapp_groups) ? lead.contact_info.whatsapp_groups : []
+
+    // Auto-suggest groups whose members include the lead's phone, unless --all
+    const candidates: any[] = args.all ? wa.listGroups(120, 40) : wa.discoverGroupCandidatesForLead(lead, 120)
+    const pool = candidates.filter((g: any) => !existing.some((n) => n.toLowerCase().trim() === g.name.toLowerCase().trim()))
+    spinner.stop(`${pool.length} group(s) ${args.all ? "available" : "matched by phone"}`)
+
+    if (existing.length > 0) {
+      prompts.log.info(`Already linked: ${existing.map((n) => bold(n)).join(", ")}`)
+    }
+    if (pool.length === 0) {
+      prompts.log.warn(
+        args.all
+          ? "No recent WhatsApp groups found."
+          : "No groups matched this lead's phone. Re-run with --all to browse every group, or `iris leads update <id> --whatsapp-group \"<name>\"` to link by name.",
+      )
+      prompts.outro("Done")
+      return
+    }
+
+    // Confirm gate — nothing is ingested until the user explicitly selects + links.
+    if (isNonInteractive()) {
+      prompts.log.info("Candidate groups (run interactively to link, or use --whatsapp-group):")
+      for (const g of pool) prompts.log.info(`  ${bold(g.name)} — ${g.member_count} members, ${g.message_count} msgs`)
+      prompts.outro("Done")
+      return
+    }
+
+    const choice = await prompts.multiselect({
+      message: "Link which WhatsApp group(s) to this lead?",
+      options: pool.map((g: any) => ({
+        value: g.name,
+        label: `${g.name}  (${g.member_count} members, ${g.message_count} msgs)`,
+      })),
+      required: false,
+    })
+    if (prompts.isCancel(choice)) {
+      prompts.cancel("Cancelled")
+      return
+    }
+    const selected = (choice as string[]) ?? []
+    if (selected.length === 0) {
+      prompts.log.warn("Nothing selected.")
+      prompts.outro("Done")
+      return
+    }
+
+    const merged = [...existing]
+    for (const n of selected) if (!merged.includes(n)) merged.push(n)
+
+    const saveSpinner = prompts.spinner()
+    saveSpinner.start("Linking…")
+    try {
+      const res = await irisFetch(`/api/v1/leads/${leadId}`, {
+        method: "PUT",
+        body: JSON.stringify({ contact_info: { ...(lead?.contact_info ?? {}), whatsapp_groups: merged } }),
+      })
+      const ok = await handleApiError(res, "Link WhatsApp group")
+      if (!ok) {
+        saveSpinner.stop("Failed", 1)
+        prompts.outro("Done")
+        return
+      }
+      saveSpinner.stop(`${success("✓")} Linked: ${selected.map((n) => bold(n)).join(", ")}`)
+      prompts.outro(dim(`iris leads pulse ${leadId}  ·  iris atlas:comms ingest ${leadId} --channel whatsapp`))
+    } catch (err) {
+      saveSpinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1867,6 +2001,25 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
       }
     })(),
 
+    // WhatsApp — verify local macOS ChatStorage.sqlite access (groups read from here)
+    (async (): Promise<ChannelHealth> => {
+      try {
+        const { isAvailable, diagnoseAccess } = await import("../lib/whatsapp")
+        if (isAvailable()) {
+          return { name: "WhatsApp", ok: true, status: "verified" }
+        }
+        return {
+          name: "WhatsApp",
+          ok: false,
+          status: "no_permission",
+          error: diagnoseAccess(),
+          hint: "System Settings → Privacy → Full Disk Access → enable terminal",
+        }
+      } catch {
+        return { name: "WhatsApp", ok: false, status: "error", error: "check failed", hint: "check WhatsApp desktop app" }
+      }
+    })(),
+
     // Apple Mail — verify via bridge
     (async (): Promise<ChannelHealth> => {
       try {
@@ -2053,9 +2206,27 @@ const LeadsSyncCommsCommand = cmd({
           }
         }
 
+        // ── WhatsApp GROUP chats (local macOS DB — explicitly linked groups in contact_info.whatsapp_groups) ──
+        // Items are already normalized (correct external IDs + group metadata); posted directly, server-deduped.
+        let leadIngested = 0
+        try {
+          const wa = require("../lib/whatsapp")
+          if (wa.isAvailable()) {
+            const gItems = wa.readGroupsForLead(lead, days, msgLimit)
+            if (gItems.length > 0) {
+              const ingestRes = await irisFetch("/api/v1/atlas/comms/ingest", {
+                method: "POST",
+                body: JSON.stringify({ lead_id: leadId, channel: "whatsapp", items: gItems }),
+              })
+              if (ingestRes.ok) leadIngested += gItems.length
+            }
+          }
+        } catch {
+          /* non-fatal — no Full Disk Access / off macOS */
+        }
+
         // ── Map channel results → atlas/comms/ingest payload (same shape as pulse) ──
         const channelMap: Record<string, string> = { Gmail: "gmail", iMessage: "imessage", "Apple Mail": "apple_mail", WhatsApp: "whatsapp" }
-        let leadIngested = 0
         for (const ch of channels) {
           const channelKey = channelMap[ch.name]
           if (!channelKey || ch.messages.length === 0) continue
@@ -2323,6 +2494,15 @@ const LeadsPulseCommand = cmd({
                       external_message_id: `whatsapp_${m.id}`,
                     })),
                   }),
+                }).catch(() => {})
+              }
+              // WhatsApp GROUP ingest — explicitly linked groups (contact_info.whatsapp_groups).
+              // Authoritative group-ingest path: items carry correct external IDs + metadata; server dedups.
+              const waGroupItems = wa.readGroupsForLead(lead, 30, 50)
+              if (waGroupItems.length > 0) {
+                irisFetch("/api/v1/atlas/comms/ingest", {
+                  method: "POST",
+                  body: JSON.stringify({ lead_id: leadId, channel: "whatsapp", items: waGroupItems }),
                 }).catch(() => {})
               }
             }
@@ -3187,6 +3367,22 @@ const LeadsPulseCommand = cmd({
           }
         }
 
+        // WhatsApp GROUP chats — explicitly linked groups (contact_info.whatsapp_groups), local DB.
+        // Render-only here; ingest is owned by the pre-ingest block above (correct external IDs).
+        try {
+          const wa = require("../lib/whatsapp")
+          if (wa.isAvailable()) {
+            const waItems = wa.readGroupsForLead(lead, days, msgLimit)
+            const byGroup = new Map<string, any[]>()
+            for (const it of waItems) {
+              const arr = byGroup.get(it.metadata.group_name) ?? []
+              arr.push({ text: it.body, ts: it.sent_at, from_me: it.direction === "outbound", push_name: it.metadata.push_name })
+              byGroup.set(it.metadata.group_name, arr)
+            }
+            for (const [gName, msgs] of byGroup) channels.push({ name: `WhatsApp Group (${gName})`, messages: msgs })
+          }
+        } catch {}
+
         // Apple Mail (via local bridge daemon) — scan ALL known emails
         for (const scanEmail of allEmails.length > 0 ? allEmails : (email ? [email] : [])) {
           fetches.push(
@@ -3352,12 +3548,36 @@ const LeadsPulseCommand = cmd({
             const tag = msg.status === "upcoming" ? success("upcoming") : dim("past")
             const dateStr = msg.date ? `${formatDate(msg.date)} ${formatTime(msg.date)}` : "(no date)"
             console.log(`    ${dim(dateStr)}  ${msg.summary.slice(0, 80)}  [${tag}]`)
+          } else if (ch.name.startsWith("WhatsApp Group")) {
+            const dir = msg.from_me ? "→" : "←"
+            const who = msg.push_name ? dim(`${msg.push_name}: `) : ""
+            console.log(`    ${dim(msg.ts ?? "")}  ${dir}  ${who}${(msg.text ?? "").slice(0, 120)}`)
           }
         }
         if (count > displayLimit) {
           console.log(`    ${dim(`…and ${count - displayLimit} more`)}`)
         }
       }
+
+      // Confirm-gate hint: no WhatsApp groups linked, but the lead's phone is a member of some.
+      // Suggestions only — nothing is ingested until the user links via `iris leads link-whatsapp`.
+      try {
+        const linkedGroups = Array.isArray(lead?.contact_info?.whatsapp_groups) ? lead.contact_info.whatsapp_groups : []
+        if (linkedGroups.length === 0 && phone) {
+          const wa = require("../lib/whatsapp")
+          if (wa.isAvailable()) {
+            const cands = wa.discoverGroupCandidatesForLead({ phone, contact_info: lead?.contact_info }, days)
+            if (cands.length > 0) {
+              console.log()
+              console.log(`  ${bold("WhatsApp Groups")}  ${dim(`(${cands.length} may match this lead)`)}`)
+              for (const g of cands.slice(0, 5)) {
+                console.log(`    ${dim("○")} ${g.name}  ${dim(`(${g.member_count} members, ${g.message_count} msgs)`)}`)
+              }
+              console.log(`    ${dim(`Link to ingest: iris leads link-whatsapp ${leadId}`)}`)
+            }
+          }
+        }
+      } catch {}
 
       // Extract and surface shared links from all channels (#55733)
       const urlRegex = /https?:\/\/[^\s<>"')\]]+/g
@@ -3369,7 +3589,10 @@ const LeadsPulseCommand = cmd({
           if (urls) {
             for (const url of urls) {
               if (!sharedLinks.some((l) => l.url === url)) {
-                const from = ch.name === "iMessage" ? (msg.from_me ? "You" : "Them") : (msg.from ?? msg.sender ?? "")
+                const from =
+                  ch.name === "iMessage" || ch.name.startsWith("WhatsApp Group")
+                    ? (msg.from_me ? "You" : (msg.push_name ?? "Them"))
+                    : (msg.from ?? msg.sender ?? "")
                 sharedLinks.push({ url, channel: ch.name, from })
               }
             }
@@ -3397,7 +3620,7 @@ const LeadsPulseCommand = cmd({
             const text = msg.text ?? msg.subject ?? msg.body ?? msg.summary ?? ""
             const date = msg.ts ?? msg.date ?? ""
             const isOutbound =
-              ch.name === "iMessage"
+              ch.name === "iMessage" || ch.name.startsWith("WhatsApp Group")
                 ? msg.from_me
                 : ch.name === "Gmail"
                   ? !(msg.from ?? "").toLowerCase().includes(email.toLowerCase())
@@ -9671,6 +9894,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsSearchCommand)
       .command(LeadsCreateCommand)
       .command(LeadsUpdateCommand)
+      .command(LeadsLinkWhatsappCommand)
       .command(LeadsPullCommand)
       .command(LeadsPushCommand)
       .command(LeadsDiffCommand)
