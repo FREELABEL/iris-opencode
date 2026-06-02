@@ -29,7 +29,10 @@ async function pollWorkflow(workflowId: string, timeoutSecs = 300): Promise<Work
     }
     const res = await irisFetch(`/api/workflows/${workflowId}`, {}, IRIS_API)
     if (!res.ok) throw new Error(`HTTP ${res.status} polling workflow`)
-    const run = (await res.json()) as WorkflowRun
+    // The status endpoint wraps the run in { data: {...} }. Unwrap it, else
+    // status/summary read as undefined → poll times out + "(no response)".
+    const body = (await res.json()) as { data?: WorkflowRun }
+    const run = (body.data ?? body) as WorkflowRun
 
     if (run.status === "completed") return run
     if (run.status === "failed") {

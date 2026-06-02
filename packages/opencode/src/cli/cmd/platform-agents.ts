@@ -394,7 +394,10 @@ const AgentsChatCommand = cmd({
         if ((Date.now() - start) / 1000 > maxSecs) break
         const pollRes = await irisFetch(`/api/workflows/${workflow_id}`, {}, IRIS_API)
         if (pollRes.ok) {
-          run = (await pollRes.json()) as typeof run
+          // The status endpoint wraps the run in { data: {...} }. Unwrap it, else
+          // status/summary read as undefined → poll times out + "(no response)".
+          const body = (await pollRes.json()) as { data?: typeof run }
+          run = (body.data ?? body) as typeof run
           if (run.status === "completed" || run.status === "failed") break
         }
         await Bun.sleep(800)
