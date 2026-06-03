@@ -260,7 +260,9 @@ const BoardsUpdateCommand = cmd({
       .option("title", { describe: "new title", type: "string" })
       .option("description", { describe: "new description", type: "string" })
       .option("status", { describe: "new status", type: "string" })
-      .option("type", { describe: "new type", type: "string" }),
+      .option("type", { describe: "new type", type: "string" })
+      .option("image", { describe: "image URL (repeatable) — sets the item's photo (attachments + content.images)", type: "string", array: true })
+      .example("$0 boards update 85646 --image https://cdn.../car.jpg", "set a vehicle's photo (pairs with `iris cloud:upload`)"),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Item #${args.id}`)
@@ -274,8 +276,16 @@ const BoardsUpdateCommand = cmd({
     if (args.status) payload.status = args.status
     if (args.type) payload.type = args.type
 
+    const images = ((args.image as string[] | undefined) ?? []).filter((u) => typeof u === "string" && u.trim().length > 0)
+    if (images.length > 0) {
+      // Store on both fields: `attachments` is the canonical home; `content.images`
+      // is what VehicleGrid reads today via fieldMapping. Belt and suspenders.
+      payload.attachments = images
+      payload.content = { images }
+    }
+
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --description, --status, or --type")
+      prompts.log.warn("Nothing to update. Use --title, --description, --status, --type, or --image")
       prompts.outro("Done")
       return
     }
@@ -414,6 +424,7 @@ const BoardsPushCommand = cmd({
         content: item.content,
         type: item.type,
         status: item.status,
+        attachments: item.attachments,
       }
       for (const k of Object.keys(payload)) {
         if (payload[k] === undefined) delete payload[k]
