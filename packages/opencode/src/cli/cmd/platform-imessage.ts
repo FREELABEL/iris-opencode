@@ -286,18 +286,66 @@ const ImessageChatsCommand = cmd({
 const ImessageSendCommand = cmd({
   command: "send <handle> <message>",
   aliases: ["text", "msg"],
-  describe: "send an iMessage to a phone number or contact",
+  describe: "send an iMessage to a phone number, contact, or group chat (--group)",
   builder: (yargs) =>
     yargs
-      .positional("handle", { type: "string", demandOption: true, describe: "phone number, lead ID, or contact name" })
-      .positional("message", { type: "string", demandOption: true, describe: "message text to send" }),
+      .positional("handle", { type: "string", demandOption: true, describe: "phone number, lead ID, or contact name (or a group name/GUID with --group)" })
+      .positional("message", { type: "string", demandOption: true, describe: "message text to send" })
+      .option("group", { alias: "g", type: "boolean", default: false, describe: "treat <handle> as a group chat (by name or GUID) and send to the whole group" }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  iMessage Send → ${args.handle}`)
+    prompts.intro(`◈  iMessage Send → ${args.group ? `group "${args.handle}"` : args.handle}`)
 
     if (process.platform !== "darwin") {
       prompts.log.error("iMessage is only available on macOS")
       prompts.outro("Done")
+      return
+    }
+
+    // Clean up stray backslash escapes from upstream (MCP/shell).
+    const cleanMessage = args.message.replace(/\\([^\\])/g, "$1")
+
+    // Build the AppleScript "send … to <target>" body. The message text is read
+    // from a temp file (read POSIX file) rather than inlined, so multi-line bodies,
+    // quotes, and shell metacharacters all survive intact.
+    const sendViaTempFile = (targetClause: string, label: string) => {
+      const os = require("os"), fs = require("fs"), path = require("path")
+      const tmp = path.join(os.tmpdir(), `iris-imsg-${process.pid}-${Date.now()}.txt`)
+      fs.writeFileSync(tmp, cleanMessage, "utf-8")
+      const tmpEsc = tmp.replace(/"/g, '\\"')
+      const script = `
+tell application "Messages"
+    set theText to (read POSIX file "${tmpEsc}" as «class utf8»)
+    ${targetClause}
+    send theText to theTarget
+end tell`
+      const sp = prompts.spinner()
+      sp.start(`Sending to ${label}…`)
+      try {
+        execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, { encoding: "utf-8", timeout: 15000 })
+        sp.stop(success(`Sent to ${label}`))
+        console.log(`  ${dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)}`)
+        prompts.outro("Done")
+      } catch (err: any) {
+        sp.stop("Failed", 1)
+        prompts.log.error(`Send failed: ${err.message?.slice(0, 200)}`)
+        prompts.outro("Done")
+      } finally {
+        try { fs.unlinkSync(tmp) } catch {}
+      }
+    }
+
+    // ── Group send path ──────────────────────────────────────────────────────
+    if (args.group) {
+      const g = resolveGroupChat(args.handle.trim())
+      if (!g) {
+        prompts.log.error(`No group chat found matching "${args.handle}". List groups with: iris imessage groups`)
+        prompts.outro("Done")
+        return
+      }
+      prompts.log.info(`Resolved group → ${g.display_name || g.guid} (${g.participants} members)`)
+      const guidEsc = g.guid.replace(/"/g, '\\"')
+      sendViaTempFile(`set theTarget to chat id "${guidEsc}"`, g.display_name || g.guid)
       return
     }
 
@@ -358,35 +406,11 @@ const ImessageSendCommand = cmd({
     if (finalDigits.length === 10) handle = `+1${finalDigits}`
     else if (finalDigits.length === 11 && finalDigits.startsWith("1")) handle = `+${finalDigits}`
 
-    // Clean up stray backslash escapes from upstream (MCP/shell) then escape for AppleScript
-    const cleanMessage = args.message.replace(/\\([^\\])/g, "$1")
-    const escapedMessage = cleanMessage
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"')
-
-    const script = `
-tell application "Messages"
-    set targetService to 1st account whose service type = iMessage
-    set theBuddy to participant "${handle}" of targetService
-    send "${escapedMessage}" to theBuddy
-end tell`
-
-    const sp = prompts.spinner()
-    sp.start(`Sending to ${handle}…`)
-
-    try {
-      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
-        encoding: "utf-8",
-        timeout: 15000,
-      })
-      sp.stop(success(`Sent to ${handle}`))
-      console.log(`  ${dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)}`)
-      prompts.outro("Done")
-    } catch (err: any) {
-      sp.stop("Failed", 1)
-      prompts.log.error(`Send failed: ${err.message?.slice(0, 200)}`)
-      prompts.outro("Done")
-    }
+    const handleEsc = handle.replace(/"/g, '\\"')
+    sendViaTempFile(
+      `set targetService to 1st account whose service type = iMessage\n    set theTarget to participant "${handleEsc}" of targetService`,
+      handle,
+    )
   },
 })
 
@@ -456,6 +480,7 @@ const ImessageMentionsCommand = cmd({
       .option("sender", { type: "string", describe: "filter by sender phone or name" })
       .option("lead", { type: "number", describe: "filter by lead ID" })
       .option("limit", { type: "number", default: 50, describe: "max mentions" })
+      .option("live", { type: "boolean", default: true, describe: "also scan chat.db live to catch mentions the bridge missed (use --no-live for log only)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro("◈  @heyiris Mentions") }
@@ -463,36 +488,111 @@ const ImessageMentionsCommand = cmd({
     const mentionsDir = `${require("os").homedir()}/.iris/mentions`
     const { existsSync, readdirSync, readFileSync } = require("fs")
 
-    if (!existsSync(mentionsDir)) {
-      prompts.log.error(`Mentions directory not found: ${mentionsDir}`)
-      prompts.outro("Done")
-      return
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    // Strip the wakeword + lowercase/trim so a live-scan hit ("@heyiris remove …")
+    // dedupes against an older log entry whose wakeword was stripped ("remove …").
+    const WAKEWORD = /(?:^|\s)@(?:heyiris|iris)\b/gi
+    const normText = (t: string) => (t || "").replace(WAKEWORD, "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 160)
+    const last10 = (s: string) => {
+      const d = (s || "").replace(/\D/g, "")
+      return d.length >= 10 ? d.slice(-10) : (d || s || "")
     }
+    // Key on sender + normalized text only (NOT time): the bridge historically
+    // stamped log entries with processing time, so the same message can appear on a
+    // different day than its true send time — time-based dedup would miss those.
+    const dedupeKey = (m: any) => `${last10(m.sender)}|${normText(m.text)}`
 
-    // Read all JSONL files within date range
-    const cutoff = new Date(Date.now() - (args.days as number) * 86400 * 1000)
-    const files = readdirSync(mentionsDir)
-      .filter((f: string) => f.endsWith(".jsonl"))
-      .sort()
-      .filter((f: string) => {
-        const dateStr = f.replace(".jsonl", "")
-        return new Date(dateStr) >= cutoff
-      })
-
-    if (!files.length) {
-      prompts.log.info(`No mention logs in the last ${args.days} days`)
-      prompts.outro("Done")
-      return
-    }
-
-    // Parse all mentions
+    // ── 1. Read the JSONL mention log (what the bridge captured) ───────────────
+    const cutoffMs = Date.now() - (args.days as number) * 86400 * 1000
     let mentions: any[] = []
-    for (const file of files) {
-      const lines = readFileSync(`${mentionsDir}/${file}`, "utf-8").split("\n").filter(Boolean)
-      for (const line of lines) {
+    if (existsSync(mentionsDir)) {
+      const files = readdirSync(mentionsDir)
+        .filter((f: string) => f.endsWith(".jsonl"))
+        .sort()
+      for (const file of files) {
+        const lines = readFileSync(`${mentionsDir}/${file}`, "utf-8").split("\n").filter(Boolean)
+        for (const line of lines) {
+          try { mentions.push({ source: "log", ...JSON.parse(line) }) } catch {}
+        }
+      }
+      // Filter by date here (the log filename is no longer a reliable date bucket
+      // for historical entries, so filter on the entry ts).
+      mentions = mentions.filter((m: any) => {
+        const t = new Date(m.ts).getTime()
+        return isNaN(t) ? true : t >= cutoffMs
+      })
+    }
+
+    // ── 2. Live chat.db scan (ground truth — catches anything the bridge dropped) ─
+    if (args.live && isAvailable()) {
+      try {
+        const where = `(lower(m.text) LIKE '%heyiris%' OR lower(m.text) LIKE '%hey iris%') AND m.is_from_me = 0`
+        const rows = queryMessagesWithBody(where, (args.days as number) * 86400, (args.limit as number) * 4)
+        for (const r of rows) {
+          // queryMessagesWithBody returns localtime "YYYY-MM-DD HH:MM:SS"; parse as local.
+          const sent = new Date(String(r.date).replace(" ", "T"))
+          mentions.push({
+            source: "live",
+            ts: isNaN(sent.getTime()) ? r.date : sent.toISOString(),
+            sender: r.chat_identifier || "",
+            lead_id: null,
+            lead_name: null,
+            chat: r.chat_identifier || null,
+            is_group: undefined,
+            text: r.text,
+          })
+        }
+      } catch (err: any) {
+        if (!args.json) prompts.log.warn(`Live scan skipped: ${err.message?.slice(0, 120)}`)
+      }
+    }
+
+    // ── 3. Merge + dedupe (prefer live ts as the true send time, keep lead info) ─
+    const merged = new Map<string, any>()
+    for (const m of mentions) {
+      const key = dedupeKey(m)
+      const existing = merged.get(key)
+      if (!existing) { merged.set(key, { ...m }); continue }
+      // Same mention seen in both log and live → live ts is the real send time;
+      // log entry carries lead_id/lead_name/is_group. Combine the best of each.
+      const fromLive = m.source === "live" ? m : existing
+      const fromLog = m.source === "live" ? existing : m
+      merged.set(key, {
+        source: "both",
+        ts: fromLive.ts || fromLog.ts,
+        sender: fromLog.sender || fromLive.sender,
+        lead_id: fromLog.lead_id ?? fromLive.lead_id ?? null,
+        lead_name: fromLog.lead_name ?? fromLive.lead_name ?? null,
+        chat: fromLog.chat ?? fromLive.chat ?? null,
+        is_group: fromLog.is_group ?? fromLive.is_group,
+        text: fromLog.text?.length > fromLive.text?.length ? fromLog.text : fromLive.text,
+      })
+    }
+    mentions = [...merged.values()]
+
+    // ── 4. Resolve leads/contact names for live-only senders (none from the log) ─
+    const needLead = [...new Set(mentions.filter((m: any) => !m.lead_id && m.sender).map((m: any) => m.sender))]
+    if (needLead.length) {
+      const { irisFetch: _fetch } = await import("./iris-api")
+      for (const sender of needLead) {
+        let leadId: number | null = null
+        let leadName: string | null = null
         try {
-          mentions.push(JSON.parse(line))
+          const res = await _fetch(`/api/v1/leads?search=${encodeURIComponent(last10(sender))}&per_page=5`)
+          if (res.ok) {
+            const data = (await res.json()) as any
+            const leads = data?.data?.data ?? data?.data ?? []
+            const match = Array.isArray(leads)
+              ? leads.find((l: any) => l.phone && last10(l.phone) === last10(sender))
+              : null
+            if (match) { leadId = match.id; leadName = match.full_name || match.name || match.company || match.email || null }
+          }
         } catch {}
+        // Fall back to the macOS contact name for display when there's no lead.
+        if (!leadName) { try { leadName = await resolveContactName(last10(sender)) } catch {} }
+        for (const m of mentions) {
+          if (m.sender === sender) { if (leadId) m.lead_id = leadId; if (leadName && !m.lead_name) m.lead_name = leadName }
+        }
       }
     }
 
@@ -533,6 +633,12 @@ const ImessageMentionsCommand = cmd({
     for (const [sender, count] of bySender) {
       console.log(`    ${dim(`${count}x`)} ${sender}`)
     }
+    // Surface how many were recovered live (i.e. the bridge listener missed them).
+    const liveOnly = mentions.filter((m: any) => m.source === "live").length
+    if (liveOnly) {
+      console.log()
+      console.log(`  ${dim(`⚠ ${liveOnly} recovered from live chat.db (not in the bridge log — listener may have been down)`)}`)
+    }
     console.log()
 
     printDivider()
@@ -541,7 +647,8 @@ const ImessageMentionsCommand = cmd({
       const leadTag = m.lead_id ? dim(` #${m.lead_id}`) : ""
       const date = dim(new Date(m.ts).toLocaleString())
       const groupTag = m.is_group ? dim(" [group]") : ""
-      console.log(`  ${date}  ${sender}${leadTag}${groupTag}`)
+      const liveTag = m.source === "live" ? dim(" [live]") : ""
+      console.log(`  ${date}  ${sender}${leadTag}${groupTag}${liveTag}`)
       console.log(`    ${m.text}`)
       console.log()
     }
