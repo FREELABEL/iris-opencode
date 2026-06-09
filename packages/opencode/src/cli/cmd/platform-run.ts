@@ -678,7 +678,12 @@ const ConnectCommand = cmd({
     const labelSuffix = args.name ? ` ${dim(`(${args.name})`)}` : ""
     prompts.intro(`◈  Connect: ${args.type}${labelSuffix}`)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
-    const type = String(args.type)
+    // Normalize unhyphenated slugs (googlecalendar → google-calendar) up front —
+    // otherwise the raw type reaches the oauth-url endpoint and fails AFTER the
+    // user has already confirmed the overwrite prompt.
+    const rawType = String(args.type).toLowerCase()
+    const type = SLUG_ALIASES[rawType] ?? rawType
+    if (type !== rawType) prompts.log.info(`Using integration type ${highlight(type)}`)
 
     // Multi-account guard: warn if a connection of this type already exists
     // and no --name was supplied. Without a label the OAuth callback will
@@ -691,7 +696,7 @@ const ConnectCommand = cmd({
           if (res.ok) {
             const data = (await res.json()) as any
             const existing = (data?.connections ?? data?.data ?? []).filter(
-              (i: any) => String(i.type ?? "").toLowerCase() === (SLUG_ALIASES[type] ?? type),
+              (i: any) => String(i.type ?? "").toLowerCase() === type,
             )
             if (existing.length > 0) {
               const accounts = existing.map((i: any) => i.account_email ?? i.name ?? `#${i.id}`).join(", ")
