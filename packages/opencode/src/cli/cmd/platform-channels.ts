@@ -213,7 +213,73 @@ const ChannelsConnectCommand = cmd({
       return
     }
 
-    // OAuth flow (Discord, Slack, WhatsApp, Facebook)
+    // Slack agent-channel: "Add to Slack" OAuth bound to a Bloq (PROJECT MODE).
+    // The workspace's bot token is captured by our callback — no token pasting.
+    if (type === "slack") {
+      const bloqId = args["bloq-id"]
+      if (!bloqId) {
+        console.log()
+        prompts.log.error("Slack needs a Bloq to scope the agent to.")
+        console.log(`  ${dim("Example:")} ${highlight("iris channels connect slack --bloq-id 368")}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const sp = prompts.spinner()
+      sp.start("Preparing Slack install link…")
+      try {
+        const res = await irisFetch(
+          `/api/v6/bloqs/${bloqId}/channels/slack`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              agent_id: args["agent-id"] ?? null,
+              memory_scope: "per_channel",
+            }),
+          },
+          PLATFORM_URLS.irisApi,
+        )
+
+        const data = (await res.json().catch(() => ({}))) as any
+
+        if (!res.ok) {
+          sp.stop("Failed", 1)
+          // 422 carries a human message: app not configured, or bloq has no agent
+          prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+          if (String(data?.error ?? "").includes("SLACK_CLIENT_ID")) {
+            console.log(`  ${dim("The IRIS Slack app isn't set up yet. See docs/slack-channel-setup.md (Part 1).")}`)
+          }
+          prompts.outro("Done")
+          return
+        }
+
+        const url = data?.install_url as string
+        sp.stop("Ready")
+        console.log()
+        if (data?.agent) {
+          console.log(`  ${dim("Agent:")} ${bold(data.agent.name)} ${dim(`(#${data.agent.id})`)}  ${dim("Bloq:")} ${bloqId}`)
+          console.log()
+        }
+        if (args["print-url"]) {
+          console.log(`  ${highlight(url)}`)
+        } else {
+          console.log(`  ${dim("Opening Slack authorization…")}`)
+          openBrowser(url)
+          console.log(`  ${dim("If it didn't open:")} ${highlight(url)}`)
+        }
+        console.log()
+        prompts.log.info("Approve in the Slack workspace, then invite the bot to a channel and mention it.")
+        prompts.log.info(`Confirm with ${highlight("iris channels list")}.`)
+        console.log(`  ${dim("Link expires in 30 minutes. Hand it to the client to install in their own workspace.")}`)
+      } catch (e) {
+        sp.stop("Failed", 1)
+        prompts.log.error(e instanceof Error ? e.message : String(e))
+      }
+      prompts.outro("Done")
+      return
+    }
+
+    // OAuth flow (Discord, WhatsApp, Facebook) — integration/tool linking
     const sp = prompts.spinner()
     sp.start("Generating OAuth URL…")
 
