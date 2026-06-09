@@ -1488,8 +1488,15 @@ const CurateCommand = cmd({
       // Step 3: Ask AI for curation suggestions
       spinner.message("AI analyzing…")
 
-      const prompt = `You are the Discover Page Curator for FreeLABEL, a content platform for creators, brands, and businesses.
+      // Pull the distilled taste doc (from `iris discover review`) so curation
+      // reflects accumulated editorial taste — the same signal n8n consumes.
+      const tasteProfile = await readConfigObject(TASTE_KEY) as any
+      const tasteSection = tasteProfile?.doc
+        ? `\nEDITORIAL TASTE (distilled from staff 👍/👎 — weight this heavily):\n${tasteProfile.doc}\n`
+        : ""
 
+      const prompt = `You are the Discover Page Curator for FreeLABEL, a content platform for creators, brands, and businesses.
+${tasteSection}
 CURRENT PAGE STATE:
 ${JSON.stringify(state, null, 2)}
 
@@ -1635,17 +1642,517 @@ Return ONLY the JSON object, no markdown or explanation.`
 })
 
 // ============================================================================
+// Taste engine — curation feedback loop
+// (config keys: discover.feedback_log, discover.taste_profile)
+// In-context learning: staff 👍/👎 → distilled "taste doc" → injected into the
+// n8n "Analyze Discover Content" curator prompt. No model training, no new tables.
+// ============================================================================
+
+const FEEDBACK_KEY = "discover.feedback_log"
+const TASTE_KEY = "discover.taste_profile"
+const FEEDBACK_CAP = 500
+
+const REJECT_REASONS = [
+  { value: "off-topic", label: "Off-topic — not what Discover is about" },
+  { value: "low-quality", label: "Low quality — weak / clickbait / thin" },
+  { value: "already-covered", label: "Already covered — duplicate angle" },
+  { value: "boring", label: "Boring — no hook, won't keep people going" },
+  { value: "other", label: "Other (type a reason)" },
+]
+
+type FeedbackEntry = {
+  verdict: "approve" | "reject"
+  ref: string
+  title: string
+  channel: string
+  reason: string
+  ts: number
+}
+
+function normalizeReviewItem(v: any): { ref: string; title: string; channel: string; url: string } {
+  const mediaId = v?.media_id ?? v?.mediaId ?? v?.youtube_id ?? v?.youtubeId ?? ""
+  return {
+    ref: String(v?.id ?? mediaId ?? v?.slug ?? ""),
+    title: String(v?.title || v?.name || "(untitled)"),
+    channel: String(v?.profile_name || v?.channel || v?.twitter || v?.instagram || ""),
+    url: String(v?.url || v?.link || (mediaId ? `https://www.youtube.com/watch?v=${mediaId}` : "")),
+  }
+}
+
+async function readFeedback(): Promise<FeedbackEntry[]> {
+  const list = await readConfigList(FEEDBACK_KEY)
+  return Array.isArray(list) ? (list as FeedbackEntry[]) : []
+}
+
+async function recordFeedback(entry: FeedbackEntry): Promise<Response> {
+  const list = await readFeedback()
+  list.push(entry)
+  return writeConfigList(FEEDBACK_KEY, list.slice(-FEEDBACK_CAP))
+}
+
+async function fetchReviewQueue(limit: number): Promise<any[]> {
+  const res = await irisFetch(`/api/v1/discover/recent-videos?limit=${limit}`)
+  if (!res.ok) return []
+  const data = (await res.json()) as any
+  const inner = data?.data
+  if (Array.isArray(inner)) return inner
+  if (Array.isArray(inner?.data)) return inner.data // LengthAwarePaginator
+  return []
+}
+
+// Distill accumulated feedback into a short taste doc and persist it.
+// Returns null when there's no feedback yet.
+async function distillTaste(): Promise<{ doc: string; counts: { approve: number; reject: number } } | null> {
+  const feedback = await readFeedback()
+  if (feedback.length === 0) return null
+
+  const approvals = feedback.filter((f) => f.verdict === "approve")
+  const rejections = feedback.filter((f) => f.verdict === "reject")
+  const fmt = (f: FeedbackEntry) =>
+    `- "${f.title}"${f.channel ? ` (${f.channel})` : ""}${f.reason ? ` — ${f.reason}` : ""}`
+
+  const prompt = `You are the editorial taste director for "The Discover Page" (@thediscoverpage_), a curated content feed. Below is staff feedback on individual videos: which were APPROVED (good fit) and which were REJECTED (and why).
+
+APPROVED — we love content like this:
+${approvals.slice(-60).map(fmt).join("\n") || "(none yet)"}
+
+REJECTED — do NOT post content like this:
+${rejections.slice(-60).map(fmt).join("\n") || "(none yet)"}
+
+Write a short, sharp "taste doc" that a curation AI will read before scoring new videos. Format EXACTLY as:
+
+LOVE:
+- <durable rule about what to favor>
+(3-6 bullets)
+
+SKIP:
+- <durable rule about what to reject>
+(3-6 bullets)
+
+Derive durable PATTERNS (topics, formats, tone, channels) — not one-off restatements. Be specific and opinionated. Output ONLY the taste doc, no preamble.`
+
+  const aiRes = await irisFetch("/api/v6/openai/chat/completions", {
+    method: "POST",
+    body: JSON.stringify({
+      model: "iris/gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.4,
+      max_tokens: 600,
+    }),
+  }, IRIS_API)
+  if (!aiRes.ok) throw new Error(`Distill failed: HTTP ${aiRes.status}`)
+
+  const aiData = (await aiRes.json()) as any
+  const doc = String(aiData?.choices?.[0]?.message?.content ?? "").trim()
+  if (!doc) throw new Error("Distill returned an empty taste doc")
+
+  const counts = { approve: approvals.length, reject: rejections.length }
+  await writeConfigObject(TASTE_KEY, {
+    doc,
+    counts,
+    updated_at: new Date().toISOString(),
+    recent_love: approvals.slice(-8).map((f) => ({ title: f.title, channel: f.channel })),
+    recent_skip: rejections.slice(-8).map((f) => ({ title: f.title, channel: f.channel, reason: f.reason })),
+  })
+  return { doc, counts }
+}
+
+const DiscoverReviewCommand = cmd({
+  command: "review",
+  describe: "step through recent Discover videos and mark each 👍/👎 (feeds the taste engine)",
+  builder: (yargs) =>
+    yargs
+      .option("limit", { describe: "how many recent items to pull", type: "number", default: 15 })
+      .option("refresh", { describe: "auto-distill the taste doc when done", type: "boolean", default: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Discover Review")
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading recent items…")
+    const items = await fetchReviewQueue(args.limit as number)
+    if (items.length === 0) { spinner.stop("Nothing to review", 1); prompts.outro("Done"); return }
+
+    const seen = new Set((await readFeedback()).map((f) => f.ref))
+    const queue = items.map(normalizeReviewItem).filter((i) => i.ref && !seen.has(i.ref))
+    spinner.stop(`${queue.length} new item(s) to review`)
+    if (queue.length === 0) {
+      prompts.log.info("All recent items already reviewed.")
+      prompts.outro(dim("iris discover taste"))
+      return
+    }
+
+    let approved = 0, rejected = 0, skipped = 0
+    for (let idx = 0; idx < queue.length; idx++) {
+      const item = queue[idx]
+      console.log()
+      console.log(`  ${dim(`[${idx + 1}/${queue.length}]`)} ${bold(item.title)}`)
+      if (item.channel) console.log(`  ${dim(item.channel)}`)
+      if (item.url) console.log(`  ${dim(item.url)}`)
+
+      const verdict = await prompts.select({
+        message: "Verdict?",
+        options: [
+          { value: "approve", label: "👍 Keep — good fit" },
+          { value: "reject", label: "👎 Reject — doesn't belong" },
+          { value: "skip", label: "⏭  Skip (don't record)" },
+          { value: "quit", label: "■ Stop reviewing" },
+        ],
+      })
+      if (prompts.isCancel(verdict) || verdict === "quit") break
+      if (verdict === "skip") { skipped++; continue }
+
+      let reason = ""
+      if (verdict === "reject") {
+        const r = await prompts.select({ message: "Why?", options: REJECT_REASONS })
+        if (prompts.isCancel(r)) break
+        if (r === "other") {
+          const typed = await prompts.text({ message: "Reason:" })
+          if (prompts.isCancel(typed)) break
+          reason = String(typed || "other")
+        } else {
+          reason = String(r)
+        }
+      }
+
+      await recordFeedback({
+        verdict: verdict as "approve" | "reject",
+        ref: item.ref, title: item.title, channel: item.channel, reason, ts: Date.now(),
+      })
+      if (verdict === "approve") approved++; else rejected++
+    }
+
+    printDivider()
+    console.log(`  ${success("✓")} ${approved} kept   ${rejected} rejected   ${skipped} skipped`)
+    printDivider()
+
+    if (args.refresh && approved + rejected > 0) {
+      const ds = prompts.spinner()
+      ds.start("Distilling taste doc…")
+      try {
+        const out = await distillTaste()
+        ds.stop(out ? success("Taste doc updated") : "Nothing to distill")
+      } catch (e) {
+        ds.stop("Distill failed", 1)
+        prompts.log.error(e instanceof Error ? e.message : String(e))
+      }
+    }
+    prompts.outro(dim("iris discover taste"))
+  },
+})
+
+const DiscoverApproveCommand = cmd({
+  command: "approve <ref>",
+  aliases: ["like"],
+  describe: "record a 👍 good-fit example (ref = video id or URL)",
+  builder: (yargs) =>
+    yargs
+      .positional("ref", { describe: "video id or URL", type: "string", demandOption: true })
+      .option("title", { describe: "title for the taste examples", type: "string" })
+      .option("channel", { describe: "channel / creator", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Approve")
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    await recordFeedback({
+      verdict: "approve", ref: String(args.ref),
+      title: String(args.title || args.ref), channel: String(args.channel || ""),
+      reason: "", ts: Date.now(),
+    })
+    console.log(`  ${success("✓")} Recorded 👍 for ${bold(String(args.title || args.ref))}`)
+    prompts.outro(dim("iris discover taste refresh"))
+  },
+})
+
+const DiscoverRejectCommand = cmd({
+  command: "reject <ref>",
+  describe: "record a 👎 bad-fit example with a reason",
+  builder: (yargs) =>
+    yargs
+      .positional("ref", { describe: "video id or URL", type: "string", demandOption: true })
+      .option("reason", { describe: "why it's a bad fit", type: "string", default: "" })
+      .option("title", { describe: "title", type: "string" })
+      .option("channel", { describe: "channel / creator", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Reject")
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    await recordFeedback({
+      verdict: "reject", ref: String(args.ref),
+      title: String(args.title || args.ref), channel: String(args.channel || ""),
+      reason: String(args.reason || ""), ts: Date.now(),
+    })
+    console.log(`  ${success("✓")} Recorded 👎 for ${bold(String(args.title || args.ref))}${args.reason ? dim(` — ${args.reason}`) : ""}`)
+    prompts.outro(dim("iris discover taste refresh"))
+  },
+})
+
+const DiscoverTasteRefreshCommand = cmd({
+  command: "refresh",
+  aliases: ["distill"],
+  describe: "re-distill the taste doc from accumulated feedback (gpt-4o-mini)",
+  builder: (yargs) => yargs,
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Distill Taste")
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Reading feedback + distilling…")
+    try {
+      const out = await distillTaste()
+      if (!out) { spinner.stop("No feedback yet — review some items first", 1); prompts.outro(dim("iris discover review")); return }
+      spinner.stop(success("Taste doc updated"))
+      printDivider()
+      console.log(out.doc)
+      printDivider()
+      console.log(`  ${dim(`from ${out.counts.approve} 👍 / ${out.counts.reject} 👎`)}`)
+      prompts.outro("Done")
+    } catch (e) {
+      spinner.stop("Failed", 1)
+      prompts.log.error(e instanceof Error ? e.message : String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const DiscoverTasteCommand = cmd({
+  command: "taste",
+  describe: "show the current distilled taste doc (the curator's editorial brain)",
+  builder: (yargs) => yargs.command(DiscoverTasteRefreshCommand),
+  async handler() {
+    UI.empty()
+    prompts.intro("◈  Discover Taste")
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const taste = await readConfigObject(TASTE_KEY) as any
+    if (!taste?.doc) {
+      prompts.log.info("No taste doc yet. Run `iris discover review`, then `iris discover taste refresh`.")
+      prompts.outro("Done")
+      return
+    }
+    printDivider()
+    console.log(taste.doc)
+    printDivider()
+    if (taste.counts) {
+      console.log(`  ${dim(`from ${taste.counts.approve ?? 0} 👍 / ${taste.counts.reject ?? 0} 👎`)}${taste.updated_at ? dim(`  ·  updated ${taste.updated_at}`) : ""}`)
+    }
+    prompts.outro(dim("iris discover taste refresh"))
+  },
+})
+
+const DiscoverFeedbackCommand = cmd({
+  command: "feedback",
+  aliases: ["history"],
+  describe: "list recent curation feedback (👍/👎 with reasons)",
+  builder: (yargs) =>
+    yargs
+      .option("limit", { describe: "how many entries to show", type: "number", default: 30 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Discover Feedback")
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const feedback = await readFeedback()
+    const recent = feedback.slice(-(args.limit as number)).reverse()
+    if (args.json) { console.log(JSON.stringify(recent, null, 2)); prompts.outro("Done"); return }
+    if (recent.length === 0) { prompts.log.info("No feedback yet."); prompts.outro(dim("iris discover review")); return }
+    printDivider()
+    for (const f of recent) {
+      const icon = f.verdict === "approve" ? success("👍") : "👎"
+      console.log(`  ${icon} ${bold(f.title)}${f.channel ? dim(` · ${f.channel}`) : ""}${f.reason ? dim(`  (${f.reason})`) : ""}`)
+    }
+    printDivider()
+    const approve = feedback.filter((f) => f.verdict === "approve").length
+    const reject = feedback.filter((f) => f.verdict === "reject").length
+    console.log(`  ${dim(`${approve} 👍 / ${reject} 👎 total`)}`)
+    prompts.outro(dim("iris discover taste"))
+  },
+})
+
+// ============================================================================
+// Promoted slots — monetization real estate (config key: discover.promoted_slots)
+// One component, three payers: membership CTA / newsletter / sponsor.
+// ============================================================================
+
+const PROMOS_KEY = "discover.promoted_slots"
+const PROMO_TYPES = ["membership", "newsletter", "sponsor"] as const
+
+type PromoSlot = {
+  id: string
+  type: string
+  title: string
+  body: string
+  cta_label: string
+  cta_url: string
+  image?: string
+  sponsor_name?: string
+  position?: number
+  active: boolean
+}
+
+function slugifyPromoId(title: string): string {
+  const base = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "slot"
+  return `${base}-${Math.floor(Math.random() * 1e6).toString(36)}`
+}
+
+async function readPromos(): Promise<PromoSlot[]> {
+  const list = await readConfigList(PROMOS_KEY)
+  return Array.isArray(list) ? (list as PromoSlot[]) : []
+}
+
+// Backend `value => required` rejects an empty array; store `false` (reads back as []).
+async function writePromos(slots: PromoSlot[]): Promise<Response> {
+  return irisFetch(`/api/v1/platform-config/${PROMOS_KEY}`, {
+    method: "PUT",
+    body: JSON.stringify({ value: slots.length ? slots : false }),
+  })
+}
+
+const PromosListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list promoted slots on the Discover page",
+  builder: (yargs) => yargs.option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Promoted Slots")
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const slots = await readPromos()
+    if (args.json) { console.log(JSON.stringify(slots, null, 2)); prompts.outro("Done"); return }
+    if (slots.length === 0) { prompts.log.info("No promoted slots yet."); prompts.outro(dim("iris discover promos add")); return }
+    printDivider()
+    for (const s of slots) {
+      const status = s.active === false ? dim("○ off") : success("●")
+      console.log(`  ${status} ${bold(s.title)}  ${dim(`[${s.type}]`)}${s.position != null ? dim(`  pos ${s.position}`) : ""}`)
+      console.log(`     ${dim(`${s.cta_label} → ${s.cta_url}  ·  id=${s.id}`)}`)
+    }
+    printDivider()
+    prompts.outro(dim("iris discover promos add"))
+  },
+})
+
+const PromosAddCommand = cmd({
+  command: "add",
+  describe: "add a promoted slot (membership / newsletter / sponsor)",
+  builder: (yargs) =>
+    yargs
+      .option("type", { describe: "slot type", type: "string", choices: PROMO_TYPES as unknown as string[], demandOption: true })
+      .option("title", { describe: "headline", type: "string", demandOption: true })
+      .option("body", { describe: "short pitch", type: "string", default: "" })
+      .option("cta-label", { describe: "button label", type: "string", demandOption: true })
+      .option("cta-url", { describe: "button URL/path", type: "string", demandOption: true })
+      .option("image", { describe: "image URL", type: "string" })
+      .option("sponsor", { describe: "sponsor name (for sponsor type)", type: "string" })
+      .option("position", { describe: "ordering position (lower = earlier)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Add Promoted Slot: ${args.title}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const slots = await readPromos()
+    const slot: PromoSlot = {
+      id: slugifyPromoId(String(args.title)),
+      type: String(args.type),
+      title: String(args.title),
+      body: String(args.body || ""),
+      cta_label: String(args["cta-label"]),
+      cta_url: String(args["cta-url"]),
+      active: true,
+    }
+    if (args.image) slot.image = String(args.image)
+    if (args.sponsor) slot.sponsor_name = String(args.sponsor)
+    if (args.position != null) slot.position = Number(args.position)
+    slots.push(slot)
+    const ok = await handleApiError(await writePromos(slots), "Add slot")
+    if (!ok) { prompts.outro("Done"); return }
+    console.log(`  ${success("✓")} Added ${bold(slot.title)} ${dim(`[${slot.type}]  id=${slot.id}`)}`)
+    prompts.outro(dim("iris discover promos list"))
+  },
+})
+
+const PromosRemoveCommand = cmd({
+  command: "remove <id>",
+  aliases: ["rm", "delete"],
+  describe: "remove a promoted slot by id",
+  builder: (yargs) => yargs.positional("id", { describe: "slot id", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Remove Slot: ${args.id}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    let slots = await readPromos()
+    if (!slots.some((s) => s.id === args.id)) { prompts.log.error(`No slot with id ${args.id}`); prompts.outro(dim("iris discover promos list")); return }
+    slots = slots.filter((s) => s.id !== args.id)
+    const ok = await handleApiError(await writePromos(slots), "Remove slot")
+    if (!ok) { prompts.outro("Done"); return }
+    console.log(`  ${success("✓")} Removed ${bold(String(args.id))}  ${dim(`(${slots.length} remaining)`)}`)
+    prompts.outro(dim("iris discover promos list"))
+  },
+})
+
+const PromosToggleCommand = cmd({
+  command: "toggle <id>",
+  describe: "turn a promoted slot on/off",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "slot id", type: "string", demandOption: true })
+      .option("on", { type: "boolean", describe: "force on" })
+      .option("off", { type: "boolean", describe: "force off" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Toggle Slot: ${args.id}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const slots = await readPromos()
+    const slot = slots.find((s) => s.id === args.id)
+    if (!slot) { prompts.log.error(`No slot with id ${args.id}`); prompts.outro(dim("iris discover promos list")); return }
+    slot.active = args.on ? true : args.off ? false : slot.active === false
+    const ok = await handleApiError(await writePromos(slots), "Toggle slot")
+    if (!ok) { prompts.outro("Done"); return }
+    console.log(`  ${success("✓")} ${bold(slot.title)} is now ${slot.active ? success("ON") : dim("OFF")}`)
+    prompts.outro(dim("iris discover promos list"))
+  },
+})
+
+const PromosCommand = cmd({
+  command: "promos",
+  aliases: ["promoted", "slots"],
+  describe: "manage promoted slots — membership / newsletter / sponsor cards on the Discover page",
+  builder: (yargs) =>
+    yargs
+      .command(PromosListCommand)
+      .command(PromosAddCommand)
+      .command(PromosRemoveCommand)
+      .command(PromosToggleCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root discover command
 // ============================================================================
 
 export const PlatformDiscoverCommand = cmd({
   command: "discover",
-  describe: "manage the Discover page — status, curate, stats, brands, artists, sponsors, streamers, producers, instrumentals, learning, sections",
+  describe: "manage the Discover page — status, curate, review/taste, promos, stats, brands, artists, sponsors, streamers, producers, instrumentals, learning, sections",
   builder: (yargs) =>
     yargs
       .command(StatusCommand)
       .command(StatsCommand)
       .command(CurateCommand)
+      .command(DiscoverReviewCommand)
+      .command(DiscoverApproveCommand)
+      .command(DiscoverRejectCommand)
+      .command(DiscoverTasteCommand)
+      .command(DiscoverFeedbackCommand)
+      .command(PromosCommand)
       .command(SponsorsCommand)
       .command(StreamersCommand)
       .command(ProducersCommand)
