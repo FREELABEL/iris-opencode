@@ -189,7 +189,11 @@ jobs:
           if-no-files-found: warn
 
   release:
-    needs: [build, build-desktop]
+    # Gate the release ONLY on the CLI binaries (build). The desktop Electron app
+    # (build-desktop) takes ~30-45 min and is optional — it uploads its assets to
+    # this release asynchronously via the desktop-assets job below, so it no longer
+    # blocks `iris update` from getting CLI fixes. This cuts release latency ~5x.
+    needs: [build]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
@@ -248,6 +252,42 @@ jobs:
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
-            artifacts/IRIS-app-*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Attach the desktop Electron app to the release AFTER it finishes building.
+  # Runs independently of `release` so the slow (~30-45 min) desktop build never
+  # blocks shipping CLI fixes. Optional — failures here don't fail the release.
+  desktop-assets:
+    needs: [build-desktop, release]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "tag=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: desktop
+          pattern: IRIS-app-*
+          merge-multiple: true
+
+      - name: Upload desktop assets to release
+        run: |
+          shopt -s nullglob
+          assets=(desktop/IRIS-app-*.zip)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "::warning::No desktop assets to upload (desktop build skipped or failed)"
+            exit 0
+          fi
+          gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

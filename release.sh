@@ -91,26 +91,52 @@ git push origin main --tags
 echo "Pushed to origin main with tag v$TARGET"
 
 # 4. Wait for CI
+# Match the run to THIS tag — never just grab the latest run. The new tag's
+# workflow may not have registered yet, so --limit 1 can return a PREVIOUS
+# release's run (already green) and falsely report success (bug #118232).
 echo ""
-echo "Waiting for release workflow..."
-sleep 3
+echo "Waiting for release workflow for v$TARGET..."
 
-RUN_ID=$(gh run list --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || echo "")
-if [ -n "$RUN_ID" ]; then
-  echo "Workflow run: https://github.com/$REPO/actions/runs/$RUN_ID"
-  echo "Watching CI (Ctrl+C to stop watching — release will continue)..."
-  gh run watch "$RUN_ID" --exit-status || {
-    echo ""
-    echo "CI failed or was cancelled. Check: gh run view $RUN_ID"
-    exit 1
-  }
-  echo ""
-  echo "Release v$TARGET is live!"
-  echo "Run 'iris update' to install."
-else
-  echo "Could not find workflow run. Check manually:"
-  echo "  gh run list --workflow=release.yml"
+RUN_ID=""
+for _ in $(seq 1 30); do
+  RUN_ID=$(gh run list --workflow=release.yml --limit 15 \
+    --json databaseId,headBranch \
+    --jq "[.[] | select(.headBranch==\"v$TARGET\")] | .[0].databaseId // empty" 2>/dev/null || echo "")
+  [ -n "$RUN_ID" ] && break
+  sleep 3
+done
+
+if [ -z "$RUN_ID" ]; then
+  echo "Error: no release workflow for v$TARGET appeared after ~90s."
+  echo "Check manually: gh run list --workflow=release.yml"
+  exit 1
 fi
+
+# Guard: confirm the resolved run really belongs to this tag before trusting it
+RUN_BRANCH=$(gh run view "$RUN_ID" --json headBranch --jq '.headBranch' 2>/dev/null || echo "")
+if [ "$RUN_BRANCH" != "v$TARGET" ]; then
+  echo "Error: run $RUN_ID is for '$RUN_BRANCH', not 'v$TARGET' — refusing to report false success"
+  exit 1
+fi
+
+echo "Workflow run: https://github.com/$REPO/actions/runs/$RUN_ID"
+echo "Watching CI (Ctrl+C to stop watching — release will continue)..."
+gh run watch "$RUN_ID" --exit-status || {
+  echo ""
+  echo "CI failed or was cancelled. Check: gh run view $RUN_ID"
+  exit 1
+}
+
+# Confirm the GitHub Release + binaries actually exist before declaring victory
+ASSET_COUNT=$(gh release view "v$TARGET" --json assets --jq '.assets | length' 2>/dev/null || echo "0")
+if [ "$ASSET_COUNT" -lt 1 ]; then
+  echo "Error: CI succeeded but release v$TARGET has no assets. Check: gh release view v$TARGET"
+  exit 1
+fi
+
+echo ""
+echo "Release v$TARGET is live! ($ASSET_COUNT assets)"
+echo "Run 'iris update' to install."
 
 # 5. Sync dev branch
 echo ""
