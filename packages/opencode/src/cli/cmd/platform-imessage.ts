@@ -2,8 +2,8 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success } from "./iris-api"
-import { execSync } from "child_process"
-import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat } from "../lib/imessage"
+import { execSync, execFileSync } from "child_process"
+import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle } from "../lib/imessage"
 import { resolveContactName, resolveContactNames } from "../lib/contacts"
 
 const ImessageSearchCommand = cmd({
@@ -446,18 +446,316 @@ const ImessageContactsCommand = cmd({
   },
 })
 
+// ─────────────────────────────────────────────────────────────────────────────
+// @heyiris Mention Responder — research unprocessed mentions with Claude, draft
+// client replies, queue for human approval, send on approve. Subcommands of
+// `iris imessage mentions`. State: ~/.iris/mention-responder/{processed.json,queue.jsonl}
+// ─────────────────────────────────────────────────────────────────────────────
+const MR_DIR = `${require("os").homedir()}/.iris/mention-responder`
+const MR_PROCESSED = `${MR_DIR}/processed.json`
+const MR_QUEUE = `${MR_DIR}/queue.jsonl`
+const MR_MENTIONS = `${require("os").homedir()}/.iris/mentions`
+const MR_REPO = process.env.FREELABEL_REPO || `${require("os").homedir()}/Sites/freelabel`
+
+function mrEnsure() { require("fs").mkdirSync(MR_DIR, { recursive: true }) }
+function mrKey(m: any): string {
+  return require("crypto").createHash("sha1").update(`${m.ts}|${m.sender}|${m.text || ""}`).digest("hex").slice(0, 12)
+}
+function mrProcessed(): Set<string> {
+  try { return new Set(JSON.parse(require("fs").readFileSync(MR_PROCESSED, "utf-8"))) } catch { return new Set() }
+}
+function mrSaveProcessed(s: Set<string>) { mrEnsure(); require("fs").writeFileSync(MR_PROCESSED, JSON.stringify([...s])) }
+function mrLoadQueue(): any[] {
+  try {
+    return require("fs").readFileSync(MR_QUEUE, "utf-8").split("\n").filter(Boolean)
+      .map((l: string) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+  } catch { return [] }
+}
+function mrRewrite(rows: any[]) { mrEnsure(); require("fs").writeFileSync(MR_QUEUE, rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : "")) }
+function mrAppend(row: any) { mrEnsure(); require("fs").appendFileSync(MR_QUEUE, JSON.stringify(row) + "\n") }
+
+function mrReadMentions(days: number, client?: string, includeSelf = false): any[] {
+  const { existsSync, readdirSync, readFileSync } = require("fs")
+  if (!existsSync(MR_MENTIONS)) return []
+  const cutoff = new Date(Date.now() - days * 86400 * 1000)
+  const files = readdirSync(MR_MENTIONS).filter((f: string) => f.endsWith(".jsonl")).sort()
+    .filter((f: string) => new Date(f.replace(".jsonl", "")) >= cutoff)
+  const out: any[] = []
+  for (const f of files) {
+    for (const line of readFileSync(`${MR_MENTIONS}/${f}`, "utf-8").split("\n").filter(Boolean)) {
+      try {
+        const m = JSON.parse(line)
+        if (!m.text || !m.text.trim()) continue
+        if (!includeSelf && m.is_from_me) continue
+        if (client && !`${m.lead_name || ""} ${m.sender || ""}`.toLowerCase().includes(client.toLowerCase())) continue
+        out.push(m)
+      } catch {}
+    }
+  }
+  return out.sort((a, b) => (a.ts < b.ts ? -1 : 1))
+}
+
+// Pull recent conversation around a mention so Claude knows WHICH project the
+// client is talking about (the single message line rarely names it). Returns a
+// chronological transcript, newest last, with our short canned acks filtered out.
+function mrThreadContext(m: any): string {
+  if (!m.sender) return ""
+  let msgs: any[] = []
+  try { msgs = searchByHandle(m.sender, 7, 16) } catch { return "" }
+  const name = m.lead_name || "Client"
+  const lines: string[] = []
+  for (const x of msgs.slice().reverse()) {
+    const t = (x.text || "").replace(/\s+/g, " ").trim()
+    if (!t) continue
+    if (x.from_me && t.length < 40) continue // drop our emoji ack noise ("🫡 Logged…")
+    lines.push(`${x.from_me ? "IRIS/team" : name}: ${t.slice(0, 220)}`)
+  }
+  return lines.slice(-14).join("\n")
+}
+
+// Run Claude headless inside the freelabel repo (read-only tools) to triage +
+// investigate one mention, returning { category, severity, summary,
+// internal_findings, client_reply, needs_human } or { error }.
+function mrResearch(m: any): any {
+  const thread = mrThreadContext(m)
+  const contextBlock = thread
+    ? `RECENT CONVERSATION (chronological, most recent last — use this to determine WHICH project/site/app the client means):
+"""
+${thread}
+"""
+
+`
+    : ""
+
+  // Image attachments (screenshots) the client sent with the mention. Claude is
+  // vision-capable via the Read tool, so list readable image paths and tell it
+  // to look — a screenshot often names the project better than any words.
+  const { existsSync } = require("fs")
+  const images = (m.attachments || [])
+    .filter((a: any) => a && a.path && (a.mimeType || "").startsWith("image/") && existsSync(a.path))
+  const imageBlock = images.length
+    ? `ATTACHED SCREENSHOT${images.length > 1 ? "S" : ""} (${images.length}) — READ each with the Read tool BEFORE answering; they usually show exactly what the client means and which screen/project it is:
+${images.map((a: any) => `- ${a.path}`).join("\n")}
+
+`
+    : ""
+  const prompt = `You are IRIS, the AI operator for the Freelabel / HeyIRIS platform, triaging a client message that @mentioned you over iMessage. You are running inside the freelabel monorepo at ${MR_REPO} and may read/grep the codebase to investigate before answering.
+
+CLIENT: ${m.lead_name || "Unknown"} (${m.sender})
+SENT: ${m.ts}
+
+${contextBlock}${imageBlock}THE MESSAGE TO ACT ON:
+"""
+${m.text}
+"""
+
+CRITICAL — identify the right project first: a single message rarely names its project. Infer the active project from the RECENT CONVERSATION above (e.g. a "pathways-*" link or words like "patient portal" / "case progress" mean the Pathways project — NOT a similarly-named repo like Saddle Pass). Do not pattern-match a stray word to the wrong codebase. If the project is still genuinely ambiguous after reading the context, set needs_human=true and ask which project in client_reply rather than guessing.
+
+Steps:
+1. Classify. category = bug | feature_request | question | task | status_check | other. severity = low | medium | high. Write a one-line summary.
+2. Scope to the project identified from context, then investigate (read code, grep, check page JSON) and write concise internal_findings: the right files, root cause, and what it'd take. State which project you concluded and why.
+3. Draft client_reply: warm, concise, FIRST PERSON as IRIS, NO markdown, <= 600 chars, address the client by first name. If it's a real bug: acknowledge + what you found + the next step / rough ETA. If it needs a human decision, or you are not confident, set needs_human=true and make client_reply a brief honest holding response (don't fabricate a fix).
+
+Return ONLY a single JSON object, no prose, no code fences:
+{"category":"","severity":"","summary":"","internal_findings":"","client_reply":"","needs_human":false}`
+
+  const cargs = ["-p", prompt, "--output-format", "json", "--allowedTools", "Read,Grep,Glob", "--max-turns", process.env.CLAUDE_MAX_TURNS || "15"]
+  if (process.env.CLAUDE_MODEL) cargs.push("--model", process.env.CLAUDE_MODEL)
+  let raw: string
+  try {
+    raw = execFileSync("claude", cargs, { cwd: MR_REPO, encoding: "utf-8", timeout: 300000, maxBuffer: 20 * 1024 * 1024 })
+  } catch (e: any) {
+    return { error: `claude failed: ${(e.stderr || e.message || "").toString().slice(0, 300)}` }
+  }
+  let text = raw
+  try { const env = JSON.parse(raw); if (env && typeof env.result === "string") text = env.result } catch {}
+  const s = text.indexOf("{"), e = text.lastIndexOf("}")
+  if (s === -1 || e === -1) return { error: "no JSON in claude output" }
+  try {
+    const o = JSON.parse(text.slice(s, e + 1))
+    return {
+      category: o.category || "other", severity: o.severity || "low", summary: o.summary || "",
+      internal_findings: o.internal_findings || "", client_reply: (o.client_reply || "").trim(),
+      needs_human: o.needs_human !== false,
+    }
+  } catch (err: any) { return { error: `parse failed: ${err.message}` } }
+}
+
+// Send an iMessage via AppleScript (same path as `iris imessage send`).
+function mrSend(handle: string, text: string): void {
+  let h = handle.trim()
+  const d = h.replace(/\D/g, "")
+  if (d.length === 10) h = `+1${d}`
+  else if (d.length === 11 && d.startsWith("1")) h = `+${d}`
+  const clean = text.replace(/\\([^\\])/g, "$1")
+  const esc = clean.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+  const script = `
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set theBuddy to participant "${h}" of targetService
+    send "${esc}" to theBuddy
+end tell`
+  execFileSync("osascript", ["-e", script], { encoding: "utf-8", timeout: 15000 })
+}
+
+const MentionsRespondCommand = cmd({
+  command: "respond",
+  aliases: ["sweep", "draft"],
+  describe: "research unprocessed @heyiris mentions with Claude and draft client replies (queued for approval)",
+  builder: (yargs) =>
+    yargs
+      .option("limit", { type: "number", default: 5, describe: "max mentions to process this run" })
+      .option("days", { type: "number", default: 30, describe: "look back N days" })
+      .option("client", { type: "string", describe: "only mentions from this sender phone or name" })
+      .option("dry-run", { type: "boolean", default: false, describe: "preview what would be processed (no Claude, no queue)" })
+      .option("include-self", { type: "boolean", default: false, describe: "include your own @heyiris messages" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mention Respond")
+    const processed = mrProcessed()
+    const pending = mrReadMentions(args.days as number, args.client as string, args["include-self"] as boolean)
+      .filter((m) => !processed.has(mrKey(m)))
+
+    if (!pending.length) { prompts.log.info("No unprocessed mentions in range"); prompts.outro("Done"); return }
+
+    if (args["dry-run"]) {
+      prompts.log.info(bold(`${pending.length} unprocessed — would process up to ${args.limit}`))
+      printDivider()
+      pending.slice(0, args.limit as number).forEach((m, i) =>
+        console.log(`  ${dim(String(i + 1).padStart(2))}. ${bold(m.lead_name || m.sender)} ${dim(m.ts.slice(0, 16))}\n      ${(m.text || "").replace(/\n+/g, " ").slice(0, 100)}`))
+      printDivider()
+      prompts.outro(dim("dry-run — nothing researched or queued"))
+      return
+    }
+
+    let done = 0
+    for (const m of pending.slice(0, args.limit as number)) {
+      const id = mrKey(m)
+      const sp = prompts.spinner()
+      sp.start(`${m.lead_name || m.sender} — ${dim(m.ts.slice(0, 16))}`)
+      const r = mrResearch(m)
+      if (r.error) { sp.stop(`${m.lead_name || m.sender}: ${r.error}`, 1); continue }
+      mrAppend({
+        id, status: "pending", created: new Date().toISOString(),
+        sender: m.sender, lead_id: m.lead_id, lead_name: m.lead_name, chat: m.chat, message: m.text,
+        category: r.category, severity: r.severity, summary: r.summary,
+        internal_findings: r.internal_findings, draft_reply: r.client_reply, needs_human: r.needs_human,
+      })
+      processed.add(id); mrSaveProcessed(processed)
+      sp.stop(`${success("✓")} ${m.lead_name || m.sender} ${dim(`[${r.category}/${r.severity}]`)} ${r.needs_human ? "⚑ needs-human" : "auto-ok"} ${dim(id)}`)
+      done++
+    }
+    prompts.outro(`${success("✓")} Queued ${done} draft${done === 1 ? "" : "s"} — review: ${bold("iris imessage mentions drafts")}`)
+  },
+})
+
+const MentionsDraftsCommand = cmd({
+  command: "drafts",
+  aliases: ["review", "queue"],
+  describe: "list drafted replies awaiting approval",
+  builder: (yargs) =>
+    yargs
+      .option("all", { type: "boolean", default: false, describe: "include sent/rejected" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const rows = mrLoadQueue().filter((r) => args.all || r.status === "pending")
+    if (args.json) { console.log(JSON.stringify(rows, null, 2)); return }
+    UI.empty(); prompts.intro("◈  Mention Drafts")
+    if (!rows.length) { prompts.log.info(args.all ? "Queue is empty" : "No pending drafts (use --all)"); prompts.outro("Done"); return }
+    printDivider()
+    for (const r of rows) {
+      const st = r.status === "pending" ? r.status.toUpperCase() : r.status === "sent" ? success("SENT") : dim(r.status.toUpperCase())
+      console.log(`  ${bold(r.id)}  ${st}  ${bold(r.lead_name || r.sender)}  ${dim(`[${r.category}/${r.severity}]`)}${r.needs_human ? " ⚑human" : ""}`)
+      console.log(`    ${dim("msg:")}   ${(r.message || "").replace(/\n+/g, " ").slice(0, 88)}`)
+      console.log(`    ${dim("reply:")} ${(r.draft_reply || "").replace(/\n+/g, " ").slice(0, 100)}`)
+      console.log()
+    }
+    printDivider()
+    prompts.outro(dim("show <id> · approve <id|all> · reject <id>"))
+  },
+})
+
+const MentionsShowCommand = cmd({
+  command: "show <id>",
+  describe: "show a draft's full message, findings, and reply",
+  builder: (yargs) => yargs.positional("id", { type: "string", demandOption: true }),
+  async handler(args) {
+    const r = mrLoadQueue().find((x) => x.id === args.id)
+    if (!r) { UI.empty(); prompts.log.error(`No draft ${args.id}`); return }
+    UI.empty(); prompts.intro(`◈  Draft ${r.id}`)
+    console.log(`  ${bold("client")}   ${r.lead_name || ""} (${r.sender})  lead #${r.lead_id || "—"}`)
+    console.log(`  ${bold("status")}   ${r.status}`)
+    console.log(`  ${bold("class")}    ${r.category} / ${r.severity}${r.needs_human ? "  ⚑ needs human" : ""}`)
+    console.log(`  ${bold("summary")}  ${r.summary}`)
+    console.log(`\n  ${dim("— message —")}\n  ${(r.message || "").replace(/\n/g, "\n  ")}`)
+    console.log(`\n  ${dim("— internal findings —")}\n  ${(r.internal_findings || "").replace(/\n/g, "\n  ")}`)
+    console.log(`\n  ${dim("— draft reply —")}\n  ${success((r.draft_reply || "").replace(/\n/g, "\n  "))}`)
+    prompts.outro(dim(`approve ${r.id} · reject ${r.id}`))
+  },
+})
+
+const MentionsApproveCommand = cmd({
+  command: "approve <id>",
+  describe: "send a drafted reply to the client (id, or 'all' for pending non-needs-human)",
+  builder: (yargs) => yargs.positional("id", { type: "string", demandOption: true }),
+  async handler(args) {
+    if (process.platform !== "darwin") { prompts.log.error("iMessage send requires macOS"); return }
+    const rows = mrLoadQueue()
+    const targets = args.id === "all"
+      ? rows.filter((r) => r.status === "pending" && !r.needs_human)
+      : rows.filter((r) => r.id === args.id)
+    UI.empty(); prompts.intro("◈  Mention Approve")
+    if (!targets.length) {
+      prompts.log.warn(args.id === "all" ? "Nothing auto-approvable (needs-human drafts must be approved by id)" : `No draft ${args.id}`)
+      prompts.outro("Done"); return
+    }
+    for (const r of targets) {
+      if (r.status === "sent") { prompts.log.info(`${r.id} already sent`); continue }
+      try {
+        mrSend(r.sender, r.draft_reply)
+        r.status = "sent"; r.sent_at = new Date().toISOString()
+        prompts.log.success(`Sent → ${r.lead_name || r.sender}`)
+      } catch (err: any) {
+        prompts.log.error(`${r.id}: ${err.message?.slice(0, 160)}`)
+      }
+    }
+    mrRewrite(rows)
+    prompts.outro("Done")
+  },
+})
+
+const MentionsRejectCommand = cmd({
+  command: "reject <id>",
+  describe: "discard a drafted reply (won't send)",
+  builder: (yargs) => yargs.positional("id", { type: "string", demandOption: true }),
+  async handler(args) {
+    const rows = mrLoadQueue(); const r = rows.find((x) => x.id === args.id)
+    UI.empty()
+    if (!r) { prompts.log.error(`No draft ${args.id}`); return }
+    r.status = "rejected"; mrRewrite(rows)
+    prompts.log.info(`${args.id} rejected`)
+  },
+})
+
 const ImessageMentionsCommand = cmd({
   command: "mentions",
   aliases: ["@", "wakeword"],
-  describe: "query @heyiris mentions from iMessage logs",
+  describe: "query @heyiris mentions, or respond/draft/approve replies (subcommands)",
   builder: (yargs) =>
     yargs
+      .command(MentionsRespondCommand)
+      .command(MentionsDraftsCommand)
+      .command(MentionsShowCommand)
+      .command(MentionsApproveCommand)
+      .command(MentionsRejectCommand)
       .option("days", { type: "number", default: 30, describe: "look back N days" })
       .option("sender", { type: "string", describe: "filter by sender phone or name" })
       .option("lead", { type: "number", describe: "filter by lead ID" })
       .option("limit", { type: "number", default: 50, describe: "max mentions" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
+    // If a subcommand (respond/drafts/show/approve/reject) ran, yargs invoked it
+    // already and this default handler is skipped. Reaching here = bare `mentions`.
     if (!args.json) { UI.empty(); prompts.intro("◈  @heyiris Mentions") }
 
     const mentionsDir = `${require("os").homedir()}/.iris/mentions`
