@@ -614,33 +614,22 @@ const AnnounceTargetSetCommand = cmd({
     const channelId = String(args.channel)
 
     const sp = prompts.spinner()
-    sp.start("Finding channel…")
+    sp.start("Setting target…")
     try {
-      const listRes = await irisFetch(`/api/v6/bloqs/${bloqId}/channels`, {}, PLATFORM_URLS.irisApi)
-      if (!listRes.ok) {
-        sp.stop("Failed", 1)
-        prompts.log.error(listRes.status === 404 ? `Bloq ${bloqId} not found (or not yours)` : `HTTP ${listRes.status}`)
-        prompts.outro("Done")
-        return
-      }
-      const channels = (await listRes.json()) as any[]
-      const channel = (Array.isArray(channels) ? channels : []).find((c) => c.channel_type === type && c.is_active)
-      if (!channel) {
-        sp.stop("Not found", 1)
-        prompts.log.error(`No active ${type} channel on bloq ${bloqId}. Connect it first:`)
-        console.log(`    ${highlight(`iris channels connect ${type} --bloq-id ${bloqId}`)}`)
-        prompts.outro("Done")
-        return
-      }
       const setRes = await irisFetch(
-        `/api/v6/bloqs/${bloqId}/channels/${channel.id}/announce-target`,
-        { method: "POST", body: JSON.stringify({ channel_id: channelId }) },
+        `/api/v6/bloqs/${bloqId}/announce-target`,
+        { method: "POST", body: JSON.stringify({ channel_type: type, channel_id: channelId }) },
         PLATFORM_URLS.irisApi,
       )
       if (!setRes.ok) {
         sp.stop("Failed", 1)
         const d = (await setRes.json().catch(() => ({}))) as any
-        prompts.log.error(d?.error || d?.message || `HTTP ${setRes.status}`)
+        if (setRes.status === 404 && (d?.error || "").includes("No active")) {
+          prompts.log.error(`No active ${type} channel on bloq ${bloqId}. Connect it first:`)
+          console.log(`    ${highlight(`iris channels connect ${type} --bloq-id ${bloqId}`)}`)
+        } else {
+          prompts.log.error(d?.error || d?.message || (setRes.status === 404 ? `Bloq ${bloqId} not found (or not yours)` : `HTTP ${setRes.status}`))
+        }
         prompts.outro("Done")
         return
       }
@@ -668,16 +657,16 @@ const AnnounceTargetGetCommand = cmd({
     const sp = prompts.spinner()
     sp.start("Loading…")
     try {
-      const res = await irisFetch(`/api/v6/bloqs/${bloqId}/channels`, {}, PLATFORM_URLS.irisApi)
+      const res = await irisFetch(`/api/v6/bloqs/${bloqId}/announce-targets`, {}, PLATFORM_URLS.irisApi)
       if (!res.ok) {
         sp.stop("Failed", 1)
         prompts.log.error(res.status === 404 ? `Bloq ${bloqId} not found (or not yours)` : `HTTP ${res.status}`)
         prompts.outro("Done")
         return
       }
-      const channels = (await res.json()) as any[]
+      const data = (await res.json()) as { channels?: Array<{ channel_type: string; announce_channel_id: string | null }> }
       sp.stop("Loaded")
-      const broadcast = (Array.isArray(channels) ? channels : []).filter((c) => ["slack", "discord"].includes(c.channel_type))
+      const broadcast = data.channels ?? []
       if (!broadcast.length) {
         prompts.log.info(`No Slack/Discord channels on bloq ${bloqId}`)
         prompts.outro("Done")
@@ -685,8 +674,7 @@ const AnnounceTargetGetCommand = cmd({
       }
       console.log()
       for (const c of broadcast) {
-        const target = c.announce_channel_id ?? c.config?.announce_channel_id ?? null
-        console.log(`  ${bold(c.channel_type)}  ${target ? success(target) : dim("(no target set)")}`)
+        console.log(`  ${bold(c.channel_type)}  ${c.announce_channel_id ? success(c.announce_channel_id) : dim("(no target set)")}`)
       }
       console.log()
       prompts.outro("Done")
