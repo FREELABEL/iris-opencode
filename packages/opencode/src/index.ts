@@ -63,6 +63,7 @@ import { PlatformProgramsCommand } from "./cli/cmd/platform-programs"
 import { PlatformMagazineCommand } from "./cli/cmd/platform-magazine"
 import { PlatformRemotionCommand } from "./cli/cmd/platform-remotion"
 import { PlatformReleaseCommand } from "./cli/cmd/platform-release"
+import { PlatformAnnounceCommand } from "./cli/cmd/platform-announce"
 import { PlatformHiveCommand } from "./cli/cmd/platform-hive"
 import { PlatformClipsCommand } from "./cli/cmd/platform-clips"
 import { PlatformOutreachCommand } from "./cli/cmd/platform-outreach"
@@ -268,6 +269,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformMagazineCommand))
   .command(reg(PlatformRemotionCommand))
   .command(reg(PlatformReleaseCommand))
+  .command(reg(PlatformAnnounceCommand))
   .command(reg(PlatformHiveCommand))
   .command(reg(PlatformClipsCommand))
   .command(reg(PlatformOutreachCommand))

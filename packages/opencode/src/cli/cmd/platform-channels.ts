@@ -592,6 +592,123 @@ function openBrowser(url: string) {
   } catch {}
 }
 
+// ─── Announce Target ─────────────────────────────────────────────
+// Designate which channel (within a connected workspace) receives announcements.
+// Set once → `iris announce` broadcasts to it forever.
+
+const AnnounceTargetSetCommand = cmd({
+  command: "set <type>",
+  describe: "designate which channel receives announcements",
+  builder: (yargs) =>
+    yargs
+      .positional("type", { type: "string", demandOption: true, describe: "channel type (slack, discord)" })
+      .option("bloq-id", { type: "number", demandOption: true, describe: "bloq the channel belongs to" })
+      .option("channel", { type: "string", demandOption: true, describe: "the Slack/Discord channel id to post announcements to" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Announce Target")
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const type = String(args.type)
+    const bloqId = args["bloq-id"] as number
+    const channelId = String(args.channel)
+
+    const sp = prompts.spinner()
+    sp.start("Finding channel…")
+    try {
+      const listRes = await irisFetch(`/api/v6/bloqs/${bloqId}/channels`, {}, PLATFORM_URLS.irisApi)
+      if (!listRes.ok) {
+        sp.stop("Failed", 1)
+        prompts.log.error(listRes.status === 404 ? `Bloq ${bloqId} not found (or not yours)` : `HTTP ${listRes.status}`)
+        prompts.outro("Done")
+        return
+      }
+      const channels = (await listRes.json()) as any[]
+      const channel = (Array.isArray(channels) ? channels : []).find((c) => c.channel_type === type && c.is_active)
+      if (!channel) {
+        sp.stop("Not found", 1)
+        prompts.log.error(`No active ${type} channel on bloq ${bloqId}. Connect it first:`)
+        console.log(`    ${highlight(`iris channels connect ${type} --bloq-id ${bloqId}`)}`)
+        prompts.outro("Done")
+        return
+      }
+      const setRes = await irisFetch(
+        `/api/v6/bloqs/${bloqId}/channels/${channel.id}/announce-target`,
+        { method: "POST", body: JSON.stringify({ channel_id: channelId }) },
+        PLATFORM_URLS.irisApi,
+      )
+      if (!setRes.ok) {
+        sp.stop("Failed", 1)
+        const d = (await setRes.json().catch(() => ({}))) as any
+        prompts.log.error(d?.error || d?.message || `HTTP ${setRes.status}`)
+        prompts.outro("Done")
+        return
+      }
+      sp.stop(success("Set"))
+      prompts.log.success(`${type} announcements → ${channelId}`)
+      prompts.outro(`${success("✓")} Now run: ${highlight(`iris announce "your update" --bloq-id ${bloqId}`)}`)
+    } catch (e) {
+      sp.stop("Failed", 1)
+      prompts.log.error(e instanceof Error ? e.message : String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const AnnounceTargetGetCommand = cmd({
+  command: "get",
+  describe: "show the announce target for each connected channel",
+  builder: (yargs) => yargs.option("bloq-id", { type: "number", demandOption: true, describe: "bloq to inspect" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Announce Targets")
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const bloqId = args["bloq-id"] as number
+    const sp = prompts.spinner()
+    sp.start("Loading…")
+    try {
+      const res = await irisFetch(`/api/v6/bloqs/${bloqId}/channels`, {}, PLATFORM_URLS.irisApi)
+      if (!res.ok) {
+        sp.stop("Failed", 1)
+        prompts.log.error(res.status === 404 ? `Bloq ${bloqId} not found (or not yours)` : `HTTP ${res.status}`)
+        prompts.outro("Done")
+        return
+      }
+      const channels = (await res.json()) as any[]
+      sp.stop("Loaded")
+      const broadcast = (Array.isArray(channels) ? channels : []).filter((c) => ["slack", "discord"].includes(c.channel_type))
+      if (!broadcast.length) {
+        prompts.log.info(`No Slack/Discord channels on bloq ${bloqId}`)
+        prompts.outro("Done")
+        return
+      }
+      console.log()
+      for (const c of broadcast) {
+        const target = c.announce_channel_id ?? c.config?.announce_channel_id ?? null
+        console.log(`  ${bold(c.channel_type)}  ${target ? success(target) : dim("(no target set)")}`)
+      }
+      console.log()
+      prompts.outro("Done")
+    } catch (e) {
+      sp.stop("Failed", 1)
+      prompts.log.error(e instanceof Error ? e.message : String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ChannelsAnnounceTargetCommand = cmd({
+  command: "announce-target <action>",
+  describe: "set or view which channel receives announcements",
+  builder: (yargs) =>
+    yargs
+      .command(AnnounceTargetSetCommand)
+      .command(AnnounceTargetGetCommand)
+      .demandCommand(1, "Use: announce-target set <type> --bloq-id N --channel <id>  |  announce-target get --bloq-id N"),
+  async handler() {},
+})
+
 // ─── Main Command ────────────────────────────────────────────────
 
 export const PlatformChannelsCommand = cmd({
@@ -603,6 +720,7 @@ export const PlatformChannelsCommand = cmd({
       .command(ChannelsConnectCommand)
       .command(ChannelsDisconnectCommand)
       .command(ChannelsStatusCommand)
+      .command(ChannelsAnnounceTargetCommand)
       .strict(false),
   async handler() {
     // Default: show list

@@ -223,13 +223,19 @@ function printChecklist(items: CheckItem[]): void {
 // Discord webhook resolution
 // ============================================================================
 
-async function resolveDiscordWebhook(): Promise<string | null> {
+export async function resolveDiscordWebhook(): Promise<string | null> {
   for (const key of ["DISCORD_RELEASE_WEBHOOK_URL", "PLATFORM_UPDATES_DISCORD_CHANNEL_WEBHOOK_URL"]) {
     if (process.env[key]) return process.env[key]!
   }
-  try {
-    const envPath = join(homedir(), ".iris", "sdk", ".env")
-    if (existsSync(envPath)) {
+  // Fall back to the local .env files the user already configures. The Discord
+  // webhook commonly lives in the Hive bridge env (PLATFORM_UPDATES_…), so check
+  // both the SDK and bridge env files.
+  for (const envPath of [
+    join(homedir(), ".iris", "sdk", ".env"),
+    join(homedir(), ".iris", "bridge", ".env"),
+  ]) {
+    try {
+      if (!existsSync(envPath)) continue
       const raw = readFileSync(envPath, "utf-8")
       const text = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw
       for (const line of text.split("\n")) {
@@ -238,8 +244,8 @@ async function resolveDiscordWebhook(): Promise<string | null> {
           if (m?.[1]) return m[1].trim()
         }
       }
-    }
-  } catch {}
+    } catch {}
+  }
   return null
 }
 

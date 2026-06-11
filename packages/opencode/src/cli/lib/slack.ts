@@ -60,13 +60,33 @@ export async function getToken(): Promise<string | null> {
       if (token) { _cachedToken = token; return token }
     }
 
-    // Fallback: try env var
-    if (process.env.SLACK_BOT_TOKEN) {
-      _cachedToken = process.env.SLACK_BOT_TOKEN
+    // Fallback: env var, then the local .env files the user already configures
+    // (~/.iris/sdk/.env, ~/.iris/bridge/.env) — symmetric with the Discord webhook.
+    const fromEnv = process.env.SLACK_BOT_TOKEN || readKeyFromIrisEnv("SLACK_BOT_TOKEN")
+    if (fromEnv) {
+      _cachedToken = fromEnv
       return _cachedToken
     }
   } catch {}
 
+  return null
+}
+
+function readKeyFromIrisEnv(key: string): string | null {
+  try {
+    const { homedir } = require("os")
+    const { join } = require("path")
+    const { existsSync, readFileSync } = require("fs")
+    for (const p of [join(homedir(), ".iris", "sdk", ".env"), join(homedir(), ".iris", "bridge", ".env")]) {
+      if (!existsSync(p)) continue
+      const raw = readFileSync(p, "utf-8")
+      const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
+      for (const line of text.split("\n")) {
+        const m = line.match(new RegExp(`^${key}\\s*=\\s*(.+)`))
+        if (m?.[1]) return m[1].trim()
+      }
+    }
+  } catch {}
   return null
 }
 
@@ -91,6 +111,41 @@ async function slackFetch(method: string, token: string, params: Record<string, 
   const data = await res.json()
   if (!data.ok) throw new Error(`Slack API ${method}: ${data.error || "unknown error"}`)
   return data
+}
+
+// ── Posting ──
+
+/**
+ * Post a message to a Slack channel via chat.postMessage (POST + JSON body).
+ * `channel` may be a channel ID (C…/G…) or a #name. Returns the message ts on success.
+ * Throws with Slack's error code (e.g. `not_in_channel`, `channel_not_found`) so callers
+ * can surface an actionable message.
+ */
+export async function postMessage(
+  token: string,
+  channel: string,
+  text: string,
+  opts: { blocks?: unknown[]; unfurl?: boolean } = {},
+): Promise<string> {
+  const res = await fetch(`${SLACK_API}/chat.postMessage`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({
+      channel,
+      text,
+      ...(opts.blocks ? { blocks: opts.blocks } : {}),
+      unfurl_links: opts.unfurl ?? false,
+      unfurl_media: opts.unfurl ?? false,
+    }),
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!res.ok) throw new Error(`Slack chat.postMessage: HTTP ${res.status}`)
+  const data = (await res.json()) as any
+  if (!data.ok) throw new Error(data.error || "unknown error")
+  return data.ts as string
 }
 
 // ── Channels ──
