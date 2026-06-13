@@ -534,12 +534,21 @@ const ChannelsStatusCommand = cmd({
     try {
       const fs = require("fs")
       const path = require("path")
-      const somDir = path.join(process.env.HOME, "Sites/freelabel/fl-docker-dev/coding-agent-bridge/som")
-      const testsDir = path.join(process.env.HOME, "Sites/freelabel/tests/e2e")
+      const os = require("os")
+      // Prefer the bundled bridge som dir (~/.iris/bridge/som) so this works on
+      // client machines; fall back to the dev checkout only if it exists.
+      const searchDirs = [
+        path.join(os.homedir(), ".iris", "bridge", "som"),
+        path.join(os.homedir(), "Sites/freelabel/fl-docker-dev/coding-agent-bridge/som"),
+        path.join(os.homedir(), "Sites/freelabel/tests/e2e"),
+      ]
       const candidates = ["instagram-auth-thediscoverpage_.json", "instagram-auth-freelabelnet.json", "instagram-auth-heyiris.io.json", "instagram-auth.json"]
       let found = false
-      for (const f of candidates) {
-        if (fs.existsSync(path.join(somDir, f)) || fs.existsSync(path.join(testsDir, f))) { found = true; break }
+      for (const dir of searchDirs) {
+        for (const f of candidates) {
+          if (fs.existsSync(path.join(dir, f))) { found = true; break }
+        }
+        if (found) break
       }
       checks.push({ name: "Instagram", icon: "📷", ok: found, detail: found ? "session file found" : "no saved session", connect: "iris hive credentials save-session --platform instagram" })
     } catch {

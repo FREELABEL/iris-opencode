@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, bold, dim, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, resolveUserId, IRIS_API, bold, dim, success, highlight } from "./iris-api"
 import * as fs from "fs"
 import * as os from "os"
 import * as pathNode from "path"
@@ -826,6 +826,78 @@ const SomDebugCommand = cmd({
   },
 })
 
+// ── Sync — populate the local campaign cache from the DB (bug #133634) ──
+// The bridge's som-all.js reads campaigns synchronously from a disk cache
+// (~/.iris/bridge/som/.som-campaigns-cache.json). On a fresh machine that cache
+// is empty, so SOM no-ops. This pulls the DB-authoritative campaign templates
+// (the same ones managed in the web UI) and writes the cache the daemon reads.
+const SomSyncCommand = cmd({
+  command: "sync",
+  describe: "Sync SOM campaigns from the DB into the local cache the daemon reads",
+  builder: (yargs) =>
+    yargs.option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const userId = await resolveUserId()
+    if (!userId) {
+      console.error(dim("Could not resolve your user id — run: iris auth login"))
+      process.exit(1)
+    }
+
+    const res = await irisFetch(`/api/v1/campaign-templates/daemon-configs?user_id=${userId}`, {}, IRIS_API)
+    if (!res.ok) {
+      await handleApiError(res, "sync SOM campaigns")
+      process.exit(1)
+    }
+
+    const body = (await res.json()) as { configs?: Record<string, any>; active_accounts?: any[]; source?: string }
+    const configs = body?.configs ?? {}
+    const count = Object.keys(configs).length
+
+    if (count === 0) {
+      console.error(dim(`No SOM campaigns found for user ${userId}. Create them in the web UI (Campaign Templates) first.`))
+      process.exit(1)
+    }
+
+    // Write the cache to the bundled bridge som dir (what the daemon spawns), and
+    // also to the dev checkout if present, so local runs pick it up too.
+    const payload = JSON.stringify({ syncedAt: new Date().toISOString(), campaigns: configs }, null, 2)
+    const targets = [
+      pathNode.join(os.homedir(), ".iris", "bridge", "som"),
+      pathNode.join(os.homedir(), "Sites", "freelabel", "fl-docker-dev", "coding-agent-bridge", "som"),
+    ]
+    const written: string[] = []
+    for (const dir of targets) {
+      try {
+        // Only create the bundled dir; skip the dev dir if its checkout is absent
+        const isBundled = dir.includes(pathNode.join(".iris", "bridge"))
+        if (!fs.existsSync(dir)) {
+          if (!isBundled) continue
+          fs.mkdirSync(dir, { recursive: true })
+        }
+        const cacheFile = pathNode.join(dir, ".som-campaigns-cache.json")
+        fs.writeFileSync(cacheFile, payload)
+        written.push(cacheFile)
+      } catch { /* best-effort per target */ }
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify({ synced: count, source: body?.source ?? "database", written }, null, 2))
+      return
+    }
+
+    console.log(success(`Synced ${count} SOM campaign${count === 1 ? "" : "s"} (source: ${body?.source ?? "database"})`))
+    for (const [id, c] of Object.entries(configs)) {
+      const active = (c as any).active === false ? dim(" (off)") : ""
+      console.log(`  ${bold(id)} — board ${(c as any).boardId ?? "?"} · ${(c as any).strategy ?? "?"}${active}`)
+    }
+    console.log("")
+    for (const f of written) console.log(dim(`  → ${f}`))
+    if (written.length === 0) console.log(dim("  (no cache target writable — is ~/.iris/bridge installed?)"))
+  },
+})
+
 // ── Parent command ──
 
 export const PlatformSomCommand = cmd({
@@ -841,6 +913,7 @@ export const PlatformSomCommand = cmd({
       .command(SomLedgerCommand)
       .command(SomRetryCommand)
       .command(SomDebugCommand)
+      .command(SomSyncCommand)
       // Default to overview when no subcommand
       .option("campaign", { alias: "c", describe: "show only one campaign", type: "string" })
       .option("scripts", { alias: "s", describe: "show full script text", type: "boolean" })
