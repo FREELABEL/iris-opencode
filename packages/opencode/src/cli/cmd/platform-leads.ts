@@ -4471,6 +4471,58 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
 // Meet — schedule a meeting with a lead (syncs to Google Calendar)
 // ============================================================================
 
+// Red/danger text — iris-api exposes success/dim but no danger helper.
+function danger(s: string): string {
+  return `${UI.Style.TEXT_DANGER}${s}${UI.Style.TEXT_NORMAL}`
+}
+
+// Normalize the various envelopes execute-direct can return for a calendar event.
+// ok=false when the backend reported failure OR no event id came back — so the CLI
+// never reports a phantom "synced" when Google auth is silently disconnected.
+function extractCalendarEvent(raw: any): { ok: boolean; eventId: string | null; eventUrl: string | null } {
+  if (!raw || typeof raw !== "object") return { ok: false, eventId: null, eventUrl: null }
+  const d = raw.data ?? raw
+  const rd = d.response_data ?? d.result ?? d
+  const eventId = raw.event_id ?? d.event_id ?? rd.event_id ?? rd.id ?? d.id ?? null
+  const eventUrl = raw.event_url ?? d.event_url ?? rd.event_url ?? rd.htmlLink ?? d.htmlLink ?? null
+  const explicitlyFailed = raw.success === false || d.success === false
+  return { ok: !!eventId && !explicitlyFailed, eventId: eventId ?? null, eventUrl: eventUrl ?? null }
+}
+
+// Minimal RFC-5545 VEVENT so scheduling always leaves a usable invite on disk,
+// even when Google OAuth is disconnected (the .ics fallback).
+function buildIcs(opts: {
+  uid: string
+  title: string
+  start: string
+  end: string
+  description?: string
+  location?: string
+  attendees?: string[]
+}): string {
+  const fmt = (iso: string) => new Date(iso).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "")
+  const esc = (s: string) =>
+    String(s ?? "").replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n")
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//IRIS//leads meet//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${opts.uid}`,
+    `DTSTAMP:${fmt(new Date().toISOString())}`,
+    `DTSTART:${fmt(opts.start)}`,
+    `DTEND:${fmt(opts.end)}`,
+    `SUMMARY:${esc(opts.title)}`,
+  ]
+  if (opts.description) lines.push(`DESCRIPTION:${esc(opts.description)}`)
+  if (opts.location) lines.push(`LOCATION:${esc(opts.location)}`)
+  for (const a of opts.attendees ?? []) lines.push(`ATTENDEE;RSVP=TRUE:mailto:${a}`)
+  lines.push("END:VEVENT", "END:VCALENDAR")
+  return lines.join("\r\n")
+}
+
 const LeadsMeetCommand = cmd({
   command: "meet <id>",
   aliases: ["schedule"],
@@ -4539,6 +4591,13 @@ const LeadsMeetCommand = cmd({
     const spinner = prompts.spinner()
 
     let calendarResult: any = null
+    let calEvent: { ok: boolean; eventId: string | null; eventUrl: string | null } = {
+      ok: false,
+      eventId: null,
+      eventUrl: null,
+    }
+    let calendarSynced = false
+    let icsPath: string | undefined
     let resolvedCalendarName: string | undefined
     let calendarId: string | undefined
     const attendeeList: string[] = []
@@ -4598,17 +4657,51 @@ const LeadsMeetCommand = cmd({
           ...(attendeeList.length > 0 ? { attendees: attendeeList } : {}),
           ...(calendarId ? { calendar_id: calendarId } : {}),
         }, accountOpts)
-        spinner.stop(`${success("✓")} Calendar event created`)
+        calEvent = extractCalendarEvent(calendarResult)
+        calendarSynced = calEvent.ok
+        if (calendarSynced) {
+          spinner.stop(`${success("✓")} Calendar event created`)
+        } else {
+          // Backend returned 200 but no event id / explicit failure — Google auth
+          // is almost certainly expired/disconnected. Do NOT report a phantom sync.
+          spinner.stop(`${danger("✗")} Calendar event not confirmed`)
+          prompts.log.warn("Integration responded but returned no event — Google auth is likely disconnected.")
+        }
       } catch (err: any) {
-        spinner.stop(`Calendar sync failed: ${err.message}`)
-        prompts.log.warn("Continuing with note + task only")
+        spinner.stop(`${danger("✗")} Calendar sync failed: ${err.message}`)
+        prompts.log.warn("Continuing with note + task + .ics invite only")
+      }
+
+      // Always leave a usable invite on disk so a Google-auth failure never blocks scheduling.
+      try {
+        const icsDir = join(homedir(), ".iris", "calendar")
+        mkdirSync(icsDir, { recursive: true })
+        const safeStart = startTime.replace(/[:.]/g, "-")
+        const path = join(icsDir, `lead-${leadId}-${safeStart}.ics`)
+        writeFileSync(
+          path,
+          buildIcs({
+            uid: `iris-lead-${leadId}-${safeStart}@heyiris.io`,
+            title,
+            start: startTime,
+            end: endTime,
+            description,
+            location: (args.location as string) ?? undefined,
+            attendees: attendeeList,
+          }),
+          "utf8",
+        )
+        icsPath = path
+      } catch {
+        icsPath = undefined
       }
     }
 
     // Save note on lead
+    let noteSaved = false
     try {
-      const noteMsg = `Meeting scheduled: ${title}\nDate: ${formatDate(startTime)} ${formatTime(startTime)}${args.location ? `\nLocation: ${args.location}` : ""}${args.notes ? `\nAgenda: ${args.notes}` : ""}${calendarResult?.event_url ? `\nCalendar: ${calendarResult.event_url}` : ""}`
-      await irisFetch(`/api/v1/leads/${leadId}/notes`, {
+      const noteMsg = `Meeting scheduled: ${title}\nDate: ${formatDate(startTime)} ${formatTime(startTime)}${args.location ? `\nLocation: ${args.location}` : ""}${args.notes ? `\nAgenda: ${args.notes}` : ""}${calEvent.eventUrl ? `\nCalendar: ${calEvent.eventUrl}` : ""}${!calendarSynced && !args["no-calendar"] ? `\n(Google Calendar not synced — .ics invite generated)` : ""}`
+      const noteRes = await irisFetch(`/api/v1/leads/${leadId}/notes`, {
         method: "POST",
         body: JSON.stringify({
           message: noteMsg,
@@ -4616,10 +4709,11 @@ const LeadsMeetCommand = cmd({
           activity_type: "meeting",
           activity_icon: "calendar",
           activity_data: JSON.stringify({
-            calendar_event_id: calendarResult?.event_id ?? calendarResult?.id ?? null,
+            calendar_event_id: calEvent.eventId,
             calendar_id: calendarId ?? null,
             calendar_name: resolvedCalendarName ?? null,
-            event_url: calendarResult?.event_url ?? calendarResult?.htmlLink ?? null,
+            calendar_synced: calendarSynced,
+            event_url: calEvent.eventUrl,
             account: (args.account as string) ?? null,
             start_time: startTime,
             end_time: endTime,
@@ -4629,11 +4723,13 @@ const LeadsMeetCommand = cmd({
           }),
         }),
       })
+      noteSaved = !!noteRes?.ok
     } catch {}
 
     // Create task with due_date
+    let taskCreated = false
     try {
-      await irisFetch(`/api/v1/leads/${leadId}/tasks`, {
+      const taskRes = await irisFetch(`/api/v1/leads/${leadId}/tasks`, {
         method: "POST",
         body: JSON.stringify({
           title,
@@ -4642,13 +4738,18 @@ const LeadsMeetCommand = cmd({
           status: "pending",
         }),
       })
+      taskCreated = !!taskRes?.ok
     } catch {}
+
+    // Surface a non-zero exit when calendar was requested but didn't actually sync,
+    // so Hive/automation see a real failure instead of a green run.
+    if (!args["no-calendar"] && !calendarSynced) process.exitCode = 1
 
     // Send meeting invite email to lead (opt-in via --notify)
     let emailSent = false
     if (args.notify && lead.email) {
       try {
-        const eventUrl = calendarResult?.event_url ?? calendarResult?.data?.response_data?.htmlLink ?? ""
+        const eventUrl = calEvent.eventUrl ?? ""
         const emailBody = [
           `Hi ${lead.first_name ?? lead.name ?? "there"},`,
           "",
@@ -4680,7 +4781,20 @@ const LeadsMeetCommand = cmd({
     if (args.json) {
       console.log(
         JSON.stringify(
-          { lead_id: leadId, title, start: startTime, end: endTime, calendar: calendarResult ?? null, email_sent: emailSent },
+          {
+            lead_id: leadId,
+            title,
+            start: startTime,
+            end: endTime,
+            calendar_synced: calendarSynced,
+            event_id: calEvent.eventId,
+            event_url: calEvent.eventUrl,
+            ics_path: icsPath ?? null,
+            note_saved: noteSaved,
+            task_created: taskCreated,
+            calendar: calendarResult ?? null,
+            email_sent: emailSent,
+          },
           null,
           2,
         ),
@@ -4695,17 +4809,26 @@ const LeadsMeetCommand = cmd({
       if (resolvedCalendarName) printKV("Calendar", resolvedCalendarName)
       else if (args.calendar) printKV("Calendar", args.calendar as string)
       if (args.account) printKV("Account", args.account as string)
-      if (calendarResult?.event_url) printKV("Link", calendarResult.event_url)
+      if (calEvent.eventUrl) printKV("Link", calEvent.eventUrl)
       printKV(
         "Synced",
-        args["no-calendar"] ? dim("skipped") : calendarResult ? success("✓ Google Calendar") : dim("failed"),
+        args["no-calendar"] ? dim("skipped") : calendarSynced ? success("✓ Google Calendar") : danger("✗ failed"),
       )
-      printKV("Note", success("✓ saved"))
-      printKV("Task", success("✓ created"))
+      printKV("Note", noteSaved ? success("✓ saved") : danger("✗ failed"))
+      printKV("Task", taskCreated ? success("✓ created") : danger("✗ failed"))
+      if (icsPath) printKV("Invite", `${icsPath}  ${dim("(.ics — double-click to add)")}`)
       if (args.notify) {
-        printKV("Email", emailSent ? success(`✓ sent to ${lead.email}`) : lead.email ? dim("failed") : dim("no email on lead"))
+        printKV("Email", emailSent ? success(`✓ sent to ${lead.email}`) : lead.email ? danger("✗ failed") : dim("no email on lead"))
       }
       printDivider()
+
+      // When the calendar genuinely didn't sync, tell the user why + how to recover —
+      // instead of the old silent false-success.
+      if (!args["no-calendar"] && !calendarSynced) {
+        prompts.log.warn("Google Calendar did not confirm this event — your Google auth is likely disconnected/expired.")
+        if (icsPath) prompts.log.info(`Add it now via the invite: ${icsPath}`)
+        prompts.log.info(dim("Reconnect:  iris integrations list   →   reconnect google-calendar"))
+      }
     }
 
     prompts.outro(`${dim(`iris leads pulse ${leadId}`)}  ·  ${dim(`iris leads meetings ${leadId}`)}`)
