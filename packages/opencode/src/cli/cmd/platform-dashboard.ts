@@ -313,15 +313,181 @@ const StatusCmd = cmd({
   },
 })
 
+// ─── add-assistant ─────────────────────────────────────────────────────────
+
+const AddAssistantCmd = cmd({
+  command: "add-assistant <slug>",
+  describe: "drop an AI chat assistant onto a dashboard page, wired to a bloq agent",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug to add the assistant to", type: "string", demandOption: true })
+      .option("agent-id", { describe: "BloqAgent id to chat with (auto-detected from the bloq if omitted)", type: "number" })
+      .option("bloq-id", { describe: "bloq the agent is scoped to (defaults to the page owner / agent's bloq)", type: "number" })
+      .option("title", { describe: "assistant title (default: '<Page> AI Assistant')", type: "string" })
+      .option("subtitle", { describe: "assistant subtitle", type: "string" })
+      .option("suggestion", { describe: "starter prompt chip (repeatable)", type: "array" })
+      .option("model", { describe: "model override (nano tiers)", type: "string", default: "gpt-4.1-nano" })
+      .option("replace", { describe: "make the chat the page's sole content (keeps a banner if present)", type: "boolean", default: false })
+      .option("nav", { describe: "point/activate this page's 'AI Assistant' nav item here", type: "boolean", default: false })
+      .option("publish", { describe: "publish after saving (use --no-publish for draft)", type: "boolean", default: true }),
+  async handler(args) {
+    UI.empty()
+    const slug = args.slug as string
+    prompts.intro(`◈  Add AI Assistant → ${slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const userId = await requireUserId()
+    if (!userId) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Loading page…")
+
+    // 1. Fetch the page with its json_content.
+    let page: any
+    try {
+      const res = await dashFetch(`/api/v1/pages/by-slug/${encodeURIComponent(slug)}?include_json=1&include_drafts=1`)
+      if (!res.ok) { sp.stop(`Page "${slug}" not found`, 1); prompts.outro("Done"); return }
+      const data = (await res.json()) as { data?: any }
+      page = data?.data ?? data
+    } catch (err) {
+      sp.stop("Error loading page", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done"); return
+    }
+
+    const jc = page?.json_content
+    if (!jc || typeof jc !== "object") { sp.stop("Page has no json_content to edit", 1); prompts.outro("Done"); return }
+
+    // 2. Resolve bloq + agent (explicit flags win; otherwise infer).
+    let bloqId = (args.bloqId as number | undefined) ?? (page.owner_type === "bloq" ? Number(page.owner_id) : undefined)
+    let agentId = args.agentId as number | undefined
+    let agentName = ""
+
+    if (!agentId) {
+      if (!bloqId) { sp.stop("No --agent-id and no bloq to detect from — pass --agent-id (and --bloq-id)", 1); prompts.outro("Done"); return }
+      sp.message("Finding agent for bloq…")
+      try {
+        const res = await dashFetch(`/api/v1/users/${userId}/bloqs/agents?bloq_id=${bloqId}`)
+        const body = (await res.json()) as any
+        const agents: any[] = (Array.isArray(body) ? body : body?.data) ?? []
+        const scoped = agents.filter((a) => Number(a.bloq_id) === Number(bloqId))
+        const active = scoped.filter((a) => a.active)
+        const pick = active.length ? active : scoped
+        if (pick.length === 1) { agentId = Number(pick[0].id); agentName = pick[0].name }
+        else if (pick.length === 0) { sp.stop(`No agents on bloq ${bloqId} — pass --agent-id`, 1); prompts.outro("Done"); return }
+        else {
+          sp.stop(`${pick.length} agents on bloq ${bloqId} — pass --agent-id to pick one:`, 1)
+          pick.forEach((a) => console.log(`  ${a.id}  ${dim(a.name)}`))
+          prompts.outro("Done"); return
+        }
+      } catch (err) {
+        sp.stop("Agent lookup failed — pass --agent-id", 1); prompts.outro("Done"); return
+      }
+    }
+
+    // Backfill bloq from the agent record if still unknown.
+    if (!bloqId && agentId) {
+      try {
+        const res = await dashFetch(`/api/v1/users/${userId}/bloqs/agents/${agentId}`)
+        const a = ((await res.json()) as any)?.data ?? (await res.json().catch(() => ({})))
+        if (a?.bloq_id) bloqId = Number(a.bloq_id)
+        if (!agentName && a?.name) agentName = a.name
+      } catch { /* non-fatal */ }
+    }
+
+    // 3. Build the AiChat block.
+    const title = (args.title as string) || `${page.title || slug} AI Assistant`
+    const initials =
+      (title.replace(/[^A-Za-z ]/g, "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("")) || "AI"
+    const suggestions =
+      (args.suggestion as (string | number)[] | undefined)?.map((s) => ({ label: String(s) })) ?? [
+        { label: "What can you help me with?" },
+        { label: "Give me a summary of my data" },
+      ]
+
+    const chat = {
+      type: "AiChat",
+      id: "ai-chat",
+      props: {
+        agentId,
+        ...(bloqId ? { bloqId } : {}),
+        title,
+        subtitle: (args.subtitle as string) || "Ask about your data",
+        agentInitials: initials,
+        placeholder: "Ask anything…",
+        model: args.model as string,
+        height: "calc(100vh - 260px)",
+        themeMode: jc?.theme?.mode === "dark" ? "dark" : "light",
+        suggestions,
+      },
+    }
+
+    // 4. Inject into the page's components.
+    if (!Array.isArray(jc.components)) jc.components = []
+    if (args.replace) {
+      const banner = jc.components.find((c: any) => c.type === "WidgetWorkspaceBanner")
+      jc.components = [...(banner ? [banner] : []), chat]
+    } else {
+      const idx = jc.components.findIndex((c: any) => c.type === "AiChat")
+      if (idx >= 0) jc.components[idx] = chat
+      else jc.components.push(chat)
+    }
+
+    // 5. Optionally wire this page's "AI Assistant" nav item here.
+    if (args.nav && Array.isArray(jc.layout?.navItems)) {
+      const item = jc.layout.navItems.find((n: any) => /ai assistant/i.test(String(n.label || "")))
+      jc.layout.navItems.forEach((n: any) => { n.active = false })
+      if (item) { item.url = `/p/${slug}`; item.active = true }
+    }
+
+    // 6. Save (server validates AiChat against the component registry).
+    sp.message("Saving page…")
+    try {
+      const res = await dashFetch(`/api/v1/pages/${page.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ json_content: jc }),
+      })
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as any
+        const msg = err?.errors ? JSON.stringify(err.errors) : err?.message || `HTTP ${res.status}`
+        sp.stop(`Push failed: ${msg}`, 1); prompts.outro("Done"); return
+      }
+    } catch (err) {
+      sp.stop("Error saving page", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done"); return
+    }
+
+    // 7. Publish + purge cache (default).
+    if (args.publish !== false) {
+      sp.message("Publishing…")
+      await dashFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" }).catch(() => {})
+      await dashFetch("/api/internal/cache/purge-page", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug }),
+      }).catch(() => {})
+      sp.stop(success("Assistant added + published"))
+    } else {
+      sp.stop(success("Assistant added (draft)"))
+    }
+
+    printDivider()
+    printKV("Page", slug)
+    printKV("Agent", `#${agentId}${agentName ? ` (${agentName})` : ""}`)
+    if (bloqId) printKV("Bloq", String(bloqId))
+    printKV("URL", publicUrl(slug))
+    printDivider()
+    prompts.outro(dim(`iris pages get ${slug} components`))
+  },
+})
+
 // ─── export ──────────────────────────────────────────────────────────────────
 
 export const PlatformDashboardCommand = cmd({
   command: "dashboard",
-  describe: "manage client dashboards — create, status",
+  describe: "manage client dashboards — create, status, add-assistant",
   builder: (y) =>
     y
       .command(CreateCmd)
       .command(StatusCmd)
+      .command(AddAssistantCmd)
       .demandCommand(1, "Run iris dashboard <command> --help"),
   handler() {},
 })
