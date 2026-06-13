@@ -2,9 +2,7 @@ import { readFileSync } from "node:fs"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
-
-const FL_API = "fl-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API } from "./iris-api"
 
 function pagesFetch(path: string, opts?: RequestInit) {
   return irisFetch(path, opts, FL_API)
