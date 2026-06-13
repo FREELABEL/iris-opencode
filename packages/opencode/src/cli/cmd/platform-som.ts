@@ -898,6 +898,130 @@ const SomSyncCommand = cmd({
   },
 })
 
+// ── Browser-session distribution (encrypted cloud ↔ any node) ─────────────────
+// Sessions live encrypted in the user's cloud (platform_credentials, keyed by
+// bloq_id+platform). push-sessions seeds the cloud from a machine that has the
+// local IG logins; pull-sessions distributes them to any node. This is what lets
+// SOM actually RUN on a fresh machine that has no instagram-auth-*.json.
+
+// The som dirs the bridge/daemon read session files from (bundled install + dev).
+function somSessionDirs(): string[] {
+  return [
+    pathNode.join(os.homedir(), ".iris", "bridge", "som"),
+    pathNode.join(os.homedir(), "Sites", "freelabel", "fl-docker-dev", "coding-agent-bridge", "som"),
+  ]
+}
+
+// Active SOM campaigns (deduped by igAccount) with their board + IG account.
+async function fetchSomIgCampaigns(userId: number): Promise<Array<{ id: string; boardId: string; igAccount: string }>> {
+  const res = await irisFetch(`/api/v1/campaign-templates/daemon-configs?user_id=${userId}`, {}, IRIS_API)
+  if (!res.ok) { await handleApiError(res, "fetch SOM campaigns"); return [] }
+  const body = (await res.json()) as { configs?: Record<string, any> }
+  const seen = new Set<string>()
+  const out: Array<{ id: string; boardId: string; igAccount: string }> = []
+  for (const [id, c] of Object.entries(body?.configs ?? {})) {
+    const ig = (c as any).igAccount
+    const board = (c as any).boardId
+    if (!ig || !board || seen.has(ig)) continue
+    seen.add(ig)
+    out.push({ id, boardId: String(board), igAccount: String(ig) })
+  }
+  return out
+}
+
+function findLocalSession(igAccount: string): string | null {
+  for (const dir of somSessionDirs()) {
+    const f = pathNode.join(dir, `instagram-auth-${igAccount}.json`)
+    if (fs.existsSync(f)) return f
+  }
+  return null
+}
+
+const SomPushSessionsCommand = cmd({
+  command: "push-sessions",
+  describe: "Upload this machine's local IG sessions to your encrypted cloud store",
+  builder: (yargs) =>
+    yargs
+      .option("account", { describe: "only this IG account", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const userId = await resolveUserId()
+    if (!userId) { console.error(dim("Could not resolve your user id — run: iris auth login")); process.exit(1) }
+
+    let campaigns = await fetchSomIgCampaigns(userId)
+    if (args.account) campaigns = campaigns.filter((c) => c.igAccount === args.account)
+    if (campaigns.length === 0) { console.error(dim("No SOM campaigns with an IG account found.")); process.exit(1) }
+
+    const results: Array<{ account: string; board: string; status: string }> = []
+    for (const c of campaigns) {
+      const file = findLocalSession(c.igAccount)
+      if (!file) { results.push({ account: c.igAccount, board: c.boardId, status: "no local session" }); continue }
+      let storageState: any
+      try { storageState = JSON.parse(fs.readFileSync(file, "utf8")) } catch { results.push({ account: c.igAccount, board: c.boardId, status: "unreadable file" }); continue }
+      const res = await irisFetch(`/api/v1/project-credentials`, {
+        method: "POST",
+        body: JSON.stringify({ bloq_id: Number(c.boardId), user_id: userId, platform: "instagram", credential_type: "browser_session", credentials: storageState }),
+      }, IRIS_API)
+      results.push({ account: c.igAccount, board: c.boardId, status: res.ok ? "uploaded" : `failed (${res.status})` })
+    }
+
+    if (args.json) { console.log(JSON.stringify({ results }, null, 2)); return }
+    const ok = results.filter((r) => r.status === "uploaded").length
+    console.log(success(`Pushed ${ok}/${results.length} IG session${results.length === 1 ? "" : "s"} to the cloud`))
+    for (const r of results) {
+      const mark = r.status === "uploaded" ? "✓" : "•"
+      console.log(`  ${mark} ${bold(r.account)} ${dim(`(board ${r.board})`)} — ${r.status}`)
+    }
+  },
+})
+
+const SomPullSessionsCommand = cmd({
+  command: "pull-sessions",
+  describe: "Download your cloud IG sessions onto this node so SOM can run",
+  builder: (yargs) =>
+    yargs
+      .option("account", { describe: "only this IG account", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const userId = await resolveUserId()
+    if (!userId) { console.error(dim("Could not resolve your user id — run: iris auth login")); process.exit(1) }
+
+    let campaigns = await fetchSomIgCampaigns(userId)
+    if (args.account) campaigns = campaigns.filter((c) => c.igAccount === args.account)
+    if (campaigns.length === 0) { console.error(dim("No SOM campaigns with an IG account found.")); process.exit(1) }
+
+    const results: Array<{ account: string; board: string; status: string }> = []
+    for (const c of campaigns) {
+      const res = await irisFetch(`/api/v1/project-credentials/session?bloq_id=${c.boardId}&platform=instagram&user_id=${userId}`, {}, IRIS_API)
+      if (res.status === 404) { results.push({ account: c.igAccount, board: c.boardId, status: "no cloud session — run: iris som push-sessions" }); continue }
+      if (res.status === 410) { results.push({ account: c.igAccount, board: c.boardId, status: "expired — re-authenticate" }); continue }
+      if (!res.ok) { results.push({ account: c.igAccount, board: c.boardId, status: `failed (${res.status})` }); continue }
+      const body = (await res.json()) as { credentials?: any }
+      if (!body?.credentials) { results.push({ account: c.igAccount, board: c.boardId, status: "empty session" }); continue }
+      const data = JSON.stringify(body.credentials, null, 2)
+      let wrote = false
+      for (const dir of somSessionDirs()) {
+        const isBundled = dir.includes(pathNode.join(".iris", "bridge"))
+        if (!fs.existsSync(dir)) { if (!isBundled) continue; fs.mkdirSync(dir, { recursive: true }) }
+        fs.writeFileSync(pathNode.join(dir, `instagram-auth-${c.igAccount}.json`), data)
+        wrote = true
+      }
+      results.push({ account: c.igAccount, board: c.boardId, status: wrote ? "pulled" : "no writable som dir" })
+    }
+
+    if (args.json) { console.log(JSON.stringify({ results }, null, 2)); return }
+    const ok = results.filter((r) => r.status === "pulled").length
+    console.log(success(`Pulled ${ok}/${results.length} IG session${results.length === 1 ? "" : "s"} from the cloud`))
+    for (const r of results) {
+      const mark = r.status === "pulled" ? "✓" : "•"
+      console.log(`  ${mark} ${bold(r.account)} ${dim(`(board ${r.board})`)} — ${r.status}`)
+    }
+    if (ok > 0) console.log(dim("\n  Sessions written to ~/.iris/bridge/som/ — SOM can now run on this node."))
+  },
+})
+
 // ── Parent command ──
 
 export const PlatformSomCommand = cmd({
@@ -914,6 +1038,8 @@ export const PlatformSomCommand = cmd({
       .command(SomRetryCommand)
       .command(SomDebugCommand)
       .command(SomSyncCommand)
+      .command(SomPushSessionsCommand)
+      .command(SomPullSessionsCommand)
       // Default to overview when no subcommand
       .option("campaign", { alias: "c", describe: "show only one campaign", type: "string" })
       .option("scripts", { alias: "s", describe: "show full script text", type: "boolean" })
