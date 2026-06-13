@@ -170,7 +170,10 @@ rm -rf "${tmpDir}"
 BRIDGE_DIR="${irisDir}/bridge"
 if [ -d "$BRIDGE_DIR" ] && [ -d "$BRIDGE_DIR/.git" ]; then
   echo "Updating Hive daemon..."
-  (cd "$BRIDGE_DIR" && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null) || true
+  # Pin the bridge to main and self-heal branch drift (#133629) — a node stranded
+  # on a stale/feature branch would pull old code forever. Untracked runtime state
+  # (sessions, caches) survives a checkout -B.
+  (cd "$BRIDGE_DIR" && git fetch origin --quiet 2>/dev/null && git checkout -B main origin/main --quiet 2>/dev/null && npm install --production --silent 2>/dev/null) || true
 fi
 
 # ─── Post-update: Fix stale API URLs in daemon config ───

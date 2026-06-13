@@ -98,8 +98,13 @@ export const UpgradeCommand = {
         const { execSync } = await import("child_process")
         const { existsSync } = await import("fs")
         if (existsSync(`${bridgeDir}/.git`)) {
-          execSync("git pull --quiet && npm install --production --silent 2>/dev/null", { cwd: bridgeDir, timeout: 60000, stdio: "pipe" })
-          prompts.log.info("Bridge updated")
+          // Pin the bridge to main and self-heal branch drift (#133629). A node
+          // stranded on a stale/feature branch would `git pull` old code forever
+          // (the exact reason finished features never reached client machines).
+          // `checkout -B main origin/main` force-tracks main from any state;
+          // untracked runtime files (sessions, .som-campaigns-cache.json) survive.
+          execSync("git fetch origin --quiet && git checkout -B main origin/main --quiet && npm install --production --silent 2>/dev/null", { cwd: bridgeDir, timeout: 60000, stdio: "pipe" })
+          prompts.log.info("Bridge updated (pinned to main)")
           // Restart daemon so it picks up new bridge code
           const daemonCtl = `${home}/.iris/bin/iris-daemon`
           if (existsSync(daemonCtl)) {
