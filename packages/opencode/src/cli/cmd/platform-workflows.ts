@@ -1705,6 +1705,56 @@ const WorkflowsEvalCommand = cmd({
   },
 })
 
+// Run a saved template NOW on one of your registered nodes. Generalizes the SOM
+// model: pick a cloud-saved workflow → dispatch it to a node registered to you.
+const WorkflowsHubRunCommand = cmd({
+  command: "run <template-id>",
+  describe: "run a saved template now on one of your nodes",
+  builder: (yargs) =>
+    yargs
+      .positional("template-id", { describe: "template ID (UUID)", type: "string", demandOption: true })
+      .option("node", { describe: "node id to run on (default: any available node)", type: "string" })
+      .option("limit", { describe: "lead/item limit", type: "number" })
+      .option("args", { describe: "extra pass-through args, e.g. \"filter=followup\"", type: "string" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) return
+
+    const body: Record<string, unknown> = {}
+    if (args.node) body.node_id = args.node
+    if (typeof args.limit === "number") body.limit = args.limit
+    if (args.args) body.args = args.args
+
+    const res = await irisFetch(`/api/v1/campaign-templates/${args["template-id"]}/run`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }, IRIS_API)
+
+    if (!res.ok) {
+      // Surface the backend's actionable message (e.g. unsupported_type, missing_prompt_base)
+      let msg = `${res.status} ${res.statusText}`
+      try { const e = (await res.json()) as { message?: string }; if (e?.message) msg = e.message } catch { /* ignore */ }
+      console.error(dim(msg))
+      process.exitCode = 1
+      return
+    }
+
+    const out = (await res.json()) as { task?: any; dispatched?: boolean; message?: string }
+    if (args.json) { console.log(JSON.stringify(out, null, 2)); return }
+
+    const t = out?.task ?? {}
+    console.log(success(out?.message ?? "Dispatched"))
+    console.log(`  ${dim("task")}    ${bold(String(t.id ?? "?"))}  ${dim(String(t.type ?? ""))}`)
+    console.log(`  ${dim("status")}  ${String(t.status ?? "?")}${t.node_id ? `  ${dim("node")} ${t.node_id}` : ""}`)
+    if (t.prompt) console.log(`  ${dim("prompt")}  ${t.prompt}`)
+    console.log(dim(`  follow: iris hive tasks get ${t.id ?? "<id>"}`))
+  },
+})
+
 const WorkflowsHubCommand = cmd({
   command: "hub",
   describe: "browse and import campaign templates",
@@ -1713,6 +1763,7 @@ const WorkflowsHubCommand = cmd({
       .command(WorkflowsHubListCommand)
       .command(WorkflowsHubImportCommand)
       .command(WorkflowsHubInspectCommand)
+      .command(WorkflowsHubRunCommand)
       .demandCommand(0)
       .option("category", { describe: "filter by category", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
