@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, printDivider, printKV, dim, bold, success, resolveUserId } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 
 // Google Calendar integration via iris-api execute-direct endpoint
@@ -392,33 +392,70 @@ const CalendarDeleteCommand = cmd({
 // ── CALENDARS ─────────────────────────────────────────────────
 const CalendarCalendarsCommand = cmd({
   command: "calendars",
-  describe: "list all accessible calendars",
-  builder: (yargs) => addAccountOptions(yargs).option("json", { type: "boolean", default: false }),
+  describe: "list all accessible calendars (with source labels)",
+  builder: (yargs) =>
+    addAccountOptions(yargs)
+      .option("source", { type: "string", describe: "filter by source: primary|workspace|secondary|subscribed|shared" })
+      .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
     UI.empty()
     prompts.intro("◈  Calendar — All Calendars")
 
-    const result = await calExec("get_calendars", {}, getAccountOpts(args))
+    const opts = getAccountOpts(args)
+
+    // Primary path: the normalized endpoint (single source of truth for source
+    // labels — Owned / Workspace / Subscribed feed — shared with Elon + Genesis).
+    let cals: any[] | null = null
+    try {
+      const uid = await resolveUserId()
+      const qs = new URLSearchParams()
+      if (uid) qs.set("user_id", String(uid))
+      if (opts.integrationId) qs.set("integration_id", String(opts.integrationId))
+      if (args.source) qs.set("source", args.source as string)
+      const res = await irisFetch(`/api/v1/calendar/calendars?${qs.toString()}`)
+      if (res.ok) {
+        const data = await res.json()
+        if (data?.success) cals = data.calendars ?? []
+      }
+    } catch {
+      /* fall through to legacy path */
+    }
+
+    // Fallback: backend without the normalized endpoint yet — unlabeled list.
+    if (cals === null) {
+      const result = await calExec("get_calendars", {}, opts)
+      if (!result?.success) {
+        prompts.log.error(result?.error ?? "Failed to list calendars")
+        prompts.outro("Done")
+        return
+      }
+      cals = ((result.calendars ?? result.data?.calendars ?? []) as any[]).map((c: any) => ({
+        ...c,
+        name: c.name || c.summary || c.id,
+      }))
+      if (args.source) cals = cals.filter((c: any) => c.source === args.source)
+    }
+
+    if (!cals) {
+      prompts.outro("Done")
+      return
+    }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      console.log(JSON.stringify(cals, null, 2))
       prompts.outro("Done")
       return
     }
 
-    if (!result?.success) {
-      prompts.log.error(result?.error ?? "Failed to list calendars")
-      prompts.outro("Done")
-      return
-    }
-
-    const cals: any[] = result.calendars ?? result.data?.calendars ?? []
     for (const cal of cals) {
-      const primary = cal.primary ? ` ${success("* primary")}` : ""
-      console.log(`  ${bold(cal.name || cal.id)}${primary}`)
+      const tag = cal.label
+        ? `  ${dim(`[${cal.label}${cal.read_only ? " · read-only" : ""}]`)}`
+        : cal.primary
+          ? `  ${success("* primary")}`
+          : ""
+      console.log(`  ${bold(cal.name || cal.id)}${tag}`)
       console.log(`  ${dim("ID: " + cal.id)}`)
-      if (cal.timezone) console.log(`  ${dim("TZ: " + cal.timezone)}`)
       console.log()
     }
     prompts.outro(`${success("✓")} ${cals.length} calendar${cals.length === 1 ? "" : "s"}`)
