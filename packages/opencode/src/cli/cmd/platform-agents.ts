@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, streamAgentChat } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -347,72 +347,67 @@ const AgentsChatCommand = cmd({
     yargs
       .positional("id", { describe: "agent ID", type: "number", demandOption: true })
       .positional("message", { describe: "your message", type: "string", demandOption: true })
-      .option("bloq", { alias: "b", describe: "bloq ID for context", type: "number" }),
+      .option("bloq", { alias: "b", describe: "bloq ID for context", type: "number" })
+      // Each call is already a clean, stateless run (no resumed server session).
+      // --new is the default and exists as the documented escape hatch (#137387).
+      .option("new", { describe: "start a fresh stateless turn (default behavior)", type: "boolean", default: true })
+      .option("model", { alias: "m", describe: "override model (nano/flash only; keeps cost low)", type: "string" })
+      .option("max-iterations", { describe: "cap ReactLoop iterations", type: "number" }),
   async handler(args) {
-    // Delegate to iris chat --agent=<id> <message>
     UI.empty()
     prompts.intro(`◈  Agent #${args.id}`)
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    // The iris-api /chat/start endpoint resolves the user from the `userId` in the
-    // body (the SDK/platform token is an fl-api token that iris-api cannot validate
-    // via auth()->user()). Without it, non-system agents return 401 (#119559).
+    // The /api/v6/chat/stream endpoint resolves the user from `user_id` in the body
+    // (the SDK/platform token is an fl-api token that iris-api cannot validate via
+    // auth()->user()). Without it, non-system agents return 401 (#119559).
     const userId = await requireUserId()
-
-    const payload: Record<string, unknown> = {
-      query: args.message,
-      agentId: args.id,
-      conversationHistory: [{ role: "user", content: args.message }],
-      enableRAG: true,
-      contextPayload: { source: "iris-cli" },
-    }
-    if (userId) payload.userId = userId
-    if (args.bloq) payload.bloqId = String(args.bloq)
 
     prompts.log.info(`Sending: ${dim(String(args.message).slice(0, 80))}`)
     const spinner = prompts.spinner()
-    spinner.start("Waiting…")
+    spinner.start("Thinking…")
 
     try {
-      const startRes = await irisFetch("/api/chat/start", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      }, IRIS_API)
-      const ok = await handleApiError(startRes, "Chat")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      // Faithful V6 ReactLoop path — same engine + toolset as the Slack channel (#137387).
+      const result = await streamAgentChat({
+        agentId: args.id,
+        message: args.message,
+        userId,
+        bloqId: args.bloq,
+        overrideModel: args.model,
+        maxIterations: args["max-iterations"],
+        onEvent: (evt) => {
+          if (evt.type === "tool_call" && evt.tool) spinner.message(`Using ${evt.tool}…`)
+          else if (evt.type === "tool_result" && evt.tool) spinner.message(`${evt.tool} ✓`)
+          else if (evt.type === "thinking") spinner.message("Thinking…")
+        },
+      })
 
-      const { workflow_id } = (await startRes.json()) as { workflow_id?: string }
-      if (!workflow_id) { spinner.stop("No workflow ID", 1); process.exitCode = 1; prompts.outro("Done"); return }
-
-      // Poll
-      const maxSecs = 180
-      const start = Date.now()
-      let run: { status: string; summary?: string; response?: string; output?: string; error?: string } = { status: "pending" }
-      while (true) {
-        if ((Date.now() - start) / 1000 > maxSecs) break
-        const pollRes = await irisFetch(`/api/workflows/${workflow_id}`, {}, IRIS_API)
-        if (pollRes.ok) {
-          // The status endpoint wraps the run in { data: {...} }. Unwrap it, else
-          // status/summary read as undefined → poll times out + "(no response)".
-          const body = (await pollRes.json()) as { data?: typeof run }
-          run = (body.data ?? body) as typeof run
-          if (run.status === "completed" || run.status === "failed") break
-        }
-        await Bun.sleep(800)
+      if (!result.ok) {
+        spinner.stop("Failed", 1)
+        process.exitCode = 1
+        if (result.error) prompts.log.error(result.error)
+        prompts.outro("Done")
+        return
       }
 
-      const response = run.summary ?? run.response ?? run.output ?? "(no response)"
+      const response = result.content || "(no response)"
       spinner.stop("Done")
 
       printDivider()
       console.log()
       console.log(`  ${bold("Agent:")} ${response.split("\n").join("\n  ")}`)
       console.log()
+      // Surface the real toolset that ran — proof the harness is faithful (#137387).
+      if (result.toolsUsed.length > 0) {
+        console.log(`  ${dim(`tools used: ${result.toolsUsed.join(", ")}`)}`)
+        console.log()
+      }
       printDivider()
 
-      prompts.outro(dim(`iris chat --agent=${args.id} "follow up"`))
+      prompts.outro(dim(`iris agents chat ${args.id} "follow up"`))
     } catch (err) {
       spinner.stop("Error", 1)
       process.exitCode = 1

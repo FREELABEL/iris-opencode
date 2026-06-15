@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API, resolveUserId } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API, resolveUserId, streamAgentChat } from "./iris-api"
 
 // ============================================================================
 // Polling helper
@@ -60,6 +60,7 @@ async function executeChat(args: {
   "no-rag": boolean
   json?: boolean
   continue?: string
+  model?: string
 }): Promise<void> {
   const isJson = args.json === true
 
@@ -152,49 +153,49 @@ async function executeChat(args: {
   }
 
   const spinner = isJson ? null : prompts.spinner()
-  spinner?.start("Waiting for response…")
+  spinner?.start("Thinking…")
   const startTime = Date.now()
 
   try {
-    const payload: Record<string, unknown> = {
-      query: args.message,
+    // Faithful V6 ReactLoop path — same engine + toolset as the Slack channel (#137387).
+    // Stateless per call: no resumed server session → no cross-turn poisoning.
+    const result = await streamAgentChat({
       agentId,
-      conversationHistory: [{ role: "user", content: args.message }],
-      enableRAG: !args["no-rag"],
-      contextPayload: { source: "iris-cli" },
-    }
-    if (userId) payload.userId = userId
-    if (args.bloq) payload.bloqId = String(args.bloq)
+      message: args.message,
+      userId,
+      bloqId: args.bloq,
+      overrideModel: args.model,
+      timeoutSecs: args.timeout,
+      onEvent: (evt) => {
+        if (isJson) return
+        if (evt.type === "tool_call" && evt.tool) spinner?.message(`Using ${evt.tool}…`)
+        else if (evt.type === "tool_result" && evt.tool) spinner?.message(`${evt.tool} ✓`)
+      },
+    })
 
-    const startRes = await irisFetch("/api/chat/start", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }, IRIS_API)
-
-    const ok = await handleApiError(startRes, "Chat")
-    if (!ok) {
+    if (!result.ok) {
       spinner?.stop("Failed", 1)
-      if (!isJson) prompts.outro("Done")
+      if (isJson) {
+        console.log(JSON.stringify({ error: result.error ?? "Chat failed" }))
+      } else {
+        if (result.error) prompts.log.error(result.error)
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
       return
     }
 
-    const { workflow_id } = (await startRes.json()) as { workflow_id?: string }
-    if (!workflow_id) {
-      spinner?.stop("No workflow ID returned", 1)
-      if (!isJson) prompts.outro("Done")
-      return
+    spinner?.stop("Done")
+
+    const run: WorkflowRun = {
+      status: result.status === "failed" ? "failed" : "completed",
+      summary: result.content,
+      iteration_count: result.iterations,
+      elapsed_ms: Date.now() - startTime,
     }
 
-    spinner?.stop(`Workflow ${dim(workflow_id)}`)
-
-    // Poll for completion
-    const run = await pollWorkflow(workflow_id, args.timeout)
-    process.stderr.write("\r" + " ".repeat(40) + "\r")
-
-    const elapsed = Date.now() - startTime
-    run.elapsed_ms = elapsed
-
-    outputResult(run, workflow_id, agentId, isJson)
+    // No server-side workflow id in the sync stream path → pass "" (suppresses --continue).
+    outputResult(run, "", agentId, isJson, result.toolsUsed)
   } catch (err) {
     process.stderr.write("\r" + " ".repeat(40) + "\r")
     if (isJson) {
@@ -206,17 +207,18 @@ async function executeChat(args: {
   }
 }
 
-function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean): void {
+function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean, toolsUsed: string[] = []): void {
   const response = run.summary ?? run.response ?? run.output ?? "(no response)"
 
   if (isJson) {
     console.log(JSON.stringify({
-      workflow_id: workflowId,
+      workflow_id: workflowId || undefined,
       status: run.status,
       response,
       model: run.model,
       tokens: run.tokens_used,
       iterations: run.iteration_count,
+      tools_used: toolsUsed,
       elapsed_ms: run.elapsed_ms,
       requires_approval: run.requires_approval ?? false,
     }))
@@ -227,6 +229,12 @@ function outputResult(run: WorkflowRun, workflowId: string, agentId: number | un
   console.log()
   console.log(`  ${bold("Agent:")} ${response.split("\n").join("\n  ")}`)
   console.log()
+
+  // Surface the real toolset that ran — proof the harness is faithful (#137387).
+  if (toolsUsed.length > 0) {
+    console.log(`  ${dim(`tools used: ${toolsUsed.join(", ")}`)}`)
+    console.log()
+  }
 
   // Metrics
   const metrics: string[] = []
@@ -246,8 +254,10 @@ function outputResult(run: WorkflowRun, workflowId: string, agentId: number | un
     prompts.log.info(`Approve: ${dim(`iris chat approve ${workflowId}`)}`)
   }
 
+  // --continue resumes a legacy workflow; only offer it when we have a workflow id.
+  const followUp = `${dim("iris chat --agent=" + (agentId ?? "?") + ' "follow up"')}`
   prompts.outro(
-    `${dim("iris chat --agent=" + (agentId ?? "?") + ' "follow up"')}  ·  ${dim(`iris chat --continue ${workflowId}`)}`,
+    workflowId ? `${followUp}  ·  ${dim(`iris chat --continue ${workflowId}`)}` : followUp,
   )
 }
 
@@ -381,7 +391,12 @@ export const PlatformChatCommand = cmd({
         default: false,
       })
       .option("continue", {
-        describe: "resume a previous workflow by ID",
+        describe: "resume a previous workflow by ID (legacy V5.5 workflow engine)",
+        type: "string",
+      })
+      .option("model", {
+        alias: "m",
+        describe: "override model (nano/flash only; keeps cost low)",
         type: "string",
       })
       .command(ChatApproveCommand),
@@ -407,6 +422,7 @@ export const PlatformChatCommand = cmd({
       "no-rag": args["no-rag"],
       json: args.json,
       continue: args.continue,
+      model: args.model,
     })
   },
 })
