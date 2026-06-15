@@ -93,6 +93,8 @@ async function submitBug(args: {
   severity: string
   command?: string
   error?: string
+  reporterLeadId?: number
+  reporterName?: string
   json?: boolean
 }): Promise<void> {
   const sysInfo = collectSystemInfo()
@@ -112,6 +114,8 @@ async function submitBug(args: {
         description: args.description,
         severity: args.severity,
         reporter,
+        reporter_lead_id: args.reporterLeadId ?? null,
+        reporter_name: args.reporterName ?? null,
         system_info: sysInfo,
         command: args.command ?? null,
         error: args.error ?? null,
@@ -203,6 +207,14 @@ const ReportCommand = cmd({
         type: "string",
       })
       .option("user-id", { describe: "user ID (for exchange listing)", type: "number" })
+      .option("reporter-lead", {
+        describe: "lead ID of the person who actually reported the bug (for bounty attribution)",
+        type: "number",
+      })
+      .option("reporter-name", {
+        describe: "display name of the reporter (optional, used with --reporter-lead)",
+        type: "string",
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     // Combine positional title words + any passthrough args (after --)
@@ -289,6 +301,8 @@ const ReportCommand = cmd({
         severity: severity.toLowerCase(),
         command: args.command,
         error: args.error,
+        reporterLeadId: args["reporter-lead"] as number | undefined,
+        reporterName: args["reporter-name"] as string | undefined,
         json: args.json,
       })
     } catch (e: any) {
