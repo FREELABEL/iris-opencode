@@ -622,9 +622,14 @@ const CloseCommand = cmd({
       const sysInfo = collectSystemInfo()
       const resolver = `${sysInfo.user}@${sysInfo.hostname}`
 
-      let fixCommit = args.commit as string | undefined
+      // yargs treats `--no-commit` as NEGATING the --commit string option (sets
+      // args.commit === false), so the declared `no-commit` boolean never flips true.
+      // Honor BOTH forms, else --no-commit was ignored and we stamped the cwd's HEAD —
+      // often the wrong repo (e.g. the parent monorepo, not where the fix landed).
+      const noCommit = args["no-commit"] === true || (args.commit as unknown) === false
+      let fixCommit = typeof args.commit === "string" ? (args.commit as string) : undefined
       let fixCommitUrl: string | undefined
-      if (!fixCommit && !args["no-commit"]) {
+      if (!fixCommit && !noCommit) {
         const git = detectGitCommit()
         fixCommit = git.hash
         fixCommitUrl = git.url

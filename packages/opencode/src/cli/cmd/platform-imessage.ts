@@ -628,13 +628,22 @@ const MentionsRespondCommand = cmd({
       return
     }
 
+    const slice = pending.slice(0, args.limit as number)
+    // mrResearch runs `claude` SYNCHRONOUSLY (up to 5 min each), which blocks the event
+    // loop and freezes any spinner — making the command look hung (#137259). Print an
+    // explicit status line BEFORE each blocking call and the elapsed time after, so the
+    // user always sees forward progress and never assumes it's frozen.
+    prompts.log.info(`Researching ${slice.length} mention${slice.length === 1 ? "" : "s"} with Claude — each can take 1-5 min (it reads/greps the repo). Progress prints per mention:`)
     let done = 0
-    for (const m of pending.slice(0, args.limit as number)) {
+    for (let i = 0; i < slice.length; i++) {
+      const m = slice[i]
       const id = mrKey(m)
-      const sp = prompts.spinner()
-      sp.start(`${m.lead_name || m.sender} — ${dim(m.ts.slice(0, 16))}`)
+      const label = `${m.lead_name || m.sender} ${dim(m.ts.slice(0, 16))}`
+      process.stdout.write(`  ${dim(`[${i + 1}/${slice.length}]`)} researching ${label} … `)
+      const t0 = Date.now()
       const r = mrResearch(m)
-      if (r.error) { sp.stop(`${m.lead_name || m.sender}: ${r.error}`, 1); continue }
+      const secs = Math.round((Date.now() - t0) / 1000)
+      if (r.error) { console.log(`${dim(`(${secs}s)`)} ✗ ${r.error}`); continue }
       mrAppend({
         id, status: "pending", created: new Date().toISOString(),
         sender: m.sender, lead_id: m.lead_id, lead_name: m.lead_name, chat: m.chat, message: m.text,
@@ -642,7 +651,7 @@ const MentionsRespondCommand = cmd({
         internal_findings: r.internal_findings, draft_reply: r.client_reply, needs_human: r.needs_human,
       })
       processed.add(id); mrSaveProcessed(processed)
-      sp.stop(`${success("✓")} ${m.lead_name || m.sender} ${dim(`[${r.category}/${r.severity}]`)} ${r.needs_human ? "⚑ needs-human" : "auto-ok"} ${dim(id)}`)
+      console.log(`${dim(`(${secs}s)`)} ${success("✓")} ${dim(`[${r.category}/${r.severity}]`)} ${r.needs_human ? "⚑ needs-human" : "auto-ok"} ${dim(id)}`)
       done++
     }
     prompts.outro(`${success("✓")} Queued ${done} draft${done === 1 ? "" : "s"} — review: ${bold("iris imessage mentions drafts")}`)

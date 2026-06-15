@@ -29,31 +29,38 @@ const ProjPullCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
-      .option("output", { alias: "o", describe: "custom output path", type: "string" }),
+      .option("output", { alias: "o", describe: "custom output path", type: "string" })
+      .option("json", { type: "boolean", default: false, describe: "print the projections as JSON to stdout instead of writing a file" }),
   async handler(args) {
     UI.empty()
     const bloqId = args["bloq-id"] as number
-    prompts.intro(`Atlas Projections -- Pull (bloq ${bloqId})`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    if (!args.json) prompts.intro(`Atlas Projections -- Pull (bloq ${bloqId})`)
+    const token = await requireAuth(); if (!token) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Fetching...")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Fetching...")
     try {
       const res = await irisFetch(`/api/v1/atlas/${bloqId}/projections`)
-      const ok = await handleApiError(res, "Get projections"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const ok = await handleApiError(res, "Get projections"); if (!ok) { spinner?.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
       const body = (await res.json()) as any
       const doc = body?.data ?? body
 
       if (!doc || Object.keys(doc).length === 0) {
-        spinner.stop("Not found", 1)
-        prompts.log.error("No projections exist. Run: iris atlas:projections generate <bloq-id>")
-        prompts.outro("Done"); return
+        spinner?.stop("Not found", 1)
+        prompts.log.error("No projections exist. Run: iris atlas:projections generate <bloq-id> --lead-id <lead-id>")
+        if (!args.json) prompts.outro("Done"); return
+      }
+
+      // --json: emit to stdout for piping/scripting and stop (pull normally writes a file).
+      if (args.json) {
+        console.log(JSON.stringify(doc, null, 2))
+        return
       }
 
       if (!existsSync(ATLAS_DIR)) mkdirSync(ATLAS_DIR, { recursive: true })
       const filepath = args.output ?? projectionsPath(String(bloqId))
       writeFileSync(filepath, JSON.stringify(doc, null, 2) + "\n")
-      spinner.stop("Pulled")
+      spinner?.stop("Pulled")
 
       printDivider()
       printKV("Company", doc.company?.name)
@@ -63,7 +70,7 @@ const ProjPullCommand = cmd({
       printDivider()
       prompts.outro(`${dim(`iris atlas:projections push ${bloqId}`)}  |  ${dim(`iris atlas:projections diff ${bloqId}`)}`)
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -190,11 +197,12 @@ const ProjDiffCommand = cmd({
 
 const ProjGenerateCommand = cmd({
   command: "generate <bloq-id>",
-  describe: "scaffold initial projections from lead data + GoodDeals",
+  describe: "scaffold initial projections from lead data + GoodDeals (requires --lead-id)",
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
-      .option("lead-id", { alias: "l", describe: "lead ID to source data from", type: "number", demandOption: true }),
+      .option("lead-id", { alias: "l", describe: "lead ID to source data from (required)", type: "number", demandOption: true })
+      .example("$0 atlas:projections generate 348 --lead-id 15336", "generate projections for bloq 348 from lead 15336"),
   async handler(args) {
     UI.empty()
     const bloqId = args["bloq-id"] as number

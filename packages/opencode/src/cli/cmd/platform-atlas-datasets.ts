@@ -325,6 +325,35 @@ const RecordsSummaryCommand = cmd({
   },
 })
 
+// Fetch dataset records, paginating through ALL pages when `all` is set. Returns the
+// records plus the dataset's true total so callers can warn loudly when a capped fetch
+// is partial — audit and export used to silently process only the first 200 rows and
+// present the result as complete, dropping ~91% of a 2143-row dataset (#137273).
+async function fetchDatasetRecords(
+  schema: string,
+  opts: { limit: number; all: boolean },
+): Promise<{ records: any[]; total: number; truncated: boolean }> {
+  const perPage = opts.all ? 200 : opts.limit
+  let page = 1
+  let records: any[] = []
+  let total = 0
+  while (true) {
+    const p = new URLSearchParams({ per_page: String(perPage), page: String(page) })
+    const res = await irisFetch(`/api/v1/atlas/datasets/${schema}?${p}`)
+    const ok = await handleApiError(res, "List records")
+    if (!ok) throw new Error("Failed to list records")
+    const body = (await res.json()) as any
+    const recs = body?.data?.records
+    const pageRecords: any[] = recs?.data ?? recs ?? []
+    total = recs?.total ?? body?.data?.total ?? total ?? pageRecords.length
+    records = records.concat(pageRecords)
+    const lastPage = recs?.last_page ?? Math.ceil((total || pageRecords.length) / perPage)
+    if (!opts.all || page >= lastPage || pageRecords.length === 0) break
+    page++
+  }
+  return { records, total: total || records.length, truncated: !opts.all && (total || 0) > records.length }
+}
+
 // ── EXPORT ───────────────────────────────────────────────────────────────────
 
 const ExportCommand = cmd({
@@ -336,6 +365,7 @@ const ExportCommand = cmd({
       .option("out", { type: "string", alias: "o", describe: "output file path" })
       .option("format", { type: "string", default: "csv", describe: "csv|json" })
       .option("fields", { type: "string", describe: "comma-separated fields to include" })
+      .option("all", { type: "boolean", default: false, describe: "export the ENTIRE dataset (paginate past --limit)" })
       .option("limit", { type: "number", default: 200 }),
   async handler(args) {
     UI.empty()
@@ -352,13 +382,12 @@ const ExportCommand = cmd({
       const schemaBody = (await schemaRes.json()) as any
       const schema = schemaBody?.data?.schema ?? schemaBody?.data
 
-      // Get all records
-      const p = new URLSearchParams({ per_page: String(args.limit) })
-      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}?${p}`)
-      const ok = await handleApiError(res, "List records"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-      const body = (await res.json()) as any
-      const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
-      spinner.stop(`${records.length} record(s)`)
+      // Get records (paginate the full dataset with --all; otherwise capped by --limit)
+      const { records, total, truncated } = await fetchDatasetRecords(args.schema, { limit: args.limit, all: args.all })
+      spinner.stop(truncated ? `${records.length} of ${total} record(s) — PARTIAL` : `${records.length} record(s)`)
+      if (truncated) {
+        prompts.log.warn(`Exporting only ${records.length} of ${total} records (--limit ${args.limit}). Pass --all to export the entire dataset, or raise --limit.`)
+      }
 
       // Determine fields to export
       const allFields: { key: string; label: string }[] = (schema?.fields?.fields ?? []).map((f: any) => ({
@@ -429,6 +458,7 @@ const AuditCommand = cmd({
     y
       .option("schema", { type: "string", demandOption: true, alias: "s" })
       .option("json", { type: "boolean", default: false })
+      .option("all", { type: "boolean", default: false, describe: "audit the ENTIRE dataset (paginate past --limit)" })
       .option("limit", { type: "number", default: 200 }),
   async handler(args) {
     UI.empty()
@@ -445,13 +475,12 @@ const AuditCommand = cmd({
       const schemaBody = (await schemaRes.json()) as any
       const schema = schemaBody?.data?.schema ?? schemaBody?.data
 
-      // Get records
-      const p = new URLSearchParams({ per_page: String(args.limit) })
-      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}?${p}`)
-      const ok = await handleApiError(res, "List records"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-      const body = (await res.json()) as any
-      const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
-      spinner.stop(`${records.length} record(s) to audit`)
+      // Get records (paginate the full dataset with --all; otherwise capped by --limit)
+      const { records, total, truncated } = await fetchDatasetRecords(args.schema, { limit: args.limit, all: args.all })
+      spinner.stop(truncated ? `auditing ${records.length} of ${total} record(s) — PARTIAL` : `${records.length} record(s) to audit`)
+      if (truncated) {
+        prompts.log.warn(`Auditing only ${records.length} of ${total} records (--limit ${args.limit}). The other ${total - records.length} were NOT examined — pass --all to audit the entire dataset.`)
+      }
 
       const fields: any[] = schema?.fields?.fields ?? []
       const requiredKeys = fields.filter((f: any) => f.required).map((f: any) => f.key)
