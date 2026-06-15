@@ -47,29 +47,63 @@ async function downloadFile(
   outPath: string,
   formatSpec: string,
   mergeFormat?: string,
-): Promise<boolean> {
+  opts?: { quality?: number; section?: string },
+): Promise<{ ok: boolean; error?: string; timedOut?: boolean }> {
+  // Cap resolution when --quality is set: rewrite the height-agnostic default into a
+  // height-bounded selector so a 6h source isn't pulled at 1080p when 720p will do (#137385).
+  const spec = opts?.quality
+    ? `bestvideo[height<=${opts.quality}]+bestaudio/best[height<=${opts.quality}]/best`
+    : formatSpec
   const baseArgs = [
-    "-f", formatSpec,
+    "-f", spec,
     "--no-playlist",
     "-o", outPath,
     "--no-warnings",
+    // Only pull the requested minutes instead of the whole multi-hour file.
+    ...(opts?.section ? ["--download-sections", opts.section] : []),
     ...(mergeFormat ? ["--merge-output-format", mergeFormat] : []),
   ]
 
-  // Try with browser cookies first
-  for (const browser of ["chrome", "firefox", "safari"]) {
-    const dl = spawnSync(ytdlp, [...baseArgs, "--cookies-from-browser", browser, url], {
-      stdio: "pipe",
-      timeout: 300_000,
-    })
-    if (dl.status === 0 && existsSync(outPath)) return true
+  // Stream yt-dlp's own progress/errors when the user asked for logs — otherwise a
+  // multi-GB / multi-hour pull looks identical to a hang, and the real error is lost
+  // behind a guess (#137384). yt-dlp emits full %/ETA + clear errors; surface them.
+  const argv = process.argv
+  const verbose =
+    argv.includes("--print-logs") ||
+    argv.includes("--log-level=DEBUG") ||
+    (argv.includes("--log-level") && (argv[argv.indexOf("--log-level") + 1] || "").toUpperCase() === "DEBUG")
+  const stdio: any = verbose ? ["ignore", "inherit", "inherit"] : "pipe"
+
+  const attempts = [
+    ...["chrome", "firefox", "safari"].map((b) => [...baseArgs, "--cookies-from-browser", b, url]),
+    [...baseArgs, url],
+  ]
+
+  let last: ReturnType<typeof spawnSync> | null = null
+  for (const a of attempts) {
+    const dl = spawnSync(ytdlp, a, { stdio, timeout: 300_000, encoding: "utf8" })
+    last = dl
+    if (dl.status === 0 && existsSync(outPath)) return { ok: true }
   }
 
-  // Fallback: no cookies
-  const dl = spawnSync(ytdlp, [...baseArgs, url], { stdio: "pipe", timeout: 300_000 })
-  if (dl.status === 0 && existsSync(outPath)) return true
-
-  return false
+  // Failed — report the REAL cause. On timeout spawnSync sets .error(ETIMEDOUT)/SIGTERM;
+  // otherwise yt-dlp's stderr holds the true error (e.g. "No video could be found in
+  // this tweet"). A partial .part/.ytdl may remain — flag it so a downstream step never
+  // mistakes a partial for a finished file.
+  const timedOut = (last?.error as any)?.code === "ETIMEDOUT" || last?.signal === "SIGTERM"
+  const stderr = typeof last?.stderr === "string" ? last.stderr.trim() : ""
+  const partial = existsSync(outPath + ".part") ? outPath + ".part" : null
+  let error: string
+  if (timedOut) {
+    error = `yt-dlp timed out after 300s${partial ? ` (incomplete ${partial} left in place)` : ""}`
+  } else if (stderr) {
+    error = stderr.split("\n").filter(Boolean).pop() || stderr
+  } else if (verbose) {
+    error = "yt-dlp failed (see output above)"
+  } else {
+    error = last?.error?.message || "yt-dlp failed — re-run with --print-logs to see why"
+  }
+  return { ok: false, error, timedOut }
 }
 
 /**
@@ -242,6 +276,14 @@ export const PlatformDownloadCommand = cmd({
         default: false,
         describe: "Only extract text (skip video/audio download)",
       })
+      .option("quality", {
+        type: "number",
+        describe: "Max video height (e.g. 720, 1080) — caps resolution instead of pulling best. Huge for long sources.",
+      })
+      .option("section", {
+        type: "string",
+        describe: "Time range to download instead of the whole file, passed to yt-dlp --download-sections (e.g. '*00:10:00-00:11:00')",
+      })
       .option("out", {
         type: "string",
         alias: "o",
@@ -318,18 +360,19 @@ export const PlatformDownloadCommand = cmd({
       const sp = prompts.spinner()
       sp.start("Downloading video...")
 
-      const ok = await downloadFile(
+      const r = await downloadFile(
         ytdlp, url, videoPath,
         "bestvideo+bestaudio/best",
         "mp4",
+        { quality: args.quality as number | undefined, section: args.section as string | undefined },
       )
 
-      if (ok && existsSync(videoPath)) {
+      if (r.ok && existsSync(videoPath)) {
         const size = (statSync(videoPath).size / 1024 / 1024).toFixed(1)
         sp.stop(`Video downloaded (${size} MB)`)
         results.push({ path: videoPath, format: "video/mp4" })
       } else {
-        sp.stop("Video download failed (may be text-only post)", 1)
+        sp.stop(`Video download failed: ${r.error}`, 1)
       }
     }
 
@@ -339,17 +382,19 @@ export const PlatformDownloadCommand = cmd({
       const sp = prompts.spinner()
       sp.start("Downloading audio...")
 
-      const ok = await downloadFile(
+      const r = await downloadFile(
         ytdlp, url, audioPath,
         "bestaudio[ext=m4a]/bestaudio/best",
+        undefined,
+        { section: args.section as string | undefined },
       )
 
-      if (ok && existsSync(audioPath)) {
+      if (r.ok && existsSync(audioPath)) {
         const size = (statSync(audioPath).size / 1024 / 1024).toFixed(1)
         sp.stop(`Audio downloaded (${size} MB)`)
         results.push({ path: audioPath, format: "audio/m4a" })
       } else {
-        sp.stop("Audio download failed (may be text-only post)", 1)
+        sp.stop(`Audio download failed: ${r.error}`, 1)
       }
     }
 
@@ -362,7 +407,10 @@ export const PlatformDownloadCommand = cmd({
       printDivider()
       prompts.outro(`${results.length} file${results.length > 1 ? "s" : ""} saved`)
     } else {
-      prompts.outro("No files downloaded")
+      // Exit non-zero so a downstream pipeline step (transcribe/clip) doesn't treat a
+      // failed download as success — the silent-data-loss core of #137384.
+      process.exitCode = 1
+      prompts.outro("No files downloaded — see the error above (re-run with --print-logs for full yt-dlp output)")
     }
   },
 })
