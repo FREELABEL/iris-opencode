@@ -256,6 +256,11 @@ const ApproveCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("submission-id", { describe: "submission ID", type: "number", demandOption: true })
+      .option("tier", {
+        describe: "quality tier for clip-cutting bounties (sets the payout amount)",
+        type: "string",
+        choices: ["high", "medium", "low"] as const,
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -271,6 +276,7 @@ const ApproveCommand = cmd({
     try {
       const res = await irisFetch(`/api/v1/marketplace/submissions/${id}/approve`, {
         method: "PATCH",
+        body: args.tier ? JSON.stringify({ tier: args.tier }) : undefined,
       })
       const ok = await handleApiError(res, "Approve submission")
       if (!ok) { if (spinner) spinner.stop("Failed", 1); return }

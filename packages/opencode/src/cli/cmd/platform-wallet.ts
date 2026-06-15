@@ -165,6 +165,41 @@ const WalletUnfreezeCommand = cmd({
   },
 })
 
+const WalletCashoutCommand = cmd({
+  command: "cashout",
+  describe: "cash out your accrued earnings to your Stripe Connect account",
+  builder: (yargs) =>
+    yargs
+      .option("execute", { describe: "actually move money (default: dry-run preview)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    if (!args.json) prompts.intro(`◈  Cashout earnings`)
+    const token = await requireAuth(); if (!token) { if (!args.json) prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/marketplace/cashout`, {
+      method: "POST",
+      body: JSON.stringify({ execute: args.execute }),
+    })
+    const ok = await handleApiError(res, "Cashout")
+    if (!ok) { if (!args.json) prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    const r = data?.data ?? data
+    if (args.json) { console.log(JSON.stringify(r, null, 2)); return }
+    const cashable = `$${((r.cashable_cents ?? 0) / 100).toFixed(2)}`
+    printDivider()
+    printKV("Cashable", cashable)
+    printKV("Status", String(r.status ?? "?"))
+    if (r.reason) printKV("Note", String(r.reason))
+    if (r.transfer_id) printKV("Transfer", String(r.transfer_id))
+    printDivider()
+    prompts.outro(
+      r.status === "sent"
+        ? `${success("✓")} Cashed out ${cashable}`
+        : (args.execute ? "Done" : "Dry-run — re-run with --execute to cash out"),
+    )
+  },
+})
+
 export const PlatformWalletCommand = cmd({
   command: "wallet",
   aliases: ["payments"],
@@ -178,6 +213,7 @@ export const PlatformWalletCommand = cmd({
       .command(WalletTransactionsCommand)
       .command(WalletFreezeCommand)
       .command(WalletUnfreezeCommand)
+      .command(WalletCashoutCommand)
       .demandCommand(),
   async handler() {},
 })
