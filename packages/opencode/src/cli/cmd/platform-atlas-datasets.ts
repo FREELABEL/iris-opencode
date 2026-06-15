@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, isNonInteractive } from "./iris-api"
 import * as fs from "fs"
 import * as path from "path"
 
@@ -160,11 +160,58 @@ const SchemaCreateCommand = cmd({
   },
 })
 
+// #137845 — the create path existed but there was no delete path, so test schemas
+// persisted as orphans. Prompt by default, --force to skip, --cascade to also remove
+// records (the server refuses with a clear 409 if records exist and cascade is off).
+const SchemaDeleteCommand = cmd({
+  command: "delete <slug>",
+  aliases: ["rm", "destroy"],
+  describe: "delete a dataset schema (all versions)",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true })
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
+      .option("cascade", { describe: "also delete the dataset's records", type: "boolean", default: false })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!isJson) {
+      UI.empty()
+      prompts.intro(`◈  Delete Schema: ${args.slug}`)
+    }
+    const token = await requireAuth()
+    if (!token) { if (!isJson) prompts.outro("Done"); return }
+
+    let confirmed: boolean | symbol = args.force
+    if (!confirmed) {
+      if (isNonInteractive()) {
+        if (isJson) console.log(JSON.stringify({ error: "Refusing to delete schema without --force in non-interactive mode" }))
+        else prompts.log.error("Refusing to delete schema without --force in non-interactive mode.")
+        process.exitCode = 2
+        return
+      }
+      confirmed = await prompts.confirm({ message: `Delete schema '${args.slug}'${args.cascade ? " AND its records" : ""}? This cannot be undone.` })
+    }
+    if (!confirmed || prompts.isCancel(confirmed)) { if (!isJson) prompts.outro("Cancelled"); return }
+
+    const query = args.cascade ? "?cascade=true" : ""
+    const res = await irisFetch(`/api/v1/atlas/schemas/${args.slug}${query}`, { method: "DELETE" })
+    if (!(await handleApiError(res, "Delete schema"))) {
+      process.exitCode = 1
+      if (!isJson) prompts.outro("Done")
+      return
+    }
+    const data = (((await res.json().catch(() => ({}))) as any)?.data) ?? {}
+    if (isJson) { console.log(JSON.stringify(data, null, 2)); return }
+    prompts.outro(`Deleted schema '${args.slug}' (${data.deleted_versions ?? 1} version(s)${data.deleted_records ? `, ${data.deleted_records} record(s)` : ""})`)
+  },
+})
+
 const SchemasGroup = cmd({
   command: "schemas",
   aliases: ["schema"],
   describe: "manage dataset schemas",
-  builder: (y) => y.command(SchemaListCommand).command(SchemaShowCommand).command(SchemaCreateCommand).demandCommand(),
+  builder: (y) => y.command(SchemaListCommand).command(SchemaShowCommand).command(SchemaCreateCommand).command(SchemaDeleteCommand).demandCommand(),
   async handler() {},
 })
 
@@ -761,11 +808,90 @@ const RecordsGroup = cmd({
   async handler() {},
 })
 
+// #137843 — datasets ARE served as a real REST API, but it was undiscoverable: no
+// command told you the host, path, auth header, or the (wrapped) body shape. This
+// surfaces the full contract for a dataset so it can actually be called.
+const ApiCommand = cmd({
+  command: "api <slug>",
+  aliases: ["endpoint", "serve"],
+  describe: "show the REST API for a dataset (base URL, auth, request shapes)",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const url = `${FL_API}/api/v1/atlas/datasets/${args.slug}`
+
+    // Pull the field keys + record count so the body example is concrete.
+    let fields: string[] = []
+    let recordCount: number | undefined
+    try {
+      const res = await irisFetch(`/api/v1/atlas/schemas/${args.slug}`)
+      if (res.ok) {
+        const b = (await res.json()) as any
+        const schema = b?.data?.schema ?? b?.data
+        fields = (schema?.fields?.fields ?? []).map((f: any) => f.key).filter(Boolean)
+        recordCount = b?.data?.record_count
+      }
+    } catch { /* non-fatal — still print the contract */ }
+
+    const exampleData = fields.length
+      ? `{${fields.slice(0, 2).map((f) => `"${f}":"…"`).join(",")}}`
+      : `{…}`
+    const curl = `curl -X POST "${url}" -H "Authorization: Bearer $IRIS_API_KEY" -H "Content-Type: application/json" -d '{"data":${exampleData},"external_id":"unique-1"}'`
+
+    if (args.json) {
+      console.log(JSON.stringify({
+        dataset: args.slug,
+        base_url: url,
+        auth: { header: "Authorization", value: "Bearer <IRIS_API_KEY>" },
+        record_count: recordCount,
+        fields,
+        endpoints: {
+          list: { method: "GET", path: `/api/v1/atlas/datasets/${args.slug}`, query: ["page", "per_page"] },
+          create: { method: "POST", path: `/api/v1/atlas/datasets/${args.slug}`, body: { data: "{...fields}", external_id: "optional unique id" } },
+          show: { method: "GET", path: `/api/v1/atlas/datasets/${args.slug}/{id}` },
+          update: { method: "PATCH", path: `/api/v1/atlas/datasets/${args.slug}/{id}` },
+          delete: { method: "DELETE", path: `/api/v1/atlas/datasets/${args.slug}/{id}` },
+          upsert: { method: "POST", path: `/api/v1/atlas/datasets/${args.slug}/upsert` },
+          summary: { method: "GET", path: `/api/v1/atlas/datasets/${args.slug}/summary` },
+        },
+        example_curl: curl,
+      }, null, 2))
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  Dataset API — ${args.slug}`)
+    console.log(`  ${bold("Base URL")}   ${url}`)
+    console.log(`  ${bold("Auth")}       Authorization: Bearer <IRIS_API_KEY>`)
+    if (recordCount != null) console.log(`  ${bold("Records")}    ${recordCount}`)
+    printDivider()
+    console.log(`  ${bold("Endpoints")}`)
+    console.log(`    GET    ${url}        ${dim("?page=&per_page=")}`)
+    console.log(`    POST   ${url}        ${dim('{"data":{…},"external_id":"…"}')}`)
+    console.log(`    GET    ${url}/{id}`)
+    console.log(`    PATCH  ${url}/{id}`)
+    console.log(`    DELETE ${url}/{id}`)
+    console.log(`    POST   ${url}/upsert ${dim("(upsert by external_id)")}`)
+    console.log(`    GET    ${url}/summary`)
+    printDivider()
+    if (fields.length) console.log(`  ${bold("Fields")}     ${fields.join(", ")}`)
+    console.log()
+    console.log(`  ${dim("POST body MUST be wrapped as { data, external_id } — a flat body fails:")}`)
+    console.log(`  ${dim(curl)}`)
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformAtlasDatasetsCommand = cmd({
   command: "atlas:datasets",
   aliases: ["atlas-datasets", "datasets"],
   describe: "Schema-driven datasets — define once, store anything, no migrations",
   builder: (y) =>
-    y.command(SchemasGroup).command(RecordsGroup).command(ExportCommand).command(AuditCommand).demandCommand(),
+    y.command(SchemasGroup).command(RecordsGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).demandCommand(),
   async handler() {},
 })

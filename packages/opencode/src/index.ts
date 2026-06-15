@@ -81,6 +81,7 @@ import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedComman
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
+import { DeviceCommand } from "./cli/cmd/platform-device"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
 import { PlatformAtlasCommsCommand } from "./cli/cmd/platform-atlas-comms"
@@ -296,6 +297,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformListConnectedCommand))
   .command(reg(PlatformListAvailableCommand))
   .command(reg(PlatformBugCommand))
+  .command(reg(DeviceCommand))
   .command(reg(PlatformAtlasMeetingsCommand))
   .command(reg(PlatformAtlasBrandKitCommand))
   .command(reg(PlatformAtlasCommsCommand))

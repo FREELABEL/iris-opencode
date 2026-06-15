@@ -698,25 +698,32 @@ const LeadsCreateCommand = cmd({
         choices: ["Prospected", "Contacted", "Interested", "Converted", "Archived"],
       })
       .option("notes", { describe: "initial note to attach", type: "string" })
-      .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" }),
+      .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" })
+      .option("json", { describe: "JSON output (returns the created lead — capture the new id)", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Create Lead")
+    const isJson = args.json === true
+    if (!isJson) {
+      UI.empty()
+      prompts.intro("◈  Create Lead")
+    }
 
     const token = await requireAuth()
     if (!token) {
-      prompts.outro("Done")
+      if (!isJson) prompts.outro("Done")
       return
     }
 
     // Bug #6/#57642: Require non-empty name. Trim whitespace before checking.
     let name = typeof args.name === "string" ? args.name.trim() : args.name
     if (!name) {
-      if (isNonInteractive()) {
-        prompts.log.error("Missing required --name flag.")
-        prompts.log.info(dim(`iris leads create --name "Jane Doe" --email jane@co.com`))
+      if (isNonInteractive() || isJson) {
+        if (isJson) console.log(JSON.stringify({ error: "Missing required --name flag" }))
+        else {
+          prompts.log.error("Missing required --name flag.")
+          prompts.log.info(dim(`iris leads create --name "Jane Doe" --email jane@co.com`))
+        }
         process.exitCode = 1
-        prompts.outro("Done")
+        if (!isJson) prompts.outro("Done")
         return
       }
       const result = await prompts.text({
@@ -732,7 +739,7 @@ const LeadsCreateCommand = cmd({
 
     // Bug #6: In non-interactive mode, skip email prompt entirely — use flag or nothing.
     let email = args.email
-    if (email === undefined && !isNonInteractive()) {
+    if (email === undefined && !isNonInteractive() && !isJson) {
       const result = await prompts.text({
         message: "Email address (optional, press Enter to skip)",
         placeholder: "e.g. jane@company.com",
@@ -746,8 +753,8 @@ const LeadsCreateCommand = cmd({
 
     let bloqId = args["bloq-id"] ?? 38
 
-    const spinner = prompts.spinner()
-    spinner.start("Creating lead…")
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start("Creating lead…")
 
     try {
       const payload: Record<string, unknown> = {
@@ -776,14 +783,35 @@ const LeadsCreateCommand = cmd({
       })
       const ok = await handleApiError(res, "Create lead")
       if (!ok) {
-        spinner.stop("Failed", 1)
-        prompts.outro("Done")
+        spinner?.stop("Failed", 1)
+        if (isJson) console.log(JSON.stringify({ error: "Create lead failed" }))
+        else prompts.outro("Done")
+        process.exitCode = 1
         return
       }
 
       const data = (await res.json()) as { data?: any }
       const l = data?.data ?? data
-      spinner.stop(`${success("✓")} Lead created: ${bold(String(l.name ?? l.id))} (#${l.id})`)
+
+      // Auto-attach note if provided (before output, so JSON reflects the final state)
+      if (args.notes) {
+        try {
+          await irisFetch(`/api/v1/leads/${l.id}/notes`, {
+            method: "POST",
+            body: JSON.stringify({ message: args.notes }),
+          })
+          if (!isJson) prompts.log.info(dim("Note attached"))
+        } catch {
+          /* non-fatal */
+        }
+      }
+
+      if (isJson) {
+        console.log(JSON.stringify(l, null, 2))
+        return
+      }
+
+      spinner?.stop(`${success("✓")} Lead created: ${bold(String(l.name ?? l.id))} (#${l.id})`)
 
       printDivider()
       printKV("ID", l.id)
@@ -795,24 +823,15 @@ const LeadsCreateCommand = cmd({
       printKV("Status", l.status)
       printDivider()
 
-      // Auto-attach note if provided
-      if (args.notes) {
-        try {
-          await irisFetch(`/api/v1/leads/${l.id}/notes`, {
-            method: "POST",
-            body: JSON.stringify({ message: args.notes }),
-          })
-          prompts.log.info(dim("Note attached"))
-        } catch {
-          /* non-fatal */
-        }
-      }
-
       prompts.outro(dim(`iris leads get ${l.id}`))
     } catch (err) {
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      spinner?.stop("Error", 1)
+      if (isJson) console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
     }
   },
 })
@@ -1009,9 +1028,11 @@ const LeadsNoteCommand = cmd({
         describe: "note type tag",
         type: "string",
         choices: ["note", "meeting_intel", "call_log", "email_log", "system"],
-      }),
+      })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
+    const isJson = args.json === true
+    if (!isJson) UI.empty()
 
     // ── Validate: need a message or --file ── (Bug #2)
     if (!args.message && !args.file) {
@@ -1036,7 +1057,7 @@ const LeadsNoteCommand = cmd({
     }
     const { leadId } = resolved
 
-    prompts.intro(`◈  Note — Lead #${leadId}`)
+    if (!isJson) prompts.intro(`◈  Note — Lead #${leadId}`)
 
     // ── Resolve content from --file or positional message ──
     let content = String(args.message ?? "")
@@ -1055,11 +1076,11 @@ const LeadsNoteCommand = cmd({
         prompts.outro("Done")
         return
       }
-      prompts.log.info(dim(`Read ${content.length.toLocaleString()} chars from ${basename(filePath)}`))
+      if (!isJson) prompts.log.info(dim(`Read ${content.length.toLocaleString()} chars from ${basename(filePath)}`))
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Adding note…")
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start("Adding note…")
 
     try {
       const body: Record<string, unknown> = { message: content }
@@ -1074,17 +1095,29 @@ const LeadsNoteCommand = cmd({
       })
       const ok = await handleApiError(res, "Add note")
       if (!ok) {
-        spinner.stop("Failed", 1)
-        prompts.outro("Done")
+        spinner?.stop("Failed", 1)
+        if (isJson) console.log(JSON.stringify({ error: "Add note failed" }))
+        else prompts.outro("Done")
+        process.exitCode = 1
         return
       }
 
-      spinner.stop(`${success("✓")} Note added`)
+      const data = await res.json().catch(() => ({}))
+      if (isJson) {
+        console.log(JSON.stringify((data as any)?.data ?? data, null, 2))
+        return
+      }
+
+      spinner?.stop(`${success("✓")} Note added`)
       prompts.outro(dim(`iris leads get ${leadId}`))
     } catch (err) {
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      spinner?.stop("Error", 1)
+      if (isJson) console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
     }
   },
 })
@@ -1118,26 +1151,29 @@ const LeadsUpdateCommand = cmd({
       })
       .option("chat-id", { describe: "link an iMessage chat ID (e.g. chat713220476491386040)", type: "string" })
       .option("whatsapp-group", { describe: 'link a WhatsApp group chat by name (e.g. "CatoDrive Tech Dev")', type: "string" })
-      .option("add-email", { describe: "add an alternate email address (for multi-email inbox scanning)", type: "string" }),
+      .option("add-email", { describe: "add an alternate email address (for multi-email inbox scanning)", type: "string" })
+      .option("json", { describe: "JSON output (returns the updated lead)", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
+    const isJson = args.json === true
+    if (!isJson) UI.empty()
 
     const token = await requireAuth()
     if (!token) {
-      prompts.outro("Done")
+      if (!isJson) prompts.outro("Done")
       return
     }
 
     // ── Resolve lead ID from name/email if not numeric ── (Bug #3)
     const resolved = await resolveLeadId(String(args.id))
     if (!resolved) {
+      if (isJson) console.log(JSON.stringify({ error: "Lead not found" }))
       process.exitCode = 1
-      prompts.outro("Done")
+      if (!isJson) prompts.outro("Done")
       return
     }
     const { leadId } = resolved
 
-    prompts.intro(`◈  Update Lead #${leadId}`)
+    if (!isJson) prompts.intro(`◈  Update Lead #${leadId}`)
 
     const payload: Record<string, unknown> = {}
     if (args.name) payload.name = args.name
@@ -1197,13 +1233,18 @@ const LeadsUpdateCommand = cmd({
     }
 
     if (Object.keys(payload).length === 0) {
+      if (isJson) {
+        console.log(JSON.stringify({ error: "Nothing to update — pass --name, --email, --status, etc." }))
+        process.exitCode = 1
+        return
+      }
       prompts.log.warn("Nothing to update. Use --name, --email, --status, --bloq-id, etc.")
       prompts.outro("Done")
       return
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Updating…")
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start("Updating…")
 
     try {
       const res = await irisFetch(`/api/v1/leads/${leadId}`, {
@@ -1212,14 +1253,22 @@ const LeadsUpdateCommand = cmd({
       })
       const ok = await handleApiError(res, "Update lead")
       if (!ok) {
-        spinner.stop("Failed", 1)
-        prompts.outro("Done")
+        spinner?.stop("Failed", 1)
+        if (isJson) console.log(JSON.stringify({ error: "Update lead failed" }))
+        else prompts.outro("Done")
+        process.exitCode = 1
         return
       }
 
       const data = (await res.json()) as { data?: any }
       const l = data?.data ?? data
-      spinner.stop(`${success("✓")} Updated: ${bold(String(l.name ?? l.id))}`)
+
+      if (isJson) {
+        console.log(JSON.stringify(l, null, 2))
+        return
+      }
+
+      spinner?.stop(`${success("✓")} Updated: ${bold(String(l.name ?? l.id))}`)
 
       printDivider()
       printKV("ID", l.id)
@@ -1229,9 +1278,13 @@ const LeadsUpdateCommand = cmd({
 
       prompts.outro(dim(`iris leads get ${leadId}`))
     } catch (err) {
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      spinner?.stop("Error", 1)
+      if (isJson) console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
     }
   },
 })
@@ -5245,9 +5298,29 @@ const LeadsDeletePaymentGateCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "lead ID", type: "number", demandOption: true })
-      .option("json", { describe: "JSON output", type: "boolean" }),
+      // #137533: align destructive flags with `iris leads delete` — prompt by
+      // default, --force/-y to skip, refuse non-interactively without --force.
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
+
+    const isJson = args.json === true
+
+    let confirmed: boolean | symbol = args.force
+    if (!confirmed) {
+      if (isNonInteractive()) {
+        if (isJson) console.log(JSON.stringify({ error: "Refusing to delete payment gate without --force in non-interactive mode" }))
+        else prompts.log.error("Refusing to delete the payment gate without --force in non-interactive mode.")
+        process.exitCode = 2
+        return
+      }
+      confirmed = await prompts.confirm({ message: `Delete the payment gate for lead #${args.id}? This cannot be undone.` })
+    }
+    if (!confirmed || prompts.isCancel(confirmed)) {
+      if (!isJson) prompts.log.info("Cancelled")
+      return
+    }
 
     const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
       method: "DELETE",
@@ -5255,7 +5328,7 @@ const LeadsDeletePaymentGateCommand = cmd({
     if (!(await handleApiError(res, "Delete payment gate"))) return
 
     const data = await res.json().catch(() => ({}))
-    if (args.json) {
+    if (isJson) {
       console.log(JSON.stringify(data, null, 2))
       return
     }
