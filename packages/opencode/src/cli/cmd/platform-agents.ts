@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, streamAgentChat } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { executeChat } from "./platform-chat"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -340,80 +341,33 @@ const AgentsCreateCommand = cmd({
   },
 })
 
+// `iris agents chat` is a THIN ALIAS over the canonical `iris chat` implementation
+// (#137420). Same transport, flags, output, exit codes, and progress UX — it just
+// takes the agent id as a positional. All chat behavior lives in executeChat().
 const AgentsChatCommand = cmd({
   command: "chat <id> <message>",
-  describe: "send a single chat message to an agent",
+  describe: "send a single chat message to an agent (alias of `iris chat -a <id>`)",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "agent ID", type: "number", demandOption: true })
       .positional("message", { describe: "your message", type: "string", demandOption: true })
       .option("bloq", { alias: "b", describe: "bloq ID for context", type: "number" })
-      // Each call is already a clean, stateless run (no resumed server session).
-      // --new is the default and exists as the documented escape hatch (#137387).
-      .option("new", { describe: "start a fresh stateless turn (default behavior)", type: "boolean", default: true })
       .option("model", { alias: "m", describe: "override model (nano/flash only; keeps cost low)", type: "string" })
-      .option("max-iterations", { describe: "cap ReactLoop iterations", type: "number" }),
+      .option("max-iterations", { describe: "cap ReactLoop iterations", type: "number" })
+      .option("timeout", { describe: "max seconds to wait for response", type: "number", default: 300 })
+      .option("no-rag", { describe: "disable RAG/knowledge base lookup", type: "boolean", default: false })
+      .option("json", { describe: "output response as JSON", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Agent #${args.id}`)
-
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
-
-    // The /api/v6/chat/stream endpoint resolves the user from `user_id` in the body
-    // (the SDK/platform token is an fl-api token that iris-api cannot validate via
-    // auth()->user()). Without it, non-system agents return 401 (#119559).
-    const userId = await requireUserId()
-
-    prompts.log.info(`Sending: ${dim(String(args.message).slice(0, 80))}`)
-    const spinner = prompts.spinner()
-    spinner.start("Thinking…")
-
-    try {
-      // Faithful V6 ReactLoop path — same engine + toolset as the Slack channel (#137387).
-      const result = await streamAgentChat({
-        agentId: args.id,
-        message: args.message,
-        userId,
-        bloqId: args.bloq,
-        overrideModel: args.model,
-        maxIterations: args["max-iterations"],
-        onEvent: (evt) => {
-          if (evt.type === "tool_call" && evt.tool) spinner.message(`Using ${evt.tool}…`)
-          else if (evt.type === "tool_result" && evt.tool) spinner.message(`${evt.tool} ✓`)
-          else if (evt.type === "thinking") spinner.message("Thinking…")
-        },
-      })
-
-      if (!result.ok) {
-        spinner.stop("Failed", 1)
-        process.exitCode = 1
-        if (result.error) prompts.log.error(result.error)
-        prompts.outro("Done")
-        return
-      }
-
-      const response = result.content || "(no response)"
-      spinner.stop("Done")
-
-      printDivider()
-      console.log()
-      console.log(`  ${bold("Agent:")} ${response.split("\n").join("\n  ")}`)
-      console.log()
-      // Surface the real toolset that ran — proof the harness is faithful (#137387).
-      if (result.toolsUsed.length > 0) {
-        console.log(`  ${dim(`tools used: ${result.toolsUsed.join(", ")}`)}`)
-        console.log()
-      }
-      printDivider()
-
-      prompts.outro(dim(`iris agents chat ${args.id} "follow up"`))
-    } catch (err) {
-      spinner.stop("Error", 1)
-      process.exitCode = 1
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
-    }
+    await executeChat({
+      message: args.message,
+      agent: args.id,
+      bloq: args.bloq,
+      timeout: args.timeout,
+      "no-rag": args["no-rag"],
+      json: args.json,
+      model: args.model,
+      "max-iterations": args["max-iterations"],
+    })
   },
 })
 

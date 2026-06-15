@@ -157,7 +157,17 @@ async function readSdkEnv(): Promise<Record<string, string>> {
 // Auth token resolution
 // ============================================================================
 
+// Resolve auth ONCE per process — not once per request/poll (#137421). Repeated
+// resolution spammed the "token source" line on every poll loop iteration.
+let _cachedToken: string | undefined
+
 async function resolveToken(): Promise<string> {
+  if (_cachedToken !== undefined) return _cachedToken
+  _cachedToken = await resolveTokenUncached()
+  return _cachedToken
+}
+
+async function resolveTokenUncached(): Promise<string> {
   // 1. Try stored auth (iris auth login)
   const stored = await Auth.get("iris")
   if (stored?.type === "api" && stored.key) {
@@ -211,7 +221,8 @@ export async function irisFetch(
   // Debug: stderr trace for diagnosing auth failures (only with --print-logs)
   if (process.argv.includes("--print-logs")) {
     console.error(`[irisFetch] ${options.method ?? "GET"} ${url}`)
-    console.error(`[irisFetch] token: ${token ? token.slice(0, 12) + "..." : "(none)"}`)
+    // Never print the token — not even a prefix (#137421). Presence only.
+    console.error(`[irisFetch] token: ${token ? "(present)" : "(none)"}`)
     console.error(`[irisFetch] body keys: ${options.body ? Object.keys(JSON.parse(String(options.body))).join(", ") : "(none)"}`)
   }
   const res = await fetch(url, { ...options, headers })
@@ -323,6 +334,9 @@ export type AgentChatResult = {
   iterations: number
   status: string
   error?: string
+  // Distinguishes failure modes so callers can set distinct exit codes (#137418):
+  // timedOut → exit 2, any other failure → exit 1, ok → exit 0.
+  timedOut?: boolean
 }
 
 /** Normalize the heterogeneous tools_used payload into a flat list of tool names. */
@@ -375,13 +389,14 @@ export async function streamAgentChat(opts: {
   // Endpoint validator only accepts nano/flash models — keeps test runs cheap.
   if (opts.overrideModel) body.override_model = opts.overrideModel
 
-  const failure = (error?: string): AgentChatResult => ({
+  const failure = (error?: string, timedOut = false): AgentChatResult => ({
     ok: false,
     content: "",
     toolsUsed: [],
     iterations: 0,
-    status: "failed",
+    status: timedOut ? "timeout" : "failed",
     error,
+    timedOut,
   })
 
   // Abort the inline ReactLoop run if it exceeds the timeout (default 180s).
@@ -459,7 +474,7 @@ export async function streamAgentChat(opts: {
     if (streamError) return { ...result, ok: false, status: "failed", error: streamError }
     return result
   } catch (err) {
-    if (controller.signal.aborted) return failure(`Timed out after ${opts.timeoutSecs ?? 180}s`)
+    if (controller.signal.aborted) return failure(`Timed out after ${opts.timeoutSecs ?? 180}s`, true)
     return failure(err instanceof Error ? err.message : String(err))
   } finally {
     clearTimeout(timer)

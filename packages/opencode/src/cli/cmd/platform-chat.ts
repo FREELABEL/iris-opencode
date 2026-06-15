@@ -51,7 +51,9 @@ async function pollWorkflow(workflowId: string, timeoutSecs = 300): Promise<Work
 // Shared chat execution
 // ============================================================================
 
-async function executeChat(args: {
+// Exported so `iris agents chat` can be a thin alias over the SAME path (#137420)
+// — one canonical chat implementation, identical transport, flags, and output.
+export async function executeChat(args: {
   message: string
   agent?: number
   bloq?: number
@@ -61,6 +63,7 @@ async function executeChat(args: {
   json?: boolean
   continue?: string
   model?: string
+  "max-iterations"?: number
 }): Promise<void> {
   const isJson = args.json === true
 
@@ -156,6 +159,14 @@ async function executeChat(args: {
   spinner?.start("Thinking…")
   const startTime = Date.now()
 
+  // Elapsed heartbeat so a slow run never looks stuck (#137419). The latest tool
+  // event wins the label; otherwise we show "Thinking… (Ns)" ticking every second.
+  let lastActivity = "Thinking…"
+  const heartbeat = isJson ? null : setInterval(() => {
+    const secs = Math.floor((Date.now() - startTime) / 1000)
+    spinner?.message(`${lastActivity} (${secs}s)`)
+  }, 1000)
+
   try {
     // Faithful V6 ReactLoop path — same engine + toolset as the Slack channel (#137387).
     // Stateless per call: no resumed server session → no cross-turn poisoning.
@@ -165,30 +176,39 @@ async function executeChat(args: {
       userId,
       bloqId: args.bloq,
       overrideModel: args.model,
+      maxIterations: args["max-iterations"],
       timeoutSecs: args.timeout,
       onEvent: (evt) => {
         if (isJson) return
-        if (evt.type === "tool_call" && evt.tool) spinner?.message(`Using ${evt.tool}…`)
-        else if (evt.type === "tool_result" && evt.tool) spinner?.message(`${evt.tool} ✓`)
+        if (evt.type === "tool_call" && evt.tool) lastActivity = `Using ${evt.tool}…`
+        else if (evt.type === "tool_result" && evt.tool) lastActivity = `${evt.tool} ✓`
+        else if (evt.type === "thinking") lastActivity = "Thinking…"
       },
     })
 
+    if (heartbeat) clearInterval(heartbeat)
+
     if (!result.ok) {
-      spinner?.stop("Failed", 1)
+      // Distinct exit codes so automation can branch (#137418): 2 = timeout, 1 = other failure.
+      const elapsed = Math.floor((Date.now() - startTime) / 1000)
+      const msg = result.timedOut
+        ? `Timed out after ${elapsed}s — the agent didn't respond in time. Try again or raise --timeout.`
+        : (result.error ?? "Chat failed — no answer delivered.")
+      spinner?.stop(result.timedOut ? "Timed out" : "Failed", 1)
       if (isJson) {
-        console.log(JSON.stringify({ error: result.error ?? "Chat failed" }))
+        console.log(JSON.stringify({ status: result.timedOut ? "timeout" : "failed", error: msg }))
       } else {
-        if (result.error) prompts.log.error(result.error)
+        prompts.log.error(msg)
         prompts.outro("Done")
       }
-      process.exitCode = 1
+      process.exitCode = result.timedOut ? 2 : 1
       return
     }
 
     spinner?.stop("Done")
 
     const run: WorkflowRun = {
-      status: result.status === "failed" ? "failed" : "completed",
+      status: "completed",
       summary: result.content,
       iteration_count: result.iterations,
       elapsed_ms: Date.now() - startTime,
@@ -197,13 +217,16 @@ async function executeChat(args: {
     // No server-side workflow id in the sync stream path → pass "" (suppresses --continue).
     outputResult(run, "", agentId, isJson, result.toolsUsed)
   } catch (err) {
+    if (heartbeat) clearInterval(heartbeat)
     process.stderr.write("\r" + " ".repeat(40) + "\r")
+    const msg = err instanceof Error ? err.message : String(err)
     if (isJson) {
-      console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      console.log(JSON.stringify({ status: "failed", error: msg }))
     } else {
-      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.log.error(msg)
       prompts.outro("Done")
     }
+    process.exitCode = 1
   }
 }
 
@@ -399,6 +422,10 @@ export const PlatformChatCommand = cmd({
         describe: "override model (nano/flash only; keeps cost low)",
         type: "string",
       })
+      .option("max-iterations", {
+        describe: "cap ReactLoop iterations",
+        type: "number",
+      })
       .command(ChatApproveCommand),
 
   async handler(args) {
@@ -423,6 +450,7 @@ export const PlatformChatCommand = cmd({
       json: args.json,
       continue: args.continue,
       model: args.model,
+      "max-iterations": args["max-iterations"],
     })
   },
 })
