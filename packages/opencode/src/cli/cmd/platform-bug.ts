@@ -468,6 +468,93 @@ const ListCommand = cmd({
   },
 })
 
+// Show the full, untruncated detail of a single bug by ID. `list` truncates the body
+// to one line, so there was no way to read a full report from the CLI without --json
+// scraping. Pages through the bug bloq (all statuses) to find the item.
+const ShowCommand = cmd({
+  command: "show <id>",
+  aliases: ["view", "get"],
+  describe: "show the full details of a single bug report by ID",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bug item ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const userId = await resolveUserId()
+    if (!userId) {
+      console.error("Could not resolve user ID. Set IRIS_USER_ID or run iris-login.")
+      return
+    }
+
+    const targetId = Number(args.id)
+    let found: any = null
+    const perPage = 50
+    const maxPages = 60 // safety cap (~3000 items)
+
+    for (let page = 1; page <= maxPages && !found; page++) {
+      // Omit the status param entirely — that's how the API returns ALL statuses
+      // (the `list` command treats status=all as "don't send the param"). Sending a
+      // literal status=all filters to nothing.
+      const params = new URLSearchParams({
+        per_page: String(perPage),
+        page: String(page),
+      })
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${BUG_BLOQ_ID}/items?${params}`)
+      const ok = await handleApiError(res, "Show bug report")
+      if (!ok) return
+
+      const data = (await res.json()) as any
+      const rawItems = data?.data?.items ?? data?.data?.data ?? data?.data ?? []
+      const items: any[] = Array.isArray(rawItems) ? rawItems : Object.values(rawItems)
+      if (items.length === 0) break
+
+      found = items.find((it: any) => Number(it.id) === targetId)
+
+      const pagination = data?.data?.pagination ?? data?.meta ?? null
+      const total = pagination?.total ?? items.length
+      const lastPage = pagination?.last_page ?? Math.ceil(total / perPage)
+      if (page >= lastPage) break
+    }
+
+    if (!found) {
+      if (args.json) {
+        console.log(JSON.stringify({ error: "not_found", id: targetId }, null, 2))
+        return
+      }
+      console.error(`\n  Bug #${targetId} not found (searched open + closed).`)
+      console.error(`  ${dim('Try: iris bug list --status=all --search="keyword"')}\n`)
+      process.exitCode = 1
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(found, null, 2))
+      return
+    }
+
+    const contentStr = found.content ?? found.description ?? ""
+    const severity = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1] ?? ""
+    const hasResolution = /###\s*✅?\s*Resolution/i.test(contentStr)
+    const fixCommit = contentStr.match(/Fix commit:\*?\*?\s*`?([0-9a-f]{6,40})`?/i)?.[1]
+
+    console.log("")
+    console.log(`  ${bold(String(found.title))}  ${dim(`#${found.id}`)}`)
+    const meta: string[] = []
+    if (severity) meta.push(`[${severity.toUpperCase()}]`)
+    if (found.status) meta.push(dim(String(found.status)))
+    if (hasResolution) meta.push(success(`✓ FIXED${fixCommit ? ` ${fixCommit}` : ""}`))
+    if (meta.length) console.log(`  ${meta.join("  ")}`)
+    printDivider()
+    console.log(contentStr ? String(contentStr) : dim("  (no description)"))
+    printDivider()
+    console.log(dim(`  iris bug close ${found.id} --solution "..." — record the fix`))
+    console.log("")
+  },
+})
+
 // Record the fix/solution + commit on a bug via the PUBLIC resolve endpoint (no auth).
 // This stamps the resolution into the bug's content so every other machine sees what fixed it.
 async function resolveBug(
@@ -642,6 +729,6 @@ export const PlatformBugCommand = cmd({
   command: "bug",
   aliases: ["bugs", "report"],
   describe: "report bugs and view your submissions",
-  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(CloseCommand).demandCommand(),
+  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(CloseCommand).demandCommand(),
   async handler() {},
 })

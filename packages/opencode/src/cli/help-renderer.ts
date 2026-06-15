@@ -70,6 +70,44 @@ export function renderGroupedHelp(): string {
   return lines.join(EOL)
 }
 
+// Surface `<prefix>:*` namespaced commands under `iris <prefix> [--help]`.
+// yargs registers each `atlas:datasets`, `pages:batch`, etc. as a SEPARATE top-level
+// command, so they never appear under their bare-word parent's help. For `atlas` the
+// problem is worse: the bare word is an alias of `bloqs`, so the whole Atlas OS suite
+// is invisible from `iris atlas --help` (#137271, #137272). This block lists them.
+export function renderNamespacedHelp(prefix: string): string | null {
+  const S = UI.Style
+  const namespaced = getRegistry().filter((c) => c.name.startsWith(`${prefix}:`))
+  if (namespaced.length === 0) return null
+
+  // Prefer the friendly category title (e.g. "Atlas OS") when the prefix maps to one.
+  const catKey = COMMAND_CATEGORY_MAP[namespaced[0]!.name]
+  const heading = catKey && CATEGORIES[catKey] ? CATEGORIES[catKey]!.name : prefix
+
+  const lines: string[] = []
+  lines.push("")
+  lines.push(
+    `  ${S.TEXT_HIGHLIGHT_BOLD}${heading}${S.TEXT_NORMAL}  ${S.TEXT_DIM}namespaced commands (iris ${prefix}:<name>)${S.TEXT_NORMAL}`,
+  )
+  lines.push("")
+  for (const cmd of namespaced.sort((a, b) => a.name.localeCompare(b.name))) {
+    const nameCol = cmd.name.padEnd(24)
+    const aliasStr =
+      cmd.aliases.length > 0
+        ? ` ${S.TEXT_DIM}(${cmd.aliases.join(", ")})${S.TEXT_NORMAL}`
+        : ""
+    lines.push(
+      `    ${S.TEXT_NORMAL_BOLD}${nameCol}${S.TEXT_NORMAL}${cmd.describe}${aliasStr}`,
+    )
+  }
+  lines.push("")
+  lines.push(
+    `  ${S.TEXT_DIM}Run ${S.TEXT_HIGHLIGHT}iris ${prefix}:<name> --help${S.TEXT_DIM} for details on any of these${S.TEXT_NORMAL}`,
+  )
+  lines.push("")
+  return lines.join(EOL)
+}
+
 // Workflow recipes shown at the bottom of each topic guide
 const TOPIC_RECIPES: Record<string, string[]> = {
   crm: [

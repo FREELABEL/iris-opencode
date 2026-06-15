@@ -146,8 +146,8 @@ import { PlatformMsgCommand } from "./cli/cmd/platform-msg"
 import { PlatformAffiliatesCommand } from "./cli/cmd/platform-affiliates"
 import { PlatformPlaybookCommand, PlatformSkillCommand } from "./cli/cmd/platform-playbook"
 import { GuideCommand } from "./cli/cmd/guide"
-import { registerCommand } from "./cli/cmd/command-groups"
-import { renderGroupedHelp } from "./cli/help-renderer"
+import { registerCommand, getRegistry } from "./cli/cmd/command-groups"
+import { renderGroupedHelp, renderNamespacedHelp } from "./cli/help-renderer"
 
 // Register a command in the grouped help registry and return it unchanged
 function reg<T>(commandModule: T): T {
@@ -379,6 +379,27 @@ const hasNoCommand = rawArgs.every((a) => a.startsWith("-"))
 if (hasHelp && hasNoCommand) {
   console.log(renderGroupedHelp())
   process.exit(0)
+}
+
+// Intercept `iris <parent> --help` to surface `<parent>:*` namespaced commands, which
+// yargs registers as separate top-level commands and never lists under the parent
+// (#137271 atlas, #137272 all 14 colon-namespaced commands). Print the namespaced
+// suite first, then fall through to yargs for the parent's own native help. If the
+// parent is ONLY a namespace (e.g. `cloud`, `sdk` — no bare command), strict() would
+// reject it, so we print the suite and exit cleanly instead.
+if (hasHelp) {
+  const firstArg = rawArgs.find((a) => !a.startsWith("-"))
+  if (firstArg && !firstArg.includes(":")) {
+    const block = renderNamespacedHelp(firstArg)
+    if (block) {
+      console.log(block)
+      const registry = getRegistry()
+      const isRealCommand = registry.some(
+        (c) => c.name === firstArg || c.aliases.includes(firstArg),
+      )
+      if (!isRealCommand) process.exit(0)
+    }
+  }
 }
 
 // Auto-start bridge+daemon if not running (silent, non-blocking)
