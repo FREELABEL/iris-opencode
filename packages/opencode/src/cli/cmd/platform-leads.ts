@@ -6241,6 +6241,288 @@ const LeadsEnrichCommand = cmd({
 })
 
 // ============================================================================
+// verify — validate a lead's contact info (#137535). Scraped/discovered emails &
+// phones are never validated before becoming leads, so junk flows into the CRM and
+// outreach bounces. This checks FORMAT + a real deliverability SIGNAL (DNS MX for the
+// email domain) with zero paid API — so it works as the free verification step for
+// the browser-discovery pipeline (no Serper/Tavily dependency).
+// ============================================================================
+
+const DISPOSABLE_EMAIL_DOMAINS = new Set([
+  "mailinator.com", "guerrillamail.com", "10minutemail.com", "tempmail.com", "temp-mail.org",
+  "throwaway.email", "yopmail.com", "trashmail.com", "getnada.com", "sharklasers.com",
+  "maildrop.cc", "dispostable.com", "fakeinbox.com", "mailnesia.com",
+])
+const ROLE_EMAIL_PREFIXES = new Set([
+  "info", "sales", "support", "admin", "contact", "hello", "office", "team", "help",
+  "billing", "noreply", "no-reply", "marketing", "enquiries", "inquiries",
+])
+
+type EmailVerdict = { value: string; valid: boolean; risk: "low" | "medium" | "high"; reasons: string[]; has_mx: boolean }
+async function verifyEmail(email: string): Promise<EmailVerdict> {
+  const value = email.trim()
+  const reasons: string[] = []
+  // RFC-pragmatic format check
+  const formatOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)
+  if (!formatOk) {
+    return { value, valid: false, risk: "high", reasons: ["invalid format"], has_mx: false }
+  }
+  const [local, domain] = value.toLowerCase().split("@")
+  if (DISPOSABLE_EMAIL_DOMAINS.has(domain)) reasons.push("disposable domain")
+  if (ROLE_EMAIL_PREFIXES.has(local)) reasons.push("role-based (not a person)")
+
+  // Deliverability signal: does the domain publish MX records?
+  let hasMx = false
+  try {
+    const dns = await import("dns/promises")
+    const mx = await dns.resolveMx(domain)
+    hasMx = Array.isArray(mx) && mx.length > 0
+  } catch {
+    hasMx = false
+  }
+  if (!hasMx) reasons.push("no MX records (domain can't receive mail)")
+
+  const valid = formatOk && hasMx && !DISPOSABLE_EMAIL_DOMAINS.has(domain)
+  const risk: EmailVerdict["risk"] = !hasMx || DISPOSABLE_EMAIL_DOMAINS.has(domain)
+    ? "high"
+    : reasons.length > 0
+      ? "medium"
+      : "low"
+  return { value, valid, risk, reasons, has_mx: hasMx }
+}
+
+type PhoneVerdict = { value: string; valid: boolean; e164: string | null; reasons: string[] }
+function verifyPhone(phone: string): PhoneVerdict {
+  const raw = phone.trim()
+  const reasons: string[] = []
+  const hasPlus = raw.startsWith("+")
+  const digits = raw.replace(/[^\d]/g, "")
+  // E.164 is 8–15 digits. US default: 10 digits, or 11 with leading 1.
+  let e164: string | null = null
+  if (hasPlus && digits.length >= 8 && digits.length <= 15) {
+    e164 = "+" + digits
+  } else if (digits.length === 10) {
+    e164 = "+1" + digits // assume NANP
+    reasons.push("assumed US country code (no +)")
+  } else if (digits.length === 11 && digits.startsWith("1")) {
+    e164 = "+" + digits
+  } else {
+    reasons.push(digits.length < 8 ? "too few digits" : "ambiguous — needs country code (+)")
+  }
+  return { value: raw, valid: e164 !== null && reasons.every((r) => r.startsWith("assumed")), e164, reasons }
+}
+
+const LeadsVerifyCommand = cmd({
+  command: "verify [id]",
+  describe: "validate a lead's email + phone (format + MX deliverability signal; free, no API)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead id to verify (reads its contact info)", type: "number" })
+      .option("email", { describe: "verify a raw email (skip lead lookup)", type: "string" })
+      .option("phone", { describe: "verify a raw phone (skip lead lookup)", type: "string" })
+      .option("store", { describe: "write the verification result back to the lead", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!(await requireAuth())) { process.exitCode = 1; return }
+
+    let email = args.email as string | undefined
+    let phone = args.phone as string | undefined
+    let lead: any = null
+
+    if (args.id != null && !email && !phone) {
+      const res = await irisFetch(`/api/v1/leads/${args.id}`)
+      if (!(await handleApiError(res, "Get lead"))) { process.exitCode = 1; return }
+      lead = ((await res.json()) as any)?.data ?? {}
+      const ci = lead.contact_info ?? {}
+      email = lead.email ?? ci.email ?? (Array.isArray(ci.emails) ? ci.emails[0] : undefined)
+      phone = lead.phone ?? ci.phone ?? undefined
+    }
+
+    if (!email && !phone) {
+      const msg = "Nothing to verify. Pass a lead id, or --email / --phone."
+      if (isJson) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    const emailResult = email ? await verifyEmail(email) : null
+    const phoneResult = phone ? verifyPhone(phone) : null
+
+    // Optionally persist the verdict onto the lead's contact_info.
+    let stored = false
+    if (args.store && args.id != null) {
+      const ci = (lead?.contact_info as Record<string, unknown>) ?? {}
+      const merged = { ...ci, verification: { email: emailResult, phone: phoneResult, verified_at: new Date().toISOString() } }
+      const up = await irisFetch(`/api/v1/leads/${args.id}`, { method: "PUT", body: JSON.stringify({ contact_info: merged }) })
+      stored = up.ok
+    }
+
+    if (isJson) {
+      console.log(JSON.stringify({ ok: true, lead_id: args.id ?? null, email: emailResult, phone: phoneResult, stored }, null, 2))
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  Verify Contact${args.id != null ? ` — Lead #${args.id}` : ""}`)
+    if (emailResult) {
+      const mark = emailResult.valid ? success("✓") : emailResult.risk === "high" ? "✗" : "⚠"
+      console.log(`  ${mark} ${bold("Email")}  ${emailResult.value}  ${dim(`[${emailResult.risk} risk]`)}`)
+      if (emailResult.reasons.length) console.log(dim(`      ${emailResult.reasons.join("; ")}`))
+    }
+    if (phoneResult) {
+      const mark = phoneResult.valid ? success("✓") : "⚠"
+      console.log(`  ${mark} ${bold("Phone")}  ${phoneResult.value}${phoneResult.e164 ? `  ${dim("→ " + phoneResult.e164)}` : ""}`)
+      if (phoneResult.reasons.length) console.log(dim(`      ${phoneResult.reasons.join("; ")}`))
+    }
+    if (stored) console.log(dim(`  ✓ verification stored on lead #${args.id}`))
+    prompts.outro(stored ? "Done" : args.id != null ? dim(`Store it: iris leads verify ${args.id} --store`) : "Done")
+  },
+})
+
+// ============================================================================
+// score — generic ICP / lead-quality scorer (#137536). Scraped leads can't be
+// ranked, so an operator can't focus on the best ones. This scores 0–100 across
+// weighted signals with sensible DEFAULT weights you can tune via --weights. No ICP
+// model is hardcoded — it's a transparent, configurable heuristic.
+// ============================================================================
+
+// Category weights (sum = 100). Override any subset via --weights '{"seniority":40}'.
+const ICP_DEFAULT_WEIGHTS = {
+  completeness: 25, // has the fields you need to actually reach + qualify them
+  email_quality: 20, // deliverable, person (not role) inbox
+  seniority: 25, // decision-maker title
+  company_signal: 15, // real company + web presence
+  engagement: 15, // already moving in the pipeline
+}
+type IcpWeights = typeof ICP_DEFAULT_WEIGHTS
+
+const SENIOR_TITLE_RE = /\b(founder|co-?founder|owner|ceo|cfo|coo|cto|cmo|chief|president|vp|vice president|head of|director|principal|partner|managing)\b/i
+
+/** Each signal returns a 0–1 fraction of its category weight that the lead earns. */
+async function scoreLead(lead: any, weights: IcpWeights): Promise<{ score: number; tier: string; breakdown: Record<string, { earned: number; max: number; note: string }> }> {
+  const ci = lead?.contact_info ?? {}
+  const email = lead?.email ?? ci.email ?? (Array.isArray(ci.emails) ? ci.emails[0] : undefined)
+  const phone = lead?.phone ?? ci.phone
+  const company = lead?.company ?? ci.company
+  const title = lead?.job_title ?? ci.job_title ?? ci.title ?? ""
+  const website = lead?.website ?? ci.website
+  const status = String(lead?.status ?? "")
+  const noteCount = Array.isArray(lead?.notes) ? lead.notes.length : (lead?.notes_count ?? 0)
+
+  // completeness
+  const haveFields = [!!email, !!phone, !!company, !!(lead?.name)].filter(Boolean).length
+  const completenessFrac = haveFields / 4
+
+  // email_quality (reuse the verifier — deliverability + person vs role)
+  let emailFrac = 0
+  let emailNote = "no email"
+  if (email) {
+    const ev = await verifyEmail(String(email))
+    emailFrac = ev.valid ? (ev.reasons.includes("role-based (not a person)") ? 0.6 : 1) : ev.has_mx ? 0.4 : 0.1
+    emailNote = ev.valid ? (ev.risk === "low" ? "deliverable, personal" : "deliverable, role/medium") : "undeliverable/invalid"
+  }
+
+  // seniority
+  const seniorityFrac = SENIOR_TITLE_RE.test(String(title)) ? 1 : title ? 0.4 : 0
+  const seniorityNote = title ? (SENIOR_TITLE_RE.test(String(title)) ? `decision-maker (${title})` : `non-senior (${title})`) : "no title"
+
+  // company_signal
+  const companyFrac = (company ? 0.6 : 0) + (website ? 0.4 : 0)
+  const companyNote = [company ? "has company" : null, website ? "has website" : null].filter(Boolean).join(", ") || "no company signal"
+
+  // engagement
+  const movedInPipeline = status && !/^(new|prospected)$/i.test(status)
+  const engagementFrac = Math.min(1, (movedInPipeline ? 0.6 : 0) + Math.min(0.4, noteCount * 0.2))
+  const engagementNote = `${status || "no status"}, ${noteCount} note(s)`
+
+  const parts: Array<[keyof IcpWeights, number, string]> = [
+    ["completeness", completenessFrac, `${haveFields}/4 key fields`],
+    ["email_quality", emailFrac, emailNote],
+    ["seniority", seniorityFrac, seniorityNote],
+    ["company_signal", companyFrac, companyNote],
+    ["engagement", engagementFrac, engagementNote],
+  ]
+  const breakdown: Record<string, { earned: number; max: number; note: string }> = {}
+  let score = 0
+  for (const [k, frac, note] of parts) {
+    const max = weights[k]
+    const earned = Math.round(max * frac)
+    score += earned
+    breakdown[k] = { earned, max, note }
+  }
+  score = Math.max(0, Math.min(100, Math.round(score)))
+  const tier = score >= 80 ? "A" : score >= 60 ? "B" : score >= 40 ? "C" : "D"
+  return { score, tier, breakdown }
+}
+
+const LeadsScoreCommand = cmd({
+  command: "score [id]",
+  describe: "score a lead's ICP fit 0–100 with configurable weights (qualify + rank)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead id to score", type: "number" })
+      .option("weights", { describe: 'override category weights as JSON, e.g. \'{"seniority":40}\'', type: "string" })
+      .option("store", { describe: "write the score + tier back to the lead", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!(await requireAuth())) { process.exitCode = 1; return }
+    if (args.id == null) {
+      const msg = "Provide a lead id: iris leads score <id>"
+      if (isJson) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    let weights: IcpWeights = { ...ICP_DEFAULT_WEIGHTS }
+    if (args.weights) {
+      try {
+        weights = { ...weights, ...JSON.parse(String(args.weights)) }
+      } catch {
+        const msg = "Invalid --weights JSON"
+        if (isJson) console.log(JSON.stringify({ ok: false, error: msg }))
+        else console.error(msg)
+        process.exitCode = 1
+        return
+      }
+    }
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}`)
+    if (!(await handleApiError(res, "Get lead"))) { process.exitCode = 1; return }
+    const lead = ((await res.json()) as any)?.data ?? {}
+
+    const { score, tier, breakdown } = await scoreLead(lead, weights)
+
+    let stored = false
+    if (args.store) {
+      const ci = (lead.contact_info as Record<string, unknown>) ?? {}
+      const merged = { ...ci, icp_score: { score, tier, weights, scored_at: new Date().toISOString() } }
+      const up = await irisFetch(`/api/v1/leads/${args.id}`, { method: "PUT", body: JSON.stringify({ contact_info: merged }) })
+      stored = up.ok
+    }
+
+    if (isJson) {
+      console.log(JSON.stringify({ ok: true, lead_id: args.id, score, tier, breakdown, weights, stored }, null, 2))
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  ICP Score — Lead #${args.id}`)
+    console.log(`  ${bold(String(score) + "/100")}  ${dim("tier")} ${bold(tier)}  ${dim(lead.name ?? "")}`)
+    printDivider()
+    for (const [k, v] of Object.entries(breakdown)) {
+      console.log(`  ${k.padEnd(15)} ${String(v.earned).padStart(2)}/${String(v.max).padEnd(2)}  ${dim(v.note)}`)
+    }
+    printDivider()
+    if (stored) console.log(dim(`  ✓ score stored on lead #${args.id}`))
+    prompts.outro(stored ? "Done" : dim(`Store it: iris leads score ${args.id} --store`))
+  },
+})
+
+// ============================================================================
 // gate-all — batch-create payment gates for Won leads missing them
 // ============================================================================
 
@@ -10178,6 +10460,8 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsSegmentCommand)
       .command(LeadsRequirementsCommand)
       .command(LeadsEnrichCommand)
+      .command(LeadsVerifyCommand)
+      .command(LeadsScoreCommand)
       .command(LeadsGateAllCommand)
       .command(LeadsKBCommand)
       .command(LeadsPulseAllCommand)
