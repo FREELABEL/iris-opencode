@@ -681,6 +681,26 @@ const LeadsSearchCommand = cmd({
   },
 })
 
+// #137406 — single canonical CRM status taxonomy, shared by create + update so the
+// write side can't drift into casing/spelling variants again (the old create enum was
+// a wrong 5-value set). Derived from the real statuses observed across bloqs. The
+// `list --status` FILTER stays free-form so you can still query legacy/drifted values.
+const LEAD_STATUSES = [
+  "New",
+  "Prospected",
+  "Contacted",
+  "Qualified",
+  "Proposal",
+  "In Negotiation",
+  "Follow-Up",
+  "On Hold",
+  "Active",
+  "Partner",
+  "Won",
+  "Lost",
+  "Archived",
+] as const
+
 const LeadsCreateCommand = cmd({
   command: "create",
   describe: "create a new lead",
@@ -693,9 +713,9 @@ const LeadsCreateCommand = cmd({
       .option("company", { describe: "company name", type: "string" })
       .option("source", { describe: "lead source (e.g. referral, inbound, outreach)", type: "string" })
       .option("status", {
-        describe: "initial status",
+        describe: "initial status (canonical CRM taxonomy)",
         type: "string",
-        choices: ["Prospected", "Contacted", "Interested", "Converted", "Archived"],
+        choices: LEAD_STATUSES,
       })
       .option("notes", { describe: "initial note to attach", type: "string" })
       .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" })
@@ -1132,7 +1152,7 @@ const LeadsUpdateCommand = cmd({
       .option("email", { describe: "new email", type: "string" })
       .option("phone", { describe: "new phone", type: "string" })
       .option("company", { describe: "new company", type: "string" })
-      .option("status", { describe: "new status", type: "string" })
+      .option("status", { describe: "new status (canonical CRM taxonomy)", type: "string", choices: LEAD_STATUSES })
       .option("bloq-id", { alias: "bloq", describe: "CRM bloq ID to associate", type: "number" })
       .option("website", { describe: "website URL", type: "string" })
       .option("source", { describe: "lead source", type: "string" })
@@ -6081,13 +6101,15 @@ const LeadsTasksCommand = cmd({
 
 const LeadsEnrichCommand = cmd({
   command: "enrich",
-  describe: "enrich leads in a bloq via API (no Playwright/browser needed)",
+  // #137537 — per-lead synchronous form + provider documented. Bloq mode stays queued.
+  describe: "enrich one lead (--id, synchronous, reports results) or a whole bloq (--bloq, queued Hive task). Provider: LeadEnrichmentService — AI web research, no Playwright/Serper.",
   builder: (yargs) =>
     yargs
-      .option("bloq", { alias: "b", describe: "bloq id to enrich leads from", type: "number", demandOption: true })
-      .option("limit", { alias: "n", describe: "max leads to enrich", type: "number", default: 20 })
+      .option("id", { describe: "lead id to enrich synchronously (reports found contacts + tags)", type: "number" })
+      .option("bloq", { alias: "b", describe: "bloq id to enrich leads from (queued Hive task)", type: "number" })
+      .option("limit", { alias: "n", describe: "max leads to enrich (bloq mode)", type: "number", default: 20 })
       .option("user-id", { describe: "user id (defaults to ~/.iris/sdk/.env)", type: "number" })
-      .option("queue", { describe: "fire and forget — print task id and exit", type: "boolean", default: true })
+      .option("queue", { describe: "fire and forget — print task id and exit (bloq mode)", type: "boolean", default: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(argv) {
     const { requireUserId } = await import("./iris-api")
@@ -6096,8 +6118,45 @@ const LeadsEnrichCommand = cmd({
       process.exitCode = 1
       return
     }
+
+    // ── Per-lead SYNCHRONOUS enrich (#137537) — call the endpoint directly and report
+    // what came back. No fire-and-forget task id, no silent-failure pattern. The endpoint
+    // returns researched contacts for review (requires_confirmation) — apply via the UI.
+    if (argv.id != null) {
+      const leadId = argv.id as number
+      const res = await irisFetch(`/api/v1/leads/${leadId}/enrich`, { method: "POST", body: JSON.stringify({}) })
+      if (!res.ok) {
+        const body = await res.text()
+        if (argv.json) console.log(JSON.stringify({ ok: false, status: res.status, error: body }))
+        else console.error(`Enrich failed: HTTP ${res.status} ${body.slice(0, 200)}`)
+        process.exitCode = 1
+        return
+      }
+      const out = (await res.json()) as any
+      const data = out?.data ?? {}
+      const contacts: any[] = data.found_contacts ?? []
+      const tags: any[] = data.generated_tags ?? []
+
+      if (argv.json) {
+        console.log(JSON.stringify({ ok: true, lead_id: leadId, found_contacts: contacts, generated_tags: tags, note: data.note ?? null, iterations: data.iterations ?? 0, requires_confirmation: out?.requires_confirmation ?? true }, null, 2))
+        return
+      }
+      console.log(`${success("✓")} Enriched lead ${bold(String(leadId))} — ${contacts.length} contact(s) found, ${tags.length} tag(s) (${data.iterations ?? 0} research iterations)`)
+      if (data.note) console.log(dim(`  ${String(data.note).slice(0, 240)}`))
+      if (contacts.length > 0) console.log(dim(`  Review + apply in the CRM (results require confirmation before they're written).`))
+      return
+    }
+
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) {
+      process.exitCode = 1
+      return
+    }
+
+    if (argv.bloq == null) {
+      const msg = "Provide --id <leadId> (one lead, synchronous) or --bloq <bloqId> (queued batch)."
+      if (argv.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(msg)
       process.exitCode = 1
       return
     }
