@@ -815,8 +815,18 @@ const LeadsCreateCommand = cmd({
       const data = (await res.json()) as { data?: any }
       const l = data?.data ?? data
 
-      // Auto-attach note if provided (before output, so JSON reflects the final state)
-      if (args.notes) {
+      // #137529 — the API UPSERTS by email: if the email already belongs to a lead it
+      // returns that existing lead with its OLD values and silently drops what we sent.
+      // Detect that (the returned name doesn't match what we asked for) and report
+      // HONESTLY instead of a green "created" — and DON'T attach the note (it would
+      // pollute the existing record). Operators were being lied to.
+      const sentName = String(name).trim().toLowerCase()
+      const gotName = String(l.name ?? "").trim().toLowerCase()
+      const matchedExisting = !!email && !!sentName && gotName !== sentName
+      l.matched_existing = matchedExisting
+
+      // Auto-attach note only on a real create (never onto a silently-matched lead).
+      if (args.notes && !matchedExisting) {
         try {
           await irisFetch(`/api/v1/leads/${l.id}/notes`, {
             method: "POST",
@@ -830,6 +840,18 @@ const LeadsCreateCommand = cmd({
 
       if (isJson) {
         console.log(JSON.stringify(l, null, 2))
+        return
+      }
+
+      if (matchedExisting) {
+        spinner?.stop("Matched existing lead", 1)
+        prompts.log.warn(`A lead with ${email} already exists (#${l.id}) — NOT created. Your values were NOT applied.`)
+        printDivider()
+        printKV("ID", l.id)
+        printKV("Name", `${l.name} ${dim(`(you sent: ${name})`)}`)
+        printKV("Status", `${l.status} ${args.status ? dim(`(you sent: ${args.status})`) : ""}`)
+        printDivider()
+        prompts.outro(dim(`Update it instead: iris leads update ${l.id} --name "${name}"${args.status ? ` --status "${args.status}"` : ""}`))
         return
       }
 
@@ -861,14 +883,18 @@ const LeadsCreateCommand = cmd({
 const LeadsNotesCommand = cmd({
   command: "notes <id>",
   aliases: ["view-notes"],
-  describe: "list all notes for a lead",
-  builder: (yargs) => yargs.positional("id", { describe: "lead ID or name", type: "string", demandOption: true }),
+  describe: "list all notes for a lead (with note IDs for edit/delete)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID or name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output (includes note IDs — for scripted cleanup)", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
+    const isJson = args.json === true
+    if (!isJson) UI.empty()
 
     const token = await requireAuth()
     if (!token) {
-      prompts.outro("Done")
+      if (!isJson) prompts.outro("Done")
       return
     }
 
@@ -891,7 +917,7 @@ const LeadsNotesCommand = cmd({
       }
       if (matches.length === 1) {
         leadId = matches[0].id
-      } else if (isNonInteractive()) {
+      } else if (isNonInteractive() || isJson) {
         leadId = matches[0].id
       } else {
         const choice = await prompts.select({
@@ -909,17 +935,17 @@ const LeadsNotesCommand = cmd({
       }
     }
 
-    prompts.intro(`◈  Notes — Lead #${leadId}`)
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    if (!isJson) prompts.intro(`◈  Notes — Lead #${leadId}`)
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start("Loading…")
 
     try {
       const res = await irisFetch(`/api/v1/leads/${leadId}`)
       const ok = await handleApiError(res, "Get lead")
       if (!ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
         process.exitCode = 1
-        prompts.outro("Done")
+        if (!isJson) prompts.outro("Done")
         return
       }
 
@@ -928,7 +954,13 @@ const LeadsNotesCommand = cmd({
       const name = lead.name ?? lead.first_name ?? `Lead #${leadId}`
       const notes: any[] = Array.isArray(lead.notes) ? lead.notes : []
 
-      spinner.stop(bold(name))
+      if (isJson) {
+        // Include note IDs so scripts can edit/delete (#137530).
+        console.log(JSON.stringify({ lead_id: leadId, notes }, null, 2))
+        return
+      }
+
+      spinner?.stop(bold(name))
 
       if (notes.length === 0) {
         prompts.log.info("No notes yet.")
@@ -941,7 +973,9 @@ const LeadsNotesCommand = cmd({
         const content =
           typeof note === "object" ? (note.content ?? JSON.stringify(note)).replace(/\\n/g, "\n") : String(note)
         const date = typeof note === "object" ? (note.created_at ?? "") : ""
-        if (date) console.log(`  ${dim(date)}`)
+        const noteId = typeof note === "object" ? (note.id ?? null) : null
+        // Show the note ID so it can be deleted/edited (#137530).
+        console.log(`  ${noteId != null ? dim(`#${noteId}`) : ""}${date ? `  ${dim(date)}` : ""}`)
         const lines = content.split("\n")
         for (const line of lines) {
           if (line.trim()) console.log(`  ${line.trim()}`)
@@ -950,12 +984,16 @@ const LeadsNotesCommand = cmd({
       }
       printDivider()
       prompts.outro(
-        `${success("✓")} ${notes.length} note${notes.length === 1 ? "" : "s"}  ·  ${dim(`iris leads note ${leadId} "…"`)}`,
+        `${success("✓")} ${notes.length} note${notes.length === 1 ? "" : "s"}  ·  ${dim(`delete: iris leads note-delete ${leadId} <noteId>`)}`,
       )
     } catch (err) {
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      spinner?.stop("Error", 1)
+      if (isJson) console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
     }
   },
 })
@@ -1035,6 +1073,32 @@ const LeadsOutreachCommand = cmd({
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
+  },
+})
+
+// #137530 — notes were append-only with no IDs, so a wrong/test note (e.g. from the
+// create-upsert bug) couldn't be removed. The DELETE endpoint exists; surface it.
+const LeadsNoteDeleteCommand = cmd({
+  command: "note-delete <id> <noteId>",
+  aliases: ["note-rm", "delete-note"],
+  describe: "delete a note from a lead (get note IDs via `iris leads notes <id> --json`)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .positional("noteId", { describe: "note ID (from `iris leads notes <id>`)", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!(await requireAuth())) { process.exitCode = 1; return }
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/notes/${args.noteId}`, { method: "DELETE" })
+    if (!(await handleApiError(res, "Delete note"))) { process.exitCode = 1; return }
+
+    if (isJson) {
+      console.log(JSON.stringify({ ok: true, lead_id: args.id, note_id: args.noteId, deleted: true }))
+      return
+    }
+    console.log(`${success("✓")} Deleted note #${args.noteId} from lead #${args.id}`)
   },
 })
 
@@ -1763,6 +1827,14 @@ const LeadsDeleteCommand = cmd({
     spinner.start("Deleting…")
 
     try {
+      // #137532 — cascade: tear down the payment gate FIRST so its public artifacts
+      // (proposal / e-sign / Stripe checkout pages) aren't left live + orphaned after
+      // the lead is gone. Best-effort: a 404 (no gate) is fine; we don't block delete.
+      try {
+        const gateRes = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, { method: "DELETE" })
+        if (gateRes.ok) spinner.message("Tore down payment gate…")
+      } catch { /* no gate / non-fatal — proceed with lead delete */ }
+
       const res = await irisFetch(`/api/v1/leads/${args.id}`, { method: "DELETE" })
       const ok = await handleApiError(res, "Delete lead")
       if (!ok) {
@@ -1771,7 +1843,7 @@ const LeadsDeleteCommand = cmd({
         return
       }
 
-      spinner.stop(`${success("✓")} Lead #${args.id} deleted`)
+      spinner.stop(`${success("✓")} Lead #${args.id} deleted (payment gate torn down)`)
       prompts.outro(dim("iris leads list"))
     } catch (err) {
       spinner.stop("Error", 1)
@@ -10562,6 +10634,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsSyncCalendarCommand)
       .command(LeadsNotesCommand)
       .command(LeadsNoteCommand)
+      .command(LeadsNoteDeleteCommand)
       .command(LeadsOutreachCommand)
       .command(LeadsTasksCommand)
       .command(LeadsPaymentGateCommand)
