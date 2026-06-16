@@ -240,6 +240,25 @@ const SetCmd = cmd({
     try {
       const page = await getBySlug(args.slug, true)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+
+      // Top-level page COLUMNS are record fields, NOT json_content paths (#137875).
+      // Route them straight to the update endpoint so e.g.
+      //   iris pages set <slug> requires_auth true
+      // actually gates the page (PublicPageController reads the column) instead of
+      // nesting a dead `json_content.requires_auth` key that the gate ignores.
+      const PAGE_COLUMNS = new Set(["requires_auth", "status", "title", "seo_title", "seo_description", "og_image"])
+      if (PAGE_COLUMNS.has(args.path)) {
+        const colVal = parseValue(args.value)
+        const colRes = await pagesFetch(`/api/v1/pages/${page.id}`, {
+          method: "PUT",
+          body: JSON.stringify({ [args.path]: colVal }),
+        })
+        if (!(await handleApiError(colRes, `Update ${args.path}`))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+        sp.stop(success(`Updated page column ${args.path} = ${JSON.stringify(colVal)}`))
+        prompts.outro(dim(`iris pages cache-clear ${args.slug}   # purge the rendered cache so the change takes effect`))
+        return
+      }
+
       const json = page.json_content ?? {}
       const parsed = parseValue(args.value)
       setNestedValue(json, args.path, parsed)
