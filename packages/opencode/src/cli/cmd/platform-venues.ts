@@ -523,7 +523,8 @@ const DeleteCommand = cmd({
 // Falls back to Serper API if no Hive nodes are online.
 // ============================================================================
 
-async function findOnlineHiveNode(): Promise<{ id: string; name: string } | null> {
+// Exported so `iris leads discover` reuses the SAME browser Google-Maps path (#137526).
+export async function findOnlineHiveNode(): Promise<{ id: string; name: string } | null> {
   try {
     const userId = await resolveUserId()
     if (!userId) return null
@@ -534,7 +535,7 @@ async function findOnlineHiveNode(): Promise<{ id: string; name: string } | null
   } catch { return null }
 }
 
-async function dispatchHiveSearch(node: { id: string; name: string }, query: string, limit: number): Promise<any[]> {
+export async function dispatchHiveSearch(node: { id: string; name: string }, query: string, limit: number): Promise<any[]> {
   const userId = await resolveUserId()
 
   // Self-contained Node.js script sent inline — no file dependencies on the node.

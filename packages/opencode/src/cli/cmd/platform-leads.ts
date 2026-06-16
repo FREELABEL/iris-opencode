@@ -20,6 +20,8 @@ import {
   getBridgeToken,
   resolveUserId,
 } from "./iris-api"
+// #137403/#137526 — reuse the venues browser Google-Maps discovery path for leads.
+import { findOnlineHiveNode, dispatchHiveSearch } from "./platform-venues"
 import { executeIntegrationCall } from "./platform-run"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync } from "fs"
 import { homedir } from "os"
@@ -6523,6 +6525,121 @@ const LeadsScoreCommand = cmd({
 })
 
 // ============================================================================
+// discover — turn a niche + geography into Prospected leads (#137403). The keystone:
+// finds businesses from the web via the FREE Hive browser Google-Maps scrape (#137526,
+// browser-primary per the #137404 provider policy), then creates leads and (optionally)
+// verifies (#137535) + scores (#137536) them inline. Zero Serper/Tavily credits needed.
+// ============================================================================
+
+const LeadsDiscoverCommand = cmd({
+  command: "discover",
+  aliases: ["find"],
+  describe: "find businesses from the web (free Hive browser) → create Prospected leads",
+  builder: (yargs) =>
+    yargs
+      .option("niche", { describe: 'business category, e.g. "family law offices"', type: "string", demandOption: true })
+      .option("location", { alias: "loc", describe: 'geography, e.g. "Fort Worth TX"', type: "string" })
+      .option("bloq-id", { alias: "bloq", describe: "CRM bloq to create leads in (omit = preview only)", type: "number" })
+      .option("limit", { alias: "n", describe: "max businesses", type: "number", default: 10 })
+      .option("verify", { describe: "verify each created lead's contact info (#137535)", type: "boolean", default: false })
+      .option("score", { describe: "ICP-score each created lead (#137536)", type: "boolean", default: false })
+      .option("dry-run", { describe: "preview results without creating leads", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!(await requireAuth())) { process.exitCode = 1; return }
+
+    const query = [args.niche, args.location].filter(Boolean).join(" in ")
+    const limit = args.limit as number
+
+    // Provider policy (#137404/#137526): BROWSER-PRIMARY — the free Hive Google-Maps
+    // scrape. No online node → fail LOUDLY (no silent empty list), don't pretend.
+    const node = await findOnlineHiveNode()
+    if (!node) {
+      const msg = "No online Hive node to run the browser scrape. Start one with `iris-daemon start`, then retry. (Discovery is browser-first and free — no Serper credits needed.)"
+      if (isJson) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    if (!isJson) { UI.empty(); prompts.intro(`◈  Discover — ${query}`) }
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start(`Scraping Google Maps via Hive node ${node.name}…`)
+
+    let businesses: any[] = []
+    try {
+      businesses = (await dispatchHiveSearch(node, query, limit)) || []
+    } catch (err) {
+      spinner?.stop("Failed", 1)
+      const msg = err instanceof Error ? err.message : String(err)
+      if (isJson) console.log(JSON.stringify({ ok: false, error: msg }))
+      else { prompts.log.error(msg); prompts.outro("Done") }
+      process.exitCode = 1
+      return
+    }
+    businesses = businesses.slice(0, limit)
+    spinner?.stop(`${success("✓")} found ${businesses.length} business(es)`)
+
+    const create = args["bloq-id"] != null && !args["dry-run"]
+    const created: any[] = []
+
+    if (create) {
+      for (const b of businesses) {
+        const name = b.title || b.name
+        if (!name) continue
+        const contact_info: Record<string, unknown> = {
+          source: "discover",
+          niche: args.niche,
+          location: args.location ?? null,
+          address: b.address ?? null,
+          rating: b.rating ?? null,
+          website: b.website ?? b.website_url ?? null,
+        }
+        const payload: Record<string, unknown> = { name, bloqId: args["bloq-id"], status: "Prospected", source: "discover", company: name, contact_info }
+        if (b.email) payload.email = b.email
+        if (b.phone) payload.phone = b.phone
+        try {
+          const res = await irisFetch("/api/v1/leads", { method: "POST", body: JSON.stringify(payload) })
+          if (!res.ok) continue
+          const lead = ((await res.json()) as any)?.data ?? {}
+          let verification: any = null
+          let icp: any = null
+          if (args.verify) {
+            verification = { email: b.email ? await verifyEmail(String(b.email)) : null, phone: b.phone ? verifyPhone(String(b.phone)) : null }
+          }
+          if (args.score) {
+            icp = await scoreLead({ ...lead, contact_info }, ICP_DEFAULT_WEIGHTS)
+          }
+          created.push({ id: lead.id, name, phone: b.phone ?? null, website: contact_info.website, verification, icp })
+        } catch { /* skip individual failures */ }
+      }
+    }
+
+    if (isJson) {
+      console.log(JSON.stringify({ ok: true, query, found: businesses.length, businesses, created }, null, 2))
+      return
+    }
+
+    printDivider()
+    for (const b of businesses) {
+      console.log(`  ${bold(b.title || b.name || "?")}  ${dim([b.phone, b.address].filter(Boolean).join("  ·  "))}`)
+    }
+    printDivider()
+    if (create) {
+      console.log(`  ${success("✓")} created ${bold(String(created.length))} Prospected lead(s) in bloq ${args["bloq-id"]}`)
+      if (args.score) {
+        for (const c of created.filter((x) => x.icp)) console.log(dim(`    #${c.id} ${c.name} — ICP ${c.icp.score} (${c.icp.tier})`))
+      }
+      prompts.outro("Done")
+    } else {
+      console.log(dim(`  Preview only — add ${bold("--bloq-id <N>")} to create these as Prospected leads.`))
+      prompts.outro(dim("add --bloq-id to create leads"))
+    }
+  },
+})
+
+// ============================================================================
 // gate-all — batch-create payment gates for Won leads missing them
 // ============================================================================
 
@@ -10462,6 +10579,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsEnrichCommand)
       .command(LeadsVerifyCommand)
       .command(LeadsScoreCommand)
+      .command(LeadsDiscoverCommand)
       .command(LeadsGateAllCommand)
       .command(LeadsKBCommand)
       .command(LeadsPulseAllCommand)
