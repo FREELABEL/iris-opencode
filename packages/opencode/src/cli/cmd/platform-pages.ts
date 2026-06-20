@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
+import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
 
 // ============================================================================
 // Helpers
@@ -37,7 +38,7 @@ function formatStatus(status: string): string {
   return status
 }
 
-async function getBySlug(slug: string, includeJson = false): Promise<any | null> {
+export async function getBySlug(slug: string, includeJson = false): Promise<any | null> {
   const params = new URLSearchParams({
     include_json: includeJson ? "1" : "0",
     include_drafts: "1",
@@ -89,6 +90,45 @@ function setNestedValue(obj: any, path: string, value: unknown): void {
 
 function pagesDir(custom?: string): string {
   return custom ?? join(process.cwd(), "pages")
+}
+
+// Create a page from already-built json_content (reused by `sites clone`).
+// Returns the created page record, or null on failure.
+export async function createPageFromJson(opts: {
+  slug: string
+  title: string
+  seo_title?: string
+  seo_description?: string
+  og_image?: string
+  owner_type?: string
+  owner_id?: number
+  json_content: any
+  publish?: boolean
+}): Promise<any | null> {
+  const payload: Record<string, unknown> = {
+    slug: opts.slug,
+    title: opts.title,
+    seo_title: opts.seo_title ?? opts.title,
+    seo_description: opts.seo_description,
+    og_image: opts.og_image,
+    owner_type: opts.owner_type,
+    owner_id: opts.owner_id,
+    status: "draft",
+    json_content: opts.json_content,
+  }
+  const res = await pagesFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
+  if (!(await handleApiError(res, `Create page ${opts.slug}`))) return null
+  const p = ((await res.json()) as { data?: any }).data ?? {}
+  if (opts.publish && p?.id) {
+    const pub = await pagesFetch(`/api/v1/pages/${p.id}/publish`, { method: "POST" })
+    if (await handleApiError(pub, "Publish")) {
+      await pagesFetch("/api/internal/cache/purge-page", {
+        method: "POST",
+        body: JSON.stringify({ slug: opts.slug }),
+      }).catch(() => {})
+    }
+  }
+  return p
 }
 
 // ============================================================================
@@ -776,6 +816,119 @@ const DuplicateCmd = cmd({
         console.log(`  ${dim("Publish:")}  iris pages push ${args.slug} --publish`)
       }
 
+      prompts.outro("Done")
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const RebrandCmd = cmd({
+  command: "rebrand <source>",
+  describe: "clone a page and swap brand identity from a brand profile (PII safety gate)",
+  builder: (y) =>
+    y
+      .positional("source", { describe: "source page slug to clone", type: "string", demandOption: true })
+      .option("as", { describe: "new page slug", type: "string", demandOption: true })
+      .option("brand", { describe: "brand slug whose profile to apply", type: "string", demandOption: true })
+      .option("title", { describe: "new page title (defaults to brand name)", type: "string" })
+      .option("owner-type", { describe: "owner type (defaults to source)", type: "string" })
+      .option("owner-id", { describe: "owner id (defaults to source)", type: "number" })
+      .option("site", { describe: "attach the cloned page to this site id", type: "number" })
+      .option("publish", { describe: "publish immediately", type: "boolean", default: false })
+      .option("force", { describe: "proceed even if PII leaks are detected", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Rebrand ${args.source} → ${args.as}  ${dim(`(brand: ${args.brand})`)}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const sp = prompts.spinner()
+    sp.start("Loading source + brand…")
+    try {
+      const source = await getBySlug(args.source, true)
+      if (!source) { sp.stop("Source not found", 1); prompts.outro("Done"); return }
+      const jsonContent = source.json_content
+      if (!jsonContent) { sp.stop("Source has no content", 1); prompts.outro("Done"); return }
+
+      let target: BrandProfile
+      try {
+        target = await profileFromBrand(String(args.brand))
+      } catch (e) {
+        sp.stop("Brand not found", 1)
+        prompts.log.error(e instanceof Error ? e.message : String(e))
+        prompts.outro("Done"); return
+      }
+
+      sp.message("Rebranding…")
+      const { json, leaks } = rebrandJsonContent(jsonContent, target)
+      sp.stop(leaks.length ? `${leaks.length} possible leak(s)` : success("Rebranded — clean"))
+
+      // --- Safety gate: refuse to create/publish if source PII survived ---
+      if (leaks.length > 0) {
+        printDivider()
+        for (const l of leaks) {
+          console.log(`  ${UI.Style.TEXT_WARNING}⚠${UI.Style.TEXT_NORMAL}  ${bold(l.needle)}  ${dim("at")} ${dim(l.path)}  ${dim(`("${l.value}")`)}`)
+        }
+        printDivider()
+        prompts.log.warn(`Source client data survived. Populate the missing fields on brand "${args.brand}" (iris brands profile set ${args.brand} --file ...) then retry — or pass --force to clone anyway.`)
+        if (!args.force) { prompts.outro("Blocked — nothing created"); return }
+        prompts.log.warn("--force set: cloning despite leaks")
+      }
+
+      const sp2 = prompts.spinner()
+      sp2.start("Creating…")
+      const title = (args.title as string) ?? target.name ?? source.title
+      const payload: Record<string, unknown> = {
+        slug: args.as,
+        title,
+        seo_title: json.seo_title ?? title,
+        seo_description: json.seo_description ?? source.seo_description,
+        og_image: source.og_image,
+        owner_type: (args["owner-type"] as string) ?? source.owner_type,
+        owner_id: (args["owner-id"] as number) ?? source.owner_id,
+        status: "draft",
+        json_content: json,
+      }
+      const res = await pagesFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
+      if (!(await handleApiError(res, "Create page"))) { sp2.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = (await res.json()) as { data?: any }
+      const p = data?.data ?? data
+      sp2.stop(success(`Cloned → #${p.id}`))
+
+      // Save local file
+      const filePath = join(pagesDir("./pages"), `${args.as}.json`)
+      writeFileSync(filePath, JSON.stringify({
+        id: p.id, slug: args.as, title,
+        seo_title: payload.seo_title, seo_description: payload.seo_description, og_image: payload.og_image,
+        status: p.status, owner_type: payload.owner_type, owner_id: payload.owner_id, json_content: json,
+      }, null, 2))
+
+      // Optional: attach to a site (sites live on FL_API)
+      if (args.site != null) {
+        const aRes = await irisFetch(`/api/v1/sites/${args.site}/pages/${p.id}`, { method: "POST" }, FL_API)
+        await handleApiError(aRes, "Attach to site")
+      }
+
+      printDivider()
+      printKV("ID", p.id)
+      printKV("Slug", args.as)
+      printKV("Brand", args.brand)
+      printKV("Leaks", leaks.length === 0 ? success("none") : `${leaks.length} (forced)`)
+      printKV("Components", (json.components?.length ?? 0).toString())
+      printKV("File", filePath)
+      printDivider()
+
+      if (args.publish) {
+        const pubRes = await pagesFetch(`/api/v1/pages/${p.id}/publish`, { method: "POST" })
+        if (await handleApiError(pubRes, "Publish")) {
+          await pagesFetch("/api/internal/cache/purge-page", { method: "POST", body: JSON.stringify({ slug: args.as }) }).catch(() => {})
+          console.log(`  ${success("Published")} ${highlight(publicUrl(args.as))}`)
+        }
+      } else {
+        console.log(`  ${dim("Review:")}  ${publicUrl(args.as)}`)
+        console.log(`  ${dim("Publish:")} iris pages publish ${args.as}`)
+      }
       prompts.outro("Done")
     } catch (err) {
       sp.stop("Error", 1)
@@ -1479,6 +1632,7 @@ export const PlatformPagesCommand = cmd({
       .command(PreviewCmd)
       .command(CreateCmd)
       .command(DuplicateCmd)
+      .command(RebrandCmd)
       .command(ComponentsCmd)
       .command(ComposeCmd)
       .command(ComponentRegistryCmd)

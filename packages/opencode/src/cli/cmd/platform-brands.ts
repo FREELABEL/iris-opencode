@@ -1190,6 +1190,123 @@ const DesignTokensDiffCommand = cmd({
   },
 })
 
+// ============================================================================
+// Brand profile — client identity (name, contact, social, booking, colors)
+// stored under design_tokens.profile. The single source of truth consumed by
+// `iris pages rebrand` / `iris sites clone`. (Plan: moonlit-snacking-quail.md)
+// ============================================================================
+
+async function fetchBrandTokens(slug: string): Promise<Record<string, unknown> | null> {
+  const res = await irisFetch(`/api/v1/public/brands/${encodeURIComponent(slug)}/design-tokens`)
+  const ok = await handleApiError(res, "Get brand"); if (!ok) return null
+  const data = (await res.json()) as { design_tokens?: Record<string, unknown> }
+  return (data?.design_tokens ?? {}) as Record<string, unknown>
+}
+
+const ProfileGetCommand = cmd({
+  command: "get <slug>",
+  describe: "show a brand's client profile (name, contact, social, booking)",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .option("json", { describe: "output raw JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Brand Profile — ${args.slug}`)
+    const spinner = prompts.spinner()
+    spinner.start("Fetching…")
+    try {
+      const tokens = await fetchBrandTokens(String(args.slug))
+      if (!tokens) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const profile = (tokens.profile ?? {}) as Record<string, any>
+      spinner.stop(String(args.slug))
+      if (args.json) { console.log(JSON.stringify(profile, null, 2)); prompts.outro("Done"); return }
+      if (Object.keys(profile).length === 0) {
+        prompts.log.warn("No profile set")
+        prompts.outro(`Set it: ${dim(`iris brands profile set ${args.slug} --file profile.json`)}`)
+        return
+      }
+      printDivider()
+      printKV("Name", profile.name ?? dim("—"))
+      printKV("Tagline", profile.tagline ?? dim("—"))
+      printKV("Booking", profile.bookingUrl ?? dim("—"))
+      printKV("Phone", profile.contact?.phone ?? dim("—"))
+      printKV("Email", profile.contact?.email ?? dim("—"))
+      printKV("Instagram", profile.social?.instagram ?? dim("—"))
+      printKV("Colors", [profile.colors?.primary, profile.colors?.secondary].filter(Boolean).join(" / ") || dim("—"))
+      printDivider()
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ProfileSetCommand = cmd({
+  command: "set <slug>",
+  describe: "set a brand's client profile from a JSON file (merged into design_tokens.profile)",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .option("file", { describe: "path to profile JSON file", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Set Brand Profile — ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    let profile: Record<string, unknown>
+    try {
+      profile = JSON.parse(readFileSync(args.file!, "utf-8"))
+    } catch (e) {
+      prompts.log.error(`Failed to read ${args.file}: ${e instanceof Error ? e.message : String(e)}`)
+      prompts.outro("Done"); return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Resolving brand…")
+    try {
+      // Read-modify-write so we don't clobber colors/typography already on the brand.
+      const existing = await fetchBrandTokens(String(args.slug))
+      if (!existing) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
+      const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const listData = (await listRes.json()) as { data?: any }
+      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+      const brandId = brands[0].id
+
+      spinner.message("Updating profile…")
+      const merged = { ...existing, profile }
+      const res = await irisFetch(`/api/v1/brands/${brandId}/design-tokens`, {
+        method: "PATCH",
+        body: JSON.stringify(merged),
+      })
+      const ok = await handleApiError(res, "Set profile"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop("Profile updated")
+      prompts.log.success(`Set profile for "${args.slug}"`)
+      prompts.outro(`${dim(`iris brands profile get ${args.slug}`)}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ProfileGroup = cmd({
+  command: "profile",
+  describe: "manage a brand's client profile (identity/contact for site cloning)",
+  builder: (yargs) =>
+    yargs
+      .command(ProfileGetCommand)
+      .command(ProfileSetCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
 const DesignTokensGroup = cmd({
   command: "design-tokens",
   aliases: ["tokens", "dt"],
@@ -1226,6 +1343,7 @@ export const PlatformBrandsCommand = cmd({
       .command(BrandsDetachCommand)
       .command(PersonasGroup)
       .command(DesignTokensGroup)
+      .command(ProfileGroup)
       .demandCommand(),
   async handler() {},
 })
