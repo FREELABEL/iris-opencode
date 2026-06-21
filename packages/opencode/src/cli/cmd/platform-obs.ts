@@ -2,6 +2,9 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, success, highlight } from "./iris-api"
+import { readFileSync, existsSync } from "fs"
+import { homedir } from "os"
+import { join } from "path"
 
 // ============================================================================
 // OBS Studio CLI — control OBS via WebSocket through the IRIS bridge
@@ -11,14 +14,39 @@ import { dim, bold, success, highlight } from "./iris-api"
 // ============================================================================
 
 const BRIDGE = "http://localhost:3200"
+const IRIS_DIR = join(homedir(), ".iris")
+
+// Bridge auth (#145947): every /api/* bridge route is gated on an X-Bridge-Key
+// header. Read the live key from disk at call time (the bridge rotates it on
+// restart) — same approach as the MCP server (#145946).
+function readBridgeKey(): string | null {
+  const tokenFile = join(IRIS_DIR, "bridge-token")
+  if (existsSync(tokenFile)) {
+    const t = readFileSync(tokenFile, "utf-8").trim()
+    if (t) return t
+  }
+  const cfgFile = join(IRIS_DIR, "bridge", ".bridge-config.json")
+  if (existsSync(cfgFile)) {
+    try {
+      const k = JSON.parse(readFileSync(cfgFile, "utf-8"))?.auth?.apiKey
+      if (typeof k === "string" && k) return k
+    } catch {}
+  }
+  return process.env.IRIS_BRIDGE_KEY?.trim() || null
+}
 
 async function obsFetch(path: string, method = "GET", body?: any): Promise<any> {
-  const res = await fetch(`${BRIDGE}${path}`, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(10000),
-  })
+  const doFetch = () => {
+    const key = readBridgeKey() // re-read each attempt so a 401 retry picks up a rotated token
+    return fetch(`${BRIDGE}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", ...(key ? { "X-Bridge-Key": key } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(10000),
+    })
+  }
+  let res = await doFetch()
+  if (res.status === 401) res = await doFetch() // token may have rotated — re-read + retry once
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
     throw new Error(err.error || `HTTP ${res.status}`)
