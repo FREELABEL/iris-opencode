@@ -189,6 +189,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   bug: "system",
   claude: "system",
   doctor: "system",
+  "system:apps-scan": "system",
   "sdk:call": "system",
   eval: "system",
   diary: "system",

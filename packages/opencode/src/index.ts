@@ -37,6 +37,7 @@ import { PlatformDialerCommand } from "./cli/cmd/platform-dialer"
 import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
 import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
+import { OkfCommand } from "./cli/cmd/platform-okf"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
@@ -91,6 +92,7 @@ import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
 import { PlatformDoctorCommand } from "./cli/cmd/platform-doctor"
+import { PlatformSystemAppsScanCommand } from "./cli/cmd/platform-system-apps-scan"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
 import { PlatformInitCommand } from "./cli/cmd/platform-init"
 import { PlatformOnboardFlowsCommand } from "./cli/cmd/platform-onboard-flows"
@@ -244,6 +246,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformWorkflowsCommand))
   .command(reg(PlatformBloqsCommand))
   .command(reg(PlatformBrandsCommand))
+  .command(reg(OkfCommand))
   .command(reg(PlatformCopycatCommand))
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
@@ -311,6 +314,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformTelegramCommand))
   .command(reg(PlatformInstagramCommand))
   .command(reg(PlatformDoctorCommand))
+  .command(reg(PlatformSystemAppsScanCommand))
   .command(reg(PlatformObsCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformInitCommand))
