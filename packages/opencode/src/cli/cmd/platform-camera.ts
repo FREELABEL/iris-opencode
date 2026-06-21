@@ -154,12 +154,24 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // Detect on-board AI tracking: if the camera's pan/tilt drifts with no input
 // from us, tracking is active and will override manual control.
+// #145968: the old 50-unit threshold flagged idle gimbal jitter (~200 units of
+// noise observed at rest) as "tracking ON" — constant false positives. Real
+// tracking sweeps thousands of units as it follows a subject, so require a large
+// drift, sampled over a longer window, to separate following from noise.
+const TRACKING_DRIFT_UNITS = 1500
 async function isSelfMoving(bin: string, index: number): Promise<boolean> {
   const a = getPanTilt(bin, index)
-  await sleep(350)
-  const b = getPanTilt(bin, index)
-  if (!a || !b) return false
-  return Math.abs(a.pan - b.pan) > 50 || Math.abs(a.tilt - b.tilt) > 50
+  if (!a) return false
+  let maxPan = 0
+  let maxTilt = 0
+  for (let i = 0; i < 2; i++) {
+    await sleep(350)
+    const b = getPanTilt(bin, index)
+    if (!b) continue
+    maxPan = Math.max(maxPan, Math.abs(a.pan - b.pan))
+    maxTilt = Math.max(maxTilt, Math.abs(a.tilt - b.tilt))
+  }
+  return maxPan > TRACKING_DRIFT_UNITS || maxTilt > TRACKING_DRIFT_UNITS
 }
 
 async function warnIfTracking(bin: string, index: number): Promise<void> {
