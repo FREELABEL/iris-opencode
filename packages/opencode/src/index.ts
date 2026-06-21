@@ -83,6 +83,7 @@ import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
 import { DeviceCommand } from "./cli/cmd/platform-device"
+import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
 import { PlatformAtlasCommsCommand } from "./cli/cmd/platform-atlas-comms"
@@ -316,6 +317,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDoctorCommand))
   .command(reg(PlatformSystemAppsScanCommand))
   .command(reg(PlatformObsCommand))
+  .command(reg(PlatformCameraCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformInitCommand))
   .command(reg(PlatformOnboardFlowsCommand))
