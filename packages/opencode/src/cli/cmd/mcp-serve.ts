@@ -10,11 +10,60 @@ import {
 import { getRegistry, CATEGORIES, COMMAND_CATEGORY_MAP } from "./command-groups"
 import { homedir } from "os"
 import { join } from "path"
+import { readFileSync, existsSync } from "fs"
 
 const IRIS_BIN = join(homedir(), ".iris", "bin", "iris")
 const HOWTO_DIR = join(homedir(), ".iris", "how-to")
 const MAX_OUTPUT = 100 * 1024 // 100KB
 const TIMEOUT_MS = 30_000
+
+// ── Local bridge auth (#145946) ───────────────────────────────────────────
+// The hive_* tools proxy through the local daemon bridge, which gates every
+// request on an `x-bridge-key` header. The MCP server is spawned without the
+// secret in its env, and the bridge rotates its token on restart — so we read
+// the live key from disk at call time (never cached stale) and retry once on 401.
+const IRIS_DIR = join(homedir(), ".iris")
+function readBridgeKey(): string | null {
+  // Preferred: the rotating token file written by the daemon on (re)start.
+  const tokenFile = join(IRIS_DIR, "bridge-token")
+  if (existsSync(tokenFile)) {
+    const t = readFileSync(tokenFile, "utf-8").trim()
+    if (t) return t
+  }
+  // Fallback: the configured static key in the bridge config.
+  const cfgFile = join(IRIS_DIR, "bridge", ".bridge-config.json")
+  if (existsSync(cfgFile)) {
+    try {
+      const cfg = JSON.parse(readFileSync(cfgFile, "utf-8"))
+      const k = cfg?.auth?.apiKey
+      if (typeof k === "string" && k) return k
+    } catch {}
+  }
+  // Last resort: explicit env override.
+  return process.env.IRIS_BRIDGE_KEY?.trim() || null
+}
+
+// fetch() wrapper that injects the live bridge key and re-reads + retries once on 401.
+async function bridgeFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const withKey = (key: string | null): RequestInit => ({
+    ...init,
+    headers: { ...(init.headers as Record<string, string>), ...(key ? { "x-bridge-key": key } : {}) },
+    signal: init.signal ?? AbortSignal.timeout(5000),
+  })
+  let res = await fetch(url, withKey(readBridgeKey()))
+  if (res.status === 401) {
+    // Token likely rotated since process start — re-read from disk and retry once.
+    res = await fetch(url, withKey(readBridgeKey()))
+  }
+  return res
+}
+
+// Normalized error text for a failed bridge response (#145951: consistent shape).
+function bridgeErr(res: Response): string {
+  if (res.status === 401)
+    return "Bridge error: Unauthorized — the local daemon bridge rejected the key. Ensure the iris daemon is running (the key in ~/.iris/bridge-token rotates on restart)."
+  return `Bridge error: ${res.status} ${res.statusText}`
+}
 
 // Known commands from the registry (populated at startup)
 let knownCommands: Set<string> = new Set()
@@ -278,7 +327,7 @@ Common commands and their subcommands:
 - mail: inbox, read, send, search
 - imessage: read, send, search
 - partials: list, get, create, update, push, pull
-- hive: nodes, tasks, campaigns, dispatch
+- hive: nodes (list|show), tasks (list|show), campaigns, run <node> "<cmd>"
 - n8n: list, pull, push, diff, activate, deactivate, dispatch
 
 Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-page --json'`,
@@ -403,8 +452,8 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
 
       if (name === "hive_sessions") {
         try {
-          const res = await fetch(`${BRIDGE}/daemon/tmux/sessions`, { signal: AbortSignal.timeout(5000) })
-          if (!res.ok) return { content: [{ type: "text" as const, text: `Bridge error: ${res.statusText}` }], isError: true }
+          const res = await bridgeFetch(`${BRIDGE}/daemon/tmux/sessions`)
+          if (!res.ok) return { content: [{ type: "text" as const, text: bridgeErr(res) }], isError: true }
           const data = await res.json()
           return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] }
         } catch (e) {
@@ -417,8 +466,8 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
         const lines = (args?.lines as number) ?? 20
         if (!session) return { content: [{ type: "text" as const, text: "Error: session is required" }], isError: true }
         try {
-          const res = await fetch(`${BRIDGE}/daemon/tmux/sessions/${session}/panes?lines=${lines}`, { signal: AbortSignal.timeout(5000) })
-          if (!res.ok) return { content: [{ type: "text" as const, text: `Error: ${res.statusText}` }], isError: true }
+          const res = await bridgeFetch(`${BRIDGE}/daemon/tmux/sessions/${session}/panes?lines=${lines}`)
+          if (!res.ok) return { content: [{ type: "text" as const, text: bridgeErr(res) }], isError: true }
           const data = await res.json()
           return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] }
         } catch (e) {
@@ -432,13 +481,12 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
         const text = args?.text as string
         if (!session || text === undefined) return { content: [{ type: "text" as const, text: "Error: session and text are required" }], isError: true }
         try {
-          const res = await fetch(`${BRIDGE}/daemon/tmux/sessions/${session}/input`, {
+          const res = await bridgeFetch(`${BRIDGE}/daemon/tmux/sessions/${session}/input`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ pane, text }),
-            signal: AbortSignal.timeout(5000),
           })
-          if (!res.ok) return { content: [{ type: "text" as const, text: `Error: ${res.statusText}` }], isError: true }
+          if (!res.ok) return { content: [{ type: "text" as const, text: bridgeErr(res) }], isError: true }
           return { content: [{ type: "text" as const, text: `Sent to ${session}:${pane}` }] }
         } catch (e) {
           return { content: [{ type: "text" as const, text: `Daemon bridge unavailable: ${e instanceof Error ? e.message : e}` }], isError: true }
@@ -451,6 +499,20 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
     // --- Start stdio transport ---
     const transport = new StdioServerTransport()
     await server.connect(transport)
+
+    // #145951: emit a JSON-RPC Parse error (-32700) on malformed input instead of
+    // silently dropping the line, so MCP clients aren't left hanging. We chain the
+    // SDK's existing onerror (set during connect) rather than clobbering it.
+    const prevOnError = transport.onerror?.bind(transport)
+    transport.onerror = (error: Error) => {
+      prevOnError?.(error)
+      if (/JSON|parse/i.test(error?.message ?? "")) {
+        // A parse failure carries no request id; per JSON-RPC, respond with id: null.
+        transport
+          .send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } } as any)
+          .catch(() => {})
+      }
+    }
 
     // Keep the process alive until stdin closes (MCP client disconnects)
     await new Promise<void>((resolve) => {

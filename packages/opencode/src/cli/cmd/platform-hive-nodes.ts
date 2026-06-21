@@ -44,11 +44,23 @@ function timeAgo(iso: string | null | undefined): string {
   return `${Math.floor(ms / 86_400_000)}d ago`
 }
 
+// SECURITY (#145949): strip live secrets from a node record before it can reach
+// stdout / --json / MCP transcripts. Defense-in-depth behind the server-side fix
+// (fl-iris-api ComputeNodeController::formatNode no longer emits api_key).
+function redactNode(node: HiveNode): HiveNode {
+  if (!node || typeof node !== "object") return node
+  const { api_key, api_secret, api_secret_hash, ...safe } = node as unknown as Record<string, unknown>
+  void api_key
+  void api_secret
+  void api_secret_hash
+  return safe as unknown as HiveNode
+}
+
 export async function fetchNodes(userId: number): Promise<HiveNode[]> {
   const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}`)
   if (!res.ok) throw new Error(`Failed to fetch nodes: ${res.status} ${await res.text()}`)
   const data = (await res.json()) as { nodes: HiveNode[] }
-  return data.nodes ?? []
+  return (data.nodes ?? []).map(redactNode)
 }
 
 export async function resolveNode(userId: number, target: string): Promise<HiveNode | null> {
