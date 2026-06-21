@@ -12,7 +12,8 @@ import {
   highlight,
 } from "./iris-api"
 import { spawnSync } from "child_process"
-import { existsSync, mkdirSync, statSync } from "fs"
+import { existsSync, mkdirSync, statSync, writeFileSync } from "fs"
+import { transcribeLocal } from "../lib/transcription"
 import { homedir, tmpdir } from "os"
 import { join, basename, extname, resolve } from "path"
 
@@ -32,92 +33,23 @@ async function runLocalWhisper(
   sourceUrl?: string,
 ) {
   const abs = resolve(filePath)
-  if (!existsSync(abs)) {
-    prompts.log.error(`File not found: ${abs}`)
-    return
-  }
-
-  // 1. Check deps
-  const ffmpeg = which("ffmpeg")
-  const whisper = which("whisper-cli") || which("whisper-cpp")
-  if (!ffmpeg) {
-    prompts.log.error("ffmpeg not found. Install: brew install ffmpeg")
-    return
-  }
-  if (!whisper) {
-    prompts.log.error("Local transcription requires whisper-cpp.")
-    prompts.log.info("Install:  brew install whisper-cpp")
-    prompts.log.info("Or use a YouTube URL — server-side transcription doesn't need local tools.")
-    return
-  }
-
-  // 2. Ensure model
-  const modelDir = join(homedir(), ".whisper")
-  const modelPath = join(modelDir, "ggml-base.en.bin")
-  if (!existsSync(modelPath)) {
-    mkdirSync(modelDir, { recursive: true })
-    const sp = prompts.spinner()
-    sp.start("Downloading whisper model (~141 MB)…")
-    const dl = spawnSync("curl", ["-L", "-o", modelPath, WHISPER_MODEL_URL], {
-      stdio: "ignore",
-    })
-    if (dl.status !== 0) {
-      sp.stop("Failed", 1)
-      prompts.log.error("Model download failed")
-      return
-    }
-    sp.stop("Model ready")
-  }
-
-  // 3. Convert → 16kHz mono WAV in tmp
-  const wavPath = join(
-    tmpdir(),
-    `iris-transcribe-${Date.now()}-${basename(abs, extname(abs))}.wav`,
-  )
   const sp = prompts.spinner()
-  sp.start("Converting audio…")
-  const conv = spawnSync(
-    ffmpeg,
-    ["-y", "-i", abs, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wavPath],
-    { stdio: "ignore" },
-  )
-  if (conv.status !== 0 || !existsSync(wavPath)) {
+  sp.start("Transcribing locally (whisper.cpp)…")
+  let text: string
+  try {
+    text = await transcribeLocal(abs, { language })
+  } catch (e) {
     sp.stop("Failed", 1)
-    prompts.log.error("ffmpeg conversion failed")
+    prompts.log.error(e instanceof Error ? e.message : String(e))
     return
   }
-  const wavSize = (statSync(wavPath).size / 1024 / 1024).toFixed(1)
-  sp.stop(`Converted (${wavSize} MB)`)
+  sp.stop("Done")
 
-  // 4. Run whisper-cli
-  const outBase = join(
-    process.cwd(),
-    `${basename(abs, extname(abs))}-transcript`,
-  )
-  const args = ["-m", modelPath, "-otxt", "-of", outBase]
-  if (language) args.push("-l", language)
-  args.push(wavPath)
+  // Persist next to the source (preserves prior UX).
+  const txtPath = join(process.cwd(), `${basename(abs, extname(abs))}-transcript.txt`)
+  writeFileSync(txtPath, text)
 
-  const sp2 = prompts.spinner()
-  sp2.start("Transcribing locally (whisper.cpp)…")
-  const res = spawnSync(whisper, args, { encoding: "utf8" })
-  // cleanup wav regardless
-  spawnSync("rm", ["-f", wavPath])
-
-  if (res.status !== 0) {
-    sp2.stop("Failed", 1)
-    prompts.log.error(res.stderr?.slice(-500) || "whisper-cli failed")
-    return
-  }
-  sp2.stop("Done")
-
-  const txtPath = `${outBase}.txt`
-  const text = existsSync(txtPath)
-    ? require("fs").readFileSync(txtPath, "utf8")
-    : ""
-
-  // Sync to server so the transcript is searchable in the user's knowledge base.
-  // Best-effort — silent on failure.
+  // Best-effort server sync so it's searchable in the knowledge base.
   const estimatedDuration = Math.round((text.split(/\s+/).length / 150) * 60)
   const syncUrl = sourceUrl ?? (/^https?:\/\//i.test(filePath) ? filePath : undefined)
   try {
@@ -137,13 +69,7 @@ async function runLocalWhisper(
   }
 
   if (asJson) {
-    console.log(
-      JSON.stringify(
-        { provider: "whisper.cpp (local)", file: abs, transcript_path: txtPath, text },
-        null,
-        2,
-      ),
-    )
+    console.log(JSON.stringify({ provider: "whisper.cpp (local)", file: abs, transcript_path: txtPath, text }, null, 2))
     return
   }
 
