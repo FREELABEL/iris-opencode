@@ -150,6 +150,7 @@ const RunCmd = cmd({
         title: `iris scripts run: ${args.slug}`,
         type: "user_script",
         node_id: node.id,
+        prompt: String(args.slug), // also the slug — the daemon reads config.script_slug ?? prompt
         config: { script_slug: args.slug },
         timeout_seconds: timeoutSec,
       }),
