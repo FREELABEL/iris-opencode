@@ -242,7 +242,8 @@ const AgentsCreateCommand = cmd({
       .option("model", { alias: "m", describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
       .option("type", { describe: "agent type (content, chat, assistant, support)", type: "string", default: "content" })
       .option("bloq-id", { alias: "b", describe: "knowledge base bloq ID", type: "number" })
-      .option("heartbeat-mode", { describe: "heartbeat mode (autonomous, briefing, disabled)", type: "string", choices: ["autonomous", "briefing", "disabled"] })
+      // Same enum as `agents update` (#146506 flagged the create/update mismatch).
+      .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, co-pilot, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "co-pilot", "briefing"] })
       .option("heartbeat-tools", { describe: "comma-separated tool names for heartbeat", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -299,9 +300,17 @@ const AgentsCreateCommand = cmd({
       if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
       if (args["initial-prompt"]) payload.initial_prompt = args["initial-prompt"]
       if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
+      // These three persist under settings.*, NOT top-level — top-level model /
+      // system_prompt / heartbeat_tools are silently dropped by the API (#146506).
+      // Mirror the shape that `agents push` writes (and that working agents have).
+      const settings: Record<string, unknown> = { model }
+      if (args["system-prompt"]) settings.system_prompt = args["system-prompt"]
+      else if (args.prompt) settings.system_prompt = args.prompt
       if (args["heartbeat-tools"]) {
-        payload.heartbeat_tools = args["heartbeat-tools"].split(",").map((t: string) => t.trim())
+        settings.heartbeat_tools = args["heartbeat-tools"].split(",").map((t: string) => t.trim())
+        payload.heartbeat_tools = settings.heartbeat_tools // tolerate either shape server-side
       }
+      payload.settings = settings
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents`, {
         method: "POST",
@@ -323,7 +332,7 @@ const AgentsCreateCommand = cmd({
       printDivider()
       printKV("ID", a.id)
       printKV("Name", a.name)
-      printKV("Model", a.model)
+      printKV("Model", a.model ?? (a.settings as Record<string, unknown>)?.model)
       if (a.bloq_id) printKV("Bloq", a.bloq_id)
       if (args["heartbeat-mode"]) printKV("Heartbeat", args["heartbeat-mode"])
       printDivider()
@@ -380,6 +389,8 @@ const AgentsUpdateCommand = cmd({
       .option("name", { describe: "new name", type: "string" })
       .option("description", { describe: "new description", type: "string" })
       .option("model", { describe: "new model", type: "string" })
+      .option("system-prompt", { describe: "new system prompt (persists to settings.system_prompt)", type: "string" })
+      .option("heartbeat-tools", { describe: "comma-separated heartbeat tool names (settings.heartbeat_tools)", type: "string" })
       .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, co-pilot, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "co-pilot", "briefing"] })
       .option("reset-health", { describe: "reset health_status to healthy and clear consecutive_failures", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -396,15 +407,19 @@ const AgentsUpdateCommand = cmd({
     const payload: Record<string, unknown> = {}
     if (args.name) payload.name = args.name
     if (args.description) payload.description = args.description
-    if (args.model) payload.model = args.model
     if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
     if (args["reset-health"]) {
       payload.health_status = "healthy"
       payload.consecutive_failures = 0
     }
 
-    if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --name, --description, --model, --heartbeat-mode, or --reset-health")
+    // model / system_prompt / heartbeat_tools live under settings.* — a top-level
+    // `model` is silently ignored (#146506). The API replaces the whole settings
+    // object on PUT, so read-modify-merge to avoid wiping sibling keys.
+    const wantsSettings = !!(args.model || args["system-prompt"] || args["heartbeat-tools"])
+
+    if (Object.keys(payload).length === 0 && !wantsSettings) {
+      prompts.log.warn("Nothing to update. Use --name, --description, --model, --system-prompt, --heartbeat-tools, --heartbeat-mode, or --reset-health")
       prompts.outro("Done")
       return
     }
@@ -413,6 +428,21 @@ const AgentsUpdateCommand = cmd({
     spinner.start("Updating…")
 
     try {
+      if (wantsSettings) {
+        const cur = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
+        if (cur.ok) {
+          const curData = (await cur.json()) as { data?: any }
+          const a = curData?.data ?? curData
+          const settings: Record<string, unknown> = { ...(a?.settings ?? {}) }
+          if (args.model) settings.model = args.model
+          if (args["system-prompt"]) settings.system_prompt = args["system-prompt"]
+          if (args["heartbeat-tools"]) settings.heartbeat_tools = args["heartbeat-tools"].split(",").map((t: string) => t.trim())
+          payload.settings = settings
+        } else {
+          // Fall back to top-level if we can't read current settings
+          if (args.model) payload.model = args.model
+        }
+      }
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`, {
         method: "PUT",
         body: JSON.stringify(payload),
@@ -427,7 +457,7 @@ const AgentsUpdateCommand = cmd({
       printDivider()
       printKV("ID", a.id)
       printKV("Name", a.name)
-      printKV("Model", a.model)
+      printKV("Model", a.model ?? (a.settings as Record<string, unknown>)?.model)
       printDivider()
 
       prompts.outro(dim(`iris agents get ${args.id}`))
@@ -562,12 +592,18 @@ const AgentsPushCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const result = data?.data ?? data
+      // Reconcile the local file with the server's canonical response so a
+      // follow-up `diff` doesn't report phantom drift from key reordering /
+      // normalization the server applies on write (#146510).
+      if (result && result.id) {
+        try { writeFileSync(filepath, JSON.stringify(result, null, 2)) } catch {}
+      }
       spinner.stop(success("Pushed"))
 
       printDivider()
       printKV("Name", result.name)
       printKV("ID", args.id)
-      printKV("Model", result.model)
+      printKV("Model", result.model ?? (result.settings as Record<string, unknown>)?.model)
       printKV("From", filepath)
       printDivider()
 
@@ -636,13 +672,25 @@ const AgentsDiffCommand = cmd({
         }
       }
 
-      // Compare nested objects
+      // Compare nested objects — recurse one level so we show WHICH keys changed
+      // (settings.model, config.x, …) instead of an opaque "(object changed)" (#146510).
       const objFields = ["config", "settings", "file_attachments", "structured_output"]
       for (const f of objFields) {
+        const liveObj = (live[f] ?? {}) as Record<string, unknown>
+        const localObj = (local[f] ?? {}) as Record<string, unknown>
         const liveVal = JSON.stringify(live[f] ?? null, null, 0)
         const localVal = JSON.stringify(local[f] ?? null, null, 0)
-        if (liveVal !== localVal) {
-          changes.push({ field: f, live: "(object changed)", local: "(object changed)" })
+        if (liveVal === localVal) continue
+        const isObj = (v: unknown) => v && typeof v === "object" && !Array.isArray(v)
+        if (isObj(live[f]) || isObj(local[f])) {
+          const keys = new Set([...Object.keys(liveObj), ...Object.keys(localObj)])
+          for (const k of keys) {
+            const lv = JSON.stringify(liveObj[k] ?? null)
+            const kv = JSON.stringify(localObj[k] ?? null)
+            if (lv !== kv) changes.push({ field: `${f}.${k}`, live: liveObj[k], local: localObj[k] })
+          }
+        } else {
+          changes.push({ field: f, live: live[f], local: local[f] })
         }
       }
 

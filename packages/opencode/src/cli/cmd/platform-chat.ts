@@ -178,6 +178,7 @@ export async function executeChat(args: {
       overrideModel: args.model,
       maxIterations: args["max-iterations"],
       timeoutSecs: args.timeout,
+      enableRag: !args["no-rag"],
       onEvent: (evt) => {
         if (isJson) return
         if (evt.type === "tool_call" && evt.tool) lastActivity = `Using ${evt.tool}…`

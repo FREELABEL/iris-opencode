@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
+import { requireAuth, requireUserId, printDivider, printKV, dim, bold, success, streamAgentChat } from "./iris-api"
 import { writeFileSync } from "fs"
 
 // ============================================================================
@@ -36,47 +36,39 @@ interface EvalResult {
   error?: string
 }
 
-async function pollWorkflow(workflowId: string, timeoutSec: number): Promise<any> {
-  const start = Date.now()
-  while (true) {
-    if ((Date.now() - start) / 1000 > timeoutSec) throw new Error(`Timeout (${workflowId})`)
-    await new Promise((r) => setTimeout(r, 1500))
-    const res = await irisFetch(`/api/workflows/${workflowId}`, {}, IRIS_API)
-    if (!res.ok) continue
-    const data = (await res.json()) as any
-    const status = data?.status ?? data?.data?.status
-    if (status === "completed" || status === "failed") return data?.data ?? data
-    if (status === "paused") return data?.data ?? data
-  }
-}
-
 async function runTest(agentId: number, userId: number, test: EvalTest, timeoutSec: number): Promise<EvalResult> {
   const start = Date.now()
   try {
-    const res = await irisFetch(`/api/chat/start`, {
-      method: "POST",
-      body: JSON.stringify({
-        query: test.prompt,
-        agentId,
-        userId,
-        conversationHistory: [{ role: "user", content: test.prompt }],
-        contextPayload: { source: "sdk-eval" },
-      }),
-      headers: {},
+    // Route through the SAME faithful V6 ReactLoop path as `iris agents chat`
+    // (POST /api/v6/chat/stream on iris-api). The old harness POSTed to the dead
+    // `raichu.heyiris.io/api/chat/start` route → 404 on every test → false 0/7
+    // (#146509). streamAgentChat owns host + endpoint, so eval can't drift again.
+    const result = await streamAgentChat({
+      agentId,
+      message: test.prompt,
+      userId,
+      timeoutSecs: timeoutSec,
     })
-    if (!res.ok) return { test: test.name, status: "failed", elapsedSec: 0, keywordsFound: null, error: `HTTP ${res.status}` }
-    const startData = (await res.json()) as any
-    const wfId = startData?.workflow_id ?? startData?.data?.workflow_id
-    if (!wfId) return { test: test.name, status: "failed", elapsedSec: 0, keywordsFound: null, error: "no workflow_id" }
-    const result = await pollWorkflow(wfId, timeoutSec)
     const elapsed = (Date.now() - start) / 1000
-    const summary: string = result?.summary ?? result?.response ?? ""
+    if (!result.ok) {
+      return {
+        test: test.name,
+        status: result.timedOut ? "timeout" : "failed",
+        elapsedSec: Math.round(elapsed * 10) / 10,
+        keywordsFound: null,
+        error: result.error,
+      }
+    }
+    const summary: string = result.content ?? ""
     let kw: boolean | null = null
     if (test.expectKeywords && test.expectKeywords.length > 0) {
       const lower = summary.toLowerCase()
       kw = test.expectKeywords.every((k) => lower.includes(k.toLowerCase()))
     }
-    return { test: test.name, status: result?.status ?? "unknown", elapsedSec: Math.round(elapsed * 10) / 10, keywordsFound: kw, summary: summary.slice(0, 200) }
+    // A non-empty response from a completed stream counts as a pass; the V6 stream
+    // reports status "done"/"completed" — treat any ok+content run as completed.
+    const status = summary.trim().length > 0 ? "completed" : (result.status ?? "unknown")
+    return { test: test.name, status, elapsedSec: Math.round(elapsed * 10) / 10, keywordsFound: kw, summary: summary.slice(0, 200) }
   } catch (err) {
     return { test: test.name, status: "failed", elapsedSec: (Date.now() - start) / 1000, keywordsFound: null, error: err instanceof Error ? err.message : String(err) }
   }

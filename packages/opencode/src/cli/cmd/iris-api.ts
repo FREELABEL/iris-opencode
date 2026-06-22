@@ -371,12 +371,15 @@ export async function streamAgentChat(opts: {
   maxIterations?: number
   overrideModel?: string
   timeoutSecs?: number
+  // Defaults to true. Set false (via `--no-rag`) to suppress knowledge-base/bloq
+  // context injection so the model answers from its own weights only (#146915).
+  enableRag?: boolean
   onEvent?: (event: AgentChatEvent) => void
 }): Promise<AgentChatResult> {
   const body: Record<string, unknown> = {
     query: opts.message,
     agent_id: opts.agentId,
-    enable_rag: true,
+    enable_rag: opts.enableRag !== false,
   }
   if (opts.userId) body.user_id = opts.userId
   if (opts.bloqId !== undefined && opts.bloqId !== null && `${opts.bloqId}` !== "") {
