@@ -366,7 +366,9 @@ export async function streamAgentChat(opts: {
   agentId: number
   message: string
   userId?: number | null
-  bloqId?: number | string | null
+  // Accepts a single id or several (repeated `--bloq A --bloq B`). Multiple ids are
+  // sent as bloq_ids[] so the server retrieves per-bloq instead of collapsing to NaN (#146917).
+  bloqId?: number | string | Array<number | string> | null
   conversationHistory?: Array<{ role: string; content: string }>
   maxIterations?: number
   overrideModel?: string
@@ -382,8 +384,17 @@ export async function streamAgentChat(opts: {
     enable_rag: opts.enableRag !== false,
   }
   if (opts.userId) body.user_id = opts.userId
-  if (opts.bloqId !== undefined && opts.bloqId !== null && `${opts.bloqId}` !== "") {
-    body.bloq_id = Number(opts.bloqId)
+  // Normalize one-or-many bloq ids. A bare `Number([514,515])` is NaN → serializes to
+  // null → server silently does a broad user-wide search (the #146917 recall dilution).
+  if (opts.bloqId !== undefined && opts.bloqId !== null) {
+    const ids = (Array.isArray(opts.bloqId) ? opts.bloqId : [opts.bloqId])
+      .map((b) => Number(b))
+      .filter((n) => Number.isFinite(n))
+    if (ids.length === 1) body.bloq_id = ids[0]
+    else if (ids.length > 1) {
+      body.bloq_id = ids[0] // primary, for any consumer that reads a single id
+      body.bloq_ids = ids
+    }
   }
   if (opts.conversationHistory && opts.conversationHistory.length > 0) {
     body.conversation_history = opts.conversationHistory
