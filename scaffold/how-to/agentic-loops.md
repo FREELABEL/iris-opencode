@@ -178,23 +178,37 @@ schedule` registers the recurring version where the cadence is the outer loop. A
 your own loopable playbook by emitting a `VERDICT:` line from a verify step (see
 `iris playbook show agentic-loop`).
 
+## Native agent→agent delegation (G1)
+
+An agent can now hand a sub-task to ANOTHER of your agents in-engine — no playbook or
+external orchestrator needed. Enable it on the orchestrator agent and name its specialists:
+
+```bash
+# turn on delegation for the orchestrator agent
+$ iris agents pull <orchestratorId>
+#   → edit settings.include_delegation = true, then:
+$ iris agents push <orchestratorId>
+```
+
+Then the orchestrator's prompt can say *"delegate research to your **Scout** agent and
+drafting to your **Builder** agent, then synthesize."* The model calls the
+`delegate_to_agent` tool ({agent_name|agent_id, message}); the platform runs that agent
+and returns its answer. Guards: same-user scoping, no self-delegation, and a depth cap
+(orchestrator → A → B; B can't delegate further). This is what `iris loop schedule` uses
+for the recurring single-orchestrator loop.
+
 ## What is not first-class yet (be honest — don't promise these)
 
-Most of the substrate is now solid; one real gap remains.
+The substrate is now solid end-to-end. The remaining sharp edge:
 
-- **Orchestrator → sub-agent delegation (G1)** — there is still no native "delegate to
-  agent X / fan out to agents [..] / collect + synthesize" tool. The `agentic-loop`
-  playbook fans out via `prompt` steps (or `iris hive run "iris agents chat …"` for true
-  parallelism); external orchestration (Claude Code) is the supported path. This is the
-  main thing still hand-wired.
-- **Closed-loop budget (G3)** — `iris loop --max-cycles` bounds a run by cycles (the
-  predictable budget guard). A finer per-loop *token* ceiling / kill-on-spend isn't
-  surfaced yet — keep loops closed and bounded.
+- **Closed-loop *token* budget (G3, partial)** — `iris loop --max-cycles` bounds a run by
+  cycles and `delegate_to_agent` is depth-capped, but a finer per-loop *token* ceiling /
+  kill-on-spend isn't surfaced yet. Keep loops closed and bounded.
 
-Fixed June 2026 (no longer caveats): verify→iterate is first-class via `iris loop`;
-persistent memory attach works (`iris agents update --bloq`, honored server-side);
-heartbeat execution flows; multi-bloq RAG retrieves per-bloq; `iris eval`, `iris
-transcribe`, `iris monitor`, and `--no-rag` all work.
+Fixed June 2026 (no longer caveats): native delegation via `delegate_to_agent` (G1);
+verify→iterate is first-class via `iris loop` (G2); persistent memory attach works
+(`iris agents update --bloq`); heartbeat execution flows; multi-bloq RAG retrieves
+per-bloq; `iris eval`, `iris transcribe`, `iris monitor`, and `--no-rag` all work.
 
 `iris transcribe` (ingest), `iris eval` (verify), and `--no-rag` were fixed June 2026 and
 work in current builds.
