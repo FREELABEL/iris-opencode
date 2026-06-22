@@ -6,6 +6,25 @@
  */
 
 import { irisFetch } from "../cmd/iris-api"
+import { resolveFromAddressBook, findContactsByName } from "./address-book"
+
+export interface ResolvedHandle {
+  name: string
+  handle: string // phone (last 10 digits) or email
+}
+
+/**
+ * Resolve a free-text name to a saved contact's iMessage handle (phone or email)
+ * via macOS Contacts. Returns null if no saved contact matches.
+ */
+export function resolveHandleByName(name: string): ResolvedHandle | null {
+  const matches = findContactsByName(name)
+  for (const m of matches) {
+    if (m.phones.length) return { name: m.name, handle: m.phones[0] }
+    if (m.emails.length) return { name: m.name, handle: m.emails[0] }
+  }
+  return null
+}
 
 const cache = new Map<string, string | null>()
 
@@ -29,6 +48,15 @@ export async function resolveContactName(identifier: string): Promise<string | n
   if (!identifier) return null
   if (cache.has(identifier)) return cache.get(identifier) ?? null
 
+  // 1. Local macOS Contacts (AddressBook) — instant, no network, and the
+  //    authoritative source for personal contacts who aren't CRM leads.
+  const saved = resolveFromAddressBook(identifier)
+  if (saved) {
+    cache.set(identifier, saved)
+    return saved
+  }
+
+  // 2. Fall back to the leads CRM for business contacts not in Contacts.app.
   const search = normalizeForSearch(identifier)
 
   try {
@@ -61,8 +89,26 @@ export async function resolveContactName(identifier: string): Promise<string | n
 export async function resolveContactNames(identifiers: string[]): Promise<Map<string, string>> {
   const result = new Map<string, string>()
   const unique = [...new Set(identifiers.filter(Boolean))]
-  const batch = unique.slice(0, 10)
 
+  // Pass 1 — resolve everything possible from local Contacts (free, no network).
+  const unresolved: string[] = []
+  for (const id of unique) {
+    if (cache.has(id)) {
+      const cached = cache.get(id)
+      if (cached) result.set(id, cached)
+      continue
+    }
+    const saved = resolveFromAddressBook(id)
+    if (saved) {
+      cache.set(id, saved)
+      result.set(id, saved)
+    } else {
+      unresolved.push(id)
+    }
+  }
+
+  // Pass 2 — only the leftovers hit the CRM, still bounded to avoid hammering it.
+  const batch = unresolved.slice(0, 10)
   await Promise.allSettled(
     batch.map(async (id) => {
       const name = await resolveContactName(id)

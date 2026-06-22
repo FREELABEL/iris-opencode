@@ -4,7 +4,7 @@ import { UI } from "../ui"
 import { printDivider, dim, bold, success } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
 import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle } from "../lib/imessage"
-import { resolveContactName, resolveContactNames } from "../lib/contacts"
+import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
 
 const ImessageSearchCommand = cmd({
   command: "search <query>",
@@ -33,7 +33,21 @@ const ImessageSearchCommand = cmd({
 
     // If not a phone number, try to resolve as lead name → phone or email (#58890)
     let resolvedName: string | null = null
+    // First check local Contacts so personal contacts (not CRM leads) work by name.
     if (!isPhone) {
+      const c = resolveHandleByName(args.query)
+      if (c) {
+        if (c.handle.includes("@")) {
+          normalized = c.handle
+        } else {
+          normalized = normalizeHandle(c.handle)
+          isPhone = true
+        }
+        resolvedName = c.name
+        prompts.log.info(`Resolved "${args.query}" → ${c.name} (${c.handle})`)
+      }
+    }
+    if (!isPhone && !resolvedName) {
       try {
         const { irisFetch: _fetch } = await import("./iris-api")
         const leadRes = await _fetch(`/api/v1/leads?search=${encodeURIComponent(args.query)}&per_page=5`)
@@ -63,10 +77,11 @@ const ImessageSearchCommand = cmd({
       } catch {}
     }
 
-    // Build WHERE clause — match chat_identifier by phone digits or email
-    const whereClause = isPhone
-      ? `c.chat_identifier LIKE '%${normalized}%'`
-      : `c.chat_identifier LIKE '%${args.query.replace(/'/g, "''")}%'`
+    // Build WHERE clause — match chat_identifier by phone digits or email.
+    // Use `normalized` (the resolved handle) for phones OR any resolved email;
+    // only fall back to the raw query when nothing resolved.
+    const matchTerm = isPhone || resolvedName ? normalized : args.query
+    const whereClause = `c.chat_identifier LIKE '%${matchTerm.replace(/'/g, "''")}%'`
 
     // --since takes priority over --days (#58884)
     const cutoffSeconds = args.since
@@ -139,7 +154,22 @@ const ImessageReadCommand = cmd({
 
     // If not a phone number, try to resolve as lead ID or name
     const isLeadId = /^\d+$/.test(args.query.trim()) && digits.length < 7
-    if (isLeadId || !isPhone) {
+    // Local Contacts first so personal contacts resolve by name (not just leads).
+    let readResolvedName: string | null = null
+    if (!isPhone && !isLeadId) {
+      const c = resolveHandleByName(args.query)
+      if (c) {
+        readResolvedName = c.name
+        if (c.handle.includes("@")) {
+          normalized = c.handle
+        } else {
+          normalized = normalizeHandle(c.handle)
+          isPhone = true
+        }
+        if (!args.json) prompts.log.info(`Resolved "${args.query}" → ${c.name} (${c.handle})`)
+      }
+    }
+    if ((isLeadId || !isPhone) && !readResolvedName) {
       try {
         const { irisFetch: _fetch } = await import("./iris-api")
         if (isLeadId) {
@@ -171,9 +201,8 @@ const ImessageReadCommand = cmd({
       } catch {}
     }
 
-    const whereClause = isPhone
-      ? `c.chat_identifier LIKE '%${normalized}%'`
-      : `c.chat_identifier LIKE '%${args.query.replace(/'/g, "''")}%'`
+    const matchTerm = isPhone || readResolvedName ? normalized : args.query
+    const whereClause = `c.chat_identifier LIKE '%${matchTerm.replace(/'/g, "''")}%'`
 
     // --since takes priority over --days (#58884)
     const cutoffSeconds = args.since
@@ -192,10 +221,12 @@ const ImessageReadCommand = cmd({
         return
       }
 
+      // Prefer a resolved contact name; otherwise resolve from the handle.
+      const them = readResolvedName ?? (isPhone ? await resolveContactName(normalized) : null) ?? "Them"
       const reversed = [...messages].reverse()
       printDivider()
       for (const msg of reversed) {
-        const direction = msg.from_me ? bold("  You →") : bold("← Them")
+        const direction = msg.from_me ? bold("  You →") : bold(`← ${them}`)
         const dateStr = dim(msg.date)
         console.log(`  ${dateStr}  ${direction}  ${msg.text}`)
       }
@@ -259,14 +290,15 @@ const ImessageChatsCommand = cmd({
         return { identifier, message_count: parseInt(count || "0"), last_message: lastMsg }
       })
 
+      // Resolve handles → contact names in bulk (Contacts first, then CRM) (#58888).
+      // Done before the JSON branch so programmatic consumers (MCP) get names too.
+      const phones = chats.filter(c => /^\+?\d{10,}$/.test(c.identifier.replace(/[^+\d]/g, "")) || c.identifier.includes("@"))
+      const phoneMap = await resolveContactNames(phones.map(c => c.identifier))
+
       if (args.json) {
-        console.log(JSON.stringify(chats, null, 2))
+        console.log(JSON.stringify(chats.map(c => ({ ...c, name: phoneMap.get(c.identifier) ?? null })), null, 2))
         return
       }
-
-      // Resolve phone numbers → lead names in bulk (#58888)
-      const phones = chats.filter(c => /^\+?\d{10,}$/.test(c.identifier.replace(/[^+\d]/g, "")))
-      const phoneMap = await resolveContactNames(phones.map(c => c.identifier))
 
       printDivider()
       for (const chat of chats) {
@@ -309,7 +341,18 @@ const ImessageSendCommand = cmd({
     const isLeadId = /^\d+$/.test(handle) && digits.length < 7
     const isPhone = !isLeadId && digits.length >= 7
 
-    if (isLeadId || (!isPhone && !handle.includes("@"))) {
+    // Local Contacts first — text a personal contact by name (not just leads).
+    let sendResolved = false
+    if (!isLeadId && !isPhone && !handle.includes("@")) {
+      const c = resolveHandleByName(handle)
+      if (c) {
+        handle = c.handle
+        sendResolved = true
+        prompts.log.info(`Resolved "${args.handle}" → ${c.name} (${c.handle})`)
+      }
+    }
+
+    if (!sendResolved && (isLeadId || (!isPhone && !handle.includes("@")))) {
       // Resolve from CRM
       try {
         const { irisFetch: _fetch } = await import("./iris-api")
