@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success } from "./iris-api"
+import { resolveNode } from "./platform-hive-nodes"
 import { existsSync, writeFileSync, readFileSync } from "fs"
 
 // User scripts live on the IRIS API (fl-iris-api), not fl-api.
@@ -118,6 +119,72 @@ const RmCmd = cmd({
   },
 })
 
+const RunCmd = cmd({
+  command: "run <slug>",
+  describe: "run a saved script on a Hive node (the node pulls it from the cloud if missing)",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "script slug", type: "string", demandOption: true })
+      .option("node", { describe: "node name or id to run on", type: "string", demandOption: true })
+      .option("timeout", { describe: "task timeout in seconds", type: "number", default: 120 })
+      .option("queue", { describe: "dispatch and exit (don't wait for output)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output (full task)", type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const userId = await requireUserId()
+    if (!userId) return
+
+    const node = await resolveNode(userId, String(args.node))
+    if (!node) return void prompts.log.error(`No node matching "${args.node}". Run: iris hive nodes list`)
+    if (node.connection_status !== "online") {
+      return void prompts.log.error(`Node "${node.name}" is ${node.connection_status} — cannot dispatch.`)
+    }
+
+    const timeoutSec = Math.max(30, Math.min(3600, Number(args.timeout) || 120))
+    if (!args.json) console.log(`${dim("→")} dispatching ${bold(String(args.slug))} to ${bold(node.name)}`)
+
+    const createRes = await scriptsFetch("/api/v6/nodes/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        user_id: userId,
+        title: `iris scripts run: ${args.slug}`,
+        type: "user_script",
+        node_id: node.id,
+        config: { script_slug: args.slug },
+        timeout_seconds: timeoutSec,
+      }),
+    })
+    if (!createRes.ok) return void prompts.log.error(`Dispatch failed: ${createRes.status} ${await createRes.text()}`)
+
+    const created = (await createRes.json()) as { task: { id: string; status: string } }
+    const taskId = created.task.id
+    if (args.queue) return void success(`Dispatched task ${bold(taskId)}  (check: iris hive tasks --task ${taskId})`)
+    if (!args.json) console.log(dim("waiting for completion…"))
+
+    const deadline = Date.now() + (timeoutSec + 30) * 1000
+    const terminal = new Set(["succeeded", "completed", "failed", "cancelled", "timeout", "errored"])
+    let final: any = null
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1500))
+      const r = await scriptsFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
+      if (!r.ok) return void prompts.log.error(`Poll failed: ${r.status}`)
+      const t = ((await r.json()) as { task: any }).task
+      if (terminal.has(t.status)) {
+        final = t
+        break
+      }
+    }
+    if (!final) return void prompts.log.error(`Timed out waiting for task ${taskId}`)
+    if (args.json) return void console.log(JSON.stringify(final, null, 2))
+
+    const out = final.result?.output ?? final.output ?? final.result?.stdout ?? ""
+    console.log()
+    if (out) console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2))
+    if (["succeeded", "completed"].includes(final.status)) success(`${bold(String(args.slug))} ran on ${node.name}`)
+    else prompts.log.error(`Script ${final.status} on ${node.name}`)
+  },
+})
+
 // ============================================================================
 // Root
 // ============================================================================
@@ -125,6 +192,7 @@ const RmCmd = cmd({
 export const PlatformScriptsCommand = cmd({
   command: "scripts",
   describe: "account-scoped, slug-addressed scripts that run on your Hive fleet",
-  builder: (y) => y.command(ListCmd).command(PushCmd).command(PullCmd).command(RmCmd).demandCommand(),
+  builder: (y) =>
+    y.command(ListCmd).command(PushCmd).command(PullCmd).command(RunCmd).command(RmCmd).demandCommand(),
   async handler() {},
 })
