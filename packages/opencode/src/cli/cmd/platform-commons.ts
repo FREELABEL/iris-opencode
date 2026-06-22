@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
 
 // ============================================================================
 // iris commons — community / membership management (the flywheel surface).
@@ -391,6 +391,67 @@ const RoleCmd = cmd({
   },
 })
 
+// ── send (post to the community hub) ──
+
+const SendCmd = cmd({
+  command: "send <program-id> <message>",
+  aliases: ["post"],
+  describe: "post a message to a program's community hub",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .positional("message", { describe: "message content", type: "string", demandOption: true })
+      .option("channel", { describe: "channel slug (default general)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const userId = await requireUserId(undefined)
+    if (!userId) return
+    const pid = args["program-id"]
+    // The V1 chat controller resolves the actor from a user_id param (its bearer-token
+    // path is an unfinished TODO), so we pass the authenticated user_id explicitly.
+    const body: Record<string, any> = { content: String(args.message), user_id: userId }
+    if (args.channel) body.channel = String(args.channel)
+    const res = await irisFetch(`/api/v1/programs/${pid}/chat/messages`, { method: "POST", body: JSON.stringify(body) })
+    if (!(await handleApiError(res, "Send message"))) return
+    const json = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    const m = json?.data ?? json?.message ?? json
+    console.log(`${success("✓")} Posted to program #${pid}${m?.channel ? ` ${dim(`#${m.channel}`)}` : ""}` + (m?.id ? dim(`  (message #${m.id})`) : ""))
+  },
+})
+
+// ── pin (moderation — toggle a pinned message) ──
+
+const PinCmd = cmd({
+  command: "pin <program-id> <message-id>",
+  aliases: ["unpin"],
+  describe: "pin/unpin a community hub message (moderator+ only)",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .positional("message-id", { describe: "chat message ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const userId = await requireUserId(undefined)
+    if (!userId) return
+    const pid = args["program-id"]
+    const mid = args["message-id"]
+    // user_id passed explicitly (chat controller's token path is an unfinished TODO);
+    // togglePin also enforces canModerate(program, user) server-side.
+    const res = await irisFetch(`/api/v1/programs/${pid}/chat/messages/${mid}/pin`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId }),
+    })
+    if (!(await handleApiError(res, "Pin message"))) return
+    const json = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    const pinned = json?.data?.is_pinned ?? json?.is_pinned ?? json?.message?.is_pinned
+    console.log(`${success("✓")} Message #${mid} ${pinned ? `${UI.Style.TEXT_WARNING}📌 pinned${UI.Style.TEXT_NORMAL}` : "unpinned"}`)
+  },
+})
+
 export const PlatformCommonsCommand = cmd({
   command: "commons",
   aliases: ["community", "membership"],
@@ -403,6 +464,8 @@ export const PlatformCommonsCommand = cmd({
       .command(AddCmd)
       .command(RemoveCmd)
       .command(RoleCmd)
+      .command(SendCmd)
+      .command(PinCmd)
       .command(AnnounceCmd)
       .demandCommand(),
   async handler() {},
