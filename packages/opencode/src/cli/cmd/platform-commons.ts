@@ -391,6 +391,151 @@ const RoleCmd = cmd({
   },
 })
 
+// ── revenue (MRR + paid membership metrics) ──
+
+const RevenueCmd = cmd({
+  command: "revenue <program-id>",
+  aliases: ["mrr"],
+  describe: "paid-membership revenue — MRR, active/trialing members, recent payments",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const pid = args["program-id"]
+    UI.empty()
+    prompts.intro(`◈  Commons — revenue of program #${pid}`)
+    const sp = prompts.spinner()
+    sp.start("Loading memberships…")
+    try {
+      const res = await irisFetch(`/api/v1/programs/${pid}/memberships`)
+      if (!(await handleApiError(res, "Program memberships"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      const json = (await res.json()) as any
+      if (json?.success === false) {
+        sp.stop("Unavailable", 1)
+        // Honest: the endpoint reported failure — don't fabricate $0 MRR.
+        prompts.log.warn(`Membership data unavailable: ${json?.message ?? "unknown error"}`)
+        prompts.outro("Done")
+        return
+      }
+      const d = json?.data ?? json
+      const stats = d?.stats ?? {}
+      const memberships: any[] = Array.isArray(d?.memberships) ? d.memberships : []
+      sp.stop("Loaded")
+
+      const mrr = Number(stats.monthly_revenue ?? 0)
+      const totalRev = Number(stats.total_revenue ?? 0)
+
+      if (args.json) {
+        console.log(JSON.stringify({
+          mrr, total_revenue: totalRev,
+          total_members: stats.total_members ?? memberships.length,
+          active_members: stats.active_members ?? null,
+          trialing_members: stats.trialing_members ?? null,
+        }, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      printKV("MRR", `$${mrr.toLocaleString(undefined, { minimumFractionDigits: 2 })}`)
+      printKV("Total revenue", `$${totalRev.toLocaleString(undefined, { minimumFractionDigits: 2 })}`)
+      printKV("Active members", String(stats.active_members ?? 0))
+      printKV("Trialing", String(stats.trialing_members ?? 0))
+      printKV("Total members", String(stats.total_members ?? memberships.length))
+      if (memberships.length === 0) {
+        console.log(`  ${dim("No paid memberships yet — set pricing with iris programs package-create")}`)
+      }
+      printDivider()
+      prompts.outro(dim(`iris commons health ${pid}  ·  iris commons members ${pid}`))
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ── health (community engagement metrics — proves the flywheel is working) ──
+
+const HealthCmd = cmd({
+  command: "health <program-id>",
+  describe: "community health — active members, churn, recent joins, hub activity",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const pid = args["program-id"]
+    UI.empty()
+    prompts.intro(`◈  Commons — health of program #${pid}`)
+    const sp = prompts.spinner()
+    sp.start("Computing…")
+    try {
+      // Roster (all statuses) + hub message count, from proven endpoints.
+      const [enrRes, chatRes] = await Promise.all([
+        irisFetch(`/api/v1/programs/${pid}/enrollments?per_page=1000`).catch(() => null),
+        irisFetch(`/api/programs/${pid}/chat/messages?per_page=1`).catch(() => null),
+      ])
+      const enrollOk = !!enrRes?.ok
+      const enrJson = enrollOk ? ((await enrRes!.json()) as any) : {}
+      const env = enrJson?.enrollments ?? enrJson?.data ?? enrJson
+      const rows: any[] = Array.isArray(env) ? env : (Array.isArray(env?.data) ? env.data : [])
+
+      const chatOk = !!chatRes?.ok
+      const chatJson = chatOk ? ((await chatRes!.json()) as any) : {}
+      const messageTotal = chatJson?.data?.pagination?.total ?? null
+
+      const isActive = (s: string) => !["CANCELLED", "ERROR"].includes(String(s ?? "").toUpperCase())
+      const active = rows.filter((r) => isActive(r.status)).length
+      const cancelled = rows.filter((r) => ["CANCELLED", "ERROR"].includes(String(r.status ?? "").toUpperCase())).length
+      const totalEver = rows.length
+      const within = (days: number) => rows.filter((r) => {
+        const t = new Date(String(r.created_at ?? 0)).getTime()
+        return !isNaN(t) && Date.now() - t <= days * 86400_000
+      }).length
+      const joined7 = within(7), joined30 = within(30)
+      // Churn proxy: share of all-time enrollments that are now cancelled.
+      const churnPct = totalEver > 0 ? Math.round((cancelled / totalEver) * 100) : 0
+
+      sp.stop(enrollOk ? "Computed" : "Roster unavailable")
+
+      const data = {
+        active_members: enrollOk ? active : null,
+        cancelled: enrollOk ? cancelled : null,
+        total_ever: enrollOk ? totalEver : null,
+        churn_pct: enrollOk ? churnPct : null,
+        joined_last_7d: enrollOk ? joined7 : null,
+        joined_last_30d: enrollOk ? joined30 : null,
+        hub_messages: chatOk ? messageTotal : null,
+      }
+      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+      printDivider()
+      printKV("Active members", enrollOk ? String(active) : dim("unknown"))
+      printKV("Cancelled", enrollOk ? String(cancelled) : dim("unknown"))
+      printKV("Churn", enrollOk ? `${churnPct}%  ${dim(`(${cancelled}/${totalEver} ever)`)}` : dim("unknown"))
+      printKV("Joined (7d / 30d)", enrollOk ? `${joined7} / ${joined30}` : dim("unknown"))
+      printKV("Hub messages", chatOk && messageTotal !== null ? String(messageTotal) : dim("unknown"))
+      printDivider()
+      // A simple engagement read so the number means something at a glance.
+      if (enrollOk) {
+        const signal = joined30 > 0 && churnPct < 25 ? `${UI.Style.TEXT_SUCCESS}growing${UI.Style.TEXT_NORMAL}`
+          : churnPct >= 50 ? `${UI.Style.TEXT_DANGER}high churn${UI.Style.TEXT_NORMAL}`
+          : joined30 === 0 ? `${UI.Style.TEXT_WARNING}stalled (no recent joins)${UI.Style.TEXT_NORMAL}` : dim("steady")
+        console.log(`  ${dim("Signal:")} ${signal}`)
+      }
+      prompts.outro(dim(`iris commons members ${pid}  ·  iris commons revenue ${pid}`))
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 // ── send (post to the community hub) ──
 
 const SendCmd = cmd({
@@ -466,6 +611,8 @@ export const PlatformCommonsCommand = cmd({
       .command(RoleCmd)
       .command(SendCmd)
       .command(PinCmd)
+      .command(HealthCmd)
+      .command(RevenueCmd)
       .command(AnnounceCmd)
       .demandCommand(),
   async handler() {},
