@@ -160,25 +160,41 @@ $ iris schedules create --type code_workflow --frequency weekly \
    already covered. *(Caveat from the source: AI is unreliable at predicting which topics
    will perform — keep a human in this judgment.)*
 
+## Just run the loop (the fast path)
+
+You don't have to wire Steps 1-5 by hand. Two commands give you the whole loop:
+
+```bash
+# Burst: run the reference loop, iterating until the verifier says SHIP (bounded budget)
+$ iris loop run agentic-loop --until SHIP --max-cycles 5
+
+# Autonomous: tie it to a heartbeat — one cycle per firing, memory kept in a bloq
+$ iris loop schedule agentic-loop --agent <id> --frequency weekly --bloq <memId>
+```
+
+`iris loop run` re-runs the `agentic-loop` playbook, reads the `VERDICT: SHIP|ITERATE`
+line from its verify step, and stops on SHIP or when `--max-cycles` is hit. `iris loop
+schedule` registers the recurring version where the cadence is the outer loop. Author
+your own loopable playbook by emitting a `VERDICT:` line from a verify step (see
+`iris playbook show agentic-loop`).
+
 ## What is not first-class yet (be honest — don't promise these)
 
-The loop assembles today, but three pieces are still manual and two substrate links can
-be flaky. Telling the user the truth here matters more than a clean demo.
+Most of the substrate is now solid; one real gap remains.
 
-- **Orchestrator → sub-agent delegation (G1)** — there is no native "delegate to agent X
-  / fan out to agents [..] / collect + synthesize" tool. You wire it with `iris hive` +
-  a playbook/script (Steps 3 & 5). External orchestration (Claude Code) is the supported
-  path today.
-- **Verify → iterate as a declarative construct (G2)** — `iris schedules` has no
-  "evaluate condition; if unmet, loop" type. You express it as a check inside a
-  `code_workflow` (Step 4 + 5).
-- **Closed-loop budget ceilings (G3)** — no per-loop token cap / kill-on-spend yet. Keep
-  loops closed and bounded by hand.
-- **Persistent memory attach (#146918)** — an agent's `bloq_id` is currently forced to its
-  auto-Workspace bloq, so attach memory **per call** with `--bloq <id>` (Step 4). A
-  scheduled `heartbeat` that takes no `--bloq` will not see project memory yet.
-- **Heartbeat execution (#146511)** — if a `heartbeat`-type schedule never fires, prefer
-  `--type agent_task` / `code_workflow` and confirm runs with `iris schedules history <id>`.
+- **Orchestrator → sub-agent delegation (G1)** — there is still no native "delegate to
+  agent X / fan out to agents [..] / collect + synthesize" tool. The `agentic-loop`
+  playbook fans out via `prompt` steps (or `iris hive run "iris agents chat …"` for true
+  parallelism); external orchestration (Claude Code) is the supported path. This is the
+  main thing still hand-wired.
+- **Closed-loop budget (G3)** — `iris loop --max-cycles` bounds a run by cycles (the
+  predictable budget guard). A finer per-loop *token* ceiling / kill-on-spend isn't
+  surfaced yet — keep loops closed and bounded.
+
+Fixed June 2026 (no longer caveats): verify→iterate is first-class via `iris loop`;
+persistent memory attach works (`iris agents update --bloq`, honored server-side);
+heartbeat execution flows; multi-bloq RAG retrieves per-bloq; `iris eval`, `iris
+transcribe`, `iris monitor`, and `--no-rag` all work.
 
 `iris transcribe` (ingest), `iris eval` (verify), and `--no-rag` were fixed June 2026 and
 work in current builds.
