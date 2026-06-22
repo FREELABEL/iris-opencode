@@ -1,0 +1,283 @@
+{
+  "id": 235,
+  "slug": "monarch-test",
+  "title": "Monarch Beauty",
+  "seo_title": "Monarch Beauty — Lash artistry — Austin, TX",
+  "seo_description": "Lash artistry — Austin, TX",
+  "og_image": "https://cdn.heyiris.io/cloud-files/1781734674_moody-hero-1920.jpg",
+  "status": "draft",
+  "owner_type": "user",
+  "owner_id": 193,
+  "json_content": {
+    "version": "1.0",
+    "type": "landing",
+    "theme": {
+      "mode": "light",
+      "backgroundColor": "#F5EFE8",
+      "branding": {
+        "name": "Monarch Beauty",
+        "primaryColor": "#7C3AED",
+        "secondaryColor": "#1C1233",
+        "faviconUrl": "",
+        "logoUrl": ""
+      },
+      "ogTemplate": "hero"
+    },
+    "components": [
+      {
+        "type": "SiteNavigation",
+        "id": "mb-nav",
+        "props": {
+          "themeMode": "light",
+          "logo": {
+            "text": "MONARCH BEAUTY",
+            "accentDot": true,
+            "imageUrl": "",
+            "textColor": "#6B4226"
+          },
+          "links": [
+            {
+              "label": "The Studio",
+              "url": "#about"
+            },
+            {
+              "label": "Lashes",
+              "url": "#services"
+            },
+            {
+              "label": "Story",
+              "url": "#story"
+            },
+            {
+              "label": "Contact",
+              "url": "#contact"
+            },
+            {
+              "label": "Book",
+              "url": "https://www.vagaro.com/monarchbeauty"
+            }
+          ],
+          "ctaButton": {
+            "text": "Book with Lisa",
+            "url": "https://www.vagaro.com/monarchbeauty"
+          },
+          "ctaColor": "#6B4226",
+          "transparent": false,
+          "ctaFilled": true,
+          "linkColor": "#1A1418",
+          "textColor": "#1A1418",
+          "backgroundColor": "#F5EFE8",
+          "hideThemeToggle": true,
+          "ctaTextColor": "#FFFFFF"
+        }
+      },
+      {
+        "type": "Hero",
+        "id": "mb-hero",
+        "props": {
+          "title": "EFFORTLESS BEAUTY, ELEVATED",
+          "subtitle": "A private Austin studio for elevated beauty — custom lash extensions, bridal hair and makeup. Every appointment designed with intention.",
+          "backgroundImage": "https://cdn.heyiris.io/cloud-files/1781734674_moody-hero-1920.jpg",
+          "overlayOpacity": 0.4,
+          "textAlign": "center",
+          "minHeight": "720px",
+          "fullHeight": false,
+          "themeMode": "dark",
+          "primaryButtonText": "Book an Appointment",
+          "primaryButtonUrl": "https://www.vagaro.com/monarchbeauty",
+          "primaryButtonVariant": "white",
+          "secondaryButtonText": null,
+          "secondaryButtonUrl": null,
+          "headline": "EFFORTLESS BEAUTY, ELEVATED",
+          "eyebrow": "MONARCH BEAUTY · EST. AUSTIN, TX",
+          "headingFont": "Playfair Display"
+        }
+      },
+      {
+        "type": "FeatureShowcase",
+        "id": "mb-features",
+        "props": {
+          "heading": "WHAT WE DO",
+          "subheading": "From a lash nap to a fashion-forward haircut, we invite you to let us make you beautiful. The ultimate salon experience begins when you walk through our doors. Our customer service and artistically trained professionals will provide you with the relaxation and style that you need, making us the leader in salon services including lash extensions, special-event hair styling (bridal updos) & makeup.",
+          "themeMode": "light",
+          "accentColor": "#6B4226",
+          "backgroundColor": "#F5EFE8",
+          "layout": "grid",
+          "columns": 3,
+          "features": [
+            {
+              "description": "A classic lash set is the most natural style of lash extensions, designed to enhance your lashes with subtle length and definition. Great options for first time extensions clients.",
+              "imageUrl": "https://cdn.heyiris.io/cloud-files/1781758131_mb-classic-real.jpg",
+              "heading": "Classic Lash Set",
+              "title": "Classic Lash Set"
+            },
+            {
+              "description": "Mega Volume Lashes are the boldest, fullest style of lash extensions—designed for maximum drama and density.",
+              "imageUrl": "https://cdn.heyiris.io/cloud-files/1781757306_mb-volume-real.jpg",
+              "heading": "Mega Volume Lashes",
+              "title": "Mega Volume Lashes"
+            },
+            {
+              "description": "Bridal upstyle is an elegant, fully styled hairstyle where the hair is lifted and secured up off the shoulders—designed to last all day while complementing your dress, face shape, and overall bridal look.",
+              "imageUrl": "https://cdn.heyiris.io/cloud-files/1781758134_mb-bridal-real.jpg",
+              "heading": "Bridal Upstyle",
+              "title": "Bridal Upstyle"
+            },
+            {
+              "description": "A lash lift is a low-maintenance treatment that enhances your natural lashes by lifting and curling them from the root—giving the appearance of longer, fuller lashes without extensions.",
+              "imageUrl": "https://cdn.heyiris.io/cloud-files/1781758136_mb-lashlift-real.jpg",
+              "heading": "Lash Lift",
+              "title": "Lash Lift"
+            }
+          ],
+          "imageFit": "contain"
+        }
+      },
+      {
+        "type": "InstagramFeed",
+        "id": "mb-instagram",
+        "props": {
+          "instagram": "monarchbeauty.atx",
+          "maxPosts": 9,
+          "columns": 3,
+          "showStats": true,
+          "themeMode": "dark",
+          "accentColor": "#6B4226",
+          "heading": "Follow the Studio",
+          "backgroundColor": "#0A0A0A"
+        }
+      },
+      {
+        "type": "MapSection",
+        "id": "mb-map",
+        "props": {
+          "heading": "Visit the Studio",
+          "layout": "split",
+          "themeMode": "light",
+          "accentColor": "#6B4226",
+          "latitude": 30.309392,
+          "longitude": -97.742263,
+          "mapEmbedUrl": "",
+          "locations": [
+            {
+              "name": "Monarch Beauty Studio",
+              "address": [
+                "98 San Jacinto Blvd",
+                "Austin, TX 78701"
+              ],
+              "phone": "(737) 555-0188",
+              "email": "hello@monarchbeauty.co",
+              "directionsUrl": ""
+            }
+          ]
+        }
+      },
+      {
+        "type": "ContactSection",
+        "id": "mb-contact",
+        "props": {
+          "heading": "Get in Touch",
+          "subheading": "Ready to book your appointment or have questions about our services? We'd love to hear from you.",
+          "accentColor": "#6B4226",
+          "layout": "split",
+          "showForm": true,
+          "submitLabel": "Send Message",
+          "themeMode": "light",
+          "contactInfo": [
+            {
+              "type": "phone",
+              "label": "Phone",
+              "value": "(737) 555-0188",
+              "link": "tel:7375550188"
+            },
+            {
+              "type": "email",
+              "label": "Email",
+              "value": "hello@monarchbeauty.co",
+              "link": "mailto:hello@monarchbeauty.co"
+            },
+            {
+              "type": "address",
+              "label": "Location",
+              "value": "98 San Jacinto Blvd, Austin, TX, 78701"
+            },
+            {
+              "type": "hours",
+              "label": "Booking",
+              "value": "Book online at www.vagaro.com/monarchbeauty"
+            }
+          ],
+          "formFields": [
+            {
+              "name": "name",
+              "label": "Full Name",
+              "type": "text",
+              "required": true
+            },
+            {
+              "name": "email",
+              "label": "Email Address",
+              "type": "email",
+              "required": true
+            },
+            {
+              "name": "phone",
+              "label": "Phone Number",
+              "type": "tel",
+              "required": false
+            },
+            {
+              "name": "interest",
+              "label": "Interested in",
+              "type": "select",
+              "options": [
+                "Classic Lash Set",
+                "Mega Volume Lashes",
+                "Bridal Upstyle",
+                "Lash Lift",
+                "General Inquiry"
+              ],
+              "required": true
+            },
+            {
+              "name": "message",
+              "label": "Message",
+              "type": "textarea",
+              "required": false
+            }
+          ]
+        }
+      },
+      {
+        "type": "SiteFooter",
+        "id": "mb-footer",
+        "props": {
+          "brandName": "Monarch Beauty",
+          "tagline": "Lash artistry — Austin, TX",
+          "themeMode": "dark",
+          "backgroundColor": "#1A1418",
+          "accentColor": "#6B4226",
+          "copyright": "© 2026 Monarch Beauty",
+          "links": [
+            {
+              "label": "ATX Beauty Lab",
+              "url": "https://heyiris.io/p/atx-beauty-lab"
+            }
+          ],
+          "brandMark": {
+            "imageUrl": ""
+          },
+          "logo": {
+            "text": "MONARCH BEAUTY",
+            "tagline": "Lash artistry by Lisa Martinez · Austin, TX",
+            "imageUrl": ""
+          }
+        }
+      }
+    ],
+    "seo_title": "Monarch Beauty — Lash artistry — Austin, TX",
+    "seo_description": "Lash artistry — Austin, TX",
+    "seo_keywords": "",
+    "og_image": "https://cdn.heyiris.io/cloud-files/1781734674_moody-hero-1920.jpg"
+  }
+}
