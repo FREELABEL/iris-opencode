@@ -243,7 +243,7 @@ const AgentsCreateCommand = cmd({
       .option("type", { describe: "agent type (content, chat, assistant, support)", type: "string", default: "content" })
       .option("bloq-id", { alias: "b", describe: "knowledge base bloq ID", type: "number" })
       // Same enum as `agents update` (#146506 flagged the create/update mismatch).
-      .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, co-pilot, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "co-pilot", "briefing"] })
+      .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "briefing"] })
       .option("heartbeat-tools", { describe: "comma-separated tool names for heartbeat", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -391,7 +391,7 @@ const AgentsUpdateCommand = cmd({
       .option("model", { describe: "new model", type: "string" })
       .option("system-prompt", { describe: "new system prompt (persists to settings.system_prompt)", type: "string" })
       .option("heartbeat-tools", { describe: "comma-separated heartbeat tool names (settings.heartbeat_tools)", type: "string" })
-      .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, co-pilot, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "co-pilot", "briefing"] })
+      .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "briefing"] })
       .option("reset-health", { describe: "reset health_status to healthy and clear consecutive_failures", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
