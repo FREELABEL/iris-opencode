@@ -101,6 +101,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   boards: "knowledge",
   bloq: "knowledge",
   "bloq-ingest": "knowledge",
+  "data-sources": "knowledge",
   "bloq-members": "knowledge",
   share: "knowledge",
   invite: "knowledge",

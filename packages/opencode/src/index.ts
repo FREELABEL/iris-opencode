@@ -114,6 +114,7 @@ import { PlatformMarketplaceCommand } from "./cli/cmd/platform-marketplace"
 import { PlatformMemoryCommand } from "./cli/cmd/platform-memory"
 import { PlatformProfileCommand } from "./cli/cmd/platform-profile"
 import { PlatformBloqIngestCommand } from "./cli/cmd/platform-bloq-ingest"
+import { PlatformDataSourcesCommand } from "./cli/cmd/platform-data-sources"
 import { PlatformBloqMembersCommand } from "./cli/cmd/platform-bloq-members"
 import { PlatformEvalCommand } from "./cli/cmd/platform-eval"
 import { PlatformSdkCallCommand } from "./cli/cmd/platform-sdk-call"
@@ -345,6 +346,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformMemoryCommand))
   .command(reg(PlatformProfileCommand))
   .command(reg(PlatformBloqIngestCommand))
+  .command(reg(PlatformDataSourcesCommand))
   .command(reg(PlatformBloqMembersCommand))
   .command(reg(PlatformEvalCommand))
   .command(reg(PlatformSdkCallCommand))
