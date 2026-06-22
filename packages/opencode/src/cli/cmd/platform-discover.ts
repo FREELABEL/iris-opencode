@@ -4,6 +4,39 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API } from "./iris-api"
 
 // ============================================================================
+// Shape helpers — discover endpoints return heterogeneous shapes; coerce
+// defensively so a surprise object never crashes the whole command with
+// "X.slice is not a function" (#147306 — degrade honestly, never crash).
+// ============================================================================
+
+/** Coerce any value to an array. Unwraps a paginated { data: [...] } object. */
+export function asArray(v: any): any[] {
+  if (Array.isArray(v)) return v
+  if (v && Array.isArray(v.data)) return v.data
+  return []
+}
+
+/**
+ * Flatten the trending-content response into one views-ranked list.
+ *
+ * The endpoint returns `data.top_uploads_this_month = { tracks, articles,
+ * videos, services }`, where each value is either an array OR a paginated
+ * `{ data: [...] }` object — NOT the flat array the old code assumed (which is
+ * why `trendingItems.slice(...)` threw and aborted the command). Falls back to
+ * the older flat shapes for safety.
+ */
+export function extractTrendingItems(trending: any): any[] {
+  const top = trending?.data?.top_uploads_this_month
+  if (top && typeof top === "object" && !Array.isArray(top)) {
+    return Object.values(top)
+      .flatMap((v: any) => asArray(v))
+      .sort((a: any, b: any) => Number(b?.views ?? 0) - Number(a?.views ?? 0))
+  }
+  const flat = asArray(trending?.data?.data)
+  return flat.length ? flat : asArray(trending?.data)
+}
+
+// ============================================================================
 // Sponsors subcommand
 // ============================================================================
 
@@ -1364,9 +1397,9 @@ const StatsCommand = cmd({
       const anyFailed = !videosOk || !articlesOk || !servicesOk
       // Render a count honestly: the real number when the call succeeded, else "unknown".
       const fmtCount = (ok: boolean, total: number) => (ok ? bold(String(total)) : dim("unknown (fetch failed)"))
-      const trendingItems: any[] = trending?.data?.data ?? trending?.data ?? []
-      const activeProfiles: any[] = active?.data?.data ?? active?.data ?? []
-      const tutorialItems: any[] = tutorials?.data?.data ?? tutorials?.data ?? []
+      const trendingItems: any[] = extractTrendingItems(trending)
+      const activeProfiles: any[] = asArray(active?.data?.data ?? active?.data)
+      const tutorialItems: any[] = asArray(tutorials?.data?.data ?? tutorials?.data)
       const paidTutorials = tutorialItems.filter((t: any) => t.price_usd && Number(t.price_usd) > 0)
 
       spinner.stop(success("Loaded"))
