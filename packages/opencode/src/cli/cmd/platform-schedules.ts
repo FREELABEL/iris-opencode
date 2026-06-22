@@ -4,6 +4,34 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
 
 // ============================================================================
+// Execution-verification helpers (#146511) — `run` reports "dispatched", then
+// optionally confirms the worker actually EXECUTED it, instead of unconditional
+// success. Pure + unit-tested.
+// ============================================================================
+
+/** Highest execution id in a list (the baseline before we trigger a new run). */
+export function latestExecId(runs: any[]): number {
+  if (!Array.isArray(runs) || runs.length === 0) return 0
+  return Math.max(...runs.map((r) => Number(r?.id) || 0))
+}
+
+/** The newest execution created AFTER the baseline — i.e. the run we just dispatched. */
+export function pickFreshExecution(runs: any[], baselineId: number): any | null {
+  if (!Array.isArray(runs)) return null
+  const fresh = runs.filter((r) => (Number(r?.id) || 0) > baselineId)
+  if (fresh.length === 0) return null
+  return fresh.reduce((a, b) => ((Number(b?.id) || 0) > (Number(a?.id) || 0) ? b : a))
+}
+
+const TERMINAL_RUN_STATES = ["completed", "failed", "cancelled", "running"]
+
+/** Has the execution reached a state that proves the worker picked it up? */
+export function isExecutionObserved(run: any | null): boolean {
+  if (!run) return false
+  return TERMINAL_RUN_STATES.includes(String(run.status ?? "").toLowerCase())
+}
+
+// ============================================================================
 // Display helpers
 // ============================================================================
 
@@ -417,11 +445,13 @@ const SchedulesGetCommand = cmd({
 
 const SchedulesRunCommand = cmd({
   command: "run <id>",
-  describe: "trigger a schedule to run now",
+  describe: "trigger a schedule to run now (use --wait to verify it actually executes)",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
-      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("wait", { alias: "w", describe: "wait and confirm the worker actually executes it (not just enqueues)", type: "boolean", default: false })
+      .option("timeout", { describe: "seconds to wait for execution when --wait", type: "number", default: 30 }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Run Schedule #${args.id}`)
@@ -432,10 +462,23 @@ const SchedulesRunCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
+    const execUrl = `/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}/executions?per_page=10`
+    const fetchExecs = async (): Promise<any[]> => {
+      try {
+        const r = await irisFetch(execUrl)
+        if (!r.ok) return []
+        return ((await r.json()) as { data?: any[] })?.data ?? []
+      } catch { return [] }
+    }
+
     const spinner = prompts.spinner()
-    spinner.start("Triggering…")
+    spinner.start("Dispatching…")
 
     try {
+      // Baseline the latest execution BEFORE triggering so --wait can detect the
+      // new run rather than mistaking a prior execution for ours.
+      const baselineId = args.wait ? latestExecId(await fetchExecs()) : 0
+
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}/run`, {
         method: "POST",
         body: JSON.stringify({}),
@@ -444,16 +487,48 @@ const SchedulesRunCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any; message?: string }
-      spinner.stop(`${success("✓")} Schedule triggered`)
+      const runId = data?.data?.run_id ?? data?.data?.id
 
-      if (data?.message) {
-        prompts.log.info(data.message)
-      }
-      if (data?.data?.run_id ?? data?.data?.id) {
-        const runId = data?.data?.run_id ?? data?.data?.id
-        prompts.log.info(`Run ID: ${dim(String(runId))}`)
+      // HONESTY (#146511): a 2xx means the job was ENQUEUED, not executed. Say so —
+      // don't claim "triggered" (which reads as "it ran") when the worker may be
+      // stalled and the job never drains.
+      spinner.stop(`${success("✓")} Dispatched to queue${runId ? ` ${dim(`(run ${runId})`)}` : ""}`)
+      if (data?.message) prompts.log.info(data.message)
+
+      if (!args.wait) {
+        prompts.log.info(dim("Dispatched ≠ executed — the worker runs it asynchronously."))
+        prompts.outro(dim(`verify it ran:  iris schedules run ${args.id} --wait   |   iris schedules history ${args.id}`))
+        return
       }
 
+      // Verify the worker actually picks it up (converts "unconditional success"
+      // into real exec status). Surfaces a stalled queue instead of hiding it.
+      const verify = prompts.spinner()
+      verify.start("Verifying execution…")
+      const start = Date.now()
+      let observed: any = null
+      while (Date.now() - start < args.timeout * 1000) {
+        await new Promise((r) => setTimeout(r, 3000))
+        const fresh = pickFreshExecution(await fetchExecs(), baselineId)
+        if (fresh) {
+          observed = fresh
+          verify.message(`run #${fresh.id}: ${fresh.status ?? "queued"}`)
+          if (isExecutionObserved(fresh)) break
+        } else {
+          verify.message("queued — waiting for worker…")
+        }
+      }
+
+      if (!isExecutionObserved(observed)) {
+        verify.stop(`${UI.Style.TEXT_DANGER}⚠ no execution after ${args.timeout}s${UI.Style.TEXT_NORMAL}`, 1)
+        prompts.log.warn(`Dispatched but the worker produced no execution within ${args.timeout}s — the heartbeat/queue worker may be stalled (#146511), not a successful run.`)
+        process.exitCode = 1
+        prompts.outro(dim(`check:  iris schedules history ${args.id}`))
+        return
+      }
+
+      const done = String(observed.status).toLowerCase() === "completed"
+      verify.stop(`${done ? success("✓") : "⚠"} run #${observed.id}: ${observed.status}`)
       prompts.outro(dim(`iris schedules history ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
