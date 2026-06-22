@@ -357,6 +357,40 @@ const AnnounceCmd = cmd({
   },
 })
 
+// ── role (promote/demote a member) ──
+
+const ROLES = ["owner", "admin", "moderator", "member"]
+
+const RoleCmd = cmd({
+  command: "role <program-id> <member> <role>",
+  describe: "set a member's role (owner/admin/moderator/member)",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .positional("member", { describe: "enrollment id, user id, or email", type: "string", demandOption: true })
+      .positional("role", { describe: "owner | admin | moderator | member", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const pid = args["program-id"]
+    const role = String(args.role).toLowerCase()
+    if (!ROLES.includes(role)) { prompts.log.error(`Invalid role "${args.role}" — use one of: ${ROLES.join(", ")}`); process.exitCode = 1; return }
+
+    const resolved = await resolveEnrollmentId(pid, String(args.member))
+    if (!resolved) { prompts.log.error(`No enrollment found for "${args.member}" in program #${pid}`); process.exitCode = 1; return }
+
+    const res = await irisFetch(`/api/v1/enrollments/role`, {
+      method: "POST",
+      body: JSON.stringify({ enrollment_id: resolved.id, role }),
+    })
+    if (!(await handleApiError(res, "Set role"))) return
+    const json = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    const d = json?.data ?? json
+    console.log(`${success("✓")} ${bold(resolved.who)} → ${roleBadge(d?.role ?? role)}` + (d?.previous_role ? dim(` (was ${d.previous_role})`) : ""))
+  },
+})
+
 export const PlatformCommonsCommand = cmd({
   command: "commons",
   aliases: ["membership"],
@@ -368,6 +402,7 @@ export const PlatformCommonsCommand = cmd({
       .command(ChatCmd)
       .command(AddCmd)
       .command(RemoveCmd)
+      .command(RoleCmd)
       .command(AnnounceCmd)
       .demandCommand(),
   async handler() {},
