@@ -393,7 +393,7 @@ const RoleCmd = cmd({
 
 export const PlatformCommonsCommand = cmd({
   command: "commons",
-  aliases: ["membership"],
+  aliases: ["community", "membership"],
   describe: "community & membership management — members, access, community hub",
   builder: (yargs) =>
     yargs

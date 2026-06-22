@@ -815,7 +815,7 @@ const VerifyCertCommand = cmd({
 
 export const PlatformProgramsCommand = cmd({
   command: "programs",
-  aliases: ["locale", "community"],
+  aliases: ["locale"],
   describe: "manage programs & membership packages — pull, push, diff, CRUD",
   builder: (yargs) =>
     yargs
