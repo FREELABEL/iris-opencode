@@ -1381,7 +1381,7 @@ const StatsCommand = cmd({
           },
           monetization: { paid_tutorials: paidTutorials.length, tutorials: paidTutorials.map((t: any) => ({ title: t.title, price: t.price_usd, type: t.type })) },
           trending: trendingItems.slice(0, 5).map((t: any) => ({ title: t.title, views: t.views, profile: t.profile_name ?? t.name })),
-          active_creators: activeProfiles.slice(0, 5).map((p: any) => ({ name: p.name, uploads: p.content_count ?? p.upload_count })),
+          active_creators: activeProfiles.slice(0, 5).map((p: any) => ({ name: p.name, views: Number(p.views ?? 0) })),
         }, null, 2))
         prompts.outro("Done")
         return
@@ -1423,8 +1423,10 @@ const StatsCommand = cmd({
         console.log()
         console.log(`  ${bold("MOST ACTIVE CREATORS")} ${dim("(last 30 days)")}`)
         for (const [i, p] of activeProfiles.slice(0, 5).entries()) {
-          const uploads = p.content_count ?? p.upload_count ?? 0
-          console.log(`    ${i + 1}. ${p.name ?? "Unknown"}  ${dim(`${uploads} uploads`)}`)
+          // active-profiles returns `views`, not an upload/content count — show the real
+          // field instead of a fabricated "0 uploads" (#147306/#147307 false-data class).
+          const views = Number(p.views ?? 0)
+          console.log(`    ${i + 1}. ${p.name ?? "Unknown"}  ${dim(`${views.toLocaleString()} views`)}`)
         }
       }
 
