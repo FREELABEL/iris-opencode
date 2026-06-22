@@ -107,6 +107,7 @@ import { PlatformSitesCommand } from "./cli/cmd/platform-sites"
 import { PlatformDomainsCommand } from "./cli/cmd/platform-domains"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
+import { PlatformScriptsCommand } from "./cli/cmd/platform-scripts"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
 import { PlatformPackagesCommand } from "./cli/cmd/platform-packages"
 import { PlatformMarketplaceCommand } from "./cli/cmd/platform-marketplace"
@@ -175,7 +176,12 @@ process.on("uncaughtException", (e) => {
 const rawArgs = hideBin(process.argv)
 
 const cli = yargs(rawArgs)
-  .parserConfiguration({ "populate--": true })
+  // boolean-negation OFF: many commands register literal `--no-*` flags
+  // (--no-rag, --no-publish, --no-commit, …). With yargs' default negation on,
+  // `--no-rag` was parsed as `rag=false`, then strict() rejected it as an
+  // "Unknown argument: rag" (#146915). Disabling negation makes `--no-x` a
+  // literal flag, which is what every `.option("no-x")` here intends.
+  .parserConfiguration({ "populate--": true, "boolean-negation": false })
   .scriptName("iris")
   .wrap(100)
   .help("help", "show help")
@@ -332,6 +338,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDomainsCommand))
   .command(reg(PlatformPagesBatchCommand))
   .command(reg(PlatformPartialsCommand))
+  .command(reg(PlatformScriptsCommand))
   .command(reg(PlatformCloudUploadCommand))
   .command(reg(PlatformPackagesCommand))
   .command(reg(PlatformMarketplaceCommand))
