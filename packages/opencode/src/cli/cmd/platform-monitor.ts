@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, IRIS_API, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
 
 // ============================================================================
 // Platform Monitor — port of MonitorCommand.php
@@ -91,51 +91,199 @@ const OverviewCmd = cmd({
   },
 })
 
-// ── agent ──
+// ── agent (unified dossier) ──
+//
+// Composes a single-agent dossier from the WORKING data layer (agent config +
+// owned schedules + per-schedule executions on fl-api) instead of the dead
+// /api/v6/agents/{id}/heartbeat-status endpoint (404, bug #146507). This is the
+// keystone "unified agent dossier" — identity + context/tools + owned schedules
+// + dormancy flags + run history + token burn, all reconciled in one view.
+
+function ago(dateStr: string | null | undefined): string {
+  if (!dateStr) return ""
+  const t = new Date(String(dateStr)).getTime()
+  if (isNaN(t)) return ""
+  const diff = Date.now() - t
+  if (diff < 0) return "just now"
+  if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`
+  if (diff < 3600_000) return `${Math.round(diff / 60_000)}m ago`
+  if (diff < 86400_000) return `${Math.round(diff / 3600_000)}h ago`
+  return `${Math.round(diff / 86400_000)}d ago`
+}
+
+// Positive number = overdue by that many ms (next_run_at in the past)
+function overdueMs(nextRunAt: string | null | undefined): number {
+  if (!nextRunAt) return 0
+  const t = new Date(String(nextRunAt)).getTime()
+  if (isNaN(t)) return 0
+  const diff = Date.now() - t
+  return diff > 0 ? diff : 0
+}
+
+function humanDur(ms: number): string {
+  if (ms <= 0) return ""
+  const h = Math.floor(ms / 3600_000)
+  if (h >= 24) return `${Math.floor(h / 24)}d`
+  if (h >= 1) return `${h}h`
+  return `${Math.floor(ms / 60_000)}m`
+}
 
 const AgentCmd = cmd({
   command: "agent <id>",
-  aliases: ["inspect"],
-  describe: "deep-dive diagnostics for one agent",
+  aliases: ["inspect", "dossier"],
+  describe: "unified dossier for one agent — config, owned schedules, run history, dormancy",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "agent ID", type: "number", demandOption: true })
-      .option("hours", { describe: "time window in hours", type: "number", default: 48 })
+      .option("limit", { describe: "run-history rows to show", type: "number", default: 20 })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
     if (!(await requireAuth())) return
-    const res = await irisFetch(`/api/v6/agents/${args.id}/heartbeat-status?hours=${args.hours}`, {}, IRIS_API)
-    if (!(await handleApiError(res, "Agent monitor"))) return
-    const body = await getJson(res)
-    const data = body.data ?? body
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) return
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    const agentId = args.id
 
-    const agent = data.agent ?? {}
-    const stats = data.stats ?? {}
+    // 1. Agent identity + context (config endpoint — works)
+    let agent: any = null
+    try {
+      const aRes = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${agentId}`)
+      if (aRes.ok) { const j = await getJson(aRes); agent = j?.data ?? j }
+    } catch {}
+
+    // 2. Schedules owned by this agent (works)
+    let schedules: any[] = []
+    try {
+      const sRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?agent_id=${agentId}&per_page=200`)
+      if (!(await handleApiError(sRes, "Agent schedules"))) return
+      const j = await getJson(sRes)
+      schedules = j?.data ?? []
+    } catch {}
+
+    // 3. Executions per schedule (works) — gather for history + aggregates
+    const execsBySchedule: Record<number, any[]> = {}
+    await Promise.all(schedules.map(async (s: any) => {
+      try {
+        const eRes = await irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs/${s.id}/executions?per_page=10`)
+        if (eRes.ok) { const j = await getJson(eRes); execsBySchedule[s.id] = j?.data ?? [] }
+      } catch {}
+    }))
+
+    // Aggregate run history across all schedules
+    const allExecs = Object.entries(execsBySchedule).flatMap(([sid, execs]) =>
+      (execs ?? []).map((e: any) => ({ ...e, schedule_id: Number(sid) })))
+    allExecs.sort((a, b) => new Date(String(b.completed_at ?? b.created_at ?? 0)).getTime()
+      - new Date(String(a.completed_at ?? a.created_at ?? 0)).getTime())
+
+    const totals = {
+      runs: allExecs.length,
+      completed: allExecs.filter((e) => e.status === "completed").length,
+      failed: allExecs.filter((e) => e.status === "failed").length,
+      tokens: allExecs.reduce((sum, e) => sum + (Number(e.tokens_used) || 0), 0),
+    }
+
+    // Dormancy: scheduled jobs whose next_run_at is in the past
+    const dormant = schedules
+      .map((s: any) => ({ s, over: overdueMs(s.next_run_at) }))
+      .filter((x) => x.over > 0 && ["scheduled", "active", "enabled"].includes(String(x.s.status ?? "").toLowerCase()))
+      .sort((a, b) => b.over - a.over)
+
+    if (args.json) {
+      console.log(JSON.stringify({
+        agent: agent ? { id: agent.id, name: agent.name, model: agent.model ?? agent.settings?.model,
+          heartbeat_mode: agent.heartbeat_mode, tools: agent.settings?.tools ?? agent.capabilities,
+          integrations: agent.settings?.integrations } : { id: agentId },
+        schedules: schedules.map((s: any) => ({ id: s.id, status: s.status, frequency: s.frequency,
+          next_run_at: s.next_run_at, overdue_ms: overdueMs(s.next_run_at) })),
+        totals,
+        dormant: dormant.map((d) => ({ id: d.s.id, overdue: humanDur(d.over) })),
+        history: allExecs.slice(0, args.limit),
+      }, null, 2))
+      return
+    }
+
+    // ── Identity ──
     console.log("")
-    console.log(bold(`Agent #${args.id}: ${agent.name ?? "Unknown"}`))
+    const hb = agent?.heartbeat_mode && agent.heartbeat_mode !== "off"
+      ? `${UI.Style.TEXT_SUCCESS}${agent.heartbeat_mode} heartbeat${UI.Style.TEXT_NORMAL}` : dim("no heartbeat")
+    console.log(bold(`Agent #${agentId}: ${agent?.name ?? "Unknown"}`) + `  ${hb}`)
     printDivider()
-    printKV("Heartbeat Mode", agent.heartbeat_mode ?? "off")
-    printKV("Last Heartbeat", agent.last_heartbeat_at ?? "never")
-    console.log("")
-    console.log(bold("Stats"))
-    printKV("Total Executions", stats.total_executions ?? 0)
-    printKV("Completed", stats.completed ?? 0)
-    printKV("Failed", stats.failed ?? 0)
-    printKV("Total Tokens", stats.total_tokens ?? 0)
-    printKV("Active Jobs", stats.active_jobs ?? 0)
+    if (agent) {
+      printKV("Model", agent.model ?? agent.settings?.model ?? "-")
+      printKV("Heartbeat freq", agent.settings?.heartbeat_frequency ?? agent.settings?.frequency ?? "-")
+      const tools = agent.settings?.tools ?? agent.capabilities ?? agent.settings?.capabilities
+      const toolList = Array.isArray(tools) ? tools : tools ? Object.keys(tools) : []
+      if (toolList.length) printKV("Tools", toolList.slice(0, 12).join(", ") + (toolList.length > 12 ? ` +${toolList.length - 12}` : ""))
+      const integrations = agent.settings?.integrations ?? []
+      if (Array.isArray(integrations) && integrations.length) printKV("Integrations", integrations.join(", "))
+    } else {
+      console.log(`  ${dim("(agent config unavailable)")}`)
+    }
 
-    const execs = data.executions ?? []
-    if (execs.length > 0) {
-      console.log("")
-      console.log(bold("Recent Executions"))
-      for (const e of execs.slice(0, 15)) {
-        const d = e.duration_ms ? `${(e.duration_ms / 1000).toFixed(1)}s` : "-"
-        const err = e.error_message ? `${UI.Style.TEXT_DANGER}${String(e.error_message).slice(0, 30)}${UI.Style.TEXT_NORMAL}` : ""
-        console.log(`  ${dim(`#${e.id}`)}  ${formatStatus(e.status ?? "-")}  ${e.model_used ?? "-"}  ${e.tokens_used ?? "-"}  ${d}  ${err}`)
+    // ── Owned schedules ──
+    console.log("")
+    const stuck = schedules.filter((s: any) => {
+      const st = String(s.status ?? "").toLowerCase()
+      const freq = String(s.frequency ?? "").toLowerCase()
+      const age = s.created_at ? Date.now() - new Date(String(s.created_at)).getTime() : 0
+      return st === "running" && freq === "once" && age > 3600_000
+    }).length
+    const sched_summary = `${schedules.length} total · ${dormant.length} overdue · ${stuck} stuck`
+    console.log(bold("Owned Schedules") + `  ${dim(sched_summary)}`)
+    printDivider()
+    if (schedules.length === 0) {
+      console.log(`  ${dim("none")}`)
+    } else {
+      for (const s of schedules) {
+        const over = overdueMs(s.next_run_at)
+        const badge = over > 0 && ["scheduled", "active", "enabled"].includes(String(s.status ?? "").toLowerCase())
+          ? `${UI.Style.TEXT_DANGER}⚠ overdue ${humanDur(over)}${UI.Style.TEXT_NORMAL}`
+          : formatStatus(String(s.status ?? "-").toLowerCase())
+        const name = String(s.data?.agent_name ?? s.name ?? s.title ?? s.task_name ?? "").slice(0, 44)
+        const freq = String(s.frequency ?? "").replace(/_/g, " ")
+        console.log(`  ${dim(`#${s.id}`)}  ${badge.padEnd(20)}  ${dim(freq.padEnd(10))}  ${bold(name)}`)
+        const last = (execsBySchedule[s.id] ?? [])[0]
+        if (last) {
+          const ls = last.status === "completed" ? `${UI.Style.TEXT_SUCCESS}✓${UI.Style.TEXT_NORMAL}`
+            : last.status === "failed" ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}` : dim(last.status ?? "?")
+          const model = last.model_used ? dim(`[${last.model_used}]`) : ""
+          const tok = last.tokens_used ? dim(`${Number(last.tokens_used).toLocaleString()} tok`) : ""
+          const err = last.error_message ? `${UI.Style.TEXT_DANGER}${String(last.error_message).slice(0, 40)}${UI.Style.TEXT_NORMAL}` : ""
+          console.log(`        ${ls} ${dim(ago(last.completed_at ?? last.created_at))}  ${model}  ${tok}  ${err}`)
+        }
       }
     }
+
+    // ── Run history (reconciled across all schedules) ──
+    if (allExecs.length > 0) {
+      console.log("")
+      console.log(bold(`Run History`) + `  ${dim(`(last ${Math.min(args.limit, allExecs.length)} across all schedules)`)}`)
+      printDivider()
+      for (const e of allExecs.slice(0, args.limit)) {
+        const st = e.status === "completed" ? `${UI.Style.TEXT_SUCCESS}✓${UI.Style.TEXT_NORMAL}`
+          : e.status === "failed" ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}` : dim(e.status ?? "?")
+        const d = e.duration_ms ? `${(e.duration_ms / 1000).toFixed(1)}s` : ""
+        const model = e.model_used ? dim(`[${e.model_used}]`) : ""
+        const tok = e.tokens_used ? dim(`${Number(e.tokens_used).toLocaleString()} tok`) : ""
+        console.log(`  ${st}  ${dim(ago(e.completed_at ?? e.created_at).padEnd(9))}  ${dim(`#${e.schedule_id}`)}  ${model}  ${tok}  ${dim(d)}`)
+      }
+    }
+
+    // ── Totals + dormancy verdict ──
+    console.log("")
+    console.log(bold("Totals") + dim(" (recent runs sampled)") + `  ${dim(`runs ${totals.runs} · ok ${totals.completed} · fail ${totals.failed} · ${totals.tokens.toLocaleString()} tok`)}`)
+    printDivider()
+    if (dormant.length > 0) {
+      const worst = humanDur(dormant[0].over)
+      console.log(`  ${UI.Style.TEXT_DANGER}⚠ DORMANT${UI.Style.TEXT_NORMAL}  ${dormant.length} schedule(s) overdue — worst ${worst} (#${dormant[0].s.id})`)
+    } else if (schedules.length === 0) {
+      console.log(`  ${dim("no schedules owned by this agent")}`)
+    } else {
+      console.log(`  ${success("✓ all schedules on time")}`)
+    }
+    console.log("")
+    console.log(dim(`iris schedules inspect <id>  ·  iris agents update ${agentId}  ·  iris monitor loops`))
     printDivider()
   },
 })
