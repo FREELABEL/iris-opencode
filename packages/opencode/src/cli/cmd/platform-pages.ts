@@ -135,63 +135,113 @@ export async function createPageFromJson(opts: {
 // Subcommands
 // ============================================================================
 
+// Shared list/search renderer. The /api/v1/pages endpoint supports server-side
+// per_page, page and search — previously hardcoded per_page=50 with no way to
+// page or search, so any page past the first 50 was undiscoverable (#147317).
+async function fetchAndRenderPages(args: {
+  "page-type"?: string
+  search?: string
+  limit?: number
+  page?: number
+  json?: boolean
+}) {
+  UI.empty()
+  prompts.intro(args.search ? `◈  Pages — search "${args.search}"` : "◈  Pages")
+  if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+  const sp = prompts.spinner()
+  sp.start("Loading pages…")
+  try {
+    const params = new URLSearchParams({
+      per_page: String(args.limit ?? 50),
+      page: String(args.page ?? 1),
+      include_json: "0",
+      slim: "1",
+    })
+    if (args.search) params.set("search", args.search)
+
+    const res = await pagesFetch(`/api/v1/pages?${params.toString()}`)
+    if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+    const json = (await res.json()) as any
+
+    // Laravel paginator meta when present ({ data: { current_page, last_page, total, data: [...] } })
+    const meta = json?.data && !Array.isArray(json.data) ? json.data : null
+    let pages: any[] = []
+    if (Array.isArray(json?.data)) pages = json.data
+    else if (Array.isArray(json?.data?.data)) pages = json.data.data
+    else if (Array.isArray(json)) pages = json
+
+    if (args["page-type"]) {
+      pages = pages.filter((p: any) => {
+        const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type
+        return tpl === args["page-type"]
+      })
+    }
+
+    const total = meta?.total ?? pages.length
+    const currentPage = meta?.current_page ?? args.page ?? 1
+    const lastPage = meta?.last_page ?? 1
+    sp.stop(`${pages.length} of ${total} page(s)${lastPage > 1 ? ` — page ${currentPage}/${lastPage}` : ""}`)
+
+    if (args.json) {
+      // Back-compat flat array; enumerate via --limit/--page (documented page size + cursor).
+      console.log(JSON.stringify(pages, null, 2))
+      prompts.outro("Done")
+      return
+    }
+    if (pages.length === 0) {
+      prompts.log.warn(args.search ? `No pages match "${args.search}"` : "No pages found")
+      prompts.outro("Done")
+      return
+    }
+    printDivider()
+    for (const p of pages) {
+      const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type ?? "-"
+      console.log(`  ${bold(p.slug)}  ${dim(`#${p.id}`)}  ${formatStatus(p.status)}`)
+      console.log(`    ${dim(p.title ?? "")}  ${dim(`[${tpl}]`)}`)
+      console.log(`    ${dim(publicUrl(p))}`)
+      console.log()
+    }
+    printDivider()
+    const hints: string[] = ["iris pages view <slug>"]
+    if (currentPage < lastPage) hints.push(`iris pages list --page ${currentPage + 1}`)
+    if (!args.search) hints.push("iris pages search <query>")
+    prompts.outro(dim(hints.join("  ·  ")))
+  } catch (err) {
+    sp.stop("Error", 1)
+    prompts.log.error(err instanceof Error ? err.message : String(err))
+    prompts.outro("Done")
+  }
+}
+
 const ListCmd = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "list pages",
+  describe: "list pages (supports --search, --limit, --page)",
   builder: (y) =>
     y
       .option("page-type", { describe: "filter by template type", type: "string" })
+      .option("search", { describe: "filter by title or slug", type: "string" })
+      .option("limit", { describe: "results per page", type: "number", default: 50 })
+      .option("page", { describe: "page number", type: "number", default: 1 })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Pages")
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    await fetchAndRenderPages(args as any)
+  },
+})
 
-    const sp = prompts.spinner()
-    sp.start("Loading pages…")
-    try {
-      const res = await pagesFetch("/api/v1/pages?per_page=50&include_json=0&slim=1")
-      if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
-      const json = (await res.json()) as any
-      // Handle both direct array and Laravel paginator ({ data: { data: [...] } })
-      let pages: any[] = []
-      if (Array.isArray(json?.data)) pages = json.data
-      else if (Array.isArray(json?.data?.data)) pages = json.data.data
-      else if (Array.isArray(json)) pages = json
-      if (args["page-type"]) {
-        pages = pages.filter((p: any) => {
-          const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type
-          return tpl === args["page-type"]
-        })
-      }
-      sp.stop(`${pages.length} page(s)`)
-
-      if (args.json) {
-        console.log(JSON.stringify(pages, null, 2))
-        prompts.outro("Done")
-        return
-      }
-      if (pages.length === 0) {
-        prompts.log.warn("No pages found")
-        prompts.outro("Done")
-        return
-      }
-      printDivider()
-      for (const p of pages) {
-        const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type ?? "-"
-        console.log(`  ${bold(p.slug)}  ${dim(`#${p.id}`)}  ${formatStatus(p.status)}`)
-        console.log(`    ${dim(p.title ?? "")}  ${dim(`[${tpl}]`)}`)
-        console.log(`    ${dim(publicUrl(p))}`)
-        console.log()
-      }
-      printDivider()
-      prompts.outro(dim("iris pages view <slug>"))
-    } catch (err) {
-      sp.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
-    }
+const SearchCmd = cmd({
+  command: "search <query>",
+  aliases: ["find"],
+  describe: "search pages by title or slug",
+  builder: (y) =>
+    y
+      .positional("query", { describe: "search text (title or slug)", type: "string", demandOption: true })
+      .option("limit", { describe: "results per page", type: "number", default: 50 })
+      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    await fetchAndRenderPages({ ...(args as any), search: String(args.query) })
   },
 })
 
@@ -1621,6 +1671,7 @@ export const PlatformPagesCommand = cmd({
   builder: (y) =>
     y
       .command(ListCmd)
+      .command(SearchCmd)
       .command(ViewCmd)
       .command(GetCmd)
       .command(SetCmd)
