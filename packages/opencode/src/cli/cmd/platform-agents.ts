@@ -388,6 +388,7 @@ const AgentsUpdateCommand = cmd({
       .positional("id", { describe: "agent ID", type: "number", demandOption: true })
       .option("name", { describe: "new name", type: "string" })
       .option("description", { describe: "new description", type: "string" })
+      .option("bloq", { alias: "b", describe: "repoint the agent's persistent knowledge-base bloq (#146918)", type: "number" })
       .option("model", { describe: "new model", type: "string" })
       .option("system-prompt", { describe: "new system prompt (persists to settings.system_prompt)", type: "string" })
       .option("heartbeat-tools", { describe: "comma-separated heartbeat tool names (settings.heartbeat_tools)", type: "string" })
@@ -407,6 +408,7 @@ const AgentsUpdateCommand = cmd({
     const payload: Record<string, unknown> = {}
     if (args.name) payload.name = args.name
     if (args.description) payload.description = args.description
+    if (args.bloq !== undefined) payload.bloq_id = args.bloq
     if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
     if (args["reset-health"]) {
       payload.health_status = "healthy"
@@ -419,7 +421,7 @@ const AgentsUpdateCommand = cmd({
     const wantsSettings = !!(args.model || args["system-prompt"] || args["heartbeat-tools"])
 
     if (Object.keys(payload).length === 0 && !wantsSettings) {
-      prompts.log.warn("Nothing to update. Use --name, --description, --model, --system-prompt, --heartbeat-tools, --heartbeat-mode, or --reset-health")
+      prompts.log.warn("Nothing to update. Use --name, --description, --bloq, --model, --system-prompt, --heartbeat-tools, --heartbeat-mode, or --reset-health")
       prompts.outro("Done")
       return
     }
