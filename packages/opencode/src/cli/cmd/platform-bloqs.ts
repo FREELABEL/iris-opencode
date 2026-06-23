@@ -325,9 +325,10 @@ const BloqsGetCommand = cmd({
 
       printDivider()
 
-      prompts.outro(
-        `${dim("iris bloqs ingest " + args.id + " ./document.pdf")}  Add knowledge`,
-      )
+      const getOutro = (args.items || args.list)
+        ? `${dim("iris bloqs share <item-id>")}  Publish an item + get a shareable link`
+        : `${dim("iris bloqs ingest " + args.id + " ./document.pdf")}  Add knowledge`
+      prompts.outro(getOutro)
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -811,8 +812,13 @@ const BloqsAddItemCommand = cmd({
         return
       }
 
-      spinner.stop(`${success("✓")} Item added`)
-      prompts.outro(dim(`iris bloqs get ${args["bloq-id"]}`))
+      const addBody = (await res.json().catch(() => null)) as { data?: any; id?: any } | null
+      const newItemId = addBody?.data?.id ?? addBody?.id
+      spinner.stop(`${success("✓")} Item added${newItemId ? ` (#${newItemId})` : ""}`)
+      const hint = newItemId
+        ? `iris bloqs get ${args["bloq-id"]}  |  iris bloqs share ${newItemId}  (publish + get a shareable link)`
+        : `iris bloqs get ${args["bloq-id"]}`
+      prompts.outro(dim(hint))
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -1548,7 +1554,7 @@ const BloqsItemsCommand = cmd({
             }
           }
           console.log()
-          prompts.outro(dim("iris bloqs update-item <id> --status <status>"))
+          prompts.outro(dim("iris bloqs share <id>  (publish + shareable link)  |  iris bloqs update-item <id> --status <status>"))
           return
         }
 
