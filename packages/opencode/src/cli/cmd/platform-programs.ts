@@ -86,7 +86,11 @@ const ListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      // The endpoint returns { programs: [...] } (flat array). The old parser only
+      // looked at data.data → always 0, hiding every program (false-zero). Accept the
+      // `programs` key, a paginator, a `data` wrapper, or a top-level array.
+      const raw = data?.programs ?? data?.data ?? data
+      const items: any[] = Array.isArray(raw) ? raw : (Array.isArray(raw?.data) ? raw.data : [])
       spinner.stop(`${items.length} program(s)`)
 
       if (items.length === 0) { prompts.log.warn("No programs found"); prompts.outro("Done"); return }

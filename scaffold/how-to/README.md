@@ -24,6 +24,8 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "price a tutorial", "monetize learning", "sell a course", "paid content", "tutorial price" | `learning-tutorials.md` |
 | "feature a producer", "curate instrumentals", "community tab", "featured beats", "producer carousel" | `community-curation.md` |
 | "pulse", "readiness", "score", "is iris working", "daily digest", "health check on customer", "requirements", "playwright tests on a lead", "comms freshness", "trend sparkline" | `pulse.md` |
+| "agentic loop", "loop engineering", "self-running agents", "set a goal once", "orchestrator and sub-agents", "verify and iterate", "weekly autonomous loop", "pickleball demo" | `agentic-loops.md` |
+| "drive iris from claude code", "bring your own orchestrator", "BYO orchestrator", "external agent drives iris", "iris as execution substrate", "MCP contract", "how does claude code control iris" | `drive-iris-from-claude-code.md` |
 
 ## How to use these files
 

@@ -4,6 +4,39 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API } from "./iris-api"
 
 // ============================================================================
+// Shape helpers — discover endpoints return heterogeneous shapes; coerce
+// defensively so a surprise object never crashes the whole command with
+// "X.slice is not a function" (#147306 — degrade honestly, never crash).
+// ============================================================================
+
+/** Coerce any value to an array. Unwraps a paginated { data: [...] } object. */
+export function asArray(v: any): any[] {
+  if (Array.isArray(v)) return v
+  if (v && Array.isArray(v.data)) return v.data
+  return []
+}
+
+/**
+ * Flatten the trending-content response into one views-ranked list.
+ *
+ * The endpoint returns `data.top_uploads_this_month = { tracks, articles,
+ * videos, services }`, where each value is either an array OR a paginated
+ * `{ data: [...] }` object — NOT the flat array the old code assumed (which is
+ * why `trendingItems.slice(...)` threw and aborted the command). Falls back to
+ * the older flat shapes for safety.
+ */
+export function extractTrendingItems(trending: any): any[] {
+  const top = trending?.data?.top_uploads_this_month
+  if (top && typeof top === "object" && !Array.isArray(top)) {
+    return Object.values(top)
+      .flatMap((v: any) => asArray(v))
+      .sort((a: any, b: any) => Number(b?.views ?? 0) - Number(a?.views ?? 0))
+  }
+  const flat = asArray(trending?.data?.data)
+  return flat.length ? flat : asArray(trending?.data)
+}
+
+// ============================================================================
 // Sponsors subcommand
 // ============================================================================
 
@@ -1334,42 +1367,54 @@ const StatsCommand = cmd({
     spinner.start("Fetching stats…")
 
     try {
-      const headers = { Accept: "application/json" }
-      const base = FL_API
-
-      // Fetch all stats in parallel
+      // These /api/v1/discover/* endpoints require auth — use irisFetch (adds the
+      // Bearer token) not bare fetch, or they 401 and silently read as 0 (#147306).
       const [trendingRes, activeRes, videosRes, articlesRes, servicesRes, tutorialsRes] = await Promise.all([
-        fetch(`${base}/api/v1/discover/trending-content?limit=5`, { headers }).catch(() => null),
-        fetch(`${base}/api/v1/discover/active-profiles?limit=5`, { headers }).catch(() => null),
-        fetch(`${base}/api/v1/discover/recent-videos?limit=1`, { headers }).catch(() => null),
-        fetch(`${base}/api/v1/discover/recent-articles?limit=1`, { headers }).catch(() => null),
-        fetch(`${base}/api/v1/discover/recent-services?limit=1`, { headers }).catch(() => null),
-        fetch(`${base}/api/v1/discover/tutorials`, { headers }).catch(() => null),
+        irisFetch(`/api/v1/discover/trending-content?limit=5`).catch(() => null),
+        irisFetch(`/api/v1/discover/active-profiles?limit=5`).catch(() => null),
+        irisFetch(`/api/v1/discover/recent-videos?limit=1`).catch(() => null),
+        irisFetch(`/api/v1/discover/recent-articles?limit=1`).catch(() => null),
+        irisFetch(`/api/v1/discover/recent-services?limit=1`).catch(() => null),
+        irisFetch(`/api/v1/discover/tutorials`).catch(() => null),
       ])
+
+      // Track which calls actually succeeded — a failed fetch must read as UNKNOWN,
+      // never a confident 0 (#147306). 0 should only show when the API truly returns 0.
+      const videosOk = !!videosRes?.ok
+      const articlesOk = !!articlesRes?.ok
+      const servicesOk = !!servicesRes?.ok
 
       const trending = trendingRes?.ok ? ((await trendingRes.json()) as any) : {}
       const active = activeRes?.ok ? ((await activeRes.json()) as any) : {}
-      const videos = videosRes?.ok ? ((await videosRes.json()) as any) : {}
-      const articles = articlesRes?.ok ? ((await articlesRes.json()) as any) : {}
-      const services = servicesRes?.ok ? ((await servicesRes.json()) as any) : {}
+      const videos = videosOk ? ((await videosRes!.json()) as any) : {}
+      const articles = articlesOk ? ((await articlesRes!.json()) as any) : {}
+      const services = servicesOk ? ((await servicesRes!.json()) as any) : {}
       const tutorials = tutorialsRes?.ok ? ((await tutorialsRes.json()) as any) : {}
 
       const videoTotal = videos?.data?.total ?? videos?.total ?? (videos?.data?.data?.length ?? 0)
       const articleTotal = articles?.data?.total ?? articles?.total ?? (articles?.data?.data?.length ?? 0)
       const serviceTotal = services?.data?.total ?? services?.total ?? (services?.data?.data?.length ?? 0)
-      const trendingItems: any[] = trending?.data?.data ?? trending?.data ?? []
-      const activeProfiles: any[] = active?.data?.data ?? active?.data ?? []
-      const tutorialItems: any[] = tutorials?.data?.data ?? tutorials?.data ?? []
+      const anyFailed = !videosOk || !articlesOk || !servicesOk
+      // Render a count honestly: the real number when the call succeeded, else "unknown".
+      const fmtCount = (ok: boolean, total: number) => (ok ? bold(String(total)) : dim("unknown (fetch failed)"))
+      const trendingItems: any[] = extractTrendingItems(trending)
+      const activeProfiles: any[] = asArray(active?.data?.data ?? active?.data)
+      const tutorialItems: any[] = asArray(tutorials?.data?.data ?? tutorials?.data)
       const paidTutorials = tutorialItems.filter((t: any) => t.price_usd && Number(t.price_usd) > 0)
 
       spinner.stop(success("Loaded"))
 
       if (args.json) {
         console.log(JSON.stringify({
-          content: { videos: videoTotal, articles: articleTotal, services: serviceTotal },
+          content: {
+            videos: videosOk ? videoTotal : null,
+            articles: articlesOk ? articleTotal : null,
+            services: servicesOk ? serviceTotal : null,
+            partial: anyFailed, // true = at least one count could not be fetched (null), not a real zero
+          },
           monetization: { paid_tutorials: paidTutorials.length, tutorials: paidTutorials.map((t: any) => ({ title: t.title, price: t.price_usd, type: t.type })) },
           trending: trendingItems.slice(0, 5).map((t: any) => ({ title: t.title, views: t.views, profile: t.profile_name ?? t.name })),
-          active_creators: activeProfiles.slice(0, 5).map((p: any) => ({ name: p.name, uploads: p.content_count ?? p.upload_count })),
+          active_creators: activeProfiles.slice(0, 5).map((p: any) => ({ name: p.name, views: Number(p.views ?? 0) })),
         }, null, 2))
         prompts.outro("Done")
         return
@@ -1378,9 +1423,10 @@ const StatsCommand = cmd({
       // Content Stats
       console.log()
       console.log(`  ${bold("CONTENT")}`)
-      console.log(`    Videos:    ${bold(String(videoTotal))}`)
-      console.log(`    Articles:  ${bold(String(articleTotal))}`)
-      console.log(`    Services:  ${bold(String(serviceTotal))}`)
+      console.log(`    Videos:    ${fmtCount(videosOk, videoTotal)}`)
+      console.log(`    Articles:  ${fmtCount(articlesOk, articleTotal)}`)
+      console.log(`    Services:  ${fmtCount(servicesOk, serviceTotal)}`)
+      if (anyFailed) console.log(`    ${dim("⚠ some counts could not be fetched (auth/endpoint) — not a real zero")}`)
 
       // Monetization
       console.log()
@@ -1410,8 +1456,10 @@ const StatsCommand = cmd({
         console.log()
         console.log(`  ${bold("MOST ACTIVE CREATORS")} ${dim("(last 30 days)")}`)
         for (const [i, p] of activeProfiles.slice(0, 5).entries()) {
-          const uploads = p.content_count ?? p.upload_count ?? 0
-          console.log(`    ${i + 1}. ${p.name ?? "Unknown"}  ${dim(`${uploads} uploads`)}`)
+          // active-profiles returns `views`, not an upload/content count — show the real
+          // field instead of a fabricated "0 uploads" (#147306/#147307 false-data class).
+          const views = Number(p.views ?? 0)
+          console.log(`    ${i + 1}. ${p.name ?? "Unknown"}  ${dim(`${views.toLocaleString()} views`)}`)
         }
       }
 

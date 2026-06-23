@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { executeChat } from "./platform-chat"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -241,7 +242,8 @@ const AgentsCreateCommand = cmd({
       .option("model", { alias: "m", describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
       .option("type", { describe: "agent type (content, chat, assistant, support)", type: "string", default: "content" })
       .option("bloq-id", { alias: "b", describe: "knowledge base bloq ID", type: "number" })
-      .option("heartbeat-mode", { describe: "heartbeat mode (autonomous, briefing, disabled)", type: "string", choices: ["autonomous", "briefing", "disabled"] })
+      // Same enum as `agents update` (#146506 flagged the create/update mismatch).
+      .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "briefing"] })
       .option("heartbeat-tools", { describe: "comma-separated tool names for heartbeat", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -298,9 +300,17 @@ const AgentsCreateCommand = cmd({
       if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
       if (args["initial-prompt"]) payload.initial_prompt = args["initial-prompt"]
       if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
+      // These three persist under settings.*, NOT top-level — top-level model /
+      // system_prompt / heartbeat_tools are silently dropped by the API (#146506).
+      // Mirror the shape that `agents push` writes (and that working agents have).
+      const settings: Record<string, unknown> = { model }
+      if (args["system-prompt"]) settings.system_prompt = args["system-prompt"]
+      else if (args.prompt) settings.system_prompt = args.prompt
       if (args["heartbeat-tools"]) {
-        payload.heartbeat_tools = args["heartbeat-tools"].split(",").map((t: string) => t.trim())
+        settings.heartbeat_tools = args["heartbeat-tools"].split(",").map((t: string) => t.trim())
+        payload.heartbeat_tools = settings.heartbeat_tools // tolerate either shape server-side
       }
+      payload.settings = settings
 
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents`, {
         method: "POST",
@@ -322,7 +332,7 @@ const AgentsCreateCommand = cmd({
       printDivider()
       printKV("ID", a.id)
       printKV("Name", a.name)
-      printKV("Model", a.model)
+      printKV("Model", a.model ?? (a.settings as Record<string, unknown>)?.model)
       if (a.bloq_id) printKV("Bloq", a.bloq_id)
       if (args["heartbeat-mode"]) printKV("Heartbeat", args["heartbeat-mode"])
       printDivider()
@@ -340,85 +350,33 @@ const AgentsCreateCommand = cmd({
   },
 })
 
+// `iris agents chat` is a THIN ALIAS over the canonical `iris chat` implementation
+// (#137420). Same transport, flags, output, exit codes, and progress UX — it just
+// takes the agent id as a positional. All chat behavior lives in executeChat().
 const AgentsChatCommand = cmd({
   command: "chat <id> <message>",
-  describe: "send a single chat message to an agent",
+  describe: "send a single chat message to an agent (alias of `iris chat -a <id>`)",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "agent ID", type: "number", demandOption: true })
       .positional("message", { describe: "your message", type: "string", demandOption: true })
-      .option("bloq", { alias: "b", describe: "bloq ID for context", type: "number" }),
+      .option("bloq", { alias: "b", describe: "bloq ID for context", type: "number" })
+      .option("model", { alias: "m", describe: "override model (nano/flash only; keeps cost low)", type: "string" })
+      .option("max-iterations", { describe: "cap ReactLoop iterations", type: "number" })
+      .option("timeout", { describe: "max seconds to wait for response", type: "number", default: 300 })
+      .option("no-rag", { describe: "disable RAG/knowledge base lookup", type: "boolean", default: false })
+      .option("json", { describe: "output response as JSON", type: "boolean", default: false }),
   async handler(args) {
-    // Delegate to iris chat --agent=<id> <message>
-    UI.empty()
-    prompts.intro(`◈  Agent #${args.id}`)
-
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
-
-    // The iris-api /chat/start endpoint resolves the user from the `userId` in the
-    // body (the SDK/platform token is an fl-api token that iris-api cannot validate
-    // via auth()->user()). Without it, non-system agents return 401 (#119559).
-    const userId = await requireUserId()
-
-    const payload: Record<string, unknown> = {
-      query: args.message,
-      agentId: args.id,
-      conversationHistory: [{ role: "user", content: args.message }],
-      enableRAG: true,
-      contextPayload: { source: "iris-cli" },
-    }
-    if (userId) payload.userId = userId
-    if (args.bloq) payload.bloqId = String(args.bloq)
-
-    prompts.log.info(`Sending: ${dim(String(args.message).slice(0, 80))}`)
-    const spinner = prompts.spinner()
-    spinner.start("Waiting…")
-
-    try {
-      const startRes = await irisFetch("/api/chat/start", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      }, IRIS_API)
-      const ok = await handleApiError(startRes, "Chat")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
-
-      const { workflow_id } = (await startRes.json()) as { workflow_id?: string }
-      if (!workflow_id) { spinner.stop("No workflow ID", 1); process.exitCode = 1; prompts.outro("Done"); return }
-
-      // Poll
-      const maxSecs = 180
-      const start = Date.now()
-      let run: { status: string; summary?: string; response?: string; output?: string; error?: string } = { status: "pending" }
-      while (true) {
-        if ((Date.now() - start) / 1000 > maxSecs) break
-        const pollRes = await irisFetch(`/api/workflows/${workflow_id}`, {}, IRIS_API)
-        if (pollRes.ok) {
-          // The status endpoint wraps the run in { data: {...} }. Unwrap it, else
-          // status/summary read as undefined → poll times out + "(no response)".
-          const body = (await pollRes.json()) as { data?: typeof run }
-          run = (body.data ?? body) as typeof run
-          if (run.status === "completed" || run.status === "failed") break
-        }
-        await Bun.sleep(800)
-      }
-
-      const response = run.summary ?? run.response ?? run.output ?? "(no response)"
-      spinner.stop("Done")
-
-      printDivider()
-      console.log()
-      console.log(`  ${bold("Agent:")} ${response.split("\n").join("\n  ")}`)
-      console.log()
-      printDivider()
-
-      prompts.outro(dim(`iris chat --agent=${args.id} "follow up"`))
-    } catch (err) {
-      spinner.stop("Error", 1)
-      process.exitCode = 1
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
-    }
+    await executeChat({
+      message: args.message,
+      agent: args.id,
+      bloq: args.bloq,
+      timeout: args.timeout,
+      "no-rag": args["no-rag"],
+      json: args.json,
+      model: args.model,
+      "max-iterations": args["max-iterations"],
+    })
   },
 })
 
@@ -430,8 +388,11 @@ const AgentsUpdateCommand = cmd({
       .positional("id", { describe: "agent ID", type: "number", demandOption: true })
       .option("name", { describe: "new name", type: "string" })
       .option("description", { describe: "new description", type: "string" })
+      .option("bloq", { alias: "b", describe: "repoint the agent's persistent knowledge-base bloq (#146918)", type: "number" })
       .option("model", { describe: "new model", type: "string" })
-      .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, co-pilot, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "co-pilot", "briefing"] })
+      .option("system-prompt", { describe: "new system prompt (persists to settings.system_prompt)", type: "string" })
+      .option("heartbeat-tools", { describe: "comma-separated heartbeat tool names (settings.heartbeat_tools)", type: "string" })
+      .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "briefing"] })
       .option("reset-health", { describe: "reset health_status to healthy and clear consecutive_failures", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -447,15 +408,20 @@ const AgentsUpdateCommand = cmd({
     const payload: Record<string, unknown> = {}
     if (args.name) payload.name = args.name
     if (args.description) payload.description = args.description
-    if (args.model) payload.model = args.model
+    if (args.bloq !== undefined) payload.bloq_id = args.bloq
     if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
     if (args["reset-health"]) {
       payload.health_status = "healthy"
       payload.consecutive_failures = 0
     }
 
-    if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --name, --description, --model, --heartbeat-mode, or --reset-health")
+    // model / system_prompt / heartbeat_tools live under settings.* — a top-level
+    // `model` is silently ignored (#146506). The API replaces the whole settings
+    // object on PUT, so read-modify-merge to avoid wiping sibling keys.
+    const wantsSettings = !!(args.model || args["system-prompt"] || args["heartbeat-tools"])
+
+    if (Object.keys(payload).length === 0 && !wantsSettings) {
+      prompts.log.warn("Nothing to update. Use --name, --description, --bloq, --model, --system-prompt, --heartbeat-tools, --heartbeat-mode, or --reset-health")
       prompts.outro("Done")
       return
     }
@@ -464,6 +430,21 @@ const AgentsUpdateCommand = cmd({
     spinner.start("Updating…")
 
     try {
+      if (wantsSettings) {
+        const cur = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
+        if (cur.ok) {
+          const curData = (await cur.json()) as { data?: any }
+          const a = curData?.data ?? curData
+          const settings: Record<string, unknown> = { ...(a?.settings ?? {}) }
+          if (args.model) settings.model = args.model
+          if (args["system-prompt"]) settings.system_prompt = args["system-prompt"]
+          if (args["heartbeat-tools"]) settings.heartbeat_tools = args["heartbeat-tools"].split(",").map((t: string) => t.trim())
+          payload.settings = settings
+        } else {
+          // Fall back to top-level if we can't read current settings
+          if (args.model) payload.model = args.model
+        }
+      }
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`, {
         method: "PUT",
         body: JSON.stringify(payload),
@@ -478,7 +459,7 @@ const AgentsUpdateCommand = cmd({
       printDivider()
       printKV("ID", a.id)
       printKV("Name", a.name)
-      printKV("Model", a.model)
+      printKV("Model", a.model ?? (a.settings as Record<string, unknown>)?.model)
       printDivider()
 
       prompts.outro(dim(`iris agents get ${args.id}`))
@@ -613,12 +594,18 @@ const AgentsPushCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const result = data?.data ?? data
+      // Reconcile the local file with the server's canonical response so a
+      // follow-up `diff` doesn't report phantom drift from key reordering /
+      // normalization the server applies on write (#146510).
+      if (result && result.id) {
+        try { writeFileSync(filepath, JSON.stringify(result, null, 2)) } catch {}
+      }
       spinner.stop(success("Pushed"))
 
       printDivider()
       printKV("Name", result.name)
       printKV("ID", args.id)
-      printKV("Model", result.model)
+      printKV("Model", result.model ?? (result.settings as Record<string, unknown>)?.model)
       printKV("From", filepath)
       printDivider()
 
@@ -687,13 +674,25 @@ const AgentsDiffCommand = cmd({
         }
       }
 
-      // Compare nested objects
+      // Compare nested objects — recurse one level so we show WHICH keys changed
+      // (settings.model, config.x, …) instead of an opaque "(object changed)" (#146510).
       const objFields = ["config", "settings", "file_attachments", "structured_output"]
       for (const f of objFields) {
+        const liveObj = (live[f] ?? {}) as Record<string, unknown>
+        const localObj = (local[f] ?? {}) as Record<string, unknown>
         const liveVal = JSON.stringify(live[f] ?? null, null, 0)
         const localVal = JSON.stringify(local[f] ?? null, null, 0)
-        if (liveVal !== localVal) {
-          changes.push({ field: f, live: "(object changed)", local: "(object changed)" })
+        if (liveVal === localVal) continue
+        const isObj = (v: unknown) => v && typeof v === "object" && !Array.isArray(v)
+        if (isObj(live[f]) || isObj(local[f])) {
+          const keys = new Set([...Object.keys(liveObj), ...Object.keys(localObj)])
+          for (const k of keys) {
+            const lv = JSON.stringify(liveObj[k] ?? null)
+            const kv = JSON.stringify(localObj[k] ?? null)
+            if (lv !== kv) changes.push({ field: `${f}.${k}`, live: liveObj[k], local: localObj[k] })
+          }
+        } else {
+          changes.push({ field: f, live: live[f], local: local[f] })
         }
       }
 

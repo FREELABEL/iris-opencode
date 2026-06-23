@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, resolveUserId, IRIS_API, bold, dim, success, highlight } from "./iris-api"
+import { SomCampaignCommand } from "./platform-som-campaign"
 import * as fs from "fs"
 import * as os from "os"
 import * as pathNode from "path"
@@ -1040,6 +1041,9 @@ export const PlatformSomCommand = cmd({
       .command(SomSyncCommand)
       .command(SomPushSessionsCommand)
       .command(SomPullSessionsCommand)
+      // Campaign registry CRUD — wires a strategy template to a board so it joins
+      // the SOM rotation (#143033: this command existed but was never mounted).
+      .command(SomCampaignCommand)
       // Default to overview when no subcommand
       .option("campaign", { alias: "c", describe: "show only one campaign", type: "string" })
       .option("scripts", { alias: "s", describe: "show full script text", type: "boolean" })

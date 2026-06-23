@@ -37,6 +37,7 @@ import { PlatformDialerCommand } from "./cli/cmd/platform-dialer"
 import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
 import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
+import { OkfCommand } from "./cli/cmd/platform-okf"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
@@ -73,6 +74,7 @@ import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
 import { PlatformEventCommand } from "./cli/cmd/platform-event"
 import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
+import { PlatformCommonsCommand } from "./cli/cmd/platform-commons"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
 import { PlatformPaymentsCommand } from "./cli/cmd/platform-payments"
 import { PlatformRevenueCommand } from "./cli/cmd/platform-revenue"
@@ -81,6 +83,8 @@ import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedComman
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
+import { DeviceCommand } from "./cli/cmd/platform-device"
+import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
 import { PlatformAtlasCommsCommand } from "./cli/cmd/platform-atlas-comms"
@@ -90,6 +94,8 @@ import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
 import { PlatformDoctorCommand } from "./cli/cmd/platform-doctor"
+import { PlatformSystemAppsScanCommand } from "./cli/cmd/platform-system-apps-scan"
+import { PlatformIdeasCommand } from "./cli/cmd/platform-ideas"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
 import { PlatformInitCommand } from "./cli/cmd/platform-init"
 import { PlatformOnboardFlowsCommand } from "./cli/cmd/platform-onboard-flows"
@@ -102,12 +108,14 @@ import { PlatformSitesCommand } from "./cli/cmd/platform-sites"
 import { PlatformDomainsCommand } from "./cli/cmd/platform-domains"
 import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
+import { PlatformScriptsCommand } from "./cli/cmd/platform-scripts"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
 import { PlatformPackagesCommand } from "./cli/cmd/platform-packages"
 import { PlatformMarketplaceCommand } from "./cli/cmd/platform-marketplace"
 import { PlatformMemoryCommand } from "./cli/cmd/platform-memory"
 import { PlatformProfileCommand } from "./cli/cmd/platform-profile"
 import { PlatformBloqIngestCommand } from "./cli/cmd/platform-bloq-ingest"
+import { PlatformDataSourcesCommand } from "./cli/cmd/platform-data-sources"
 import { PlatformBloqMembersCommand } from "./cli/cmd/platform-bloq-members"
 import { PlatformEvalCommand } from "./cli/cmd/platform-eval"
 import { PlatformSdkCallCommand } from "./cli/cmd/platform-sdk-call"
@@ -145,6 +153,7 @@ import { PlatformArticleQaCommand } from "./cli/cmd/platform-article-qa"
 import { PlatformMsgCommand } from "./cli/cmd/platform-msg"
 import { PlatformAffiliatesCommand } from "./cli/cmd/platform-affiliates"
 import { PlatformPlaybookCommand, PlatformSkillCommand } from "./cli/cmd/platform-playbook"
+import { PlatformLoopCommand } from "./cli/cmd/platform-loop"
 import { GuideCommand } from "./cli/cmd/guide"
 import { registerCommand, getRegistry } from "./cli/cmd/command-groups"
 import { renderGroupedHelp, renderNamespacedHelp } from "./cli/help-renderer"
@@ -170,7 +179,12 @@ process.on("uncaughtException", (e) => {
 const rawArgs = hideBin(process.argv)
 
 const cli = yargs(rawArgs)
-  .parserConfiguration({ "populate--": true })
+  // boolean-negation OFF: many commands register literal `--no-*` flags
+  // (--no-rag, --no-publish, --no-commit, …). With yargs' default negation on,
+  // `--no-rag` was parsed as `rag=false`, then strict() rejected it as an
+  // "Unknown argument: rag" (#146915). Disabling negation makes `--no-x` a
+  // literal flag, which is what every `.option("no-x")` here intends.
+  .parserConfiguration({ "populate--": true, "boolean-negation": false })
   .scriptName("iris")
   .wrap(100)
   .help("help", "show help")
@@ -243,6 +257,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformWorkflowsCommand))
   .command(reg(PlatformBloqsCommand))
   .command(reg(PlatformBrandsCommand))
+  .command(reg(OkfCommand))
   .command(reg(PlatformCopycatCommand))
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
@@ -279,6 +294,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformSomCommand))
   .command(reg(PlatformEventCommand))
   .command(reg(PlatformMonitorCommand))
+  .command(reg(PlatformCommonsCommand))
   .command(reg(PlatformInboxCommand))
 
   .command(reg(PlatformInvoicesCommand))
@@ -296,6 +312,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformListConnectedCommand))
   .command(reg(PlatformListAvailableCommand))
   .command(reg(PlatformBugCommand))
+  .command(reg(DeviceCommand))
   .command(reg(PlatformAtlasMeetingsCommand))
   .command(reg(PlatformAtlasBrandKitCommand))
   .command(reg(PlatformAtlasCommsCommand))
@@ -309,7 +326,10 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformTelegramCommand))
   .command(reg(PlatformInstagramCommand))
   .command(reg(PlatformDoctorCommand))
+  .command(reg(PlatformSystemAppsScanCommand))
+  .command(reg(PlatformIdeasCommand))
   .command(reg(PlatformObsCommand))
+  .command(reg(PlatformCameraCommand))
   .command(reg(PlatformOnboardCommand))
   .command(reg(PlatformInitCommand))
   .command(reg(PlatformOnboardFlowsCommand))
@@ -322,12 +342,14 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDomainsCommand))
   .command(reg(PlatformPagesBatchCommand))
   .command(reg(PlatformPartialsCommand))
+  .command(reg(PlatformScriptsCommand))
   .command(reg(PlatformCloudUploadCommand))
   .command(reg(PlatformPackagesCommand))
   .command(reg(PlatformMarketplaceCommand))
   .command(reg(PlatformMemoryCommand))
   .command(reg(PlatformProfileCommand))
   .command(reg(PlatformBloqIngestCommand))
+  .command(reg(PlatformDataSourcesCommand))
   .command(reg(PlatformBloqMembersCommand))
   .command(reg(PlatformEvalCommand))
   .command(reg(PlatformSdkCallCommand))
@@ -358,6 +380,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformArticleQaCommand))
   .command(reg(PlatformMsgCommand))
   .command(reg(PlatformAffiliatesCommand))
+  .command(reg(PlatformLoopCommand))
   .command(reg(PlatformPlaybookCommand))
   .command(PlatformSkillCommand) // hidden alias for backward compat
   .fail((msg, err) => {

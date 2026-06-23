@@ -1,5 +1,5 @@
 {
-  "version": "2026.05.04-pulse",
+  "version": "2026.06.22-agentic-loops",
   "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
   "files": [
     {
@@ -97,6 +97,18 @@
       "dest": "how-to/pulse.md",
       "managed": true,
       "purpose": "Pulse readiness engine — autonomous 4-signal scoring (requirements + liveness + comms freshness + config), 15-min cron, daily digest. How to enroll a lead, view the score, run requirements, debug the loop."
+    },
+    {
+      "src": "how-to/agentic-loops.md",
+      "dest": "how-to/agentic-loops.md",
+      "managed": true,
+      "purpose": "Loop engineering — build a self-running goal→discover→plan→execute→verify→ship loop on IRIS (agents + bloq memory + hive parallelism + weekly schedule + eval verify). The IRIS mapping, a worked store-growth build, 4 use cases, and an honest list of what's not first-class yet."
+    },
+    {
+      "src": "how-to/drive-iris-from-claude-code.md",
+      "dest": "how-to/drive-iris-from-claude-code.md",
+      "managed": true,
+      "purpose": "Bring-your-own-orchestrator manual — how Claude Code (or any external agent) drives IRIS as an execution substrate via the CLI + MCP contract (guide/how-to/--help/MCP), the substrate primitives, a worked loop cycle, and reliability notes."
     }
   ]
 }

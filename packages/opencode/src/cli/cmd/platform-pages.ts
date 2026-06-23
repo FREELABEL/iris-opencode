@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
+import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
 
 // ============================================================================
 // Helpers
@@ -37,7 +38,7 @@ function formatStatus(status: string): string {
   return status
 }
 
-async function getBySlug(slug: string, includeJson = false): Promise<any | null> {
+export async function getBySlug(slug: string, includeJson = false): Promise<any | null> {
   const params = new URLSearchParams({
     include_json: includeJson ? "1" : "0",
     include_drafts: "1",
@@ -91,67 +92,156 @@ function pagesDir(custom?: string): string {
   return custom ?? join(process.cwd(), "pages")
 }
 
+// Create a page from already-built json_content (reused by `sites clone`).
+// Returns the created page record, or null on failure.
+export async function createPageFromJson(opts: {
+  slug: string
+  title: string
+  seo_title?: string
+  seo_description?: string
+  og_image?: string
+  owner_type?: string
+  owner_id?: number
+  json_content: any
+  publish?: boolean
+}): Promise<any | null> {
+  const payload: Record<string, unknown> = {
+    slug: opts.slug,
+    title: opts.title,
+    seo_title: opts.seo_title ?? opts.title,
+    seo_description: opts.seo_description,
+    og_image: opts.og_image,
+    owner_type: opts.owner_type,
+    owner_id: opts.owner_id,
+    status: "draft",
+    json_content: opts.json_content,
+  }
+  const res = await pagesFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
+  if (!(await handleApiError(res, `Create page ${opts.slug}`))) return null
+  const p = ((await res.json()) as { data?: any }).data ?? {}
+  if (opts.publish && p?.id) {
+    const pub = await pagesFetch(`/api/v1/pages/${p.id}/publish`, { method: "POST" })
+    if (await handleApiError(pub, "Publish")) {
+      await pagesFetch("/api/internal/cache/purge-page", {
+        method: "POST",
+        body: JSON.stringify({ slug: opts.slug }),
+      }).catch(() => {})
+    }
+  }
+  return p
+}
+
 // ============================================================================
 // Subcommands
 // ============================================================================
 
+// Shared list/search renderer. The /api/v1/pages endpoint supports server-side
+// per_page, page and search — previously hardcoded per_page=50 with no way to
+// page or search, so any page past the first 50 was undiscoverable (#147317).
+async function fetchAndRenderPages(args: {
+  "page-type"?: string
+  search?: string
+  limit?: number
+  page?: number
+  json?: boolean
+}) {
+  UI.empty()
+  prompts.intro(args.search ? `◈  Pages — search "${args.search}"` : "◈  Pages")
+  if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+  const sp = prompts.spinner()
+  sp.start("Loading pages…")
+  try {
+    const params = new URLSearchParams({
+      per_page: String(args.limit ?? 50),
+      page: String(args.page ?? 1),
+      include_json: "0",
+      slim: "1",
+    })
+    if (args.search) params.set("search", args.search)
+
+    const res = await pagesFetch(`/api/v1/pages?${params.toString()}`)
+    if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+    const json = (await res.json()) as any
+
+    // Laravel paginator meta when present ({ data: { current_page, last_page, total, data: [...] } })
+    const meta = json?.data && !Array.isArray(json.data) ? json.data : null
+    let pages: any[] = []
+    if (Array.isArray(json?.data)) pages = json.data
+    else if (Array.isArray(json?.data?.data)) pages = json.data.data
+    else if (Array.isArray(json)) pages = json
+
+    if (args["page-type"]) {
+      pages = pages.filter((p: any) => {
+        const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type
+        return tpl === args["page-type"]
+      })
+    }
+
+    const total = meta?.total ?? pages.length
+    const currentPage = meta?.current_page ?? args.page ?? 1
+    const lastPage = meta?.last_page ?? 1
+    sp.stop(`${pages.length} of ${total} page(s)${lastPage > 1 ? ` — page ${currentPage}/${lastPage}` : ""}`)
+
+    if (args.json) {
+      // Back-compat flat array; enumerate via --limit/--page (documented page size + cursor).
+      console.log(JSON.stringify(pages, null, 2))
+      prompts.outro("Done")
+      return
+    }
+    if (pages.length === 0) {
+      prompts.log.warn(args.search ? `No pages match "${args.search}"` : "No pages found")
+      prompts.outro("Done")
+      return
+    }
+    printDivider()
+    for (const p of pages) {
+      const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type ?? "-"
+      console.log(`  ${bold(p.slug)}  ${dim(`#${p.id}`)}  ${formatStatus(p.status)}`)
+      console.log(`    ${dim(p.title ?? "")}  ${dim(`[${tpl}]`)}`)
+      console.log(`    ${dim(publicUrl(p))}`)
+      console.log()
+    }
+    printDivider()
+    const hints: string[] = ["iris pages view <slug>"]
+    if (currentPage < lastPage) hints.push(`iris pages list --page ${currentPage + 1}`)
+    if (!args.search) hints.push("iris pages search <query>")
+    prompts.outro(dim(hints.join("  ·  ")))
+  } catch (err) {
+    sp.stop("Error", 1)
+    prompts.log.error(err instanceof Error ? err.message : String(err))
+    prompts.outro("Done")
+  }
+}
+
 const ListCmd = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "list pages",
+  describe: "list pages (supports --search, --limit, --page)",
   builder: (y) =>
     y
       .option("page-type", { describe: "filter by template type", type: "string" })
+      .option("search", { describe: "filter by title or slug", type: "string" })
+      .option("limit", { describe: "results per page", type: "number", default: 50 })
+      .option("page", { describe: "page number", type: "number", default: 1 })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Pages")
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    await fetchAndRenderPages(args as any)
+  },
+})
 
-    const sp = prompts.spinner()
-    sp.start("Loading pages…")
-    try {
-      const res = await pagesFetch("/api/v1/pages?per_page=50&include_json=0&slim=1")
-      if (!(await handleApiError(res, "List pages"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
-      const json = (await res.json()) as any
-      // Handle both direct array and Laravel paginator ({ data: { data: [...] } })
-      let pages: any[] = []
-      if (Array.isArray(json?.data)) pages = json.data
-      else if (Array.isArray(json?.data?.data)) pages = json.data.data
-      else if (Array.isArray(json)) pages = json
-      if (args["page-type"]) {
-        pages = pages.filter((p: any) => {
-          const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type
-          return tpl === args["page-type"]
-        })
-      }
-      sp.stop(`${pages.length} page(s)`)
-
-      if (args.json) {
-        console.log(JSON.stringify(pages, null, 2))
-        prompts.outro("Done")
-        return
-      }
-      if (pages.length === 0) {
-        prompts.log.warn("No pages found")
-        prompts.outro("Done")
-        return
-      }
-      printDivider()
-      for (const p of pages) {
-        const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type ?? "-"
-        console.log(`  ${bold(p.slug)}  ${dim(`#${p.id}`)}  ${formatStatus(p.status)}`)
-        console.log(`    ${dim(p.title ?? "")}  ${dim(`[${tpl}]`)}`)
-        console.log(`    ${dim(publicUrl(p))}`)
-        console.log()
-      }
-      printDivider()
-      prompts.outro(dim("iris pages view <slug>"))
-    } catch (err) {
-      sp.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
-    }
+const SearchCmd = cmd({
+  command: "search <query>",
+  aliases: ["find"],
+  describe: "search pages by title or slug",
+  builder: (y) =>
+    y
+      .positional("query", { describe: "search text (title or slug)", type: "string", demandOption: true })
+      .option("limit", { describe: "results per page", type: "number", default: 50 })
+      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    await fetchAndRenderPages({ ...(args as any), search: String(args.query) })
   },
 })
 
@@ -240,6 +330,25 @@ const SetCmd = cmd({
     try {
       const page = await getBySlug(args.slug, true)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+
+      // Top-level page COLUMNS are record fields, NOT json_content paths (#137875).
+      // Route them straight to the update endpoint so e.g.
+      //   iris pages set <slug> requires_auth true
+      // actually gates the page (PublicPageController reads the column) instead of
+      // nesting a dead `json_content.requires_auth` key that the gate ignores.
+      const PAGE_COLUMNS = new Set(["requires_auth", "status", "title", "seo_title", "seo_description", "og_image"])
+      if (PAGE_COLUMNS.has(args.path)) {
+        const colVal = parseValue(args.value)
+        const colRes = await pagesFetch(`/api/v1/pages/${page.id}`, {
+          method: "PUT",
+          body: JSON.stringify({ [args.path]: colVal }),
+        })
+        if (!(await handleApiError(colRes, `Update ${args.path}`))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+        sp.stop(success(`Updated page column ${args.path} = ${JSON.stringify(colVal)}`))
+        prompts.outro(dim(`iris pages cache-clear ${args.slug}   # purge the rendered cache so the change takes effect`))
+        return
+      }
+
       const json = page.json_content ?? {}
       const parsed = parseValue(args.value)
       setNestedValue(json, args.path, parsed)
@@ -757,6 +866,119 @@ const DuplicateCmd = cmd({
         console.log(`  ${dim("Publish:")}  iris pages push ${args.slug} --publish`)
       }
 
+      prompts.outro("Done")
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const RebrandCmd = cmd({
+  command: "rebrand <source>",
+  describe: "clone a page and swap brand identity from a brand profile (PII safety gate)",
+  builder: (y) =>
+    y
+      .positional("source", { describe: "source page slug to clone", type: "string", demandOption: true })
+      .option("as", { describe: "new page slug", type: "string", demandOption: true })
+      .option("brand", { describe: "brand slug whose profile to apply", type: "string", demandOption: true })
+      .option("title", { describe: "new page title (defaults to brand name)", type: "string" })
+      .option("owner-type", { describe: "owner type (defaults to source)", type: "string" })
+      .option("owner-id", { describe: "owner id (defaults to source)", type: "number" })
+      .option("site", { describe: "attach the cloned page to this site id", type: "number" })
+      .option("publish", { describe: "publish immediately", type: "boolean", default: false })
+      .option("force", { describe: "proceed even if PII leaks are detected", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Rebrand ${args.source} → ${args.as}  ${dim(`(brand: ${args.brand})`)}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const sp = prompts.spinner()
+    sp.start("Loading source + brand…")
+    try {
+      const source = await getBySlug(args.source, true)
+      if (!source) { sp.stop("Source not found", 1); prompts.outro("Done"); return }
+      const jsonContent = source.json_content
+      if (!jsonContent) { sp.stop("Source has no content", 1); prompts.outro("Done"); return }
+
+      let target: BrandProfile
+      try {
+        target = await profileFromBrand(String(args.brand))
+      } catch (e) {
+        sp.stop("Brand not found", 1)
+        prompts.log.error(e instanceof Error ? e.message : String(e))
+        prompts.outro("Done"); return
+      }
+
+      sp.message("Rebranding…")
+      const { json, leaks } = rebrandJsonContent(jsonContent, target)
+      sp.stop(leaks.length ? `${leaks.length} possible leak(s)` : success("Rebranded — clean"))
+
+      // --- Safety gate: refuse to create/publish if source PII survived ---
+      if (leaks.length > 0) {
+        printDivider()
+        for (const l of leaks) {
+          console.log(`  ${UI.Style.TEXT_WARNING}⚠${UI.Style.TEXT_NORMAL}  ${bold(l.needle)}  ${dim("at")} ${dim(l.path)}  ${dim(`("${l.value}")`)}`)
+        }
+        printDivider()
+        prompts.log.warn(`Source client data survived. Populate the missing fields on brand "${args.brand}" (iris brands profile set ${args.brand} --file ...) then retry — or pass --force to clone anyway.`)
+        if (!args.force) { prompts.outro("Blocked — nothing created"); return }
+        prompts.log.warn("--force set: cloning despite leaks")
+      }
+
+      const sp2 = prompts.spinner()
+      sp2.start("Creating…")
+      const title = (args.title as string) ?? target.name ?? source.title
+      const payload: Record<string, unknown> = {
+        slug: args.as,
+        title,
+        seo_title: json.seo_title ?? title,
+        seo_description: json.seo_description ?? source.seo_description,
+        og_image: source.og_image,
+        owner_type: (args["owner-type"] as string) ?? source.owner_type,
+        owner_id: (args["owner-id"] as number) ?? source.owner_id,
+        status: "draft",
+        json_content: json,
+      }
+      const res = await pagesFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
+      if (!(await handleApiError(res, "Create page"))) { sp2.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = (await res.json()) as { data?: any }
+      const p = data?.data ?? data
+      sp2.stop(success(`Cloned → #${p.id}`))
+
+      // Save local file
+      const filePath = join(pagesDir("./pages"), `${args.as}.json`)
+      writeFileSync(filePath, JSON.stringify({
+        id: p.id, slug: args.as, title,
+        seo_title: payload.seo_title, seo_description: payload.seo_description, og_image: payload.og_image,
+        status: p.status, owner_type: payload.owner_type, owner_id: payload.owner_id, json_content: json,
+      }, null, 2))
+
+      // Optional: attach to a site (sites live on FL_API)
+      if (args.site != null) {
+        const aRes = await irisFetch(`/api/v1/sites/${args.site}/pages/${p.id}`, { method: "POST" }, FL_API)
+        await handleApiError(aRes, "Attach to site")
+      }
+
+      printDivider()
+      printKV("ID", p.id)
+      printKV("Slug", args.as)
+      printKV("Brand", args.brand)
+      printKV("Leaks", leaks.length === 0 ? success("none") : `${leaks.length} (forced)`)
+      printKV("Components", (json.components?.length ?? 0).toString())
+      printKV("File", filePath)
+      printDivider()
+
+      if (args.publish) {
+        const pubRes = await pagesFetch(`/api/v1/pages/${p.id}/publish`, { method: "POST" })
+        if (await handleApiError(pubRes, "Publish")) {
+          await pagesFetch("/api/internal/cache/purge-page", { method: "POST", body: JSON.stringify({ slug: args.as }) }).catch(() => {})
+          console.log(`  ${success("Published")} ${highlight(publicUrl(args.as))}`)
+        }
+      } else {
+        console.log(`  ${dim("Review:")}  ${publicUrl(args.as)}`)
+        console.log(`  ${dim("Publish:")} iris pages publish ${args.as}`)
+      }
       prompts.outro("Done")
     } catch (err) {
       sp.stop("Error", 1)
@@ -1449,6 +1671,7 @@ export const PlatformPagesCommand = cmd({
   builder: (y) =>
     y
       .command(ListCmd)
+      .command(SearchCmd)
       .command(ViewCmd)
       .command(GetCmd)
       .command(SetCmd)
@@ -1460,6 +1683,7 @@ export const PlatformPagesCommand = cmd({
       .command(PreviewCmd)
       .command(CreateCmd)
       .command(DuplicateCmd)
+      .command(RebrandCmd)
       .command(ComponentsCmd)
       .command(ComposeCmd)
       .command(ComponentRegistryCmd)

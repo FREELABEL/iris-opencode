@@ -20,6 +20,8 @@ import {
   getBridgeToken,
   resolveUserId,
 } from "./iris-api"
+// #137403/#137526 — reuse the venues browser Google-Maps discovery path for leads.
+import { findOnlineHiveNode, dispatchHiveSearch } from "./platform-venues"
 import { executeIntegrationCall } from "./platform-run"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync } from "fs"
 import { homedir } from "os"
@@ -681,6 +683,26 @@ const LeadsSearchCommand = cmd({
   },
 })
 
+// #137406 — single canonical CRM status taxonomy, shared by create + update so the
+// write side can't drift into casing/spelling variants again (the old create enum was
+// a wrong 5-value set). Derived from the real statuses observed across bloqs. The
+// `list --status` FILTER stays free-form so you can still query legacy/drifted values.
+const LEAD_STATUSES = [
+  "New",
+  "Prospected",
+  "Contacted",
+  "Qualified",
+  "Proposal",
+  "In Negotiation",
+  "Follow-Up",
+  "On Hold",
+  "Active",
+  "Partner",
+  "Won",
+  "Lost",
+  "Archived",
+] as const
+
 const LeadsCreateCommand = cmd({
   command: "create",
   describe: "create a new lead",
@@ -693,30 +715,37 @@ const LeadsCreateCommand = cmd({
       .option("company", { describe: "company name", type: "string" })
       .option("source", { describe: "lead source (e.g. referral, inbound, outreach)", type: "string" })
       .option("status", {
-        describe: "initial status",
+        describe: "initial status (canonical CRM taxonomy)",
         type: "string",
-        choices: ["Prospected", "Contacted", "Interested", "Converted", "Archived"],
+        choices: LEAD_STATUSES,
       })
       .option("notes", { describe: "initial note to attach", type: "string" })
-      .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" }),
+      .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" })
+      .option("json", { describe: "JSON output (returns the created lead — capture the new id)", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Create Lead")
+    const isJson = args.json === true
+    if (!isJson) {
+      UI.empty()
+      prompts.intro("◈  Create Lead")
+    }
 
     const token = await requireAuth()
     if (!token) {
-      prompts.outro("Done")
+      if (!isJson) prompts.outro("Done")
       return
     }
 
     // Bug #6/#57642: Require non-empty name. Trim whitespace before checking.
     let name = typeof args.name === "string" ? args.name.trim() : args.name
     if (!name) {
-      if (isNonInteractive()) {
-        prompts.log.error("Missing required --name flag.")
-        prompts.log.info(dim(`iris leads create --name "Jane Doe" --email jane@co.com`))
+      if (isNonInteractive() || isJson) {
+        if (isJson) console.log(JSON.stringify({ error: "Missing required --name flag" }))
+        else {
+          prompts.log.error("Missing required --name flag.")
+          prompts.log.info(dim(`iris leads create --name "Jane Doe" --email jane@co.com`))
+        }
         process.exitCode = 1
-        prompts.outro("Done")
+        if (!isJson) prompts.outro("Done")
         return
       }
       const result = await prompts.text({
@@ -732,7 +761,7 @@ const LeadsCreateCommand = cmd({
 
     // Bug #6: In non-interactive mode, skip email prompt entirely — use flag or nothing.
     let email = args.email
-    if (email === undefined && !isNonInteractive()) {
+    if (email === undefined && !isNonInteractive() && !isJson) {
       const result = await prompts.text({
         message: "Email address (optional, press Enter to skip)",
         placeholder: "e.g. jane@company.com",
@@ -746,8 +775,8 @@ const LeadsCreateCommand = cmd({
 
     let bloqId = args["bloq-id"] ?? 38
 
-    const spinner = prompts.spinner()
-    spinner.start("Creating lead…")
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start("Creating lead…")
 
     try {
       const payload: Record<string, unknown> = {
@@ -776,14 +805,57 @@ const LeadsCreateCommand = cmd({
       })
       const ok = await handleApiError(res, "Create lead")
       if (!ok) {
-        spinner.stop("Failed", 1)
-        prompts.outro("Done")
+        spinner?.stop("Failed", 1)
+        if (isJson) console.log(JSON.stringify({ error: "Create lead failed" }))
+        else prompts.outro("Done")
+        process.exitCode = 1
         return
       }
 
       const data = (await res.json()) as { data?: any }
       const l = data?.data ?? data
-      spinner.stop(`${success("✓")} Lead created: ${bold(String(l.name ?? l.id))} (#${l.id})`)
+
+      // #137529 — the API UPSERTS by email: if the email already belongs to a lead it
+      // returns that existing lead with its OLD values and silently drops what we sent.
+      // Detect that (the returned name doesn't match what we asked for) and report
+      // HONESTLY instead of a green "created" — and DON'T attach the note (it would
+      // pollute the existing record). Operators were being lied to.
+      const sentName = String(name).trim().toLowerCase()
+      const gotName = String(l.name ?? "").trim().toLowerCase()
+      const matchedExisting = !!email && !!sentName && gotName !== sentName
+      l.matched_existing = matchedExisting
+
+      // Auto-attach note only on a real create (never onto a silently-matched lead).
+      if (args.notes && !matchedExisting) {
+        try {
+          await irisFetch(`/api/v1/leads/${l.id}/notes`, {
+            method: "POST",
+            body: JSON.stringify({ message: args.notes }),
+          })
+          if (!isJson) prompts.log.info(dim("Note attached"))
+        } catch {
+          /* non-fatal */
+        }
+      }
+
+      if (isJson) {
+        console.log(JSON.stringify(l, null, 2))
+        return
+      }
+
+      if (matchedExisting) {
+        spinner?.stop("Matched existing lead", 1)
+        prompts.log.warn(`A lead with ${email} already exists (#${l.id}) — NOT created. Your values were NOT applied.`)
+        printDivider()
+        printKV("ID", l.id)
+        printKV("Name", `${l.name} ${dim(`(you sent: ${name})`)}`)
+        printKV("Status", `${l.status} ${args.status ? dim(`(you sent: ${args.status})`) : ""}`)
+        printDivider()
+        prompts.outro(dim(`Update it instead: iris leads update ${l.id} --name "${name}"${args.status ? ` --status "${args.status}"` : ""}`))
+        return
+      }
+
+      spinner?.stop(`${success("✓")} Lead created: ${bold(String(l.name ?? l.id))} (#${l.id})`)
 
       printDivider()
       printKV("ID", l.id)
@@ -795,24 +867,15 @@ const LeadsCreateCommand = cmd({
       printKV("Status", l.status)
       printDivider()
 
-      // Auto-attach note if provided
-      if (args.notes) {
-        try {
-          await irisFetch(`/api/v1/leads/${l.id}/notes`, {
-            method: "POST",
-            body: JSON.stringify({ message: args.notes }),
-          })
-          prompts.log.info(dim("Note attached"))
-        } catch {
-          /* non-fatal */
-        }
-      }
-
       prompts.outro(dim(`iris leads get ${l.id}`))
     } catch (err) {
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      spinner?.stop("Error", 1)
+      if (isJson) console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
     }
   },
 })
@@ -820,14 +883,18 @@ const LeadsCreateCommand = cmd({
 const LeadsNotesCommand = cmd({
   command: "notes <id>",
   aliases: ["view-notes"],
-  describe: "list all notes for a lead",
-  builder: (yargs) => yargs.positional("id", { describe: "lead ID or name", type: "string", demandOption: true }),
+  describe: "list all notes for a lead (with note IDs for edit/delete)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID or name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output (includes note IDs — for scripted cleanup)", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
+    const isJson = args.json === true
+    if (!isJson) UI.empty()
 
     const token = await requireAuth()
     if (!token) {
-      prompts.outro("Done")
+      if (!isJson) prompts.outro("Done")
       return
     }
 
@@ -850,7 +917,7 @@ const LeadsNotesCommand = cmd({
       }
       if (matches.length === 1) {
         leadId = matches[0].id
-      } else if (isNonInteractive()) {
+      } else if (isNonInteractive() || isJson) {
         leadId = matches[0].id
       } else {
         const choice = await prompts.select({
@@ -868,17 +935,17 @@ const LeadsNotesCommand = cmd({
       }
     }
 
-    prompts.intro(`◈  Notes — Lead #${leadId}`)
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    if (!isJson) prompts.intro(`◈  Notes — Lead #${leadId}`)
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start("Loading…")
 
     try {
       const res = await irisFetch(`/api/v1/leads/${leadId}`)
       const ok = await handleApiError(res, "Get lead")
       if (!ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
         process.exitCode = 1
-        prompts.outro("Done")
+        if (!isJson) prompts.outro("Done")
         return
       }
 
@@ -887,7 +954,13 @@ const LeadsNotesCommand = cmd({
       const name = lead.name ?? lead.first_name ?? `Lead #${leadId}`
       const notes: any[] = Array.isArray(lead.notes) ? lead.notes : []
 
-      spinner.stop(bold(name))
+      if (isJson) {
+        // Include note IDs so scripts can edit/delete (#137530).
+        console.log(JSON.stringify({ lead_id: leadId, notes }, null, 2))
+        return
+      }
+
+      spinner?.stop(bold(name))
 
       if (notes.length === 0) {
         prompts.log.info("No notes yet.")
@@ -900,7 +973,9 @@ const LeadsNotesCommand = cmd({
         const content =
           typeof note === "object" ? (note.content ?? JSON.stringify(note)).replace(/\\n/g, "\n") : String(note)
         const date = typeof note === "object" ? (note.created_at ?? "") : ""
-        if (date) console.log(`  ${dim(date)}`)
+        const noteId = typeof note === "object" ? (note.id ?? null) : null
+        // Show the note ID so it can be deleted/edited (#137530).
+        console.log(`  ${noteId != null ? dim(`#${noteId}`) : ""}${date ? `  ${dim(date)}` : ""}`)
         const lines = content.split("\n")
         for (const line of lines) {
           if (line.trim()) console.log(`  ${line.trim()}`)
@@ -909,12 +984,16 @@ const LeadsNotesCommand = cmd({
       }
       printDivider()
       prompts.outro(
-        `${success("✓")} ${notes.length} note${notes.length === 1 ? "" : "s"}  ·  ${dim(`iris leads note ${leadId} "…"`)}`,
+        `${success("✓")} ${notes.length} note${notes.length === 1 ? "" : "s"}  ·  ${dim(`delete: iris leads note-delete ${leadId} <noteId>`)}`,
       )
     } catch (err) {
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      spinner?.stop("Error", 1)
+      if (isJson) console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
     }
   },
 })
@@ -997,6 +1076,32 @@ const LeadsOutreachCommand = cmd({
   },
 })
 
+// #137530 — notes were append-only with no IDs, so a wrong/test note (e.g. from the
+// create-upsert bug) couldn't be removed. The DELETE endpoint exists; surface it.
+const LeadsNoteDeleteCommand = cmd({
+  command: "note-delete <id> <noteId>",
+  aliases: ["note-rm", "delete-note"],
+  describe: "delete a note from a lead (get note IDs via `iris leads notes <id> --json`)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead ID", type: "number", demandOption: true })
+      .positional("noteId", { describe: "note ID (from `iris leads notes <id>`)", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!(await requireAuth())) { process.exitCode = 1; return }
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}/notes/${args.noteId}`, { method: "DELETE" })
+    if (!(await handleApiError(res, "Delete note"))) { process.exitCode = 1; return }
+
+    if (isJson) {
+      console.log(JSON.stringify({ ok: true, lead_id: args.id, note_id: args.noteId, deleted: true }))
+      return
+    }
+    console.log(`${success("✓")} Deleted note #${args.noteId} from lead #${args.id}`)
+  },
+})
+
 const LeadsNoteCommand = cmd({
   command: "note <id> [message]",
   describe: "add a note to a lead (inline text or --file)",
@@ -1009,9 +1114,11 @@ const LeadsNoteCommand = cmd({
         describe: "note type tag",
         type: "string",
         choices: ["note", "meeting_intel", "call_log", "email_log", "system"],
-      }),
+      })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
+    const isJson = args.json === true
+    if (!isJson) UI.empty()
 
     // ── Validate: need a message or --file ── (Bug #2)
     if (!args.message && !args.file) {
@@ -1036,7 +1143,7 @@ const LeadsNoteCommand = cmd({
     }
     const { leadId } = resolved
 
-    prompts.intro(`◈  Note — Lead #${leadId}`)
+    if (!isJson) prompts.intro(`◈  Note — Lead #${leadId}`)
 
     // ── Resolve content from --file or positional message ──
     let content = String(args.message ?? "")
@@ -1055,11 +1162,11 @@ const LeadsNoteCommand = cmd({
         prompts.outro("Done")
         return
       }
-      prompts.log.info(dim(`Read ${content.length.toLocaleString()} chars from ${basename(filePath)}`))
+      if (!isJson) prompts.log.info(dim(`Read ${content.length.toLocaleString()} chars from ${basename(filePath)}`))
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Adding note…")
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start("Adding note…")
 
     try {
       const body: Record<string, unknown> = { message: content }
@@ -1074,17 +1181,29 @@ const LeadsNoteCommand = cmd({
       })
       const ok = await handleApiError(res, "Add note")
       if (!ok) {
-        spinner.stop("Failed", 1)
-        prompts.outro("Done")
+        spinner?.stop("Failed", 1)
+        if (isJson) console.log(JSON.stringify({ error: "Add note failed" }))
+        else prompts.outro("Done")
+        process.exitCode = 1
         return
       }
 
-      spinner.stop(`${success("✓")} Note added`)
+      const data = await res.json().catch(() => ({}))
+      if (isJson) {
+        console.log(JSON.stringify((data as any)?.data ?? data, null, 2))
+        return
+      }
+
+      spinner?.stop(`${success("✓")} Note added`)
       prompts.outro(dim(`iris leads get ${leadId}`))
     } catch (err) {
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      spinner?.stop("Error", 1)
+      if (isJson) console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
     }
   },
 })
@@ -1099,7 +1218,7 @@ const LeadsUpdateCommand = cmd({
       .option("email", { describe: "new email", type: "string" })
       .option("phone", { describe: "new phone", type: "string" })
       .option("company", { describe: "new company", type: "string" })
-      .option("status", { describe: "new status", type: "string" })
+      .option("status", { describe: "new status (canonical CRM taxonomy)", type: "string", choices: LEAD_STATUSES })
       .option("bloq-id", { alias: "bloq", describe: "CRM bloq ID to associate", type: "number" })
       .option("website", { describe: "website URL", type: "string" })
       .option("source", { describe: "lead source", type: "string" })
@@ -1118,26 +1237,29 @@ const LeadsUpdateCommand = cmd({
       })
       .option("chat-id", { describe: "link an iMessage chat ID (e.g. chat713220476491386040)", type: "string" })
       .option("whatsapp-group", { describe: 'link a WhatsApp group chat by name (e.g. "CatoDrive Tech Dev")', type: "string" })
-      .option("add-email", { describe: "add an alternate email address (for multi-email inbox scanning)", type: "string" }),
+      .option("add-email", { describe: "add an alternate email address (for multi-email inbox scanning)", type: "string" })
+      .option("json", { describe: "JSON output (returns the updated lead)", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
+    const isJson = args.json === true
+    if (!isJson) UI.empty()
 
     const token = await requireAuth()
     if (!token) {
-      prompts.outro("Done")
+      if (!isJson) prompts.outro("Done")
       return
     }
 
     // ── Resolve lead ID from name/email if not numeric ── (Bug #3)
     const resolved = await resolveLeadId(String(args.id))
     if (!resolved) {
+      if (isJson) console.log(JSON.stringify({ error: "Lead not found" }))
       process.exitCode = 1
-      prompts.outro("Done")
+      if (!isJson) prompts.outro("Done")
       return
     }
     const { leadId } = resolved
 
-    prompts.intro(`◈  Update Lead #${leadId}`)
+    if (!isJson) prompts.intro(`◈  Update Lead #${leadId}`)
 
     const payload: Record<string, unknown> = {}
     if (args.name) payload.name = args.name
@@ -1197,13 +1319,18 @@ const LeadsUpdateCommand = cmd({
     }
 
     if (Object.keys(payload).length === 0) {
+      if (isJson) {
+        console.log(JSON.stringify({ error: "Nothing to update — pass --name, --email, --status, etc." }))
+        process.exitCode = 1
+        return
+      }
       prompts.log.warn("Nothing to update. Use --name, --email, --status, --bloq-id, etc.")
       prompts.outro("Done")
       return
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Updating…")
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start("Updating…")
 
     try {
       const res = await irisFetch(`/api/v1/leads/${leadId}`, {
@@ -1212,14 +1339,22 @@ const LeadsUpdateCommand = cmd({
       })
       const ok = await handleApiError(res, "Update lead")
       if (!ok) {
-        spinner.stop("Failed", 1)
-        prompts.outro("Done")
+        spinner?.stop("Failed", 1)
+        if (isJson) console.log(JSON.stringify({ error: "Update lead failed" }))
+        else prompts.outro("Done")
+        process.exitCode = 1
         return
       }
 
       const data = (await res.json()) as { data?: any }
       const l = data?.data ?? data
-      spinner.stop(`${success("✓")} Updated: ${bold(String(l.name ?? l.id))}`)
+
+      if (isJson) {
+        console.log(JSON.stringify(l, null, 2))
+        return
+      }
+
+      spinner?.stop(`${success("✓")} Updated: ${bold(String(l.name ?? l.id))}`)
 
       printDivider()
       printKV("ID", l.id)
@@ -1229,9 +1364,13 @@ const LeadsUpdateCommand = cmd({
 
       prompts.outro(dim(`iris leads get ${leadId}`))
     } catch (err) {
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      spinner?.stop("Error", 1)
+      if (isJson) console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+      else {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
     }
   },
 })
@@ -1688,6 +1827,14 @@ const LeadsDeleteCommand = cmd({
     spinner.start("Deleting…")
 
     try {
+      // #137532 — cascade: tear down the payment gate FIRST so its public artifacts
+      // (proposal / e-sign / Stripe checkout pages) aren't left live + orphaned after
+      // the lead is gone. Best-effort: a 404 (no gate) is fine; we don't block delete.
+      try {
+        const gateRes = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, { method: "DELETE" })
+        if (gateRes.ok) spinner.message("Tore down payment gate…")
+      } catch { /* no gate / non-fatal — proceed with lead delete */ }
+
       const res = await irisFetch(`/api/v1/leads/${args.id}`, { method: "DELETE" })
       const ok = await handleApiError(res, "Delete lead")
       if (!ok) {
@@ -1696,7 +1843,7 @@ const LeadsDeleteCommand = cmd({
         return
       }
 
-      spinner.stop(`${success("✓")} Lead #${args.id} deleted`)
+      spinner.stop(`${success("✓")} Lead #${args.id} deleted (payment gate torn down)`)
       prompts.outro(dim("iris leads list"))
     } catch (err) {
       spinner.stop("Error", 1)
@@ -5245,9 +5392,29 @@ const LeadsDeletePaymentGateCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "lead ID", type: "number", demandOption: true })
-      .option("json", { describe: "JSON output", type: "boolean" }),
+      // #137533: align destructive flags with `iris leads delete` — prompt by
+      // default, --force/-y to skip, refuse non-interactively without --force.
+      .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
+
+    const isJson = args.json === true
+
+    let confirmed: boolean | symbol = args.force
+    if (!confirmed) {
+      if (isNonInteractive()) {
+        if (isJson) console.log(JSON.stringify({ error: "Refusing to delete payment gate without --force in non-interactive mode" }))
+        else prompts.log.error("Refusing to delete the payment gate without --force in non-interactive mode.")
+        process.exitCode = 2
+        return
+      }
+      confirmed = await prompts.confirm({ message: `Delete the payment gate for lead #${args.id}? This cannot be undone.` })
+    }
+    if (!confirmed || prompts.isCancel(confirmed)) {
+      if (!isJson) prompts.log.info("Cancelled")
+      return
+    }
 
     const res = await irisFetch(`/api/v1/leads/${args.id}/payment-gate`, {
       method: "DELETE",
@@ -5255,7 +5422,7 @@ const LeadsDeletePaymentGateCommand = cmd({
     if (!(await handleApiError(res, "Delete payment gate"))) return
 
     const data = await res.json().catch(() => ({}))
-    if (args.json) {
+    if (isJson) {
       console.log(JSON.stringify(data, null, 2))
       return
     }
@@ -6008,13 +6175,15 @@ const LeadsTasksCommand = cmd({
 
 const LeadsEnrichCommand = cmd({
   command: "enrich",
-  describe: "enrich leads in a bloq via API (no Playwright/browser needed)",
+  // #137537 — per-lead synchronous form + provider documented. Bloq mode stays queued.
+  describe: "enrich one lead (--id, synchronous, reports results) or a whole bloq (--bloq, queued Hive task). Provider: LeadEnrichmentService — AI web research, no Playwright/Serper.",
   builder: (yargs) =>
     yargs
-      .option("bloq", { alias: "b", describe: "bloq id to enrich leads from", type: "number", demandOption: true })
-      .option("limit", { alias: "n", describe: "max leads to enrich", type: "number", default: 20 })
+      .option("id", { describe: "lead id to enrich synchronously (reports found contacts + tags)", type: "number" })
+      .option("bloq", { alias: "b", describe: "bloq id to enrich leads from (queued Hive task)", type: "number" })
+      .option("limit", { alias: "n", describe: "max leads to enrich (bloq mode)", type: "number", default: 20 })
       .option("user-id", { describe: "user id (defaults to ~/.iris/sdk/.env)", type: "number" })
-      .option("queue", { describe: "fire and forget — print task id and exit", type: "boolean", default: true })
+      .option("queue", { describe: "fire and forget — print task id and exit (bloq mode)", type: "boolean", default: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(argv) {
     const { requireUserId } = await import("./iris-api")
@@ -6023,8 +6192,45 @@ const LeadsEnrichCommand = cmd({
       process.exitCode = 1
       return
     }
+
+    // ── Per-lead SYNCHRONOUS enrich (#137537) — call the endpoint directly and report
+    // what came back. No fire-and-forget task id, no silent-failure pattern. The endpoint
+    // returns researched contacts for review (requires_confirmation) — apply via the UI.
+    if (argv.id != null) {
+      const leadId = argv.id as number
+      const res = await irisFetch(`/api/v1/leads/${leadId}/enrich`, { method: "POST", body: JSON.stringify({}) })
+      if (!res.ok) {
+        const body = await res.text()
+        if (argv.json) console.log(JSON.stringify({ ok: false, status: res.status, error: body }))
+        else console.error(`Enrich failed: HTTP ${res.status} ${body.slice(0, 200)}`)
+        process.exitCode = 1
+        return
+      }
+      const out = (await res.json()) as any
+      const data = out?.data ?? {}
+      const contacts: any[] = data.found_contacts ?? []
+      const tags: any[] = data.generated_tags ?? []
+
+      if (argv.json) {
+        console.log(JSON.stringify({ ok: true, lead_id: leadId, found_contacts: contacts, generated_tags: tags, note: data.note ?? null, iterations: data.iterations ?? 0, requires_confirmation: out?.requires_confirmation ?? true }, null, 2))
+        return
+      }
+      console.log(`${success("✓")} Enriched lead ${bold(String(leadId))} — ${contacts.length} contact(s) found, ${tags.length} tag(s) (${data.iterations ?? 0} research iterations)`)
+      if (data.note) console.log(dim(`  ${String(data.note).slice(0, 240)}`))
+      if (contacts.length > 0) console.log(dim(`  Review + apply in the CRM (results require confirmation before they're written).`))
+      return
+    }
+
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) {
+      process.exitCode = 1
+      return
+    }
+
+    if (argv.bloq == null) {
+      const msg = "Provide --id <leadId> (one lead, synchronous) or --bloq <bloqId> (queued batch)."
+      if (argv.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(msg)
       process.exitCode = 1
       return
     }
@@ -6105,6 +6311,403 @@ const LeadsEnrichCommand = cmd({
     }
     console.log(dim(`  prompt:  ${prompt}`))
     console.log(dim(`  monitor: iris hive tasks --task ${taskId}`))
+  },
+})
+
+// ============================================================================
+// verify — validate a lead's contact info (#137535). Scraped/discovered emails &
+// phones are never validated before becoming leads, so junk flows into the CRM and
+// outreach bounces. This checks FORMAT + a real deliverability SIGNAL (DNS MX for the
+// email domain) with zero paid API — so it works as the free verification step for
+// the browser-discovery pipeline (no Serper/Tavily dependency).
+// ============================================================================
+
+const DISPOSABLE_EMAIL_DOMAINS = new Set([
+  "mailinator.com", "guerrillamail.com", "10minutemail.com", "tempmail.com", "temp-mail.org",
+  "throwaway.email", "yopmail.com", "trashmail.com", "getnada.com", "sharklasers.com",
+  "maildrop.cc", "dispostable.com", "fakeinbox.com", "mailnesia.com",
+])
+const ROLE_EMAIL_PREFIXES = new Set([
+  "info", "sales", "support", "admin", "contact", "hello", "office", "team", "help",
+  "billing", "noreply", "no-reply", "marketing", "enquiries", "inquiries",
+])
+
+type EmailVerdict = { value: string; valid: boolean; risk: "low" | "medium" | "high"; reasons: string[]; has_mx: boolean }
+async function verifyEmail(email: string): Promise<EmailVerdict> {
+  const value = email.trim()
+  const reasons: string[] = []
+  // RFC-pragmatic format check
+  const formatOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)
+  if (!formatOk) {
+    return { value, valid: false, risk: "high", reasons: ["invalid format"], has_mx: false }
+  }
+  const [local, domain] = value.toLowerCase().split("@")
+  if (DISPOSABLE_EMAIL_DOMAINS.has(domain)) reasons.push("disposable domain")
+  if (ROLE_EMAIL_PREFIXES.has(local)) reasons.push("role-based (not a person)")
+
+  // Deliverability signal: does the domain publish MX records?
+  let hasMx = false
+  try {
+    const dns = await import("dns/promises")
+    const mx = await dns.resolveMx(domain)
+    hasMx = Array.isArray(mx) && mx.length > 0
+  } catch {
+    hasMx = false
+  }
+  if (!hasMx) reasons.push("no MX records (domain can't receive mail)")
+
+  const valid = formatOk && hasMx && !DISPOSABLE_EMAIL_DOMAINS.has(domain)
+  const risk: EmailVerdict["risk"] = !hasMx || DISPOSABLE_EMAIL_DOMAINS.has(domain)
+    ? "high"
+    : reasons.length > 0
+      ? "medium"
+      : "low"
+  return { value, valid, risk, reasons, has_mx: hasMx }
+}
+
+type PhoneVerdict = { value: string; valid: boolean; e164: string | null; reasons: string[] }
+function verifyPhone(phone: string): PhoneVerdict {
+  const raw = phone.trim()
+  const reasons: string[] = []
+  const hasPlus = raw.startsWith("+")
+  const digits = raw.replace(/[^\d]/g, "")
+  // E.164 is 8–15 digits. US default: 10 digits, or 11 with leading 1.
+  let e164: string | null = null
+  if (hasPlus && digits.length >= 8 && digits.length <= 15) {
+    e164 = "+" + digits
+  } else if (digits.length === 10) {
+    e164 = "+1" + digits // assume NANP
+    reasons.push("assumed US country code (no +)")
+  } else if (digits.length === 11 && digits.startsWith("1")) {
+    e164 = "+" + digits
+  } else {
+    reasons.push(digits.length < 8 ? "too few digits" : "ambiguous — needs country code (+)")
+  }
+  return { value: raw, valid: e164 !== null && reasons.every((r) => r.startsWith("assumed")), e164, reasons }
+}
+
+const LeadsVerifyCommand = cmd({
+  command: "verify [id]",
+  describe: "validate a lead's email + phone (format + MX deliverability signal; free, no API)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead id to verify (reads its contact info)", type: "number" })
+      .option("email", { describe: "verify a raw email (skip lead lookup)", type: "string" })
+      .option("phone", { describe: "verify a raw phone (skip lead lookup)", type: "string" })
+      .option("store", { describe: "write the verification result back to the lead", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!(await requireAuth())) { process.exitCode = 1; return }
+
+    let email = args.email as string | undefined
+    let phone = args.phone as string | undefined
+    let lead: any = null
+
+    if (args.id != null && !email && !phone) {
+      const res = await irisFetch(`/api/v1/leads/${args.id}`)
+      if (!(await handleApiError(res, "Get lead"))) { process.exitCode = 1; return }
+      lead = ((await res.json()) as any)?.data ?? {}
+      const ci = lead.contact_info ?? {}
+      email = lead.email ?? ci.email ?? (Array.isArray(ci.emails) ? ci.emails[0] : undefined)
+      phone = lead.phone ?? ci.phone ?? undefined
+    }
+
+    if (!email && !phone) {
+      const msg = "Nothing to verify. Pass a lead id, or --email / --phone."
+      if (isJson) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    const emailResult = email ? await verifyEmail(email) : null
+    const phoneResult = phone ? verifyPhone(phone) : null
+
+    // Optionally persist the verdict onto the lead's contact_info.
+    let stored = false
+    if (args.store && args.id != null) {
+      const ci = (lead?.contact_info as Record<string, unknown>) ?? {}
+      const merged = { ...ci, verification: { email: emailResult, phone: phoneResult, verified_at: new Date().toISOString() } }
+      const up = await irisFetch(`/api/v1/leads/${args.id}`, { method: "PUT", body: JSON.stringify({ contact_info: merged }) })
+      stored = up.ok
+    }
+
+    if (isJson) {
+      console.log(JSON.stringify({ ok: true, lead_id: args.id ?? null, email: emailResult, phone: phoneResult, stored }, null, 2))
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  Verify Contact${args.id != null ? ` — Lead #${args.id}` : ""}`)
+    if (emailResult) {
+      const mark = emailResult.valid ? success("✓") : emailResult.risk === "high" ? "✗" : "⚠"
+      console.log(`  ${mark} ${bold("Email")}  ${emailResult.value}  ${dim(`[${emailResult.risk} risk]`)}`)
+      if (emailResult.reasons.length) console.log(dim(`      ${emailResult.reasons.join("; ")}`))
+    }
+    if (phoneResult) {
+      const mark = phoneResult.valid ? success("✓") : "⚠"
+      console.log(`  ${mark} ${bold("Phone")}  ${phoneResult.value}${phoneResult.e164 ? `  ${dim("→ " + phoneResult.e164)}` : ""}`)
+      if (phoneResult.reasons.length) console.log(dim(`      ${phoneResult.reasons.join("; ")}`))
+    }
+    if (stored) console.log(dim(`  ✓ verification stored on lead #${args.id}`))
+    prompts.outro(stored ? "Done" : args.id != null ? dim(`Store it: iris leads verify ${args.id} --store`) : "Done")
+  },
+})
+
+// ============================================================================
+// score — generic ICP / lead-quality scorer (#137536). Scraped leads can't be
+// ranked, so an operator can't focus on the best ones. This scores 0–100 across
+// weighted signals with sensible DEFAULT weights you can tune via --weights. No ICP
+// model is hardcoded — it's a transparent, configurable heuristic.
+// ============================================================================
+
+// Category weights (sum = 100). Override any subset via --weights '{"seniority":40}'.
+const ICP_DEFAULT_WEIGHTS = {
+  completeness: 25, // has the fields you need to actually reach + qualify them
+  email_quality: 20, // deliverable, person (not role) inbox
+  seniority: 25, // decision-maker title
+  company_signal: 15, // real company + web presence
+  engagement: 15, // already moving in the pipeline
+}
+type IcpWeights = typeof ICP_DEFAULT_WEIGHTS
+
+const SENIOR_TITLE_RE = /\b(founder|co-?founder|owner|ceo|cfo|coo|cto|cmo|chief|president|vp|vice president|head of|director|principal|partner|managing)\b/i
+
+/** Each signal returns a 0–1 fraction of its category weight that the lead earns. */
+async function scoreLead(lead: any, weights: IcpWeights): Promise<{ score: number; tier: string; breakdown: Record<string, { earned: number; max: number; note: string }> }> {
+  const ci = lead?.contact_info ?? {}
+  const email = lead?.email ?? ci.email ?? (Array.isArray(ci.emails) ? ci.emails[0] : undefined)
+  const phone = lead?.phone ?? ci.phone
+  const company = lead?.company ?? ci.company
+  const title = lead?.job_title ?? ci.job_title ?? ci.title ?? ""
+  const website = lead?.website ?? ci.website
+  const status = String(lead?.status ?? "")
+  const noteCount = Array.isArray(lead?.notes) ? lead.notes.length : (lead?.notes_count ?? 0)
+
+  // completeness
+  const haveFields = [!!email, !!phone, !!company, !!(lead?.name)].filter(Boolean).length
+  const completenessFrac = haveFields / 4
+
+  // email_quality (reuse the verifier — deliverability + person vs role)
+  let emailFrac = 0
+  let emailNote = "no email"
+  if (email) {
+    const ev = await verifyEmail(String(email))
+    emailFrac = ev.valid ? (ev.reasons.includes("role-based (not a person)") ? 0.6 : 1) : ev.has_mx ? 0.4 : 0.1
+    emailNote = ev.valid ? (ev.risk === "low" ? "deliverable, personal" : "deliverable, role/medium") : "undeliverable/invalid"
+  }
+
+  // seniority
+  const seniorityFrac = SENIOR_TITLE_RE.test(String(title)) ? 1 : title ? 0.4 : 0
+  const seniorityNote = title ? (SENIOR_TITLE_RE.test(String(title)) ? `decision-maker (${title})` : `non-senior (${title})`) : "no title"
+
+  // company_signal
+  const companyFrac = (company ? 0.6 : 0) + (website ? 0.4 : 0)
+  const companyNote = [company ? "has company" : null, website ? "has website" : null].filter(Boolean).join(", ") || "no company signal"
+
+  // engagement
+  const movedInPipeline = status && !/^(new|prospected)$/i.test(status)
+  const engagementFrac = Math.min(1, (movedInPipeline ? 0.6 : 0) + Math.min(0.4, noteCount * 0.2))
+  const engagementNote = `${status || "no status"}, ${noteCount} note(s)`
+
+  const parts: Array<[keyof IcpWeights, number, string]> = [
+    ["completeness", completenessFrac, `${haveFields}/4 key fields`],
+    ["email_quality", emailFrac, emailNote],
+    ["seniority", seniorityFrac, seniorityNote],
+    ["company_signal", companyFrac, companyNote],
+    ["engagement", engagementFrac, engagementNote],
+  ]
+  const breakdown: Record<string, { earned: number; max: number; note: string }> = {}
+  let score = 0
+  for (const [k, frac, note] of parts) {
+    const max = weights[k]
+    const earned = Math.round(max * frac)
+    score += earned
+    breakdown[k] = { earned, max, note }
+  }
+  score = Math.max(0, Math.min(100, Math.round(score)))
+  const tier = score >= 80 ? "A" : score >= 60 ? "B" : score >= 40 ? "C" : "D"
+  return { score, tier, breakdown }
+}
+
+const LeadsScoreCommand = cmd({
+  command: "score [id]",
+  describe: "score a lead's ICP fit 0–100 with configurable weights (qualify + rank)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "lead id to score", type: "number" })
+      .option("weights", { describe: 'override category weights as JSON, e.g. \'{"seniority":40}\'', type: "string" })
+      .option("store", { describe: "write the score + tier back to the lead", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!(await requireAuth())) { process.exitCode = 1; return }
+    if (args.id == null) {
+      const msg = "Provide a lead id: iris leads score <id>"
+      if (isJson) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    let weights: IcpWeights = { ...ICP_DEFAULT_WEIGHTS }
+    if (args.weights) {
+      try {
+        weights = { ...weights, ...JSON.parse(String(args.weights)) }
+      } catch {
+        const msg = "Invalid --weights JSON"
+        if (isJson) console.log(JSON.stringify({ ok: false, error: msg }))
+        else console.error(msg)
+        process.exitCode = 1
+        return
+      }
+    }
+
+    const res = await irisFetch(`/api/v1/leads/${args.id}`)
+    if (!(await handleApiError(res, "Get lead"))) { process.exitCode = 1; return }
+    const lead = ((await res.json()) as any)?.data ?? {}
+
+    const { score, tier, breakdown } = await scoreLead(lead, weights)
+
+    let stored = false
+    if (args.store) {
+      const ci = (lead.contact_info as Record<string, unknown>) ?? {}
+      const merged = { ...ci, icp_score: { score, tier, weights, scored_at: new Date().toISOString() } }
+      const up = await irisFetch(`/api/v1/leads/${args.id}`, { method: "PUT", body: JSON.stringify({ contact_info: merged }) })
+      stored = up.ok
+    }
+
+    if (isJson) {
+      console.log(JSON.stringify({ ok: true, lead_id: args.id, score, tier, breakdown, weights, stored }, null, 2))
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  ICP Score — Lead #${args.id}`)
+    console.log(`  ${bold(String(score) + "/100")}  ${dim("tier")} ${bold(tier)}  ${dim(lead.name ?? "")}`)
+    printDivider()
+    for (const [k, v] of Object.entries(breakdown)) {
+      console.log(`  ${k.padEnd(15)} ${String(v.earned).padStart(2)}/${String(v.max).padEnd(2)}  ${dim(v.note)}`)
+    }
+    printDivider()
+    if (stored) console.log(dim(`  ✓ score stored on lead #${args.id}`))
+    prompts.outro(stored ? "Done" : dim(`Store it: iris leads score ${args.id} --store`))
+  },
+})
+
+// ============================================================================
+// discover — turn a niche + geography into Prospected leads (#137403). The keystone:
+// finds businesses from the web via the FREE Hive browser Google-Maps scrape (#137526,
+// browser-primary per the #137404 provider policy), then creates leads and (optionally)
+// verifies (#137535) + scores (#137536) them inline. Zero Serper/Tavily credits needed.
+// ============================================================================
+
+const LeadsDiscoverCommand = cmd({
+  command: "discover",
+  aliases: ["find"],
+  describe: "find businesses from the web (free Hive browser) → create Prospected leads",
+  builder: (yargs) =>
+    yargs
+      .option("niche", { describe: 'business category, e.g. "family law offices"', type: "string", demandOption: true })
+      .option("location", { alias: "loc", describe: 'geography, e.g. "Fort Worth TX"', type: "string" })
+      .option("bloq-id", { alias: "bloq", describe: "CRM bloq to create leads in (omit = preview only)", type: "number" })
+      .option("limit", { alias: "n", describe: "max businesses", type: "number", default: 10 })
+      .option("verify", { describe: "verify each created lead's contact info (#137535)", type: "boolean", default: false })
+      .option("score", { describe: "ICP-score each created lead (#137536)", type: "boolean", default: false })
+      .option("dry-run", { describe: "preview results without creating leads", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!(await requireAuth())) { process.exitCode = 1; return }
+
+    const query = [args.niche, args.location].filter(Boolean).join(" in ")
+    const limit = args.limit as number
+
+    // Provider policy (#137404/#137526): BROWSER-PRIMARY — the free Hive Google-Maps
+    // scrape. No online node → fail LOUDLY (no silent empty list), don't pretend.
+    const node = await findOnlineHiveNode()
+    if (!node) {
+      const msg = "No online Hive node to run the browser scrape. Start one with `iris-daemon start`, then retry. (Discovery is browser-first and free — no Serper credits needed.)"
+      if (isJson) console.log(JSON.stringify({ ok: false, error: msg }))
+      else console.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    if (!isJson) { UI.empty(); prompts.intro(`◈  Discover — ${query}`) }
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start(`Scraping Google Maps via Hive node ${node.name}…`)
+
+    let businesses: any[] = []
+    try {
+      businesses = (await dispatchHiveSearch(node, query, limit)) || []
+    } catch (err) {
+      spinner?.stop("Failed", 1)
+      const msg = err instanceof Error ? err.message : String(err)
+      if (isJson) console.log(JSON.stringify({ ok: false, error: msg }))
+      else { prompts.log.error(msg); prompts.outro("Done") }
+      process.exitCode = 1
+      return
+    }
+    businesses = businesses.slice(0, limit)
+    spinner?.stop(`${success("✓")} found ${businesses.length} business(es)`)
+
+    const create = args["bloq-id"] != null && !args["dry-run"]
+    const created: any[] = []
+
+    if (create) {
+      for (const b of businesses) {
+        const name = b.title || b.name
+        if (!name) continue
+        const contact_info: Record<string, unknown> = {
+          source: "discover",
+          niche: args.niche,
+          location: args.location ?? null,
+          address: b.address ?? null,
+          rating: b.rating ?? null,
+          website: b.website ?? b.website_url ?? null,
+        }
+        const payload: Record<string, unknown> = { name, bloqId: args["bloq-id"], status: "Prospected", source: "discover", company: name, contact_info }
+        if (b.email) payload.email = b.email
+        if (b.phone) payload.phone = b.phone
+        try {
+          const res = await irisFetch("/api/v1/leads", { method: "POST", body: JSON.stringify(payload) })
+          if (!res.ok) continue
+          const lead = ((await res.json()) as any)?.data ?? {}
+          let verification: any = null
+          let icp: any = null
+          if (args.verify) {
+            verification = { email: b.email ? await verifyEmail(String(b.email)) : null, phone: b.phone ? verifyPhone(String(b.phone)) : null }
+          }
+          if (args.score) {
+            icp = await scoreLead({ ...lead, contact_info }, ICP_DEFAULT_WEIGHTS)
+          }
+          created.push({ id: lead.id, name, phone: b.phone ?? null, website: contact_info.website, verification, icp })
+        } catch { /* skip individual failures */ }
+      }
+    }
+
+    if (isJson) {
+      console.log(JSON.stringify({ ok: true, query, found: businesses.length, businesses, created }, null, 2))
+      return
+    }
+
+    printDivider()
+    for (const b of businesses) {
+      console.log(`  ${bold(b.title || b.name || "?")}  ${dim([b.phone, b.address].filter(Boolean).join("  ·  "))}`)
+    }
+    printDivider()
+    if (create) {
+      console.log(`  ${success("✓")} created ${bold(String(created.length))} Prospected lead(s) in bloq ${args["bloq-id"]}`)
+      if (args.score) {
+        for (const c of created.filter((x) => x.icp)) console.log(dim(`    #${c.id} ${c.name} — ICP ${c.icp.score} (${c.icp.tier})`))
+      }
+      prompts.outro("Done")
+    } else {
+      console.log(dim(`  Preview only — add ${bold("--bloq-id <N>")} to create these as Prospected leads.`))
+      prompts.outro(dim("add --bloq-id to create leads"))
+    }
   },
 })
 
@@ -10031,6 +10634,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsSyncCalendarCommand)
       .command(LeadsNotesCommand)
       .command(LeadsNoteCommand)
+      .command(LeadsNoteDeleteCommand)
       .command(LeadsOutreachCommand)
       .command(LeadsTasksCommand)
       .command(LeadsPaymentGateCommand)
@@ -10046,6 +10650,9 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsSegmentCommand)
       .command(LeadsRequirementsCommand)
       .command(LeadsEnrichCommand)
+      .command(LeadsVerifyCommand)
+      .command(LeadsScoreCommand)
+      .command(LeadsDiscoverCommand)
       .command(LeadsGateAllCommand)
       .command(LeadsKBCommand)
       .command(LeadsPulseAllCommand)

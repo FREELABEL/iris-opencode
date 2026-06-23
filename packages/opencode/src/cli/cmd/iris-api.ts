@@ -157,7 +157,17 @@ async function readSdkEnv(): Promise<Record<string, string>> {
 // Auth token resolution
 // ============================================================================
 
+// Resolve auth ONCE per process — not once per request/poll (#137421). Repeated
+// resolution spammed the "token source" line on every poll loop iteration.
+let _cachedToken: string | undefined
+
 async function resolveToken(): Promise<string> {
+  if (_cachedToken !== undefined) return _cachedToken
+  _cachedToken = await resolveTokenUncached()
+  return _cachedToken
+}
+
+async function resolveTokenUncached(): Promise<string> {
   // 1. Try stored auth (iris auth login)
   const stored = await Auth.get("iris")
   if (stored?.type === "api" && stored.key) {
@@ -211,7 +221,8 @@ export async function irisFetch(
   // Debug: stderr trace for diagnosing auth failures (only with --print-logs)
   if (process.argv.includes("--print-logs")) {
     console.error(`[irisFetch] ${options.method ?? "GET"} ${url}`)
-    console.error(`[irisFetch] token: ${token ? token.slice(0, 12) + "..." : "(none)"}`)
+    // Never print the token — not even a prefix (#137421). Presence only.
+    console.error(`[irisFetch] token: ${token ? "(present)" : "(none)"}`)
     console.error(`[irisFetch] body keys: ${options.body ? Object.keys(JSON.parse(String(options.body))).join(", ") : "(none)"}`)
   }
   const res = await fetch(url, { ...options, headers })
@@ -291,6 +302,197 @@ export async function handleApiError(res: Response, action: string): Promise<boo
     return false
   }
   return true
+}
+
+// ============================================================================
+// V6 agent chat — faithful ReactLoop harness (bug #137387)
+//
+// Both `iris agents chat` and `iris chat` route through this single helper so the
+// CLI runs the SAME engine as the Slack channel path: POST /api/v6/chat/stream →
+// ChatStreamController → ReactLoopService::executeRequest() → V6ToolRegistry::
+// getToolsForAgent() (agentIntegrations + per-agent allowlist + system-tools).
+//
+// The legacy CLI path (POST /api/chat/start → RunWorkflowJob, V5.5 Neuron nodes)
+// never built the V6 toolset, so agents lost their tools and invented data. This
+// endpoint is also stateless per-request (explicit conversation_history, no auto-
+// resumed session) → no session poisoning between turns.
+// ============================================================================
+
+export type AgentChatEvent = {
+  type: string
+  tool?: string
+  content?: string
+  iteration?: number
+  error?: string
+  [k: string]: unknown
+}
+
+export type AgentChatResult = {
+  ok: boolean
+  content: string
+  toolsUsed: string[]
+  iterations: number
+  status: string
+  error?: string
+  // Distinguishes failure modes so callers can set distinct exit codes (#137418):
+  // timedOut → exit 2, any other failure → exit 1, ok → exit 0.
+  timedOut?: boolean
+}
+
+/** Normalize the heterogeneous tools_used payload into a flat list of tool names. */
+function normalizeToolNames(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const names = raw.map((t) => {
+    if (typeof t === "string") return t
+    if (t && typeof t === "object") {
+      const o = t as Record<string, unknown>
+      return String(o.tool ?? o.name ?? o.tool_name ?? "")
+    }
+    return ""
+  })
+  // De-dupe while preserving order, drop empties
+  return [...new Set(names.filter(Boolean))]
+}
+
+/**
+ * Send one message to an agent through the faithful V6 ReactLoop stream and
+ * collect the result. Surfaces intermediate SSE events (tool_call, tool_result,
+ * text, …) via `onEvent` for live progress.
+ *
+ * Stateless by default: pass `conversationHistory` only if you are deliberately
+ * continuing a thread. Omitting it gives a clean run every call.
+ */
+export async function streamAgentChat(opts: {
+  agentId: number
+  message: string
+  userId?: number | null
+  // Accepts a single id or several (repeated `--bloq A --bloq B`). Multiple ids are
+  // sent as bloq_ids[] so the server retrieves per-bloq instead of collapsing to NaN (#146917).
+  bloqId?: number | string | Array<number | string> | null
+  conversationHistory?: Array<{ role: string; content: string }>
+  maxIterations?: number
+  overrideModel?: string
+  timeoutSecs?: number
+  // Defaults to true. Set false (via `--no-rag`) to suppress knowledge-base/bloq
+  // context injection so the model answers from its own weights only (#146915).
+  enableRag?: boolean
+  onEvent?: (event: AgentChatEvent) => void
+}): Promise<AgentChatResult> {
+  const body: Record<string, unknown> = {
+    query: opts.message,
+    agent_id: opts.agentId,
+    enable_rag: opts.enableRag !== false,
+  }
+  if (opts.userId) body.user_id = opts.userId
+  // Normalize one-or-many bloq ids. A bare `Number([514,515])` is NaN → serializes to
+  // null → server silently does a broad user-wide search (the #146917 recall dilution).
+  if (opts.bloqId !== undefined && opts.bloqId !== null) {
+    const ids = (Array.isArray(opts.bloqId) ? opts.bloqId : [opts.bloqId])
+      .map((b) => Number(b))
+      .filter((n) => Number.isFinite(n))
+    if (ids.length === 1) body.bloq_id = ids[0]
+    else if (ids.length > 1) {
+      body.bloq_id = ids[0] // primary, for any consumer that reads a single id
+      body.bloq_ids = ids
+    }
+  }
+  if (opts.conversationHistory && opts.conversationHistory.length > 0) {
+    body.conversation_history = opts.conversationHistory
+  }
+  if (opts.maxIterations) body.max_iterations = opts.maxIterations
+  // Endpoint validator only accepts nano/flash models — keeps test runs cheap.
+  if (opts.overrideModel) body.override_model = opts.overrideModel
+
+  const failure = (error?: string, timedOut = false): AgentChatResult => ({
+    ok: false,
+    content: "",
+    toolsUsed: [],
+    iterations: 0,
+    status: timedOut ? "timeout" : "failed",
+    error,
+    timedOut,
+  })
+
+  // Abort the inline ReactLoop run if it exceeds the timeout (default 180s).
+  const controller = new AbortController()
+  const timeoutMs = (opts.timeoutSecs ?? 180) * 1000
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await irisFetch(
+      "/api/v6/chat/stream",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        headers: { Accept: "text/event-stream" },
+        signal: controller.signal,
+      },
+      IRIS_API,
+    )
+
+    // Pre-stream errors (401 / 422 / 5xx) arrive as a normal JSON response.
+    if (!(await handleApiError(res, "Chat"))) return failure()
+
+    const reader = res.body?.getReader()
+    if (!reader) return failure("No response stream")
+
+    const decoder = new TextDecoder()
+    let buffer = ""
+    let streamError: string | undefined
+    const result: AgentChatResult = {
+      ok: true,
+      content: "",
+      toolsUsed: [],
+      iterations: 0,
+      status: "unknown",
+    }
+
+    const handleFrame = (frame: string) => {
+      // A frame may carry an "event: <type>" line plus one or more "data:" lines.
+      const data = frame
+        .split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).replace(/^ /, ""))
+        .join("\n")
+      if (!data || data === "[DONE]") return
+      let evt: AgentChatEvent
+      try {
+        evt = JSON.parse(data) as AgentChatEvent
+      } catch {
+        return
+      }
+      opts.onEvent?.(evt)
+      if (evt.type === "done") {
+        if (typeof evt.content === "string") result.content = evt.content
+        const tu = normalizeToolNames((evt as Record<string, unknown>).tools_used)
+        if (tu.length > 0) result.toolsUsed = tu
+        if (typeof evt.iterations === "number") result.iterations = evt.iterations
+        if (typeof evt.status === "string") result.status = evt.status
+      } else if (evt.type === "error") {
+        streamError = evt.error ?? "stream error"
+      }
+    }
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx: number
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        handleFrame(buffer.slice(0, idx))
+        buffer = buffer.slice(idx + 2)
+      }
+    }
+    if (buffer.trim()) handleFrame(buffer)
+
+    if (streamError) return { ...result, ok: false, status: "failed", error: streamError }
+    return result
+  } catch (err) {
+    if (controller.signal.aborted) return failure(`Timed out after ${opts.timeoutSecs ?? 180}s`, true)
+    return failure(err instanceof Error ? err.message : String(err))
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // ============================================================================

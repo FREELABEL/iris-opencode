@@ -3,9 +3,28 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API } from "./iris-api"
+import { getBySlug, createPageFromJson } from "./platform-pages"
+import { profileFromBrand, rebrandJsonContent } from "./rebrand"
 
 function pagesFetch(path: string, opts?: RequestInit) {
   return irisFetch(path, opts, FL_API)
+}
+
+// Resolve a site by numeric id or slug. Returns the full site record (with pages).
+async function resolveSite(idOrSlug: string): Promise<any | null> {
+  if (/^\d+$/.test(idOrSlug)) {
+    const res = await pagesFetch(`/api/v1/sites/${idOrSlug}`)
+    if (!res.ok) return null
+    return ((await res.json()) as any).data ?? null
+  }
+  const listRes = await pagesFetch("/api/v1/sites?per_page=100")
+  if (!listRes.ok) return null
+  const sites: any[] = ((await listRes.json()) as any).data ?? []
+  const match = sites.find((s) => s.slug === idOrSlug)
+  if (!match) return null
+  const res = await pagesFetch(`/api/v1/sites/${match.id}`)
+  if (!res.ok) return match
+  return ((await res.json()) as any).data ?? match
 }
 
 // ============================================================================
@@ -344,6 +363,118 @@ const NavCmd = cmd({
 })
 
 // ============================================================================
+// Clone — duplicate a whole site's pages, rebranded from a brand profile
+// ============================================================================
+
+const CloneCmd = cmd({
+  command: "clone <source>",
+  describe: "clone a site's pages, rebranded from a brand profile (PII safety gate)",
+  builder: (y) =>
+    y.positional("source", { type: "string", demandOption: true, describe: "source site id or slug" })
+      .option("as", { type: "string", demandOption: true, describe: "new site slug (also the page-slug prefix)" })
+      .option("brand", { type: "string", demandOption: true, describe: "brand slug whose profile to apply" })
+      .option("name", { type: "string", describe: "new site name (defaults to brand name)" })
+      .option("owner-type", { type: "string" })
+      .option("owner-id", { type: "number" })
+      .option("publish", { type: "boolean", default: false })
+      .option("force", { type: "boolean", default: false, describe: "proceed even if PII leaks are detected" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Clone site ${args.source} → ${args.as}  ${dim(`(brand: ${args.brand})`)}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const sp = prompts.spinner()
+    sp.start("Loading source site + brand…")
+    try {
+      const sourceSite = await resolveSite(String(args.source))
+      if (!sourceSite) { sp.stop("Source site not found", 1); prompts.outro("Done"); return }
+      const pages: any[] = sourceSite.pages ?? []
+      if (!pages.length) { sp.stop("Source site has no pages", 1); prompts.outro("Done"); return }
+
+      let target
+      try { target = await profileFromBrand(String(args.brand)) }
+      catch (e) { sp.stop("Brand not found", 1); prompts.log.error(e instanceof Error ? e.message : String(e)); prompts.outro("Done"); return }
+
+      // Dry rebrand every page first, collect leaks across the whole site.
+      sp.message(`Rebranding ${pages.length} page(s)…`)
+      const srcPrefix = String(sourceSite.slug ?? "")
+      const items: Array<{ src: any; json: any; leaks: any[]; newSlug: string }> = []
+      for (const pg of pages) {
+        const full = await getBySlug(pg.slug, true)
+        if (!full?.json_content) continue
+        const { json, leaks } = rebrandJsonContent(full.json_content, target)
+        const newSlug =
+          srcPrefix && pg.slug.startsWith(srcPrefix)
+            ? `${args.as}${pg.slug.slice(srcPrefix.length)}`
+            : `${args.as}-${pg.slug}`
+        items.push({ src: full, json, leaks, newSlug })
+      }
+      const allLeaks = items.flatMap((it) => it.leaks.map((l) => ({ ...l, page: it.src.slug })))
+      sp.stop(allLeaks.length ? `${allLeaks.length} possible leak(s)` : success(`${items.length} page(s) rebranded — clean`))
+
+      // --- Safety gate (whole-site) ---
+      if (allLeaks.length && !args.force) {
+        printDivider()
+        for (const l of allLeaks) console.log(`  ${UI.Style.TEXT_WARNING}⚠${UI.Style.TEXT_NORMAL}  ${bold(l.needle)}  ${dim(`${l.page} · ${l.path}`)}`)
+        printDivider()
+        prompts.log.warn(`Source client data survived. Populate brand "${args.brand}" profile (iris brands profile set) then retry — or pass --force.`)
+        prompts.outro("Blocked — nothing created"); return
+      }
+      if (allLeaks.length) prompts.log.warn("--force set: cloning despite leaks")
+
+      // Create the new site.
+      const sp2 = prompts.spinner()
+      sp2.start("Creating site…")
+      const ownerType = (args["owner-type"] as string) ?? sourceSite.owner_type ?? "user"
+      const ownerId = (args["owner-id"] as number) ?? sourceSite.owner_id
+      const sitePayload: Record<string, unknown> = {
+        name: (args.name as string) ?? target.name ?? args.as,
+        slug: args.as,
+        owner_type: ownerType,
+        status: "draft",
+      }
+      if (ownerId != null) sitePayload.owner_id = ownerId
+      const siteRes = await pagesFetch("/api/v1/sites", { method: "POST", body: JSON.stringify(sitePayload) })
+      if (!(await handleApiError(siteRes, "Create site"))) { sp2.stop("Failed", 1); prompts.outro("Done"); return }
+      const newSite = ((await siteRes.json()) as any).data ?? {}
+
+      // Clone + attach each page.
+      const created: Array<{ slug: string; id: number }> = []
+      for (const it of items) {
+        sp2.message(`Cloning ${it.newSlug}…`)
+        const p = await createPageFromJson({
+          slug: it.newSlug,
+          title: it.src.title,
+          seo_title: it.json.seo_title,
+          seo_description: it.json.seo_description,
+          og_image: it.src.og_image,
+          owner_type: ownerType,
+          owner_id: ownerId,
+          json_content: it.json,
+          publish: !!args.publish,
+        })
+        if (p?.id) {
+          await pagesFetch(`/api/v1/sites/${newSite.id}/pages/${p.id}`, { method: "POST" }).catch(() => {})
+          created.push({ slug: it.newSlug, id: p.id })
+        }
+      }
+      sp2.stop(success(`Cloned ${created.length} page(s) → site #${newSite.id}`))
+
+      printDivider()
+      printKV("Site", `#${newSite.id}  ${newSite.slug}`)
+      printKV("Brand", args.brand)
+      printKV("Pages", created.map((c) => c.slug).join(", ") || dim("none"))
+      printKV("Leaks", allLeaks.length === 0 ? success("none") : `${allLeaks.length} (forced)`)
+      printDivider()
+      prompts.outro(args.publish ? success("Published") : dim(`iris pages publish <slug>  (per page)`))
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
@@ -355,6 +486,7 @@ export const PlatformSitesCommand = cmd({
       .command(ListCmd)
       .command(ShowCmd)
       .command(CreateCmd)
+      .command(CloneCmd)
       .command(AttachCmd)
       .command(DetachCmd)
       .command(NavCmd)

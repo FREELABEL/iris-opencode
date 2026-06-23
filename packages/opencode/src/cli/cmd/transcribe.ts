@@ -3,8 +3,8 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
   irisFetch,
+  IRIS_API,
   requireAuth,
-  requireUserId,
   printDivider,
   dim,
   bold,
@@ -12,7 +12,8 @@ import {
   highlight,
 } from "./iris-api"
 import { spawnSync } from "child_process"
-import { existsSync, mkdirSync, statSync } from "fs"
+import { existsSync, mkdirSync, statSync, writeFileSync } from "fs"
+import { transcribeLocal } from "../lib/transcription"
 import { homedir, tmpdir } from "os"
 import { join, basename, extname, resolve } from "path"
 
@@ -32,92 +33,23 @@ async function runLocalWhisper(
   sourceUrl?: string,
 ) {
   const abs = resolve(filePath)
-  if (!existsSync(abs)) {
-    prompts.log.error(`File not found: ${abs}`)
-    return
-  }
-
-  // 1. Check deps
-  const ffmpeg = which("ffmpeg")
-  const whisper = which("whisper-cli") || which("whisper-cpp")
-  if (!ffmpeg) {
-    prompts.log.error("ffmpeg not found. Install: brew install ffmpeg")
-    return
-  }
-  if (!whisper) {
-    prompts.log.error("Local transcription requires whisper-cpp.")
-    prompts.log.info("Install:  brew install whisper-cpp")
-    prompts.log.info("Or use a YouTube URL — server-side transcription doesn't need local tools.")
-    return
-  }
-
-  // 2. Ensure model
-  const modelDir = join(homedir(), ".whisper")
-  const modelPath = join(modelDir, "ggml-base.en.bin")
-  if (!existsSync(modelPath)) {
-    mkdirSync(modelDir, { recursive: true })
-    const sp = prompts.spinner()
-    sp.start("Downloading whisper model (~141 MB)…")
-    const dl = spawnSync("curl", ["-L", "-o", modelPath, WHISPER_MODEL_URL], {
-      stdio: "ignore",
-    })
-    if (dl.status !== 0) {
-      sp.stop("Failed", 1)
-      prompts.log.error("Model download failed")
-      return
-    }
-    sp.stop("Model ready")
-  }
-
-  // 3. Convert → 16kHz mono WAV in tmp
-  const wavPath = join(
-    tmpdir(),
-    `iris-transcribe-${Date.now()}-${basename(abs, extname(abs))}.wav`,
-  )
   const sp = prompts.spinner()
-  sp.start("Converting audio…")
-  const conv = spawnSync(
-    ffmpeg,
-    ["-y", "-i", abs, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wavPath],
-    { stdio: "ignore" },
-  )
-  if (conv.status !== 0 || !existsSync(wavPath)) {
+  sp.start("Transcribing locally (whisper.cpp)…")
+  let text: string
+  try {
+    text = await transcribeLocal(abs, { language })
+  } catch (e) {
     sp.stop("Failed", 1)
-    prompts.log.error("ffmpeg conversion failed")
+    prompts.log.error(e instanceof Error ? e.message : String(e))
     return
   }
-  const wavSize = (statSync(wavPath).size / 1024 / 1024).toFixed(1)
-  sp.stop(`Converted (${wavSize} MB)`)
+  sp.stop("Done")
 
-  // 4. Run whisper-cli
-  const outBase = join(
-    process.cwd(),
-    `${basename(abs, extname(abs))}-transcript`,
-  )
-  const args = ["-m", modelPath, "-otxt", "-of", outBase]
-  if (language) args.push("-l", language)
-  args.push(wavPath)
+  // Persist next to the source (preserves prior UX).
+  const txtPath = join(process.cwd(), `${basename(abs, extname(abs))}-transcript.txt`)
+  writeFileSync(txtPath, text)
 
-  const sp2 = prompts.spinner()
-  sp2.start("Transcribing locally (whisper.cpp)…")
-  const res = spawnSync(whisper, args, { encoding: "utf8" })
-  // cleanup wav regardless
-  spawnSync("rm", ["-f", wavPath])
-
-  if (res.status !== 0) {
-    sp2.stop("Failed", 1)
-    prompts.log.error(res.stderr?.slice(-500) || "whisper-cli failed")
-    return
-  }
-  sp2.stop("Done")
-
-  const txtPath = `${outBase}.txt`
-  const text = existsSync(txtPath)
-    ? require("fs").readFileSync(txtPath, "utf8")
-    : ""
-
-  // Sync to server so the transcript is searchable in the user's knowledge base.
-  // Best-effort — silent on failure.
+  // Best-effort server sync so it's searchable in the knowledge base.
   const estimatedDuration = Math.round((text.split(/\s+/).length / 150) * 60)
   const syncUrl = sourceUrl ?? (/^https?:\/\//i.test(filePath) ? filePath : undefined)
   try {
@@ -137,13 +69,7 @@ async function runLocalWhisper(
   }
 
   if (asJson) {
-    console.log(
-      JSON.stringify(
-        { provider: "whisper.cpp (local)", file: abs, transcript_path: txtPath, text },
-        null,
-        2,
-      ),
-    )
+    console.log(JSON.stringify({ provider: "whisper.cpp (local)", file: abs, transcript_path: txtPath, text }, null, 2))
     return
   }
 
@@ -198,34 +124,66 @@ async function downloadVideoLocally(url: string): Promise<string | null> {
 
   const outPath = join(tmpdir(), `iris-dl-${Date.now()}.mp4`)
 
-  // Build yt-dlp args — try with browser cookies first (Instagram needs them)
-  const baseArgs = [
-    "-f", "bestaudio[ext=m4a]/bestaudio/best",
-    "--no-playlist",
-    "-o", outPath,
-    "--no-warnings",
-    "--quiet",
+  // Format ladder — try most-specific (small m4a audio) first, then progressively
+  // looser selectors, ending with NO -f so yt-dlp picks its own default. A single
+  // hardcoded selector was the cause of "Requested format is not available"
+  // (#147267) when YouTube didn't offer that exact format. Each entry is tried
+  // both with browser cookies and without.
+  const formatLadder = [
+    "bestaudio[ext=m4a]/bestaudio/best",
+    "bestaudio/best",
+    "worstaudio/worst",
+    null, // let yt-dlp choose its default format
   ]
+  const commonArgs = ["--no-playlist", "-o", outPath, "--no-warnings", "--quiet"]
 
-  // Try with browser cookies (Chrome, Firefox, Safari — whatever works)
-  for (const browser of ["chrome", "firefox", "safari"]) {
-    const args = [...baseArgs, "--cookies-from-browser", browser, url]
-    const dl = spawnSync(ytdlp, args, { stdio: "pipe", timeout: 60_000 })
-    if (dl.status === 0 && existsSync(outPath)) return outPath
+  let lastErr = "Download failed"
+  for (const fmt of formatLadder) {
+    const fmtArgs = fmt ? ["-f", fmt] : []
+    // Cookies first (Instagram/age-gated need them), then a cookieless attempt.
+    for (const browser of ["chrome", "firefox", "safari", null]) {
+      const cookieArgs = browser ? ["--cookies-from-browser", browser] : []
+      const dl = spawnSync(ytdlp, [...fmtArgs, ...commonArgs, ...cookieArgs, url], {
+        encoding: "utf8",
+        timeout: 60_000,
+      })
+      if (dl.status === 0 && existsSync(outPath)) return outPath
+      const out = (dl.stderr || dl.stdout || "").trim()
+      if (out) lastErr = out.split("\n").pop() || lastErr
+    }
   }
 
-  // Fallback: try without cookies (works for public YouTube, TikTok, etc.)
-  const dl = spawnSync(ytdlp, [...baseArgs, url], { stdio: "pipe", timeout: 60_000 })
-  if (dl.status === 0 && existsSync(outPath)) return outPath
-
-  // If all failed, show the actual error
-  const errDl = spawnSync(ytdlp, ["-f", "bestaudio/best", "--no-playlist", "-o", outPath, url], {
-    encoding: "utf8",
-    timeout: 60_000,
-  })
-  const errMsg = (errDl.stderr || errDl.stdout || "").trim().split("\n").pop() || "Download failed"
-  prompts.log.error(errMsg)
+  // Everything failed — surface the last real yt-dlp error + a hint to update.
+  prompts.log.error(lastErr)
+  if (/format is not available|requested format/i.test(lastErr)) {
+    prompts.log.info(`Tip: update yt-dlp — ${highlight("brew upgrade yt-dlp")} (or ${highlight("pip3 install -U yt-dlp")})`)
+  }
   return null
+}
+
+// Server-side transcription via the SAME path that `iris tools invoke
+// transcribevideo` uses and that the bug report (#147267) proved works:
+//   POST /api/v1/tools/invoke  on IRIS_API (freelabel.net)  { tool, params }
+//
+// The old code POSTed to `/api/v1/v6/tools/execute` WITHOUT the IRIS_API host
+// arg → irisFetch defaulted to FL_API (raichu.heyiris.io), where that route is
+// dead → "Server unavailable" on every YouTube transcribe while the underlying
+// tool was fine. Tool name is lowercase `transcribevideo` to match the registry.
+async function invokeTranscribeTool(url: string): Promise<{ ok: boolean; data?: any }> {
+  try {
+    const res = await irisFetch(
+      `/api/v1/tools/invoke`,
+      { method: "POST", body: JSON.stringify({ tool: "transcribevideo", params: { url } }) },
+      IRIS_API,
+    )
+    if (!res.ok) return { ok: false }
+    const result = (await res.json()) as any
+    const data = result?.data ?? result
+    if (result?.status?.includes?.("error") || data?.error || !data?.text) return { ok: false }
+    return { ok: true, data }
+  } catch {
+    return { ok: false }
+  }
 }
 
 /**
@@ -299,57 +257,41 @@ export const PlatformTranscribeCommand = cmd({
     if (isYouTubeUrl(url)) {
       const token = await requireAuth()
       if (token) {
-        const userId = await requireUserId()
-        if (userId) {
-          const spinner = prompts.spinner()
-          spinner.start("Transcribing via Supadata…")
+        const spinner = prompts.spinner()
+        spinner.start("Transcribing on server…")
+        const tool = await invokeTranscribeTool(url)
+        if (tool.ok) {
+          const data = tool.data
+          spinner.stop("Done")
 
-          try {
-            const res = await irisFetch(`/api/v1/v6/tools/execute`, {
-              method: "POST",
-              body: JSON.stringify({ tool: "transcribeVideo", params: { url }, user_id: userId }),
-            })
-
-            if (res.ok) {
-              const result = (await res.json()) as any
-              const data = result?.data ?? result
-
-              if (!result?.status?.includes?.("error") && !data?.error) {
-                spinner.stop("Done")
-
-                if (args.json) {
-                  console.log(JSON.stringify(result, null, 2))
-                  prompts.outro("Done")
-                  return
-                }
-
-                const text = data?.text ?? ""
-                const provider = data?.provider ?? "?"
-                const wordCount = data?.word_count ?? 0
-                const duration = data?.duration_seconds ?? 0
-                const cached = data?.cached ? success("(cached)") : dim("(fresh)")
-                const transcriptUrl = data?.transcript_url
-
-                printDivider()
-                console.log(`  ${bold("Provider:")}  ${highlight(provider)} ${cached}`)
-                console.log(`  ${bold("Words:")}     ${wordCount}`)
-                console.log(`  ${bold("Duration:")}  ~${duration}s`)
-                if (transcriptUrl) {
-                  console.log(`  ${bold("CDN:")}       ${highlight(transcriptUrl)}`)
-                }
-                printDivider()
-                console.log()
-                console.log(text)
-                console.log()
-                prompts.outro("Done")
-                return
-              }
-            }
-            spinner.stop("Server unavailable — falling back to local", 1)
-          } catch {
-            spinner.stop("Server unavailable — falling back to local", 1)
+          if (args.json) {
+            console.log(JSON.stringify(data, null, 2))
+            prompts.outro("Done")
+            return
           }
+
+          const text = data?.text ?? ""
+          const provider = data?.provider ?? "?"
+          const wordCount = data?.word_count ?? 0
+          const duration = data?.duration_seconds ?? 0
+          const cached = data?.cached ? success("(cached)") : dim("(fresh)")
+          const transcriptUrl = data?.transcript_url
+
+          printDivider()
+          console.log(`  ${bold("Provider:")}  ${highlight(provider)} ${cached}`)
+          console.log(`  ${bold("Words:")}     ${wordCount}`)
+          console.log(`  ${bold("Duration:")}  ~${duration}s`)
+          if (transcriptUrl) {
+            console.log(`  ${bold("CDN:")}       ${highlight(transcriptUrl)}`)
+          }
+          printDivider()
+          console.log()
+          console.log(text)
+          console.log()
+          prompts.outro("Done")
+          return
         }
+        spinner.stop("Server path unavailable — falling back to local", 1)
       }
 
       // YouTube server failed → download locally + whisper
@@ -384,56 +326,44 @@ export const PlatformTranscribeCommand = cmd({
       return
     }
 
-    const userId = await requireUserId()
     const spinner = prompts.spinner()
-    spinner.start("Transcribing…")
+    spinner.start("Transcribing on server…")
 
-    try {
-      const res = await irisFetch(`/api/v1/v6/tools/execute`, {
-        method: "POST",
-        body: JSON.stringify({ tool: "transcribeVideo", params: { url }, user_id: userId }),
-      })
-
-      if (!res.ok) {
-        spinner.stop("Server failed — trying local", 1)
-        const dlSpinner = prompts.spinner()
-        dlSpinner.start("Downloading…")
-        const videoPath = await downloadVideoLocally(url)
-        if (!videoPath) { dlSpinner.stop("Failed", 1); prompts.outro("Done"); return }
-        dlSpinner.stop("Downloaded")
-        await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url)
-        try { spawnSync("rm", ["-f", videoPath]) } catch {}
-        prompts.outro("Done")
-        return
-      }
-
-      const result = (await res.json()) as any
-      const data = result?.data ?? result
-      spinner.stop("Done")
-
-      if (args.json) {
-        console.log(JSON.stringify(result, null, 2))
-        prompts.outro("Done")
-        return
-      }
-
-      const text = data?.text ?? ""
-      const provider = data?.provider ?? "?"
-      const wordCount = data?.word_count ?? 0
-      const duration = data?.duration_seconds ?? 0
-      printDivider()
-      console.log(`  ${bold("Provider:")}  ${highlight(provider)}`)
-      console.log(`  ${bold("Words:")}     ${wordCount}`)
-      console.log(`  ${bold("Duration:")}  ~${duration}s`)
-      printDivider()
-      console.log()
-      console.log(text)
-      console.log()
+    const tool = await invokeTranscribeTool(url)
+    if (!tool.ok) {
+      spinner.stop("Server path unavailable — trying local", 1)
+      const dlSpinner = prompts.spinner()
+      dlSpinner.start("Downloading…")
+      const videoPath = await downloadVideoLocally(url)
+      if (!videoPath) { dlSpinner.stop("Failed", 1); prompts.outro("Done"); return }
+      dlSpinner.stop("Downloaded")
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url)
+      try { spawnSync("rm", ["-f", videoPath]) } catch {}
       prompts.outro("Done")
-    } catch (e) {
-      spinner.stop("Failed", 1)
-      prompts.log.error(e instanceof Error ? e.message : String(e))
-      prompts.outro("Done")
+      return
     }
+
+    const data = tool.data
+    spinner.stop("Done")
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+      prompts.outro("Done")
+      return
+    }
+
+    const text = data?.text ?? ""
+    const provider = data?.provider ?? "?"
+    const wordCount = data?.word_count ?? 0
+    const duration = data?.duration_seconds ?? 0
+    printDivider()
+    console.log(`  ${bold("Provider:")}  ${highlight(provider)}`)
+    console.log(`  ${bold("Words:")}     ${wordCount}`)
+    console.log(`  ${bold("Duration:")}  ~${duration}s`)
+    printDivider()
+    console.log()
+    console.log(text)
+    console.log()
+    prompts.outro("Done")
   },
 })

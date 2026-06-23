@@ -270,6 +270,9 @@ const BloqsGetCommand = cmd({
           const date = item.created_at ? dim(new Date(item.created_at).toLocaleDateString()) : ""
           console.log(`    ${dim(`#${item.id}`)}  ${bold(title)}  ${dim(listName)}  ${date}`)
           if (content) console.log(`      ${dim(content)}`)
+          if (item.is_public && (item.public_url || item.public_uuid)) {
+            console.log(`      ${dim("public:")} ${item.public_url ?? item.public_uuid}`)
+          }
         }
 
         if (displayItems.length > limit) {
@@ -322,9 +325,10 @@ const BloqsGetCommand = cmd({
 
       printDivider()
 
-      prompts.outro(
-        `${dim("iris bloqs ingest " + args.id + " ./document.pdf")}  Add knowledge`,
-      )
+      const getOutro = (args.items || args.list)
+        ? `${dim("iris bloqs share <item-id>")}  Publish an item + get a shareable link`
+        : `${dim("iris bloqs ingest " + args.id + " ./document.pdf")}  Add knowledge`
+      prompts.outro(getOutro)
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -808,8 +812,13 @@ const BloqsAddItemCommand = cmd({
         return
       }
 
-      spinner.stop(`${success("✓")} Item added`)
-      prompts.outro(dim(`iris bloqs get ${args["bloq-id"]}`))
+      const addBody = (await res.json().catch(() => null)) as { data?: any; id?: any } | null
+      const newItemId = addBody?.data?.id ?? addBody?.id
+      spinner.stop(`${success("✓")} Item added${newItemId ? ` (#${newItemId})` : ""}`)
+      const hint = newItemId
+        ? `iris bloqs get ${args["bloq-id"]}  |  iris bloqs share ${newItemId}  (publish + get a shareable link)`
+        : `iris bloqs get ${args["bloq-id"]}`
+      prompts.outro(dim(hint))
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -861,6 +870,117 @@ const BloqsDeleteItemCommand = cmd({
       prompts.outro("Done")
     } catch (err) {
       spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsMakePublicCommand = cmd({
+  command: "make-public <item-id>",
+  aliases: ["share", "publish-item"],
+  describe: "make a bloq item publicly shareable and print its public URL",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID to share", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) {
+      UI.empty()
+      prompts.intro(`◈  Share Item #${args["item-id"]}`)
+    }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Making item public…")
+
+    try {
+      const res = await irisFetch(
+        `/api/v1/user/${userId}/bloqs/list/item/${args["item-id"]}/make-public`,
+        { method: "POST", body: "{}" },
+      )
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Make public")
+        prompts.outro("Done")
+        return
+      }
+
+      const body = (await res.json()) as { data?: any }
+      const data = body?.data ?? body
+      const url = data?.public_url ?? null
+
+      if (args.json) { console.log(JSON.stringify({ success: true, ...data })); return }
+
+      spinner?.stop(`${success("✓")} Item is now public`)
+      if (url) {
+        console.log()
+        console.log(`  ${bold("Public URL")}  ${url}`)
+        console.log(`  ${dim(`uuid: ${data?.public_uuid ?? "?"}`)}`)
+        console.log()
+      } else {
+        prompts.log.warn("Item made public but no URL was returned")
+      }
+      prompts.outro("Done")
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsMakePrivateCommand = cmd({
+  command: "make-private <item-id>",
+  aliases: ["unshare"],
+  describe: "revoke public sharing for a bloq item",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID to unshare", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) {
+      UI.empty()
+      prompts.intro(`◈  Unshare Item #${args["item-id"]}`)
+    }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Making item private…")
+
+    try {
+      const res = await irisFetch(
+        `/api/v1/user/${userId}/bloqs/list/item/${args["item-id"]}/make-private`,
+        { method: "POST", body: "{}" },
+      )
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Make private")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, is_public: false })); return }
+      spinner?.stop(`${success("✓")} Item is now private`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1429,9 +1549,12 @@ const BloqsItemsCommand = cmd({
             const statusLabel = item.status && item.status !== "active" ? `  ${dim(`[${item.status}]`)}` : ""
             const listLabel = item.list_name ? dim(` (${item.list_name})`) : ""
             console.log(`  ${dim(`#${item.id}`)}  ${title}${statusLabel}${listLabel}`)
+            if (item.is_public && (item.public_url || item.public_uuid)) {
+              console.log(`      ${dim("public:")} ${item.public_url ?? item.public_uuid}`)
+            }
           }
           console.log()
-          prompts.outro(dim("iris bloqs update-item <id> --status <status>"))
+          prompts.outro(dim("iris bloqs share <id>  (publish + shareable link)  |  iris bloqs update-item <id> --status <status>"))
           return
         }
 
@@ -1564,6 +1687,8 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
       .command(BloqsDeleteItemCommand)
+      .command(BloqsMakePublicCommand)
+      .command(BloqsMakePrivateCommand)
       .command(BloqsCreateListCommand)
       .command(BloqsMoveItemCommand)
       .command(BloqsComposeCommand)
