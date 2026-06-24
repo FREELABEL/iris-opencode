@@ -751,16 +751,15 @@ fi
 scaffold_mcp_config() {
     local iris_config_dir="$HOME/.iris"
     local mcp_config="$iris_config_dir/mcp.json"
-
-    # Don't overwrite existing config
-    if [ -f "$mcp_config" ]; then
-        print_message info "${GREEN}[4/7]${NC} MCP Config ${MUTED}.........................${NC} ${GREEN}already configured${NC}"
-        return 0
-    fi
+    local iris_bin="$HOME/.iris/bin/iris"
 
     mkdir -p "$iris_config_dir"
 
-    cat > "$mcp_config" << 'MCPEOF'
+    # Reference scaffold (kept for documentation / manual setups). The real
+    # wiring happens below via `iris mcp install`, which registers the server
+    # into the MCP clients that actually consume it.
+    if [ ! -f "$mcp_config" ]; then
+        cat > "$mcp_config" << 'MCPEOF'
 {
   "mcpServers": {
     "iris-local": {
@@ -778,9 +777,23 @@ scaffold_mcp_config() {
   }
 }
 MCPEOF
+    fi
 
+    # Bug #150264: actually REGISTER the server into detected MCP clients
+    # (Claude Code, Claude Desktop, Cursor, opencode) with an absolute binary
+    # path, so GUI-launched clients (no login shell) can resolve it. Without
+    # this, ~/.iris/mcp.json is a dead file no client reads.
+    if [ -x "$iris_bin" ]; then
+        if "$iris_bin" mcp install >/dev/null 2>&1; then
+            print_message info "${GREEN}[4/7]${NC} MCP Config ${MUTED}.........................${NC} ${GREEN}registered with clients${NC}"
+            print_message info "${MUTED}      Verify with ${NC}iris mcp list${MUTED} · restart your editor to load IRIS tools${NC}"
+            return 0
+        fi
+    fi
+
+    # Fallback: binary missing or registration failed — scaffold only.
     print_message info "${GREEN}[4/7]${NC} MCP Config ${MUTED}.........................${NC} ${GREEN}scaffolded${NC}"
-    print_message info "${MUTED}      Config at ${NC}~/.iris/mcp.json${MUTED} (enable when MCP servers are ready)${NC}"
+    print_message info "${MUTED}      Run ${NC}iris mcp install${MUTED} to register IRIS with your editor${NC}"
 }
 
 if [ "$skip_mcp" = "false" ]; then
