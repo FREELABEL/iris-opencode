@@ -394,6 +394,10 @@ const AgentsUpdateCommand = cmd({
       .option("heartbeat-tools", { describe: "comma-separated heartbeat tool names (settings.heartbeat_tools)", type: "string" })
       .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "briefing"] })
       .option("reset-health", { describe: "reset health_status to healthy and clear consecutive_failures", type: "boolean", default: false })
+      .option("enable-integration", { describe: "enable an integration on the agent (adds to settings.integrations, e.g. 'pathways')", type: "string" })
+      .option("disable-integration", { describe: "disable an integration (removes it from settings.integrations)", type: "string" })
+      .option("add-tools", { describe: "comma-separated tool names to ADD to the agent's allowlist (config.tools)", type: "string" })
+      .option("remove-tools", { describe: "comma-separated tool names to REMOVE from the allowlist (config.tools)", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -419,9 +423,14 @@ const AgentsUpdateCommand = cmd({
     // `model` is silently ignored (#146506). The API replaces the whole settings
     // object on PUT, so read-modify-merge to avoid wiping sibling keys.
     const wantsSettings = !!(args.model || args["system-prompt"] || args["heartbeat-tools"])
+    // settings.integrations (enable/disable) + config.tools allowlist (add/remove) —
+    // both need the current value to safely modify (the API replaces config wholesale).
+    const wantsIntegration = !!(args["enable-integration"] || args["disable-integration"])
+    const wantsTools = !!(args["add-tools"] || args["remove-tools"])
+    const needsCurrent = wantsSettings || wantsIntegration || wantsTools
 
-    if (Object.keys(payload).length === 0 && !wantsSettings) {
-      prompts.log.warn("Nothing to update. Use --name, --description, --bloq, --model, --system-prompt, --heartbeat-tools, --heartbeat-mode, or --reset-health")
+    if (Object.keys(payload).length === 0 && !needsCurrent) {
+      prompts.log.warn("Nothing to update. Use --name, --description, --bloq, --model, --system-prompt, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, or --reset-health")
       prompts.outro("Done")
       return
     }
@@ -430,16 +439,62 @@ const AgentsUpdateCommand = cmd({
     spinner.start("Updating…")
 
     try {
-      if (wantsSettings) {
+      if (needsCurrent) {
         const cur = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
         if (cur.ok) {
           const curData = (await cur.json()) as { data?: any }
           const a = curData?.data ?? curData
-          const settings: Record<string, unknown> = { ...(a?.settings ?? {}) }
-          if (args.model) settings.model = args.model
-          if (args["system-prompt"]) settings.system_prompt = args["system-prompt"]
-          if (args["heartbeat-tools"]) settings.heartbeat_tools = args["heartbeat-tools"].split(",").map((t: string) => t.trim())
-          payload.settings = settings
+
+          // ── settings.* (model / prompt / heartbeat / integrations)
+          if (wantsSettings || wantsIntegration) {
+            const settings: Record<string, unknown> = { ...(a?.settings ?? {}) }
+            if (args.model) settings.model = args.model
+            if (args["system-prompt"]) settings.system_prompt = args["system-prompt"]
+            if (args["heartbeat-tools"]) settings.heartbeat_tools = args["heartbeat-tools"].split(",").map((t: string) => t.trim())
+            if (wantsIntegration) {
+              // V6 needs the type in BOTH keys: settings.agentIntegrations is the GATE
+              // (hasEnabledIntegrations) and settings.integrations is the type lookup
+              // (getAgentIntegrationTypes → which *.yml to load). Set/clear both.
+              // Preserve existing entries verbatim (some carry per-integration config as
+              // {type,config}); only append/remove BY TYPE so we never flatten that config.
+              const typeOf = (it: any) => (typeof it === "string" ? it : (it?.type ?? it?.name))
+              const applyTo = (val: unknown): any[] => {
+                const raw: any[] = Array.isArray(val) ? [...(val as any[])] : []
+                let next = raw
+                if (args["enable-integration"] && !raw.some((it) => typeOf(it) === args["enable-integration"])) {
+                  next = [...raw, args["enable-integration"]]
+                }
+                if (args["disable-integration"]) {
+                  next = next.filter((it) => typeOf(it) !== args["disable-integration"])
+                }
+                return next
+              }
+              settings.integrations = applyTo(settings.integrations)
+              settings.agentIntegrations = applyTo(settings.agentIntegrations)
+            }
+            payload.settings = settings
+          }
+
+          // ── config.tools allowlist (add/remove). config can be a list OR a dict in the
+          // wild (#); coerce to a dict so $agent->config['tools'] resolves server-side.
+          if (wantsTools) {
+            const curConfig: any = a?.config
+            const baseConfig: Record<string, unknown> =
+              curConfig && !Array.isArray(curConfig) && typeof curConfig === "object" ? { ...curConfig } : {}
+            const curTools: string[] = Array.isArray(curConfig?.tools)
+              ? curConfig.tools
+              : (Array.isArray(curConfig) ? curConfig.filter((x: any) => typeof x === "string") : [])
+            let nextTools = [...new Set(curTools)]
+            if (args["add-tools"]) {
+              const add = args["add-tools"].split(",").map((t: string) => t.trim()).filter(Boolean)
+              nextTools = [...new Set([...nextTools, ...add])]
+            }
+            if (args["remove-tools"]) {
+              const rm = new Set(args["remove-tools"].split(",").map((t: string) => t.trim()))
+              nextTools = nextTools.filter((t) => !rm.has(t))
+            }
+            payload.config = { ...baseConfig, tools: nextTools }
+          }
         } else {
           // Fall back to top-level if we can't read current settings
           if (args.model) payload.model = args.model
@@ -460,6 +515,16 @@ const AgentsUpdateCommand = cmd({
       printKV("ID", a.id)
       printKV("Name", a.name)
       printKV("Model", a.model ?? (a.settings as Record<string, unknown>)?.model)
+      if (wantsIntegration) {
+        const ints = (a.settings as Record<string, unknown>)?.integrations
+        const names = Array.isArray(ints) ? ints.map((it: any) => (typeof it === "string" ? it : (it?.type ?? it?.name))).filter(Boolean) : []
+        printKV("Integrations", names.length ? names.join(", ") : "(none)")
+      }
+      if (wantsTools) {
+        const cfg: any = a.config
+        const tools = Array.isArray(cfg?.tools) ? cfg.tools : (Array.isArray(cfg) ? cfg : [])
+        printKV("Allowlist", tools.length ? `${tools.length} tools` : "(none)")
+      }
       printDivider()
 
       prompts.outro(dim(`iris agents get ${args.id}`))
