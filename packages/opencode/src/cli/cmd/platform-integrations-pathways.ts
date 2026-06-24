@@ -212,16 +212,95 @@ const PathwaysStatusCommand = cmd({
   },
 })
 
+// The Pathways agent tool surface (prefixed integration names) that a new tenant's agent
+// must allowlist to reach the records + accounting tools. Keep in sync with pathways.yml.
+const PATHWAYS_AGENT_TOOLS = [
+  "Pathways_get_firm_directory",
+  "Pathways_get_records_cadence",
+  "Pathways_get_records_validation",
+  "Pathways_get_ron_approval_queue",
+  "Pathways_get_records_delivery",
+  "Pathways_get_provider_balance_ledger",
+  "Pathways_get_reduction_evidence",
+  "Pathways_get_settlement_allocation",
+  "Pathways_get_provider_payouts",
+  "Pathways_get_smartpay_deposits",
+  "Pathways_get_reconciliation_audit",
+]
+
+const PathwaysOnboardCommand = cmd({
+  command: "onboard <client>",
+  describe: "Plan onboarding a NEW Pathways tenant — emits the executable runbook (clone spokes · wire agent+integration · vertical-template mapping · storage)",
+  builder: (y) =>
+    y
+      .positional("client", { describe: "new client slug prefix, e.g. 'acme-legal'", type: "string", demandOption: true })
+      .option("brand", { describe: "brand slug whose identity to apply to the cloned spokes", type: "string", demandOption: true })
+      .option("template", { describe: "template tenant to inherit panels/tools from", type: "string", default: "pathways-dashboard" })
+      .option("agent", { describe: "the client's agent id to enable the Pathways integration on", type: "number" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Pathways onboard — ${bold(String(args.client))}  ${dim(`(template: ${args.template}, brand: ${args.brand})`)}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const client = String(args.client).replace(/-dashboard$/, "")
+    const dash = `${client}-dashboard`
+    const records = `${client}-records`
+    const acct = `${client}-accounting`
+    const template = String(args.template)
+    const recordsTpl = template.replace(/-dashboard$/, "-records")
+    const acctTpl = template.replace(/-dashboard$/, "-accounting")
+    const brand = String(args.brand)
+    const agent = args.agent ? `${args.agent}` : "<AGENT_ID>"
+
+    prompts.log.info("This emits the runbook to instantiate a new tenant from the Pathways vertical.")
+    prompts.log.info("Each step reuses an already-verified primitive. Run them in order.\n")
+
+    const steps = [
+      ["1. Bloq — create the client's data owner bloq (note the new id → use as owner)",
+        `iris bloqs create "${client} — Case Management"`],
+      ["2. Spokes — clone the 3 Genesis spokes with the client's brand (PII-gated rebrand)",
+        `iris pages rebrand ${template}  --as ${dash}    --brand ${brand} --publish\n` +
+        `       iris pages rebrand ${recordsTpl} --as ${records} --brand ${brand} --publish\n` +
+        `       iris pages rebrand ${acctTpl}    --as ${acct}    --brand ${brand} --publish`],
+      ["3. Mapping — inherit all Pathways panels via ONE config line, then deploy fl-iris-api",
+        `# config/tenant-settings.php → 'vertical_templates' => [ '${dash}' => '${template}' ]\n` +
+        `       git commit + push fl-iris-api (config:cache rebuilds on deploy)`],
+      ["4. Agent — enable the Pathways integration + allowlist the 11 tools on the client's agent",
+        `iris agents update ${agent} --enable-integration pathways \\\n` +
+        `         --add-tools ${PATHWAYS_AGENT_TOOLS.join(",")}`],
+      ["5. Storage — bind a PRIVATE per-tenant bucket for PHI packages (capability #150146)",
+        `# set PATHWAYS_RECORDS_DISK + a per-tenant R2_PRIVATE_BUCKET on fl-iris-api\n` +
+        `       railway ssh -s fl-iris-api -- php artisan pathways:records-storage-check`],
+      ["6. Data — connect the client's Servis/FA source + seed their Atlas cases (scoped to their bloq)",
+        `# wire the client's data source; the builders read the 'cases' schema scoped to the owner bloq`],
+    ]
+
+    for (const [title, cmds] of steps) {
+      console.log(`  ${bold(title)}`)
+      console.log(`       ${dim(cmds)}\n`)
+    }
+
+    prompts.log.success(`Verify: load /p/${dash} under a staff OTP session → all panels populate from the client's data; ` +
+      `send their agent "which records packages are going quiet?" → answers from the tools.`)
+    prompts.log.warn("Steps 1/5/6 create prod resources / touch infra — run deliberately. Steps 2/4 are reversible " +
+      "(unpublish / --remove-tools). This planner does not auto-execute; full auto-provisioning is the next increment.")
+    printKV("New slugs", `${dash} · ${records} · ${acct}`)
+    prompts.outro(dim(`Capability: #503 (vertical templates) · #150146 (per-tenant storage)`))
+  },
+})
+
 export const PathwaysCommand = cmd({
   command: "pathways",
   aliases: ["pw"],
-  describe: "Pathways AI — settlement calc, audit, pipeline, batch processing",
+  describe: "Pathways AI — settlement calc, audit, pipeline, batch processing, tenant onboarding",
   builder: (yargs) =>
     yargs
       .command(PathwaysAuditCommand)
       .command(PathwaysSettleCommand)
       .command(PathwaysPipelineCommand)
       .command(PathwaysStatusCommand)
+      .command(PathwaysOnboardCommand)
       .demandCommand(),
   async handler() {},
 })
