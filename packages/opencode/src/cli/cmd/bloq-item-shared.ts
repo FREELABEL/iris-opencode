@@ -1,6 +1,6 @@
 // Shared logic for publishing/sharing bloq items, used by both the `bloqs` and
 // branded `atlas:item` command families so they never drift.
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, isNonInteractive } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, isNonInteractive, FL_API } from "./iris-api"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import matter from "gray-matter"
@@ -184,6 +184,83 @@ async function resolveDestination(
   return { bloqId: target.id, listId }
 }
 
+// ── Local image upload (so relative image paths resolve on the public page) ──
+
+function isLocalPath(url: string): boolean {
+  return !/^(https?:|data:|\/\/|#|mailto:)/i.test(url.trim())
+}
+
+/** Find every image reference (markdown ![](url) + <img src>) in the body. */
+function findImageUrls(body: string): string[] {
+  const urls = new Set<string>()
+  let m: RegExpExecArray | null
+  const md = /!\[[^\]]*\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g
+  while ((m = md.exec(body))) urls.add(m[1])
+  const html = /<img\b[^>]*?\ssrc=["']([^"']+)["']/gi
+  while ((m = html.exec(body))) urls.add(m[1])
+  return [...urls]
+}
+
+async function uploadImage(localPath: string, userId: number, token: string): Promise<string | null> {
+  try {
+    const buf = readFileSync(localPath)
+    const form = new FormData()
+    form.append("file", new Blob([new Uint8Array(buf)]), path.basename(localPath))
+    form.append("type", "digital_product")
+    form.append("user_id", String(userId))
+    const res = await fetch(`${FL_API}/api/v1/cloud-files/upload`, {
+      method: "POST",
+      body: form,
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as any
+    const r = data?.data ?? data
+    return r?.cdn_url ?? r?.url ?? r?.filepath ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Upload any LOCAL images referenced in the markdown to the CDN and rewrite the
+ * body to point at the CDN URLs (so they render on the public page). Rewrites are
+ * persisted back to the file too, so re-publishing is idempotent (https → skipped).
+ */
+async function uploadLocalImages(
+  body: string,
+  baseDir: string,
+  userId: number,
+  token: string,
+  warn: (s: string) => void,
+): Promise<string> {
+  const local = findImageUrls(body).filter(isLocalPath)
+  if (local.length === 0) return body
+
+  // Upload each distinct FILE once (dedup by resolved path), map original url → CDN.
+  const byPath: Record<string, string | null> = {}
+  const urlToCdn: Record<string, string> = {}
+  for (const url of local) {
+    const abs = path.isAbsolute(url) ? url : path.resolve(baseDir, url)
+    if (!(abs in byPath)) {
+      if (!existsSync(abs)) { byPath[abs] = null; warn(`image not found, left as-is: ${url}`) }
+      else {
+        byPath[abs] = await uploadImage(abs, userId, token)
+        if (!byPath[abs]) warn(`image upload failed, left as-is: ${url}`)
+      }
+    }
+    if (byPath[abs]) urlToCdn[url] = byPath[abs]!
+  }
+
+  // Replace ONLY within image references, matching the exact URL (no substring
+  // bleed into already-rewritten CDN URLs).
+  let out = body.replace(/(!\[[^\]]*\]\(\s*)([^)\s]+)(\s*(?:"[^"]*")?\s*\))/g,
+    (full, pre, url, post) => (urlToCdn[url] ? `${pre}${urlToCdn[url]}${post}` : full))
+  out = out.replace(/(<img\b[^>]*?\ssrc=["'])([^"']+)(["'])/gi,
+    (full, pre, url, post) => (urlToCdn[url] ? `${pre}${urlToCdn[url]}${post}` : full))
+  return out
+}
+
 function deriveTitle(explicit: unknown, fmTitle: unknown, body: string, file: string): string {
   if (explicit) return String(explicit)
   if (fmTitle) return String(fmTitle)
@@ -249,9 +326,17 @@ export async function executePublish(args: PublishArgs): Promise<void> {
     let bloqId = fm.iris_bloq_id ? Number(fm.iris_bloq_id) : args.bloq ?? null
     let listId = fm.iris_list_id ? Number(fm.iris_list_id) : null
 
+    // Upload any LOCAL images to the CDN and rewrite the body so they render publicly.
+    let content = body
+    const localImages = findImageUrls(body).filter(isLocalPath)
+    if (localImages.length > 0) {
+      spinner?.message?.(`Uploading ${localImages.length} local image(s)…`)
+      content = await uploadLocalImages(body, path.dirname(args.file), userId, token, (s) => { if (!json) prompts.log.warn(s) })
+    }
+
     // Re-sync path: try to update the item the file already points at.
     if (existingItemId) {
-      const updated = await updateItem(existingItemId, title, body)
+      const updated = await updateItem(existingItemId, title, content)
       if (updated === "NOT_FOUND") {
         // Item was deleted upstream — fall through and recreate it.
         spinner?.message?.(`Item #${existingItemId} was deleted — recreating…`)
@@ -279,7 +364,7 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       }
       bloqId = dest.bloqId
       listId = dest.listId
-      const created = await createItem(userId, bloqId, listId, title, body)
+      const created = await createItem(userId, bloqId, listId, title, content)
       if (!created?.id) {
         spinner?.stop("Failed to create item", 1)
         if (json) console.log(JSON.stringify({ success: false, error: "Create item failed" }))
@@ -301,7 +386,7 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       if (bloqId) newData.iris_bloq_id = bloqId
       if (listId) newData.iris_list_id = listId
       if (publicUrl) newData.iris_public_url = publicUrl
-      writeFileSync(args.file, matter.stringify(body, newData))
+      writeFileSync(args.file, matter.stringify(content, newData))
     }
 
     if (json) {
