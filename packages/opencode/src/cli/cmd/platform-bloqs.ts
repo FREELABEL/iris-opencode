@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
+import { executePublish } from "./bloq-item-shared"
 import path from "path"
 
 // ============================================================================
@@ -876,6 +877,25 @@ const BloqsDeleteItemCommand = cmd({
   },
 })
 
+const BloqsPublishCommand = cmd({
+  command: "publish <file>",
+  aliases: ["publish-md"],
+  describe: "publish a markdown file as a public bloq item (returns a shareable URL; re-run to sync)",
+  builder: (yargs) =>
+    yargs
+      .positional("file", { describe: "path to a markdown (.md) file", type: "string", demandOption: true })
+      .option("bloq", { describe: "target bloq ID (default: prompt, or auto 'Published Docs')", type: "number" })
+      .option("list", { describe: "target list (ID or name; created if missing)", type: "string" })
+      .option("title", { describe: "override the item title", type: "string" })
+      .option("private", { describe: "create/update without making it public", type: "boolean", default: false })
+      .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    await executePublish(args as any)
+  },
+})
+
 const BloqsMakePublicCommand = cmd({
   command: "make-public <item-id>",
   aliases: ["share", "publish-item"],
@@ -1687,6 +1707,7 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
       .command(BloqsDeleteItemCommand)
+      .command(BloqsPublishCommand)
       .command(BloqsMakePublicCommand)
       .command(BloqsMakePrivateCommand)
       .command(BloqsCreateListCommand)
