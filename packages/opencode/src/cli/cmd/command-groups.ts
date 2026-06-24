@@ -76,7 +76,6 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   outreach: "crm",
   "outreach-campaign": "crm",
   "outreach-send": "crm",
-  "outreach-strategy": "crm",
   "outreach-approve": "crm",
   som: "crm",
   invoices: "crm",
