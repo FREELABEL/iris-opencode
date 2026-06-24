@@ -14,6 +14,8 @@ import { Installation } from "../../installation"
 import path from "path"
 import { Global } from "../../global"
 import { McpServeCommand } from "./mcp-serve"
+import { McpInstallCommand } from "./mcp-install"
+import { McpClients } from "../../mcp/clients"
 
 function getAuthStatusIcon(status: MCP.AuthStatus): string {
   switch (status) {
@@ -55,6 +57,7 @@ export const McpCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(McpServeCommand)
+      .command(McpInstallCommand)
       .command(McpAddCommand)
       .command(McpListCommand)
       .command(McpAuthCommand)
@@ -84,9 +87,7 @@ export const McpListCommand = cmd({
         )
 
         if (servers.length === 0) {
-          prompts.log.warn("No MCP servers configured")
-          prompts.outro("Add servers with: opencode mcp add")
-          return
+          prompts.log.warn("No MCP servers configured for this CLI session")
         }
 
         for (const [name, serverConfig] of servers) {
@@ -129,7 +130,19 @@ export const McpListCommand = cmd({
           )
         }
 
-        prompts.outro(`${servers.length} server(s)`)
+        // Bug #150264: also report whether the IRIS MCP server is wired into the
+        // external clients that actually consume it (Claude Code, Cursor, ...).
+        // `config.mcp` above only reflects this CLI's own session — it never
+        // showed that the installer's `~/.iris/mcp.json` scaffold reaches no client.
+        UI.empty()
+        prompts.log.info(`${UI.Style.TEXT_DIM}IRIS MCP server registration (external clients):`)
+        for (const client of McpClients.all()) {
+          const wired = await McpClients.isWired(client)
+          const icon = wired ? "✓" : client.detected ? "○" : " "
+          const state = wired ? "registered" : client.detected ? "detected, not registered" : "not installed"
+          prompts.log.info(`${icon} ${client.label} ${UI.Style.TEXT_DIM}${state}\n    ${UI.Style.TEXT_DIM}${client.configPath}`)
+        }
+        prompts.outro(`${servers.length} session server(s) · run 'iris mcp install' to register with clients`)
       },
     })
   },
