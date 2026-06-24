@@ -6,6 +6,7 @@ import {
   buildGroundedArticlePrompt,
   parseAbstention,
   stringifySource,
+  groupTypesByCategory,
 } from "./platform-data-sources"
 
 // ---------------------------------------------------------------------------
@@ -127,4 +128,35 @@ test("stringifySource: truncates oversized content with a marker", () => {
   const out = stringifySource(big, 10)
   expect(out).toContain("[truncated 40 chars]")
   expect(out.startsWith("xxxxxxxxxx")).toBe(true)
+})
+
+// ---------------------------------------------------------------------------
+// groupTypesByCategory — the #147299 D1 catalog
+// ---------------------------------------------------------------------------
+
+test("groupTypesByCategory: groups by category, flags oauth, sorts by name", () => {
+  const registry = {
+    "google-drive": { name: "Google Drive", category: "storage", oauth_required: true },
+    slack: { name: "Slack", category: "communication", oauth_required: false },
+    dropbox: { name: "Dropbox", category: "storage", oauth_required: true },
+    github: { name: "GitHub", category: "development" },
+  }
+  const grouped = groupTypesByCategory(registry)
+  expect(Object.keys(grouped).sort()).toEqual(["communication", "development", "storage"])
+  // sorted by name within category: Dropbox before Google Drive
+  expect(grouped.storage.map((t) => t.type)).toEqual(["dropbox", "google-drive"])
+  expect(grouped.storage[0].oauth).toBe(true)
+  expect(grouped.communication[0]).toEqual({ type: "slack", name: "Slack", oauth: false })
+  // missing oauth_required defaults to false
+  expect(grouped.development[0].oauth).toBe(false)
+})
+
+test("groupTypesByCategory: tolerates empty/odd input without throwing", () => {
+  expect(groupTypesByCategory({})).toEqual({})
+  expect(groupTypesByCategory({ bad: null, also: "x" } as any)).toEqual({})
+})
+
+test("groupTypesByCategory: falls back to 'other' category and type-as-name", () => {
+  const grouped = groupTypesByCategory({ weird: { oauth_required: false } })
+  expect(grouped.other[0]).toEqual({ type: "weird", name: "weird", oauth: false })
 })
