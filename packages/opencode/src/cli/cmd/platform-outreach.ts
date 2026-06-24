@@ -267,7 +267,9 @@ const OutreachApplyCommand = cmd({
 
 export const PlatformOutreachCommand = cmd({
   command: "outreach",
-  aliases: ["reachr"],
+  // `outreach-strategy` / `reachr-strategy` are kept as aliases of this canonical
+  // command (was a separate re-export file — removed to drop the redundant 3rd path).
+  aliases: ["reachr", "outreach-strategy", "reachr-strategy"],
   describe: "manage outreach strategies — list, show, create, update, apply, delete",
   builder: (yargs) =>
     yargs

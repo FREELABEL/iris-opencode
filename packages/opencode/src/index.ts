@@ -68,7 +68,6 @@ import { PlatformAnnounceCommand } from "./cli/cmd/platform-announce"
 import { PlatformHiveCommand } from "./cli/cmd/platform-hive"
 import { PlatformClipsCommand } from "./cli/cmd/platform-clips"
 import { PlatformOutreachCommand } from "./cli/cmd/platform-outreach"
-import { PlatformOutreachStrategyCommand } from "./cli/cmd/platform-outreach-strategy"
 import { PlatformOutreachCampaignCommand } from "./cli/cmd/platform-outreach-campaign"
 import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
@@ -288,7 +287,6 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformHiveCommand))
   .command(reg(PlatformClipsCommand))
   .command(reg(PlatformOutreachCommand))
-  .command(reg(PlatformOutreachStrategyCommand))
   .command(reg(PlatformOutreachCampaignCommand))
   .command(reg(PlatformOutreachSendCommand))
   .command(reg(PlatformSomCommand))
