@@ -43,7 +43,18 @@ export async function getBySlug(slug: string, includeJson = false): Promise<any 
     include_json: includeJson ? "1" : "0",
     include_drafts: "1",
   })
-  const res = await pagesFetch(`/api/v1/pages/by-slug/${encodeURIComponent(slug)}?${params}`)
+  const path = `/api/v1/pages/by-slug/${encodeURIComponent(slug)}?${params}`
+  // #150147: large-page by-slug intermittently 502s on Railway (slow include_json serialization).
+  // GET is idempotent, so retry transient gateway 5xx with backoff — the fl-api cache warms on the
+  // first (failed) attempt, so a retry usually lands a fast warm response. Self-contained loop so
+  // it doesn't depend on irisFetch's (currently absent) retry plumbing.
+  const TRANSIENT = new Set([429, 502, 503, 504])
+  let res!: Response
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    res = await pagesFetch(path)
+    if (res.ok || !TRANSIENT.has(res.status) || attempt === 4) break
+    await new Promise((r) => setTimeout(r, 300 * attempt + Math.floor(Math.random() * 150)))
+  }
   if (!res.ok) {
     await handleApiError(res, `Get page ${slug}`)
     return null
