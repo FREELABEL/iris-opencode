@@ -100,18 +100,29 @@ async function createItem(
   return d?.data ?? d
 }
 
-async function updateItem(itemId: number, title: string, content: string): Promise<any | null> {
+// Returns the updated item, the sentinel "NOT_FOUND" if the item was deleted
+// upstream (so the caller can recreate), or null on any other failure.
+async function updateItem(itemId: number, title: string, content: string): Promise<any | "NOT_FOUND" | null> {
   const payload: Record<string, unknown> = { content }
   if (title) payload.title = title
   const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}`, {
     method: "PUT",
     body: JSON.stringify(payload),
   })
-  if (!res.ok) {
-    await handleApiError(res, "Update item")
-    return null
+  if (res.ok) {
+    const d = await unwrap(res)
+    return d?.data ?? d
   }
-  return unwrap(res)
+  // A deleted item updates as HTTP 500 "Resource not found" (backend findOrFail
+  // throws instead of 404), so detect "not found" in the body too — the caller
+  // then recreates it and rewrites the frontmatter.
+  const text = await res.text().catch(() => "")
+  if (process.argv.includes("--print-logs")) console.error(`[updateItem] HTTP ${res.status} body=${text.slice(0, 200)}`)
+  // Laravel returns either "not found" or "No query results for model" when the
+  // item is gone (soft-deleted) — both mean recreate.
+  if (res.status === 404 || /not[\s_-]*found|no query results/i.test(text)) return "NOT_FOUND"
+  prompts.log.error(`Update item failed (HTTP ${res.status})`)
+  return null
 }
 
 // ── Destination resolution (the fallback cascade) ───────────────────────────
@@ -222,23 +233,47 @@ export async function executePublish(args: PublishArgs): Promise<void> {
   const title = deriveTitle(args.title, fm.title, body, args.file)
   const existingItemId = fm.iris_item_id ? Number(fm.iris_item_id) : null
 
+  if (!body) {
+    const msg = "File has no content to publish (empty body)."
+    if (json) console.log(JSON.stringify({ success: false, error: msg }))
+    else { prompts.log.error(msg); prompts.outro("Done") }
+    process.exitCode = 2
+    return
+  }
+
   const spinner = json ? null : prompts.spinner()
   spinner?.start(existingItemId ? `Updating item #${existingItemId}…` : "Creating item…")
 
   try {
-    let itemId: number
+    let itemId: number | null = null
     let bloqId = fm.iris_bloq_id ? Number(fm.iris_bloq_id) : args.bloq ?? null
     let listId = fm.iris_list_id ? Number(fm.iris_list_id) : null
 
+    // Re-sync path: try to update the item the file already points at.
     if (existingItemId) {
       const updated = await updateItem(existingItemId, title, body)
-      if (!updated) { spinner?.stop("Failed", 1); if (!json) prompts.outro("Done"); return }
-      itemId = existingItemId
-    } else {
+      if (updated === "NOT_FOUND") {
+        // Item was deleted upstream — fall through and recreate it.
+        spinner?.message?.(`Item #${existingItemId} was deleted — recreating…`)
+      } else if (!updated) {
+        spinner?.stop("Update failed", 1)
+        if (json) console.log(JSON.stringify({ success: false, error: "Update failed" }))
+        else prompts.outro("Done")
+        return
+      } else {
+        itemId = existingItemId
+      }
+    }
+
+    // Create path: brand-new file, or the previous item was deleted upstream.
+    if (!itemId) {
       const dest = await resolveDestination(userId, args)
       if (!dest) {
-        spinner?.stop("Could not resolve a bloq/list to publish into", 1)
-        if (json) console.log(JSON.stringify({ success: false, error: "No destination (try --bloq <id>)" }))
+        const msg = args.bloq
+          ? `Bloq ${args.bloq} not found or has no writable list.`
+          : "Could not resolve a destination — pass --bloq <id>."
+        spinner?.stop(msg, 1)
+        if (json) console.log(JSON.stringify({ success: false, error: msg }))
         else prompts.outro("Done")
         return
       }
@@ -257,7 +292,7 @@ export async function executePublish(args: PublishArgs): Promise<void> {
     let publicUrl: string | null = null
     let publicUuid: string | null = null
     if (!args.private) {
-      const pub = await apiMakePublic(userId, itemId)
+      const pub = await apiMakePublic(userId, itemId!)
       if (pub) { publicUrl = pub.public_url; publicUuid = pub.public_uuid }
     }
 
