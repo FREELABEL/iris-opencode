@@ -224,6 +224,8 @@ const UpdateCommand = cmd({
       .option("name", { describe: "new name", type: "string" })
       .option("description", { describe: "new description", type: "string" })
       .option("tier", { describe: "new tier", type: "string" })
+      .option("image-url", { describe: "cover image URL", type: "string" })
+      .option("icon", { describe: "icon URL", type: "string" })
       .option("active", { describe: "active (true/false)", type: "boolean" }),
   async handler(args) {
     UI.empty()
@@ -236,10 +238,12 @@ const UpdateCommand = cmd({
     if (args.name) payload.name = args.name
     if (args.description) payload.description = args.description
     if (args.tier) payload.tier = args.tier
+    if (args["image-url"]) payload.image_url = args["image-url"]
+    if (args.icon) payload.icon = args.icon
     if (args.active !== undefined) payload.active = args.active
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --name, --description, --tier, or --active")
+      prompts.log.warn("Nothing to update. Use --name, --description, --tier, --image-url, --icon, or --active")
       prompts.outro("Done")
       return
     }
