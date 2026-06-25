@@ -813,11 +813,47 @@ function fetchInstagramViaBridge(igUrl: string): { caption: string; images: stri
   }
 }
 
+// Re-host an external image URL on our own CDN so it doesn't expire (#152262).
+// Instagram CDN URLs carry a short-lived signature (?oe=…) and 404 after a while —
+// fatal for a stored event flyer. Returns the permanent cdn_url, or null on failure
+// (caller keeps the original URL). Reuses the proven `iris cloud:upload --url` path.
+function rehostImageUrl(imageUrl: string): string | null {
+  const irisCmd = join(process.env.HOME || "", ".iris/bin/iris")
+  if (!existsSync(irisCmd)) return null
+  try {
+    const stdout = execFileSync(irisCmd, ["cloud:upload", "--url", imageUrl, "--expires", "never", "--json"], {
+      timeout: 90000, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
+    })
+    // cloud:upload --json pretty-prints (multi-line) after some progress text — grab
+    // the JSON object, not just the last line.
+    const m = String(stdout).match(/\{[\s\S]*\}/)
+    if (!m) return null
+    const data = JSON.parse(m[0])
+    return data?.cdn_url || null
+  } catch {
+    return null
+  }
+}
+
+// True for transient social-CDN URLs that must be re-hosted before we store them.
+function isEphemeralImageUrl(url: string | null): boolean {
+  return !!url && /cdninstagram\.com|fbcdn\.net|scontent/i.test(url)
+}
+
 async function scrapeInstagramPost(igUrl: string, userId: number): Promise<{ caption: string; images: string[]; flyerUrl: string | null; location: any } | null> {
   // Try the authenticated local bridge fetch first — it gets past IG's login wall (#152145).
   const viaBridge = fetchInstagramViaBridge(igUrl)
   if (viaBridge && (viaBridge.caption || viaBridge.flyerUrl)) {
-    return { ...viaBridge, location: null }
+    let { flyerUrl, images } = viaBridge
+    // Re-host the flyer to our CDN so it survives IG's URL expiry (#152262).
+    if (isEphemeralImageUrl(flyerUrl)) {
+      const cdn = rehostImageUrl(flyerUrl!)
+      if (cdn) {
+        images = images.map((i) => (i === flyerUrl ? cdn : i))
+        flyerUrl = cdn
+      }
+    }
+    return { caption: viaBridge.caption, images, flyerUrl, location: null }
   }
 
   // Fallback: fl-api web_scraper.
