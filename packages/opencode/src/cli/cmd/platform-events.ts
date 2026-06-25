@@ -84,6 +84,9 @@ const ListCommand = cmd({
 
     try {
       const params = new URLSearchParams({ per_page: String(args.limit) })
+      // The public /events endpoint now defaults include_private=false (#152137);
+      // the CLI manages events, so it must explicitly opt in to see hidden drafts.
+      params.set("include_private", "true")
       if (args.future) params.set("future_only", "true")
       if (args.past) params.set("past_only", "true")
       if (args.city) params.set("city", args.city)
@@ -133,7 +136,8 @@ const GetCommand = cmd({
     spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/v1/events/${args.id}`)
+      // include_private=true so the CLI can read hidden/draft events by id (#152137)
+      const res = await irisFetch(`/api/v1/events/${args.id}?include_private=true`)
       const ok = await handleApiError(res, "Get event")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
