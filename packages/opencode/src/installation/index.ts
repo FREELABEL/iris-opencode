@@ -234,46 +234,32 @@ print("Synced IRIS chat token from SDK .env into auth.json")
 PYEOF
 fi
 
-# ─── Post-update: Scaffold MCP config if missing ───
+# ─── Post-update: register IRIS MCP server into real clients (#152284) ───
+# The bespoke ~/.iris/mcp.json is kept only as a reference scaffold — NO MCP
+# client reads it. Real wiring is done by 'iris mcp install', which registers
+# 'iris mcp serve' into every detected client (Claude Code/Desktop/Cursor/
+# opencode) with an ABSOLUTE binary path so GUI clients (no login shell) resolve
+# it. Running it on every update also wires existing users on upgrade.
 MCP_CONFIG="${irisDir}/mcp.json"
 if [ ! -f "$MCP_CONFIG" ]; then
-  echo "Scaffolding MCP config..."
   cat > "$MCP_CONFIG" << 'MCPEOF'
 {
+  "_comment": "Reference scaffold only — real wiring lives in your editor's config via 'iris mcp install'. Run 'iris mcp list' to verify.",
   "mcpServers": {
-    "iris-local": {
-      "_comment": "Local IRIS tools — filesystem, SDK, project setup",
+    "IRIS OS": {
       "command": "iris",
       "args": ["mcp", "serve"],
       "enabled": true
-    },
-    "iris-platform": {
-      "_comment": "Remote IRIS platform — agents, integrations, workflows",
-      "type": "remote",
-      "url": "https://heyiris.io/mcp",
-      "enabled": false
     }
   }
 }
 MCPEOF
 fi
 
-# ─── Post-update: Enable iris-local MCP if it was scaffolded as disabled ───
-if [ -f "$MCP_CONFIG" ] && grep -q '"enabled": false' "$MCP_CONFIG" 2>/dev/null; then
-  # Only enable iris-local, leave iris-platform disabled
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c "
-import json, sys
-with open('$MCP_CONFIG') as f: cfg = json.load(f)
-changed = False
-if 'mcpServers' in cfg and 'iris-local' in cfg['mcpServers']:
-    if cfg['mcpServers']['iris-local'].get('enabled') == False:
-        cfg['mcpServers']['iris-local']['enabled'] = True
-        changed = True
-if changed:
-    with open('$MCP_CONFIG', 'w') as f: json.dump(cfg, f, indent=2)
-    print('Enabled iris-local MCP server')
-" 2>/dev/null || true
+IRIS_BIN="${irisDir}/bin/iris"
+if [ -x "$IRIS_BIN" ]; then
+  if "$IRIS_BIN" mcp install >/dev/null 2>&1; then
+    echo "Registered IRIS MCP server with your editors (verify: iris mcp list)"
   fi
 fi
 

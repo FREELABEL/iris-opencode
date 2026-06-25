@@ -12,8 +12,31 @@ import { realpathSync } from "fs"
  * source of truth used by `iris mcp install` and `iris mcp list` to fix that.
  */
 export namespace McpClients {
-  /** Server name written into client configs. */
-  export const SERVER_NAME = "iris"
+  /**
+   * Canonical server key written into client configs. Matches the server's own
+   * `serverInfo` name ("IRIS OS 1.0.0") and the key hand-written configs already
+   * use — so install updates the existing entry in place instead of adding a
+   * second one (#152285). `wire()` additionally de-dupes any legacy key
+   * ("iris", "iris-local", a bash-wrapped entry) that runs `iris mcp serve`.
+   */
+  export const SERVER_NAME = "IRIS OS"
+
+  /**
+   * True if a client entry already launches `iris mcp serve`, under ANY key or
+   * format (stdio array, command+args, or a `/bin/bash -l -c "exec iris mcp
+   * serve"` wrapper). Used to de-dupe and to detect existing registration.
+   */
+  function isIrisServeEntry(entry: unknown): boolean {
+    if (!entry || typeof entry !== "object") return false
+    const e = entry as Record<string, unknown>
+    const parts: string[] = []
+    if (Array.isArray(e.command)) parts.push(...e.command.map(String))
+    else if (typeof e.command === "string") parts.push(e.command)
+    if (Array.isArray(e.args)) parts.push(...e.args.map(String))
+    const joined = parts.join(" ").toLowerCase()
+    const refsIris = joined.includes("iris")
+    return refsIris && joined.includes("mcp") && joined.includes("serve")
+  }
 
   /**
    * Two on-disk shapes clients use for a local (stdio) server:
@@ -185,12 +208,24 @@ export namespace McpClients {
 
     const mapKey = client.format === "opencode" ? "mcp" : "mcpServers"
     if (typeof config[mapKey] !== "object" || config[mapKey] === null) config[mapKey] = {}
+    const map = config[mapKey] as Record<string, unknown>
 
-    const before = JSON.stringify(config[mapKey][SERVER_NAME])
-    config[mapKey][SERVER_NAME] = entry
+    // De-dupe (#152285): remove any OTHER key that already runs `iris mcp serve`
+    // (legacy "iris"/"iris-local", or a hand-written "IRIS OS" under a different
+    // casing) so the client doesn't load the same tools twice.
+    let removedOther = false
+    for (const k of Object.keys(map)) {
+      if (k !== SERVER_NAME && isIrisServeEntry(map[k])) {
+        delete map[k]
+        removedOther = true
+      }
+    }
+
+    const before = JSON.stringify(map[SERVER_NAME])
+    map[SERVER_NAME] = entry
     const after = JSON.stringify(entry)
 
-    if (existed && before === after) {
+    if (existed && !removedOther && before === after) {
       return { client, action: "unchanged", bin }
     }
 
@@ -199,10 +234,17 @@ export namespace McpClients {
     return { client, action: existed ? "updated" : "created", bin }
   }
 
-  /** Whether the IRIS server is already present in a client's config. */
+  /**
+   * Whether the IRIS server is already present in a client's config — under the
+   * canonical key OR any other key that runs `iris mcp serve` (so `mcp list`
+   * reports a hand-written "IRIS OS"/"iris" entry as registered too).
+   */
   export async function isWired(client: Client): Promise<boolean> {
     const config = await readJson(client.configPath)
     const mapKey = client.format === "opencode" ? "mcp" : "mcpServers"
-    return !!config?.[mapKey]?.[SERVER_NAME]
+    const map = config?.[mapKey]
+    if (!map || typeof map !== "object") return false
+    if (map[SERVER_NAME]) return true
+    return Object.values(map).some((e) => isIrisServeEntry(e))
   }
 }

@@ -39,7 +39,7 @@ describe("McpClients registration", () => {
     expect(res.action).toBe("created")
 
     const config = JSON.parse(await fs.readFile(client.configPath, "utf8"))
-    expect(config.mcpServers.iris).toEqual({ command: "/abs/iris", args: ["mcp", "serve"] })
+    expect(config.mcpServers["IRIS OS"]).toEqual({ command: "/abs/iris", args: ["mcp", "serve"] })
   })
 
   test("wires opencode (mcp map, array command) format", async () => {
@@ -47,10 +47,10 @@ describe("McpClients registration", () => {
     await McpClients.wire(client, "/abs/iris")
 
     const config = JSON.parse(await fs.readFile(client.configPath, "utf8"))
-    expect(config.mcp.iris).toEqual({ type: "local", command: ["/abs/iris", "mcp", "serve"], enabled: true })
+    expect(config.mcp["IRIS OS"]).toEqual({ type: "local", command: ["/abs/iris", "mcp", "serve"], enabled: true })
   })
 
-  test("preserves existing keys and other servers", async () => {
+  test("preserves unrelated keys and other servers", async () => {
     const client = McpClients.get("claude-code")!
     await fs.writeFile(
       client.configPath,
@@ -61,7 +61,40 @@ describe("McpClients registration", () => {
     const config = JSON.parse(await fs.readFile(client.configPath, "utf8"))
     expect(config.keepMe).toBe(1)
     expect(config.mcpServers.other).toEqual({ command: "x" })
-    expect(config.mcpServers.iris.command).toBe("/abs/iris")
+    expect(config.mcpServers["IRIS OS"].command).toBe("/abs/iris")
+  })
+
+  test("de-dupes a legacy 'iris' key that runs iris mcp serve (#152285)", async () => {
+    const client = McpClients.get("claude-code")!
+    await fs.writeFile(
+      client.configPath,
+      JSON.stringify({ mcpServers: { iris: { command: "iris", args: ["mcp", "serve"] } } }),
+    )
+    const res = await McpClients.wire(client, "/abs/iris")
+    expect(res.action).toBe("updated")
+
+    const config = JSON.parse(await fs.readFile(client.configPath, "utf8"))
+    // legacy key collapsed into the canonical one — no duplicate stdio server
+    expect(config.mcpServers.iris).toBeUndefined()
+    expect(Object.keys(config.mcpServers)).toEqual(["IRIS OS"])
+    expect(config.mcpServers["IRIS OS"].command).toBe("/abs/iris")
+  })
+
+  test("de-dupes a bash-wrapped entry under a different key", async () => {
+    const client = McpClients.get("claude-code")!
+    await fs.writeFile(
+      client.configPath,
+      JSON.stringify({
+        mcpServers: {
+          "IRIS OS legacy": { command: "/bin/bash", args: ["-l", "-c", "exec iris mcp serve"] },
+        },
+      }),
+    )
+    await McpClients.wire(client, "/abs/iris")
+
+    const config = JSON.parse(await fs.readFile(client.configPath, "utf8"))
+    expect(Object.keys(config.mcpServers)).toEqual(["IRIS OS"])
+    expect(config.mcpServers["IRIS OS"].command).toBe("/abs/iris")
   })
 
   test("is idempotent — second wire reports unchanged", async () => {
