@@ -47,6 +47,21 @@ async function obsFetch(path: string, method = "GET", body?: any): Promise<any> 
   }
   let res = await doFetch()
   if (res.status === 401) res = await doFetch() // token may have rotated — re-read + retry once
+  if (res.status === 401) {
+    // A persistent 401 is a BRIDGE AUTH problem, not an OBS one (#152274). The old
+    // path surfaced the raw "missing or invalid X-Bridge-Key" and the connect command
+    // then told users to toggle OBS WebSocket settings — wrong place. Give the real cause.
+    const haveKey = !!readBridgeKey()
+    throw new Error(
+      haveKey
+        ? "Bridge auth failed — the local daemon rejected the X-Bridge-Key. The token in " +
+          "~/.iris/bridge-token doesn't match the running bridge. Restart the iris daemon to resync " +
+          "(`iris daemon restart`); if the bridge runs in Docker, ensure the container's token is " +
+          "written to ~/.iris/bridge-token."
+        : "Bridge auth failed — no token at ~/.iris/bridge-token. Start the iris daemon to generate one " +
+          "(`iris daemon start`).",
+    )
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
     throw new Error(err.error || `HTTP ${res.status}`)
@@ -79,8 +94,12 @@ const ConnectCmd = cmd({
     } catch (e: any) {
       sp.stop("Failed")
       prompts.log.error(e.message)
-      prompts.log.info(dim("Make sure OBS is running with WebSocket Server enabled"))
-      prompts.log.info(dim("OBS → Tools → WebSocket Server Settings → Enable"))
+      // Only point at OBS WebSocket settings for an actual OBS-connection failure —
+      // not a bridge-auth (X-Bridge-Key) failure, where that hint is misleading (#152274).
+      if (!/Bridge auth failed|X-Bridge-Key/i.test(e.message)) {
+        prompts.log.info(dim("Make sure OBS is running with WebSocket Server enabled"))
+        prompts.log.info(dim("OBS → Tools → WebSocket Server Settings → Enable"))
+      }
     }
     prompts.outro("Done")
   },
