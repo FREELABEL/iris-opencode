@@ -17,6 +17,7 @@ import {
 } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
+import { execFileSync } from "child_process"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -778,10 +779,52 @@ const DiffCommand = cmd({
 // Event Content — Instagram import & flyer updates
 // ---------------------------------------------------------------------------
 
-async function scrapeInstagramPost(igUrl: string): Promise<{ caption: string; images: string[]; flyerUrl: string | null; location: any } | null> {
+// Locate the local authenticated IG fetcher shipped with the coding-agent-bridge.
+function resolveIgFetchScript(): string | null {
+  const rel = "fl-docker-dev/coding-agent-bridge/som/ig-fetch-post.js"
+  const candidates = [
+    process.env.IRIS_IG_FETCH_SCRIPT,
+    join(process.cwd(), rel),
+    join(process.env.HOME || "", "Sites/freelabel", rel),
+  ].filter(Boolean) as string[]
+  for (const c of candidates) { if (existsSync(c)) return c }
+  return null
+}
+
+// Primary IG fetch path (#152145): the fl-api web_scraper runs from a datacenter IP
+// with no IG session, so Instagram serves a login wall and returns nothing. The
+// coding-agent-bridge has logged-in IG sessions on a residential IP — run the fetch
+// there. Returns null (caller falls back to web_scraper) if the bridge isn't present.
+function fetchInstagramViaBridge(igUrl: string): { caption: string; images: string[]; flyerUrl: string | null } | null {
+  const script = resolveIgFetchScript()
+  if (!script) return null
+  const account = process.env.IRIS_IG_ACCOUNT || "heyiris.io"
+  try {
+    const stdout = execFileSync("node", [script, igUrl, account], {
+      timeout: 60000, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
+    })
+    const line = String(stdout).trim().split("\n").filter(Boolean).pop() || ""
+    const data = JSON.parse(line)
+    if (!data?.ok) return null
+    const images: string[] = Array.isArray(data.images) ? data.images : []
+    return { caption: data.caption || "", images, flyerUrl: data.flyerUrl ?? (images[0] ?? null) }
+  } catch {
+    return null
+  }
+}
+
+async function scrapeInstagramPost(igUrl: string, userId: number): Promise<{ caption: string; images: string[]; flyerUrl: string | null; location: any } | null> {
+  // Try the authenticated local bridge fetch first — it gets past IG's login wall (#152145).
+  const viaBridge = fetchInstagramViaBridge(igUrl)
+  if (viaBridge && (viaBridge.caption || viaBridge.flyerUrl)) {
+    return { ...viaBridge, location: null }
+  }
+
+  // Fallback: fl-api web_scraper.
+  // /api/v1/tools/execute requires `params` (not `input`) + `user_id` — see BloqItemController.
   const scrapeRes = await irisFetch("/api/v1/tools/execute", {
     method: "POST",
-    body: JSON.stringify({ tool: "web_scraper", input: { url: igUrl, extract: "all" } })
+    body: JSON.stringify({ tool: "web_scraper", params: { url: igUrl, extract: "all" }, user_id: userId })
   }, IRIS_API)
   const ok = await handleApiError(scrapeRes, "Scrape Instagram")
   if (!ok) return null
@@ -853,6 +896,7 @@ const EventImportFromIgCommand = cmd({
       .option("state", { describe: "state", type: "string" })
       .option("type", { describe: "event type", type: "string", default: "showcase" })
       .option("bloq-id", { describe: "associated bloq ID", type: "number" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("dry-run", { describe: "show extracted data without creating event", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
@@ -869,11 +913,14 @@ const EventImportFromIgCommand = cmd({
       return
     }
 
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
     const spinner = prompts.spinner()
     spinner.start("Scraping Instagram post...")
 
     try {
-      const scraped = await scrapeInstagramPost(igUrl)
+      const scraped = await scrapeInstagramPost(igUrl, userId)
       if (!scraped) { spinner.stop("Scrape failed", 1); prompts.outro("Done"); return }
 
       spinner.stop(success("Scraped"))
@@ -960,6 +1007,7 @@ const EventUpdateFlyerCommand = cmd({
       .positional("event-id", { describe: "event ID to update", type: "number", demandOption: true })
       .positional("url", { describe: "Instagram post URL", type: "string", demandOption: true })
       .option("gallery", { describe: "store all images as gallery in metadata", type: "boolean", default: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("dry-run", { describe: "show what would be updated without saving", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args: any) {
@@ -977,11 +1025,14 @@ const EventUpdateFlyerCommand = cmd({
       return
     }
 
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
     const spinner = prompts.spinner()
     spinner.start("Scraping Instagram post for flyer...")
 
     try {
-      const scraped = await scrapeInstagramPost(igUrl)
+      const scraped = await scrapeInstagramPost(igUrl, userId)
       if (!scraped) { spinner.stop("Scrape failed", 1); prompts.outro("Done"); return }
 
       if (!scraped.flyerUrl) {
