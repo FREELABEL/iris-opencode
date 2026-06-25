@@ -558,7 +558,10 @@ const PackagesListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      // Endpoint returns { data: { packages: [...], program: {...} } } — pull out the
+      // packages array (was reading data.data → the object → "undefined package(s)" + crash). #152282
+      const root = data?.data ?? data
+      const items: any[] = Array.isArray(root) ? root : (Array.isArray(root?.packages) ? root.packages : [])
       spinner.stop(`${items.length} package(s)`)
 
       if (items.length === 0) { prompts.log.warn("No packages found"); prompts.outro("Done"); return }
