@@ -377,11 +377,16 @@ const PushCommand = cmd({
       const payload: Record<string, unknown> = {
         name: p.name, slug: p.slug, description: p.description,
         active: p.active, tier: p.tier, bloq_id: p.bloq_id,
+        // Curation/visibility fields the update endpoint accepts — previously dropped,
+        // so pull→edit→push silently no-op'd on type/featured/visibility (#152269).
+        type: p.type, featured: p.featured, visibility: p.visibility,
         image_url: p.image_url, icon: p.icon,
         base_price: p.base_price, has_paid_membership: p.has_paid_membership,
         allow_free_enrollment: p.allow_free_enrollment,
         membership_features: p.membership_features,
-        custom_fields: p.custom_fields,
+        // The API validates custom_fields as an array — only send when it actually is
+        // one (#66's is null → otherwise 422 "custom fields must be an array").
+        custom_fields: Array.isArray(p.custom_fields) ? p.custom_fields : undefined,
         enrollment_form_config: p.enrollment_form_config,
       }
       for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
@@ -429,7 +434,10 @@ const DiffCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const live = data?.data ?? data
+      // getProgram wraps as { program: {...} } — unwrap, else every field reads empty
+      // and diff reports everything changed (#152269).
+      let live = data?.data ?? data
+      if (live && typeof live.program === "object" && live.program) live = live.program
 
       const dir = resolveSyncDir()
       let filepath = args.file
@@ -442,9 +450,12 @@ const DiffCommand = cmd({
         return
       }
 
-      const local = JSON.parse(readFileSync(filepath, "utf-8"))
+      let local = JSON.parse(readFileSync(filepath, "utf-8"))
+      if (local && typeof local.program === "object" && local.program) local = local.program
 
-      const fields = ["name", "slug", "description", "active", "tier", "bloq_id", "base_price", "has_paid_membership", "allow_free_enrollment"]
+      // Must mirror the push payload, else diff falsely reports "in sync" on fields
+      // push sends but diff ignored (type/featured/visibility/image_url/icon) — #152269.
+      const fields = ["name", "slug", "description", "active", "tier", "bloq_id", "type", "featured", "visibility", "image_url", "icon", "base_price", "has_paid_membership", "allow_free_enrollment"]
       const changes: { field: string; live: unknown; local: unknown }[] = []
 
       for (const f of fields) {
@@ -898,7 +909,7 @@ const CoverCommand = cmd({
 
 export const PlatformProgramsCommand = cmd({
   command: "programs",
-  aliases: ["locale", "community"],
+  aliases: ["locale"],
   describe: "manage programs & membership packages — pull, push, diff, CRUD",
   builder: (yargs) =>
     yargs
