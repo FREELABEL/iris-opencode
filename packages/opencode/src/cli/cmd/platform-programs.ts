@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { scrapeInstagramPost } from "./platform-content"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -298,7 +299,11 @@ const PullCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const entity = data?.data ?? data
+      // getProgram wraps the record as { data: { program: {...} } } — unwrap to the
+      // bare program object, else the filename (undefined-program.json), packages
+      // fetch, and push all break on the missing top-level id/name.
+      let entity = data?.data ?? data
+      if (entity && typeof entity.program === "object" && entity.program) entity = entity.program
 
       // Also fetch packages
       const pkgRes = await irisFetch(`/api/v1/programs/${entity.id}/packages`)
@@ -367,14 +372,17 @@ const PushCommand = cmd({
       spinner.start(`Pushing ${basename(filepath)}…`)
 
       const entity = JSON.parse(readFileSync(filepath, "utf-8"))
+      // Tolerate the wrapped shape too, in case the file was pulled before the unwrap fix.
+      const p = (entity && typeof entity.program === "object" && entity.program) ? entity.program : entity
       const payload: Record<string, unknown> = {
-        name: entity.name, slug: entity.slug, description: entity.description,
-        active: entity.active, tier: entity.tier, bloq_id: entity.bloq_id,
-        base_price: entity.base_price, has_paid_membership: entity.has_paid_membership,
-        allow_free_enrollment: entity.allow_free_enrollment,
-        membership_features: entity.membership_features,
-        custom_fields: entity.custom_fields,
-        enrollment_form_config: entity.enrollment_form_config,
+        name: p.name, slug: p.slug, description: p.description,
+        active: p.active, tier: p.tier, bloq_id: p.bloq_id,
+        image_url: p.image_url, icon: p.icon,
+        base_price: p.base_price, has_paid_membership: p.has_paid_membership,
+        allow_free_enrollment: p.allow_free_enrollment,
+        membership_features: p.membership_features,
+        custom_fields: p.custom_fields,
+        enrollment_form_config: p.enrollment_form_config,
       }
       for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
 
@@ -814,6 +822,77 @@ const VerifyCertCommand = cmd({
 })
 
 // ============================================================================
+// cover <id> — set a program's cover image from an IG post / image URL (one-shot)
+// ============================================================================
+
+const CoverCommand = cmd({
+  command: "cover <id>",
+  describe: "view or set a program's cover image (from an Instagram post or image URL)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "program ID", type: "number", demandOption: true })
+      .option("ig", { describe: "Instagram post URL — scrape its flyer & use as the cover", type: "string" })
+      .option("url", { describe: "direct image URL to use as the cover", type: "string" })
+      .option("user-id", { describe: "user ID for the IG scrape (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Program Cover #${args.id}`)
+
+    // No source → show the current cover.
+    if (!args.ig && !args.url) {
+      const res = await irisFetch(`/api/v1/programs/${args.id}`)
+      if (!(await handleApiError(res, "Get program"))) { prompts.outro("Done"); return }
+      const data = (await res.json()) as any
+      let p = data?.data ?? data
+      if (p && typeof p.program === "object" && p.program) p = p.program
+      printDivider()
+      printKV("Program", p?.name ?? args.id)
+      printKV("Cover", p?.image_url || dim("(none)"))
+      printDivider()
+      prompts.outro(dim(`iris programs cover ${args.id} --ig <url>  |  --url <image-url>`))
+      return
+    }
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    let coverUrl = args.url as string | undefined
+
+    // IG source → scrape the post and use its durable (re-hosted) flyer.
+    if (args.ig) {
+      const userId = await requireUserId(args["user-id"] as number | undefined)
+      if (!userId) { prompts.outro("Done"); return }
+      const spinner = prompts.spinner()
+      spinner.start("Scraping Instagram post…")
+      const scraped = await scrapeInstagramPost(args.ig as string, userId)
+      if (!scraped || !scraped.flyerUrl) {
+        spinner.stop("No flyer found in that post", 1)
+        prompts.outro("Done")
+        return
+      }
+      spinner.stop(success("Got flyer"))
+      coverUrl = scraped.flyerUrl
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Setting cover…")
+    const res = await irisFetch(`/api/v1/programs/${args.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ image_url: coverUrl }),
+    })
+    const ok = await handleApiError(res, "Set cover")
+    if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+    spinner.stop(`${success("✓")} Cover set`)
+
+    printDivider()
+    printKV("Program", args.id)
+    printKV("Cover", coverUrl)
+    printDivider()
+    prompts.outro(dim(`iris programs get ${args.id}`))
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -827,6 +906,7 @@ export const PlatformProgramsCommand = cmd({
       .command(GetCommand)
       .command(CreateCommand)
       .command(UpdateCommand)
+      .command(CoverCommand)
       .command(PullCommand)
       .command(PushCommand)
       .command(DiffCommand)

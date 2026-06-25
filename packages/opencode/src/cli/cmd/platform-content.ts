@@ -840,7 +840,7 @@ function isEphemeralImageUrl(url: string | null): boolean {
   return !!url && /cdninstagram\.com|fbcdn\.net|scontent/i.test(url)
 }
 
-async function scrapeInstagramPost(igUrl: string, userId: number): Promise<{ caption: string; images: string[]; flyerUrl: string | null; location: any } | null> {
+export async function scrapeInstagramPost(igUrl: string, userId: number): Promise<{ caption: string; images: string[]; flyerUrl: string | null; location: any } | null> {
   // Try the authenticated local bridge fetch first — it gets past IG's login wall (#152145).
   const viaBridge = fetchInstagramViaBridge(igUrl)
   if (viaBridge && (viaBridge.caption || viaBridge.flyerUrl)) {
