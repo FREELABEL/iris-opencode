@@ -204,6 +204,61 @@ const SponsorsRemoveCommand = cmd({
   },
 })
 
+const SponsorsLabelCommand = cmd({
+  command: "label [text]",
+  describe: "view or set the sponsor-bar label (default 'Supported by') (#152265)",
+  builder: (yargs) =>
+    yargs.positional("text", { describe: "new label text (omit to view current)", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Sponsor Bar Label")
+
+    // No text → view the current label from the public discover-config.
+    if (!args.text) {
+      const spinner = prompts.spinner()
+      spinner.start("Loading…")
+      try {
+        const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
+        const data = (await res.json()) as any
+        const label = data?.data?.sponsorsLabel ?? "Supported by"
+        spinner.stop("Current")
+        printDivider()
+        console.log(`  ${dim("Label:")} ${bold(label)}`)
+        printDivider()
+        prompts.outro(dim('iris discover sponsors label "Powered by"'))
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        prompts.outro("Done")
+      }
+      return
+    }
+
+    // Text → set discover.sponsors_label (authed PUT, same path as add/remove).
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Updating label…")
+    try {
+      const putRes = await irisFetch("/api/v1/platform-config/discover.sponsors_label", {
+        method: "PUT",
+        body: JSON.stringify({ value: args.text }),
+      })
+      const ok = await handleApiError(putRes, "Set label")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop(`${success("✓")} Label set to ${bold(args.text as string)}`)
+      printDivider()
+      console.log(`  ${dim("Live within ~5 min (discover-config cache TTL).")}`)
+      printDivider()
+      prompts.outro(dim("iris discover sponsors label"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const SponsorsCommand = cmd({
   command: "sponsors",
   describe: "manage sponsor profiles on the discover page",
@@ -212,6 +267,7 @@ const SponsorsCommand = cmd({
       .command(SponsorsListCommand)
       .command(SponsorsAddCommand)
       .command(SponsorsRemoveCommand)
+      .command(SponsorsLabelCommand)
       .demandCommand(),
   async handler() {},
 })
