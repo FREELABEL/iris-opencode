@@ -31,7 +31,8 @@ async function runLocalWhisper(
   language: string | undefined,
   asJson: boolean,
   sourceUrl?: string,
-) {
+  output?: string,
+): Promise<boolean> {
   const abs = resolve(filePath)
   const sp = prompts.spinner()
   sp.start("Transcribing locally (whisper.cpp)…")
@@ -41,13 +42,32 @@ async function runLocalWhisper(
   } catch (e) {
     sp.stop("Failed", 1)
     prompts.log.error(e instanceof Error ? e.message : String(e))
-    return
+    process.exitCode = 1 // #152292 — fail loudly so automation doesn't proceed on no transcript
+    return false
+  }
+  if (!text || !text.trim()) {
+    sp.stop("Failed", 1)
+    prompts.log.error("Transcription produced no text.")
+    process.exitCode = 1 // #152292 — empty result is a failure
+    return false
   }
   sp.stop("Done")
 
-  // Persist next to the source (preserves prior UX).
-  const txtPath = join(process.cwd(), `${basename(abs, extname(abs))}-transcript.txt`)
-  writeFileSync(txtPath, text)
+  // Output location (#152293): default to ~/.iris/transcripts — NOT the CWD (it littered
+  // git repos). Honor --output (dir or file). Skip the file entirely for --json with no
+  // explicit --output, since the JSON already carries the text.
+  const name = `${basename(abs, extname(abs))}-transcript.txt`
+  let txtPath: string | null
+  if (output) {
+    txtPath = existsSync(output) && statSync(output).isDirectory() ? join(output, name) : output
+  } else if (asJson) {
+    txtPath = null
+  } else {
+    const dir = join(homedir(), ".iris", "transcripts")
+    mkdirSync(dir, { recursive: true })
+    txtPath = join(dir, name)
+  }
+  if (txtPath) writeFileSync(txtPath, text)
 
   // Best-effort server sync so it's searchable in the knowledge base.
   const estimatedDuration = Math.round((text.split(/\s+/).length / 150) * 60)
@@ -70,15 +90,16 @@ async function runLocalWhisper(
 
   if (asJson) {
     console.log(JSON.stringify({ provider: "whisper.cpp (local)", file: abs, transcript_path: txtPath, text }, null, 2))
-    return
+    return true
   }
 
   printDivider()
-  console.log(`  ${bold("Saved:")}  ${highlight(txtPath)}`)
+  if (txtPath) console.log(`  ${bold("Saved:")}  ${highlight(txtPath)}`)
   printDivider()
   console.log()
   console.log(text)
   console.log()
+  return true
 }
 
 // ============================================================================
@@ -135,28 +156,50 @@ async function downloadVideoLocally(url: string): Promise<string | null> {
     "worstaudio/worst",
     null, // let yt-dlp choose its default format
   ]
-  const commonArgs = ["--no-playlist", "-o", outPath, "--no-warnings", "--quiet"]
+  // Keep --no-warnings OFF so nsig/SSAP/"Only images" diagnostics reach stderr (#152290).
+  const commonArgs = ["--no-playlist", "-o", outPath]
 
-  let lastErr = "Download failed"
-  for (const fmt of formatLadder) {
-    const fmtArgs = fmt ? ["-f", fmt] : []
-    // Cookies first (Instagram/age-gated need them), then a cookieless attempt.
-    for (const browser of ["chrome", "firefox", "safari", null]) {
-      const cookieArgs = browser ? ["--cookies-from-browser", browser] : []
-      const dl = spawnSync(ytdlp, [...fmtArgs, ...commonArgs, ...cookieArgs, url], {
-        encoding: "utf8",
-        timeout: 60_000,
-      })
-      if (dl.status === 0 && existsSync(outPath)) return outPath
-      const out = (dl.stderr || dl.stdout || "").trim()
-      if (out) lastErr = out.split("\n").pop() || lastErr
+  const tryLadder = (): { path?: string; err: string } => {
+    let lastErr = "Download failed"
+    for (const fmt of formatLadder) {
+      const fmtArgs = fmt ? ["-f", fmt] : []
+      // Cookies first (Instagram/age-gated need them), then a cookieless attempt.
+      for (const browser of ["chrome", "firefox", "safari", null]) {
+        const cookieArgs = browser ? ["--cookies-from-browser", browser] : []
+        const dl = spawnSync(ytdlp!, [...fmtArgs, ...commonArgs, ...cookieArgs, url], {
+          encoding: "utf8",
+          timeout: 60_000,
+        })
+        if (dl.status === 0 && existsSync(outPath)) return { path: outPath, err: "" }
+        const out = (dl.stderr || dl.stdout || "").trim()
+        if (out) lastErr = out // keep the FULL stderr, not just the last line (#152290)
+      }
     }
+    return { err: lastErr }
   }
 
-  // Everything failed — surface the last real yt-dlp error + a hint to update.
-  prompts.log.error(lastErr)
-  if (/format is not available|requested format/i.test(lastErr)) {
-    prompts.log.info(`Tip: update yt-dlp — ${highlight("brew upgrade yt-dlp")} (or ${highlight("pip3 install -U yt-dlp")})`)
+  const isStaleSignatureError = (err: string) =>
+    /format is not available|requested format|nsig|only images|player|signature|ssap/i.test(err)
+
+  let res = tryLadder()
+  if (res.path) return res.path
+
+  // #152290 — a format/nsig failure is almost always a STALE yt-dlp that can't solve
+  // YouTube's current player signature. Self-update once and retry, rather than misleading
+  // the user with a bare "Requested format is not available".
+  if (isStaleSignatureError(res.err)) {
+    prompts.log.info(`yt-dlp couldn't solve YouTube's player (likely stale) — updating (${highlight("yt-dlp -U")})…`)
+    spawnSync(ytdlp, ["-U"], { stdio: "pipe", timeout: 120_000 })
+    spawnSync("brew", ["upgrade", "yt-dlp"], { stdio: "pipe", timeout: 120_000 }) // -U no-ops on brew installs
+    res = tryLadder()
+    if (res.path) return res.path
+  }
+
+  // Everything failed — surface the REAL yt-dlp error (full stderr incl. nsig/SSAP/"Only
+  // images"), not a swallowed generic line.
+  prompts.log.error(res.err)
+  if (isStaleSignatureError(res.err)) {
+    prompts.log.info(`yt-dlp may still be stale — ${highlight("brew upgrade yt-dlp")} or ${highlight("pip3 install -U yt-dlp")}`)
   }
   return null
 }
@@ -214,6 +257,11 @@ export const PlatformTranscribeCommand = cmd({
         default: false,
         describe: "Force local offline transcription via whisper.cpp",
       })
+      .option("output", {
+        type: "string",
+        alias: "o",
+        describe: "Write the transcript here (file or dir). Default: ~/.iris/transcripts",
+      })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -225,7 +273,7 @@ export const PlatformTranscribeCommand = cmd({
 
     // ── Local file ──────────────────────────────────────────────
     if (looksLikeFile) {
-      await runLocalWhisper(url, args.language as string | undefined, !!args.json)
+      await runLocalWhisper(url, args.language as string | undefined, !!args.json, undefined, args.output as string | undefined)
       prompts.outro("Done")
       return
     }
@@ -240,12 +288,13 @@ export const PlatformTranscribeCommand = cmd({
       const videoPath = await downloadVideoLocally(url)
       if (!videoPath) {
         dlSpinner.stop("Download failed", 1)
+        process.exitCode = 1 // #152292
         prompts.outro("Done")
         return
       }
       dlSpinner.stop("Downloaded")
 
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined)
 
       // Cleanup temp file
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
@@ -301,11 +350,12 @@ export const PlatformTranscribeCommand = cmd({
       const videoPath = await downloadVideoLocally(url)
       if (!videoPath) {
         dlSpinner.stop("Download failed", 1)
+        process.exitCode = 1 // #152292
         prompts.outro("Done")
         return
       }
       dlSpinner.stop("Downloaded")
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined)
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
       prompts.outro("Done")
       return
@@ -318,9 +368,9 @@ export const PlatformTranscribeCommand = cmd({
       const dlSpinner = prompts.spinner()
       dlSpinner.start("Downloading…")
       const videoPath = await downloadVideoLocally(url)
-      if (!videoPath) { dlSpinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!videoPath) { dlSpinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       dlSpinner.stop("Downloaded")
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined)
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
       prompts.outro("Done")
       return
@@ -335,9 +385,9 @@ export const PlatformTranscribeCommand = cmd({
       const dlSpinner = prompts.spinner()
       dlSpinner.start("Downloading…")
       const videoPath = await downloadVideoLocally(url)
-      if (!videoPath) { dlSpinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!videoPath) { dlSpinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       dlSpinner.stop("Downloaded")
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined)
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
       prompts.outro("Done")
       return
