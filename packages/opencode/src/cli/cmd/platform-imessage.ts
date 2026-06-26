@@ -925,11 +925,30 @@ const ImessageGroupsCommand = cmd({
       return
     }
 
+    // Resolve member handles -> contact names once for all groups
+    const membersByGuid = new Map<string, string[]>()
+    for (const g of groups) membersByGuid.set(g.guid, getGroupParticipants(g.guid))
+    const allHandles = [...new Set([...membersByGuid.values()].flat())]
+    const nameMap = await resolveContactNames(allHandles)
+
+    const memberInfo = (guid: string) =>
+      (membersByGuid.get(guid) || []).map(h => ({ handle: h, name: nameMap.get(h) ?? null }))
+
+    // A real, user-set group name (listGroupChats backfills "(unnamed group)")
+    const realName = (dn: string) => (dn && dn !== "(unnamed group)" ? dn : null)
+
+    // Synthesize a label from member first-names when the group has no display_name
+    const synthName = (guid: string) => {
+      const parts = memberInfo(guid).map(m => (m.name || m.handle).split(" ")[0])
+      return parts.length ? parts.join(", ") : "(unnamed group)"
+    }
+
     if (args.json) {
-      // Enrich with participants for JSON output
+      // Enrich with resolved participants for JSON output
       const enriched = groups.map(g => ({
         ...g,
-        members: getGroupParticipants(g.guid),
+        display_name: realName(g.display_name) ?? synthName(g.guid),
+        members: memberInfo(g.guid),
       }))
       console.log(JSON.stringify(enriched, null, 2))
       return
@@ -937,10 +956,12 @@ const ImessageGroupsCommand = cmd({
 
     printDivider()
     for (const group of groups) {
-      const name = bold(group.display_name || "(unnamed)")
+      const name = bold(realName(group.display_name) ?? synthName(group.guid))
       const meta = dim(`${group.participants} members · ${group.message_count} msgs · ${group.last_message}`)
+      const memberNames = memberInfo(group.guid).map(m => m.name || m.handle).join(", ")
       console.log(`  ${name}`)
       console.log(`    ${meta}`)
+      if (memberNames) console.log(`    ${dim(memberNames)}`)
       console.log(`    ${dim(group.chat_identifier)}`)
       console.log()
     }
