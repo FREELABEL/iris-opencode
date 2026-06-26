@@ -18,7 +18,10 @@ const AtlasItemPublishCommand = cmd({
       .option("bloq", { describe: "target bloq ID (default: prompt, or auto 'Published Docs')", type: "number" })
       .option("list", { describe: "target list (ID or name; created if missing)", type: "string" })
       .option("title", { describe: "override the item title (single file only)", type: "string" })
-      .option("private", { describe: "create/update without making it public", type: "boolean", default: false })
+      .option("public", { describe: "make the item publicly shareable (private by default)", type: "boolean", default: false })
+      .option("password", { describe: "share behind a password (implies --public)", type: "string" })
+      .option("expires", { describe: "expiring link — ISO date/time, e.g. 2026-12-31 (implies --public)", type: "string" })
+      .option("private", { describe: "force private (override; default is already private)", type: "boolean", default: false })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -62,6 +65,8 @@ const AtlasItemShareCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("item-id", { describe: "item ID to share", type: "number", demandOption: true })
+      .option("password", { describe: "share behind a password", type: "string" })
+      .option("expires", { describe: "expiring link — ISO date/time, e.g. 2026-12-31", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {

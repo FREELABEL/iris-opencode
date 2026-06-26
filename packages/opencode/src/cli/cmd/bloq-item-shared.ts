@@ -17,20 +17,34 @@ async function unwrap(res: Response): Promise<any> {
   return j?.data ?? j
 }
 
+export interface ShareOptions {
+  password?: string
+  expires?: string // ISO date/time, or e.g. "30d" handled server-side via expires_at
+}
+
 export async function apiMakePublic(
   userId: number,
   itemId: number,
-): Promise<{ public_url: string | null; public_uuid: string | null } | null> {
+  opts: ShareOptions = {},
+): Promise<{ public_url: string | null; public_uuid: string | null; access_level?: string; expires_at?: string | null } | null> {
+  const payload: Record<string, unknown> = {}
+  if (opts.password) payload.password = opts.password
+  if (opts.expires) payload.expires_at = opts.expires
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-public`, {
     method: "POST",
-    body: "{}",
+    body: JSON.stringify(payload),
   })
   if (!res.ok) {
     await handleApiError(res, "Make public")
     return null
   }
   const d = await unwrap(res)
-  return { public_url: d?.public_url ?? null, public_uuid: d?.public_uuid ?? null }
+  return {
+    public_url: d?.public_url ?? null,
+    public_uuid: d?.public_uuid ?? null,
+    access_level: d?.access_level,
+    expires_at: d?.expires_at ?? null,
+  }
 }
 
 export async function apiMakePrivate(userId: number, itemId: number): Promise<boolean> {
@@ -293,10 +307,21 @@ export interface PublishArgs {
   bloq?: number
   list?: string | number
   title?: string
-  private?: boolean
+  // Sharing is OPT-IN (private by default). Any of these makes the item public.
+  public?: boolean
+  password?: string
+  expires?: string
+  private?: boolean // explicit private (back-compat / override)
   "no-frontmatter"?: boolean
   json?: boolean
   "user-id"?: number
+}
+
+/** Resolve whether this publish should share the item, and with what gates. */
+function shareIntent(args: PublishArgs): { share: boolean; opts: ShareOptions } {
+  if (args.private) return { share: false, opts: {} }
+  const share = !!(args.public || args.password || args.expires)
+  return { share, opts: { password: args.password, expires: args.expires } }
 }
 
 /** Publish a markdown file as a bloq item + public URL. Idempotent re-sync via frontmatter. */
@@ -391,11 +416,14 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       itemId = created.id
     }
 
+    // Sharing is OPT-IN now (private by default). --public / --password / --expires share it.
+    const { share, opts } = shareIntent(args)
     let publicUrl: string | null = null
     let publicUuid: string | null = null
-    if (!args.private) {
-      const pub = await apiMakePublic(userId, itemId!)
-      if (pub) { publicUrl = pub.public_url; publicUuid = pub.public_uuid }
+    let accessLevel: string | undefined
+    if (share) {
+      const pub = await apiMakePublic(userId, itemId!, opts)
+      if (pub) { publicUrl = pub.public_url; publicUuid = pub.public_uuid; accessLevel = pub.access_level }
     }
 
     if (!args["no-frontmatter"]) {
@@ -403,13 +431,16 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       if (bloqId) newData.iris_bloq_id = bloqId
       if (listId) newData.iris_list_id = listId
       if (publicUrl) newData.iris_public_url = publicUrl
+      else { delete newData.iris_public_url } // no longer shared → drop stale URL
+      if (accessLevel) newData.iris_access_level = accessLevel
+      else { delete newData.iris_access_level }
       writeFileSync(args.file, matter.stringify(content, newData))
     }
 
     if (json) {
       console.log(JSON.stringify({
         success: true, item_id: itemId, bloq_id: bloqId, list_id: listId,
-        public_url: publicUrl, public_uuid: publicUuid, is_public: !args.private,
+        public_url: publicUrl, public_uuid: publicUuid, is_public: share, access_level: accessLevel ?? "private",
       }))
       return
     }
@@ -418,9 +449,10 @@ export async function executePublish(args: PublishArgs): Promise<void> {
     if (publicUrl) {
       console.log()
       console.log(`  ${bold("Public URL")}  ${publicUrl}`)
+      if (accessLevel && accessLevel !== "public") console.log(`  ${dim(`access: ${accessLevel}`)}`)
       console.log()
-    } else if (args.private) {
-      prompts.log.info("Saved privately. Re-run without --private to publish.")
+    } else {
+      prompts.log.info("Saved privately. Add --public (or --password / --expires) to share.")
     }
     prompts.outro(dim(args["no-frontmatter"] ? "edit + re-run to sync" : "frontmatter updated — edit + re-run to sync the same URL"))
   } catch (err) {
@@ -464,6 +496,8 @@ export async function executePublishMany(args: PublishArgs & { files: string[] }
 
 export interface ItemActionArgs {
   "item-id": number
+  password?: string
+  expires?: string
   json?: boolean
   "user-id"?: number
 }
@@ -478,7 +512,7 @@ export async function executeMakePublic(args: ItemActionArgs): Promise<void> {
 
   const spinner = json ? null : prompts.spinner()
   spinner?.start("Making item public…")
-  const pub = await apiMakePublic(userId, args["item-id"])
+  const pub = await apiMakePublic(userId, args["item-id"], { password: args.password, expires: args.expires })
   if (!pub) { spinner?.stop("Failed", 1); if (json) console.log(JSON.stringify({ success: false })); else prompts.outro("Done"); return }
 
   if (json) { console.log(JSON.stringify({ success: true, ...pub, is_public: true })); return }
@@ -486,6 +520,7 @@ export async function executeMakePublic(args: ItemActionArgs): Promise<void> {
   if (pub.public_url) {
     console.log()
     console.log(`  ${bold("Public URL")}  ${pub.public_url}`)
+    if (pub.access_level && pub.access_level !== "public") console.log(`  ${dim(`access: ${pub.access_level}${pub.expires_at ? ` · expires ${pub.expires_at}` : ""}`)}`)
     console.log(`  ${dim(`uuid: ${pub.public_uuid ?? "?"}`)}`)
     console.log()
   } else {
