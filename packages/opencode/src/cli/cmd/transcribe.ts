@@ -5,6 +5,7 @@ import {
   irisFetch,
   IRIS_API,
   requireAuth,
+  requireUserId,
   printDivider,
   dim,
   bold,
@@ -212,11 +213,16 @@ async function downloadVideoLocally(url: string): Promise<string | null> {
 // arg → irisFetch defaulted to FL_API (raichu.heyiris.io), where that route is
 // dead → "Server unavailable" on every YouTube transcribe while the underlying
 // tool was fine. Tool name is lowercase `transcribevideo` to match the registry.
-async function invokeTranscribeTool(url: string): Promise<{ ok: boolean; data?: any }> {
+async function invokeTranscribeTool(url: string, userId?: number): Promise<{ ok: boolean; data?: any }> {
   try {
+    // user_id is REQUIRED for V6 tool execution — without it the tool errors
+    // "user_id required" and the CLI silently fell to local whisper on every call,
+    // so the (working) Supadata cloud path was never actually reached (#152291).
+    const params: Record<string, any> = { url }
+    if (userId) params.user_id = userId
     const res = await irisFetch(
       `/api/v1/tools/invoke`,
-      { method: "POST", body: JSON.stringify({ tool: "transcribevideo", params: { url } }) },
+      { method: "POST", body: JSON.stringify({ tool: "transcribevideo", params, user_id: userId }) },
       IRIS_API,
     )
     if (!res.ok) return { ok: false }
@@ -306,9 +312,10 @@ export const PlatformTranscribeCommand = cmd({
     if (isYouTubeUrl(url)) {
       const token = await requireAuth()
       if (token) {
+        const userId = (await requireUserId(undefined)) ?? undefined
         const spinner = prompts.spinner()
         spinner.start("Transcribing on server…")
-        const tool = await invokeTranscribeTool(url)
+        const tool = await invokeTranscribeTool(url, userId)
         if (tool.ok) {
           const data = tool.data
           spinner.stop("Done")
@@ -376,10 +383,11 @@ export const PlatformTranscribeCommand = cmd({
       return
     }
 
+    const userId = (await requireUserId(undefined)) ?? undefined
     const spinner = prompts.spinner()
     spinner.start("Transcribing on server…")
 
-    const tool = await invokeTranscribeTool(url)
+    const tool = await invokeTranscribeTool(url, userId)
     if (!tool.ok) {
       spinner.stop("Server path unavailable — trying local", 1)
       const dlSpinner = prompts.spinner()
