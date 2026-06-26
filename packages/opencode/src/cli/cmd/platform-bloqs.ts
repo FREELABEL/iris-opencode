@@ -2,12 +2,67 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
-import { executePublish } from "./bloq-item-shared"
+import { executePublishMany } from "./bloq-item-shared"
 import path from "path"
 
 // ============================================================================
 // Display helpers
 // ============================================================================
+
+// Frontend host. Override with IRIS_FRONTEND_URL.
+function frontendBase(): string {
+  return (process.env.IRIS_FRONTEND_URL ?? "https://web.heyiris.io").replace(/\/+$/, "")
+}
+
+// Canonical web URL for a bloq/board. The frontend serves clean routes
+// /iris/bloq/:id, /iris/:id and /bloq/:id. Requires the viewer to already be
+// logged in — use a share link (below) for a passwordless deep-link.
+function bloqWebUrl(id: string | number): string {
+  return `${frontendBase()}/iris/bloq/${id}`
+}
+
+// Passwordless tokenized auth link — anyone with this URL can claim access and
+// is logged straight into the board. Consumed by pages/invite/_token.vue.
+function inviteWebUrl(token: string): string {
+  return `${frontendBase()}/invite/${token}`
+}
+
+// Mint a share-link token for a bloq (POST /api/v1/user/bloqs/:id/share-link).
+// Mirrors CoreService.createBloqShareLink — the atomic source of this flow.
+async function mintShareLink(
+  bloqId: number,
+  userId: number,
+  opts: { permission?: string; expiresAt?: string | null; maxUses?: number | null } = {},
+): Promise<{ token: string; permission: string; expires_at: string | null; max_uses: number | null }> {
+  const res = await irisFetch(`/api/v1/user/bloqs/${bloqId}/share-link`, {
+    method: "POST",
+    body: JSON.stringify({
+      permission: opts.permission ?? "viewer",
+      expires_at: opts.expiresAt ?? null,
+      max_uses: opts.maxUses ?? null,
+      user_id: userId,
+    }),
+  })
+  if (!res.ok) {
+    await handleApiError(res, "Create share link")
+    throw new Error(`share-link failed (${res.status})`)
+  }
+  const json = (await res.json()) as { data?: any }
+  const data = json?.data ?? {}
+  if (!data.token) throw new Error("share-link response had no token")
+  return data
+}
+
+function openBrowser(url: string): boolean {
+  try {
+    const { execSync } = require("child_process")
+    const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
+    execSync(`${opener} "${url}"`, { stdio: "ignore" })
+    return true
+  } catch {
+    return false
+  }
+}
 
 function printBloq(b: Record<string, unknown>): void {
   const name = bold(String(b.name ?? `Bloq #${b.id}`))
@@ -164,7 +219,7 @@ const BloqsGetCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify({ ...b, lists }, null, 2))
+        console.log(JSON.stringify({ ...b, web_url: bloqWebUrl(b.id), lists }, null, 2))
         return
       }
 
@@ -203,6 +258,7 @@ const BloqsGetCommand = cmd({
       printKV("Name", b.name)
       printKV("Description", b.description)
       printKV("Created", b.created_at)
+      printKV("URL", bloqWebUrl(b.id))
       console.log()
 
       // Entity summary bar
@@ -327,8 +383,8 @@ const BloqsGetCommand = cmd({
       printDivider()
 
       const getOutro = (args.items || args.list)
-        ? `${dim("iris bloqs share <item-id>")}  Publish an item + get a shareable link`
-        : `${dim("iris bloqs ingest " + args.id + " ./document.pdf")}  Add knowledge`
+        ? `${dim("iris bloqs make-public <item-id>")}  Publish an item + get a shareable link`
+        : `${dim("iris bloqs open " + args.id)}  ·  ${dim("iris bloqs invite " + args.id)}  Passwordless invite link`
       prompts.outro(getOutro)
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
@@ -878,21 +934,21 @@ const BloqsDeleteItemCommand = cmd({
 })
 
 const BloqsPublishCommand = cmd({
-  command: "publish <file>",
+  command: "publish <files..>",
   aliases: ["publish-md"],
-  describe: "publish a markdown file as a public bloq item (returns a shareable URL; re-run to sync)",
+  describe: "publish markdown file(s) as public bloq items (globs ok; re-run to sync)",
   builder: (yargs) =>
     yargs
-      .positional("file", { describe: "path to a markdown (.md) file", type: "string", demandOption: true })
+      .positional("files", { describe: "one or more markdown (.md) files (e.g. ./docs/*.md)", type: "string", demandOption: true })
       .option("bloq", { describe: "target bloq ID (default: prompt, or auto 'Published Docs')", type: "number" })
       .option("list", { describe: "target list (ID or name; created if missing)", type: "string" })
-      .option("title", { describe: "override the item title", type: "string" })
+      .option("title", { describe: "override the item title (single file only)", type: "string" })
       .option("private", { describe: "create/update without making it public", type: "boolean", default: false })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    await executePublish(args as any)
+    await executePublishMany({ ...(args as any), files: (args as any).files })
   },
 })
 
@@ -1695,6 +1751,153 @@ function formatBytes(bytes: number): string {
 // Root command
 // ============================================================================
 
+const BloqsOpenCommand = cmd({
+  command: "open <id>",
+  aliases: ["url"],
+  describe: "print (and open) the web URL for a bloq board",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("share", { describe: "mint a passwordless invite link instead of the plain board URL", type: "boolean", default: false })
+      .option("permission", { describe: "share permission (viewer|editor)", type: "string", default: "viewer", choices: ["viewer", "editor"] })
+      .option("print", { describe: "only print the URL, don't open a browser", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    let url = bloqWebUrl(args.id)
+
+    if (args.share) {
+      const token = await requireAuth()
+      if (!token) return
+      const userId = await requireUserId(args["user-id"])
+      if (!userId) return
+      try {
+        const link = await mintShareLink(args.id, userId, { permission: args.permission })
+        url = inviteWebUrl(link.token)
+      } catch (err) {
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        return
+      }
+    }
+
+    // Always print the URL so it's pipeable / clickable in the terminal.
+    console.log(url)
+    if (!args.print) {
+      const opened = openBrowser(url)
+      if (!opened) prompts.log.warn("Could not launch a browser — open the URL above manually.")
+    }
+  },
+})
+
+const BloqsShareCommand = cmd({
+  // NB: `share` is already an alias of `make-public` (item-level). Board-level
+  // passwordless links live under `invite` / `share-link` to avoid collision.
+  command: "invite <id>",
+  aliases: ["share-link", "link"],
+  describe: "mint a passwordless invite link (tokenized auth) for a bloq board",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("permission", { describe: "access granted to the link (viewer|editor)", type: "string", default: "viewer", choices: ["viewer", "editor"] })
+      .option("expires", { describe: "expiry as an ISO date/time (e.g. 2026-12-31)", type: "string" })
+      .option("max-uses", { describe: "max number of redemptions", type: "number" })
+      .option("open", { describe: "also open the link in a browser", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) return
+
+    let link: { token: string; permission: string; expires_at: string | null; max_uses: number | null }
+    try {
+      link = await mintShareLink(args.id, userId, {
+        permission: args.permission,
+        expiresAt: args.expires ?? null,
+        maxUses: args["max-uses"] ?? null,
+      })
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      return
+    }
+
+    const url = inviteWebUrl(link.token)
+
+    if (args.json) {
+      console.log(JSON.stringify({ ...link, url, board_url: bloqWebUrl(args.id) }, null, 2))
+      return
+    }
+
+    console.log(url)
+    const meta: string[] = [`${link.permission} access`]
+    if (link.expires_at) meta.push(`expires ${link.expires_at}`)
+    if (link.max_uses) meta.push(`max ${link.max_uses} uses`)
+    console.log(dim(`  ${meta.join("  ·  ")}`))
+
+    if (args.open) {
+      const opened = openBrowser(url)
+      if (!opened) prompts.log.warn("Could not launch a browser — open the URL above manually.")
+    }
+  },
+})
+
+const BloqsLinksCommand = cmd({
+  command: "links <id>",
+  aliases: ["invites", "share-links"],
+  describe: "list passwordless invite links for a bloq board",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const res = await irisFetch(`/api/v1/user/bloqs/${args.id}/share-links`)
+    if (!res.ok) { await handleApiError(res, "List share links"); return }
+    const json = (await res.json()) as { data?: any[] }
+    const links = json?.data ?? []
+
+    if (args.json) {
+      console.log(JSON.stringify(links.map((l) => ({ ...l, url: inviteWebUrl(l.token) })), null, 2))
+      return
+    }
+
+    if (links.length === 0) {
+      console.log(dim(`  No invite links. Create one: iris bloqs invite ${args.id}`))
+      return
+    }
+    printDivider()
+    for (const l of links) {
+      const active = l.is_usable ?? l.is_active
+      const flag = active ? success("●") : dim("○")
+      const meta: string[] = [String(l.permission)]
+      if (l.expires_at) meta.push(`exp ${String(l.expires_at).slice(0, 10)}`)
+      meta.push(`${l.use_count ?? 0}${l.max_uses ? `/${l.max_uses}` : ""} uses`)
+      console.log(`  ${flag} ${dim(`#${l.id}`)}  ${inviteWebUrl(l.token)}`)
+      console.log(`      ${dim(meta.join("  ·  "))}`)
+    }
+    printDivider()
+    console.log(dim(`  Revoke: iris bloqs revoke-link ${args.id} <link-id>`))
+  },
+})
+
+const BloqsRevokeLinkCommand = cmd({
+  command: "revoke-link <id> <linkId>",
+  aliases: ["revoke-invite"],
+  describe: "revoke (deactivate) a bloq invite link",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .positional("linkId", { describe: "share-link ID (from `iris bloqs links`)", type: "number", demandOption: true }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const res = await irisFetch(`/api/v1/user/bloqs/${args.id}/share-link/${args.linkId}`, { method: "DELETE" })
+    if (!res.ok) { await handleApiError(res, "Revoke share link"); return }
+    console.log(success(`Revoked invite link #${args.linkId}`))
+  },
+})
+
 export const PlatformBloqsCommand = cmd({
   command: "bloqs",
   aliases: ["kb", "knowledge", "memory", "projects", "atlas"],
@@ -1703,6 +1906,10 @@ export const PlatformBloqsCommand = cmd({
     yargs
       .command(BloqsListCommand)
       .command(BloqsGetCommand)
+      .command(BloqsOpenCommand)
+      .command(BloqsShareCommand)
+      .command(BloqsLinksCommand)
+      .command(BloqsRevokeLinkCommand)
       .command(BloqsCreateCommand)
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
