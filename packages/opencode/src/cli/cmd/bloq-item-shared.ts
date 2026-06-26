@@ -45,6 +45,23 @@ export async function apiMakePrivate(userId: number, itemId: number): Promise<bo
   return true
 }
 
+async function apiDeleteItem(itemId: number): Promise<boolean> {
+  const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}`, { method: "DELETE" })
+  if (!res.ok) {
+    await handleApiError(res, "Delete item")
+    return false
+  }
+  return true
+}
+
+async function fetchItems(userId: number, bloqId: number): Promise<any[]> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items?per_page=500`)
+  if (!res.ok) return []
+  const j = (await res.json()) as { data?: any }
+  const raw = j?.data
+  return Array.isArray(raw) ? raw : (raw?.items ?? [])
+}
+
 async function fetchBloqs(userId: number): Promise<any[]> {
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs?per_page=100&simplified=1`)
   if (!res.ok) return []
@@ -413,6 +430,38 @@ export async function executePublish(args: PublishArgs): Promise<void> {
   }
 }
 
+/** Publish one or many markdown files (shells expand globs like ./docs/*.md). */
+export async function executePublishMany(args: PublishArgs & { files: string[] }): Promise<void> {
+  const files = (args.files ?? []).filter(Boolean)
+  if (files.length <= 1) {
+    await executePublish({ ...args, file: files[0] ?? args.file })
+    return
+  }
+  const results: any[] = []
+  for (const file of files) {
+    // Capture each file's JSON result so we can print a single summary.
+    const captured: string[] = []
+    const orig = console.log
+    console.log = (...a: any[]) => captured.push(a.join(" "))
+    try {
+      await executePublish({ ...args, file, json: true })
+    } finally {
+      console.log = orig
+    }
+    let r: any = null
+    try { r = JSON.parse(captured[captured.length - 1] ?? "null") } catch {}
+    results.push({ file, ...(r ?? { success: false }) })
+  }
+  if (args.json) { console.log(JSON.stringify({ success: true, count: results.length, results })); return }
+  UI.empty()
+  prompts.intro(`◈  Published ${results.filter((r) => r.success).length}/${results.length} files`)
+  for (const r of results) {
+    if (r.success) prompts.log.success(`${path.basename(r.file)} → ${r.public_url ?? "(private)"}`)
+    else prompts.log.error(`${path.basename(r.file)} → ${r.error ?? "failed"}`)
+  }
+  prompts.outro("Done")
+}
+
 export interface ItemActionArgs {
   "item-id": number
   json?: boolean
@@ -460,4 +509,97 @@ export async function executeMakePrivate(args: ItemActionArgs): Promise<void> {
   if (json) { console.log(JSON.stringify({ success: true, is_public: false })); return }
   spinner?.stop(`${success("✓")} Item is now private`)
   prompts.outro("Done")
+}
+
+export interface UnpublishArgs {
+  file: string
+  delete?: boolean
+  json?: boolean
+  "user-id"?: number
+}
+
+/** Unpublish (make private) the item a markdown file points at; optionally delete it. */
+export async function executeUnpublish(args: UnpublishArgs): Promise<void> {
+  const json = !!args.json
+  if (!json) { UI.empty(); prompts.intro(`◈  Unpublish ${path.basename(args.file)}`) }
+  const token = await requireAuth()
+  if (!token) { if (!json) prompts.outro("Done"); return }
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  if (!existsSync(args.file)) {
+    const msg = `File not found: ${args.file}`
+    if (json) console.log(JSON.stringify({ success: false, error: msg }))
+    else { prompts.log.error(msg); prompts.outro("Done") }
+    process.exitCode = 2
+    return
+  }
+
+  const fm: Record<string, any> = matter(readFileSync(args.file, "utf8")).data || {}
+  const itemId = fm.iris_item_id ? Number(fm.iris_item_id) : null
+  if (!itemId) {
+    const msg = "No iris_item_id in this file's frontmatter — it hasn't been published."
+    if (json) console.log(JSON.stringify({ success: false, error: msg }))
+    else { prompts.log.error(msg); prompts.outro("Done") }
+    return
+  }
+
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start(args.delete ? `Deleting item #${itemId}…` : `Making item #${itemId} private…`)
+  const priv = await apiMakePrivate(userId, itemId)
+  let deleted = false
+  if (args.delete && priv) deleted = await apiDeleteItem(itemId)
+
+  if (!priv) { spinner?.stop("Failed", 1); if (json) console.log(JSON.stringify({ success: false })); else prompts.outro("Done"); return }
+
+  // Drop the public-url marker from the file (it's no longer reachable).
+  if (!args.delete) {
+    const body = matter(readFileSync(args.file, "utf8")).content
+    const { iris_public_url, ...rest } = fm
+    writeFileSync(args.file, matter.stringify(body, rest))
+  }
+
+  if (json) { console.log(JSON.stringify({ success: true, item_id: itemId, is_public: false, deleted })); return }
+  spinner?.stop(`${success("✓")} ${args.delete ? "Deleted" : "Unpublished"} item #${itemId}`)
+  prompts.outro("Done")
+}
+
+export interface ListArgs {
+  bloq?: number
+  json?: boolean
+  "user-id"?: number
+}
+
+/** List the caller's published (public) bloq items + their URLs. */
+export async function executeListPublished(args: ListArgs): Promise<void> {
+  const json = !!args.json
+  if (!json) { UI.empty(); prompts.intro("◈  Published items") }
+  const token = await requireAuth()
+  if (!token) { if (!json) prompts.outro("Done"); return }
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start("Scanning for published items…")
+
+  const bloqs = args.bloq ? [{ id: args.bloq }] : (await fetchBloqs(userId)).slice(0, 50)
+  const published: any[] = []
+  for (const b of bloqs) {
+    const items = await fetchItems(userId, b.id)
+    for (const it of items) {
+      if (it.is_public && (it.public_url || it.public_uuid)) {
+        published.push({ id: it.id, title: it.title ?? "(untitled)", bloq_id: b.id, public_url: it.public_url ?? it.public_uuid })
+      }
+    }
+  }
+
+  if (json) { spinner?.stop(); console.log(JSON.stringify({ success: true, count: published.length, items: published })); return }
+  spinner?.stop(`${published.length} published item(s)`)
+  console.log()
+  for (const p of published) {
+    console.log(`  ${dim(`#${p.id}`)}  ${bold(p.title)}`)
+    console.log(`      ${p.public_url}`)
+  }
+  console.log()
+  prompts.outro(dim("iris atlas:item unpublish <file>  |  iris atlas:item make-private <id>"))
 }
