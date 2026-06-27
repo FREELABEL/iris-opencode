@@ -5,10 +5,12 @@
  */
 
 import { execSync } from "child_process"
-import { existsSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "fs"
 import { homedir } from "os"
+import { join } from "path"
 
 const MESSAGES_DB = `${homedir()}/Library/Messages/chat.db`
+const SELF_CONFIG_PATH = join(homedir(), ".iris", "imessage-self.json")
 
 // ── Types ──
 
@@ -76,6 +78,91 @@ export function query(sql: string): string {
     encoding: "utf-8",
     timeout: 10000,
   }).trim()
+}
+
+// ── Self handle ("me" / "self" target) ──
+
+export interface SelfConfig {
+  email?: string
+  phone?: string
+}
+
+/** Read the persisted self-handle config (`~/.iris/imessage-self.json`). */
+export function readSelfConfig(): SelfConfig {
+  try {
+    if (!existsSync(SELF_CONFIG_PATH)) return {}
+    return JSON.parse(readFileSync(SELF_CONFIG_PATH, "utf-8")) as SelfConfig
+  } catch {
+    return {}
+  }
+}
+
+/** Merge-write the self-handle config. Pass undefined values to leave a field unchanged. */
+export function writeSelfConfig(patch: SelfConfig): SelfConfig {
+  const current = readSelfConfig()
+  const next: SelfConfig = { ...current }
+  if (patch.email !== undefined) next.email = patch.email || undefined
+  if (patch.phone !== undefined) next.phone = patch.phone || undefined
+  mkdirSync(join(homedir(), ".iris"), { recursive: true })
+  writeFileSync(SELF_CONFIG_PATH, JSON.stringify(next, null, 2) + "\n", "utf-8")
+  return next
+}
+
+/** Delete the persisted self-handle config. */
+export function clearSelfConfig(): void {
+  try {
+    rmSync(SELF_CONFIG_PATH, { force: true })
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Auto-detect the user's own handles from chat.db.
+ * Every chat row carries `account_login` = the local account that owns it,
+ * prefixed `E:` (email/iMessage) or `P:` (phone/SMS). We pick the most-used of each.
+ */
+export function detectSelfHandle(): SelfConfig {
+  const out: SelfConfig = {}
+  if (!isAvailable()) return out
+  try {
+    const rows = query(
+      "SELECT account_login, COUNT(*) c FROM chat WHERE account_login != '' GROUP BY account_login ORDER BY c DESC",
+    )
+    for (const line of rows.split("\n")) {
+      const login = line.split("|")[0]?.trim()
+      if (!login) continue
+      if (!out.email && login.startsWith("E:")) out.email = login.slice(2)
+      else if (!out.phone && login.startsWith("P:")) out.phone = login.slice(2)
+    }
+  } catch {
+    /* ignore */
+  }
+  return out
+}
+
+/**
+ * Resolve the handle to send to when the user targets "me"/"self".
+ * Order: env override → persisted config → chat.db auto-detect.
+ * `prefer` picks which to return first ("email" for iMessage, "phone" for SMS);
+ * falls back to the other if the preferred one is unset.
+ * Returns null if nothing can be resolved.
+ */
+export function resolveSelfHandle(prefer: "email" | "phone" = "email"): string | null {
+  const env = process.env.IRIS_SELF_HANDLE?.trim()
+  if (env) return env
+  const cfg = readSelfConfig()
+  const detected = detectSelfHandle()
+  const email = cfg.email || detected.email
+  const phone = cfg.phone || detected.phone
+  const primary = prefer === "phone" ? phone : email
+  const secondary = prefer === "phone" ? email : phone
+  return primary || secondary || null
+}
+
+/** True if the given handle string is a "me"/"self" alias. */
+export function isSelfAlias(handle: string): boolean {
+  return ["me", "self", "myself", ":me", ":self"].includes(handle.trim().toLowerCase())
 }
 
 /**
