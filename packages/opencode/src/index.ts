@@ -158,6 +158,7 @@ import { PlatformLoopCommand } from "./cli/cmd/platform-loop"
 import { GuideCommand } from "./cli/cmd/guide"
 import { registerCommand, getRegistry } from "./cli/cmd/command-groups"
 import { renderGroupedHelp, renderNamespacedHelp } from "./cli/help-renderer"
+import { Beacon } from "./telemetry/beacon"
 
 // Register a command in the grouped help registry and return it unchanged
 function reg<T>(commandModule: T): T {
@@ -169,11 +170,19 @@ process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
     e: e instanceof Error ? e.message : e,
   })
+  void Beacon.report("cli_uncaught", {
+    message: e instanceof Error ? e.message : String(e),
+    context: { kind: "unhandledRejection" },
+  })
 })
 
 process.on("uncaughtException", (e) => {
   Log.Default.error("exception", {
     e: e instanceof Error ? e.message : e,
+  })
+  void Beacon.report("cli_uncaught", {
+    message: e instanceof Error ? e.message : String(e),
+    context: { kind: "uncaughtException" },
   })
 })
 
@@ -478,6 +487,13 @@ try {
     })
   }
   Log.Default.error("fatal", data)
+  // Beacon the fatal command error to telemetry. Awaited so the POST flushes
+  // before the finally{} process.exit() — reliable client error visibility.
+  await Beacon.report("cli_command_error", {
+    message: e instanceof Error ? e.message : String(e),
+    command: rawArgs[0],
+    context: { name: e instanceof Error ? e.name : undefined },
+  })
   const formatted = FormatError(e)
   if (formatted) UI.error(formatted)
   if (formatted === undefined) {
