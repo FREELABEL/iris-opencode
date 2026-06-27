@@ -9,7 +9,7 @@ import { join, basename } from "path"
 // Config
 // ============================================================================
 
-const N8N_API_URL = process.env.IRIS_N8N_API_URL ?? "http://localhost:5678"
+const N8N_API_URL = process.env.IRIS_N8N_API_URL ?? "https://fl-n8n-production.up.railway.app"
 const N8N_API_KEY = process.env.IRIS_N8N_API_KEY ?? process.env.N8N_API_KEY ?? ""
 
 const WORKFLOWS_DIR = "fl-docker-dev/n8n/workflows"
@@ -1028,7 +1028,7 @@ const N8nRestoreCommand = cmd({
       if (hasRedacted) printKV("Warning", "Contains redacted secrets")
       printDivider()
 
-      prompts.outro(dim("Verify in n8n UI: http://localhost:5678/workflow/" + args.id))
+      prompts.outro(dim("Verify in n8n UI: " + N8N_API_URL + "/workflow/" + args.id))
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
