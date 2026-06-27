@@ -703,36 +703,64 @@ export namespace Provider {
         variants: {},
       })
 
+      // Catalog of all branded models (display names + capabilities). Which of
+      // these are actually OFFERED is decided by the proxy's /models `available`
+      // flag below — the single source of truth (provider toggle + key presence).
+      const irisCatalog: Record<string, Model> = {
+        "iris-ai": makeIrisModel("iris-ai", "IRIS AI"),
+        "iris-ai-reasoning": makeIrisModel("iris-ai-reasoning", "IRIS AI Reasoning", { reasoning: true }),
+        "grok-4.3": makeIrisModel("grok-4.3", "Grok 4.3"),
+        "gpt-4o-mini": makeIrisModel("gpt-4o-mini", "GPT-4o Mini"),
+        "gpt-4.1-nano": makeIrisModel("gpt-4.1-nano", "GPT-4.1 Nano"),
+        "gpt-5-nano": makeIrisModel("gpt-5-nano", "GPT-5 Nano"),
+        "gpt-5.4-nano": makeIrisModel("gpt-5.4-nano", "GPT-5.4 Nano"),
+        "do-120b": makeIrisModel("do-120b", "DO GPT-OSS 120B", { toolcall: false }),
+        "do-20b": makeIrisModel("do-20b", "DO GPT-OSS 20B", { toolcall: false }),
+        "qwen3-32b": makeIrisModel("qwen3-32b", "Qwen3 32B"),
+        "qwen3-coder": makeIrisModel("qwen3-coder", "Qwen3 Coder Flash"),
+        "gemma-4": makeIrisModel("gemma-4", "Gemma 4", { toolcall: false }),
+        "ministral-14b": makeIrisModel("ministral-14b", "Ministral 14B", { toolcall: false }),
+        "deepseek-v4": makeIrisModel("deepseek-v4", "DeepSeek V4 Pro"),
+        "qwen3.5-397b": makeIrisModel("qwen3.5-397b", "Qwen3.5 397B MoE"),
+        // OpenCode Zen free models
+        "big-pickle": makeIrisModel("big-pickle", "Big Pickle"),
+        "deepseek-v4-flash": makeIrisModel("deepseek-v4-flash", "DeepSeek V4 Flash"),
+        "mimo-v2.5": makeIrisModel("mimo-v2.5", "MiMo V2.5"),
+        "nemotron-3-super": makeIrisModel("nemotron-3-super", "Nemotron 3 Super"),
+        "grok-code": makeIrisModel("grok-code", "Grok Code Fast 1"),
+        "glm-4.7": makeIrisModel("glm-4.7", "GLM 4.7"),
+      }
+
+      // Ask the proxy which models are actually serveable right now (provider
+      // toggle + key presence). Show only those — so dropping a provider
+      // server-side (e.g. DO) removes its models from the TUI picker with NO
+      // client release. /models is public (no auth). On any failure, fall back
+      // to the full catalog rather than an empty picker.
+      const irisAvailable = await (async (): Promise<Set<string> | null> => {
+        try {
+          const res = await fetch(`${irisApiUrl}/models`, { signal: AbortSignal.timeout(3000) })
+          if (!res.ok) return null
+          const body = (await res.json()) as { data?: Array<{ id?: string; available?: boolean }> }
+          const rows = Array.isArray(body?.data) ? body.data : []
+          return new Set(
+            rows.filter((m) => m?.available === true).map((m) => String(m.id ?? "").replace(/^iris\//, "")),
+          )
+        } catch {
+          return null
+        }
+      })()
+
+      const irisModels: Record<string, Model> = irisAvailable
+        ? Object.fromEntries(Object.entries(irisCatalog).filter(([key]) => irisAvailable.has(key)))
+        : irisCatalog
+
       database["iris"] = {
         id: "iris",
         name: "IRIS",
         source: "custom",
         env: ["IRIS_API_KEY"],
         options: {},
-        models: {
-          "iris-ai": makeIrisModel("iris-ai", "IRIS AI"),
-          "iris-ai-reasoning": makeIrisModel("iris-ai-reasoning", "IRIS AI Reasoning", { reasoning: true }),
-          "grok-4.3": makeIrisModel("grok-4.3", "Grok 4.3"),
-          "gpt-4o-mini": makeIrisModel("gpt-4o-mini", "GPT-4o Mini"),
-          "gpt-4.1-nano": makeIrisModel("gpt-4.1-nano", "GPT-4.1 Nano"),
-          "gpt-5-nano": makeIrisModel("gpt-5-nano", "GPT-5 Nano"),
-          "gpt-5.4-nano": makeIrisModel("gpt-5.4-nano", "GPT-5.4 Nano"),
-          "do-120b": makeIrisModel("do-120b", "DO GPT-OSS 120B", { toolcall: false }),
-          "do-20b": makeIrisModel("do-20b", "DO GPT-OSS 20B", { toolcall: false }),
-          "qwen3-32b": makeIrisModel("qwen3-32b", "Qwen3 32B"),
-          "qwen3-coder": makeIrisModel("qwen3-coder", "Qwen3 Coder Flash"),
-          "gemma-4": makeIrisModel("gemma-4", "Gemma 4", { toolcall: false }),
-          "ministral-14b": makeIrisModel("ministral-14b", "Ministral 14B", { toolcall: false }),
-          "deepseek-v4": makeIrisModel("deepseek-v4", "DeepSeek V4 Pro"),
-          "qwen3.5-397b": makeIrisModel("qwen3.5-397b", "Qwen3.5 397B MoE"),
-          // OpenCode Zen free models
-          "big-pickle": makeIrisModel("big-pickle", "Big Pickle"),
-          "deepseek-v4-flash": makeIrisModel("deepseek-v4-flash", "DeepSeek V4 Flash"),
-          "mimo-v2.5": makeIrisModel("mimo-v2.5", "MiMo V2.5"),
-          "nemotron-3-super": makeIrisModel("nemotron-3-super", "Nemotron 3 Super"),
-          "grok-code": makeIrisModel("grok-code", "Grok Code Fast 1"),
-          "glm-4.7": makeIrisModel("glm-4.7", "GLM 4.7"),
-        },
+        models: irisModels,
       }
     }
 
