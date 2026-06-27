@@ -151,7 +151,9 @@ jobs:
       - name: Generate static Nuxt build
         run: NUXT_TELEMETRY_DISABLED=1 npx nuxt generate
         env:
-          NODE_OPTIONS: --openssl-legacy-provider
+          # Raise V8 heap — the full elon static generate (pdfjs-dist etc.) blows
+          # past Node's ~2GB default and OOM-crashed the desktop build (exit 134).
+          NODE_OPTIONS: --openssl-legacy-provider --max-old-space-size=5120
           SERVER_HOST: 0.0.0.0
           SERVER_PORT: 3000
           API_URL: https://raichu.heyiris.io
