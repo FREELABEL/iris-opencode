@@ -432,7 +432,7 @@ export async function probeServices(): Promise<Record<string, boolean>> {
       return res.ok
     },
     n8n: async () => {
-      const res = await fetch("http://localhost:5678/healthz", {
+      const res = await fetch((process.env.N8N_URL ?? "https://fl-n8n-production.up.railway.app") + "/healthz", {
         signal: AbortSignal.timeout(2000),
       })
       return res.ok
