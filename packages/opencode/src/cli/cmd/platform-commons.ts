@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
 
 // ============================================================================
 // iris commons — community / membership management (the flywheel surface).
@@ -51,6 +51,7 @@ const MembersCmd = cmd({
     yargs
       .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
       .option("role", { describe: "filter by role (owner/admin/moderator/member)", type: "string" })
+      .option("all", { describe: "include cancelled/inactive enrollments", type: "boolean", default: false })
       .option("limit", { describe: "results per page", type: "number", default: 100 })
       .option("page", { describe: "page number", type: "number", default: 1 })
       .option("json", { describe: "JSON output", type: "boolean" }),
@@ -75,12 +76,22 @@ const MembersCmd = cmd({
       const lastPage = env?.last_page ?? 1
       const currentPage = env?.current_page ?? args.page ?? 1
 
+      // Default to ACTIVE members — a "who's in my community" roster shouldn't be
+      // padded with cancelled/errored former members. --all includes them.
+      const inactive = new Set(["CANCELLED", "ERROR"])
+      let hiddenInactive = 0
+      if (!args.all) {
+        const before = rows.length
+        rows = rows.filter((r: any) => !inactive.has(String(r.status ?? "").toUpperCase()))
+        hiddenInactive = before - rows.length
+      }
       if (args.role) {
         const want = String(args.role).toLowerCase()
         rows = rows.filter((r: any) => String(r.role ?? "member").toLowerCase() === want)
       }
 
-      sp.stop(`${rows.length} of ${total} member(s)${lastPage > 1 ? ` — page ${currentPage}/${lastPage}` : ""}`)
+      const inactiveNote = hiddenInactive > 0 ? ` (${hiddenInactive} inactive hidden — --all)` : ""
+      sp.stop(`${rows.length} of ${total} member(s)${inactiveNote}${lastPage > 1 ? ` — page ${currentPage}/${lastPage}` : ""}`)
 
       if (args.json) {
         console.log(JSON.stringify(rows.map((r: any) => ({
@@ -219,15 +230,390 @@ const ChatCmd = cmd({
   },
 })
 
+// ── add (enroll a member) ──
+
+const AddCmd = cmd({
+  command: "add <program-id> <email>",
+  aliases: ["enroll"],
+  describe: "enroll a member in a program by email",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .positional("email", { describe: "member email", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const pid = args["program-id"]
+    const email = String(args.email)
+    const res = await irisFetch(`/api/v1/programs/enroll`, {
+      method: "POST",
+      body: JSON.stringify({ program_id: pid, email }),
+    })
+    if (!(await handleApiError(res, "Enroll member"))) return
+    const json = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    const e = json?.data ?? json?.enrollment ?? json
+    console.log("")
+    console.log(`${success("✓")} Enrolled ${bold(email)} in program #${pid}`)
+    printKV("Enrollment ID", e?.id ?? "-")
+    printKV("Status", e?.status ?? "-")
+    printKV("Role", e?.role ?? "member")
+    console.log(dim(`  iris commons members ${pid}  ·  iris commons remove ${pid} ${e?.id ?? "<enrollment-id>"}`))
+  },
+})
+
+// ── remove (cancel an enrollment) ──
+
+async function resolveEnrollmentId(pid: number, idOrEmail: string): Promise<{ id: number; who: string } | null> {
+  // Accept a raw enrollment id, OR resolve a user_id / email against the roster.
+  const res = await irisFetch(`/api/v1/programs/${pid}/enrollments?per_page=500`)
+  if (!res.ok) return null
+  const json = (await res.json()) as any
+  const env = json?.enrollments ?? json?.data ?? json
+  const rows: any[] = Array.isArray(env) ? env : (Array.isArray(env?.data) ? env.data : [])
+  const needle = String(idOrEmail).toLowerCase()
+  const match = rows.find((r: any) =>
+    String(r.id) === needle ||
+    String(r.user_id) === needle ||
+    String(r.email ?? "").toLowerCase() === needle ||
+    String(r.user?.email ?? "").toLowerCase() === needle)
+  if (!match) return null
+  return { id: match.id, who: match.email ?? match.user?.user_name ?? `user #${match.user_id}` }
+}
+
+const RemoveCmd = cmd({
+  command: "remove <program-id> <member>",
+  aliases: ["unenroll", "kick"],
+  describe: "remove a member (by enrollment id, user id, or email)",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .positional("member", { describe: "enrollment id, user id, or email", type: "string", demandOption: true })
+      .option("yes", { describe: "skip confirmation", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const pid = args["program-id"]
+    const resolved = await resolveEnrollmentId(pid, String(args.member))
+    if (!resolved) { prompts.log.error(`No enrollment found for "${args.member}" in program #${pid}`); process.exitCode = 1; return }
+
+    if (!args.yes) {
+      const ok = await prompts.confirm({ message: `Remove ${resolved.who} (enrollment #${resolved.id}) from program #${pid}?` })
+      if (!ok || prompts.isCancel(ok)) { prompts.log.info("Cancelled"); return }
+    }
+    const res = await irisFetch(`/api/v1/enrollments/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ enrollment_id: resolved.id }),
+    })
+    if (!(await handleApiError(res, "Remove member"))) return
+    const json = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    console.log(`${success("✓")} Removed ${bold(resolved.who)} (enrollment #${resolved.id}) from program #${pid}`)
+  },
+})
+
+// ── announce (email members; preview-gated for safety) ──
+
+const AnnounceCmd = cmd({
+  command: "announce <program-id>",
+  describe: "send an announcement to a program's members (previews unless --send)",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .option("subject", { describe: "announcement subject", type: "string", demandOption: true })
+      .option("body", { describe: "announcement body", type: "string", demandOption: true })
+      .option("send", { describe: "actually send (default is preview only)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const pid = args["program-id"]
+    const payload = JSON.stringify({ subject: String(args.subject), body: String(args.body) })
+
+    // Default to a PREVIEW — never email members unless --send is explicit + confirmed.
+    if (!args.send) {
+      const res = await irisFetch(`/api/v1/programs/${pid}/announcements/preview`, { method: "POST", body: payload })
+      if (!(await handleApiError(res, "Preview announcement"))) return
+      const json = (await res.json()) as any
+      if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+      const d = json?.data ?? json
+      console.log("")
+      console.log(`${dim("PREVIEW (not sent)")}  program #${pid}`)
+      printDivider()
+      printKV("Subject", d?.subject ?? args.subject)
+      console.log(dim(String(d?.html ?? d?.body ?? args.body).replace(/<[^>]+>/g, "").slice(0, 400)))
+      printDivider()
+      console.log(dim(`Re-run with --send to email members: iris commons announce ${pid} --subject "…" --body "…" --send`))
+      return
+    }
+
+    const ok = await prompts.confirm({ message: `EMAIL all members of program #${pid} with subject "${args.subject}"?` })
+    if (!ok || prompts.isCancel(ok)) { prompts.log.info("Cancelled"); return }
+    const res = await irisFetch(`/api/v1/programs/${pid}/announcements`, { method: "POST", body: payload })
+    if (!(await handleApiError(res, "Send announcement"))) return
+    const json = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    const d = json?.data ?? json
+    console.log(`${success("✓")} Announcement sent to program #${pid}` + (d?.recipients ? ` (${d.recipients} recipients)` : ""))
+  },
+})
+
+// ── role (promote/demote a member) ──
+
+const ROLES = ["owner", "admin", "moderator", "member"]
+
+const RoleCmd = cmd({
+  command: "role <program-id> <member> <role>",
+  describe: "set a member's role (owner/admin/moderator/member)",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .positional("member", { describe: "enrollment id, user id, or email", type: "string", demandOption: true })
+      .positional("role", { describe: "owner | admin | moderator | member", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const pid = args["program-id"]
+    const role = String(args.role).toLowerCase()
+    if (!ROLES.includes(role)) { prompts.log.error(`Invalid role "${args.role}" — use one of: ${ROLES.join(", ")}`); process.exitCode = 1; return }
+
+    const resolved = await resolveEnrollmentId(pid, String(args.member))
+    if (!resolved) { prompts.log.error(`No enrollment found for "${args.member}" in program #${pid}`); process.exitCode = 1; return }
+
+    const res = await irisFetch(`/api/v1/enrollments/role`, {
+      method: "POST",
+      body: JSON.stringify({ enrollment_id: resolved.id, role }),
+    })
+    if (!(await handleApiError(res, "Set role"))) return
+    const json = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    const d = json?.data ?? json
+    console.log(`${success("✓")} ${bold(resolved.who)} → ${roleBadge(d?.role ?? role)}` + (d?.previous_role ? dim(` (was ${d.previous_role})`) : ""))
+  },
+})
+
+// ── revenue (MRR + paid membership metrics) ──
+
+const RevenueCmd = cmd({
+  command: "revenue <program-id>",
+  aliases: ["mrr"],
+  describe: "paid-membership revenue — MRR, active/trialing members, recent payments",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const pid = args["program-id"]
+    UI.empty()
+    prompts.intro(`◈  Commons — revenue of program #${pid}`)
+    const sp = prompts.spinner()
+    sp.start("Loading memberships…")
+    try {
+      const res = await irisFetch(`/api/v1/programs/${pid}/memberships`)
+      if (!(await handleApiError(res, "Program memberships"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      const json = (await res.json()) as any
+      if (json?.success === false) {
+        sp.stop("Unavailable", 1)
+        // Honest: the endpoint reported failure — don't fabricate $0 MRR.
+        prompts.log.warn(`Membership data unavailable: ${json?.message ?? "unknown error"}`)
+        prompts.outro("Done")
+        return
+      }
+      const d = json?.data ?? json
+      const stats = d?.stats ?? {}
+      const memberships: any[] = Array.isArray(d?.memberships) ? d.memberships : []
+      sp.stop("Loaded")
+
+      const mrr = Number(stats.monthly_revenue ?? 0)
+      const totalRev = Number(stats.total_revenue ?? 0)
+
+      if (args.json) {
+        console.log(JSON.stringify({
+          mrr, total_revenue: totalRev,
+          total_members: stats.total_members ?? memberships.length,
+          active_members: stats.active_members ?? null,
+          trialing_members: stats.trialing_members ?? null,
+        }, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      printKV("MRR", `$${mrr.toLocaleString(undefined, { minimumFractionDigits: 2 })}`)
+      printKV("Total revenue", `$${totalRev.toLocaleString(undefined, { minimumFractionDigits: 2 })}`)
+      printKV("Active members", String(stats.active_members ?? 0))
+      printKV("Trialing", String(stats.trialing_members ?? 0))
+      printKV("Total members", String(stats.total_members ?? memberships.length))
+      if (memberships.length === 0) {
+        console.log(`  ${dim("No paid memberships yet — set pricing with iris programs package-create")}`)
+      }
+      printDivider()
+      prompts.outro(dim(`iris commons health ${pid}  ·  iris commons members ${pid}`))
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ── health (community engagement metrics — proves the flywheel is working) ──
+
+const HealthCmd = cmd({
+  command: "health <program-id>",
+  describe: "community health — active members, churn, recent joins, hub activity",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const pid = args["program-id"]
+    UI.empty()
+    prompts.intro(`◈  Commons — health of program #${pid}`)
+    const sp = prompts.spinner()
+    sp.start("Computing…")
+    try {
+      // Roster (all statuses) + hub message count, from proven endpoints.
+      const [enrRes, chatRes] = await Promise.all([
+        irisFetch(`/api/v1/programs/${pid}/enrollments?per_page=1000`).catch(() => null),
+        irisFetch(`/api/programs/${pid}/chat/messages?per_page=1`).catch(() => null),
+      ])
+      const enrollOk = !!enrRes?.ok
+      const enrJson = enrollOk ? ((await enrRes!.json()) as any) : {}
+      const env = enrJson?.enrollments ?? enrJson?.data ?? enrJson
+      const rows: any[] = Array.isArray(env) ? env : (Array.isArray(env?.data) ? env.data : [])
+
+      const chatOk = !!chatRes?.ok
+      const chatJson = chatOk ? ((await chatRes!.json()) as any) : {}
+      const messageTotal = chatJson?.data?.pagination?.total ?? null
+
+      const isActive = (s: string) => !["CANCELLED", "ERROR"].includes(String(s ?? "").toUpperCase())
+      const active = rows.filter((r) => isActive(r.status)).length
+      const cancelled = rows.filter((r) => ["CANCELLED", "ERROR"].includes(String(r.status ?? "").toUpperCase())).length
+      const totalEver = rows.length
+      const within = (days: number) => rows.filter((r) => {
+        const t = new Date(String(r.created_at ?? 0)).getTime()
+        return !isNaN(t) && Date.now() - t <= days * 86400_000
+      }).length
+      const joined7 = within(7), joined30 = within(30)
+      // Churn proxy: share of all-time enrollments that are now cancelled.
+      const churnPct = totalEver > 0 ? Math.round((cancelled / totalEver) * 100) : 0
+
+      sp.stop(enrollOk ? "Computed" : "Roster unavailable")
+
+      const data = {
+        active_members: enrollOk ? active : null,
+        cancelled: enrollOk ? cancelled : null,
+        total_ever: enrollOk ? totalEver : null,
+        churn_pct: enrollOk ? churnPct : null,
+        joined_last_7d: enrollOk ? joined7 : null,
+        joined_last_30d: enrollOk ? joined30 : null,
+        hub_messages: chatOk ? messageTotal : null,
+      }
+      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+      printDivider()
+      printKV("Active members", enrollOk ? String(active) : dim("unknown"))
+      printKV("Cancelled", enrollOk ? String(cancelled) : dim("unknown"))
+      printKV("Churn", enrollOk ? `${churnPct}%  ${dim(`(${cancelled}/${totalEver} ever)`)}` : dim("unknown"))
+      printKV("Joined (7d / 30d)", enrollOk ? `${joined7} / ${joined30}` : dim("unknown"))
+      printKV("Hub messages", chatOk && messageTotal !== null ? String(messageTotal) : dim("unknown"))
+      printDivider()
+      // A simple engagement read so the number means something at a glance.
+      if (enrollOk) {
+        const signal = joined30 > 0 && churnPct < 25 ? `${UI.Style.TEXT_SUCCESS}growing${UI.Style.TEXT_NORMAL}`
+          : churnPct >= 50 ? `${UI.Style.TEXT_DANGER}high churn${UI.Style.TEXT_NORMAL}`
+          : joined30 === 0 ? `${UI.Style.TEXT_WARNING}stalled (no recent joins)${UI.Style.TEXT_NORMAL}` : dim("steady")
+        console.log(`  ${dim("Signal:")} ${signal}`)
+      }
+      prompts.outro(dim(`iris commons members ${pid}  ·  iris commons revenue ${pid}`))
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ── send (post to the community hub) ──
+
+const SendCmd = cmd({
+  command: "send <program-id> <message>",
+  aliases: ["post"],
+  describe: "post a message to a program's community hub",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .positional("message", { describe: "message content", type: "string", demandOption: true })
+      .option("channel", { describe: "channel slug (default general)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const userId = await requireUserId(undefined)
+    if (!userId) return
+    const pid = args["program-id"]
+    // The V1 chat controller resolves the actor from a user_id param (its bearer-token
+    // path is an unfinished TODO), so we pass the authenticated user_id explicitly.
+    const body: Record<string, any> = { content: String(args.message), user_id: userId }
+    if (args.channel) body.channel = String(args.channel)
+    const res = await irisFetch(`/api/v1/programs/${pid}/chat/messages`, { method: "POST", body: JSON.stringify(body) })
+    if (!(await handleApiError(res, "Send message"))) return
+    const json = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    const m = json?.data ?? json?.message ?? json
+    console.log(`${success("✓")} Posted to program #${pid}${m?.channel ? ` ${dim(`#${m.channel}`)}` : ""}` + (m?.id ? dim(`  (message #${m.id})`) : ""))
+  },
+})
+
+// ── pin (moderation — toggle a pinned message) ──
+
+const PinCmd = cmd({
+  command: "pin <program-id> <message-id>",
+  aliases: ["unpin"],
+  describe: "pin/unpin a community hub message (moderator+ only)",
+  builder: (yargs) =>
+    yargs
+      .positional("program-id", { describe: "program ID", type: "number", demandOption: true })
+      .positional("message-id", { describe: "chat message ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const userId = await requireUserId(undefined)
+    if (!userId) return
+    const pid = args["program-id"]
+    const mid = args["message-id"]
+    // user_id passed explicitly (chat controller's token path is an unfinished TODO);
+    // togglePin also enforces canModerate(program, user) server-side.
+    const res = await irisFetch(`/api/v1/programs/${pid}/chat/messages/${mid}/pin`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId }),
+    })
+    if (!(await handleApiError(res, "Pin message"))) return
+    const json = (await res.json()) as any
+    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    const pinned = json?.data?.is_pinned ?? json?.is_pinned ?? json?.message?.is_pinned
+    console.log(`${success("✓")} Message #${mid} ${pinned ? `${UI.Style.TEXT_WARNING}📌 pinned${UI.Style.TEXT_NORMAL}` : "unpinned"}`)
+  },
+})
+
 export const PlatformCommonsCommand = cmd({
   command: "commons",
-  aliases: ["membership"],
+  aliases: ["community", "membership"],
   describe: "community & membership management — members, access, community hub",
   builder: (yargs) =>
     yargs
       .command(MembersCmd)
       .command(AccessCmd)
       .command(ChatCmd)
+      .command(AddCmd)
+      .command(RemoveCmd)
+      .command(RoleCmd)
+      .command(SendCmd)
+      .command(PinCmd)
+      .command(HealthCmd)
+      .command(RevenueCmd)
+      .command(AnnounceCmd)
       .demandCommand(),
   async handler() {},
 })

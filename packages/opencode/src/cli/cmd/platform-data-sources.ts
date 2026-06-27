@@ -484,12 +484,173 @@ const StatusCommand = cmd({
   },
 })
 
+// ----------------------------------------------------------------------------
+// data-sources types — the catalog (#147299 D1: inventory of supported types)
+// ----------------------------------------------------------------------------
+
+/**
+ * Group the integration registry into { category: [{type,name,oauth}] }, sorted.
+ * Pure so the catalog rendering is unit-testable without a live API. Drives the
+ * D1 inventory straight from the backend registry so it never drifts.
+ */
+export function groupTypesByCategory(
+  registry: Record<string, any>,
+): Record<string, Array<{ type: string; name: string; oauth: boolean }>> {
+  const out: Record<string, Array<{ type: string; name: string; oauth: boolean }>> = {}
+  for (const [type, meta] of Object.entries(registry || {})) {
+    if (!meta || typeof meta !== "object") continue
+    const category = (meta as any).category || "other"
+    ;(out[category] ||= []).push({
+      type,
+      name: (meta as any).name || type,
+      oauth: !!(meta as any).oauth_required,
+    })
+  }
+  for (const cat of Object.keys(out)) out[cat].sort((a, b) => a.name.localeCompare(b.name))
+  return out
+}
+
+const TypesCommand = cmd({
+  command: "types",
+  aliases: ["catalog"],
+  describe: "list every supported data-source type and how to connect each",
+  builder: (yargs) =>
+    yargs
+      .option("category", { alias: "c", type: "string", describe: "filter to one category" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Data Source Types")
+    const token = await requireAuth()
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
+    const res = await irisFetch(`/api/v1/integrations/registry`)
+    const ok = await handleApiError(res, "List source types")
+    if (!ok) {
+      prompts.outro("Done")
+      return
+    }
+    const registry = ((await res.json()) as any)?.data ?? {}
+    if (args.json) {
+      console.log(JSON.stringify(registry, null, 2))
+      prompts.outro("Done")
+      return
+    }
+    const grouped = groupTypesByCategory(registry)
+    printDivider()
+    let shown = 0
+    for (const cat of Object.keys(grouped).sort()) {
+      if (args.category && cat !== args.category) continue
+      console.log(`  ${bold(cat)}`)
+      for (const t of grouped[cat]) {
+        const how = t.oauth ? dim("OAuth → web UI") : dim(`add: iris data-sources add ${t.type}`)
+        console.log(`    ${t.type.padEnd(22)} ${dim((t.name || "").slice(0, 20).padEnd(20))} ${how}`)
+        shown++
+      }
+    }
+    printDivider()
+    console.log(`  ${dim(`${shown} type(s) · key/token types connect via`)} ${highlight("iris data-sources add <type>")} ${dim("· OAuth types in the web UI")}`)
+    prompts.outro("Done")
+  },
+})
+
+// ----------------------------------------------------------------------------
+// data-sources add <type> — the connect verb (#147299: a real add, not just
+// `integrations connect`). Mirrors integrations connect's working request.
+// ----------------------------------------------------------------------------
+
+const AddCommand = cmd({
+  command: "add <type>",
+  aliases: ["connect"],
+  describe: "connect a new data source (key/token-based; OAuth types use the web UI)",
+  builder: (yargs) =>
+    yargs
+      .positional("type", { type: "string", demandOption: true, describe: "source type, e.g. slack, github (see: data-sources types)" })
+      .option("api-key", { type: "string", describe: "API key" })
+      .option("token", { type: "string", describe: "access token" })
+      .option("webhook-url", { type: "string", describe: "webhook URL" })
+      .option("bloq", { alias: "b", type: "number", describe: "share with a bloq" })
+      .option("user-id", { type: "number" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Add Data Source: ${args.type}`)
+    const token = await requireAuth()
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
+    const userId = await requireUserId(args["user-id"] as number | undefined)
+    if (!userId) {
+      prompts.outro("Done")
+      return
+    }
+
+    const credentials: Record<string, string> = {}
+    if (args["api-key"]) credentials.api_key = String(args["api-key"])
+    if (args.token) credentials.token = String(args.token)
+    if (args["webhook-url"]) credentials.webhook_url = String(args["webhook-url"])
+
+    if (Object.keys(credentials).length === 0) {
+      // Distinguish "OAuth type (can't CLI-connect)" from "you forgot creds" so
+      // the user isn't stuck guessing why a bare `add google-drive` won't work.
+      let oauth = false
+      try {
+        const r = await irisFetch(`/api/v1/integrations/registry`)
+        if (r.ok) oauth = !!(((await r.json()) as any)?.data?.[String(args.type)]?.oauth_required)
+      } catch {}
+      if (oauth) {
+        prompts.log.warn(`${args.type} is an OAuth integration — connect it in the web UI (Settings → Integrations → Connect), not the CLI.`)
+      } else {
+        prompts.log.error("No credentials provided. Use --api-key, --token, or --webhook-url. List types: iris data-sources types")
+      }
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    const payload: Record<string, unknown> = { type: args.type, credentials, status: "active" }
+    if (args.bloq) payload.bloq_id = args.bloq
+
+    const spinner = prompts.spinner()
+    spinner.start("Connecting…")
+    const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+    const ok = await handleApiError(res, "Add data source")
+    if (!ok) {
+      spinner.stop("Failed", 1)
+      prompts.outro("Done")
+      return
+    }
+    const integration = ((await res.json()) as any)?.data ?? {}
+    spinner.stop(`${success("✓")} Connected ${bold(String(args.type))}`)
+    if (args.json) {
+      console.log(JSON.stringify(integration, null, 2))
+      prompts.outro("Done")
+      return
+    }
+    printDivider()
+    printKV("ID", integration.id)
+    printKV("Type", integration.type)
+    printKV("Status", integration.status)
+    printKV("Scope", args.bloq ? `Bloq #${args.bloq}` : "Personal")
+    printDivider()
+    prompts.outro(dim(`iris data-sources list  ·  iris data-sources read ${args.type} -f <function>`))
+  },
+})
+
 export const PlatformDataSourcesCommand = cmd({
   command: "data-sources",
   aliases: ["datasources", "ds"],
-  describe: "unified data sources: list, read, article (grounded), sync, status",
+  describe: "unified data sources: types, add, list, read, article (grounded), sync, status",
   builder: (yargs) =>
     yargs
+      .command(TypesCommand)
+      .command(AddCommand)
       .command(ListCommand)
       .command(ReadCommand)
       .command(ArticleCommand)

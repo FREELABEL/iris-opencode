@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
-import { executePublishMany } from "./bloq-item-shared"
+import { executePublish } from "./bloq-item-shared"
 import path from "path"
 
 // ============================================================================
@@ -934,21 +934,21 @@ const BloqsDeleteItemCommand = cmd({
 })
 
 const BloqsPublishCommand = cmd({
-  command: "publish <files..>",
+  command: "publish <file>",
   aliases: ["publish-md"],
-  describe: "publish markdown file(s) as public bloq items (globs ok; re-run to sync)",
+  describe: "publish a markdown file as a public bloq item (returns a shareable URL; re-run to sync)",
   builder: (yargs) =>
     yargs
-      .positional("files", { describe: "one or more markdown (.md) files (e.g. ./docs/*.md)", type: "string", demandOption: true })
+      .positional("file", { describe: "path to a markdown (.md) file", type: "string", demandOption: true })
       .option("bloq", { describe: "target bloq ID (default: prompt, or auto 'Published Docs')", type: "number" })
       .option("list", { describe: "target list (ID or name; created if missing)", type: "string" })
-      .option("title", { describe: "override the item title (single file only)", type: "string" })
+      .option("title", { describe: "override the item title", type: "string" })
       .option("private", { describe: "create/update without making it public", type: "boolean", default: false })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    await executePublishMany({ ...(args as any), files: (args as any).files })
+    await executePublish(args as any)
   },
 })
 

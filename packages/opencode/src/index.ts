@@ -38,6 +38,7 @@ import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
 import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { OkfCommand } from "./cli/cmd/platform-okf"
+import { PlatformLearnCommand } from "./cli/cmd/platform-learn"
 import { PlatformCopycatCommand } from "./cli/cmd/platform-copycat"
 import { PlatformContentCommand } from "./cli/cmd/platform-content"
 import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
@@ -258,6 +259,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformBloqsCommand))
   .command(reg(PlatformBrandsCommand))
   .command(reg(OkfCommand))
+  .command(reg(PlatformLearnCommand))
   .command(reg(PlatformCopycatCommand))
   .command(reg(PlatformContentCommand))
   .command(reg(PlatformGoodDealsCommand))
