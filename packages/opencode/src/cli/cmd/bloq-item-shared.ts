@@ -17,20 +17,34 @@ async function unwrap(res: Response): Promise<any> {
   return j?.data ?? j
 }
 
+export interface ShareOptions {
+  password?: string
+  expires?: string // ISO date/time, or e.g. "30d" handled server-side via expires_at
+}
+
 export async function apiMakePublic(
   userId: number,
   itemId: number,
-): Promise<{ public_url: string | null; public_uuid: string | null } | null> {
+  opts: ShareOptions = {},
+): Promise<{ public_url: string | null; public_uuid: string | null; access_level?: string; expires_at?: string | null } | null> {
+  const payload: Record<string, unknown> = {}
+  if (opts.password) payload.password = opts.password
+  if (opts.expires) payload.expires_at = opts.expires
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-public`, {
     method: "POST",
-    body: "{}",
+    body: JSON.stringify(payload),
   })
   if (!res.ok) {
     await handleApiError(res, "Make public")
     return null
   }
   const d = await unwrap(res)
-  return { public_url: d?.public_url ?? null, public_uuid: d?.public_uuid ?? null }
+  return {
+    public_url: d?.public_url ?? null,
+    public_uuid: d?.public_uuid ?? null,
+    access_level: d?.access_level,
+    expires_at: d?.expires_at ?? null,
+  }
 }
 
 export async function apiMakePrivate(userId: number, itemId: number): Promise<boolean> {
@@ -43,6 +57,23 @@ export async function apiMakePrivate(userId: number, itemId: number): Promise<bo
     return false
   }
   return true
+}
+
+async function apiDeleteItem(itemId: number): Promise<boolean> {
+  const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}`, { method: "DELETE" })
+  if (!res.ok) {
+    await handleApiError(res, "Delete item")
+    return false
+  }
+  return true
+}
+
+async function fetchItems(userId: number, bloqId: number): Promise<any[]> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items?per_page=500`)
+  if (!res.ok) return []
+  const j = (await res.json()) as { data?: any }
+  const raw = j?.data
+  return Array.isArray(raw) ? raw : (raw?.items ?? [])
 }
 
 async function fetchBloqs(userId: number): Promise<any[]> {
@@ -276,10 +307,21 @@ export interface PublishArgs {
   bloq?: number
   list?: string | number
   title?: string
-  private?: boolean
+  // Sharing is OPT-IN (private by default). Any of these makes the item public.
+  public?: boolean
+  password?: string
+  expires?: string
+  private?: boolean // explicit private (back-compat / override)
   "no-frontmatter"?: boolean
   json?: boolean
   "user-id"?: number
+}
+
+/** Resolve whether this publish should share the item, and with what gates. */
+function shareIntent(args: PublishArgs): { share: boolean; opts: ShareOptions } {
+  if (args.private) return { share: false, opts: {} }
+  const share = !!(args.public || args.password || args.expires)
+  return { share, opts: { password: args.password, expires: args.expires } }
 }
 
 /** Publish a markdown file as a bloq item + public URL. Idempotent re-sync via frontmatter. */
@@ -374,11 +416,14 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       itemId = created.id
     }
 
+    // Sharing is OPT-IN now (private by default). --public / --password / --expires share it.
+    const { share, opts } = shareIntent(args)
     let publicUrl: string | null = null
     let publicUuid: string | null = null
-    if (!args.private) {
-      const pub = await apiMakePublic(userId, itemId!)
-      if (pub) { publicUrl = pub.public_url; publicUuid = pub.public_uuid }
+    let accessLevel: string | undefined
+    if (share) {
+      const pub = await apiMakePublic(userId, itemId!, opts)
+      if (pub) { publicUrl = pub.public_url; publicUuid = pub.public_uuid; accessLevel = pub.access_level }
     }
 
     if (!args["no-frontmatter"]) {
@@ -386,13 +431,16 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       if (bloqId) newData.iris_bloq_id = bloqId
       if (listId) newData.iris_list_id = listId
       if (publicUrl) newData.iris_public_url = publicUrl
+      else { delete newData.iris_public_url } // no longer shared → drop stale URL
+      if (accessLevel) newData.iris_access_level = accessLevel
+      else { delete newData.iris_access_level }
       writeFileSync(args.file, matter.stringify(content, newData))
     }
 
     if (json) {
       console.log(JSON.stringify({
         success: true, item_id: itemId, bloq_id: bloqId, list_id: listId,
-        public_url: publicUrl, public_uuid: publicUuid, is_public: !args.private,
+        public_url: publicUrl, public_uuid: publicUuid, is_public: share, access_level: accessLevel ?? "private",
       }))
       return
     }
@@ -401,9 +449,10 @@ export async function executePublish(args: PublishArgs): Promise<void> {
     if (publicUrl) {
       console.log()
       console.log(`  ${bold("Public URL")}  ${publicUrl}`)
+      if (accessLevel && accessLevel !== "public") console.log(`  ${dim(`access: ${accessLevel}`)}`)
       console.log()
-    } else if (args.private) {
-      prompts.log.info("Saved privately. Re-run without --private to publish.")
+    } else {
+      prompts.log.info("Saved privately. Add --public (or --password / --expires) to share.")
     }
     prompts.outro(dim(args["no-frontmatter"] ? "edit + re-run to sync" : "frontmatter updated — edit + re-run to sync the same URL"))
   } catch (err) {
@@ -413,8 +462,42 @@ export async function executePublish(args: PublishArgs): Promise<void> {
   }
 }
 
+/** Publish one or many markdown files (shells expand globs like ./docs/*.md). */
+export async function executePublishMany(args: PublishArgs & { files: string[] }): Promise<void> {
+  const files = (args.files ?? []).filter(Boolean)
+  if (files.length <= 1) {
+    await executePublish({ ...args, file: files[0] ?? args.file })
+    return
+  }
+  const results: any[] = []
+  for (const file of files) {
+    // Capture each file's JSON result so we can print a single summary.
+    const captured: string[] = []
+    const orig = console.log
+    console.log = (...a: any[]) => captured.push(a.join(" "))
+    try {
+      await executePublish({ ...args, file, json: true })
+    } finally {
+      console.log = orig
+    }
+    let r: any = null
+    try { r = JSON.parse(captured[captured.length - 1] ?? "null") } catch {}
+    results.push({ file, ...(r ?? { success: false }) })
+  }
+  if (args.json) { console.log(JSON.stringify({ success: true, count: results.length, results })); return }
+  UI.empty()
+  prompts.intro(`◈  Published ${results.filter((r) => r.success).length}/${results.length} files`)
+  for (const r of results) {
+    if (r.success) prompts.log.success(`${path.basename(r.file)} → ${r.public_url ?? "(private)"}`)
+    else prompts.log.error(`${path.basename(r.file)} → ${r.error ?? "failed"}`)
+  }
+  prompts.outro("Done")
+}
+
 export interface ItemActionArgs {
   "item-id": number
+  password?: string
+  expires?: string
   json?: boolean
   "user-id"?: number
 }
@@ -429,7 +512,7 @@ export async function executeMakePublic(args: ItemActionArgs): Promise<void> {
 
   const spinner = json ? null : prompts.spinner()
   spinner?.start("Making item public…")
-  const pub = await apiMakePublic(userId, args["item-id"])
+  const pub = await apiMakePublic(userId, args["item-id"], { password: args.password, expires: args.expires })
   if (!pub) { spinner?.stop("Failed", 1); if (json) console.log(JSON.stringify({ success: false })); else prompts.outro("Done"); return }
 
   if (json) { console.log(JSON.stringify({ success: true, ...pub, is_public: true })); return }
@@ -437,6 +520,7 @@ export async function executeMakePublic(args: ItemActionArgs): Promise<void> {
   if (pub.public_url) {
     console.log()
     console.log(`  ${bold("Public URL")}  ${pub.public_url}`)
+    if (pub.access_level && pub.access_level !== "public") console.log(`  ${dim(`access: ${pub.access_level}${pub.expires_at ? ` · expires ${pub.expires_at}` : ""}`)}`)
     console.log(`  ${dim(`uuid: ${pub.public_uuid ?? "?"}`)}`)
     console.log()
   } else {
@@ -460,4 +544,97 @@ export async function executeMakePrivate(args: ItemActionArgs): Promise<void> {
   if (json) { console.log(JSON.stringify({ success: true, is_public: false })); return }
   spinner?.stop(`${success("✓")} Item is now private`)
   prompts.outro("Done")
+}
+
+export interface UnpublishArgs {
+  file: string
+  delete?: boolean
+  json?: boolean
+  "user-id"?: number
+}
+
+/** Unpublish (make private) the item a markdown file points at; optionally delete it. */
+export async function executeUnpublish(args: UnpublishArgs): Promise<void> {
+  const json = !!args.json
+  if (!json) { UI.empty(); prompts.intro(`◈  Unpublish ${path.basename(args.file)}`) }
+  const token = await requireAuth()
+  if (!token) { if (!json) prompts.outro("Done"); return }
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  if (!existsSync(args.file)) {
+    const msg = `File not found: ${args.file}`
+    if (json) console.log(JSON.stringify({ success: false, error: msg }))
+    else { prompts.log.error(msg); prompts.outro("Done") }
+    process.exitCode = 2
+    return
+  }
+
+  const fm: Record<string, any> = matter(readFileSync(args.file, "utf8")).data || {}
+  const itemId = fm.iris_item_id ? Number(fm.iris_item_id) : null
+  if (!itemId) {
+    const msg = "No iris_item_id in this file's frontmatter — it hasn't been published."
+    if (json) console.log(JSON.stringify({ success: false, error: msg }))
+    else { prompts.log.error(msg); prompts.outro("Done") }
+    return
+  }
+
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start(args.delete ? `Deleting item #${itemId}…` : `Making item #${itemId} private…`)
+  const priv = await apiMakePrivate(userId, itemId)
+  let deleted = false
+  if (args.delete && priv) deleted = await apiDeleteItem(itemId)
+
+  if (!priv) { spinner?.stop("Failed", 1); if (json) console.log(JSON.stringify({ success: false })); else prompts.outro("Done"); return }
+
+  // Drop the public-url marker from the file (it's no longer reachable).
+  if (!args.delete) {
+    const body = matter(readFileSync(args.file, "utf8")).content
+    const { iris_public_url, ...rest } = fm
+    writeFileSync(args.file, matter.stringify(body, rest))
+  }
+
+  if (json) { console.log(JSON.stringify({ success: true, item_id: itemId, is_public: false, deleted })); return }
+  spinner?.stop(`${success("✓")} ${args.delete ? "Deleted" : "Unpublished"} item #${itemId}`)
+  prompts.outro("Done")
+}
+
+export interface ListArgs {
+  bloq?: number
+  json?: boolean
+  "user-id"?: number
+}
+
+/** List the caller's published (public) bloq items + their URLs. */
+export async function executeListPublished(args: ListArgs): Promise<void> {
+  const json = !!args.json
+  if (!json) { UI.empty(); prompts.intro("◈  Published items") }
+  const token = await requireAuth()
+  if (!token) { if (!json) prompts.outro("Done"); return }
+  const userId = await requireUserId(args["user-id"])
+  if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  const spinner = json ? null : prompts.spinner()
+  spinner?.start("Scanning for published items…")
+
+  const bloqs = args.bloq ? [{ id: args.bloq }] : (await fetchBloqs(userId)).slice(0, 50)
+  const published: any[] = []
+  for (const b of bloqs) {
+    const items = await fetchItems(userId, b.id)
+    for (const it of items) {
+      if (it.is_public && (it.public_url || it.public_uuid)) {
+        published.push({ id: it.id, title: it.title ?? "(untitled)", bloq_id: b.id, public_url: it.public_url ?? it.public_uuid })
+      }
+    }
+  }
+
+  if (json) { spinner?.stop(); console.log(JSON.stringify({ success: true, count: published.length, items: published })); return }
+  spinner?.stop(`${published.length} published item(s)`)
+  console.log()
+  for (const p of published) {
+    console.log(`  ${dim(`#${p.id}`)}  ${bold(p.title)}`)
+    console.log(`      ${p.public_url}`)
+  }
+  console.log()
+  prompts.outro(dim("iris atlas:item unpublish <file>  |  iris atlas:item make-private <id>"))
 }
