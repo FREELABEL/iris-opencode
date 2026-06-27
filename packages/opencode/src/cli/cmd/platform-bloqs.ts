@@ -959,6 +959,8 @@ const BloqsMakePublicCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("item-id", { describe: "item ID to share", type: "number", demandOption: true })
+      .option("password", { describe: "gate the public link behind a password (min 6 chars)", type: "string" })
+      .option("expires", { describe: "expiry as an ISO date/time (e.g. 2026-12-31)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -977,9 +979,14 @@ const BloqsMakePublicCommand = cmd({
     spinner?.start("Making item public…")
 
     try {
+      // Access ladder: a password gates the link (access_level=password); an
+      // expiry makes it expiring. Backend derives access_level from these.
+      const shareBody: Record<string, unknown> = {}
+      if (args.password) shareBody.password = args.password
+      if (args.expires) shareBody.expires_at = args.expires
       const res = await irisFetch(
         `/api/v1/user/${userId}/bloqs/list/item/${args["item-id"]}/make-public`,
-        { method: "POST", body: "{}" },
+        { method: "POST", body: JSON.stringify(shareBody) },
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
@@ -995,11 +1002,14 @@ const BloqsMakePublicCommand = cmd({
 
       if (args.json) { console.log(JSON.stringify({ success: true, ...data })); return }
 
-      spinner?.stop(`${success("✓")} Item is now public`)
+      const level = data?.access_level ?? (args.password ? "password" : args.expires ? "expiring" : "public")
+      spinner?.stop(`${success("✓")} Item is now shareable (${level})`)
       if (url) {
         console.log()
         console.log(`  ${bold("Public URL")}  ${url}`)
         console.log(`  ${dim(`uuid: ${data?.public_uuid ?? "?"}`)}`)
+        if (data?.requires_password ?? args.password) console.log(`  ${dim("🔒 password required to view")}`)
+        if (args.expires) console.log(`  ${dim(`⏱ expires ${args.expires}`)}`)
         console.log()
       } else {
         prompts.log.warn("Item made public but no URL was returned")
