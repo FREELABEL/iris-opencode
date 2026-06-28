@@ -99,6 +99,12 @@
       "purpose": "Pulse readiness engine — autonomous 4-signal scoring (requirements + liveness + comms freshness + config), 15-min cron, daily digest. How to enroll a lead, view the score, run requirements, debug the loop."
     },
     {
+      "src": "how-to/diary.md",
+      "dest": "how-to/diary.md",
+      "managed": true,
+      "purpose": "Daily diary — read/write your account-scoped diary and publish local daily-diary/*.md into it with `iris diary sync` (idempotent, date-deduped, frontmatter writeback). Scopes (user/agent/bloq), opt-in --public sharing, and the auth/owner-scoping security model."
+    },
+    {
       "src": "how-to/agentic-loops.md",
       "dest": "how-to/agentic-loops.md",
       "managed": true,
