@@ -249,8 +249,8 @@ const DiarySyncCommand = cmd({
       let publicUrl: string | null = null
       if (args.public && itemId && userId) {
         const opts: ShareOptions = {}
-        if (args.password) opts.password = args.password
-        if (args.expires) opts.expires = args.expires
+        if (args.password) opts.password = String(args.password)
+        if (args.expires) opts.expires = String(args.expires)
         const pub = await apiMakePublic(parseInt(userId, 10), itemId, opts)
         if (pub?.public_url) { publicUrl = pub.public_url; shared++ }
         if (pub?.public_uuid) fm.iris_diary_public_uuid = pub.public_uuid
