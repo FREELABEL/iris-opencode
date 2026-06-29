@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
+import { itemTitle, itemContentPreview } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
 import path from "path"
 
@@ -291,12 +292,7 @@ const BloqsGetCommand = cmd({
           const listItems = allItems.filter((i: any) => (i.bloq_list_id ?? i.list_id) === l.id)
           const preview = listItems.slice(0, 3)
           for (const item of preview) {
-            const contentObj = typeof item.content === "object" && item.content ? item.content : null
-            const rawContent = typeof item.content === "string" ? item.content : ""
-            const title = (typeof item.title === "string" && item.title)
-              || (contentObj?.title ? String(contentObj.title) : "")
-              || (rawContent ? rawContent.replace(/[#\n]/g, " ").trim().slice(0, 80) : "(untitled)")
-            console.log(`      ${dim("•")} ${title}`)
+            console.log(`      ${dim("•")} ${itemTitle(item)}`)
           }
           const remaining = listItems.length - preview.length
           if (remaining > 0) {
@@ -321,9 +317,9 @@ const BloqsGetCommand = cmd({
 
         const shown = displayItems.slice(0, limit)
         for (const item of shown) {
-          const title = item.title ?? "(untitled)"
+          const title = itemTitle(item)
           const listName = item.list_name ?? lists.find((l: any) => l.id === (item.bloq_list_id ?? item.list_id))?.name ?? ""
-          const content = String(item.content ?? "").replace(/\n/g, " ").slice(0, 120)
+          const content = itemContentPreview(item, 120)
           const date = item.created_at ? dim(new Date(item.created_at).toLocaleDateString()) : ""
           console.log(`    ${dim(`#${item.id}`)}  ${bold(title)}  ${dim(listName)}  ${date}`)
           if (content) console.log(`      ${dim(content)}`)
