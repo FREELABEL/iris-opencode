@@ -290,6 +290,8 @@ jobs:
             echo "::warning::No desktop assets to upload (desktop build skipped or failed)"
             exit 0
           fi
-          gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" --clobber
+          # --repo is required: this job has no checkout, so gh can't infer the
+          # repo from a local .git ("fatal: not a git repository" otherwise).
+          gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" --clobber --repo "${{ github.repository }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

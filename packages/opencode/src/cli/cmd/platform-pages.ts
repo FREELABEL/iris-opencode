@@ -304,7 +304,10 @@ const GetCmd = cmd({
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
-      .positional("path", { describe: "dot notation path", type: "string" }),
+      .positional("path", { describe: "dot notation path", type: "string" })
+      // `pages get` already emits JSON; accept --json for parity with other
+      // commands (and to stop agents that reflexively append it from erroring).
+      .option("json", { describe: "force JSON output (default for object values)", type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
     const page = await getBySlug(args.slug, true)
@@ -319,7 +322,7 @@ const GetCmd = cmd({
       console.error(`Path '${args.path}' not found in '${args.slug}'`)
       process.exit(1)
     }
-    if (typeof value === "object") console.log(JSON.stringify(value, null, 2))
+    if (args.json || typeof value === "object") console.log(JSON.stringify(value, null, 2))
     else console.log(String(value))
   },
 })

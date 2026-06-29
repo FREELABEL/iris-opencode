@@ -729,7 +729,7 @@ async function executeN8n(
   timeoutMs: number,
 ): Promise<{ output: string; exit_code: number }> {
   try {
-    const n8nUrl = (process.env.N8N_URL ?? "http://localhost:5678").replace(/\/$/, "")
+    const n8nUrl = (process.env.N8N_URL ?? "https://fl-n8n-production.up.railway.app").replace(/\/$/, "")
 
     let url: string
     let headers: Record<string, string> = { "Content-Type": "application/json" }

@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, dim, bold, success } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
-import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle } from "../lib/imessage"
+import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle } from "../lib/imessage"
 import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
 
 const ImessageSearchCommand = cmd({
@@ -321,8 +321,9 @@ const ImessageSendCommand = cmd({
   describe: "send an iMessage to a phone number or contact",
   builder: (yargs) =>
     yargs
-      .positional("handle", { type: "string", demandOption: true, describe: "phone number, lead ID, or contact name" })
-      .positional("message", { type: "string", demandOption: true, describe: "message text to send" }),
+      .positional("handle", { type: "string", demandOption: true, describe: "phone number, lead ID, contact name, or 'me'/'self'" })
+      .positional("message", { type: "string", demandOption: true, describe: "message text to send" })
+      .option("phone", { type: "boolean", default: false, describe: "for 'me'/'self', target your phone (SMS) instead of your iMessage email" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  iMessage Send → ${args.handle}`)
@@ -333,8 +334,25 @@ const ImessageSendCommand = cmd({
       return
     }
 
-    // Resolve handle: could be phone, lead ID, or contact name
+    // Resolve handle: could be phone, lead ID, contact name, or "me"/"self"
     let handle = args.handle.trim()
+
+    // "me" / "self" → the user's own handle (env → ~/.iris/imessage-self.json → chat.db auto-detect)
+    if (isSelfAlias(handle)) {
+      const self = resolveSelfHandle(args.phone ? "phone" : "email")
+      if (!self) {
+        prompts.log.error(
+          "Couldn't resolve your own handle. Set it with:\n" +
+            "  iris imessage me --set-email you@icloud.com\n" +
+            "  iris imessage me --set-phone +15551234567",
+        )
+        prompts.outro("Done")
+        return
+      }
+      prompts.log.info(`Resolved "${args.handle}" → you (${self})`)
+      handle = self
+    }
+
     const digits = handle.replace(/\D/g, "")
 
     // Check if it's a lead ID (pure number, < 7 digits — not a phone)
@@ -1104,12 +1122,66 @@ end tell`
   },
 })
 
+const ImessageMeCommand = cmd({
+  command: "me",
+  aliases: ["self"],
+  describe: "view or set your own handle (used by `send me …`)",
+  builder: (yargs) =>
+    yargs
+      .option("set-email", { type: "string", describe: "set your iMessage email/Apple ID" })
+      .option("set-phone", { type: "string", describe: "set your phone number (for SMS)" })
+      .option("clear", { type: "boolean", default: false, describe: "clear saved self config" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (args.clear) {
+      clearSelfConfig()
+      if (args.json) { console.log(JSON.stringify({ cleared: true })); return }
+      UI.empty(); prompts.intro("◈  iMessage — Me"); prompts.log.success("Cleared saved self config"); prompts.outro("Done")
+      return
+    }
+
+    const patch: { email?: string; phone?: string } = {}
+    if (args["set-email"] !== undefined) patch.email = String(args["set-email"]).trim()
+    if (args["set-phone"] !== undefined) {
+      let p = String(args["set-phone"]).trim()
+      const d = p.replace(/\D/g, "")
+      if (d.length === 10) p = `+1${d}`
+      else if (d.length === 11 && d.startsWith("1")) p = `+${d}`
+      patch.phone = p
+    }
+    if (patch.email !== undefined || patch.phone !== undefined) writeSelfConfig(patch)
+
+    const cfg = readSelfConfig()
+    const detected = detectSelfHandle()
+    const effective = resolveSelfHandle("email")
+
+    if (args.json) {
+      console.log(JSON.stringify({ saved: cfg, detected, effective }))
+      return
+    }
+
+    UI.empty()
+    prompts.intro("◈  iMessage — Me")
+    printDivider()
+    console.log(`  ${dim("Saved email:")}  ${cfg.email || dim("(unset)")}`)
+    console.log(`  ${dim("Saved phone:")}  ${cfg.phone || dim("(unset)")}`)
+    console.log(`  ${dim("Detected:")}     ${dim("email")} ${detected.email || dim("—")}  ${dim("phone")} ${detected.phone || dim("—")}`)
+    printDivider()
+    console.log(`  ${dim("`send me …` will use:")} ${effective ? bold(effective) : dim("(nothing — set one above)")}`)
+    if (!cfg.email && !cfg.phone) {
+      console.log(`  ${dim("Set with:")} iris imessage me --set-email you@icloud.com`)
+    }
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformImessageCommand = cmd({
   command: "imessage",
   aliases: ["sms", "messages"],
   describe: "read and send iMessages via macOS Messages.app (requires Full Disk Access)",
   builder: (yargs) =>
     yargs
+      .command(ImessageMeCommand)
       .command(ImessageSearchCommand)
       .command(ImessageReadCommand)
       .command(ImessageChatsCommand)

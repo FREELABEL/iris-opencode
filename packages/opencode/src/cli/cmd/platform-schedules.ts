@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
 
 // ============================================================================
 // Execution-verification helpers (#146511) — `run` reports "dispatched", then
@@ -862,6 +862,21 @@ const SchedulesCreateCommand = cmd({
       .option("timezone", { describe: "timezone", type: "string", default: "America/New_York" })
       .option("max-runs", { describe: "max number of executions (null = unlimited)", type: "number" })
       .option("params", { describe: "JSON params for tool jobs (e.g., sources, keywords, domain)", type: "string" })
+      // ── Human-in-the-loop approval gating (bug #157532) ──────────────────
+      // autonomous = run everything unattended (existing behaviour, DEFAULT — unchanged)
+      // gated      = run safe tools automatically, but PAUSE risky tools (send/merge/pay/
+      //              publish) into an approval queue until a human approves via
+      //              `iris schedules approvals approve <id>`.
+      .option("approval-mode", {
+        describe: "human-in-the-loop gating for risky tool calls",
+        type: "string",
+        choices: ["autonomous", "gated"],
+        default: "autonomous",
+      })
+      .option("risky-tools", {
+        describe: "comma-separated tool names to gate (overrides server default risky set). Only used with --approval-mode gated",
+        type: "string",
+      })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -913,6 +928,14 @@ const SchedulesCreateCommand = cmd({
     }
     const prompt = args.prompt ?? typePrompts[args.type] ?? taskName
 
+    // Human-in-the-loop approval gating (bug #157532).
+    // Carried in data.approval_mode so it travels with the schedule and is read
+    // server-side at tool-dispatch time. "autonomous" is the unchanged default.
+    const approvalMode = String(args["approval-mode"] ?? "autonomous")
+    const riskyTools = args["risky-tools"]
+      ? String(args["risky-tools"]).split(",").map((t) => t.trim()).filter(Boolean)
+      : undefined
+
     const payload: Record<string, unknown> = {
       agent_id: args.agent,
       task_name: taskName,
@@ -922,6 +945,8 @@ const SchedulesCreateCommand = cmd({
       timezone: args.timezone,
       data: {
         type: args.type,
+        approval_mode: approvalMode,
+        ...(riskyTools ? { risky_tools: riskyTools } : {}),
         params,
         ...params,
       },
@@ -953,6 +978,8 @@ const SchedulesCreateCommand = cmd({
       printKV("Frequency", args.frequency)
       printKV("Time", args.time)
       printKV("Agent", args.agent)
+      printKV("Approval", approvalMode === "gated" ? "gated (risky tools held for approval)" : "autonomous")
+      if (riskyTools) printKV("Risky Tools", riskyTools.join(", "))
       printKV("Status", job.status ?? "scheduled")
       printKV("Next Run", job.next_run_at ?? "pending")
       if (Object.keys(params).length > 0) {
@@ -962,6 +989,9 @@ const SchedulesCreateCommand = cmd({
 
       prompts.log.info(dim(`iris schedule list   — view all schedules`))
       prompts.log.info(dim(`iris schedule run ${job.id ?? "<id>"}  — trigger now`))
+      if (approvalMode === "gated") {
+        prompts.log.info(dim(`iris schedule approvals list  — review risky actions this loop pauses on`))
+      }
       prompts.outro(success("Schedule created"))
     } catch (err) {
       spinner.stop("Error", 1)
@@ -1526,6 +1556,173 @@ const SchedulesHoursCommand = cmd({
   },
 })
 
+// ============================================================================
+// Approval queue — human-in-the-loop gating for autonomous heartbeats (#157532)
+//
+// When a schedule is created with `--approval-mode gated`, the backend agent
+// loop runs safe tools automatically but, instead of dispatching a *risky* tool
+// (send / merge / pay / publish), it persists a PENDING approval and halts that
+// step. A human reviews the queued action here and approves/rejects it; on
+// approval the backend resumes and dispatches the held tool call.
+//
+// Proposed backend contract (see design notes in the bug — backend not yet built):
+//   GET    /api/v1/users/{userId}/bloqs/scheduled-jobs/approvals            ?status=pending
+//   POST   /api/v1/users/{userId}/bloqs/scheduled-jobs/approvals/{id}/approve  { notes? }
+//   POST   /api/v1/users/{userId}/bloqs/scheduled-jobs/approvals/{id}/reject   { notes? }
+// ============================================================================
+
+interface PendingApproval {
+  id: number
+  schedule_id: number
+  run_id?: number | null
+  agent_id?: number | null
+  tool_name: string
+  tool_args?: Record<string, unknown> | null
+  risk_reason?: string | null
+  status: string
+  created_at?: string | null
+  expires_at?: string | null
+}
+
+async function fetchApprovals(userId: number, status: string): Promise<PendingApproval[]> {
+  const res = await irisFetch(
+    `/api/v1/users/${userId}/bloqs/scheduled-jobs/approvals?status=${encodeURIComponent(status)}`,
+    {},
+    IRIS_API,
+  )
+  if (!res.ok) {
+    await handleApiError(res, "fetch approvals")
+    return []
+  }
+  const body = (await res.json()) as { data?: PendingApproval[] }
+  return body.data ?? []
+}
+
+async function reviewApproval(
+  userId: number,
+  id: number,
+  action: "approve" | "reject",
+  notes?: string,
+): Promise<boolean> {
+  const res = await irisFetch(
+    `/api/v1/users/${userId}/bloqs/scheduled-jobs/approvals/${id}/${action}`,
+    { method: "POST", body: JSON.stringify({ notes: notes ?? null }) },
+    IRIS_API,
+  )
+  if (!res.ok) {
+    await handleApiError(res, `${action} approval #${id}`)
+    return false
+  }
+  return true
+}
+
+const ApprovalsListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list risky actions paused by gated schedules awaiting your approval",
+  builder: (yargs) =>
+    yargs
+      .option("status", { describe: "filter by status", type: "string", choices: ["pending", "approved", "rejected", "all"], default: "pending" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Schedule Approvals")
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading pending approvals…")
+    const items = await fetchApprovals(userId, String(args.status))
+    spinner.stop(`${items.length} ${args.status} approval(s)`)
+
+    if (items.length === 0) {
+      prompts.log.info(dim("Nothing waiting. Gated loops only queue risky tools (send/merge/pay/publish)."))
+      prompts.outro("Done")
+      return
+    }
+
+    for (const a of items) {
+      printDivider()
+      printKV("ID", a.id)
+      printKV("Schedule", `#${a.schedule_id}`)
+      printKV("Tool", highlight(a.tool_name))
+      if (a.risk_reason) printKV("Why gated", a.risk_reason)
+      if (a.tool_args) printKV("Args", JSON.stringify(a.tool_args).slice(0, 160))
+      printKV("Status", a.status)
+      if (a.expires_at) printKV("Expires", a.expires_at)
+    }
+    printDivider()
+    prompts.log.info(dim(`iris schedule approvals approve <id>   — let it run`))
+    prompts.log.info(dim(`iris schedule approvals reject <id>    — block it`))
+    prompts.outro("Done")
+  },
+})
+
+const ApprovalsApproveCommand = cmd({
+  command: "approve <id>",
+  describe: "approve a paused risky action — the loop resumes and runs it",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "approval ID", type: "number", demandOption: true })
+      .option("notes", { describe: "optional note recorded with the decision", type: "string" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Approve action #${args.id}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Approving…")
+    const ok = await reviewApproval(userId, Number(args.id), "approve", args.notes)
+    spinner.stop(ok ? success("Approved") : "Failed", ok ? 0 : 1)
+    prompts.outro(ok ? success(`Action #${args.id} approved — loop will resume it`) : "Done")
+  },
+})
+
+const ApprovalsRejectCommand = cmd({
+  command: "reject <id>",
+  aliases: ["decline"],
+  describe: "reject a paused risky action — the loop skips it and continues",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "approval ID", type: "number", demandOption: true })
+      .option("notes", { describe: "optional reason recorded with the decision", type: "string" })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Reject action #${args.id}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Rejecting…")
+    const ok = await reviewApproval(userId, Number(args.id), "reject", args.notes)
+    spinner.stop(ok ? success("Rejected") : "Failed", ok ? 0 : 1)
+    prompts.outro(ok ? success(`Action #${args.id} rejected — loop will skip it`) : "Done")
+  },
+})
+
+const SchedulesApprovalsCommand = cmd({
+  command: "approvals",
+  aliases: ["approval"],
+  describe: "review risky actions paused by gated schedules (human-in-the-loop)",
+  builder: (yargs) =>
+    yargs
+      .command(ApprovalsListCommand)
+      .command(ApprovalsApproveCommand)
+      .command(ApprovalsRejectCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
 export const PlatformSchedulesCommand = cmd({
   command: "schedules",
   aliases: ["schedule"],
@@ -1544,6 +1741,7 @@ export const PlatformSchedulesCommand = cmd({
       .command(SchedulesUpdateCommand)
       .command(SchedulesFrequencyCommand)
       .command(SchedulesHoursCommand)
+      .command(SchedulesApprovalsCommand)
       .demandCommand(),
   async handler() {},
 })

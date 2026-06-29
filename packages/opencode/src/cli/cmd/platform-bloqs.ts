@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
+import { itemTitle, itemContentPreview } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
 import path from "path"
 
@@ -291,12 +292,7 @@ const BloqsGetCommand = cmd({
           const listItems = allItems.filter((i: any) => (i.bloq_list_id ?? i.list_id) === l.id)
           const preview = listItems.slice(0, 3)
           for (const item of preview) {
-            const contentObj = typeof item.content === "object" && item.content ? item.content : null
-            const rawContent = typeof item.content === "string" ? item.content : ""
-            const title = (typeof item.title === "string" && item.title)
-              || (contentObj?.title ? String(contentObj.title) : "")
-              || (rawContent ? rawContent.replace(/[#\n]/g, " ").trim().slice(0, 80) : "(untitled)")
-            console.log(`      ${dim("•")} ${title}`)
+            console.log(`      ${dim("•")} ${itemTitle(item)}`)
           }
           const remaining = listItems.length - preview.length
           if (remaining > 0) {
@@ -321,9 +317,9 @@ const BloqsGetCommand = cmd({
 
         const shown = displayItems.slice(0, limit)
         for (const item of shown) {
-          const title = item.title ?? "(untitled)"
+          const title = itemTitle(item)
           const listName = item.list_name ?? lists.find((l: any) => l.id === (item.bloq_list_id ?? item.list_id))?.name ?? ""
-          const content = String(item.content ?? "").replace(/\n/g, " ").slice(0, 120)
+          const content = itemContentPreview(item, 120)
           const date = item.created_at ? dim(new Date(item.created_at).toLocaleDateString()) : ""
           console.log(`    ${dim(`#${item.id}`)}  ${bold(title)}  ${dim(listName)}  ${date}`)
           if (content) console.log(`      ${dim(content)}`)
@@ -959,6 +955,8 @@ const BloqsMakePublicCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("item-id", { describe: "item ID to share", type: "number", demandOption: true })
+      .option("password", { describe: "gate the public link behind a password (min 6 chars)", type: "string" })
+      .option("expires", { describe: "expiry as an ISO date/time (e.g. 2026-12-31)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -977,9 +975,14 @@ const BloqsMakePublicCommand = cmd({
     spinner?.start("Making item public…")
 
     try {
+      // Access ladder: a password gates the link (access_level=password); an
+      // expiry makes it expiring. Backend derives access_level from these.
+      const shareBody: Record<string, unknown> = {}
+      if (args.password) shareBody.password = args.password
+      if (args.expires) shareBody.expires_at = args.expires
       const res = await irisFetch(
         `/api/v1/user/${userId}/bloqs/list/item/${args["item-id"]}/make-public`,
-        { method: "POST", body: "{}" },
+        { method: "POST", body: JSON.stringify(shareBody) },
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
@@ -995,11 +998,14 @@ const BloqsMakePublicCommand = cmd({
 
       if (args.json) { console.log(JSON.stringify({ success: true, ...data })); return }
 
-      spinner?.stop(`${success("✓")} Item is now public`)
+      const level = data?.access_level ?? (args.password ? "password" : args.expires ? "expiring" : "public")
+      spinner?.stop(`${success("✓")} Item is now shareable (${level})`)
       if (url) {
         console.log()
         console.log(`  ${bold("Public URL")}  ${url}`)
         console.log(`  ${dim(`uuid: ${data?.public_uuid ?? "?"}`)}`)
+        if (data?.requires_password ?? args.password) console.log(`  ${dim("🔒 password required to view")}`)
+        if (args.expires) console.log(`  ${dim(`⏱ expires ${args.expires}`)}`)
         console.log()
       } else {
         prompts.log.warn("Item made public but no URL was returned")
@@ -1483,6 +1489,144 @@ const BloqsDetachLeadCommand = cmd({
 })
 
 // ============================================================================
+// Attach / Detach playbooks
+// ============================================================================
+
+const BloqsAttachPlaybookCommand = cmd({
+  command: "attach-playbook <bloq-id> <playbook-name>",
+  aliases: ["add-playbook", "link-playbook"],
+  describe: "link a playbook to this bloq project",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .positional("playbook-name", { describe: "playbook name (see `iris playbook list`)", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const name = String(args["playbook-name"])
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Attach Playbook "${name}" → Bloq #${args["bloq-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Attaching…")
+
+    try {
+      const res = await irisFetch(`/api/v1/bloqs/${args["bloq-id"]}/attach-playbook`, {
+        method: "POST",
+        body: JSON.stringify({ playbook_name: name }),
+      })
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Attach playbook")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = await res.json().catch(() => ({})) as Record<string, unknown>
+      if (args.json) { console.log(JSON.stringify({ success: true, bloq_id: args["bloq-id"], playbook_name: name, ...data })); return }
+
+      if (spinner) spinner.stop(`${success("✓")} Playbook "${name}" attached to Bloq #${args["bloq-id"]}`)
+      prompts.outro(dim(`iris bloqs playbooks ${args["bloq-id"]}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsDetachPlaybookCommand = cmd({
+  command: "detach-playbook <bloq-id> <playbook-name>",
+  aliases: ["remove-playbook", "unlink-playbook"],
+  describe: "unlink a playbook from this bloq project",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .positional("playbook-name", { describe: "playbook name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const name = String(args["playbook-name"])
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Detach Playbook "${name}" from Bloq #${args["bloq-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Detaching…")
+
+    try {
+      const res = await irisFetch(`/api/v1/bloqs/${args["bloq-id"]}/detach-playbook`, {
+        method: "POST",
+        body: JSON.stringify({ playbook_name: name }),
+      })
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Detach playbook")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = await res.json().catch(() => ({})) as Record<string, unknown>
+      if (args.json) { console.log(JSON.stringify({ success: true, bloq_id: args["bloq-id"], playbook_name: name, ...data })); return }
+
+      if (spinner) spinner.stop(`${success("✓")} Playbook "${name}" detached from Bloq #${args["bloq-id"]}`)
+      prompts.outro(dim(`iris bloqs playbooks ${args["bloq-id"]}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsPlaybooksCommand = cmd({
+  command: "playbooks <bloq-id>",
+  aliases: ["list-playbooks"],
+  describe: "list playbooks linked to this bloq project",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    try {
+      const res = await irisFetch(`/api/v1/bloqs/${args["bloq-id"]}/playbooks`, { method: "GET" })
+      if (!res.ok) {
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "List bloq playbooks")
+        return
+      }
+
+      const body = await res.json().catch(() => ({})) as { data?: Array<{ name?: string; attached_at?: string }> }
+      const playbooks = body.data ?? []
+      if (args.json) { console.log(JSON.stringify({ success: true, bloq_id: args["bloq-id"], playbooks })); return }
+
+      if (playbooks.length === 0) {
+        console.log(dim(`No playbooks linked to Bloq #${args["bloq-id"]}.`))
+        console.log(dim(`Attach one: iris bloqs attach-playbook ${args["bloq-id"]} <playbook-name>`))
+        return
+      }
+
+      console.log(bold(`Playbooks linked to Bloq #${args["bloq-id"]}:`))
+      for (const p of playbooks) {
+        const when = p.attached_at ? dim(` (${p.attached_at})`) : ""
+        console.log(`  ${success("•")} ${p.name ?? "unknown"}${when}`)
+      }
+    } catch (err) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+// ============================================================================
 // Contributors — list leads attached to a bloq
 // ============================================================================
 
@@ -1924,6 +2068,9 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsSearchCommand)
       .command(BloqsAttachLeadCommand)
       .command(BloqsDetachLeadCommand)
+      .command(BloqsAttachPlaybookCommand)
+      .command(BloqsDetachPlaybookCommand)
+      .command(BloqsPlaybooksCommand)
       .command(BloqsUpdateItemCommand)
       .command(BloqsContributorsCommand)
       .command(BloqsItemsCommand)

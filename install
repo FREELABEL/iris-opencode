@@ -260,6 +260,35 @@ if [ -n "$_missing_soft" ]; then
     echo -e "${GREEN}✓${NC} Auto-installed:$_missing_soft"
 fi
 
+# ─── tmux (required for Hive session persistence) ─────────────────────────
+if ! command -v tmux >/dev/null 2>&1; then
+    echo -e "${MUTED}Installing tmux (required for Hive compute sessions)...${NC}"
+    if command -v brew >/dev/null 2>&1; then
+        brew install tmux >/dev/null 2>&1
+    elif command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y tmux >/dev/null 2>&1 || true
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y tmux >/dev/null 2>&1 || true
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm tmux >/dev/null 2>&1 || true
+    else
+        echo -e "${ORANGE}Could not auto-install tmux.${NC}"
+        echo -e "${MUTED}Install manually: brew install tmux (macOS) or sudo apt install tmux (Linux)${NC}"
+        echo -e "${MUTED}The IRIS Hive daemon requires tmux for session persistence.${NC}"
+    fi
+    if command -v tmux >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} tmux installed: $(tmux -V 2>/dev/null || echo 'unknown version')"
+    fi
+else
+    # Version check — require tmux >= 3.0 for wait-for support
+    _tmux_ver=$(tmux -V 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+    _tmux_major=$(echo "$_tmux_ver" | cut -d. -f1)
+    if [ -n "$_tmux_major" ] && [ "$_tmux_major" -lt 3 ] 2>/dev/null; then
+        echo -e "${ORANGE}tmux $_tmux_ver found but 3.0+ recommended for full Hive features.${NC}"
+        echo -e "${MUTED}Upgrade: brew install tmux (macOS) or sudo apt install tmux (Linux)${NC}"
+    fi
+fi
+
 INSTALL_DIR=$HOME/.iris/bin
 mkdir -p "$INSTALL_DIR"
 
