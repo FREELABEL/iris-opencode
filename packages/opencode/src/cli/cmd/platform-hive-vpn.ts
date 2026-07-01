@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import { dim, bold, success, highlight } from "./iris-api"
-import { spawnSync } from "child_process"
+import { spawnSync, spawn } from "child_process"
 import { existsSync, writeFileSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
@@ -131,7 +131,7 @@ const VpnCheckCommand = cmd({
       console.log(`  ${dim("Windows:")}  https://tailscale.com/download/windows`)
       console.log(`  ${dim("Linux:")}    curl -fsSL https://tailscale.com/install.sh | sh`)
       console.log()
-      console.log(dim("  Then: iris hive vpn up   to join the tailnet."))
+      console.log(dim("  Or let me do it: iris hive vpn install   then  iris hive vpn up"))
       return
     }
     console.log(`  ${dim("logged in:")}            ${s.loggedIn ? success("yes") : highlight("no — run: iris hive vpn up")}`)
@@ -148,6 +148,43 @@ const VpnCheckCommand = cmd({
     console.log(`  ${dim("•")} 4. ACL grants drex-accounting RDP to ONLY the host  ${dim("(iris hive vpn grant)")}`)
     console.log(`  ${dim("•")} 5. Host registered as a Hive node  ${dim("(iris hive vpn enroll)")}`)
     console.log()
+  },
+})
+
+// ── vpn install  (install Tailscale on THIS machine) ─────────────────────────
+
+const VpnInstallCommand = cmd({
+  command: "install",
+  describe: "install Tailscale on THIS machine (auto-detects OS)",
+  builder: (y) => y,
+  async handler() {
+    if (tailscaleBin()) {
+      console.log(`${success("✓")} Tailscale already installed  ${dim(tailscaleBin()!)}`)
+      console.log(dim("  Next: iris hive vpn up"))
+      return
+    }
+    const plat = process.platform
+    let installer: string[] | null = null
+    if (plat === "darwin") installer = ["brew", "install", "--cask", "tailscale-app"]
+    else if (plat === "win32") installer = ["winget", "install", "--id", "tailscale.tailscale", "-e"]
+    else if (plat === "linux") installer = ["sh", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"]
+
+    if (!installer) {
+      console.log(`${highlight("!")} unsupported platform (${plat}). See https://tailscale.com/download`)
+      process.exit(1)
+    }
+    console.log(`${dim("→")} installing Tailscale (${plat}) — follow any password prompt...`)
+    const r = spawnSync(installer[0], installer.slice(1), { stdio: "inherit" })
+    if (r.status !== 0 || !tailscaleBin()) {
+      console.log()
+      console.log(`${highlight("!")} couldn't finish automatically. Install manually:`)
+      console.log(`  ${dim("macOS:")}    brew install --cask tailscale-app   ${dim("(or the Mac App Store)")}`)
+      console.log(`  ${dim("Windows:")}  https://tailscale.com/download/windows`)
+      console.log(`  ${dim("Linux:")}    curl -fsSL https://tailscale.com/install.sh | sh`)
+      process.exit(r.status ?? 1)
+    }
+    console.log()
+    console.log(`${success("✓")} Tailscale installed. Next: ${bold("iris hive vpn up")}`)
   },
 })
 
@@ -214,6 +251,156 @@ const VpnStatusCommand = cmd({
     }
     console.log()
     console.log(dim(`  Enroll one as a Hive node:  iris hive vpn enroll <tailnet-ip>`))
+  },
+})
+
+// ── host resolver (name → tailnet node) ──────────────────────────────────────
+
+function resolveHost(name: string): TsNode | null {
+  const s = readStatus()
+  const all = [s.self, ...s.peers].filter(Boolean) as TsNode[]
+  const q = name.toLowerCase()
+  return (
+    all.find((n) => n.name.toLowerCase() === q || n.dnsName.toLowerCase() === q) ||
+    all.find((n) => n.name.toLowerCase().includes(q) || n.dnsName.toLowerCase().includes(q)) ||
+    null
+  )
+}
+
+// ── vpn host  (show connection details for one host) ─────────────────────────
+
+const VpnHostCommand = cmd({
+  command: "host <name>",
+  describe: "show connection details for a host on the tailnet (IP, RDP, how to connect)",
+  builder: (y) =>
+    y
+      .positional("name", { describe: "host name, e.g. qb-host", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(argv) {
+    const s = readStatus()
+    if (!s.installed) {
+      console.log(`${highlight("!")} Tailscale not installed — run: ${bold("iris hive vpn install")}`)
+      process.exit(1)
+    }
+    if (!s.loggedIn) {
+      console.log(`${highlight("!")} not on the tailnet — run: ${bold("iris hive vpn up")}`)
+      process.exit(1)
+    }
+    const node = resolveHost(String(argv.name))
+    if (!node) {
+      console.log(`${highlight("!")} no machine matching ${bold(String(argv.name))} — run: ${bold("iris hive vpn status")}`)
+      process.exit(1)
+    }
+    if (argv.json) {
+      console.log(JSON.stringify(node, null, 2))
+      return
+    }
+    console.log()
+    console.log(bold(`Host ${node.name}`) + (node.online ? success("  ● online") : dim("  ○ offline")))
+    console.log(`  ${dim("tailnet IP:")}   ${bold(node.tailscaleIP)}`)
+    console.log(`  ${dim("OS:")}           ${node.os}`)
+    console.log(`  ${dim("RDP address:")}  ${bold(node.tailscaleIP + ":3389")}`)
+    console.log()
+    console.log(bold("Connect (remote desktop):"))
+    console.log(`  ${dim("Windows:")}  Remote Desktop → PC = ${bold(node.tailscaleIP)}`)
+    console.log(`  ${dim("Mac:")}      Windows App → Add PC → ${bold(node.tailscaleIP)}`)
+    console.log(`  ${dim("one-liner:")} ${bold("iris hive vpn connect " + node.name)}`)
+    console.log()
+    console.log(dim("  Log in with the Windows account we set up for you (never the owner's login)."))
+    console.log()
+  },
+})
+
+// ── vpn connect  (one command → launch remote desktop to a host) ─────────────
+
+const VpnConnectCommand = cmd({
+  command: "connect <name>",
+  describe: "launch a remote-desktop session to a host on the tailnet (one command)",
+  builder: (y) =>
+    y
+      .positional("name", { describe: "host name, e.g. qb-host", type: "string", demandOption: true })
+      .option("user", { describe: "windows username to prefill", type: "string" }),
+  async handler(argv) {
+    const s = readStatus()
+    if (!s.installed) {
+      console.log(`${highlight("!")} Tailscale not installed — run: ${bold("iris hive vpn install")}`)
+      process.exit(1)
+    }
+    if (!s.loggedIn) {
+      console.log(`${highlight("!")} not on the tailnet — run: ${bold("iris hive vpn up")}`)
+      process.exit(1)
+    }
+    const node = resolveHost(String(argv.name))
+    if (!node) {
+      console.log(`${highlight("!")} no machine matching ${bold(String(argv.name))} — run: ${bold("iris hive vpn status")}`)
+      process.exit(1)
+    }
+    if (!node.online) console.log(`${highlight("!")} ${node.name} looks offline — trying anyway...`)
+    const ip = node.tailscaleIP
+    const user = argv.user ? String(argv.user) : null
+    console.log(`${dim("→")} opening remote desktop to ${bold(node.name)} ${dim(ip)}...`)
+    const plat = process.platform
+    if (plat === "win32") {
+      const args = [`/v:${ip}`]
+      if (user) args.push(`/u:${user}`)
+      spawn("mstsc", args, { detached: true, stdio: "ignore" }).unref()
+    } else if (plat === "darwin") {
+      // write a minimal .rdp and open it with the default RDP client (Windows App)
+      const rdp = [`full address:s:${ip}`, user ? `username:s:${user}` : "", "screen mode id:i:2"]
+        .filter(Boolean)
+        .join("\n")
+      const out = join(homedir(), ".iris", `connect-${node.name}.rdp`)
+      writeFileSync(out, rdp + "\n")
+      spawn("open", [out], { detached: true, stdio: "ignore" }).unref()
+    } else {
+      const r = spawnSync("xfreerdp", [`/v:${ip}`], { stdio: "inherit" })
+      if (r.error) {
+        console.log(dim(`  No RDP client found — point yours at ${ip}:3389`))
+        process.exit(1)
+      }
+    }
+    console.log(`${success("✓")} launched. Log in with the Windows account we set up for you.`)
+  },
+})
+
+// ── vpn doctor  (health-check the whole secure-access setup) ─────────────────
+
+const VpnDoctorCommand = cmd({
+  command: "doctor",
+  describe: "health-check the secure-access setup (install, login, peers, host reachability)",
+  builder: (y) =>
+    y
+      .option("host", { describe: "also probe a specific host by name", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(argv) {
+    const s = readStatus()
+    const checks: { label: string; ok: boolean; detail: string }[] = []
+    checks.push({ label: "Tailscale installed", ok: s.installed, detail: s.installed ? tailscaleBin()! : "run: iris hive vpn install" })
+    checks.push({ label: "On the tailnet", ok: s.loggedIn, detail: s.loggedIn ? (s.tailnet ?? "connected") : "run: iris hive vpn up" })
+    const onlinePeers = s.peers.filter((p) => p.online).length
+    checks.push({ label: "Peers reachable", ok: s.loggedIn ? s.peers.length > 0 : false, detail: `${onlinePeers}/${s.peers.length} online` })
+
+    let hostNode: TsNode | null = null
+    if (argv.host && s.loggedIn) {
+      hostNode = resolveHost(String(argv.host))
+      checks.push({ label: `Host '${argv.host}' found`, ok: !!hostNode, detail: hostNode ? hostNode.tailscaleIP : "not on the tailnet" })
+      if (hostNode) checks.push({ label: `Host '${argv.host}' online`, ok: hostNode.online, detail: hostNode.online ? "online" : "offline — is it powered on?" })
+    }
+
+    if (argv.json) {
+      console.log(JSON.stringify({ tailnet: s.tailnet, checks }, null, 2))
+      return
+    }
+    console.log()
+    console.log(bold("Secure-access health check"))
+    for (const c of checks) {
+      console.log(`  ${c.ok ? success("✓") : highlight("✗")} ${c.label.padEnd(24)} ${dim(c.detail)}`)
+    }
+    const failed = checks.filter((c) => !c.ok).length
+    console.log()
+    console.log(failed === 0 ? success("  all healthy") : highlight(`  ${failed} issue(s) — fix the ✗ rows above`))
+    console.log()
+    if (failed > 0) process.exit(1)
   },
 })
 
@@ -308,8 +495,12 @@ export const HiveVpnCommandExport = cmd({
   builder: (y) =>
     y
       .command(VpnCheckCommand)
+      .command(VpnInstallCommand)
       .command(VpnUpCommand)
       .command(VpnStatusCommand)
+      .command(VpnHostCommand)
+      .command(VpnConnectCommand)
+      .command(VpnDoctorCommand)
       .command(VpnGrantCommand)
       .command(VpnEnrollCommand)
       .demandCommand(1, "Run: iris hive vpn check"),
