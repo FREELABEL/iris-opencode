@@ -16,6 +16,7 @@ import {
   HiveEnrollCommandExport,
   HiveSshSetupCommandExport,
 } from "./platform-hive-enroll"
+import { HiveVpnCommandExport } from "./platform-hive-vpn"
 import {
   HiveSendCommand,
   HiveSentCommand,
@@ -4310,6 +4311,8 @@ export const PlatformHiveCommand = cmd({
       .command(HiveSshSetupCommandExport)
       .command(HiveDiscoverCommandExport)
       .command(HiveEnrollCommandExport)
+      // Secure transport (Tailscale/WireGuard) — reach nodes off your LAN, no open ports
+      .command(HiveVpnCommandExport)
       // Script deployment
       .command(HiveScriptCommand)
       .command(HiveScheduleCommand)
