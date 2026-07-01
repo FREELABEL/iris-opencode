@@ -233,7 +233,8 @@ const VpnGrantCommand = cmd({
     const group = String(argv.group).replace(/^group:/, "")
     const tag = String(argv["node-tag"]).replace(/^tag:/, "")
     const port = Number(argv.port)
-    const members = argv.members
+    const membersProvided = Boolean(argv.members)
+    const members = membersProvided
       ? String(argv.members).split(",").map((m) => m.trim()).filter(Boolean)
       : ["haroon@example.com", "mohammed@example.com"]
 
@@ -258,13 +259,20 @@ const VpnGrantCommand = cmd({
     console.log()
     console.log(blob)
     if (argv.write) {
+      if (!membersProvided) {
+        console.log()
+        console.log(`${highlight("!")} refusing to write an ACL with placeholder members — pass --members "a@x.com,b@x.com"`)
+        process.exit(1)
+      }
       const out = join(homedir(), ".iris", "tailscale-acl.json")
       writeFileSync(out, blob + "\n")
       console.log()
       console.log(`${success("✓")} wrote ${bold(out)}`)
     }
-    console.log()
-    console.log(dim(`  Members default to placeholders — pass --members "a@x.com,b@x.com" or sync from the Google Group.`))
+    if (!membersProvided) {
+      console.log()
+      console.log(dim(`  Members are placeholders — pass --members "a@x.com,b@x.com" or sync from the Google Group.`))
+    }
   },
 })
 
@@ -281,6 +289,7 @@ const VpnEnrollCommand = cmd({
     const ip = String(argv["tailnet-ip"])
     if (!/^100\./.test(ip)) {
       console.log(`${highlight("!")} ${ip} is not a tailnet IP (expected 100.x). Run: ${bold("iris hive vpn status")}`)
+      process.exit(1)
     }
     const target = `${argv.user}@${ip}`
     console.log(`${dim("→")} enrolling ${bold(target)} over the tailnet...`)
