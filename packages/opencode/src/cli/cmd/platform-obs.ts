@@ -100,6 +100,7 @@ const ConnectCmd = cmd({
         prompts.log.info(dim("Make sure OBS is running with WebSocket Server enabled"))
         prompts.log.info(dim("OBS → Tools → WebSocket Server Settings → Enable"))
       }
+      process.exitCode = 1 // signal failure to scripts/automation (#152275)
     }
     prompts.outro("Done")
   },
@@ -118,6 +119,7 @@ const DisconnectCmd = cmd({
       prompts.log.success("Disconnected from OBS")
     } catch (e: any) {
       prompts.log.error(e.message)
+      process.exitCode = 1 // signal failure to scripts/automation (#152275)
     }
     prompts.outro("Done")
   },
@@ -145,6 +147,7 @@ const ScenesCmd = cmd({
       }
     } catch (e: any) {
       prompts.log.error(e.message)
+      process.exitCode = 1 // signal failure to scripts/automation (#152275)
     }
     prompts.outro("Done")
   },
@@ -167,6 +170,7 @@ const SceneCmd = cmd({
     } catch (e: any) {
       sp.stop("Failed")
       prompts.log.error(e.message)
+      process.exitCode = 1 // signal failure to scripts/automation (#152275)
     }
   },
 })
@@ -189,6 +193,7 @@ const StreamCmd = cmd({
         if (data.skippedFrames) console.log(`  ${bold("Dropped:")}  ${data.skippedFrames}/${data.totalFrames} frames`)
       } catch (e: any) {
         prompts.log.error(e.message)
+        process.exitCode = 1 // signal failure to scripts/automation (#152275)
       }
     } else {
       const sp = prompts.spinner()
@@ -199,6 +204,7 @@ const StreamCmd = cmd({
       } catch (e: any) {
         sp.stop("Failed")
         prompts.log.error(e.message)
+        process.exitCode = 1 // signal failure to scripts/automation (#152275)
       }
     }
   },
@@ -222,6 +228,7 @@ const RecordCmd = cmd({
         if (data.timecode) console.log(`  ${bold("Timecode:")} ${data.timecode}`)
       } catch (e: any) {
         prompts.log.error(e.message)
+        process.exitCode = 1 // signal failure to scripts/automation (#152275)
       }
     } else {
       const sp = prompts.spinner()
@@ -233,6 +240,7 @@ const RecordCmd = cmd({
       } catch (e: any) {
         sp.stop("Failed")
         prompts.log.error(e.message)
+        process.exitCode = 1 // signal failure to scripts/automation (#152275)
       }
     }
   },
@@ -253,6 +261,7 @@ const MarkerCmd = cmd({
       console.log(`  ${success("●")} Marker at ${bold(m.timecode)} — ${m.description}`)
     } catch (e: any) {
       prompts.log.error(e.message)
+      process.exitCode = 1 // signal failure to scripts/automation (#152275)
     }
   },
 })
@@ -276,6 +285,7 @@ const MuteCmd = cmd({
       console.log(`  ${result.muted ? dim("🔇 Muted") : success("🔊 Unmuted")}: ${bold(args.input as string)}`)
     } catch (e: any) {
       prompts.log.error(e.message)
+      process.exitCode = 1 // signal failure to scripts/automation (#152275)
     }
   },
 })
@@ -298,6 +308,7 @@ const InputsCmd = cmd({
       printDivider()
     } catch (e: any) {
       prompts.log.error(e.message)
+      process.exitCode = 1 // signal failure to scripts/automation (#152275)
     }
     prompts.outro("Done")
   },
@@ -334,6 +345,7 @@ const StatusCmd = cmd({
       }
     } catch (e: any) {
       prompts.log.error(`Bridge not running: ${e.message}`)
+      process.exitCode = 1 // signal failure to scripts/automation (#152275)
     }
     prompts.outro("Done")
   },
