@@ -1,5 +1,5 @@
 {
-  "version": "2026.06.22-agentic-loops",
+  "version": "2026.07.02-agentic-loop-playbook",
   "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
   "files": [
     {
@@ -115,6 +115,12 @@
       "dest": "how-to/drive-iris-from-claude-code.md",
       "managed": true,
       "purpose": "Bring-your-own-orchestrator manual — how Claude Code (or any external agent) drives IRIS as an execution substrate via the CLI + MCP contract (guide/how-to/--help/MCP), the substrate primitives, a worked loop cycle, and reliability notes."
+    },
+    {
+      "src": "playbooks/agentic-loop/PLAYBOOK.md",
+      "dest": "playbooks/agentic-loop/PLAYBOOK.md",
+      "managed": true,
+      "purpose": "Canonical reference loopable playbook (the 'fuel' for `iris loop run`). A v2 implement→verify loop — orchestrator → Builder/Scout/Growth → verify → synthesize → memory — whose verify step emits `VERDICT: SHIP|ITERATE` so the loop engine (platform-loop.ts) terminates correctly. Resolves `iris playbook show agentic-loop` and `iris loop run agentic-loop --until SHIP`, which the agentic-loops.md how-to points at."
     }
   ]
 }
