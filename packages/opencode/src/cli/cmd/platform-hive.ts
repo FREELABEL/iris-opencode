@@ -919,13 +919,48 @@ async function detectBridgePrefix(): Promise<string> {
 }
 
 async function bridgeFetch(path: string, opts: RequestInit = {}) {
-  const prefix = await detectBridgePrefix()
-  // path comes in as "/daemon/queue" — strip the /daemon prefix and re-add the detected one
-  const cleanPath = path.replace(/^\/daemon/, "")
+  const url = await bridgeUrl(path)
   const token = getBridgeToken()
   const headers: Record<string, string> = { Accept: "application/json", ...(opts.headers as Record<string, string> || {}) }
   if (token) headers["X-Bridge-Key"] = token
-  return fetch(`${BRIDGE_URL}${prefix}${cleanPath}`, { ...opts, headers })
+  return fetch(url, { ...opts, headers })
+}
+
+/**
+ * Resolve a daemon path (e.g. "/daemon/execute-script") to its full,
+ * prefix-aware URL. The daemon runs either embedded in the bridge (routes at
+ * /daemon/*) or standalone (routes at /*). Callers that need the resolved URL
+ * for error reporting (surfacing the failing URL + HTTP status) use this
+ * directly instead of hard-coding `${BRIDGE_URL}/execute-script` — which 404s
+ * in embedded mode (#157545 / #157541).
+ */
+async function bridgeUrl(path: string): Promise<string> {
+  const prefix = await detectBridgePrefix()
+  const cleanPath = path.replace(/^\/daemon/, "")
+  return `${BRIDGE_URL}${prefix}${cleanPath}`
+}
+
+/**
+ * Surface a failed daemon HTTP response (URL + status + body error) instead of
+ * swallowing it, and mark the process for a non-zero exit. Returns the parsed
+ * error message for display.
+ */
+async function reportBridgeFailure(method: string, url: string, res: Response): Promise<string> {
+  const bodyText = await res.text().catch(() => "")
+  let errMsg = res.statusText || `HTTP ${res.status}`
+  if (bodyText) {
+    try {
+      const j = JSON.parse(bodyText) as Record<string, unknown>
+      if (j.error) errMsg = String(j.error)
+    } catch { errMsg = bodyText.slice(0, 200) }
+  }
+  // Always surface the concrete URL + status (previously swallowed to "Not Found")
+  prompts.log.error(`${method} ${url} → HTTP ${res.status} ${res.statusText}${errMsg && errMsg !== res.statusText ? ` — ${errMsg}` : ""}`)
+  if (res.status === 404) {
+    prompts.log.warn("Daemon route not found. Update the daemon: iris daemon restart (or iris update)")
+  }
+  process.exitCode = 1
+  return errMsg
 }
 
 // ── iris hive tasks ─────────────────────────────────────────────────────
@@ -1609,7 +1644,8 @@ const HiveScriptPushCommand = cmd({
         } catch {}
       }
 
-      const res = await fetch(`${BRIDGE_URL}/execute-script`, {
+      const url = await bridgeUrl("/daemon/execute-script")
+      const res = await fetch(url, {
         method: "POST",
         headers: bridgeHeaders(),
         body: JSON.stringify({
@@ -1622,8 +1658,8 @@ const HiveScriptPushCommand = cmd({
       })
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
-        spinner.stop(`Failed: ${err.error}`, 1)
+        const errMsg = await reportBridgeFailure("POST", url, res)
+        spinner.stop(`Failed: HTTP ${res.status} — ${errMsg}`, 1)
         prompts.outro("Done")
         return
       }
@@ -1657,6 +1693,7 @@ const HiveScriptPushCommand = cmd({
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.log.warn("Is the daemon running? Start with: npm run hive:daemon")
+      process.exitCode = 1
     }
     prompts.outro("Done")
   },
@@ -1685,6 +1722,7 @@ const HiveScriptExecCommand = cmd({
       if (!readRes.ok) {
         spinner.stop(`Script not found: ${filename}`, 1)
         prompts.log.warn("Push a script first: iris hive script push <file>")
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -1693,6 +1731,7 @@ const HiveScriptExecCommand = cmd({
       const content = fileInfo.content as string
       if (!content) {
         spinner.stop("Script too large to read inline (>512KB)", 1)
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
@@ -1716,7 +1755,8 @@ const HiveScriptExecCommand = cmd({
         } catch { /* non-fatal — script still runs without env */ }
       }
 
-      const res = await fetch(`${BRIDGE_URL}/execute-script`, {
+      const url = await bridgeUrl("/daemon/execute-script")
+      const res = await fetch(url, {
         method: "POST",
         headers: bridgeHeaders(),
         body: JSON.stringify({
@@ -1730,8 +1770,8 @@ const HiveScriptExecCommand = cmd({
       })
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
-        spinner.stop(`Failed: ${err.error}`, 1)
+        const errMsg = await reportBridgeFailure("POST", url, res)
+        spinner.stop(`Failed: HTTP ${res.status} — ${errMsg}`, 1)
         prompts.outro("Done")
         return
       }
@@ -1762,6 +1802,7 @@ const HiveScriptExecCommand = cmd({
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.log.warn("Is the daemon running? Start with: npm run hive:daemon")
+      process.exitCode = 1
     }
     prompts.outro("Done")
   },
@@ -1819,14 +1860,14 @@ const HiveScriptRmCommand = cmd({
     const filename = args.filename as string
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/files?path=/scripts/${encodeURIComponent(filename)}`, {
+      const url = await bridgeUrl(`/daemon/files?path=/scripts/${encodeURIComponent(filename)}`)
+      const res = await fetch(url, {
         method: "DELETE",
         headers: bridgeHeaders(),
       })
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
-        prompts.log.error(String(err.error ?? "Delete failed"))
+        await reportBridgeFailure("DELETE", url, res)
         prompts.outro("Done")
         return
       }
@@ -1834,6 +1875,7 @@ const HiveScriptRmCommand = cmd({
       prompts.log.success(`Deleted ${bold(filename)}`)
     } catch (err) {
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
     }
     prompts.outro("Done")
   },
@@ -1891,7 +1933,8 @@ echo "=== Report Complete ==="
     spinner.start("Pushing demo script to node...")
 
     try {
-      const res = await fetch(`${BRIDGE_URL}/execute-script`, {
+      const url = await bridgeUrl("/daemon/execute-script")
+      const res = await fetch(url, {
         method: "POST",
         headers: bridgeHeaders(),
         body: JSON.stringify({
@@ -1902,8 +1945,8 @@ echo "=== Report Complete ==="
       })
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText })) as Record<string, unknown>
-        spinner.stop(`Failed: ${err.error}`, 1)
+        const errMsg = await reportBridgeFailure("POST", url, res)
+        spinner.stop(`Failed: HTTP ${res.status} — ${errMsg}`, 1)
         prompts.outro("Done")
         return
       }
@@ -1925,7 +1968,8 @@ echo "=== Report Complete ==="
 
       // Optionally schedule it
       if (args.schedule) {
-        const schedRes = await fetch(`${BRIDGE_URL}/schedules`, {
+        const schedUrl = await bridgeUrl("/daemon/schedules")
+        const schedRes = await fetch(schedUrl, {
           method: "POST",
           headers: bridgeHeaders(),
           body: JSON.stringify({
@@ -1949,6 +1993,7 @@ echo "=== Report Complete ==="
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.log.warn("Is the daemon running? Start with: npm run hive:daemon")
+      process.exitCode = 1
     }
     prompts.outro("Done")
   },
