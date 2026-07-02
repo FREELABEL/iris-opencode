@@ -919,11 +919,12 @@ const ImessageMentionsCommand = cmd({
 })
 
 const ImessageGroupsCommand = cmd({
-  command: "groups",
+  command: "groups [query]",
   aliases: ["group-chats", "gc"],
-  describe: "list group chats with names and participants",
+  describe: "list group chats with names and participants (optional [query] filters by name/participant)",
   builder: (yargs) =>
     yargs
+      .positional("query", { type: "string", describe: "filter groups by name or participant (substring, case-insensitive)" })
       .option("days", { type: "number", default: 90, describe: "look back N days" })
       .option("limit", { type: "number", default: 30, describe: "max groups" })
       .option("json", { type: "boolean", default: false }),
@@ -961,9 +962,25 @@ const ImessageGroupsCommand = cmd({
       return parts.length ? parts.join(", ") : "(unnamed group)"
     }
 
+    // Optional [query] filter — match on the resolved group label OR any participant name/handle
+    const q = (args.query ? String(args.query) : "").trim().toLowerCase()
+    const matchesQuery = (guid: string, displayName: string) => {
+      if (!q) return true
+      const label = (realName(displayName) ?? synthName(guid)).toLowerCase()
+      if (label.includes(q)) return true
+      return memberInfo(guid).some(m => (m.name || "").toLowerCase().includes(q) || (m.handle || "").toLowerCase().includes(q))
+    }
+    const filtered = groups.filter(g => matchesQuery(g.guid, g.display_name))
+    if (!filtered.length) {
+      if (args.json) { console.log("[]"); return }
+      prompts.log.info(`No group chats match ${bold(String(args.query))}`)
+      prompts.outro("Done")
+      return
+    }
+
     if (args.json) {
       // Enrich with resolved participants for JSON output
-      const enriched = groups.map(g => ({
+      const enriched = filtered.map(g => ({
         ...g,
         display_name: realName(g.display_name) ?? synthName(g.guid),
         members: memberInfo(g.guid),
@@ -973,7 +990,7 @@ const ImessageGroupsCommand = cmd({
     }
 
     printDivider()
-    for (const group of groups) {
+    for (const group of filtered) {
       const name = bold(realName(group.display_name) ?? synthName(group.guid))
       const meta = dim(`${group.participants} members · ${group.message_count} msgs · ${group.last_message}`)
       const memberNames = memberInfo(group.guid).map(m => m.name || m.handle).join(", ")
@@ -984,7 +1001,8 @@ const ImessageGroupsCommand = cmd({
       console.log()
     }
     printDivider()
-    prompts.outro(`${success("✓")} ${groups.length} group chat${groups.length === 1 ? "" : "s"}\n  ${dim("iris imessage read-group <name-or-id>")}`)
+    const label = q ? ` matching ${bold(String(args.query))}` : ""
+    prompts.outro(`${success("✓")} ${filtered.length} group chat${filtered.length === 1 ? "" : "s"}${label}\n  ${dim("iris imessage read-group <name-or-id>")}`)
   },
 })
 
