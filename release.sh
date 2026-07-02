@@ -121,11 +121,43 @@ fi
 
 echo "Workflow run: https://github.com/$REPO/actions/runs/$RUN_ID"
 echo "Watching CI (Ctrl+C to stop watching — release will continue)..."
-gh run watch "$RUN_ID" --exit-status || {
+
+# gh run watch's exit code conflates a dropped watch stream (transient network /
+# auth blip) with an actual CI failure (bug #157631 — false failure on v1.3.112,
+# where a 'HTTP 401 Bad credentials' / 'connection reset by peer' on the watch
+# aborted a perfectly healthy release and skipped the dev sync below). Treat the
+# watch as best-effort live output only; derive the real verdict by polling the
+# run's actual conclusion, which is the single source of truth.
+WATCH_DEADLINE=$(( $(date +%s) + 1800 ))   # 30 min hard cap
+RUN_STATUS=""
+while :; do
+  # Live progress; ignore its exit code (may drop early on a network blip).
+  gh run watch "$RUN_ID" --exit-status >/dev/null 2>&1 || true
+
+  # Authoritative status — retry the query itself on transient API errors.
+  RUN_STATUS=""
+  for _ in 1 2 3 4 5; do
+    RUN_STATUS=$(gh run view "$RUN_ID" --json status --jq '.status' 2>/dev/null) \
+      && [ -n "$RUN_STATUS" ] && break
+    sleep 5
+  done
+
+  [ "$RUN_STATUS" = "completed" ] && break
+
+  if [ "$(date +%s)" -ge "$WATCH_DEADLINE" ]; then
+    echo "Error: run $RUN_ID still '${RUN_STATUS:-unknown}' after 30 min. Check: gh run view $RUN_ID"
+    exit 1
+  fi
+  echo "  …CI ${RUN_STATUS:-unreachable}; re-checking in 15s (watch will resume)"
+  sleep 15
+done
+
+RUN_CONCLUSION=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion' 2>/dev/null || echo "")
+if [ "$RUN_CONCLUSION" != "success" ]; then
   echo ""
-  echo "CI failed or was cancelled. Check: gh run view $RUN_ID"
+  echo "CI concluded '${RUN_CONCLUSION:-unknown}' (not success). Check: gh run view $RUN_ID"
   exit 1
-}
+fi
 
 # Confirm the GitHub Release + binaries actually exist before declaring victory
 ASSET_COUNT=$(gh release view "v$TARGET" --json assets --jq '.assets | length' 2>/dev/null || echo "0")

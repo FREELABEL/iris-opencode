@@ -187,7 +187,7 @@ const DomainsConnectCommand = cmd({
       if (!res.ok) {
         const err = await res.json().catch(() => ({})) as any
         sp.stop("Failed")
-        prompts.log.error(`DNS setup failed: ${err?.error ?? res.statusText}`)
+        prompts.log.error(`DNS setup failed: ${err?.error ?? err?.message ?? res.statusText}`)
         if (err?.details) {
           for (const d of Array.isArray(err.details) ? err.details : [err.details]) {
             prompts.log.warn(`  ${String(d)}`)
@@ -226,6 +226,27 @@ const DomainsConnectCommand = cmd({
 
       if (result.domain_mapping) {
         printKV("Mapping ID", dim(`#${result.domain_mapping.id}`))
+      }
+
+      // Auto-verify (ask 4 / #157536): confirm DNS is live right after setup so the user
+      // sees "DNS Verified" instead of having to run `iris domains verify` separately.
+      if (provider === "cloudflare") {
+        const vsp = prompts.spinner()
+        vsp.start("Verifying DNS…")
+        try {
+          const vres = await irisFetch("/api/v1/domains/verify", {
+            method: "POST",
+            body: JSON.stringify({ domain, provider }),
+          }, IRIS_API)
+          const vjson = (await vres.json().catch(() => ({}))) as any
+          if (vres.ok && vjson?.propagated) {
+            vsp.stop(success("DNS Verified"))
+          } else {
+            vsp.stop(dim(`DNS not propagated yet${vjson?.message ? ` — ${vjson.message}` : ""}`))
+          }
+        } catch {
+          vsp.stop(dim("DNS verify skipped"))
+        }
       }
 
       // Provider-specific instructions

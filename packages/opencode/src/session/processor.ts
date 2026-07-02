@@ -388,6 +388,44 @@ export namespace SessionProcessor {
               })
             }
           }
+          // Guard against silent empty finalization (bug #157647). A free / opencode-gateway
+          // model whose upstream stream dies mid-flight (e.g. rate-limit / ResourceExhausted)
+          // can finalize with finish="unknown", zero output tokens and NO output parts, yet
+          // never emit an "error" stream event — so the upstream failure is swallowed, error
+          // stays null, and the UI renders an empty bubble with only a duration. Treat this as
+          // a hard failure: attach an error the UI already knows how to render (APIError shape,
+          // read at `message.error.data.message`) and publish session.error so programmatic
+          // callers (e.g. `iris run`) exit non-zero instead of reading it as success.
+          if (!input.assistantMessage.error) {
+            const finish = input.assistantMessage.finish
+            const badFinish = finish === undefined || finish === "unknown" || finish === "error"
+            const hasOutput = p.some(
+              (part) =>
+                (part.type === "text" && part.text.trim().length > 0) ||
+                (part.type === "reasoning" && part.text.trim().length > 0) ||
+                part.type === "tool",
+            )
+            if (badFinish && !hasOutput && input.assistantMessage.tokens.output === 0) {
+              log.error("empty finalization", {
+                finish: finish ?? "unknown",
+                sessionID: input.assistantMessage.sessionID,
+                messageID: input.assistantMessage.id,
+              })
+              input.assistantMessage.error = new MessageV2.APIError(
+                {
+                  message:
+                    `Model stream ended without output (finish reason: ${finish ?? "unknown"}). ` +
+                    `The upstream provider may be rate-limited or exhausted — no response was produced.`,
+                  isRetryable: false,
+                },
+                {},
+              ).toObject()
+              Bus.publish(Session.Event.Error, {
+                sessionID: input.assistantMessage.sessionID,
+                error: input.assistantMessage.error,
+              })
+            }
+          }
           input.assistantMessage.time.completed = Date.now()
           await Session.updateMessage(input.assistantMessage)
           if (needsCompaction) return "compact"
