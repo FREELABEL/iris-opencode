@@ -270,7 +270,9 @@ const BoardsUpdateCommand = cmd({
 
     const payload: Record<string, unknown> = {}
     if (args.title) payload.title = args.title
-    if (args.description) payload.description = args.description
+    // The board item body lives in `content` (this is what `create` writes to).
+    // Writing to `description` here was a silent no-op (#157528).
+    if (args.description) payload.content = args.description
     if (args.status) payload.status = args.status
     if (args.type) payload.type = args.type
 
@@ -293,11 +295,12 @@ const BoardsUpdateCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const item = data?.data ?? data
-      spinner.stop(`${success("✓")} Updated: ${bold(String(item.title ?? item.id))}`)
+      const displayTitle = item.title ?? args.title ?? `Item #${args.id}`
+      spinner.stop(`${success("✓")} Updated: ${bold(String(displayTitle))}`)
 
       printDivider()
-      printKV("ID", item.id)
-      printKV("Title", item.title)
+      printKV("ID", item.id ?? args.id)
+      printKV("Title", displayTitle)
       printKV("Status", item.status)
       printDivider()
 
