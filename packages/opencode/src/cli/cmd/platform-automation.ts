@@ -15,17 +15,26 @@ import {
 } from "./iris-api"
 
 // ============================================================================
-// Endpoint constants — mirror PHP AutomationsResource paths exactly so the
-// behavior is byte-compatible with what V6 backend expects.
+// Endpoint constants — the real fl-api routes the V6 backend exposes.
 // ============================================================================
 //
-//   create:  POST   /api/v1/workflows/templates
+//   create:  POST   /api/v1/users/{userId}/bloqs/workflow-templates  (WorkflowTemplateController::store)
 //   execute: POST   /api/v1/workflows/{id}/execute/v6
 //   status:  GET    /api/v1/workflows/runs/{runId}
 //   runs:    GET    /api/v1/workflows/runs?...
-//   list:    GET    /api/v1/users/{userId}/workflows?...
+//   list:    GET    /api/v1/users/{userId}/bloqs/workflow-templates?...
 //   delete:  DELETE /api/v1/workflows/{id}
 //   cancel:  POST   /api/v1/workflows/runs/{runId}/cancel
+//
+// NOTE (#157794): create/list/execute MUST all stay on the workflow-TEMPLATE plane
+// (WorkflowTemplate is STI over bloq_workflows with a workflow_type='template' global
+// scope; list + execute/v6 both findOrFail template-scoped). `create` used to 422
+// because WorkflowTemplateController::store hard-required a `steps` array. That
+// endpoint now treats `steps` as nullable and persists the agentic fields
+// (execution_mode/agent_id/agent_config/max_iterations) for goal-driven agentic_v6
+// automations, so a created row is immediately listable AND executable. Routing
+// create to bloqs/workflows instead would create a workflow_type='workflow' row that
+// list/execute (template-scoped) can't see — a silent orphan. See buildAutomationCreatePayload.
 
 // ============================================================================
 // Helpers
@@ -37,6 +46,71 @@ function safeJsonParse<T = unknown>(raw: string, label: string): T {
   } catch (err) {
     throw new Error(`Invalid JSON in --${label}: ${(err as Error).message}`)
   }
+}
+
+// ============================================================================
+// Shared create contract (#157794)
+//
+// Used by BOTH `iris automation create` and `iris automation:test` so the two
+// code paths can never diverge again — previously `create` 422'd (generic
+// template endpoint, steps required) while `automation:test` 404'd (a nonexistent
+// /api/v1/workflows/templates route). Both now flow through the SAME endpoint +
+// payload builder below.
+// ============================================================================
+
+export const AUTOMATION_EXECUTION_MODE = "agentic_v6"
+
+export interface AutomationCreateInput {
+  name: string
+  agentId: number
+  goal: string
+  outcomes: unknown
+  successCriteria?: unknown
+  maxIterations?: number
+  description?: string
+  /** Optional explicit steps. Agentic_v6 automations are goal-driven and do NOT
+   *  require steps; when omitted an empty array is sent (accepted as nullable). */
+  steps?: unknown[]
+}
+
+export function automationCreatePath(userId: number | string): string {
+  return `/api/v1/users/${userId}/bloqs/workflow-templates`
+}
+
+export function buildAutomationCreatePayload(input: AutomationCreateInput): Record<string, unknown> {
+  const maxIterations = input.maxIterations ?? 10
+  return {
+    name: input.name,
+    description: input.description ?? "",
+    execution_mode: AUTOMATION_EXECUTION_MODE,
+    // agent_id is sent both top-level (column) and inside agent_config (JSON blob)
+    // so it survives regardless of which the backend persists.
+    agent_id: input.agentId,
+    agent_config: {
+      agent_id: input.agentId,
+      goal: input.goal,
+      outcomes: input.outcomes,
+      success_criteria: input.successCriteria ?? [],
+      max_iterations: maxIterations,
+    },
+    max_iterations: maxIterations,
+    steps: Array.isArray(input.steps) ? input.steps : [],
+  }
+}
+
+/**
+ * POST a create request for a V6 automation and return the raw Response so the
+ * caller can surface the HTTP status. Both `create` and `automation:test` MUST
+ * use this to guarantee identical endpoint + payload (#157794).
+ */
+export async function requestAutomationCreate(
+  userId: number | string,
+  input: AutomationCreateInput,
+): Promise<Response> {
+  return irisFetch(automationCreatePath(userId), {
+    method: "POST",
+    body: JSON.stringify(buildAutomationCreatePayload(input)),
+  })
 }
 
 function statusColor(status?: string): string {
@@ -72,6 +146,10 @@ const CreateCommand = cmd({
       .option("success-criteria", { describe: "success criteria JSON array", type: "string" })
       .option("max-iterations", { describe: "max ReAct iterations", type: "number", default: 10 })
       .option("description", { describe: "automation description", type: "string" })
+      .option("steps", {
+        describe: "steps JSON array (optional — agentic_v6 is goal-driven and does not require steps)",
+        type: "string",
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const token = await requireAuth()
@@ -121,6 +199,21 @@ const CreateCommand = cmd({
       }
     }
 
+    let steps: unknown[] | undefined
+    if (args.steps) {
+      try {
+        const parsed = safeJsonParse(args.steps as string, "steps")
+        if (!Array.isArray(parsed)) throw new Error("Invalid JSON in --steps: must be a JSON array")
+        steps = parsed as unknown[]
+      } catch (err) {
+        const msg = (err as Error).message
+        if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 1
+        return
+      }
+    }
+
     if (!args.json) {
       UI.empty()
       prompts.intro("◈  Create V6 Automation")
@@ -136,17 +229,15 @@ const CreateCommand = cmd({
     try {
       const userId = await requireUserId()
       if (!userId) { prompts.outro("Done"); return }
-      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/workflow-templates`, {
-        method: "POST",
-        body: JSON.stringify({
-          name: args.name,
-          agent_id: args["agent-id"],
-          goal: args.goal,
-          outcomes,
-          success_criteria: successCriteria,
-          max_iterations: args["max-iterations"],
-          description: args.description,
-        }),
+      const res = await requestAutomationCreate(userId, {
+        name: args.name as string,
+        agentId: args["agent-id"] as number,
+        goal: args.goal as string,
+        outcomes,
+        successCriteria,
+        maxIterations: args["max-iterations"] as number,
+        description: args.description as string | undefined,
+        steps,
       })
       if (!res.ok) {
         const text = await res.text()

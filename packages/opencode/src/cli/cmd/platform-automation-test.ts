@@ -11,6 +11,10 @@ import {
   bold,
   success,
 } from "./iris-api"
+import {
+  requestAutomationCreate,
+  type AutomationCreateInput,
+} from "./platform-automation"
 
 // ============================================================================
 // V6 Automation end-to-end test runner
@@ -38,11 +42,11 @@ interface TestResults {
 // Endpoint helpers — keep these in lockstep with platform-automation.ts
 // ----------------------------------------------------------------------------
 
-async function apiCreateAutomation(payload: Record<string, unknown>): Promise<any> {
-  const res = await irisFetch("/api/v1/workflows/templates", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
+// Delegates to the shared create helper in platform-automation.ts so `automation:test`
+// and `automation create` hit the IDENTICAL endpoint + payload (#157794 — they used
+// to disagree: create 422'd, this path 404'd).
+async function apiCreateAutomation(userId: number, input: AutomationCreateInput): Promise<any> {
+  const res = await requestAutomationCreate(userId, input)
   if (!res.ok) throw new Error(`create failed (HTTP ${res.status}): ${(await res.text()).slice(0, 200)}`)
   const body = (await res.json()) as any
   return body?.data ?? body
@@ -126,12 +130,12 @@ function validateAutomationConfig(config: Record<string, unknown>): { valid: boo
 // Test fixture builder
 // ----------------------------------------------------------------------------
 
-function buildTestAutomation(agentId: number, testEmail: string): Record<string, unknown> {
+function buildTestAutomation(agentId: number, testEmail: string): AutomationCreateInput {
   const ts = new Date().toISOString().replace("T", " ").slice(0, 19)
   return {
     name: `SDK Test Automation - ${ts}`,
     description: "Automated test created by automation:test command",
-    agent_id: agentId,
+    agentId,
     goal: `Use the callIntegration tool with integration="gmail" and action="send_email" to send a test email to ${testEmail}. The email should confirm that the V6 automation system is working correctly.`,
     outcomes: [
       {
@@ -143,8 +147,8 @@ function buildTestAutomation(agentId: number, testEmail: string): Record<string,
         },
       },
     ],
-    success_criteria: ["Email delivered successfully", "callIntegration tool returned success=true"],
-    max_iterations: 10,
+    successCriteria: ["Email delivered successfully", "callIntegration tool returned success=true"],
+    maxIterations: 10,
   }
 }
 
@@ -153,6 +157,7 @@ function buildTestAutomation(agentId: number, testEmail: string): Record<string,
 // ============================================================================
 
 async function runQuickTest(
+  userId: number,
   agentId: number,
   testEmail: string,
   noCleanup: boolean,
@@ -165,7 +170,7 @@ async function runQuickTest(
   log(bold("1. Creating test automation"))
   let automation: any
   try {
-    automation = await apiCreateAutomation(buildTestAutomation(agentId, testEmail))
+    automation = await apiCreateAutomation(userId, buildTestAutomation(agentId, testEmail))
     results.steps!.create = { success: true, automation_id: automation.id, name: automation.name }
     log(`  ${success("✓")} Created automation #${automation.id}`)
   } catch (err) {
@@ -230,7 +235,7 @@ async function runFullTest(
   log(bold("1. Creating test automation"))
   let automation: any
   try {
-    automation = await apiCreateAutomation(buildTestAutomation(agentId, testEmail))
+    automation = await apiCreateAutomation(userId, buildTestAutomation(agentId, testEmail))
     results.steps!.create = { success: true, automation_id: automation.id }
     log(`  ${success("✓")} Created automation #${automation.id}`)
   } catch (err) {
@@ -312,6 +317,7 @@ async function runFullTest(
 }
 
 async function runCreateOnlyTest(
+  userId: number,
   agentId: number,
   testEmail: string,
   log: (line: string) => void,
@@ -320,7 +326,7 @@ async function runCreateOnlyTest(
 
   log(bold("Creating test automation"))
   try {
-    const automation = await apiCreateAutomation(buildTestAutomation(agentId, testEmail))
+    const automation = await apiCreateAutomation(userId, buildTestAutomation(agentId, testEmail))
     results.steps!.create = {
       success: true,
       automation_id: automation.id,
@@ -546,6 +552,7 @@ export const PlatformAutomationTestCommand = cmd({
       switch (mode) {
         case "quick":
           results = await runQuickTest(
+            userId,
             args["agent-id"] as number,
             args["test-email"] as string,
             args["no-cleanup"] as boolean,
@@ -564,6 +571,7 @@ export const PlatformAutomationTestCommand = cmd({
           break
         case "create-only":
           results = await runCreateOnlyTest(
+            userId,
             args["agent-id"] as number,
             args["test-email"] as string,
             log,
