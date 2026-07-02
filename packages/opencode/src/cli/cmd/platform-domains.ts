@@ -1,3 +1,4 @@
+import { promises as dnsPromises } from "node:dns"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -30,6 +31,43 @@ function providerBadge(provider: string): string {
 }
 
 // ----------------------------------------------------------------------------
+// DNS provider auto-detection (#156550)
+//
+// Look up the domain's nameservers and map them to a supported DNS provider so the
+// user doesn't have to eyeball their registrar and pass --provider manually. Uses
+// Node's built-in dns module (no new deps).
+// ----------------------------------------------------------------------------
+type DetectResult = { provider: "cloudflare" | "godaddy" | null; nameservers: string[]; error?: string }
+
+async function detectDnsProvider(domain: string): Promise<DetectResult> {
+  try {
+    const ns = (await dnsPromises.resolveNs(domain)).map((n) => n.toLowerCase())
+    let provider: DetectResult["provider"] = null
+    if (ns.some((n) => n.endsWith(".ns.cloudflare.com") || n.includes("cloudflare"))) {
+      provider = "cloudflare"
+    } else if (ns.some((n) => n.includes("domaincontrol.com") || n.includes("godaddy"))) {
+      provider = "godaddy"
+    }
+    return { provider, nameservers: ns }
+  } catch (e: any) {
+    const code = e?.code
+    const msg =
+      code === "ENOTFOUND" || code === "ENODATA"
+        ? "No NS records found — the domain may be unregistered or not yet delegated"
+        : (e?.message ?? String(e))
+    return { provider: null, nameservers: [], error: msg }
+  }
+}
+
+// Manual DNS fallback shown when NS points at an unsupported registrar.
+function printManualDnsFallback(domain: string): void {
+  prompts.log.warn("Auto-provisioning may not apply to this registrar — add these records manually:")
+  console.log(`    ${dim("CNAME")}  ${bold("@")}    → ${highlight("sites.heyiris.io")}`)
+  console.log(`    ${dim("CNAME")}  ${bold("www")}  → ${highlight("sites.heyiris.io")}`)
+  prompts.log.info(`Or switch your nameservers to Cloudflare, then run: ${dim(`iris domains verify ${domain}`)}`)
+}
+
+// ----------------------------------------------------------------------------
 // domains list
 // ----------------------------------------------------------------------------
 const DomainsListCommand = cmd({
@@ -52,11 +90,29 @@ const DomainsListCommand = cmd({
       if (args.provider && args.provider !== "all") params.set("provider", String(args.provider))
 
       const res = await irisFetch(`/api/v1/domains?${params}`, {}, IRIS_API)
-      if (!res.ok) { await handleApiError(res, "List domains"); sp.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!res.ok) {
+        sp.stop("Failed", 1)
+        // #156549: distinguish a server-side 500 (backend/provider down) from an auth/permission
+        // failure. handleApiError already special-cases 401/403; add a hint for 5xx so the user
+        // knows it's the API/DNS-provider side, not their credentials.
+        await handleApiError(res, "List domains")
+        if (res.status >= 500) {
+          prompts.log.warn("The domains API returned a server error — a DNS provider (Cloudflare/GoDaddy) may be unreachable or missing credentials.")
+          prompts.log.info(`Check the iris-api logs: ${dim("railway logs -s fl-iris-api")}`)
+        }
+        prompts.outro("Done")
+        return
+      }
 
       const data = (await res.json()) as any
       const domains: any[] = data?.domains ?? []
+      const warnings: string[] = Array.isArray(data?.warnings) ? data.warnings : []
       sp.stop(`${domains.length} domain(s)`)
+
+      // Non-fatal per-provider warnings (e.g. one provider down while the other returned data).
+      for (const w of warnings) {
+        prompts.log.warn(String(w))
+      }
 
       if (args.json) {
         console.log(JSON.stringify(domains, null, 2))
@@ -121,7 +177,7 @@ const DomainsConnectCommand = cmd({
       .option("page-id", { describe: "page ID to serve", type: "number" })
       .option("site", { describe: "site slug to serve", type: "string" })
       .option("site-id", { describe: "site ID to serve", type: "number" })
-      .option("provider", { describe: "DNS provider: cloudflare (full proxy) or godaddy (CNAME only)", type: "string", default: "cloudflare" })
+      .option("provider", { describe: "DNS provider: cloudflare | godaddy (default: auto-detect from nameservers)", type: "string" })
       .option("yes", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false })
       .check((argv) => {
         if (!argv.page && !argv["page-id"] && !argv.site && !argv["site-id"]) {
@@ -135,7 +191,32 @@ const DomainsConnectCommand = cmd({
     if (!(await requireAuth())) { prompts.outro("Done"); return }
 
     const domain = String(args.domain).toLowerCase().trim()
-    const provider = String(args.provider ?? "cloudflare")
+
+    // Provider: honor an explicit --provider, otherwise auto-detect from the domain's
+    // nameservers so the user doesn't have to look it up at their registrar. (#156550)
+    let provider = args.provider ? String(args.provider) : ""
+    let unsupportedNs = false
+    if (!provider) {
+      const dsp = prompts.spinner()
+      dsp.start("Detecting DNS provider…")
+      const detected = await detectDnsProvider(domain)
+      if (detected.provider) {
+        provider = detected.provider
+        dsp.stop(`Detected provider: ${providerBadge(provider)} ${dim(`(${detected.nameservers.join(", ")})`)}`)
+      } else {
+        // Unknown/unsupported registrar — default to a Cloudflare zone (universal: the user
+        // switches nameservers to CF) but flag it and print the manual fallback records.
+        provider = "cloudflare"
+        unsupportedNs = true
+        if (detected.error) {
+          dsp.stop(dim(`Could not detect provider — ${detected.error}`))
+        } else {
+          dsp.stop(dim(`Unsupported nameservers: ${detected.nameservers.join(", ") || "none"}`))
+        }
+        prompts.log.warn(`No supported provider auto-detected — defaulting to ${providerBadge("cloudflare")} (you'll switch nameservers to Cloudflare)`)
+        printManualDnsFallback(domain)
+      }
+    }
 
     // If page slug provided, resolve to page_id first
     let pageId = args["page-id"] as number | undefined
@@ -184,27 +265,36 @@ const DomainsConnectCommand = cmd({
         body: JSON.stringify(body),
       }, IRIS_API)
 
+      const result = (await res.json().catch(() => ({}))) as any
+
       if (!res.ok) {
-        const err = await res.json().catch(() => ({})) as any
+        // A non-2xx here means the page BINDING failed (fl-api unreachable / mapping error),
+        // not merely DNS — #157538 makes DNS failures return 200 with dns_ok=false so the page
+        // still binds. Surface the real cause.
         sp.stop("Failed")
-        prompts.log.error(`DNS setup failed: ${err?.error ?? err?.message ?? res.statusText}`)
-        if (err?.details) {
-          for (const d of Array.isArray(err.details) ? err.details : [err.details]) {
+        prompts.log.error(`Connect failed: ${result?.mapping_error ?? result?.error ?? result?.message ?? res.statusText}`)
+        if (result?.dns_error) prompts.log.warn(`  DNS: ${result.dns_error}`)
+        if (result?.details) {
+          for (const d of Array.isArray(result.details) ? result.details : [result.details]) {
             prompts.log.warn(`  ${String(d)}`)
           }
         }
+        prompts.log.info(`Retry (idempotent): ${dim(`iris domains connect ${domain}${pageSlug ? ` --page ${pageSlug}` : ""}`)}`)
         prompts.outro("Done")
         return
       }
 
-      const result = (await res.json()) as any
-      sp.stop(success("Domain connected"))
+      // Page binding is the primary success condition (#157538): DNS may still be pending.
+      const dnsOk = result?.dns_ok !== false
+      sp.stop(dnsOk ? success("Domain connected") : success("Page bound (DNS pending)"))
 
       printDivider()
       printKV("Domain", bold(result.domain))
       printKV("Provider", providerBadge(result.provider))
+      printKV("Page bound", result.page_bound ? success("Yes") : dim("No"))
       printKV("Status", statusBadge(result.status ?? "pending_verification"))
 
+      if (result.domain_mapping?.id) printKV("Mapping ID", dim(`#${result.domain_mapping.id}`))
       if (result.zone_id) printKV("Zone ID", dim(result.zone_id))
       if (result.nameservers) {
         printKV("Nameservers", "")
@@ -219,18 +309,21 @@ const DomainsConnectCommand = cmd({
         }
       }
 
+      // DNS failed but the page is still bound — say so explicitly (the #157538 fix). (#157538)
+      if (!dnsOk) {
+        printDivider()
+        prompts.log.warn(`DNS provisioning did not complete${result.dns_step ? ` (step: ${result.dns_step})` : ""} — the page is bound and will serve once DNS resolves.`)
+        if (result.dns_error) prompts.log.warn(`  ${result.dns_error}`)
+        if (unsupportedNs) printManualDnsFallback(domain)
+      }
+
       if (result.next_step) {
         printDivider()
         prompts.log.info(result.next_step)
       }
 
-      if (result.domain_mapping) {
-        printKV("Mapping ID", dim(`#${result.domain_mapping.id}`))
-      }
-
-      // Auto-verify (ask 4 / #157536): confirm DNS is live right after setup so the user
-      // sees "DNS Verified" instead of having to run `iris domains verify` separately.
-      if (provider === "cloudflare") {
+      // Auto-verify (ask 4 / #157536) — only when DNS actually provisioned; pointless if it failed.
+      if (provider === "cloudflare" && dnsOk) {
         const vsp = prompts.spinner()
         vsp.start("Verifying DNS…")
         try {
@@ -249,12 +342,12 @@ const DomainsConnectCommand = cmd({
         }
       }
 
-      // Provider-specific instructions
-      if (provider === "cloudflare" && result.nameservers) {
+      // Provider-specific instructions (only when DNS provisioned).
+      if (dnsOk && provider === "cloudflare" && result.nameservers) {
         printDivider()
         prompts.log.warn("Next: Update nameservers at your registrar to the ones above")
         prompts.log.info(`Then verify: ${dim(`iris domains verify ${domain}`)}`)
-      } else if (provider === "godaddy") {
+      } else if (dnsOk && provider === "godaddy") {
         printDivider()
         prompts.log.success("GoDaddy CNAME set — domain should be active within minutes")
         prompts.log.info(`Verify: ${dim(`iris domains verify ${domain}`)}`)
@@ -490,6 +583,153 @@ const DomainsStatusCommand = cmd({
   },
 })
 
+// ----------------------------------------------------------------------------
+// domains assign — bind a page/site to a domain mapping WITHOUT touching DNS (#157538)
+//
+// The only pre-existing way to point a domain at a page was `connect`, which used to
+// 500 at the Cloudflare DNS step *before* persisting the page assignment — so the
+// mapping never bound (the domain kept serving the hardcoded fallback). `assign` updates
+// only the mapping (mirrors the server-side `php artisan domain:assign`), so a page binds
+// even when DNS is broken/pending. Works on INTERNAL mappings too, and is idempotent
+// (creates the mapping if one doesn't exist yet).
+// ----------------------------------------------------------------------------
+const DomainsAssignCommand = cmd({
+  command: "assign <domain>",
+  describe: "bind a page/site to a domain mapping (no DNS changes — works even when DNS fails)",
+  builder: (yargs) =>
+    yargs
+      .positional("domain", { describe: "the domain whose mapping to update (e.g. noys.io)", type: "string", demandOption: true })
+      .option("page", { describe: "page slug to serve on this domain", type: "string" })
+      .option("page-id", { describe: "page ID to serve", type: "number" })
+      .option("site", { describe: "site slug to serve", type: "string" })
+      .option("site-id", { describe: "site ID to serve", type: "number" })
+      .check((argv) => {
+        if (!argv.page && !argv["page-id"] && !argv.site && !argv["site-id"]) {
+          throw new Error("Provide a target: --page <slug>, --page-id <id>, --site <slug>, or --site-id <id>")
+        }
+        return true
+      }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Assign Domain Mapping")
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const domain = String(args.domain).toLowerCase().trim()
+    let pageId = args["page-id"] as number | undefined
+    const pageSlug = args.page as string | undefined
+    const siteId = args["site-id"] as number | undefined
+    const siteSlug = args.site as string | undefined
+    const isSite = Boolean(siteSlug || siteId)
+
+    // Resolve page slug → id via iris-api (mirrors `connect`).
+    if (pageSlug && !pageId) {
+      const psp = prompts.spinner()
+      psp.start(`Resolving page "${pageSlug}"…`)
+      const pageRes = await irisFetch(`/api/v1/pages/by-slug/${encodeURIComponent(pageSlug)}?include_drafts=1`, {}, IRIS_API)
+      if (!pageRes.ok) {
+        psp.stop("Page not found")
+        prompts.log.error(`Page "${pageSlug}" not found. Create it first: ${dim(`iris pages create ${pageSlug}`)}`)
+        prompts.outro("Done")
+        return
+      }
+      const pageData = (await pageRes.json()) as any
+      const page = pageData?.data ?? pageData
+      pageId = page?.id
+      psp.stop(`Found page: ${bold(page?.title ?? pageSlug)} (#${pageId})`)
+    }
+
+    const sp = prompts.spinner()
+    sp.start(`Updating mapping for ${domain}…`)
+    try {
+      // Find the existing mapping (any status, incl. internal) via fl-api.
+      const listRes = await irisFetch("/api/v1/domain-mappings", {}, FL_API)
+      if (!listRes.ok) { sp.stop("Failed", 1); await handleApiError(listRes, "List domain mappings"); prompts.outro("Done"); return }
+      const listData = (await listRes.json()) as any
+      const mappings: any[] = listData?.data ?? []
+      const existing = mappings.find((m: any) => String(m.domain ?? "").toLowerCase() === domain)
+
+      // status=active so the mapping resolves immediately (resolution uses the active scope).
+      const payload: Record<string, unknown> = { mapping_type: isSite ? "site" : "page", status: "active" }
+      if (isSite) { payload.site_id = siteId ?? null; payload.page_id = null }
+      else { payload.page_id = pageId ?? null; payload.site_id = null }
+
+      const res = existing?.id
+        ? await irisFetch(`/api/v1/domain-mappings/${existing.id}`, { method: "PUT", body: JSON.stringify(payload) }, FL_API)
+        : await irisFetch("/api/v1/domain-mappings", { method: "POST", body: JSON.stringify({ domain, ...payload }) }, FL_API)
+      const action = existing?.id ? (existing.is_internal ? "updated (internal)" : "updated") : "created"
+
+      if (!res.ok) { sp.stop("Failed", 1); await handleApiError(res, "Assign domain"); prompts.outro("Done"); return }
+
+      const out = (await res.json()) as any
+      const m = out?.data ?? out
+      sp.stop(success(`Mapping ${action}`))
+
+      printDivider()
+      printKV("Domain", bold(domain))
+      printKV("Target", isSite
+        ? highlight(`/s/${siteSlug ?? m?.site?.slug ?? siteId}`)
+        : highlight(`/p/${pageSlug ?? m?.page?.slug ?? pageId}`))
+      printKV("Status", statusBadge(m?.status ?? "active"))
+      if (m?.id) printKV("Mapping ID", dim(`#${m.id}`))
+
+      printDivider()
+      prompts.log.info("No DNS records were changed. If the domain still doesn't resolve, fix DNS separately:")
+      prompts.log.info(`  ${dim(`iris domains connect ${domain}${pageSlug ? ` --page ${pageSlug}` : ""}`)}  or  ${dim(`iris domains verify ${domain}`)}`)
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp.stop("Error")
+      prompts.log.error(e.message ?? String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ----------------------------------------------------------------------------
+// domains detect — report the DNS provider + nameservers for a domain (#156550)
+// ----------------------------------------------------------------------------
+const DomainsDetectCommand = cmd({
+  command: "detect <domain>",
+  describe: "detect the DNS provider and nameservers for a domain",
+  builder: (yargs) =>
+    yargs
+      .positional("domain", { describe: "the domain to inspect (e.g. moodybeauty.co)", type: "string", demandOption: true })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    const domain = String(args.domain).toLowerCase().trim()
+
+    if (args.json) {
+      console.log(JSON.stringify(await detectDnsProvider(domain), null, 2))
+      return
+    }
+
+    UI.empty()
+    prompts.intro("◈  Detect DNS Provider")
+    const sp = prompts.spinner()
+    sp.start(`Looking up nameservers for ${domain}…`)
+    const d = await detectDnsProvider(domain)
+
+    if (d.error) {
+      sp.stop("Lookup failed")
+      prompts.log.error(d.error)
+      prompts.outro("Done")
+      return
+    }
+
+    sp.stop(d.provider ? `Provider: ${providerBadge(d.provider)}` : "Unknown provider")
+    printDivider()
+    printKV("Domain", bold(domain))
+    printKV("Provider", d.provider ? providerBadge(d.provider) : dim("unsupported / unknown"))
+    printKV("Nameservers", "")
+    for (const ns of d.nameservers) console.log(`    ${highlight(ns)}`)
+
+    if (!d.provider) {
+      printDivider()
+      printManualDnsFallback(domain)
+    }
+    prompts.outro("Done")
+  },
+})
+
 // ============================================================================
 // Parent command
 // ============================================================================
@@ -497,14 +737,16 @@ const DomainsStatusCommand = cmd({
 export const PlatformDomainsCommand = cmd({
   command: "domains",
   aliases: ["domain"],
-  describe: "manage custom client domains (connect, verify, list, remove)",
+  describe: "manage custom client domains (connect, assign, verify, detect, list, remove)",
   builder: (yargs) =>
     yargs
       .command(DomainsListCommand)
       .command(DomainsConnectCommand)
+      .command(DomainsAssignCommand)
       .command(DomainsVerifyCommand)
+      .command(DomainsDetectCommand)
       .command(DomainsRemoveCommand)
       .command(DomainsStatusCommand)
-      .demandCommand(1, "specify a subcommand: list, connect, verify, remove, status"),
+      .demandCommand(1, "specify a subcommand: list, connect, assign, verify, detect, remove, status"),
   async handler() {},
 })
