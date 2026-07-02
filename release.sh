@@ -126,33 +126,48 @@ echo "Watching CI (Ctrl+C to stop watching — release will continue)..."
 # auth blip) with an actual CI failure (bug #157631 — false failure on v1.3.112,
 # where a 'HTTP 401 Bad credentials' / 'connection reset by peer' on the watch
 # aborted a perfectly healthy release and skipped the dev sync below). Treat the
-# watch as best-effort live output only; derive the real verdict by polling the
-# run's actual conclusion, which is the single source of truth.
+# watch as best-effort live output only; derive the real verdict below.
+#
+# GROUND TRUTH = the published GitHub Release with assets. CI creates it ONLY on
+# success (the final `release` job), so it is the single most authoritative signal
+# and it survives the run status/conclusion API queries flaking. (v1.3.116 false-
+# failed here: those queries returned empty 'unknown' for 30 min while the release
+# had actually published — so we now trust the release itself, then fall back to
+# the run status/conclusion, and only fail after the deadline AND no release.)
+release_published () {
+  [ "$(gh release view "v$TARGET" --json assets --jq '.assets | length' 2>/dev/null || echo 0)" -ge 1 ]
+}
 WATCH_DEADLINE=$(( $(date +%s) + 1800 ))   # 30 min hard cap
-RUN_STATUS=""
+RUN_CONCLUSION=""
 while :; do
   # Live progress; ignore its exit code (may drop early on a network blip).
   gh run watch "$RUN_ID" --exit-status >/dev/null 2>&1 || true
 
-  # Authoritative status — retry the query itself on transient API errors.
+  # 1) Ground truth: the release published with assets → success, done.
+  if release_published; then RUN_CONCLUSION=success; break; fi
+
+  # 2) Else consult the run's own status (retry the query on transient errors).
   RUN_STATUS=""
   for _ in 1 2 3 4 5; do
     RUN_STATUS=$(gh run view "$RUN_ID" --json status --jq '.status' 2>/dev/null) \
       && [ -n "$RUN_STATUS" ] && break
     sleep 5
   done
-
-  [ "$RUN_STATUS" = "completed" ] && break
+  if [ "$RUN_STATUS" = "completed" ]; then
+    RUN_CONCLUSION=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion' 2>/dev/null || echo "")
+    break
+  fi
 
   if [ "$(date +%s)" -ge "$WATCH_DEADLINE" ]; then
-    echo "Error: run $RUN_ID still '${RUN_STATUS:-unknown}' after 30 min. Check: gh run view $RUN_ID"
+    # Last-chance ground-truth check before giving up (queries may have flaked).
+    if release_published; then RUN_CONCLUSION=success; break; fi
+    echo "Error: run $RUN_ID still '${RUN_STATUS:-unknown}' after 30 min and no v$TARGET release published. Check: gh run view $RUN_ID"
     exit 1
   fi
   echo "  …CI ${RUN_STATUS:-unreachable}; re-checking in 15s (watch will resume)"
   sleep 15
 done
 
-RUN_CONCLUSION=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion' 2>/dev/null || echo "")
 if [ "$RUN_CONCLUSION" != "success" ]; then
   echo ""
   echo "CI concluded '${RUN_CONCLUSION:-unknown}' (not success). Check: gh run view $RUN_ID"
