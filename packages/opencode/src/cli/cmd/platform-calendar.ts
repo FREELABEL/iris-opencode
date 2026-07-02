@@ -30,6 +30,59 @@ export async function calExec(
   return executeIntegrationCall("google-calendar", action, params, opts)
 }
 
+// ── FAILURE HANDLING (#155323) ───────────────────────────────
+// A hard-failed calendar verb used to dump the raw Composio error JSON, still
+// print the success-style "Done" footer, and exit 0 — so automation saw success
+// while the event was never created. These helpers give a concise, actionable
+// message, keep the raw payload at DEBUG only, and mark the process failed.
+
+// Detects a Google auth/authorization problem inside a Composio failure payload.
+function isCalendarAuthError(msg: string): boolean {
+  return /revoked|invalid_grant|unauthorized|deauthoriz|not connected|no (active )?connection|reconnect|re-?authoriz|401|403|expired|invalid_credentials|token/i.test(
+    msg,
+  )
+}
+
+const RECONNECT_HINT = "Reconnect: iris integrations connect google-calendar"
+
+// Report a failed calendar operation and set a non-zero exit code. Callers MUST
+// `return` immediately after — the "Done" success footer is intentionally NOT
+// printed on the failure path (that footer is what made failures look like wins).
+function reportCalendarFailure(rawError: unknown, fallback: string): void {
+  const raw =
+    typeof rawError === "string"
+      ? rawError
+      : rawError instanceof Error
+        ? rawError.message
+        : rawError == null
+          ? ""
+          : (() => {
+              try {
+                return JSON.stringify(rawError)
+              } catch {
+                return String(rawError)
+              }
+            })()
+
+  // Raw Composio JSON is noisy and leaks internals — keep it for --debug only.
+  if (raw && (process.env.IRIS_DEBUG || process.env.DEBUG)) {
+    prompts.log.error(dim(raw.slice(0, 1000)))
+  }
+
+  if (isCalendarAuthError(raw)) {
+    prompts.log.error("Google Calendar is disconnected — its authorization was revoked or expired.")
+    prompts.log.info(dim(RECONNECT_HINT))
+  } else {
+    // Non-auth hard failure: show a concise reason, never the full JSON blob.
+    const looksLikeJson = /^[\s]*[[{]/.test(raw) || raw.includes('"error"') || /composio/i.test(raw)
+    prompts.log.error(fallback)
+    if (raw && !looksLikeJson) prompts.log.error(dim(raw.slice(0, 160)))
+    else if (raw) prompts.log.info(dim("Run with IRIS_DEBUG=1 for the raw provider response."))
+  }
+
+  process.exitCode = 1 // signal failure to scripts/automation (#155323)
+}
+
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso)
@@ -93,21 +146,12 @@ const CalendarListCommand = cmd({
         ...(args.calendar ? { calendar_id: args.calendar } : {}),
       }, getAccountOpts(args))
     } catch (err: any) {
-      const msg = err.message ?? String(err)
-      if (msg.includes("Array to string") || msg.includes("Composio")) {
-        prompts.log.error("Google Calendar integration error (Composio backend issue)")
-        prompts.log.info("Try: iris integrations list  — check if Google Calendar is connected")
-        prompts.log.info("Or: iris calendar list --account your@gmail.com")
-      } else {
-        prompts.log.error(msg.slice(0, 200))
-      }
-      prompts.outro("Done")
+      reportCalendarFailure(err, "Failed to fetch events")
       return
     }
 
     if (!result?.success) {
-      prompts.log.error(result?.error ?? "Failed to fetch events")
-      prompts.outro("Done")
+      reportCalendarFailure(result?.error, "Failed to fetch events")
       return
     }
 
@@ -156,16 +200,21 @@ const CalendarTodayCommand = cmd({
     const now = new Date()
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const end = new Date(start.getTime() + 86400000)
-    const result = await calExec("get_events", {
-      max_results: 30,
-      time_min: start.toISOString(),
-      time_max: end.toISOString(),
-      ...(args.calendar ? { calendar_id: args.calendar } : {}),
-    }, getAccountOpts(args))
+    let result: any
+    try {
+      result = await calExec("get_events", {
+        max_results: 30,
+        time_min: start.toISOString(),
+        time_max: end.toISOString(),
+        ...(args.calendar ? { calendar_id: args.calendar } : {}),
+      }, getAccountOpts(args))
+    } catch (err: any) {
+      reportCalendarFailure(err, "Failed to fetch events")
+      return
+    }
 
     if (!result?.success) {
-      prompts.log.error(result?.error ?? "Failed to fetch events")
-      prompts.outro("Done")
+      reportCalendarFailure(result?.error, "Failed to fetch events")
       return
     }
 
@@ -203,16 +252,21 @@ const CalendarTomorrowCommand = cmd({
     const now = new Date()
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
     const end = new Date(start.getTime() + 86400000)
-    const result = await calExec("get_events", {
-      max_results: 30,
-      time_min: start.toISOString(),
-      time_max: end.toISOString(),
-      ...(args.calendar ? { calendar_id: args.calendar } : {}),
-    }, getAccountOpts(args))
+    let result: any
+    try {
+      result = await calExec("get_events", {
+        max_results: 30,
+        time_min: start.toISOString(),
+        time_max: end.toISOString(),
+        ...(args.calendar ? { calendar_id: args.calendar } : {}),
+      }, getAccountOpts(args))
+    } catch (err: any) {
+      reportCalendarFailure(err, "Failed to fetch events")
+      return
+    }
 
     if (!result?.success) {
-      prompts.log.error(result?.error ?? "Failed to fetch events")
-      prompts.outro("Done")
+      reportCalendarFailure(result?.error, "Failed to fetch events")
       return
     }
 
@@ -274,17 +328,28 @@ const CalendarAddCommand = cmd({
     if (args.repeatCount ?? args["repeat-count"]) params.repeat_count = args.repeatCount ?? args["repeat-count"]
     if (args.recurrence) params.recurrence = args.recurrence
 
-    const result = await calExec("create_event", params, getAccountOpts(args))
+    let result: any
+    try {
+      result = await calExec("create_event", params, getAccountOpts(args))
+    } catch (err: any) {
+      if (args.json) {
+        console.log(JSON.stringify({ success: false, error: err?.message ?? String(err) }, null, 2))
+        process.exitCode = 1
+        return
+      }
+      reportCalendarFailure(err, "Failed to create event")
+      return
+    }
 
     if (args.json) {
       console.log(JSON.stringify(result, null, 2))
+      if (!result?.success) process.exitCode = 1 // don't let automation read a failed create as success (#155323)
       prompts.outro("Done")
       return
     }
 
     if (!result?.success) {
-      prompts.log.error(result?.error ?? "Failed to create event")
-      prompts.outro("Done")
+      reportCalendarFailure(result?.error, "Failed to create event")
       return
     }
 
@@ -330,17 +395,28 @@ const CalendarUpdateCommand = cmd({
     if (args.description) params.description = args.description
     if (args.calendar) params.calendar_id = args.calendar
 
-    const result = await calExec("update_event", params, getAccountOpts(args))
+    let result: any
+    try {
+      result = await calExec("update_event", params, getAccountOpts(args))
+    } catch (err: any) {
+      if (args.json) {
+        console.log(JSON.stringify({ success: false, error: err?.message ?? String(err) }, null, 2))
+        process.exitCode = 1
+        return
+      }
+      reportCalendarFailure(err, "Failed to update event")
+      return
+    }
 
     if (args.json) {
       console.log(JSON.stringify(result, null, 2))
+      if (!result?.success) process.exitCode = 1 // (#155323)
       prompts.outro("Done")
       return
     }
 
     if (!result?.success) {
-      prompts.log.error(result?.error ?? "Failed to update event")
-      prompts.outro("Done")
+      reportCalendarFailure(result?.error, "Failed to update event")
       return
     }
 
@@ -371,17 +447,28 @@ const CalendarDeleteCommand = cmd({
     }
     if (args.calendar) params.calendar_id = args.calendar
 
-    const result = await calExec("delete_event", params, getAccountOpts(args))
+    let result: any
+    try {
+      result = await calExec("delete_event", params, getAccountOpts(args))
+    } catch (err: any) {
+      if (args.json) {
+        console.log(JSON.stringify({ success: false, error: err?.message ?? String(err) }, null, 2))
+        process.exitCode = 1
+        return
+      }
+      reportCalendarFailure(err, "Failed to delete event")
+      return
+    }
 
     if (args.json) {
       console.log(JSON.stringify(result, null, 2))
+      if (!result?.success) process.exitCode = 1 // (#155323)
       prompts.outro("Done")
       return
     }
 
     if (!result?.success) {
-      prompts.log.error(result?.error ?? "Failed to delete event")
-      prompts.outro("Done")
+      reportCalendarFailure(result?.error, "Failed to delete event")
       return
     }
 
@@ -424,10 +511,15 @@ const CalendarCalendarsCommand = cmd({
 
     // Fallback: backend without the normalized endpoint yet — unlabeled list.
     if (cals === null) {
-      const result = await calExec("get_calendars", {}, opts)
+      let result: any
+      try {
+        result = await calExec("get_calendars", {}, opts)
+      } catch (err: any) {
+        reportCalendarFailure(err, "Failed to list calendars")
+        return
+      }
       if (!result?.success) {
-        prompts.log.error(result?.error ?? "Failed to list calendars")
-        prompts.outro("Done")
+        reportCalendarFailure(result?.error, "Failed to list calendars")
         return
       }
       cals = ((result.calendars ?? result.data?.calendars ?? []) as any[]).map((c: any) => ({
@@ -489,17 +581,23 @@ const CalendarFreeCommand = cmd({
       params.calendar_ids = args.calendar
     }
 
-    const result = await calExec("find_free_slots", params, getAccountOpts(args))
+    let result: any
+    try {
+      result = await calExec("find_free_slots", params, getAccountOpts(args))
+    } catch (err: any) {
+      reportCalendarFailure(err, "Failed to find free slots")
+      return
+    }
 
     if (args.json) {
       console.log(JSON.stringify(result, null, 2))
+      if (!result?.success) process.exitCode = 1 // (#155323)
       prompts.outro("Done")
       return
     }
 
     if (!result?.success) {
-      prompts.log.error(result?.error ?? "Failed to find free slots")
-      prompts.outro("Done")
+      reportCalendarFailure(result?.error, "Failed to find free slots")
       return
     }
 
@@ -551,6 +649,7 @@ const CalendarDefaultGetCommand = cmd({
 
     if (!res.ok) {
       prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      process.exitCode = 1 // signal failure to scripts/automation (#155323)
       prompts.outro("Done")
       return
     }
@@ -594,6 +693,7 @@ const CalendarDefaultSetCommand = cmd({
 
     if (!res.ok) {
       prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      process.exitCode = 1 // signal failure to scripts/automation (#155323)
       prompts.outro("Done")
       return
     }
@@ -656,6 +756,7 @@ const CalendarScheduleCommand = cmd({
 
     if (!res.ok) {
       prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      process.exitCode = 1 // signal failure to scripts/automation (#155323)
       prompts.outro("Done")
       return
     }
@@ -739,6 +840,7 @@ const CalendarPrefsShowCommand = cmd({
 
     if (!res.ok) {
       prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      process.exitCode = 1 // signal failure to scripts/automation (#155323)
       prompts.outro("Done")
       return
     }
@@ -821,6 +923,7 @@ const CalendarPrefsSetCommand = cmd({
 
     if (!res.ok) {
       prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      process.exitCode = 1 // signal failure to scripts/automation (#155323)
       prompts.outro("Done")
       return
     }
@@ -868,6 +971,7 @@ const CalendarHabitsListCommand = cmd({
 
     if (!res.ok) {
       prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      process.exitCode = 1 // signal failure to scripts/automation (#155323)
       prompts.outro("Done")
       return
     }
@@ -943,6 +1047,7 @@ const CalendarHabitsAddCommand = cmd({
 
     if (!res.ok) {
       prompts.log.error(data?.error ?? data?.message ?? `HTTP ${res.status}`)
+      process.exitCode = 1 // signal failure to scripts/automation (#155323)
       prompts.outro("Done")
       return
     }
@@ -979,6 +1084,7 @@ const CalendarHabitsRemoveCommand = cmd({
     if (!res.ok) {
       const data = await res.json() as Record<string, any>
       prompts.log.error(data?.error ?? data?.message ?? `HTTP ${res.status}`)
+      process.exitCode = 1 // signal failure to scripts/automation (#155323)
       prompts.outro("Done")
       return
     }
@@ -1014,6 +1120,7 @@ const CalendarAnalyticsCommand = cmd({
 
     if (!res.ok) {
       prompts.log.error(data?.error ?? `HTTP ${res.status}`)
+      process.exitCode = 1 // signal failure to scripts/automation (#155323)
       prompts.outro("Done")
       return
     }
