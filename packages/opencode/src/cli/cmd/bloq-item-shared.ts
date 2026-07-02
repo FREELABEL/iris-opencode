@@ -76,6 +76,13 @@ async function fetchItems(userId: number, bloqId: number): Promise<any[]> {
   return Array.isArray(raw) ? raw : (raw?.items ?? [])
 }
 
+// Fetch a single item (by scanning its bloq's items — there's no single-item GET
+// endpoint). Used to read the server's current updated_at for divergence checks.
+async function fetchItem(userId: number, bloqId: number, itemId: number): Promise<any | null> {
+  const items = await fetchItems(userId, bloqId)
+  return items.find((it) => Number(it.id) === Number(itemId)) ?? null
+}
+
 async function fetchBloqs(userId: number): Promise<any[]> {
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs?per_page=100&simplified=1`)
   if (!res.ok) return []
@@ -312,6 +319,7 @@ export interface PublishArgs {
   password?: string
   expires?: string
   private?: boolean // explicit private (back-compat / override)
+  force?: boolean // overwrite even if the item was edited in the UI after last publish (#154763)
   "no-frontmatter"?: boolean
   json?: boolean
   "user-id"?: number
@@ -376,8 +384,32 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       content = await uploadLocalImages(body, path.dirname(args.file), userId, token, (s) => { if (!json) prompts.log.warn(s) })
     }
 
+    // Tracks the server's updated_at right after our write, so the NEXT publish can
+    // detect UI edits made in the meantime (#154763).
+    let serverUpdatedAt: string | null = null
+
     // Re-sync path: try to update the item the file already points at.
     if (existingItemId) {
+      // #154763: a blind PUT here is last-write-wins — if someone edited this item in
+      // the Elon UI after we last published, we'd silently clobber their edits. Guard
+      // by comparing the server item's updated_at against the marker we stored on the
+      // last publish (atlas_published_at). Newer server timestamp ⇒ diverged ⇒ require
+      // --force. No prior marker (first sync / legacy file) ⇒ can't detect ⇒ proceed.
+      const guardBloqId = fm.iris_bloq_id ? Number(fm.iris_bloq_id) : (bloqId ?? null)
+      if (fm.atlas_published_at && guardBloqId && !args.force) {
+        const serverItem = await fetchItem(userId, Number(guardBloqId), existingItemId)
+        const serverTime = serverItem?.updated_at ? new Date(serverItem.updated_at).getTime() : NaN
+        const markerTime = new Date(String(fm.atlas_published_at)).getTime()
+        if (Number.isFinite(serverTime) && Number.isFinite(markerTime) && serverTime > markerTime) {
+          const msg = `Item #${existingItemId} was modified after your last publish (server ${serverItem.updated_at} > published ${fm.atlas_published_at}). Re-run with --force to overwrite those UI edits.`
+          spinner?.stop("Diverged — refusing to overwrite", 1)
+          if (json) console.log(JSON.stringify({ success: false, error: msg, diverged: true, server_updated_at: serverItem.updated_at, published_at: fm.atlas_published_at }))
+          else { prompts.log.warn(msg); prompts.outro("Done") }
+          process.exitCode = 1
+          return
+        }
+      }
+
       const updated = await updateItem(existingItemId, title, content)
       if (updated === "NOT_FOUND") {
         // Item was deleted upstream — fall through and recreate it.
@@ -389,6 +421,7 @@ export async function executePublish(args: PublishArgs): Promise<void> {
         return
       } else {
         itemId = existingItemId
+        serverUpdatedAt = updated?.updated_at ?? null
       }
     }
 
@@ -414,6 +447,14 @@ export async function executePublish(args: PublishArgs): Promise<void> {
         return
       }
       itemId = created.id
+      serverUpdatedAt = created?.updated_at ?? null
+    }
+
+    // Resolve the server's post-write updated_at for the divergence marker. Prefer the
+    // write response; fall back to a re-fetch if it didn't include the timestamp.
+    if (!serverUpdatedAt && bloqId && itemId) {
+      const fresh = await fetchItem(userId, Number(bloqId), Number(itemId))
+      serverUpdatedAt = fresh?.updated_at ?? null
     }
 
     // Sharing is OPT-IN now (private by default). --public / --password / --expires share it.
@@ -434,6 +475,9 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       else { delete newData.iris_public_url } // no longer shared → drop stale URL
       if (accessLevel) newData.iris_access_level = accessLevel
       else { delete newData.iris_access_level }
+      // #154763: stamp the server's updated_at so the NEXT publish can detect UI edits
+      // made in the meantime and refuse to clobber them without --force.
+      newData.atlas_published_at = serverUpdatedAt ?? new Date().toISOString()
       writeFileSync(args.file, matter.stringify(content, newData))
     }
 
