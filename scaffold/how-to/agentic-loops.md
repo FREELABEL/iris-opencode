@@ -172,11 +172,83 @@ $ iris loop run agentic-loop --until SHIP --max-cycles 5
 $ iris loop schedule agentic-loop --agent <id> --frequency weekly --bloq <memId>
 ```
 
-`iris loop run` re-runs the `agentic-loop` playbook, reads the `VERDICT: SHIP|ITERATE`
-line from its verify step, and stops on SHIP or when `--max-cycles` is hit. `iris loop
-schedule` registers the recurring version where the cadence is the outer loop. Author
-your own loopable playbook by emitting a `VERDICT:` line from a verify step (see
-`iris playbook show agentic-loop`).
+`iris loop run` re-runs the target playbook, reads the `VERDICT: SHIP|ITERATE` line from
+its step output, and stops on SHIP or when `--max-cycles` is hit. `iris loop schedule`
+registers the recurring version where the cadence is the outer loop. Author your own
+loopable playbook by emitting a `VERDICT:` line from a verify step — the exact rules the
+engine enforces are in **"The VERDICT contract"** below.
+
+## The VERDICT contract
+
+This is the "fuel spec" for `iris loop`: emit one line and any v2 playbook becomes
+loopable. Every rule below is enforced by `extractVerdict()` and the run loop in
+`packages/opencode/src/cli/cmd/platform-loop.ts` — it is the source of truth.
+
+**The token.** Somewhere in a step's output, emit:
+
+```
+VERDICT: SHIP
+```
+
+The engine matches the regex `/VERDICT:\s*([A-Za-z_-]+)/g` (platform-loop.ts:36). So:
+
+- The literal prefix **`VERDICT:` is case-SENSITIVE** — it must be uppercase `VERDICT`
+  followed by a colon. `Verdict:` or `verdict:` will NOT match (the regex has no `i` flag).
+- The **token after the colon is case-INSENSITIVE**. The captured word is upper-cased
+  (`.toUpperCase()`, platform-loop.ts:37) and compared against `--until`, which is also
+  upper-cased (platform-loop.ts:105). So `VERDICT: ship`, `VERDICT: Ship`, and
+  `VERDICT: SHIP` are all equivalent.
+- The token may contain only letters, hyphens, and underscores (`[A-Za-z_-]+`) — no
+  spaces or digits. `VERDICT: NEEDS_WORK` is fine; `VERDICT: needs work` captures only
+  `needs`.
+- Whitespace after the colon is optional (`\s*`): `VERDICT:SHIP` and `VERDICT:   SHIP`
+  both work.
+
+**Where to emit it.** The engine scans each **step's captured output** (`step.output`) —
+not the loop's own stdout, and not a file. Placement rules:
+
+- If you pass `--verdict-step <stepId>`, that step's output is scanned first, and if it
+  contains a verdict, that one wins (platform-loop.ts:39-42).
+- Otherwise **every step's output** is scanned in execution order and the **last verdict
+  found across all steps wins** (platform-loop.ts:44-50). The verify/last step usually
+  emits it.
+- Within a single block of text, if there are multiple `VERDICT:` lines, the **last match
+  wins** (platform-loop.ts:37, `matches[matches.length - 1]`).
+
+**The match / stop rule.** After each cycle the extracted verdict is compared for exact
+equality against `--until` (default `SHIP`), both upper-cased: `verdict === until`
+(platform-loop.ts:145). On a match the loop stops with "goal met". Otherwise it runs the
+next cycle, up to `--max-cycles` (default **3** — platform-loop.ts:62; note the examples
+above pass `--max-cycles 5`).
+
+**What counts as "keep going".** The engine only special-cases the `until` token. **Any
+other token** — `ITERATE`, `CONTINUE`, `NEEDS_WORK`, or even a typo — means "not met, keep
+iterating." `ITERATE` is convention, not magic.
+
+**If no verdict is emitted.** `extractVerdict()` returns `null` (platform-loop.ts:51).
+`null` never equals `until`, so the cycle is treated as **not met** and the loop keeps
+going. Note the interaction with `--stop-on-fail` (default true): if any step in the cycle
+*failed*, the loop stops early regardless of the verdict (platform-loop.ts:147-150). A
+cycle that succeeds but emits no verdict just burns a cycle toward `--max-cycles`.
+
+**Overriding the done-token.** `--until DONE` makes `VERDICT: DONE` the success token
+instead of `SHIP` (platform-loop.ts:61,105). Both `loop run` and `loop schedule` accept it.
+
+**Minimal loopable verify step.** A v2 playbook step that ends by emitting a verdict:
+
+```yaml
+# in your v2 playbook — the final verify step
+- id: verify
+  agent: 420
+  prompt: |
+    Check the goal against the work done this cycle: <your concrete exit conditions>.
+    End your reply with exactly ONE line:
+      VERDICT: SHIP      — if every exit condition is met
+      VERDICT: ITERATE   — if anything is still unmet
+```
+
+Then loop it: `iris loop run <playbook> --until SHIP --max-cycles 5`. Point the engine at
+this step explicitly with `--verdict-step verify` if other steps might also print the word.
 
 ## Native agent→agent delegation (G1)
 
