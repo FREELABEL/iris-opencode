@@ -940,6 +940,7 @@ const BloqsPublishCommand = cmd({
       .option("list", { describe: "target list (ID or name; created if missing)", type: "string" })
       .option("title", { describe: "override the item title", type: "string" })
       .option("private", { describe: "create/update without making it public", type: "boolean", default: false })
+      .option("force", { describe: "overwrite even if the item was edited in the UI after the last publish", type: "boolean", default: false })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
