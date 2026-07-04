@@ -390,7 +390,9 @@ const LeadsRepliedCommand = cmd({
     spinner.start("Loading responders…")
 
     try {
-      const params = new URLSearchParams({ status: "Responded", per_page: String(Math.max(args.limit * 2, 60)) })
+      // Filter by the "DM Replied" tag — the inbox scan reliably applies it to every responder
+      // (status varies: Follow Up / Interested / Qualified after triage, so tag is the true marker).
+      const params = new URLSearchParams({ tag: "DM Replied", per_page: String(Math.max(args.limit * 2, 60)) })
       if (args["bloq-id"]) params.set("bloq_id", String(args["bloq-id"]))
 
       const res = await irisFetch(`/api/v1/leads?${params}`)
