@@ -64,48 +64,53 @@ describe("validateCommand", () => {
     expect(result.args[3]).toContain("—")
   })
 
-  // --- Should REJECT: dangerous injection vectors ---
+  // --- Shell metacharacters are ALLOWED: args go to Bun.spawn (argv array, no
+  //     shell), so ; | ` < > \ and newlines are inert literals, not injection
+  //     vectors. Blocking them broke legitimate prose + multi-line prompts. ---
 
-  test("rejects semicolon (command chaining)", () => {
-    const result = validateCommand('leads note 21649 "hello; rm -rf /"')
-    expect(result.error).toBeDefined()
-    expect(result.error).toContain("metacharacter")
+  test("allows semicolon (inert — no shell)", () => {
+    const result = validateCommand('leads note 21649 "do X; then Y"')
+    expect(result.error).toBeUndefined()
+    expect(result.args[3]).toBe("do X; then Y")
   })
 
-  test("rejects pipe (command chaining)", () => {
-    const result = validateCommand('leads note 21649 "hello | cat /etc/passwd"')
-    expect(result.error).toBeDefined()
-    expect(result.error).toContain("metacharacter")
+  test("allows pipe (inert — no shell)", () => {
+    const result = validateCommand('leads note 21649 "revenue | margin breakdown"')
+    expect(result.error).toBeUndefined()
+    expect(result.args[3]).toContain("|")
   })
 
-  test("rejects backtick (command substitution)", () => {
-    const result = validateCommand('leads note 21649 "hello `whoami`"')
-    expect(result.error).toBeDefined()
-    expect(result.error).toContain("metacharacter")
+  test("allows backtick (inert — no shell)", () => {
+    const result = validateCommand('leads note 21649 "the `hello` handler"')
+    expect(result.error).toBeUndefined()
+    expect(result.args[3]).toContain("`")
   })
 
-  test("rejects redirect <", () => {
-    const result = validateCommand('leads note 21649 "hello < /etc/passwd"')
-    expect(result.error).toBeDefined()
-    expect(result.error).toContain("metacharacter")
+  test("allows redirect < >", () => {
+    const result = validateCommand('leads note 21649 "compare A < B > C"')
+    expect(result.error).toBeUndefined()
+    expect(result.args[3]).toContain("<")
+    expect(result.args[3]).toContain(">")
   })
 
-  test("rejects redirect >", () => {
-    const result = validateCommand('leads note 21649 "hello > /tmp/pwned"')
-    expect(result.error).toBeDefined()
-    expect(result.error).toContain("metacharacter")
+  test("allows backslash", () => {
+    const result = validateCommand('leads note 21649 "path C\\\\temp is fine"')
+    expect(result.error).toBeUndefined()
+    expect(result.args[3]).toContain("\\")
   })
 
-  test("rejects backslash (escape sequences)", () => {
-    const result = validateCommand('leads note 21649 "hello\\nworld"')
-    expect(result.error).toBeDefined()
-    expect(result.error).toContain("metacharacter")
+  test("allows newline in arg (multi-line agent prompt)", () => {
+    const result = validateCommand('agents create --prompt "You are a helper.\nRULES:\n- be kind"')
+    expect(result.error).toBeUndefined()
+    expect(result.args[3]).toContain("\n")
   })
 
-  test("rejects newline in arg", () => {
-    const result = validateCommand('leads note 21649 "hello\nworld"')
+  // --- Still REJECT: a NUL byte can truncate an argv string at the syscall ---
+
+  test("rejects NUL byte", () => {
+    const result = validateCommand('leads note 21649 "hello\0world"')
     expect(result.error).toBeDefined()
-    expect(result.error).toContain("metacharacter")
+    expect(result.error).toContain("NUL")
   })
 
   // --- Parsing edge cases ---

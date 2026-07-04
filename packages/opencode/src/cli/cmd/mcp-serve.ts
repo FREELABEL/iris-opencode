@@ -206,13 +206,18 @@ export function validateCommand(command: string): { args: string[]; error?: stri
 
   if (args.length === 0) return { args: [], error: "Empty command" }
 
-  // Reject shell injection vectors — args are passed via Bun.spawn (no shell),
-  // so only block chars that could chain/inject commands if a shell were involved.
-  // Safe in direct spawn: & $ ! % # @ ? ^ \ < >  (no shell interpretation)
-  const dangerous = /[;|`\n\r]/
+  // Args go straight to Bun.spawn([IRIS_BIN, ...args]) — an argv array, NEVER
+  // `sh -c` — so no shell ever interprets them. Shell metacharacters (; | ` & $
+  // < > \ and newlines) are therefore inert literals here. Blocking them added
+  // no real security (an agent can run destructive commands with no metacharacter,
+  // and this can't protect a downstream command that shells its own args) while it
+  // broke legitimate content: multi-line agent system prompts, notes like
+  // "do X; then Y", etc. — the MCP was rejecting valid `agents create --prompt`.
+  // The only guard we keep is against a NUL byte, which can truncate an argv
+  // string at the syscall boundary.
   for (const arg of args) {
-    if (dangerous.test(arg)) {
-      return { args: [], error: `Rejected: shell metacharacter found in argument "${arg}". Pass arguments individually, not as a shell expression.` }
+    if (arg.includes("\0")) {
+      return { args: [], error: `Rejected: NUL byte in argument.` }
     }
   }
 
