@@ -990,9 +990,12 @@ const AgentsAssignCommand = cmd({
     if (args.bloq) {
       spinner.start(`Assigning agent #${agentId} to bloq #${args.bloq}…`)
       try {
-        const res = await irisFetch(`/api/v1/user/bloqs/${args.bloq}`, {
+        // Use the purpose-built heartbeat-agent endpoint (#157963). The generic
+        // bloq-update route only accepts PATCH, so PUTting to it 405s; this
+        // dedicated route takes { agent_id } and also auto-enables heartbeat.
+        const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/heartbeat`, {
           method: "PUT",
-          body: JSON.stringify({ heartbeat_agent_id: agentId }),
+          body: JSON.stringify({ agent_id: agentId }),
         })
         const ok = await handleApiError(res, "Assign to bloq")
         if (ok) {
