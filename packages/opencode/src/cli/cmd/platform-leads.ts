@@ -367,6 +367,100 @@ const LeadsListCommand = cmd({
   },
 })
 
+const LeadsRepliedCommand = cmd({
+  command: "replied",
+  aliases: ["responders", "replies"],
+  describe: "list leads who replied (status Responded) with their last reply — for prioritized sessions",
+  builder: (yargs) =>
+    yargs
+      .option("bloq-id", { alias: "bloq", describe: "filter by bloq/project ID", type: "number" })
+      .option("limit", { describe: "max results", type: "number", default: 30 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Responders")
+
+    const token = await requireAuth()
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Loading responders…")
+
+    try {
+      const params = new URLSearchParams({ status: "Responded", per_page: String(Math.max(args.limit * 2, 60)) })
+      if (args["bloq-id"]) params.set("bloq_id", String(args["bloq-id"]))
+
+      const res = await irisFetch(`/api/v1/leads?${params}`)
+      const ok = await handleApiError(res, "List responders")
+      if (!ok) {
+        spinner.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as { data?: any[] }
+      let leads: any[] = data?.data ?? []
+      const repliedTime = (l: any) => new Date(l.replied_at ?? l.updated_at ?? 0).getTime()
+      leads.sort((a, b) => repliedTime(b) - repliedTime(a)) // newest reply first
+      leads = leads.slice(0, args.limit)
+      spinner.stop(`${leads.length} responder(s)`)
+
+      if (args.json) {
+        console.log(JSON.stringify(leads, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      if (leads.length === 0) {
+        prompts.log.info("No responders yet — run the inbox scan (with write-back) to capture replies.")
+        prompts.outro("Done")
+        return
+      }
+
+      const rel = (ts: number) => {
+        if (!ts) return ""
+        const s = Math.max(0, Math.floor((Date.now() - ts) / 1000))
+        if (s < 3600) return `${Math.floor(s / 60)}m ago`
+        if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+        return `${Math.floor(s / 86400)}d ago`
+      }
+
+      console.log()
+      for (const l of leads) {
+        // Best-effort: pull this lead's most recent inbound reply to show inline.
+        let reply = ""
+        try {
+          const mRes = await irisFetch(`/api/v1/leads/${l.id}/outreach/messages?direction=inbound`)
+          if (mRes.ok) {
+            const mBody = (await mRes.json()) as { messages?: any[] }
+            const inbound = (mBody.messages ?? []).filter((m: any) => m.direction === "inbound")
+            inbound.sort((a: any, b: any) => new Date(b.sent_at ?? b.created_at ?? 0).getTime() - new Date(a.sent_at ?? a.created_at ?? 0).getTime())
+            reply = inbound[0]?.message ?? ""
+          }
+        } catch {
+          /* best-effort — never block the list on a per-lead fetch */
+        }
+        const bloqIds = Array.isArray(l.bloq_ids) ? l.bloq_ids : []
+        const bloqLabel = bloqIds.length ? `  ${dim(`bloq:${bloqIds.join(",")}`)}` : ""
+        const when = repliedTime(l) ? `  ${dim(rel(repliedTime(l)))}` : ""
+        const name = l.name ?? l.email ?? "Unknown"
+        console.log(`  ${dim("#" + l.id)}  ${name}${bloqLabel}${when}`)
+        if (reply) console.log(`        ${dim("“" + reply.replace(/\s+/g, " ").slice(0, 110) + "”")}`)
+        console.log()
+      }
+      prompts.outro(`${dim("iris leads get <id>")}  ·  ${dim("iris leads outreach <id>")}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const LeadsGetCommand = cmd({
   command: "get <id>",
   aliases: ["show"],
@@ -10617,6 +10711,7 @@ export const PlatformLeadsCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(LeadsListCommand)
+      .command(LeadsRepliedCommand)
       .command(LeadsGetCommand)
       .command(LeadsSearchCommand)
       .command(LeadsCreateCommand)
