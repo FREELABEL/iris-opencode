@@ -1521,7 +1521,10 @@ const ScreenshotCmd = cmd({
     sp.start("Launching browser…")
 
     try {
-      const { chromium } = await import("playwright")
+      // playwright is an optional runtime dep (huge + browser binaries), not
+      // bundled — the catch below handles its absence. Cast the specifier so TS
+      // doesn't fail resolution (TS2307), which was breaking `bun typecheck`.
+      const { chromium } = await import("playwright" as string)
       const url = publicUrl(slug)
       const outDir = join(process.cwd(), "pages")
       if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true })
