@@ -2,6 +2,8 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API, resolveUserId, streamAgentChat } from "./iris-api"
+import { captureMic, speak, listMics } from "../lib/voice"
+import { transcribeLocal, which } from "../lib/transcription"
 
 // ============================================================================
 // Polling helper
@@ -231,6 +233,137 @@ export async function executeChat(args: {
   }
 }
 
+// ============================================================================
+// Voice chat — local, free, real-time conversation loop.
+//
+// mic (ffmpeg) → transcribeLocal (whisper.cpp) → streamAgentChat → speak (say).
+// Push-to-talk turn-taking; multi-turn via conversation_history (no server
+// session, so no cross-turn poisoning — same guarantee as text chat). All STT
+// + TTS runs on-device; only the agent call leaves the machine. (#158044/#158045)
+// ============================================================================
+
+export async function runVoiceChat(args: {
+  agent?: number
+  bloq?: number
+  timeout: number
+  "no-rag": boolean
+  model?: string
+  "max-iterations"?: number
+  mic?: string
+  tts?: string
+  "tts-voice"?: string
+}): Promise<void> {
+  UI.empty()
+  prompts.intro("◈  IRIS Voice Chat")
+
+  const token = await requireAuth()
+  if (!token) { prompts.outro("Done"); return }
+
+  const agentId = args.agent
+  if (!agentId) {
+    prompts.log.warn("Voice chat needs an explicit agent. Use --agent <id>.")
+    prompts.log.info(`Try: ${dim("iris agents list")} to find one (e.g. --agent 642 for TOBI)`)
+    prompts.outro("Done")
+    return
+  }
+
+  if (!which("ffmpeg") || (!which("whisper-cli") && !which("whisper-cpp"))) {
+    prompts.log.error("Local voice needs ffmpeg + whisper-cpp.")
+    prompts.log.info(`Install: ${dim("brew install ffmpeg whisper-cpp")}`)
+    prompts.outro("Done")
+    return
+  }
+
+  const userId = await resolveUserId()
+  const mics = listMics()
+  const micLabel = args.mic
+    ? mics.find((m) => m.index === args.mic)?.name ?? `device :${args.mic}`
+    : "system default"
+  const ttsLabel = args.tts ?? (process.platform === "darwin" ? "say" : "piper")
+
+  prompts.log.info(`${bold(`Agent #${agentId}`)}  ${dim(`· mic: ${micLabel} · tts: ${ttsLabel}`)}`)
+  prompts.log.info(dim("ENTER = speak · ENTER again = stop · type q + ENTER to quit"))
+
+  const history: Array<{ role: string; content: string }> = []
+
+  while (true) {
+    process.stderr.write(`\n  ${dim("▶︎ press ENTER to speak (q to quit)…")} `)
+    const key = await new Promise<string>((resolve) => {
+      process.stdin.resume()
+      const onData = (d: Buffer) => {
+        process.stdin.removeListener("data", onData)
+        process.stdin.pause()
+        resolve(d.toString().trim())
+      }
+      process.stdin.once("data", onData)
+    })
+    if (key.toLowerCase() === "q") break
+
+    // Capture + transcribe (both on-device).
+    let text = ""
+    try {
+      const wav = await captureMic({ mic: args.mic })
+      process.stderr.write("\r" + " ".repeat(48) + "\r")
+      text = await transcribeLocal(wav)
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      continue
+    }
+    if (!text) { prompts.log.info(dim("(heard nothing — try again)")); continue }
+    console.log(`  ${bold("You:")} ${text}`)
+
+    // Ask the agent (same faithful V6 ReactLoop path as text chat).
+    history.push({ role: "user", content: text })
+    const startTime = Date.now()
+    const spinner = prompts.spinner()
+    spinner.start("Thinking…")
+    let lastActivity = "Thinking…"
+    const heartbeat = setInterval(() => {
+      spinner.message(`${lastActivity} (${Math.floor((Date.now() - startTime) / 1000)}s)`)
+    }, 1000)
+
+    try {
+      const result = await streamAgentChat({
+        agentId,
+        message: text,
+        userId,
+        bloqId: args.bloq,
+        overrideModel: args.model,
+        maxIterations: args["max-iterations"],
+        timeoutSecs: args.timeout,
+        enableRag: !args["no-rag"],
+        conversationHistory: history.slice(0, -1),
+        onEvent: (evt) => {
+          if (evt.type === "tool_call" && evt.tool) lastActivity = `Using ${evt.tool}…`
+          else if (evt.type === "tool_result" && evt.tool) lastActivity = `${evt.tool} ✓`
+          else if (evt.type === "thinking") lastActivity = "Thinking…"
+        },
+      })
+      clearInterval(heartbeat)
+
+      if (!result.ok) {
+        spinner.stop(result.timedOut ? "Timed out" : "Failed", 1)
+        prompts.log.error(result.error ?? "Chat failed — no answer delivered.")
+        history.pop() // drop the unanswered turn so history stays consistent
+        continue
+      }
+
+      spinner.stop(dim(`${result.iterations ?? 0} iter · ${((Date.now() - startTime) / 1000).toFixed(1)}s`))
+      const reply = result.content || "(no response)"
+      history.push({ role: "assistant", content: reply })
+      console.log(`  ${bold("Agent:")} ${reply.split("\n").join("\n  ")}`)
+      await speak(reply, { tts: args.tts, voice: args["tts-voice"] })
+    } catch (err) {
+      clearInterval(heartbeat)
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      history.pop()
+    }
+  }
+
+  prompts.outro("Voice chat ended 👋")
+}
+
 function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean, toolsUsed: string[] = []): void {
   const response = run.summary ?? run.response ?? run.output ?? "(no response)"
 
@@ -427,9 +560,60 @@ export const PlatformChatCommand = cmd({
         describe: "cap ReactLoop iterations",
         type: "number",
       })
+      .option("voice", {
+        describe: "voice mode — talk to the agent via mic + local speech (free, on-device)",
+        type: "boolean",
+        default: false,
+      })
+      .option("mic", {
+        describe: "input device (macOS index from --list-mics, or ALSA name); default = system mic",
+        type: "string",
+      })
+      .option("tts", {
+        describe: "speech backend for replies: say | piper | none",
+        type: "string",
+        choices: ["say", "piper", "none"],
+      })
+      .option("tts-voice", {
+        describe: "TTS voice name (e.g. macOS `say -v` voice)",
+        type: "string",
+      })
+      .option("list-mics", {
+        describe: "list available input devices and exit",
+        type: "boolean",
+        default: false,
+      })
       .command(ChatApproveCommand),
 
   async handler(args) {
+    if (args["list-mics"]) {
+      UI.empty()
+      prompts.intro("◈  IRIS Voice — Input Devices")
+      const mics = listMics()
+      if (mics.length === 0) {
+        prompts.log.info("No devices enumerated (device listing is macOS-only; on Linux pass --mic <alsa-name>).")
+      } else {
+        for (const m of mics) console.log(`  ${bold(`:${m.index}`)}  ${m.name}`)
+      }
+      prompts.outro(`Use: ${dim("iris chat --voice --agent <id> --mic <index>")}`)
+      return
+    }
+
+    if (args.voice) {
+      await runVoiceChat({
+        agent: args.agent,
+        bloq: args.bloq,
+        timeout: args.timeout,
+        "no-rag": args["no-rag"],
+        model: args.model,
+        "max-iterations": args["max-iterations"],
+        mic: args.mic,
+        tts: args.tts,
+        "tts-voice": args["tts-voice"],
+      })
+      return
+    }
+
     if (!args.message && !args.continue) {
       UI.empty()
       prompts.intro("◈  IRIS Chat")
