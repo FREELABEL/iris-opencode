@@ -52,41 +52,76 @@ function micInputArgs(mic?: string): string[] {
   }
 }
 
-/** Block until the user presses ENTER; resolves with the trimmed line typed (for "q" to quit). */
-function readLine(): Promise<string> {
-  return new Promise((resolve) => {
-    process.stdin.resume()
-    const onData = (d: Buffer) => {
-      process.stdin.removeListener("data", onData)
-      process.stdin.pause()
-      resolve(d.toString().trim())
-    }
-    process.stdin.once("data", onData)
-  })
+export interface CaptureOptions {
+  mic?: string
+  /** Silence threshold in dB (quieter than this counts as silence). Default -30. */
+  silenceDb?: number
+  /** Trailing-silence seconds that end a turn. Default 1.4. */
+  silenceDur?: number
+  /** Hard cap so a turn can never run forever. Default 30s. */
+  maxSeconds?: number
+  /** Called once real speech is detected (to update the UI from "listening" → "recording"). */
+  onSpeech?: () => void
+  /** Resolve this to force-stop the recording (manual ENTER override). */
+  stopSignal?: Promise<void>
 }
 
 /**
- * Push-to-talk mic capture. Records from ENTER (already pressed by caller) until
- * the user presses ENTER again, then finalizes a 16kHz mono WAV and returns its
- * path. `-nostdin` keeps ffmpeg off the terminal so our own ENTER read wins.
+ * Voice-activated mic capture — records until you stop talking, no keypress.
+ *
+ * ffmpeg's `silencedetect` emits `silence_start`/`silence_end` on stderr; we end
+ * the turn on the first silence that follows speech (or leading silence that runs
+ * past `silenceDur` once audio was seen). SIGINT lets ffmpeg write the WAV trailer
+ * cleanly (a hard kill truncates it). Removing the old "press ENTER to stop" read
+ * is deliberate: that second stdin read fought the prompt lib's raw-mode TTY and
+ * hung the loop. Now capture never touches stdin.
  */
-export async function captureMic(opts: { mic?: string } = {}): Promise<string> {
+export async function captureMic(opts: CaptureOptions = {}): Promise<string> {
   const ffmpeg = which("ffmpeg")
   if (!ffmpeg) throw new Error("ffmpeg not found. Install: brew install ffmpeg")
 
+  const noise = opts.silenceDb ?? -30
+  const dur = opts.silenceDur ?? 1.4
+  const maxSeconds = opts.maxSeconds ?? 30
   const wav = join(tmpdir(), `iris-voice-${Date.now()}.wav`)
   const args = [
-    "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+    "-hide_banner", "-nostdin", "-y",
     ...micInputArgs(opts.mic),
-    "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav,
+    "-af", `silencedetect=noise=${noise}dB:d=${dur}`,
+    "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+    "-t", String(maxSeconds),
+    wav,
   ]
-  const proc = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "ignore"] })
+  // stderr piped so we can watch silencedetect events; loglevel stays default (info)
+  // so those events are actually emitted.
+  const proc = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"] })
 
-  process.stderr.write("  🔴 recording… press ENTER to stop ")
-  await readLine()
+  let spoke = false
+  let stopped = false
+  const stop = () => {
+    if (stopped) return
+    stopped = true
+    proc.kill("SIGINT")
+  }
 
-  // SIGINT lets ffmpeg write the WAV trailer cleanly (a hard kill truncates it).
-  proc.kill("SIGINT")
+  proc.stderr?.on("data", (buf: Buffer) => {
+    for (const line of buf.toString().split("\n")) {
+      if (line.includes("silence_end")) { if (!spoke) opts.onSpeech?.(); spoke = true; continue }
+      const m = line.match(/silence_start:\s*([\d.]+)/)
+      if (m) {
+        const t = parseFloat(m[1])
+        // End the turn on: trailing silence after confirmed speech (silence_end
+        // seen), OR a pause following a substantial opening utterance (t past a
+        // generous lead-in, so device warmup/ambient doesn't cut you off early).
+        if (spoke || t > 1.5) { if (!spoke) opts.onSpeech?.(); stop() }
+      }
+    }
+  })
+
+  // Manual override — a resolved stopSignal (ENTER) ends the turn immediately,
+  // guaranteeing a way to send even if VAD thresholds misfire for the room.
+  opts.stopSignal?.then(() => stop()).catch(() => {})
+
   await new Promise<void>((resolve) => {
     proc.on("close", () => resolve())
     proc.on("error", () => resolve())

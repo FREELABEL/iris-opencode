@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API, resolveUserId, streamAgentChat } from "./iris-api"
 import { captureMic, speak, listMics } from "../lib/voice"
 import { transcribeLocal, which } from "../lib/transcription"
+import { createInterface } from "readline"
 
 // ============================================================================
 // Polling helper
@@ -282,83 +283,101 @@ export async function runVoiceChat(args: {
   const ttsLabel = args.tts ?? (process.platform === "darwin" ? "say" : "piper")
 
   prompts.log.info(`${bold(`Agent #${agentId}`)}  ${dim(`· mic: ${micLabel} · tts: ${ttsLabel}`)}`)
-  prompts.log.info(dim("ENTER = speak · ENTER again = stop · type q + ENTER to quit"))
+  prompts.log.info(dim("ENTER = start talking · pause (or ENTER) sends it · q + ENTER = quit"))
+
+  // One readline for the whole session. The old manual `stdin.once('data')` +
+  // pause/resume juggling fought the prompt lib's raw-mode TTY and hung on the
+  // second read — readline handles the terminal correctly across every turn. No
+  // clack spinner here either (it flips stdin to raw mode); status = plain stderr.
+  const rl = createInterface({ input: process.stdin, output: process.stderr })
+  const ask = (q: string) => new Promise<string>((resolve) => rl.question(q, resolve))
+  const clearLine = () => process.stderr.write("\r" + " ".repeat(56) + "\r")
 
   const history: Array<{ role: string; content: string }> = []
 
-  while (true) {
-    process.stderr.write(`\n  ${dim("▶︎ press ENTER to speak (q to quit)…")} `)
-    const key = await new Promise<string>((resolve) => {
-      process.stdin.resume()
-      const onData = (d: Buffer) => {
-        process.stdin.removeListener("data", onData)
-        process.stdin.pause()
-        resolve(d.toString().trim())
-      }
-      process.stdin.once("data", onData)
-    })
-    if (key.toLowerCase() === "q") break
+  try {
+    while (true) {
+      const key = (await ask(`\n  ${dim("▶︎ ENTER to talk (q to quit): ")}`)).trim()
+      if (key.toLowerCase() === "q") break
 
-    // Capture + transcribe (both on-device).
-    let text = ""
-    try {
-      const wav = await captureMic({ mic: args.mic })
-      process.stderr.write("\r" + " ".repeat(48) + "\r")
-      text = await transcribeLocal(wav)
-    } catch (err) {
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      continue
-    }
-    if (!text) { prompts.log.info(dim("(heard nothing — try again)")); continue }
-    console.log(`  ${bold("You:")} ${text}`)
-
-    // Ask the agent (same faithful V6 ReactLoop path as text chat).
-    history.push({ role: "user", content: text })
-    const startTime = Date.now()
-    const spinner = prompts.spinner()
-    spinner.start("Thinking…")
-    let lastActivity = "Thinking…"
-    const heartbeat = setInterval(() => {
-      spinner.message(`${lastActivity} (${Math.floor((Date.now() - startTime) / 1000)}s)`)
-    }, 1000)
-
-    try {
-      const result = await streamAgentChat({
-        agentId,
-        message: text,
-        userId,
-        bloqId: args.bloq,
-        overrideModel: args.model,
-        maxIterations: args["max-iterations"],
-        timeoutSecs: args.timeout,
-        enableRag: !args["no-rag"],
-        conversationHistory: history.slice(0, -1),
-        onEvent: (evt) => {
-          if (evt.type === "tool_call" && evt.tool) lastActivity = `Using ${evt.tool}…`
-          else if (evt.type === "tool_result" && evt.tool) lastActivity = `${evt.tool} ✓`
-          else if (evt.type === "thinking") lastActivity = "Thinking…"
-        },
-      })
-      clearInterval(heartbeat)
-
-      if (!result.ok) {
-        spinner.stop(result.timedOut ? "Timed out" : "Failed", 1)
-        prompts.log.error(result.error ?? "Chat failed — no answer delivered.")
-        history.pop() // drop the unanswered turn so history stays consistent
+      // Capture + transcribe — both on-device. Stops on silence OR a manual ENTER
+      // (rl.once('line'), removed after so no read leaks into the next turn).
+      let text = ""
+      try {
+        process.stderr.write(`  ${dim("🎧 speak now… (pause to send, or press ENTER)")}`)
+        let onEnter: () => void = () => {}
+        const stopSignal = new Promise<void>((res) => { onEnter = () => res() })
+        rl.once("line", onEnter)
+        const wav = await captureMic({
+          mic: args.mic,
+          stopSignal,
+          onSpeech: () => process.stderr.write(`\r  ${dim("🔴 recording… (pause or ENTER to send)")}   `),
+        })
+        rl.removeListener("line", onEnter)
+        clearLine()
+        process.stderr.write(`  ${dim("📝 transcribing…")}`)
+        text = await transcribeLocal(wav)
+        clearLine()
+      } catch (err) {
+        clearLine()
+        console.log(`  ${dim("⚠ " + (err instanceof Error ? err.message : String(err)))}`)
         continue
       }
+      // Drop empties / stray blips (whisper emits "[BLANK_AUDIO]" etc. on silence).
+      if (!text || text.replace(/[^a-z0-9]/gi, "").length < 2 || /^\[.*\]$/.test(text)) {
+        console.log(`  ${dim("(didn't catch that — try again)")}`)
+        continue
+      }
+      console.log(`  ${bold("You:")} ${text}`)
 
-      spinner.stop(dim(`${result.iterations ?? 0} iter · ${((Date.now() - startTime) / 1000).toFixed(1)}s`))
-      const reply = result.content || "(no response)"
-      history.push({ role: "assistant", content: reply })
-      console.log(`  ${bold("Agent:")} ${reply.split("\n").join("\n  ")}`)
-      await speak(reply, { tts: args.tts, voice: args["tts-voice"] })
-    } catch (err) {
-      clearInterval(heartbeat)
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      history.pop()
+      // Ask the agent (same faithful V6 ReactLoop path as text chat).
+      history.push({ role: "user", content: text })
+      const startTime = Date.now()
+      let lastActivity = "thinking…"
+      const heartbeat = setInterval(() => {
+        process.stderr.write(`\r  ${dim(`🤖 ${lastActivity} (${Math.floor((Date.now() - startTime) / 1000)}s)`)}   `)
+      }, 1000)
+
+      try {
+        const result = await streamAgentChat({
+          agentId,
+          message: text,
+          userId,
+          bloqId: args.bloq,
+          overrideModel: args.model,
+          maxIterations: args["max-iterations"],
+          timeoutSecs: args.timeout,
+          enableRag: !args["no-rag"],
+          conversationHistory: history.slice(0, -1),
+          onEvent: (evt) => {
+            if (evt.type === "tool_call" && evt.tool) lastActivity = `using ${evt.tool}…`
+            else if (evt.type === "tool_result" && evt.tool) lastActivity = `${evt.tool} ✓`
+            else if (evt.type === "thinking") lastActivity = "thinking…"
+          },
+        })
+        clearInterval(heartbeat)
+        clearLine()
+
+        if (!result.ok) {
+          console.log(`  ${dim("⚠ " + (result.error ?? (result.timedOut ? "timed out" : "no answer delivered")))}`)
+          history.pop() // drop the unanswered turn so history stays consistent
+          continue
+        }
+
+        const reply = result.content || "(no response)"
+        history.push({ role: "assistant", content: reply })
+        console.log(`  ${bold("Agent:")} ${reply.split("\n").join("\n  ")}`)
+        console.log(`  ${dim(`${result.iterations ?? 0} iter · ${((Date.now() - startTime) / 1000).toFixed(1)}s`)}`)
+        await speak(reply, { tts: args.tts, voice: args["tts-voice"] })
+      } catch (err) {
+        clearInterval(heartbeat)
+        clearLine()
+        console.log(`  ${dim("⚠ " + (err instanceof Error ? err.message : String(err)))}`)
+        history.pop()
+      }
     }
+  } finally {
+    rl.close()
   }
 
   prompts.outro("Voice chat ended 👋")
