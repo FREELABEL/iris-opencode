@@ -62,19 +62,22 @@ export interface CaptureOptions {
   maxSeconds?: number
   /** Called once real speech is detected (to update the UI from "listening" → "recording"). */
   onSpeech?: () => void
-  /** Resolve this to force-stop the recording (manual ENTER override). */
+  /** Resolve this to stop the recording — the primary, deterministic control (ENTER). */
   stopSignal?: Promise<void>
+  /**
+   * Opt-in silence auto-stop. Off by default: silencedetect thresholds are too
+   * room/mic-dependent to be reliable (they misfired badly in the field), so the
+   * default control is the explicit stopSignal (ENTER). Enable only to experiment.
+   */
+  autoStop?: boolean
 }
 
 /**
- * Voice-activated mic capture — records until you stop talking, no keypress.
- *
- * ffmpeg's `silencedetect` emits `silence_start`/`silence_end` on stderr; we end
- * the turn on the first silence that follows speech (or leading silence that runs
- * past `silenceDur` once audio was seen). SIGINT lets ffmpeg write the WAV trailer
- * cleanly (a hard kill truncates it). Removing the old "press ENTER to stop" read
- * is deliberate: that second stdin read fought the prompt lib's raw-mode TTY and
- * hung the loop. Now capture never touches stdin.
+ * Mic capture → 16kHz mono WAV. Records until `stopSignal` resolves (ENTER — the
+ * deterministic default) or the `maxSeconds` safety cap, whichever comes first.
+ * SIGINT lets ffmpeg write the WAV trailer cleanly (a hard kill truncates it).
+ * `autoStop` optionally layers ffmpeg `silencedetect` on top, but it's off by
+ * default because the thresholds proved unreliable across environments.
  */
 export async function captureMic(opts: CaptureOptions = {}): Promise<string> {
   const ffmpeg = which("ffmpeg")
@@ -82,18 +85,16 @@ export async function captureMic(opts: CaptureOptions = {}): Promise<string> {
 
   const noise = opts.silenceDb ?? -30
   const dur = opts.silenceDur ?? 1.4
-  const maxSeconds = opts.maxSeconds ?? 30
+  const maxSeconds = opts.maxSeconds ?? 60
   const wav = join(tmpdir(), `iris-voice-${Date.now()}.wav`)
   const args = [
     "-hide_banner", "-nostdin", "-y",
     ...micInputArgs(opts.mic),
-    "-af", `silencedetect=noise=${noise}dB:d=${dur}`,
+    ...(opts.autoStop ? ["-af", `silencedetect=noise=${noise}dB:d=${dur}`] : []),
     "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
     "-t", String(maxSeconds),
     wav,
   ]
-  // stderr piped so we can watch silencedetect events; loglevel stays default (info)
-  // so those events are actually emitted.
   const proc = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"] })
 
   let spoke = false
@@ -104,22 +105,17 @@ export async function captureMic(opts: CaptureOptions = {}): Promise<string> {
     proc.kill("SIGINT")
   }
 
-  proc.stderr?.on("data", (buf: Buffer) => {
-    for (const line of buf.toString().split("\n")) {
-      if (line.includes("silence_end")) { if (!spoke) opts.onSpeech?.(); spoke = true; continue }
-      const m = line.match(/silence_start:\s*([\d.]+)/)
-      if (m) {
-        const t = parseFloat(m[1])
-        // End the turn on: trailing silence after confirmed speech (silence_end
-        // seen), OR a pause following a substantial opening utterance (t past a
-        // generous lead-in, so device warmup/ambient doesn't cut you off early).
-        if (spoke || t > 1.5) { if (!spoke) opts.onSpeech?.(); stop() }
+  if (opts.autoStop) {
+    proc.stderr?.on("data", (buf: Buffer) => {
+      for (const line of buf.toString().split("\n")) {
+        if (line.includes("silence_end")) { if (!spoke) opts.onSpeech?.(); spoke = true; continue }
+        const m = line.match(/silence_start:\s*([\d.]+)/)
+        if (m && (spoke || parseFloat(m[1]) > 1.5)) { if (!spoke) opts.onSpeech?.(); stop() }
       }
-    }
-  })
+    })
+  }
 
-  // Manual override — a resolved stopSignal (ENTER) ends the turn immediately,
-  // guaranteeing a way to send even if VAD thresholds misfire for the room.
+  // Primary control: a resolved stopSignal (ENTER) ends the turn immediately.
   opts.stopSignal?.then(() => stop()).catch(() => {})
 
   await new Promise<void>((resolve) => {

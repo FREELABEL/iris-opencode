@@ -283,11 +283,11 @@ export async function runVoiceChat(args: {
   const ttsLabel = args.tts ?? (process.platform === "darwin" ? "say" : "piper")
 
   prompts.log.info(`${bold(`Agent #${agentId}`)}  ${dim(`· mic: ${micLabel} · tts: ${ttsLabel}`)}`)
-  prompts.log.info(dim("Talk, then pause — it answers, then listens again. Say \"goodbye\" or Ctrl-C to end."))
+  prompts.log.info(dim("ENTER starts recording · ENTER again stops & sends · q + ENTER quits"))
 
-  // One readline for the whole session. The old manual `stdin.once('data')` +
-  // pause/resume juggling fought the prompt lib's raw-mode TTY and hung on the
-  // second read — readline handles the terminal correctly across every turn.
+  // One readline for the whole session, and BOTH the start and stop are plain
+  // rl.question() calls — deterministic, no missed keystrokes, no way to hang.
+  // (Silence auto-detection was removed: thresholds were unreliable across rooms.)
   const rl = createInterface({ input: process.stdin, output: process.stderr })
   const ask = (q: string) => new Promise<string>((resolve) => rl.question(q, resolve))
 
@@ -299,44 +299,35 @@ export async function runVoiceChat(args: {
     "If the full answer is long, give the one-line version and offer to expand.]"
 
   const history: Array<{ role: string; content: string }> = []
-  let auto = false // after the first turn, listen automatically (no ENTER)
-  let emptyStreak = 0
 
   console.log()
   try {
     while (true) {
-      // First turn (or after repeated silence) waits for ENTER; then hands-free.
-      if (!auto) {
-        const key = (await ask(`  ${dim("▶︎ ENTER to start talking (q to quit): ")}`)).trim()
-        if (key.toLowerCase() === "q") break
-      }
+      // START — wait for ENTER (or q).
+      const key = (await ask(`  ${dim("🎙️  ENTER to record  ·  q to quit: ")}`)).trim()
+      if (key.toLowerCase() === "q") break
 
-      // Listen — auto-stops on silence, or ENTER sends immediately.
+      // RECORD — the STOP is the next rl.question(); pressing ENTER resolves it,
+      // which stops ffmpeg. Deterministic: the keystroke can't be missed.
       let text = ""
       try {
-        console.log(`  ${dim("🎧 listening… (pause to send)")}`)
-        let onEnter: () => void = () => {}
-        const stopSignal = new Promise<void>((res) => { onEnter = () => res() })
-        rl.once("line", onEnter)
-        const wav = await captureMic({ mic: args.mic, silenceDur: 1.1, stopSignal })
-        rl.removeListener("line", onEnter)
+        const stopAsked = ask(`  ${bold("🔴 recording…")}  ${dim("speak, then press ENTER to send")}`)
+        const wav = await captureMic({ mic: args.mic, stopSignal: stopAsked.then(() => {}) })
+        await stopAsked
+        process.stderr.write(`  ${dim("📝 transcribing…")}`)
         text = await transcribeLocal(wav)
+        process.stderr.write("\r" + " ".repeat(56) + "\r")
       } catch (err) {
         console.log(`  ${dim("⚠ " + (err instanceof Error ? err.message : String(err)))}`)
-        auto = false
         continue
       }
 
-      // Skip empties/blips. Two in a row → fall back to ENTER so we don't hot-loop on noise.
       if (!text || text.replace(/[^a-z0-9]/gi, "").length < 2 || /^\[.*\]$/.test(text)) {
-        if (++emptyStreak >= 2) { auto = false; console.log(`  ${dim("(paused — press ENTER when ready)")}`) }
+        console.log(`  ${dim("(didn't catch that — try again)")}`)
         continue
       }
-      emptyStreak = 0
-
       console.log(`  ${bold("You:")} ${text}`)
-      // Voice command to hang up.
-      if (/^\s*(good\s?bye|hang up|end (the )?call|stop listening|quit|exit)\b/i.test(text)) break
+      if (/^\s*(good\s?bye|hang up|end (the )?call|quit|exit)\b/i.test(text)) break
 
       history.push({ role: "user", content: text })
       const startTime = Date.now()
@@ -368,7 +359,6 @@ export async function runVoiceChat(args: {
         if (!result.ok) {
           console.log(`  ${dim("⚠ " + (result.error ?? (result.timedOut ? "timed out" : "no answer")))}`)
           history.pop() // drop the unanswered turn so history stays consistent
-          auto = false
           continue
         }
 
@@ -376,13 +366,11 @@ export async function runVoiceChat(args: {
         history.push({ role: "assistant", content: reply })
         console.log(`  ${bold("Agent:")} ${reply.split("\n").join("\n  ")}`)
         await speak(reply, { tts: args.tts, voice: args["tts-voice"] })
-        auto = true // seamless: next turn starts listening on its own
       } catch (err) {
         clearInterval(heartbeat)
         process.stderr.write("\r" + " ".repeat(56) + "\r")
         console.log(`  ${dim("⚠ " + (err instanceof Error ? err.message : String(err)))}`)
         history.pop()
-        auto = false
       }
     }
   } finally {
