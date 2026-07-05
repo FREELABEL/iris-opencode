@@ -283,54 +283,61 @@ export async function runVoiceChat(args: {
   const ttsLabel = args.tts ?? (process.platform === "darwin" ? "say" : "piper")
 
   prompts.log.info(`${bold(`Agent #${agentId}`)}  ${dim(`· mic: ${micLabel} · tts: ${ttsLabel}`)}`)
-  prompts.log.info(dim("ENTER = start talking · pause (or ENTER) sends it · q + ENTER = quit"))
+  prompts.log.info(dim("Talk, then pause — it answers, then listens again. Say \"goodbye\" or Ctrl-C to end."))
 
   // One readline for the whole session. The old manual `stdin.once('data')` +
   // pause/resume juggling fought the prompt lib's raw-mode TTY and hung on the
-  // second read — readline handles the terminal correctly across every turn. No
-  // clack spinner here either (it flips stdin to raw mode); status = plain stderr.
+  // second read — readline handles the terminal correctly across every turn.
   const rl = createInterface({ input: process.stdin, output: process.stderr })
   const ask = (q: string) => new Promise<string>((resolve) => rl.question(q, resolve))
-  const clearLine = () => process.stderr.write("\r" + " ".repeat(56) + "\r")
+
+  // Per-turn nudge so replies are speakable: short, plain, no markdown/lists.
+  // Appended to the query only (not stored/displayed) so it works on any backend
+  // without depending on a "system" role in conversation_history.
+  const VOICE_HINT =
+    "\n\n[Voice call — reply in 1-2 short spoken sentences. No markdown, lists, headings, or emoji. " +
+    "If the full answer is long, give the one-line version and offer to expand.]"
 
   const history: Array<{ role: string; content: string }> = []
+  let auto = false // after the first turn, listen automatically (no ENTER)
+  let emptyStreak = 0
 
+  console.log()
   try {
     while (true) {
-      const key = (await ask(`\n  ${dim("▶︎ ENTER to talk (q to quit): ")}`)).trim()
-      if (key.toLowerCase() === "q") break
+      // First turn (or after repeated silence) waits for ENTER; then hands-free.
+      if (!auto) {
+        const key = (await ask(`  ${dim("▶︎ ENTER to start talking (q to quit): ")}`)).trim()
+        if (key.toLowerCase() === "q") break
+      }
 
-      // Capture + transcribe — both on-device. Stops on silence OR a manual ENTER
-      // (rl.once('line'), removed after so no read leaks into the next turn).
+      // Listen — auto-stops on silence, or ENTER sends immediately.
       let text = ""
       try {
-        process.stderr.write(`  ${dim("🎧 speak now… (pause to send, or press ENTER)")}`)
+        console.log(`  ${dim("🎧 listening… (pause to send)")}`)
         let onEnter: () => void = () => {}
         const stopSignal = new Promise<void>((res) => { onEnter = () => res() })
         rl.once("line", onEnter)
-        const wav = await captureMic({
-          mic: args.mic,
-          stopSignal,
-          onSpeech: () => process.stderr.write(`\r  ${dim("🔴 recording… (pause or ENTER to send)")}   `),
-        })
+        const wav = await captureMic({ mic: args.mic, silenceDur: 1.1, stopSignal })
         rl.removeListener("line", onEnter)
-        clearLine()
-        process.stderr.write(`  ${dim("📝 transcribing…")}`)
         text = await transcribeLocal(wav)
-        clearLine()
       } catch (err) {
-        clearLine()
         console.log(`  ${dim("⚠ " + (err instanceof Error ? err.message : String(err)))}`)
+        auto = false
         continue
       }
-      // Drop empties / stray blips (whisper emits "[BLANK_AUDIO]" etc. on silence).
-      if (!text || text.replace(/[^a-z0-9]/gi, "").length < 2 || /^\[.*\]$/.test(text)) {
-        console.log(`  ${dim("(didn't catch that — try again)")}`)
-        continue
-      }
-      console.log(`  ${bold("You:")} ${text}`)
 
-      // Ask the agent (same faithful V6 ReactLoop path as text chat).
+      // Skip empties/blips. Two in a row → fall back to ENTER so we don't hot-loop on noise.
+      if (!text || text.replace(/[^a-z0-9]/gi, "").length < 2 || /^\[.*\]$/.test(text)) {
+        if (++emptyStreak >= 2) { auto = false; console.log(`  ${dim("(paused — press ENTER when ready)")}`) }
+        continue
+      }
+      emptyStreak = 0
+
+      console.log(`  ${bold("You:")} ${text}`)
+      // Voice command to hang up.
+      if (/^\s*(good\s?bye|hang up|end (the )?call|stop listening|quit|exit)\b/i.test(text)) break
+
       history.push({ role: "user", content: text })
       const startTime = Date.now()
       let lastActivity = "thinking…"
@@ -341,7 +348,7 @@ export async function runVoiceChat(args: {
       try {
         const result = await streamAgentChat({
           agentId,
-          message: text,
+          message: text + VOICE_HINT,
           userId,
           bloqId: args.bloq,
           overrideModel: args.model,
@@ -356,31 +363,33 @@ export async function runVoiceChat(args: {
           },
         })
         clearInterval(heartbeat)
-        clearLine()
+        process.stderr.write("\r" + " ".repeat(56) + "\r")
 
         if (!result.ok) {
-          console.log(`  ${dim("⚠ " + (result.error ?? (result.timedOut ? "timed out" : "no answer delivered")))}`)
+          console.log(`  ${dim("⚠ " + (result.error ?? (result.timedOut ? "timed out" : "no answer")))}`)
           history.pop() // drop the unanswered turn so history stays consistent
+          auto = false
           continue
         }
 
         const reply = result.content || "(no response)"
         history.push({ role: "assistant", content: reply })
         console.log(`  ${bold("Agent:")} ${reply.split("\n").join("\n  ")}`)
-        console.log(`  ${dim(`${result.iterations ?? 0} iter · ${((Date.now() - startTime) / 1000).toFixed(1)}s`)}`)
         await speak(reply, { tts: args.tts, voice: args["tts-voice"] })
+        auto = true // seamless: next turn starts listening on its own
       } catch (err) {
         clearInterval(heartbeat)
-        clearLine()
+        process.stderr.write("\r" + " ".repeat(56) + "\r")
         console.log(`  ${dim("⚠ " + (err instanceof Error ? err.message : String(err)))}`)
         history.pop()
+        auto = false
       }
     }
   } finally {
     rl.close()
   }
 
-  prompts.outro("Voice chat ended 👋")
+  prompts.outro("Call ended 👋")
 }
 
 function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean, toolsUsed: string[] = []): void {
