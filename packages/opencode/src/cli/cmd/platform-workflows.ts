@@ -2,6 +2,12 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
+import {
+  normalizeInputSchema,
+  promptForInputs,
+  resolveInputsNonInteractive,
+  renderInputsAsText,
+} from "./input-form"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -198,6 +204,8 @@ const WorkflowsRunCommand = cmd({
     yargs
       .positional("id", { describe: "workflow ID", type: "number", demandOption: true })
       .option("query", { alias: "q", describe: "input query for the workflow", type: "string" })
+      .option("input", { describe: "structured inputs as a JSON object, e.g. --input '{\"topic\":\"AI\"}'", type: "string" })
+      .option("set", { describe: "set one input field: --set key=value (repeatable)", type: "array", string: true, default: [] as string[] })
       .option("wait", { describe: "wait for completion", type: "boolean", default: true })
       .option("timeout", { describe: "max seconds to wait", type: "number", default: 300 })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -211,8 +219,53 @@ const WorkflowsRunCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
+    const setFlags = (args.set as string[]) ?? []
+    const hasNonInteractiveInputs = Boolean(args.input) || setFlags.length > 0
+
+    // Read the workflow's declared input_schema (if any) so we can render a form
+    let fields: ReturnType<typeof normalizeInputSchema> = []
+    try {
+      const detailRes = await irisFetch(`/api/v1/users/${userId}/bloqs/workflows/${args.id}`)
+      if (detailRes.ok) {
+        const detail = (await detailRes.json()) as { data?: any }
+        const wf = detail?.data ?? detail
+        fields = normalizeInputSchema(wf?.input_schema)
+      }
+    } catch {
+      // Non-fatal: fall back to free-text query mode below
+    }
+
     let query = args.query
-    if (!query) {
+    let inputs: Record<string, unknown> | undefined
+
+    // Schema-driven inputs: collect when the workflow declares fields and the
+    // user either passed structured flags or is interactive without a raw query.
+    if (fields.length > 0 && (hasNonInteractiveInputs || (process.stdin.isTTY && !query))) {
+      if (hasNonInteractiveInputs || !process.stdin.isTTY) {
+        const { inputs: resolved, errors } = resolveInputsNonInteractive(fields, args.input, setFlags)
+        if (errors.length > 0) {
+          prompts.log.error(errors.join("\n"))
+          prompts.log.info(dim(`Provide inputs with --input '{...}' or --set key=value`))
+          const required = fields.filter((f) => f.required).map((f) => f.name)
+          if (required.length) prompts.log.info(dim(`Required: ${required.join(", ")}`))
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+        inputs = resolved
+      } else {
+        prompts.log.info(`This workflow needs ${fields.length} input${fields.length === 1 ? "" : "s"}:`)
+        const collected = await promptForInputs(fields)
+        if (!collected) { prompts.outro("Cancelled"); return }
+        inputs = collected
+      }
+      // Readable query fallback for endpoints that still only read `query`
+      // (full server-side `inputs` consumption lands in Phase 0).
+      if (!query) query = renderInputsAsText(inputs)
+    }
+
+    // Legacy free-text path (no schema, or schema not triggered)
+    if (!inputs && !query) {
       // Bail in non-TTY mode instead of hanging
       if (!process.stdin.isTTY) {
         prompts.log.error("--query is required in non-interactive mode")
@@ -234,6 +287,7 @@ const WorkflowsRunCommand = cmd({
     try {
       const payload: Record<string, unknown> = {}
       if (query) payload.query = query
+      if (inputs && Object.keys(inputs).length > 0) payload.inputs = inputs
 
       const res = await irisFetch(`/api/v1/workflows/${args.id}/execute/v6`, {
         method: "POST",
