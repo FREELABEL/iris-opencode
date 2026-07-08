@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
 import { itemTitle, itemContentPreview } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
+import { RELATION_TYPES, isValidRelationType, formatRelationsGrouped, type RelationRow } from "./bloq-relation-format"
 import path from "path"
 
 // ============================================================================
@@ -1585,6 +1586,171 @@ const BloqsDetachPlaybookCommand = cmd({
   },
 })
 
+// ============================================================================
+// Bloq relations (bug #158309) — parent/sibling/affiliated/partner/feeds_into/mirrors
+// ============================================================================
+
+const BloqsRelateCommand = cmd({
+  command: "relate <from-id> <to-id>",
+  describe: "link two bloqs with a typed relation",
+  builder: (yargs) =>
+    yargs
+      .positional("from-id", { describe: "bloq ID this relation is created from (needs write access)", type: "number", demandOption: true })
+      .positional("to-id", { describe: "the related bloq ID", type: "number", demandOption: true })
+      .option("type", { describe: `relation type (${RELATION_TYPES.join("|")})`, type: "string", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const type = String(args.type)
+    if (!isValidRelationType(type)) {
+      const msg = `Invalid --type "${type}". Must be one of: ${RELATION_TYPES.join(", ")}`
+      if (args.json) { console.log(JSON.stringify({ success: false, error: msg })); return }
+      prompts.log.error(msg)
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Relate Bloq #${args["from-id"]} → #${args["to-id"]} (${type})`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Relating…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["from-id"]}/relate`, {
+        method: "POST",
+        body: JSON.stringify({ to_bloq_id: args["to-id"], type }),
+      })
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Relate bloqs")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = await res.json().catch(() => ({})) as Record<string, unknown>
+      if (args.json) { console.log(JSON.stringify({ success: true, from_bloq_id: args["from-id"], to_bloq_id: args["to-id"], type, ...data })); return }
+
+      if (spinner) spinner.stop(`${success("✓")} Bloq #${args["from-id"]} related to #${args["to-id"]} (${type})`)
+      prompts.outro(dim(`iris bloqs relations ${args["from-id"]}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsUnrelateCommand = cmd({
+  command: "unrelate <from-id> <to-id>",
+  describe: "remove a typed relation between two bloqs",
+  builder: (yargs) =>
+    yargs
+      .positional("from-id", { describe: "bloq ID the relation was created from", type: "number", demandOption: true })
+      .positional("to-id", { describe: "the related bloq ID", type: "number", demandOption: true })
+      .option("type", { describe: `relation type (${RELATION_TYPES.join("|")})`, type: "string", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const type = String(args.type)
+    if (!isValidRelationType(type)) {
+      const msg = `Invalid --type "${type}". Must be one of: ${RELATION_TYPES.join(", ")}`
+      if (args.json) { console.log(JSON.stringify({ success: false, error: msg })); return }
+      prompts.log.error(msg)
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Unrelate Bloq #${args["from-id"]} → #${args["to-id"]} (${type})`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Removing…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["from-id"]}/unrelate`, {
+        method: "POST",
+        body: JSON.stringify({ to_bloq_id: args["to-id"], type }),
+      })
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Unrelate bloqs")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, from_bloq_id: args["from-id"], to_bloq_id: args["to-id"], type })); return }
+
+      if (spinner) spinner.stop(`${success("✓")} Relation removed (Bloq #${args["from-id"]} → #${args["to-id"]}, ${type})`)
+      prompts.outro(dim(`iris bloqs relations ${args["from-id"]}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsRelationsCommand = cmd({
+  command: "relations <id>",
+  describe: "list a bloq's relations to other bloqs",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("type", { describe: `filter by relation type (${RELATION_TYPES.join("|")})`, type: "string" })
+      .option("direction", { describe: "from|to|both", type: "string", default: "both", choices: ["from", "to", "both"] as const })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) return
+
+    try {
+      const params = new URLSearchParams()
+      if (args.type) params.set("type", String(args.type))
+      if (args.direction) params.set("direction", String(args.direction))
+      const qs = params.toString()
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/relations${qs ? `?${qs}` : ""}`)
+      if (!res.ok) {
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "List bloq relations")
+        return
+      }
+
+      const body = (await res.json().catch(() => ({}))) as { data?: RelationRow[] }
+      const relations = body.data ?? []
+      if (args.json) { console.log(JSON.stringify({ success: true, bloq_id: args.id, relations })); return }
+
+      if (relations.length === 0) {
+        console.log(dim(`No relations for Bloq #${args.id}.`))
+        console.log(dim(`Link one: iris bloqs relate ${args.id} <to-id> --type=<type>`))
+        return
+      }
+
+      console.log(bold(`Relations for Bloq #${args.id}:`))
+      console.log(formatRelationsGrouped(relations))
+    } catch (err) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
 const BloqsPlaybooksCommand = cmd({
   command: "playbooks <bloq-id>",
   aliases: ["list-playbooks"],
@@ -2075,6 +2241,9 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsUpdateItemCommand)
       .command(BloqsContributorsCommand)
       .command(BloqsItemsCommand)
+      .command(BloqsRelateCommand)
+      .command(BloqsUnrelateCommand)
+      .command(BloqsRelationsCommand)
       .demandCommand(),
   async handler() {},
 })
