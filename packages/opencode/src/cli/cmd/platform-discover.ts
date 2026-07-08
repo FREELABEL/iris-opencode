@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API } from "./iris-api"
+import { PlaylistCommand } from "./platform-discover-playlist"
 
 // ============================================================================
 // Shape helpers — discover endpoints return heterogeneous shapes; coerce
@@ -2209,6 +2210,7 @@ export const PlatformDiscoverCommand = cmd({
       .command(BrandsCommand)
       .command(LearningCommand)
       .command(SectionsCommand)
+      .command(PlaylistCommand)
       .demandCommand(),
   async handler() {},
 })
