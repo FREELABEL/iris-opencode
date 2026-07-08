@@ -83,6 +83,38 @@ async function uploadTrack(mp3Path: string, t: PlaylistTrack): Promise<{ ok: boo
 }
 
 /**
+ * Publish a whole playlist as a Discover series (album-style Category of the imported
+ * tracks) on FREELABEL. Idempotent per playlist so a series can be relaunched.
+ */
+async function publishSeries(
+  playlistId: string,
+  payload: PlaylistPayload,
+  spotifyIds: string[],
+): Promise<{ ok: boolean; seriesId?: number; attached?: number; error?: string }> {
+  try {
+    const res = await irisFetch("/api/v1/spotify/playlist/publish-series", {
+      method: "POST",
+      body: JSON.stringify({
+        playlist_id: playlistId,
+        name: payload.name,
+        image: payload.image,
+        spotify_url: payload.spotifyUrl,
+        spotify_ids: spotifyIds,
+      }),
+    })
+    if (!res.ok) {
+      const body = await res.text().catch(() => "")
+      return { ok: false, error: `HTTP ${res.status} ${body.slice(0, 140)}` }
+    }
+    const body = (await res.json()) as any
+    if (!body?.success) return { ok: false, error: body?.error || body?.message || "publish failed" }
+    return { ok: true, seriesId: body?.data?.series_id, attached: body?.data?.attached }
+  } catch (e: any) {
+    return { ok: false, error: e?.message || String(e) }
+  }
+}
+
+/**
  * `iris discover playlist <url>` — ingest a Spotify playlist, match each track on
  * YouTube, and download tagged (ID3 + album art) MP3s into a local folder for DJ
  * sets and livestreams. Spotify metadata comes from fl-api (where the creds live);
@@ -116,6 +148,11 @@ const PlaylistCommand = cmd({
         type: "boolean",
         default: false,
         describe: "Also publish each track to FREELABEL as a playable audio content item (private library)",
+      })
+      .option("publish-series", {
+        type: "boolean",
+        default: false,
+        describe: "Publish the whole playlist as a series on the Discover page (implies --upload)",
       })
       .option("json", {
         type: "boolean",
@@ -221,10 +258,13 @@ const PlaylistCommand = cmd({
     mkdirSync(outDir, { recursive: true })
 
     // 3. Download each track as a tagged MP3 (and optionally publish it).
+    const wantSeries = !!args["publish-series"]
+    const wantUpload = !!args.upload || wantSeries // a series needs the tracks uploaded first
     const done: { title: string; artist: string; path: string }[] = []
     const failed: { title: string; artist: string; error: string }[] = []
     const uploaded: { title: string; artist: string; trackId?: number }[] = []
     const uploadFailed: { title: string; artist: string; error: string }[] = []
+    const uploadedIds: string[] = [] // spotify ids of uploaded tracks, in playlist order (for the series)
 
     for (let i = 0; i < tracks.length; i++) {
       const t = tracks[i]
@@ -261,13 +301,14 @@ const PlaylistCommand = cmd({
       }
 
       // Publish to FREELABEL as a playable audio content item.
-      if (ready && args.upload) {
+      if (ready && wantUpload) {
         const sp = json ? null : prompts.spinner()
         sp?.start(`   ↑ publishing ${label}`)
         const u = await uploadTrack(mp3Path, t)
         if (u.ok) {
           sp?.stop(`   ↑ published ${label} ${dim(u.trackId ? `(#${u.trackId})` : "")}`)
           uploaded.push({ title: t.title, artist: t.artist, trackId: u.trackId })
+          uploadedIds.push(t.spotifyId)
         } else {
           sp?.stop(`   ↑ publish failed ${label} — ${u.error}`, 1)
           uploadFailed.push({ title: t.title, artist: t.artist, error: u.error || "unknown" })
@@ -275,12 +316,31 @@ const PlaylistCommand = cmd({
       }
     }
 
+    // 3b. Publish the whole playlist as a Discover series (album-style Category).
+    let series: { ok: boolean; seriesId?: number; attached?: number; error?: string } | null = null
+    if (wantSeries && uploadedIds.length > 0) {
+      const sp = json ? null : prompts.spinner()
+      sp?.start("Publishing series to Discover…")
+      series = await publishSeries(playlistId, payload, uploadedIds)
+      if (series.ok) {
+        sp?.stop(`Series live on Discover — ${series.attached} track(s) ${dim(series.seriesId ? `(#${series.seriesId})` : "")}`)
+      } else {
+        sp?.stop(`Series publish failed — ${series.error}`, 1)
+      }
+    } else if (wantSeries) {
+      if (!json) prompts.log.warn("No tracks were uploaded — skipping series publish")
+    }
+
     // 4. Summary.
     if (json) {
       console.log(
-        JSON.stringify({ playlist: payload.name, outDir, downloaded: done, failed, uploaded, uploadFailed }, null, 2),
+        JSON.stringify(
+          { playlist: payload.name, outDir, downloaded: done, failed, uploaded, uploadFailed, series },
+          null,
+          2,
+        ),
       )
-      if (failed.length || uploadFailed.length) process.exitCode = 1
+      if (failed.length || uploadFailed.length || (series && !series.ok)) process.exitCode = 1
       return
     }
 
@@ -288,7 +348,12 @@ const PlaylistCommand = cmd({
     console.log(`  ${bold("Playlist")}   ${payload.name}`)
     console.log(`  ${bold("Matched")}    ${done.length}/${tracks.length}`)
     console.log(`  ${bold("Folder")}     ${highlight(outDir)}`)
-    if (args.upload) console.log(`  ${bold("Published")}  ${uploaded.length}/${done.length} to FREELABEL`)
+    if (wantUpload) console.log(`  ${bold("Published")}  ${uploaded.length}/${done.length} to FREELABEL`)
+    if (wantSeries) {
+      console.log(
+        `  ${bold("Series")}     ${series?.ok ? `live on Discover (#${series.seriesId})` : dim(series?.error || "not published")}`,
+      )
+    }
     if (failed.length) {
       console.log()
       console.log(`  ${dim("Unmatched:")}`)
