@@ -17,9 +17,8 @@ import {
 
 describe("RELATION_TYPES", () => {
   test("includes all six canonical types", () => {
-    expect([...RELATION_TYPES].sort()).toEqual(
-      ["affiliated", "feeds_into", "mirrors", "parent", "partner", "sibling"].sort(),
-    )
+    const sorted: string[] = [...RELATION_TYPES].sort()
+    expect(sorted).toEqual(["affiliated", "feeds_into", "mirrors", "parent", "partner", "sibling"].sort())
   })
 
   test("directional + symmetric partition covers the full set with no overlap", () => {
