@@ -1002,6 +1002,83 @@ const PlaybookSyncCommand = cmd({
 // ============================================================================
 // Parent commands: iris playbook + iris skill (alias)
 // ============================================================================
+// iris playbook attach / detach / attached — bloq ↔ playbook attachment
+// Parity with the Bloq builder's Playbooks tab. Hits the fl-api bloq
+// endpoints that store attachments in bloq.config['playbooks'].
+// ============================================================================
+
+const AttachedCommand = cmd({
+  command: "attached",
+  describe: "list playbooks attached to a bloq",
+  builder: (yargs) =>
+    yargs
+      .option("bloq", { type: "number", demandOption: true, describe: "bloq (project) id" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Attached Playbooks — Bloq #${args.bloq}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/playbooks`)
+    const ok = await handleApiError(res, "List attached playbooks")
+    if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    const attached: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+    if (args.json) { console.log(JSON.stringify(attached, null, 2)); prompts.outro("Done"); return }
+    printDivider()
+    if (attached.length === 0) console.log(`  ${dim("(no playbooks attached)")}`)
+    else for (const p of attached) {
+      console.log(`  ${bold(String(p.name ?? "unknown"))}  ${p.attached_at ? dim(String(p.attached_at)) : ""}`)
+    }
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
+const AttachCommand = cmd({
+  command: "attach <playbookName>",
+  describe: "attach a playbook to a bloq",
+  builder: (yargs) =>
+    yargs
+      .positional("playbookName", { type: "string", demandOption: true })
+      .option("bloq", { type: "number", demandOption: true, describe: "bloq (project) id" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Attach Playbook — Bloq #${args.bloq}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/attach-playbook`, {
+      method: "POST",
+      body: JSON.stringify({ playbook_name: args.playbookName }),
+    })
+    const ok = await handleApiError(res, "Attach playbook")
+    if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    prompts.outro(`${success("✓")} ${data?.message ?? `Attached ${highlight(String(args.playbookName))}`}`)
+  },
+})
+
+const DetachCommand = cmd({
+  command: "detach <playbookName>",
+  describe: "detach a playbook from a bloq",
+  builder: (yargs) =>
+    yargs
+      .positional("playbookName", { type: "string", demandOption: true })
+      .option("bloq", { type: "number", demandOption: true, describe: "bloq (project) id" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Detach Playbook — Bloq #${args.bloq}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/detach-playbook`, {
+      method: "POST",
+      body: JSON.stringify({ playbook_name: args.playbookName }),
+    })
+    const ok = await handleApiError(res, "Detach playbook")
+    if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    prompts.outro(`${success("✓")} ${data?.message ?? `Detached ${highlight(String(args.playbookName))}`}`)
+  },
+})
+
+// ============================================================================
 
 export const PlatformPlaybookCommand = cmd({
   command: "playbook <subcommand>",
@@ -1017,6 +1094,9 @@ export const PlatformPlaybookCommand = cmd({
       .command(PlaybookSyncCommand)
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
+      .command(AttachCommand)
+      .command(DetachCommand)
+      .command(AttachedCommand)
       .demandCommand(1, ""),
   handler() {},
 })
@@ -1037,6 +1117,9 @@ export const PlatformSkillCommand = cmd({
       .command(PlaybookSyncCommand)
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
+      .command(AttachCommand)
+      .command(DetachCommand)
+      .command(AttachedCommand)
       .demandCommand(1, ""),
   handler() {},
 })
