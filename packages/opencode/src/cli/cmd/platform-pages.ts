@@ -115,6 +115,7 @@ export async function createPageFromJson(opts: {
   owner_id?: number
   json_content: any
   publish?: boolean
+  requires_auth?: boolean
 }): Promise<any | null> {
   const payload: Record<string, unknown> = {
     slug: opts.slug,
@@ -127,6 +128,9 @@ export async function createPageFromJson(opts: {
     status: "draft",
     json_content: opts.json_content,
   }
+  // requires_auth is a top-level page COLUMN (the login gate) — set it at create
+  // so the page is auth-gated from the first publish (no follow-up PATCH needed).
+  if (opts.requires_auth !== undefined) payload.requires_auth = opts.requires_auth
   const res = await pagesFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(payload) })
   if (!(await handleApiError(res, `Create page ${opts.slug}`))) return null
   const p = ((await res.json()) as { data?: any }).data ?? {}

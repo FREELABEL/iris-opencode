@@ -5,6 +5,7 @@ import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, pr
 import { itemTitle, itemContentPreview } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
 import { RELATION_TYPES, isValidRelationType, formatRelationsGrouped, type RelationRow } from "./bloq-relation-format"
+import { createPageFromJson } from "./platform-pages"
 import path from "path"
 
 // ============================================================================
@@ -2209,6 +2210,99 @@ const BloqsRevokeLinkCommand = cmd({
   },
 })
 
+// Publish a bloq's items as individual Genesis pages — the reusable "doc library
+// → pages" capability. An SOP bloq becomes one clean login-gated page per SOP,
+// each with its own /p/<slug> the index can link to. Auth-gated by default
+// (requires_auth) so internal docs never land on anyone-with-link public URLs;
+// pass --public to opt out. Reuses createPageFromJson (create + publish + purge).
+const BloqsPublishPagesCommand = cmd({
+  command: "publish-pages <bloq-id>",
+  aliases: ["items-to-pages"],
+  describe: "publish a bloq's items as individual auth-gated pages (doc library → pages)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID whose items become pages", type: "number", demandOption: true })
+      .option("list", { alias: "l", describe: "only publish items in this list ID", type: "number" })
+      .option("prefix", { describe: "slug prefix for created pages (default: bloq-<id>)", type: "string" })
+      .option("public", { describe: "make pages public (no login gate); default is auth-gated", type: "boolean", default: false })
+      .option("owner-id", { describe: "owner bloq ID for the pages (default: the source bloq)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Publish Bloq #${args["bloq-id"]} items → pages`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Loading items…")
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}`)
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Load bloq"); prompts.outro("Done"); return
+      }
+      const bloq = (await res.json()) as Record<string, any>
+      const lists = bloq?.data?.lists ?? bloq?.lists ?? []
+      let items: any[] = []
+      for (const list of lists) for (const it of (list.items ?? [])) items.push({ ...it, list_id: list.id })
+      if (args.list) items = items.filter((i) => i.list_id === args.list || i.bloq_list_id === args.list)
+      items = items.filter((i) => String(i.content ?? "").trim().length > 0) // skip empty/stub items
+
+      if (items.length === 0) {
+        spinner?.stop("No items", 1)
+        if (args.json) { console.log(JSON.stringify({ success: true, pages: [] })); return }
+        prompts.log.warn("No non-empty items to publish"); prompts.outro("Done"); return
+      }
+
+      const prefix = (args.prefix as string) || `bloq-${args["bloq-id"]}`
+      const ownerId = (args["owner-id"] as number) ?? Number(args["bloq-id"])
+      const used = new Set<string>()
+      const slugify = (s: string): string => {
+        let base = s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "item"
+        let slug = `${prefix}-${base}`
+        let n = 2
+        while (used.has(slug)) slug = `${prefix}-${base}-${n++}`
+        used.add(slug)
+        return slug
+      }
+
+      const created: Array<{ item_id: number; title: string; slug: string; url: string }> = []
+      let i = 0
+      for (const item of items) {
+        i++
+        const title = String(item.title ?? `Item ${item.id}`)
+        spinner?.message(`Publishing ${i}/${items.length}: ${title.slice(0, 40)}…`)
+        const slug = slugify(title)
+        const json_content = {
+          version: "2.0",
+          type: "page",
+          components: [
+            { type: "WidgetWorkspaceBanner", id: "doc-banner", props: { title, subtitle: "Standard Operating Procedure", showDate: false, themeMode: "light" } },
+            { type: "TextBlock", id: "doc-body", props: { content: String(item.content ?? ""), maxWidth: "48rem", themeMode: "light" } },
+          ],
+        }
+        const page = await createPageFromJson({ slug, title, json_content, owner_type: "bloq", owner_id: ownerId, publish: true, requires_auth: !args.public })
+        if (page?.id) created.push({ item_id: Number(item.id), title, slug, url: `https://freelabel.net/p/${slug}` })
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, gated: !args.public, pages: created })); return }
+      spinner?.stop(`${success("✓")} Published ${created.length} page(s) ${args.public ? "(public)" : "(auth-gated)"}`)
+      console.log()
+      for (const p of created) console.log(`  ${dim(`#${p.item_id}`)}  ${p.title.slice(0, 48)}  ${dim("→")}  ${p.url}`)
+      console.log()
+      prompts.outro("Done")
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformBloqsCommand = cmd({
   command: "bloqs",
   aliases: ["kb", "knowledge", "memory", "projects", "atlas"],
@@ -2241,6 +2335,7 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsUpdateItemCommand)
       .command(BloqsContributorsCommand)
       .command(BloqsItemsCommand)
+      .command(BloqsPublishPagesCommand)
       .command(BloqsRelateCommand)
       .command(BloqsUnrelateCommand)
       .command(BloqsRelationsCommand)
