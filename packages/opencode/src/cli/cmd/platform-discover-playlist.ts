@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, printDivider, bold, dim, highlight } from "./iris-api"
 import { ensureYtDlp, which, downloadAudioMp3 } from "./download"
+import { analyzeAudio } from "./audio-analysis"
 import { existsSync, mkdirSync, statSync } from "fs"
 import { join, basename } from "path"
 
@@ -68,6 +69,15 @@ async function uploadTrack(mp3Path: string, t: PlaylistTrack): Promise<{ ok: boo
     if (t.album) form.append("album", t.album)
     if (t.albumArt) form.append("album_art", t.albumArt)
     if (t.spotifyUrl) form.append("spotify_url", t.spotifyUrl)
+
+    // Beatbox: compute BPM/key/Camelot/energy from the file and send with the import.
+    const analysis = analyzeAudio(mp3Path)
+    if (analysis) {
+      form.append("bpm", String(analysis.bpm))
+      form.append("musical_key", analysis.key)
+      form.append("camelot", analysis.camelot)
+      form.append("energy", String(analysis.energy))
+    }
 
     const res = await irisFetch("/api/v1/spotify/tracks/import", { method: "POST", body: form })
     if (!res.ok) {
