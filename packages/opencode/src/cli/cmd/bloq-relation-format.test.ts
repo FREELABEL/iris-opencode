@@ -17,7 +17,7 @@ import {
 
 describe("RELATION_TYPES", () => {
   test("includes all six canonical types", () => {
-    expect(RELATION_TYPES.sort()).toEqual(
+    expect([...RELATION_TYPES].sort()).toEqual(
       ["affiliated", "feeds_into", "mirrors", "parent", "partner", "sibling"].sort(),
     )
   })
