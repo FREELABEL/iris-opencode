@@ -160,6 +160,57 @@ const SchemaCreateCommand = cmd({
   },
 })
 
+// #162692 — evolve a schema's fields safely. The backend (PATCH schemas/{slug}) creates
+// a NEW version and keeps existing records; no destructive delete-and-recreate needed.
+const SchemaUpdateCommand = cmd({
+  command: "update <slug>",
+  aliases: ["edit", "evolve"],
+  describe: "evolve a schema's fields — creates a NEW version, keeps existing records",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true })
+      .option("name", { type: "string", describe: "rename the schema" })
+      .option("fields", { type: "string", describe: "JSON fields definition or path to .json file (full new field set)" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Evolve Schema: ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    let fields: any = null
+    if (args.fields) {
+      try {
+        if (args.fields.endsWith(".json") && fs.existsSync(args.fields)) {
+          fields = JSON.parse(fs.readFileSync(args.fields, "utf8"))
+        } else {
+          fields = JSON.parse(args.fields)
+        }
+      } catch { prompts.log.error("Invalid JSON for --fields"); prompts.outro("Done"); return }
+    }
+
+    const body: Record<string, any> = {}
+    if (args.name) body.name = args.name
+    if (fields) body.fields = Array.isArray(fields) ? { fields } : fields
+    if (body.name === undefined && body.fields === undefined) {
+      prompts.log.warn("Nothing to update. Pass --fields <json|file> (full new field set) and/or --name")
+      prompts.outro("Done"); return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Evolving schema…")
+    try {
+      const res = await irisFetch(`/api/v1/atlas/schemas/${args.slug}`, { method: "PATCH", body: JSON.stringify(body) })
+      const ok = await handleApiError(res, "Update schema"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const data = ((await res.json()) as any)?.data
+      spinner.stop(`Evolved ${bold(args.slug)} → v${data?.version ?? "?"}  ${dim("(existing records preserved)")}`)
+      prompts.outro(`iris atlas:datasets records list --schema=${args.slug}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 // #137845 — the create path existed but there was no delete path, so test schemas
 // persisted as orphans. Prompt by default, --force to skip, --cascade to also remove
 // records (the server refuses with a clear 409 if records exist and cascade is off).
@@ -211,7 +262,7 @@ const SchemasGroup = cmd({
   command: "schemas",
   aliases: ["schema"],
   describe: "manage dataset schemas",
-  builder: (y) => y.command(SchemaListCommand).command(SchemaShowCommand).command(SchemaCreateCommand).command(SchemaDeleteCommand).demandCommand(),
+  builder: (y) => y.command(SchemaListCommand).command(SchemaShowCommand).command(SchemaCreateCommand).command(SchemaUpdateCommand).command(SchemaDeleteCommand).demandCommand(),
   async handler() {},
 })
 
@@ -224,8 +275,8 @@ const RecordsListCommand = cmd({
   builder: (y) =>
     y
       .option("schema", { type: "string", demandOption: true, alias: "s", describe: "schema slug" })
-      .option("filter", { type: "string", describe: "field=value filter (repeatable)", array: true })
-      .option("search", { type: "string", describe: "full-text search" })
+      .option("filter", { type: "string", alias: "where", describe: "field=value filter (repeatable), e.g. --where status=active", array: true })
+      .option("search", { type: "string", alias: "q", describe: "full-text search over record data" })
       .option("sort", { type: "string", default: "created_at" })
       .option("limit", { type: "number", default: 25 })
       .option("json", { type: "boolean", default: false }),
@@ -274,6 +325,57 @@ const RecordsListCommand = cmd({
           preview.push(`${key}: ${val}`)
         }
         if (preview.length) console.log(`    ${dim(preview.join("  ·  "))}`)
+      }
+      printDivider()
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// #162689 — discoverable search verb over dataset records (sugar for list --search,
+// plus --where filters). Backed by the API's JSON search/filter over record data.
+const RecordsSearchCommand = cmd({
+  command: "search <query>",
+  aliases: ["find"],
+  describe: "search records by text; combine with --where field=value filters",
+  builder: (y) =>
+    y
+      .positional("query", { type: "string", demandOption: true })
+      .option("schema", { type: "string", demandOption: true, alias: "s", describe: "schema slug" })
+      .option("where", { type: "string", alias: "filter", describe: "field=value filter (repeatable)", array: true })
+      .option("limit", { type: "number", default: 25 })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Search: ${args.schema} · "${args.query}"`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner()
+    spinner.start("Searching…")
+    try {
+      const p = new URLSearchParams({ per_page: String(args.limit), search: String(args.query) })
+      for (const f of (args.where as string[] | undefined) ?? []) {
+        const [key, ...rest] = f.split("=")
+        if (key && rest.length) p.set(`filter[${key}]`, rest.join("="))
+      }
+      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}?${p}`)
+      const ok = await handleApiError(res, "Search records"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const body = (await res.json()) as any
+      const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+      const total = body?.data?.records?.total ?? records.length
+      const schema = body?.data?.schema
+      spinner.stop(`${records.length} of ${total} match(es)`)
+      if (args.json) { console.log(JSON.stringify(records, null, 2)); prompts.outro("Done"); return }
+      if (records.length === 0) { prompts.log.warn("No matches"); prompts.outro("Done"); return }
+      printDivider()
+      for (const r of records) {
+        const d = r.data ?? {}
+        const displayField = schema?.fields?.display_field ?? Object.keys(d)[0]
+        const displayVal = d[displayField] ?? r.external_id ?? `#${r.id}`
+        console.log(`  ${dim(`#${r.id}`)}  ${bold(String(displayVal))}  ${r.external_id ? dim(r.external_id) : ""}`)
       }
       printDivider()
       prompts.outro("Done")
@@ -802,7 +904,7 @@ const RecordsGroup = cmd({
   aliases: ["data", "rows"],
   describe: "manage records in a dataset",
   builder: (y) =>
-    y.command(RecordsListCommand).command(RecordsShowCommand).command(RecordsSummaryCommand)
+    y.command(RecordsListCommand).command(RecordsSearchCommand).command(RecordsShowCommand).command(RecordsSummaryCommand)
      .command(RecordsAddCommand).command(RecordsUpdateCommand).command(RecordsDeleteCommand)
      .command(RecordsUpsertCommand).demandCommand(),
   async handler() {},
