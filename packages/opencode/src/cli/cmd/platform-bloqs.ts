@@ -1169,6 +1169,96 @@ const BloqsMoveItemCommand = cmd({
   },
 })
 
+const BloqsReorderItemCommand = cmd({
+  command: "reorder-item <item-id>",
+  aliases: ["pin-item"],
+  describe: "reorder an item within its list (0 = top). Use --top to pin it first.",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID to reorder", type: "number", demandOption: true })
+      .option("position", { alias: "p", describe: "new 0-based position within the list", type: "number" })
+      .option("top", { alias: "pin", describe: "pin the item to the top of its list (position 0)", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    // Resolve the target position: --top wins, else --position (must be >= 0).
+    const position = args.top ? 0 : args.position
+    if (position === undefined || position === null) {
+      if (!args.json) {
+        prompts.log.error("Specify a target: --position <n> (0 = top) or --top")
+      } else {
+        console.log(JSON.stringify({ error: "Specify --position <n> or --top" }, null, 2))
+      }
+      process.exitCode = 2
+      return
+    }
+    if (position < 0) {
+      if (!args.json) prompts.log.error("--position must be 0 or greater")
+      else console.log(JSON.stringify({ error: "--position must be 0 or greater" }, null, 2))
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Reorder Item #${args["item-id"]} → position ${position}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Reordering item…")
+
+    try {
+      // The position endpoint requires the item's list_id in the body, so first
+      // resolve the item's current list. This also keeps the item in its own list
+      // (a pure reorder, never a cross-list move).
+      const itemRes = await irisFetch(`/api/v1/user/bloqs/list/item/${args["item-id"]}`)
+      if (!itemRes.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        await handleApiError(itemRes, "Reorder item")
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+      const itemData = (await itemRes.json()) as { data?: any }
+      const item = itemData?.data ?? itemData
+      const listId = item?.bloq_list_id ?? item?.list_id
+      if (!listId) {
+        if (spinner) spinner.stop("Failed", 1)
+        if (!args.json) prompts.log.error("Could not determine the item's list")
+        else console.log(JSON.stringify({ error: "Could not determine the item's list" }, null, 2))
+        if (!args.json) prompts.outro("Done")
+        process.exitCode = 1
+        return
+      }
+
+      const res = await irisFetch(
+        `/api/v1/user/${userId}/bloqs/list/item/${args["item-id"]}/position`,
+        { method: "PATCH", body: JSON.stringify({ list_id: listId, position }) },
+      )
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        await handleApiError(res, "Reorder item")
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+
+      if (args.json) {
+        console.log(JSON.stringify({ id: args["item-id"], list_id: listId, position }, null, 2))
+        return
+      }
+      spinner!.stop(`${success("✓")} Item #${args["item-id"]} ${args.top ? "pinned to top" : `moved to position ${position}`} of list #${listId}`)
+      prompts.outro("Done")
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (!args.json) prompts.log.error(err instanceof Error ? err.message : String(err))
+      else console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }, null, 2))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
 const BloqsComposeCommand = cmd({
   command: "compose",
   describe: "create a knowledge base with AI-assisted structure",
@@ -2329,6 +2419,7 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsMakePrivateCommand)
       .command(BloqsCreateListCommand)
       .command(BloqsMoveItemCommand)
+      .command(BloqsReorderItemCommand)
       .command(BloqsComposeCommand)
       .command(BloqsRenameCommand)
       .command(BloqsSearchCommand)
