@@ -37,6 +37,26 @@ export function matchesSearchQuery(haystack: string, query: string): boolean {
   return tokens.every((t) => hay.includes(t))
 }
 
+/**
+ * Normalize a user-supplied due date to a `YYYY-MM-DD` string the API stores as
+ * a date, or return null if it isn't a real calendar date. Accepts `YYYY-MM-DD`
+ * and full ISO timestamps (the date part is kept). Rejects nonsense like
+ * "2026-13-40" or "tomorrow" so the CLI can give a clear error instead of
+ * silently sending garbage the DB coerces to null.
+ */
+export function normalizeDueDate(input: string): string | null {
+  const raw = String(input ?? "").trim()
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$/)
+  if (!m) return null
+  const [, y, mo, d] = m
+  const year = Number(y), month = Number(mo), day = Number(d)
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  // Round-trip through UTC to reject impossible days (e.g. Feb 30, Apr 31).
+  const dt = new Date(Date.UTC(year, month - 1, day))
+  if (dt.getUTCFullYear() !== year || dt.getUTCMonth() !== month - 1 || dt.getUTCDate() !== day) return null
+  return `${y}-${mo}-${d}`
+}
+
 /** A short, readable one-line preview of an item's content — never "[object Object]". */
 export function itemContentPreview(item: any, max = 120): string {
   const c = item?.content

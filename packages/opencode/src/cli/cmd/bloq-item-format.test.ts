@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { itemTitle, itemContentPreview, matchesSearchQuery } from "./bloq-item-format"
+import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 
 // =============================================================================
 // Bloq item rendering — regression for the `[object Object]` bug (IRIS bug)
@@ -113,5 +113,37 @@ describe("matchesSearchQuery", () => {
 
   test("does NOT accent-fold (typo tolerance is Typesense's job, #162213)", () => {
     expect(matchesSearchQuery("café menu", "cafe")).toBe(false)
+  })
+})
+
+// =============================================================================
+// Due-date normalization — for the --due flag (#162211). The API stores a plain
+// date, so reject nonsense up front instead of sending garbage the DB nulls.
+// =============================================================================
+
+describe("normalizeDueDate", () => {
+  test("accepts a plain YYYY-MM-DD", () => {
+    expect(normalizeDueDate("2026-07-22")).toBe("2026-07-22")
+  })
+
+  test("keeps the date part of a full ISO timestamp", () => {
+    expect(normalizeDueDate("2026-07-22T15:30:00Z")).toBe("2026-07-22")
+    expect(normalizeDueDate("2026-07-22 15:30")).toBe("2026-07-22")
+  })
+
+  test("trims surrounding whitespace", () => {
+    expect(normalizeDueDate("  2026-07-22  ")).toBe("2026-07-22")
+  })
+
+  test("rejects impossible calendar dates", () => {
+    expect(normalizeDueDate("2026-13-01")).toBeNull() // month 13
+    expect(normalizeDueDate("2026-02-30")).toBeNull() // Feb 30
+    expect(normalizeDueDate("2026-04-31")).toBeNull() // Apr 31
+  })
+
+  test("rejects non-ISO or free-text input", () => {
+    expect(normalizeDueDate("tomorrow")).toBeNull()
+    expect(normalizeDueDate("07/22/2026")).toBeNull()
+    expect(normalizeDueDate("")).toBeNull()
   })
 })

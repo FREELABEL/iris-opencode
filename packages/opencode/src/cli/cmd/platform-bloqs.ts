@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
-import { itemTitle, itemContentPreview, matchesSearchQuery } from "./bloq-item-format"
+import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
 import { RELATION_TYPES, isValidRelationType, formatRelationsGrouped, type RelationRow } from "./bloq-relation-format"
 import { createPageFromJson } from "./platform-pages"
@@ -809,10 +809,24 @@ const BloqsAddItemCommand = cmd({
       .positional("content", { describe: "item content", type: "string" })
       .option("title", { describe: "item title", type: "string" })
       .option("text", { describe: "item content (alternative to positional)", type: "string" })
+      .option("due", { describe: "due date (ISO, e.g. 2026-07-22)", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Add Item — Bloq #${args["bloq-id"]}`)
+
+    // Validate --due up front so we fail fast with a clear message.
+    let dueDate: string | undefined
+    if (args.due !== undefined && args.due !== "") {
+      const normalized = normalizeDueDate(args.due as string)
+      if (!normalized) {
+        prompts.log.error(`Invalid --due date "${args.due}" — use YYYY-MM-DD (e.g. 2026-07-22)`)
+        prompts.outro("Done")
+        process.exitCode = 2
+        return
+      }
+      dueDate = normalized
+    }
 
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
@@ -860,6 +874,7 @@ const BloqsAddItemCommand = cmd({
     try {
       const payload: Record<string, unknown> = { content }
       if (title) payload.title = title
+      if (dueDate) payload.due_date = dueDate
 
       const res = await irisFetch(
         `/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists/${args["list-id"]}/items`,
@@ -2070,6 +2085,7 @@ const BloqsUpdateItemCommand = cmd({
       .option("status", { describe: "set item status (active, pending, approved, rejected, todo, in-progress, done)", type: "string" })
       .option("title", { describe: "new title", type: "string" })
       .option("content", { describe: "new content", type: "string" })
+      .option("due", { describe: "due date (ISO, e.g. 2026-07-22; 'none' to clear)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -2082,9 +2098,24 @@ const BloqsUpdateItemCommand = cmd({
     if (args.status) payload.status = args.status
     if (args.title) payload.title = args.title
     if (args.content) payload.content = args.content
+    if (args.due !== undefined && args.due !== "") {
+      // Allow clearing the due date explicitly.
+      if (String(args.due).toLowerCase() === "none" || String(args.due).toLowerCase() === "null") {
+        payload.due_date = null
+      } else {
+        const normalized = normalizeDueDate(args.due as string)
+        if (!normalized) {
+          prompts.log.error(`Invalid --due date "${args.due}" — use YYYY-MM-DD (e.g. 2026-07-22) or 'none' to clear`)
+          prompts.outro("Done")
+          process.exitCode = 2
+          return
+        }
+        payload.due_date = normalized
+      }
+    }
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.error("Provide at least one of: --status, --title, --content")
+      prompts.log.error("Provide at least one of: --status, --title, --content, --due")
       prompts.outro("Done")
       process.exitCode = 2
       return
@@ -2109,6 +2140,7 @@ const BloqsUpdateItemCommand = cmd({
       if (args.status) parts.push(`status → ${args.status}`)
       if (args.title) parts.push(`title updated`)
       if (args.content) parts.push(`content updated`)
+      if (payload.due_date !== undefined) parts.push(payload.due_date === null ? `due cleared` : `due → ${payload.due_date}`)
 
       spinner.stop(`${success("✓")} Item #${args["item-id"]} updated (${parts.join(", ")})`)
       prompts.outro("Done")
