@@ -47,7 +47,12 @@ function printAgent(a: Record<string, unknown>): void {
   const name = bold(String(a.name ?? `Agent #${a.id}`))
   const id = dim(`#${a.id}`)
   const model = a.model ? `  ${UI.Style.TEXT_HIGHLIGHT}${a.model}${UI.Style.TEXT_NORMAL}` : ""
-  console.log(`  ${name}  ${id}${model}`)
+  // Workspace (team) badge — makes the diagram's "Orphan, no workspace attached" state
+  // visible without parsing --json (#162671). google-synced = mapped to a Google user.
+  const wsBadge = a.workspace_id
+    ? `  ${dim("· ws#" + a.workspace_id)}${a.google_workspace_match_state === "matched" ? dim(" · google-synced") : ""}`
+    : `  ${dim("· no workspace")}`
+  console.log(`  ${name}  ${id}${model}${wsBadge}`)
   if (a.description) {
     console.log(`    ${dim(String(a.description).slice(0, 100))}`)
   }
@@ -65,6 +70,8 @@ const AgentsListCommand = cmd({
     yargs
       .option("search", { alias: "s", describe: "search by name/description", type: "string" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
+      .option("workspace", { alias: "w", describe: "filter by workspace (team) ID", type: "number" })
+      .option("workspace-orphaned", { describe: "show agents with no workspace (no team scoping)", type: "boolean" })
       .option("active", { describe: "show only active agents", type: "boolean" })
       .option("orphaned", { describe: "show agents with no bloq", type: "boolean" })
       .option("limit", { describe: "results per page", type: "number", default: 30 })
@@ -103,6 +110,8 @@ const AgentsListCommand = cmd({
       // Client-side filters (for fields the API may not support)
       if (args.orphaned) agents = agents.filter((a: any) => !a.bloq_id)
       if (args.bloq && !params.has("bloq_id")) agents = agents.filter((a: any) => a.bloq_id === args.bloq)
+      if (args.workspace) agents = agents.filter((a: any) => a.workspace_id === args.workspace)
+      if (args["workspace-orphaned"]) agents = agents.filter((a: any) => !a.workspace_id)
 
       if (spinner) spinner.stop(`${agents.length} agent(s)${total > agents.length ? ` (${total} total — page ${currentPage}/${lastPage})` : ""}`)
 
@@ -123,6 +132,8 @@ const AgentsListCommand = cmd({
       if (args.bloq) filters.push(`bloq=${args.bloq}`)
       if (args.active) filters.push("active")
       if (args.orphaned) filters.push("orphaned")
+      if (args.workspace) filters.push(`workspace=${args.workspace}`)
+      if (args["workspace-orphaned"]) filters.push("workspace-orphaned")
       if (filters.length > 0) console.log(`  ${dim(`Filters: ${filters.join(", ")}`)}`)
 
       if (args.group) {
