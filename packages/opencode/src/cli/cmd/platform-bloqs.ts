@@ -177,12 +177,58 @@ const BloqsListCommand = cmd({
   },
 })
 
+/**
+ * Resolve a bloq ID from a numeric ID or a name (#162334). Mirrors the leads
+ * `get <name-or-id>` resolver so users who know a bloq's name but not its ID
+ * have a path in. The bloqs index returns all of a user's bloqs, so we filter
+ * client-side with the same tokenized matcher `bloqs search` uses. Returns the
+ * numeric ID, or null (already having printed the reason) on no/ambiguous match.
+ */
+async function resolveBloqId(idOrQuery: string | number, userId: number, json: boolean): Promise<number | null> {
+  const numeric = Number(idOrQuery)
+  if (Number.isInteger(numeric) && String(idOrQuery).trim() !== "") return numeric
+
+  const query = String(idOrQuery)
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs?simplified=1&per_page=500`)
+  if (!res.ok) {
+    if (!json) prompts.log.error("Could not look up bloqs by name")
+    process.exitCode = 1
+    return null
+  }
+  const data = (await res.json()) as { data?: any[] }
+  const matches = (data?.data ?? []).filter((b) => matchesSearchQuery(String(b.name ?? ""), query))
+
+  if (matches.length === 0) {
+    if (json) console.log(JSON.stringify({ error: `No bloq matched "${query}"` }, null, 2))
+    else prompts.log.warn(`No bloq matched "${query}" — try ${dim("iris bloqs list")}`)
+    process.exitCode = 1
+    return null
+  }
+  if (matches.length === 1) return matches[0].id
+  // Ambiguous — never guess. List candidates (non-interactive) or prompt.
+  if (json || isNonInteractive()) {
+    if (json) console.log(JSON.stringify({ error: "ambiguous", matches: matches.map((m) => ({ id: m.id, name: m.name })) }, null, 2))
+    else {
+      prompts.log.warn(`${matches.length} bloqs match "${query}" — specify by ID:`)
+      for (const m of matches) prompts.log.info(`  #${m.id}  ${m.name ?? "Unknown"}`)
+    }
+    process.exitCode = 1
+    return null
+  }
+  const choice = await prompts.select({
+    message: "Which bloq?",
+    options: matches.map((m) => ({ value: m.id, label: `#${m.id}  ${m.name ?? "Unknown"}` })),
+  })
+  if (prompts.isCancel(choice)) return null
+  return choice as number
+}
+
 const BloqsGetCommand = cmd({
   command: "get <id>",
-  describe: "show bloq details and lists",
+  describe: "show bloq details and lists (accepts a bloq ID or name)",
   builder: (yargs) =>
     yargs
-      .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .positional("id", { describe: "bloq ID or name", type: "string", demandOption: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("files", { describe: "list files attached to this bloq", type: "boolean", default: false })
       .option("items", { describe: "show recent items across all lists", type: "boolean", default: false })
@@ -190,13 +236,18 @@ const BloqsGetCommand = cmd({
       .option("limit", { describe: "max items to show (default 10)", type: "number", default: 10 })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq #${args.id}`) }
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq ${args.id}`) }
 
     const token = await requireAuth()
     if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Resolve name → numeric ID (#162334). Numeric IDs pass straight through.
+    const resolvedId = await resolveBloqId(args.id as any, userId, Boolean(args.json))
+    if (resolvedId === null) { if (!args.json) prompts.outro("Done"); return }
+    args.id = resolvedId as any
 
     const spinner = args.json ? null : prompts.spinner()
     if (spinner) spinner.start("Loading…")

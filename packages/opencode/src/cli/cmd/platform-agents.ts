@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive } from "./iris-api"
+import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
@@ -168,22 +169,72 @@ const AgentsListCommand = cmd({
   },
 })
 
+/**
+ * Resolve an agent ID from a numeric ID or a name (#162334). Mirrors the leads /
+ * bloqs `get <name-or-id>` resolvers so a user who knows an agent's name but not
+ * its ID has a path in. Filters the agents list client-side with the same
+ * tokenized matcher used elsewhere. Returns the numeric ID, or null (having
+ * printed the reason) on no/ambiguous match.
+ */
+async function resolveAgentId(idOrQuery: string | number, userId: number, json: boolean): Promise<number | null> {
+  const numeric = Number(idOrQuery)
+  if (Number.isInteger(numeric) && String(idOrQuery).trim() !== "") return numeric
+
+  const query = String(idOrQuery)
+  const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=500`)
+  if (!res.ok) {
+    if (!json) prompts.log.error("Could not look up agents by name")
+    process.exitCode = 1
+    return null
+  }
+  const raw = (await res.json()) as { data?: any[] }
+  const matches = (raw?.data ?? []).filter((a) => matchesSearchQuery(String(a.name ?? ""), query))
+
+  if (matches.length === 0) {
+    if (json) console.log(JSON.stringify({ error: `No agent matched "${query}"` }, null, 2))
+    else prompts.log.warn(`No agent matched "${query}" — try ${dim("iris agents list")}`)
+    process.exitCode = 1
+    return null
+  }
+  if (matches.length === 1) return matches[0].id
+  if (json || isNonInteractive()) {
+    if (json) console.log(JSON.stringify({ error: "ambiguous", matches: matches.map((m) => ({ id: m.id, name: m.name })) }, null, 2))
+    else {
+      prompts.log.warn(`${matches.length} agents match "${query}" — specify by ID:`)
+      for (const m of matches) prompts.log.info(`  #${m.id}  ${m.name ?? "Unknown"}`)
+    }
+    process.exitCode = 1
+    return null
+  }
+  const choice = await prompts.select({
+    message: "Which agent?",
+    options: matches.map((m) => ({ value: m.id, label: `#${m.id}  ${m.name ?? "Unknown"}` })),
+  })
+  if (prompts.isCancel(choice)) return null
+  return choice as number
+}
+
 const AgentsGetCommand = cmd({
   command: "get <id>",
-  describe: "show agent details",
+  describe: "show agent details (accepts an agent ID or name)",
   builder: (yargs) =>
     yargs
-      .positional("id", { describe: "agent ID", type: "number", demandOption: true })
+      .positional("id", { describe: "agent ID or name", type: "string", demandOption: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    if (!args.json) { UI.empty(); prompts.intro(`◈  Agent #${args.id}`) }
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Agent ${args.id}`) }
 
     const token = await requireAuth()
     if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Resolve name → numeric ID (#162334). Numeric IDs pass straight through.
+    const resolvedId = await resolveAgentId(args.id as any, userId, Boolean(args.json))
+    if (resolvedId === null) { if (!args.json) prompts.outro("Done"); return }
+    args.id = resolvedId as any
 
     const spinner = args.json ? null : prompts.spinner()
     if (spinner) spinner.start("Loading…")
