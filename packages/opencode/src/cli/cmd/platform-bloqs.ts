@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
-import { itemTitle, itemContentPreview } from "./bloq-item-format"
+import { itemTitle, itemContentPreview, matchesSearchQuery } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
 import { RELATION_TYPES, isValidRelationType, formatRelationsGrouped, type RelationRow } from "./bloq-relation-format"
 import { createPageFromJson } from "./platform-pages"
@@ -132,14 +132,14 @@ const BloqsListCommand = cmd({
 
       const data = (await res.json()) as { data?: any[] }
       let bloqs: any[] = data?.data ?? []
-      // Client-side filter fallback if API doesn't support search param
+      // Client-side filter (the API index endpoint returns all bloqs and ignores
+      // the search param). Tokenize + AND the terms so a natural name like
+      // "Mayo Life Atlas" matches a stored "MAYO — Life Atlas" — a raw substring
+      // match can't span the separator the DB stores.
       if (args.search && bloqs.length > 0) {
-        const q = args.search.toLowerCase()
-        bloqs = bloqs.filter((b) => {
-          const name = String(b.name ?? "").toLowerCase()
-          const desc = String(b.description ?? "").toLowerCase()
-          return name.includes(q) || desc.includes(q)
-        })
+        bloqs = bloqs.filter((b) =>
+          matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, args.search as string),
+        )
       }
       spinner.stop(`${bloqs.length} bloq(s)${args.search ? ` matching "${args.search}"` : ""}`)
 
@@ -149,8 +149,13 @@ const BloqsListCommand = cmd({
       }
 
       if (bloqs.length === 0) {
-        cli.log.warn("No bloqs found")
-        cli.outro(`Create one: ${dim("iris bloqs create")}`)
+        if (args.search) {
+          cli.log.warn(`No bloqs matched "${args.search}"`)
+          cli.outro(`Try fewer words or ${dim("iris bloqs list")}`)
+        } else {
+          cli.log.warn("No bloqs found")
+          cli.outro(`Create one: ${dim("iris bloqs create")}`)
+        }
         return
       }
 

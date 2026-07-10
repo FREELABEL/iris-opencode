@@ -15,6 +15,25 @@ export function itemTitle(item: any): string {
   )
 }
 
+/**
+ * Tokenized, order-independent search match. Splits the query into whitespace
+ * tokens and requires EVERY token to appear somewhere in the haystack (AND),
+ * case-insensitively. A raw substring `.includes()` treats the query as one
+ * contiguous string, so a natural name like "Mayo Life Atlas" can never match a
+ * stored "MAYO — Life Atlas" (the em-dash breaks the run). ANDing the tokens
+ * fixes that and gives word-order independence for free.
+ * Empty/whitespace query matches everything (same as no filter).
+ */
+export function matchesSearchQuery(haystack: string, query: string): boolean {
+  const hay = String(haystack ?? "").toLowerCase()
+  const tokens = String(query ?? "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (tokens.length === 0) return true
+  return tokens.every((t) => hay.includes(t))
+}
+
 /** A short, readable one-line preview of an item's content — never "[object Object]". */
 export function itemContentPreview(item: any, max = 120): string {
   const c = item?.content
