@@ -23,13 +23,16 @@ export function itemTitle(item: any): string {
  * stored "MAYO — Life Atlas" (the em-dash breaks the run). ANDing the tokens
  * fixes that and gives word-order independence for free.
  * Empty/whitespace query matches everything (same as no filter).
+ *
+ * Both sides are Unicode-normalized to NFC so that visually identical names
+ * stored decomposed (e.g. "café" as e + combining accent) still match a query
+ * typed composed. It does NOT accent-fold — "cafe" won't match "café"; that
+ * typo tolerance belongs to the Typesense-backed search (#162213).
  */
 export function matchesSearchQuery(haystack: string, query: string): boolean {
-  const hay = String(haystack ?? "").toLowerCase()
-  const tokens = String(query ?? "")
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
+  const norm = (s: string) => String(s ?? "").normalize("NFC").toLowerCase()
+  const hay = norm(haystack)
+  const tokens = norm(query).split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return true
   return tokens.every((t) => hay.includes(t))
 }

@@ -89,4 +89,29 @@ describe("matchesSearchQuery", () => {
     expect(matchesSearchQuery(undefined as any, "x")).toBe(false)
     expect(matchesSearchQuery("x", undefined as any)).toBe(true)
   })
+
+  test("collapses runs of whitespace in the query", () => {
+    expect(matchesSearchQuery("MAYO — Life Atlas", "  mayo   atlas  ")).toBe(true)
+  })
+
+  test("query characters are matched literally, not as a regex", () => {
+    expect(matchesSearchQuery("C++ Runtime (v2)", "c++ v2")).toBe(true)
+    expect(matchesSearchQuery("C++ Runtime (v2)", "c\\+\\+")).toBe(false)
+  })
+
+  test("matches across whitespace variants in the haystack (tab/newline)", () => {
+    expect(matchesSearchQuery("Tab\tSeparated", "separated")).toBe(true)
+    expect(matchesSearchQuery("Newline\nName", "newline name")).toBe(true)
+  })
+
+  test("NFC-normalizes so visually identical accents match regardless of composition", () => {
+    const nfc = "café" // é as one codepoint
+    const nfd = "café" // e + combining acute — looks identical
+    expect(matchesSearchQuery(nfd, nfc)).toBe(true)
+    expect(matchesSearchQuery(nfc, nfd)).toBe(true)
+  })
+
+  test("does NOT accent-fold (typo tolerance is Typesense's job, #162213)", () => {
+    expect(matchesSearchQuery("café menu", "cafe")).toBe(false)
+  })
 })
