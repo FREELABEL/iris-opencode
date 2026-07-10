@@ -41,8 +41,13 @@ import {
 // Pure helpers (unit-tested in platform-bloq-sync.test.ts)
 // ----------------------------------------------------------------------------
 
-/** Canonical provider ids the BloqSyncController accepts. */
-export const CANONICAL_PROVIDERS = ["google-drive", "dropbox"] as const
+/**
+ * Canonical provider ids the BloqSyncController accepts. Obsidian is push-only
+ * (export/trigger/unlink); the backend rejects it for folder browse/link, so those
+ * subcommands surface a clean API error rather than the CLI guessing. Mirrors
+ * BloqSyncService::EXPORT_PROVIDERS (#162666).
+ */
+export const CANONICAL_PROVIDERS = ["google-drive", "dropbox", "obsidian"] as const
 export type CanonicalProvider = (typeof CANONICAL_PROVIDERS)[number]
 
 /**
@@ -62,6 +67,7 @@ export function normalizeProvider(
   if (allowAll && v === "all") return "all"
   if (["google-drive", "googledrive", "gdrive", "drive", "google"].includes(v)) return "google-drive"
   if (["dropbox", "db", "drop"].includes(v)) return "dropbox"
+  if (["obsidian", "obs"].includes(v)) return "obsidian"
   return null
 }
 
