@@ -1016,12 +1016,13 @@ const AgentsAssignCommand = cmd({
     yargs
       .positional("agent-id", { type: "number", demandOption: true, describe: "agent ID to assign" })
       .option("bloq", { type: "number", describe: "set as heartbeat agent on bloq" })
+      .option("workspace", { type: "number", describe: "assign to a Workspace (team scoping); 0 to orphan" })
       .option("task", { type: "number", describe: "assign to a BloqItemTask by ID" })
       .option("lead-task", { type: "number", describe: "assign to a LeadTask by ID (requires --lead-id)" })
       .option("lead-id", { type: "number", describe: "lead ID (required with --lead-task)" })
       .check((argv) => {
-        if (!argv.bloq && !argv.task && !argv["lead-task"]) {
-          throw new Error("Specify at least one target: --bloq, --task, or --lead-task")
+        if (!argv.bloq && argv.workspace === undefined && !argv.task && !argv["lead-task"]) {
+          throw new Error("Specify at least one target: --bloq, --workspace, --task, or --lead-task")
         }
         if (argv["lead-task"] && !argv["lead-id"]) {
           throw new Error("--lead-task requires --lead-id")
@@ -1051,6 +1052,27 @@ const AgentsAssignCommand = cmd({
         const ok = await handleApiError(res, "Assign to bloq")
         if (ok) {
           spinner.stop(success(`✓ Agent #${agentId} set as heartbeat agent on bloq #${args.bloq}`))
+        } else {
+          spinner.stop("Failed", 1)
+        }
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    // Assign to a Workspace (team scoping). 0 → orphan (null).
+    if (args.workspace !== undefined) {
+      const wsId = (args.workspace as number) || null
+      spinner.start(wsId ? `Assigning agent #${agentId} to workspace #${wsId}…` : `Removing agent #${agentId} from its workspace…`)
+      try {
+        const res = await irisFetch(`/api/v1/agents/${agentId}/workspace`, {
+          method: "POST",
+          body: JSON.stringify({ workspace_id: wsId }),
+        })
+        const ok = await handleApiError(res, "Assign to workspace")
+        if (ok) {
+          spinner.stop(success(wsId ? `✓ Agent #${agentId} assigned to workspace #${wsId}` : `✓ Agent #${agentId} orphaned (no workspace)`))
         } else {
           spinner.stop("Failed", 1)
         }

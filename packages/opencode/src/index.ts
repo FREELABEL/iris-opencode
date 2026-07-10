@@ -37,6 +37,7 @@ import { PlatformDialerCommand } from "./cli/cmd/platform-dialer"
 import { PlatformWorkflowsCommand } from "./cli/cmd/platform-workflows"
 import { PlatformBloqsCommand } from "./cli/cmd/platform-bloqs"
 import { PlatformBloqSyncCommand } from "./cli/cmd/platform-bloq-sync"
+import { PlatformWorkspaceCommand } from "./cli/cmd/platform-workspace"
 import { PlatformBrandsCommand } from "./cli/cmd/platform-brands"
 import { OkfCommand } from "./cli/cmd/platform-okf"
 import { PlatformLearnCommand } from "./cli/cmd/platform-learn"
@@ -268,6 +269,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformWorkflowsCommand))
   .command(reg(PlatformBloqsCommand))
   .command(reg(PlatformBloqSyncCommand))
+  .command(reg(PlatformWorkspaceCommand))
   .command(reg(PlatformBrandsCommand))
   .command(reg(OkfCommand))
   .command(reg(PlatformLearnCommand))
