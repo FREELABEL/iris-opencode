@@ -167,6 +167,8 @@ const SyncCommand = cmd({
     console.log(`  ${success("Matched:")}  ${r.matched ?? 0}`)
     console.log(`  ${bold("Imported:")} ${r.imported ?? 0} ${dim("(new human agents)")}`)
     console.log(`  ${dim("IRIS-only:")} ${r.iris_only ?? 0}`)
+    if ((r.deprovisioned ?? 0) > 0) console.log(`  ${bold("Deprovisioned:")} ${r.deprovisioned} ${dim("(suspended/removed in Google → disabled)")}`)
+    if ((r.reprovisioned ?? 0) > 0) console.log(`  ${dim("Reprovisioned:")} ${r.reprovisioned} ${dim("(re-enabled)")}`)
     console.log(`  ${dim("Suggestions:")} ${(r.suggestions?.length) ?? 0}`)
     printDivider()
     prompts.outro("Done")
