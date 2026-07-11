@@ -72,6 +72,9 @@ const ShowCommand = cmd({
       console.log(`  ${dim("bind one:")} ${highlight(`iris workspace bind ${args.bloqId} --domain <domain> --admin <admin-email>`)}`)
     } else {
       console.log(`  ${bold(ws.name)}  ${dim("#" + ws.id)}`)
+      if (ws.uses_external_infra) {
+        console.log(`  ${success("🛡 Secure infra")} ${dim("— data on client/external backend (" + (ws.storage_driver || "byo") + "), not shared IRIS")}`)
+      }
       console.log(`  ${dim("Google domain:")} ${ws.google_workspace_domain || dim("(not bound)")}`)
       console.log(`  ${dim("Bound:")} ${payload.bound ? success("yes") : dim("no")}`)
       console.log(`  ${dim("Agents:")} ${payload.matched_agents ?? 0} matched ${dim("/")} ${payload.total_agents ?? 0} total`)
