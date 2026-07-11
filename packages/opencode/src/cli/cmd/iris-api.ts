@@ -282,10 +282,16 @@ export async function handleApiError(res: Response, action: string): Promise<boo
       // Bug #57643/#57647: use || not ?? — API returns {"message":""} which ?? doesn't fall through
       const rawMsg = body.error || body.message || ""
       // Bug #57646: sanitize raw Laravel model errors (e.g. "No query results for model [App\Models\Bloq\ScheduledJob]")
+      // Bug #162342: sanitize raw DB errors — a QueryException leaks the full SQL,
+      // table/column names, the FK constraint, and the DB name. Never surface it.
       if (rawMsg) {
-        msg = rawMsg.includes("No query results for model")
-          ? "Resource not found"
-          : rawMsg.replace(/\[App\\Models\\[^\]]+\]/g, "").trim()
+        if (rawMsg.includes("No query results for model")) {
+          msg = "Resource not found"
+        } else if (/SQLSTATE|\bSQL:|Integrity constraint|PDOException|foreign key constraint/i.test(rawMsg)) {
+          msg = "The server rejected the request (invalid reference or constraint). Check the ids you passed."
+        } else {
+          msg = rawMsg.replace(/\[App\\Models\\[^\]]+\]/g, "").trim()
+        }
       }
       // Laravel validation returns { errors: { field: ["msg", ...] } }
       if (body.errors && typeof body.errors === "object") {

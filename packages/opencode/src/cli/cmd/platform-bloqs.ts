@@ -455,16 +455,16 @@ const BloqsCreateCommand = cmd({
     yargs
       .option("name", { describe: "bloq name", type: "string" })
       .option("description", { describe: "bloq description", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Create Bloq")
+    if (!args.json) { UI.empty(); prompts.intro("◈  Create Bloq") }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
     let name = args.name
     if (!name) {
@@ -477,8 +477,8 @@ const BloqsCreateCommand = cmd({
         )) as string
       } catch (err) {
         if (err instanceof MissingFlagError) {
-          prompts.log.error(err.message)
-          prompts.outro("Done")
+          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          else { prompts.log.error(err.message); prompts.outro("Done") }
           process.exitCode = 2
           return
         }
@@ -492,7 +492,7 @@ const BloqsCreateCommand = cmd({
     // hanging.
     let description = args.description
     if (description === undefined) {
-      if (isNonInteractive()) {
+      if (isNonInteractive() || args.json) {
         description = ""
       } else {
         description = (await prompts.text({
@@ -503,8 +503,8 @@ const BloqsCreateCommand = cmd({
       }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Creating bloq…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Creating bloq…")
 
     try {
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs`, {
@@ -512,7 +512,8 @@ const BloqsCreateCommand = cmd({
         body: JSON.stringify({ name, description }),
       })
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Create bloq")
         prompts.outro("Done")
         return
@@ -520,7 +521,8 @@ const BloqsCreateCommand = cmd({
 
       const data = (await res.json()) as { data?: { bloq?: any } }
       const b = data?.data?.bloq ?? data?.data ?? data
-      spinner.stop(`${success("✓")} Bloq created: ${bold(String(b.name ?? b.id))}`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: b.id, name: b.name })); return }
+      spinner?.stop(`${success("✓")} Bloq created: ${bold(String(b.name ?? b.id))}`)
 
       printDivider()
       printKV("ID", b.id)
@@ -531,7 +533,8 @@ const BloqsCreateCommand = cmd({
         `${dim("iris bloqs ingest " + b.id + " ./document.pdf")}  Add knowledge`,
       )
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -861,18 +864,19 @@ const BloqsAddItemCommand = cmd({
       .option("title", { describe: "item title", type: "string" })
       .option("text", { describe: "item content (alternative to positional)", type: "string" })
       .option("due", { describe: "due date (ISO, e.g. 2026-07-22)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Add Item — Bloq #${args["bloq-id"]}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Add Item — Bloq #${args["bloq-id"]}`) }
 
     // Validate --due up front so we fail fast with a clear message.
     let dueDate: string | undefined
     if (args.due !== undefined && args.due !== "") {
       const normalized = normalizeDueDate(args.due as string)
       if (!normalized) {
-        prompts.log.error(`Invalid --due date "${args.due}" — use YYYY-MM-DD (e.g. 2026-07-22)`)
-        prompts.outro("Done")
+        const emsg = `Invalid --due date "${args.due}" — use YYYY-MM-DD (e.g. 2026-07-22)`
+        if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+        else { prompts.log.error(emsg); prompts.outro("Done") }
         process.exitCode = 2
         return
       }
@@ -880,10 +884,10 @@ const BloqsAddItemCommand = cmd({
     }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
     let content = args.content ?? args.text
     if (!content) {
@@ -896,8 +900,8 @@ const BloqsAddItemCommand = cmd({
         )) as string
       } catch (err) {
         if (err instanceof MissingFlagError) {
-          prompts.log.error(err.message)
-          prompts.outro("Done")
+          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          else { prompts.log.error(err.message); prompts.outro("Done") }
           process.exitCode = 2
           return
         }
@@ -908,7 +912,7 @@ const BloqsAddItemCommand = cmd({
 
     let title = args.title
     if (title === undefined) {
-      if (isNonInteractive()) {
+      if (isNonInteractive() || args.json) {
         title = ""
       } else {
         title = (await prompts.text({
@@ -919,8 +923,8 @@ const BloqsAddItemCommand = cmd({
       }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Adding item…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Adding item…")
 
     try {
       const payload: Record<string, unknown> = { content }
@@ -932,7 +936,8 @@ const BloqsAddItemCommand = cmd({
         { method: "POST", body: JSON.stringify(payload) },
       )
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Add item")
         prompts.outro("Done")
         return
@@ -940,13 +945,15 @@ const BloqsAddItemCommand = cmd({
 
       const addBody = (await res.json().catch(() => null)) as { data?: any; id?: any } | null
       const newItemId = addBody?.data?.id ?? addBody?.id
-      spinner.stop(`${success("✓")} Item added${newItemId ? ` (#${newItemId})` : ""}`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: newItemId ?? null, bloq_id: args["bloq-id"], list_id: args["list-id"] })); return }
+      spinner?.stop(`${success("✓")} Item added${newItemId ? ` (#${newItemId})` : ""}`)
       const hint = newItemId
         ? `iris bloqs get ${args["bloq-id"]}  |  iris bloqs share ${newItemId}  (publish + get a shareable link)`
         : `iris bloqs get ${args["bloq-id"]}`
       prompts.outro(dim(hint))
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -956,29 +963,40 @@ const BloqsAddItemCommand = cmd({
 const BloqsDeleteItemCommand = cmd({
   command: "delete-item <item-id>",
   aliases: ["rm-item", "remove-item"],
-  describe: "delete an item from a bloq list (soft delete, recoverable)",
+  describe: "delete an item from a bloq list (soft delete — restore with: iris bloqs restore-item <id>)",
   builder: (yargs) =>
     yargs
       .positional("item-id", { describe: "item ID to delete", type: "number", demandOption: true })
-      .option("force", { describe: "skip confirmation", type: "boolean", default: false })
+      .option("force", { describe: "skip confirmation (required in a non-interactive shell)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Delete Item #${args["item-id"]}`)
+    // Bug #162343: a destructive command must NOT proceed silently when there is
+    // no TTY to confirm at. Mirror add-item's non-interactive guard: refuse unless
+    // --force is explicitly passed.
+    if (!args.force && isNonInteractive()) {
+      const msg = "Refusing to delete without --force in a non-interactive shell. Re-run with --force."
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Delete Item #${args["item-id"]}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
     if (!args.force && !isNonInteractive()) {
       const confirmed = await prompts.confirm({ message: "Delete this item? (soft delete — recoverable)" })
       if (prompts.isCancel(confirmed) || !confirmed) { prompts.outro("Cancelled"); return }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Deleting item…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Deleting item…")
 
     try {
       const res = await irisFetch(
@@ -986,16 +1004,128 @@ const BloqsDeleteItemCommand = cmd({
         { method: "DELETE" },
       )
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Delete item")
         prompts.outro("Done")
         return
       }
 
-      spinner.stop(`${success("✓")} Item deleted`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["item-id"], deleted: true })); return }
+      spinner?.stop(`${success("✓")} Item deleted`)
+      prompts.outro(dim(`iris bloqs restore-item ${args["item-id"]}  (undo)`))
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// Restore a soft-deleted item — the recovery path promised by delete-item (#162346).
+const BloqsRestoreItemCommand = cmd({
+  command: "restore-item <item-id>",
+  aliases: ["undelete-item"],
+  describe: "restore a soft-deleted bloq item",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID to restore", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Restore Item #${args["item-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Restoring item…")
+
+    try {
+      const res = await irisFetch(
+        `/api/v1/user/bloqs/list/item/${args["item-id"]}/restore`,
+        { method: "POST", body: "{}" },
+      )
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Restore item")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["item-id"], restored: true })); return }
+      spinner?.stop(`${success("✓")} Item #${args["item-id"]} restored`)
       prompts.outro("Done")
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// Delete a whole bloq/board (#162347). Soft delete — data preserved server-side.
+const BloqsDeleteCommand = cmd({
+  command: "delete <bloq-id>",
+  aliases: ["rm", "delete-bloq"],
+  describe: "delete a bloq/board (soft delete — data preserved server-side)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID to delete", type: "number", demandOption: true })
+      .option("force", { describe: "skip confirmation (required in a non-interactive shell)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    // Bug #162343/#162347: same non-interactive safety guard as delete-item.
+    if (!args.force && isNonInteractive()) {
+      const msg = "Refusing to delete a bloq without --force in a non-interactive shell. Re-run with --force."
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Delete Bloq #${args["bloq-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    if (!args.force && !isNonInteractive()) {
+      const confirmed = await prompts.confirm({ message: `Delete bloq #${args["bloq-id"]} and all its lists/items? (soft delete)` })
+      if (prompts.isCancel(confirmed) || !confirmed) { prompts.outro("Cancelled"); return }
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Deleting bloq…")
+
+    try {
+      const res = await irisFetch(
+        `/api/v1/user/${userId}/bloqs/${args["bloq-id"]}`,
+        { method: "DELETE" },
+      )
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Delete bloq")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["bloq-id"], deleted: true })); return }
+      spinner?.stop(`${success("✓")} Bloq #${args["bloq-id"]} deleted`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1151,19 +1281,19 @@ const BloqsCreateListCommand = cmd({
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
       .positional("name", { describe: "list name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Create List on Bloq #${args["bloq-id"]}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Create List on Bloq #${args["bloq-id"]}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Creating list…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Creating list…")
 
     try {
       const res = await irisFetch(
@@ -1174,7 +1304,8 @@ const BloqsCreateListCommand = cmd({
         },
       )
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Create list")
         prompts.outro("Done")
         return
@@ -1182,10 +1313,12 @@ const BloqsCreateListCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const list = data?.data ?? data
-      spinner.stop(`${success("✓")} List created: ${bold(args.name)} (ID: ${list.id})`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: list.id, name: args.name, bloq_id: args["bloq-id"] })); return }
+      spinner?.stop(`${success("✓")} List created: ${bold(args.name)} (ID: ${list.id})`)
       prompts.outro("Done")
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1199,19 +1332,19 @@ const BloqsMoveItemCommand = cmd({
     yargs
       .positional("item-id", { describe: "item ID to move", type: "number", demandOption: true })
       .positional("target-list-id", { describe: "destination list ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Move Item #${args["item-id"]} → List #${args["target-list-id"]}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Move Item #${args["item-id"]} → List #${args["target-list-id"]}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Moving item…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Moving item…")
 
     try {
       const res = await irisFetch(
@@ -1219,16 +1352,19 @@ const BloqsMoveItemCommand = cmd({
         { method: "PUT", body: JSON.stringify({ bloq_list_id: args["target-list-id"] }) },
       )
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Move item")
         prompts.outro("Done")
         return
       }
 
-      spinner.stop(`${success("✓")} Item moved to list #${args["target-list-id"]}`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["item-id"], list_id: args["target-list-id"] })); return }
+      spinner?.stop(`${success("✓")} Item moved to list #${args["target-list-id"]}`)
       prompts.outro("Done")
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1478,16 +1614,16 @@ const BloqsRenameCommand = cmd({
       .positional("type", { describe: "what to rename", choices: ["bloq", "list", "item"] as const, demandOption: true })
       .positional("id", { describe: "ID of the bloq/list/item", type: "number", demandOption: true })
       .positional("name", { describe: "new name", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Rename ${args.type} #${args.id}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Rename ${args.type} #${args.id}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
     let name = args.name as string | undefined
     if (!name) {
@@ -1500,8 +1636,8 @@ const BloqsRenameCommand = cmd({
         )) as string
       } catch (err) {
         if (err instanceof MissingFlagError) {
-          prompts.log.error(err.message)
-          prompts.outro("Done")
+          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          else { prompts.log.error(err.message); prompts.outro("Done") }
           process.exitCode = 2
           return
         }
@@ -1510,8 +1646,8 @@ const BloqsRenameCommand = cmd({
       if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start(`Renaming ${args.type}…`)
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start(`Renaming ${args.type}…`)
 
     try {
       let res: Response
@@ -1536,22 +1672,26 @@ const BloqsRenameCommand = cmd({
           })
           break
         default:
-          spinner.stop("Invalid type", 1)
-          prompts.outro("Done")
+          spinner?.stop("Invalid type", 1)
+          if (args.json) console.log(JSON.stringify({ success: false, error: "Invalid type" }))
+          else prompts.outro("Done")
           return
       }
 
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, `Rename ${args.type}`)
         prompts.outro("Done")
         return
       }
 
-      spinner.stop(`${success("✓")} Renamed to: ${bold(name!)}`)
+      if (args.json) { console.log(JSON.stringify({ success: true, type: args.type, id: args.id, name })); return }
+      spinner?.stop(`${success("✓")} Renamed to: ${bold(name!)}`)
       prompts.outro("Done")
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2126,6 +2266,14 @@ const BloqsItemsCommand = cmd({
 // Update item (status, title, content)
 // ============================================================================
 
+// Canonical bloq item statuses (mirrors BloqItemController::VALID_ITEM_STATUSES).
+// The board/UI shows hyphenated "in-progress"; the API persists "in_progress".
+// Bug #162344 — reject anything outside this set instead of writing garbage.
+const BLOQ_ITEM_STATUS_CHOICES = ["active", "pending", "approved", "rejected", "todo", "in-progress", "done"] as const
+function normalizeItemStatus(s: string): string {
+  return s === "in-progress" ? "in_progress" : s
+}
+
 const BloqsUpdateItemCommand = cmd({
   command: "update-item <item-id>",
   aliases: ["edit-item"],
@@ -2133,7 +2281,7 @@ const BloqsUpdateItemCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("item-id", { describe: "item ID", type: "number", demandOption: true })
-      .option("status", { describe: "set item status (active, pending, approved, rejected, todo, in-progress, done)", type: "string" })
+      .option("status", { describe: "set item status", type: "string", choices: BLOQ_ITEM_STATUS_CHOICES })
       .option("title", { describe: "new title", type: "string" })
       .option("content", { describe: "new content", type: "string" })
       .option("due", { describe: "due date (ISO, e.g. 2026-07-22; 'none' to clear)", type: "string" })
@@ -2143,10 +2291,11 @@ const BloqsUpdateItemCommand = cmd({
     if (!args.json) { UI.empty(); prompts.intro(`◈  Update Item #${args["item-id"]}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const payload: Record<string, unknown> = {}
-    if (args.status) payload.status = args.status
+    // Bug #162344: map the display value "in-progress" to the persisted "in_progress".
+    if (args.status) payload.status = normalizeItemStatus(args.status)
     if (args.title) payload.title = args.title
     if (args.content) payload.content = args.content
     if (args.due !== undefined && args.due !== "") {
@@ -2156,8 +2305,9 @@ const BloqsUpdateItemCommand = cmd({
       } else {
         const normalized = normalizeDueDate(args.due as string)
         if (!normalized) {
-          prompts.log.error(`Invalid --due date "${args.due}" — use YYYY-MM-DD (e.g. 2026-07-22) or 'none' to clear`)
-          prompts.outro("Done")
+          const emsg = `Invalid --due date "${args.due}" — use YYYY-MM-DD (e.g. 2026-07-22) or 'none' to clear`
+          if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+          else { prompts.log.error(emsg); prompts.outro("Done") }
           process.exitCode = 2
           return
         }
@@ -2166,14 +2316,15 @@ const BloqsUpdateItemCommand = cmd({
     }
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.error("Provide at least one of: --status, --title, --content, --due")
-      prompts.outro("Done")
+      const emsg = "Provide at least one of: --status, --title, --content, --due"
+      if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+      else { prompts.log.error(emsg); prompts.outro("Done") }
       process.exitCode = 2
       return
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Updating…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Updating…")
 
     try {
       const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args["item-id"]}`, {
@@ -2181,22 +2332,26 @@ const BloqsUpdateItemCommand = cmd({
         body: JSON.stringify(payload),
       })
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Update item")
         prompts.outro("Done")
         return
       }
 
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["item-id"], ...payload })); return }
+
       const parts: string[] = []
-      if (args.status) parts.push(`status → ${args.status}`)
+      if (args.status) parts.push(`status → ${payload.status}`)
       if (args.title) parts.push(`title updated`)
       if (args.content) parts.push(`content updated`)
       if (payload.due_date !== undefined) parts.push(payload.due_date === null ? `due cleared` : `due → ${payload.due_date}`)
 
-      spinner.stop(`${success("✓")} Item #${args["item-id"]} updated (${parts.join(", ")})`)
+      spinner?.stop(`${success("✓")} Item #${args["item-id"]} updated (${parts.join(", ")})`)
       prompts.outro("Done")
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -2497,6 +2652,8 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
       .command(BloqsDeleteItemCommand)
+      .command(BloqsRestoreItemCommand)
+      .command(BloqsDeleteCommand)
       .command(BloqsPublishCommand)
       .command(BloqsMakePublicCommand)
       .command(BloqsMakePrivateCommand)
