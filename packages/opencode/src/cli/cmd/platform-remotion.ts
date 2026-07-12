@@ -1,10 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, FL_API } from "./iris-api"
 import { spawnSync } from "child_process"
-import { existsSync, mkdirSync, writeFileSync } from "fs"
-import { join } from "path"
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+import { join, basename } from "path"
 import { homedir } from "os"
 
 // ============================================================================
@@ -337,6 +337,15 @@ const AutoCarouselCommand = cmd({
         describe: 'Source: "opportunity:519", "lead:16388", "diary:2026-05-14", or a freeform prompt',
         demandOption: true,
       })
+      .option("register", {
+        type: "boolean",
+        default: false,
+        describe: "After rendering, register the carousel into Review Studio (needs --board)",
+      })
+      .option("board", {
+        type: "number",
+        describe: "Board ID to register into when --register is set (its Creative tab)",
+      })
       .option("brand", {
         type: "string",
         alias: "b",
@@ -557,10 +566,117 @@ const AutoCarouselCommand = cmd({
     const slides = Array.from({ length: 9 }, (_, i) => join(outDir, `slide-${i}.png`)).filter(existsSync)
     console.log(`  ${dim("Slides:")} ${slides.length} images`)
 
+    // ── Optional: register into Review Studio (one command: generate → in the UI) ──
+    if (args.register && !failed && slides.length > 0) {
+      if (!args.board) {
+        prompts.log.warn("--register needs --board <id> — skipping registration.")
+      } else {
+        const userId = await requireUserId(undefined)
+        if (userId) {
+          spinner.start(`Registering ${slides.length}-slide carousel into board ${args.board}…`)
+          const id = await registerCreativeFiles(slides, {
+            board: args.board as number,
+            userId,
+            title: String(props.headline ?? `${brand} carousel`),
+            caption: String(props.subtitle ?? props.headline ?? ""),
+            platform: "instagram",
+          })
+          if (id == null) {
+            spinner.stop("Registration failed", 1)
+          } else {
+            spinner.stop(success(`Registered → item #${id} (pending review)`))
+            console.log(`  ${dim("View:")} https://web.heyiris.io/iris/bloq/${args.board}?tab=creative`)
+          }
+        }
+      }
+    }
+
     if (args.open) {
       spawnSync("open", [outDir], { stdio: "ignore" })
     }
 
+    prompts.outro("Done")
+  },
+})
+
+// ============================================================================
+// Register rendered creatives into Review Studio (the local↔R2 wire)
+// ============================================================================
+
+/**
+ * Upload local render file(s) into a board's Review Studio as a Pending creative.
+ * The server hosts them to R2 and creates the type=content BloqItem, so the client
+ * only needs its auth token — no prod R2 creds. 1 image → image, many images →
+ * carousel, a video file → video. Returns the new item id, or null on failure.
+ */
+export async function registerCreativeFiles(
+  files: string[],
+  opts: { board: number; userId: number; title?: string; caption?: string; platform?: string },
+): Promise<number | null> {
+  const existing = files.filter(existsSync)
+  if (existing.length === 0) {
+    UI.error("No files found to register.")
+    return null
+  }
+  const form = new FormData()
+  for (const f of existing) {
+    form.append("files[]", new Blob([new Uint8Array(readFileSync(f))]), basename(f))
+  }
+  if (opts.title) form.append("title", opts.title)
+  if (opts.caption) form.append("caption", opts.caption)
+  form.append("platform", opts.platform ?? "instagram")
+
+  const res = await irisFetch(
+    `/api/v1/user/${opts.userId}/bloqs/${opts.board}/creatives`,
+    { method: "POST", body: form },
+    FL_API,
+  )
+  if (!res.ok) {
+    await handleApiError(res, "register creative")
+    return null
+  }
+  const data = (await res.json().catch(() => ({}))) as any
+  return data?.data?.id ?? null
+}
+
+const RegisterCommand = cmd({
+  command: "register <files..>",
+  describe: "Upload rendered file(s) into a board's Review Studio (hosts to cloud, creates a Pending creative)",
+  builder: (yargs: any) =>
+    yargs
+      .positional("files", {
+        type: "string",
+        array: true,
+        describe: "Local render file(s): one image/video, or several images = one carousel",
+      })
+      .option("board", { type: "number", demandOption: true, describe: "Board ID to register into (its Creative tab / Review Studio)" })
+      .option("user-id", { type: "number", describe: "Owner user id (defaults to your account)" })
+      .option("title", { type: "string", describe: "Item title" })
+      .option("caption", { type: "string", describe: "Caption shown on the card" })
+      .option("platform", { type: "string", default: "instagram", describe: "Platform tag" }),
+  async handler(args: any) {
+    const token = await requireAuth()
+    if (!token) return
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) return
+
+    const files = (args.files as string[]) ?? []
+    const spinner = prompts.spinner()
+    spinner.start(`Hosting ${files.filter(existsSync).length} file(s) + registering…`)
+    const id = await registerCreativeFiles(files, {
+      board: args.board as number,
+      userId,
+      title: args.title as string | undefined,
+      caption: args.caption as string | undefined,
+      platform: (args.platform as string) ?? "instagram",
+    })
+    if (id == null) {
+      spinner.stop("Registration failed", 1)
+      prompts.outro("Done")
+      return
+    }
+    spinner.stop(success(`Registered → item #${id} on board ${args.board} (pending review)`))
+    console.log(`  ${dim("View:")} https://web.heyiris.io/iris/bloq/${args.board}?tab=creative`)
     prompts.outro("Done")
   },
 })
@@ -578,11 +694,12 @@ export const PlatformRemotionCommand = cmd({
       .command(StillCommand)
       .command(CarouselCommand)
       .command(AutoCarouselCommand)
+      .command(RegisterCommand)
       .command(PreviewCommand)
       .command(ListCommand)
       .command(InitCommand)
       .command(UpdateCommand)
-      .demandCommand(1, "Specify a subcommand: render, still, carousel, auto-carousel, preview, list, init, update"),
+      .demandCommand(1, "Specify a subcommand: render, still, carousel, auto-carousel, register, preview, list, init, update"),
   async handler() {
     // handled by subcommands
   },
