@@ -408,10 +408,20 @@ const SyncCommand = cmd({
       .positional("path", { type: "string", demandOption: true, describe: "folder path or ID" })
       .option("recursive", { alias: "r", type: "boolean", default: false })
       .option("list-name", { alias: "l", type: "string", default: "Imported Files" })
+      .option("dataset", {
+        alias: "d",
+        type: "string",
+        describe: "target Atlas Dataset slug — files become structured, cited records (not raw list items)",
+      })
+      .option("model", { type: "string", describe: "nano model for extraction (default gpt-4o-mini)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Sync → Bloq #${args.bloqId}`)
+    prompts.intro(
+      args.dataset
+        ? `◈  Sync → Dataset "${args.dataset}" (Bloq #${args.bloqId})`
+        : `◈  Sync → Bloq #${args.bloqId}`,
+    )
     const token = await requireAuth()
     if (!token) {
       prompts.outro("Done")
@@ -424,6 +434,8 @@ const SyncCommand = cmd({
         path: args.path,
         recursive: args.recursive,
         list_name: args["list-name"],
+        ...(args.dataset ? { dataset_slug: args.dataset } : {}),
+        ...(args.model ? { extractor_model: args.model } : {}),
       }),
     })
     const ok = await handleApiError(res, "Sync folder")
