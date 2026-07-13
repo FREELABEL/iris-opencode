@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -481,6 +481,15 @@ const DeleteCommand = cmd({
       .positional("id", { describe: "program ID", type: "number", demandOption: true })
       .option("force", { alias: "y", describe: "skip confirmation prompt", type: "boolean", default: false }),
   async handler(args) {
+    // Bug #162733: a destructive delete must NOT hang on prompts.confirm() when
+    // there is no TTY to answer at (headless server, CI, desktop MCP bridge).
+    // Refuse unless --force/-y is explicitly passed.
+    if (!args.force && isNonInteractive()) {
+      prompts.log.error("Refusing to delete program without --force/-y in a non-interactive shell. Re-run with --force.")
+      process.exitCode = 2
+      return
+    }
+
     UI.empty()
     prompts.intro(`◈  Delete Program #${args.id}`)
 
