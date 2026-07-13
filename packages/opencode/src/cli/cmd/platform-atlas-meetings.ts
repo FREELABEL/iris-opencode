@@ -14,7 +14,10 @@ import {
 } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 
-const COMPOSIO_KEY = "ak_c2m5Q0Av7lOHYK9NPTCn"
+// No hardcoded fallback: a stale key silently 401s every Composio call (bug
+// #165864/#164644). Read from env; empty key degrades gracefully (helpers below
+// swallow the failed fetch and return null / an error result).
+const COMPOSIO_KEY = process.env.COMPOSIO_API_KEY ?? ""
 
 const EXTRACTION_PROMPT = `Analyze this meeting transcript and extract structured intelligence. Return your analysis in the following format with clear section headers:
 
