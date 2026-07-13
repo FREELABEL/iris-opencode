@@ -229,7 +229,22 @@ const StatsCommand = cmd({
       }
 
       printDivider()
-      printKV("Rate", formatRate(stats.rate_per_mille_cents as number))
+      // Placement bounties show the prize tiers + owner-assigned placements instead of a view rate.
+      if (stats.bounty_type === "placement" && stats.reward_tiers) {
+        const tiers = stats.reward_tiers as Record<string, number>
+        for (const [rank, cents] of Object.entries(tiers)) {
+          printKV(`Prize #${rank}`, formatCents(cents as number))
+        }
+        printKV("Prize Pool Total", formatCents(stats.reward_tiers_total_cents as number))
+        const assigned = Array.isArray(stats.assigned_placements) ? stats.assigned_placements : []
+        if (assigned.length) {
+          for (const a of assigned) {
+            console.log(`  ${dim(`rank #${a.placement}`)} → submission ${a.id}${a.title ? `  ${a.title}` : ""}`)
+          }
+        }
+      } else {
+        printKV("Rate", formatRate(stats.rate_per_mille_cents as number))
+      }
       printKV("Budget Pool", formatCents(stats.budget_pool_cents as number))
       printKV("Budget Spent", formatCents(stats.budget_spent_cents as number))
       printKV("Budget Remaining", formatCents(stats.budget_remaining_cents as number))
@@ -346,6 +361,7 @@ const PayoutCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("opportunity-id", { describe: "opportunity ID", type: "number", demandOption: true })
+      .option("dry-run", { describe: "preview payouts (placement bounties: show resolved ranks + amounts) without paying", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -354,21 +370,20 @@ const PayoutCommand = cmd({
     if (!token) return
 
     const oppId = args["opportunity-id"]
-    if (!args.json) prompts.intro(`◈  Process Payouts for Bounty #${oppId}`)
+    if (!args.json) prompts.intro(`◈  ${args["dry-run"] ? "Preview" : "Process"} Payouts for Bounty #${oppId}`)
     const spinner = args.json ? null : prompts.spinner()
-    if (spinner) spinner.start("Processing payouts…")
+    if (spinner) spinner.start(args["dry-run"] ? "Computing payouts…" : "Processing payouts…")
 
     try {
-      const res = await irisFetch(`/api/v1/marketplace/opportunities/${oppId}/process-payouts`, {
-        method: "POST",
-      })
+      const path = `/api/v1/marketplace/opportunities/${oppId}/process-payouts${args["dry-run"] ? "?dry_run=1" : ""}`
+      const res = await irisFetch(path, { method: "POST" })
       const ok = await handleApiError(res, "Process payouts")
       if (!ok) { if (spinner) spinner.stop("Failed", 1); return }
 
       const json = (await res.json()) as { data?: Record<string, unknown> }
       const result = (json.data ?? json) as any
 
-      if (spinner) spinner.stop(success("Payouts processed"))
+      if (spinner) spinner.stop(success(args["dry-run"] ? "Preview ready" : "Payouts processed"))
 
       if (args.json) {
         console.log(JSON.stringify(result, null, 2))
@@ -378,6 +393,16 @@ const PayoutCommand = cmd({
       printKV("Payouts Made", String(result.payouts_count ?? 0))
       printKV("Total Paid", formatCents(result.total_paid_cents as number))
       printKV("Budget Remaining", formatCents(result.budget_remaining_cents as number))
+
+      // Placement bounties return the resolved rank → submission → amount table.
+      const placements = Array.isArray(result.placements) ? result.placements : []
+      if (placements.length) {
+        printDivider()
+        for (const p of placements) {
+          const note = p.status && p.status !== "sent" ? `  ${dim(String(p.block_reason || p.status))}` : ""
+          console.log(`  #${p.rank}  submission ${p.submission_id}  ${formatCents(p.amount_cents)}${note}`)
+        }
+      }
     } catch (e: any) {
       if (spinner) spinner.stop("Error", 1)
       prompts.log.error(e.message)
@@ -456,12 +481,13 @@ const CreateCommand = cmd({
       .option("title", { describe: "campaign title", type: "string" })
       .option("description", { describe: "campaign description", type: "string" })
       .option("type", {
-        describe: "bounty type",
+        describe: "bounty type ('placement' = fixed prizes by rank via --reward-tiers)",
         type: "string",
         default: "video_views",
-        choices: ["video_views", "audio_streams", "social_impressions", "ugc_views"],
+        choices: ["video_views", "audio_streams", "social_impressions", "ugc_views", "placement"],
       })
       .option("rate-per-mille", { describe: "pay rate per 1K views in cents (e.g. 500 = $5)", type: "number" })
+      .option("reward-tiers", { describe: "placement prizes in dollars, best-first (e.g. \"250,100,50\" = 1st/2nd/3rd)", type: "string" })
       .option("budget", { describe: "total campaign budget in dollars (e.g. 10000)", type: "number" })
       .option("per-creator-cap", { describe: "max payout per creator in dollars (e.g. 500)", type: "number" })
       .option("deadline", { describe: "deadline (YYYY-MM-DD)", type: "string" })
@@ -483,6 +509,29 @@ const CreateCommand = cmd({
       else prompts.log.error(msg)
       process.exitCode = 2
       return
+    }
+
+    // Placement bounties need a prize table. Parse "250,100,50" (dollars, best-first) into
+    // ordered [{rank, amount_cents}] before we prompt/spin so we can fail loud early.
+    let rewardTiers: Array<{ rank: number; amount_cents: number }> | undefined
+    if (args.type === "placement") {
+      const raw = (args["reward-tiers"] as string | undefined)?.trim()
+      if (!raw) {
+        const msg = "--reward-tiers is required for a placement bounty (e.g. --reward-tiers \"250,100,50\")."
+        if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 2
+        return
+      }
+      const amounts = raw.split(",").map((s) => Number(s.trim()))
+      if (amounts.some((n) => !Number.isFinite(n) || n <= 0)) {
+        const msg = `Invalid --reward-tiers "${raw}": expected positive dollar amounts like "250,100,50".`
+        if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 2
+        return
+      }
+      rewardTiers = amounts.map((dollars, i) => ({ rank: i + 1, amount_cents: Math.round(dollars * 100) }))
     }
 
     if (!args.json) { UI.empty(); prompts.intro("◈  Create Bounty Campaign") }
@@ -525,6 +574,7 @@ const CreateCommand = cmd({
         is_public: true,
       }
       if (profilePk) payload.profile_id = profilePk
+      if (rewardTiers) payload.reward_tiers = rewardTiers
       if (args["rate-per-mille"]) payload.rate_per_mille_cents = Number(args["rate-per-mille"])
       if (args.budget) payload.budget_pool_cents = Math.round(Number(args.budget) * 100)
       if (args["per-creator-cap"]) payload.per_creator_cap_cents = Math.round(Number(args["per-creator-cap"]) * 100)
@@ -557,6 +607,55 @@ const CreateCommand = cmd({
   },
 })
 
+// #165985: owner assigns a submission's finishing rank for a placement (judged) bounty.
+// Pass --clear to unset and let the payout auto-rank it by the leaderboard metric.
+const PlaceCommand = cmd({
+  command: "place <submission-id>",
+  describe: "set a submission's placement/rank for a placement bounty (judged contests)",
+  builder: (yargs) =>
+    yargs
+      .positional("submission-id", { describe: "submission ID", type: "number", demandOption: true })
+      .option("rank", { describe: "finishing rank (1 = first place)", type: "number" })
+      .option("clear", { describe: "clear the placement (revert to auto-rank by metric)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    if (!args.clear && !args.rank) {
+      const msg = "Pass --rank <n> to set a placement, or --clear to remove it."
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    const subId = args["submission-id"]
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Set Placement for Submission #${subId}`) }
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Saving…")
+
+    try {
+      const res = await irisFetch(`/api/v1/marketplace/submissions/${subId}/placement`, {
+        method: "PATCH",
+        body: JSON.stringify({ rank: args.clear ? null : args.rank }),
+      })
+      const ok = await handleApiError(res, "Set placement")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const json = await res.json()
+      if (spinner) spinner.stop(success(args.clear ? "Placement cleared" : `Ranked #${args.rank}`))
+
+      if (args.json) console.log(JSON.stringify((json as any).data ?? json, null, 2))
+      else prompts.outro(dim(`iris bounty payout <opportunity-id> --dry-run`))
+    } catch (e: any) {
+      if (spinner) spinner.stop("Error", 1)
+      prompts.log.error(e.message)
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformBountiesCommand = cmd({
   command: "bounty",
   aliases: ["bounties"],
@@ -564,6 +663,7 @@ export const PlatformBountiesCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(CreateCommand)
+      .command(PlaceCommand)
       .command(ListCommand)
       .command(SubmitCommand)
       .command(MySubmissionsCommand)
