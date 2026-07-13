@@ -1169,6 +1169,16 @@ const BloqsMakePublicCommand = cmd({
       prompts.intro(`◈  Share Item #${args["item-id"]}`)
     }
 
+    // Enforce the documented password minimum client-side (#162350) so a weak
+    // share-link password fails fast with a clear message, matching the server's
+    // min:6 — validate before auth/network since it's purely input validation.
+    if (args.password !== undefined && String(args.password).length < 6) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: "Password must be at least 6 characters" })); return }
+      prompts.log.error("Password must be at least 6 characters")
+      prompts.outro("Done")
+      return
+    }
+
     const token = await requireAuth()
     if (!token) { if (!args.json) prompts.outro("Done"); return }
 
