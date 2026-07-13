@@ -1257,10 +1257,17 @@ const ExecCommand = cmd({
 // (Top-level `run` is taken by opencode's RunCommand, so we use `integrations`.)
 // ============================================================================
 
-const COMPOSIO_KEY = process.env.COMPOSIO_API_KEY ?? "ak_c2m5Q0Av7lOHYK9NPTCn"
+// No hardcoded fallback: a stale key here silently 401s every integrations
+// call (see bug #164644). Require COMPOSIO_API_KEY and fail loud if missing.
+const COMPOSIO_KEY = process.env.COMPOSIO_API_KEY ?? ""
 const COMPOSIO_BASE = "https://backend.composio.dev/api"
 
 async function composioFetch(path: string, init?: RequestInit) {
+  if (!COMPOSIO_KEY) {
+    throw new Error(
+      "COMPOSIO_API_KEY is not set. Generate a key at https://dashboard.composio.dev → API Keys and export it (e.g. `export COMPOSIO_API_KEY=ak_…`) before running `iris integrations …`.",
+    )
+  }
   return fetch(`${COMPOSIO_BASE}${path}`, {
     ...init,
     headers: {
