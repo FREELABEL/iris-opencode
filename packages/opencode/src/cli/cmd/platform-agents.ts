@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API } from "./iris-api"
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
@@ -1141,6 +1141,300 @@ const AgentsAssignCommand = cmd({
   },
 })
 
+// ============================================================================
+// Multi-agent threads (rooms) — message / inbox / thread   (#165979)
+//
+// Backend: fl-iris-api /api/threads/* — pass IRIS_API as the base (these do NOT
+// live on fl-api). The keystone `as_agent_id` override lets an internal agent
+// post as sender_type=agent, so an agent can speak into a room and other agents
+// can reply. `trigger_responses:false` posts without inviting a reply round.
+// ============================================================================
+
+/**
+ * Build the POST /threads/{id}/messages request body.
+ * Pure + exported for unit tests.
+ */
+export function buildThreadMessageBody(opts: {
+  content: string
+  asAgentId?: number | string | null
+  triggerResponses?: boolean
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = { content: opts.content }
+  if (opts.asAgentId != null && String(opts.asAgentId).trim() !== "") {
+    body.as_agent_id = String(opts.asAgentId)
+  }
+  // Only send the flag when suppressing — server defaults to true.
+  if (opts.triggerResponses === false) body.trigger_responses = false
+  return body
+}
+
+type ThreadParticipant = { agent_id?: number | string; agent_type?: string }
+type ThreadRow = {
+  id: string
+  name?: string | null
+  status?: string | null
+  messages_count?: number
+  agents?: Array<Record<string, unknown>>
+  participants?: ThreadParticipant[]
+  updated_at?: string | null
+}
+
+function printThreadRow(t: ThreadRow): void {
+  const name = bold(String(t.name ?? `Thread ${String(t.id).slice(0, 8)}`))
+  const agentCount = Array.isArray(t.agents) ? t.agents.length : (t.participants?.length ?? 0)
+  const msgs = t.messages_count ?? 0
+  console.log(`  ${name}  ${dim(String(t.id))}`)
+  console.log(`    ${dim(`${agentCount} agents · ${msgs} messages · ${String(t.status ?? "active")}`)}`)
+}
+
+/** True if the agent is already an internal participant of the thread. */
+function isParticipant(participants: ThreadParticipant[] | undefined, agentId: number): boolean {
+  return (participants ?? []).some(
+    (p) => String(p.agent_id) === String(agentId) && (p.agent_type ?? "internal") === "internal",
+  )
+}
+
+/**
+ * Ensure `agentId` is an internal participant of `threadId` (idempotent-ish):
+ * fetches the thread, adds the agent only if missing. Returns false on a hard
+ * API error. `autoRespond` makes the agent reply to new messages.
+ */
+async function ensureParticipant(
+  threadId: string,
+  agentId: number,
+  autoRespond: boolean,
+  action: string,
+): Promise<boolean> {
+  const showRes = await irisFetch(`/api/threads/${threadId}`, {}, IRIS_API)
+  const ok = await handleApiError(showRes, action)
+  if (!ok) return false
+  const body = (await showRes.json()) as { thread?: { participants?: ThreadParticipant[] } }
+  if (isParticipant(body?.thread?.participants, agentId)) return true
+
+  const addRes = await irisFetch(
+    `/api/threads/${threadId}/agents`,
+    { method: "POST", body: JSON.stringify({ agent_id: String(agentId), role: "participant", auto_respond: autoRespond }) },
+    IRIS_API,
+  )
+  return handleApiError(addRes, action)
+}
+
+const AgentsMessageCommand = cmd({
+  command: "message <agent> <content>",
+  describe: "post a message into a thread AS an internal agent (agent-to-agent)",
+  builder: (yargs) =>
+    yargs
+      .positional("agent", { describe: "sender agent ID or name", type: "string", demandOption: true })
+      .positional("content", { describe: "message text", type: "string", demandOption: true })
+      .option("thread", { describe: "existing thread ID to post into", type: "string" })
+      .option("to", { describe: "recipient agent ID/name — opens a new thread if --thread is omitted", type: "string" })
+      .option("trigger", { describe: "let other agents auto-respond (use --no-trigger to suppress)", type: "boolean", default: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro("◈  Agent message") }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    if (!args.thread && !args.to) {
+      if (args.json) console.log(JSON.stringify({ error: "Pass --thread <id> or --to <agent>" }, null, 2))
+      else prompts.log.error(`Pass ${dim("--thread <id>")} to post into a room, or ${dim("--to <agent>")} to open a new one`)
+      process.exitCode = 1
+      if (!args.json) prompts.outro("Done")
+      return
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Sending…")
+
+    try {
+      const fromId = await resolveAgentId(args.agent as string, userId, Boolean(args.json))
+      if (fromId === null) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      let threadId = args.thread as string | undefined
+      let toId: number | null = null
+      if (args.to) {
+        toId = await resolveAgentId(args.to as string, userId, Boolean(args.json))
+        if (toId === null) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+      }
+
+      if (!threadId) {
+        // Open a fresh thread with both agents; the recipient auto-responds.
+        const createRes = await irisFetch(
+          `/api/threads`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              name: `DM: #${fromId} ↔ #${toId}`,
+              agent_ids: [String(fromId), String(toId)],
+              agent_roles: ["participant", "participant"],
+              auto_respond: [false, true],
+            }),
+          },
+          IRIS_API,
+        )
+        const okc = await handleApiError(createRes, "Create thread")
+        if (!okc) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+        const created = (await createRes.json()) as { thread?: { id?: string } }
+        threadId = created?.thread?.id
+        if (!threadId) { if (spinner) spinner.stop("No thread id returned", 1); process.exitCode = 1; if (!args.json) prompts.outro("Done"); return }
+      } else {
+        // Posting into an existing thread — make sure the sender (and recipient)
+        // are participants, else the server rejects the agent-as-sender post.
+        if (!(await ensureParticipant(threadId, fromId, false, "Add sender"))) {
+          if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return
+        }
+        if (toId !== null && !(await ensureParticipant(threadId, toId, true, "Add recipient"))) {
+          if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return
+        }
+      }
+
+      const res = await irisFetch(
+        `/api/threads/${threadId}/messages`,
+        { method: "POST", body: JSON.stringify(buildThreadMessageBody({ content: args.content as string, asAgentId: fromId, triggerResponses: args.trigger as boolean })) },
+        IRIS_API,
+      )
+      const ok = await handleApiError(res, "Send message")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const data = (await res.json()) as {
+        message?: { sender_name?: string; content?: string }
+        agent_responses?: Array<{ sender_name?: string; content?: string }>
+        response_count?: number
+      }
+
+      if (args.json) { console.log(JSON.stringify({ thread_id: threadId, ...data }, null, 2)); return }
+
+      spinner!.stop(success(`Sent to thread ${dim(String(threadId))}`))
+      printDivider()
+      console.log(`  ${bold(String(data.message?.sender_name ?? `#${fromId}`))}: ${String(data.message?.content ?? args.content)}`)
+      for (const r of data.agent_responses ?? []) {
+        console.log(`    ${dim("↳")} ${bold(String(r.sender_name ?? "agent"))}: ${dim(String(r.content ?? "").slice(0, 200))}`)
+      }
+      printDivider()
+      prompts.outro(`${dim("iris agents thread " + threadId)}  Read the room`)
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+const AgentsThreadCommand = cmd({
+  command: "thread [id]",
+  describe: "list multi-agent threads, or show one thread's messages",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "thread ID (omit to list all threads)", type: "string" })
+      .option("limit", { describe: "messages to show", type: "number", default: 30 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(args.id ? `◈  Thread ${args.id}` : "◈  Threads") }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
+
+    try {
+      if (!args.id) {
+        const res = await irisFetch(`/api/threads`, {}, IRIS_API)
+        const ok = await handleApiError(res, "List threads")
+        if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
+        const paginator = (await res.json()) as { data?: ThreadRow[] }
+        const threads = paginator?.data ?? []
+        if (args.json) { console.log(JSON.stringify(threads, null, 2)); return }
+        spinner!.stop(`${threads.length} thread${threads.length === 1 ? "" : "s"}`)
+        printDivider()
+        if (threads.length === 0) console.log(`  ${dim("No threads yet — open one with")} ${dim("iris agents message <from> <content> --to <agent>")}`)
+        for (const t of threads) printThreadRow(t)
+        printDivider()
+        prompts.outro(`${dim("iris agents thread <id>")}  Read a room`)
+        return
+      }
+
+      const res = await irisFetch(`/api/threads/${args.id}`, {}, IRIS_API)
+      const ok = await handleApiError(res, "Show thread")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
+      const body = (await res.json()) as {
+        thread?: { name?: string | null; status?: string | null; agents?: Array<Record<string, unknown>> }
+        messages?: Array<{ sender_name?: string; sender_type?: string; content?: string }>
+      }
+      if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+
+      const msgs = (body.messages ?? []).slice(-Number(args.limit))
+      spinner!.stop(String(body.thread?.name ?? `Thread ${args.id}`))
+      printDivider()
+      printKV("Agents", (body.thread?.agents ?? []).map((a) => String(a.name ?? `#${a.id}`)).join(", "))
+      printKV("Status", body.thread?.status ?? "active")
+      printDivider()
+      for (const m of msgs) {
+        console.log(`  ${bold(String(m.sender_name ?? m.sender_type ?? "?"))}: ${String(m.content ?? "")}`)
+      }
+      if (msgs.length === 0) console.log(`  ${dim("No messages yet")}`)
+      printDivider()
+      prompts.outro("Done")
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+const AgentsInboxCommand = cmd({
+  command: "inbox <agent>",
+  describe: "list threads (rooms) an agent participates in",
+  builder: (yargs) =>
+    yargs
+      .positional("agent", { describe: "agent ID or name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Inbox — ${args.agent}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
+
+    try {
+      const agentId = await resolveAgentId(args.agent as string, userId, Boolean(args.json))
+      if (agentId === null) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const res = await irisFetch(`/api/threads`, {}, IRIS_API)
+      const ok = await handleApiError(res, "List inbox")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
+      const paginator = (await res.json()) as { data?: ThreadRow[] }
+      const mine = (paginator?.data ?? []).filter((t) => isParticipant(t.participants, agentId))
+
+      if (args.json) { console.log(JSON.stringify(mine, null, 2)); return }
+      spinner!.stop(`${mine.length} thread${mine.length === 1 ? "" : "s"} for #${agentId}`)
+      printDivider()
+      if (mine.length === 0) console.log(`  ${dim("This agent is in no threads yet")}`)
+      for (const t of mine) printThreadRow(t)
+      printDivider()
+      prompts.outro(`${dim("iris agents thread <id>")}  Read a room`)
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformAgentsCommand = cmd({
   command: "agents",
   describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign",
@@ -1157,6 +1451,9 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsBulkDeleteCommand)
       .command(AgentsChatCommand)
       .command(AgentsAssignCommand)
+      .command(AgentsMessageCommand)
+      .command(AgentsInboxCommand)
+      .command(AgentsThreadCommand)
       .demandCommand(),
   async handler() {},
 })
