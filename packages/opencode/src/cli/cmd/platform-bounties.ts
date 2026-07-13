@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive } from "./iris-api"
 
 // ============================================================================
 // Display helpers
@@ -444,12 +444,126 @@ const SubmissionsCommand = cmd({
 // Main command export
 // ============================================================================
 
+// #165984: the bounty command's help advertised `create` but it was never
+// implemented — users had to know to run `iris opportunities create --bounty`.
+// This mirrors that exact path (POST /api/v1/marketplace/opportunities with the
+// bounty fields) so `iris bounty create` works directly.
+const CreateCommand = cmd({
+  command: "create",
+  describe: "create a bounty (clip/UGC) campaign",
+  builder: (yargs) =>
+    yargs
+      .option("title", { describe: "campaign title", type: "string" })
+      .option("description", { describe: "campaign description", type: "string" })
+      .option("type", {
+        describe: "bounty type",
+        type: "string",
+        default: "video_views",
+        choices: ["video_views", "audio_streams", "social_impressions", "ugc_views"],
+      })
+      .option("rate-per-mille", { describe: "pay rate per 1K views in cents (e.g. 500 = $5)", type: "number" })
+      .option("budget", { describe: "total campaign budget in dollars (e.g. 10000)", type: "number" })
+      .option("per-creator-cap", { describe: "max payout per creator in dollars (e.g. 500)", type: "number" })
+      .option("deadline", { describe: "deadline (YYYY-MM-DD)", type: "string" })
+      .option("profile-id", { describe: "attach to a profile (PK)", type: "number" })
+      .option("profile", { describe: "attach to a profile (slug — resolves to PK)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    // Headless-safe: title/description are the only required fields — prompt in a
+    // TTY, but fail loud (don't hang) when non-interactive without them.
+    let title = args.title as string | undefined
+    let description = args.description as string | undefined
+    if ((!title || !description) && (args.json || isNonInteractive())) {
+      const missing = !title ? "--title" : "--description"
+      const msg = `${missing} is required in non-interactive mode.`
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro("◈  Create Bounty Campaign") }
+
+    if (!title) {
+      title = (await prompts.text({ message: "Title", validate: (x) => (x && x.length > 0 ? undefined : "Required") })) as string
+      if (prompts.isCancel(title)) { prompts.outro("Cancelled"); return }
+    }
+    if (!description) {
+      description = (await prompts.text({ message: "Description", validate: (x) => (x && x.length > 0 ? undefined : "Required") })) as string
+      if (prompts.isCancel(description)) { prompts.outro("Cancelled"); return }
+    }
+
+    // Resolve profile slug → PK if --profile provided
+    let profilePk: number | undefined = args["profile-id"] as number | undefined
+    if (!profilePk && args.profile) {
+      const profileRes = await irisFetch(`/api/v1/profile/${args.profile}`)
+      if (profileRes.ok) {
+        const pd = (await profileRes.json()) as any
+        const p = pd?.data ?? pd
+        profilePk = p?.pk
+      }
+      if (!profilePk) {
+        const msg = `Profile '${args.profile}' not found`
+        if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 1
+        return
+      }
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Creating…")
+
+    try {
+      const payload: Record<string, unknown> = {
+        title,
+        description,
+        bounty_type: args.type,
+        is_public: true,
+      }
+      if (profilePk) payload.profile_id = profilePk
+      if (args["rate-per-mille"]) payload.rate_per_mille_cents = Number(args["rate-per-mille"])
+      if (args.budget) payload.budget_pool_cents = Math.round(Number(args.budget) * 100)
+      if (args["per-creator-cap"]) payload.per_creator_cap_cents = Math.round(Number(args["per-creator-cap"]) * 100)
+      if (args.deadline) payload.application_deadline = args.deadline
+
+      const res = await irisFetch("/api/v1/marketplace/opportunities", { method: "POST", body: JSON.stringify(payload) })
+      const ok = await handleApiError(res, "Create bounty")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const data = (await res.json()) as any
+      const o = data?.data?.opportunity ?? data?.opportunity ?? data?.data ?? data
+
+      if (spinner) spinner.stop(`${success("✓")} Created: ${bold(String(o.title ?? o.id ?? "bounty"))}`)
+
+      if (args.json) {
+        console.log(JSON.stringify(data, null, 2))
+      } else {
+        printDivider()
+        printKV("ID", o.id)
+        printKV("Title", o.title)
+        printKV("Type", o.bounty_type)
+        printDivider()
+        prompts.outro(dim(`iris bounty stats ${o.id}`))
+      }
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformBountiesCommand = cmd({
   command: "bounty",
   aliases: ["bounties"],
   describe: "UGC content bounty campaigns — create, submit, approve, payout",
   builder: (yargs) =>
     yargs
+      .command(CreateCommand)
       .command(ListCommand)
       .command(SubmitCommand)
       .command(MySubmissionsCommand)
