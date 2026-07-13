@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -171,33 +171,49 @@ const CreateCommand = cmd({
       .option("preview", { describe: "create in preview mode (banner shown, applications/investments disabled)", type: "boolean" })
       .option("profile-id", { describe: "attach to a profile (PK)", type: "number" })
       .option("profile", { describe: "attach to a profile (slug — resolves to PK)", type: "string" })
+      // Membership gate — restrict applications to a program's confirmed members. #166095.
+      .option("program-id", { describe: "gate applications to a program's confirmed members (membership gate)", type: "number" })
       // Bounty / Clip Campaign fields
       .option("bounty", { describe: "create as a clip campaign (bounty)", type: "boolean" })
       .option("bounty-type", { describe: "bounty type (video_views, audio_streams, social_impressions, ugc_views)", type: "string", default: "video_views", choices: ["video_views", "audio_streams", "social_impressions", "ugc_views"] })
       .option("rate-per-mille", { describe: "pay rate per 1K views in cents (e.g. 500 = $5)", type: "number" })
       .option("budget", { describe: "total campaign budget in dollars (e.g. 10000)", type: "number" })
-      .option("per-creator-cap", { describe: "max payout per creator in dollars (e.g. 500)", type: "number" }),
+      .option("per-creator-cap", { describe: "max payout per creator in dollars (e.g. 500)", type: "number" })
+      .option("json", { describe: "JSON output (implies non-interactive)", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Create Opportunity")
-
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
+    // Headless-safe: title/description are the only required fields. Prompt for them in a
+    // TTY, but fail loud (don't hang, don't half-prompt) when --json or non-interactive
+    // and they're missing. #165986 — previously the skills prompt fired even when
+    // title/description came from flags.
     let title = args.title
+    let description = args.description
+    const headless = args.json || isNonInteractive()
+    if ((!title || !description) && headless) {
+      const missing = !title ? "--title" : "--description"
+      const msg = `${missing} is required in non-interactive mode.`
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro("◈  Create Opportunity") }
+
     if (!title) {
       title = (await prompts.text({ message: "Title", validate: (x) => (x && x.length > 0 ? undefined : "Required") })) as string
       if (prompts.isCancel(title)) { prompts.outro("Cancelled"); return }
     }
-
-    let description = args.description
     if (!description) {
       description = (await prompts.text({ message: "Description", validate: (x) => (x && x.length > 0 ? undefined : "Required") })) as string
       if (prompts.isCancel(description)) { prompts.outro("Cancelled"); return }
     }
 
+    // Skills are optional — only prompt in an interactive session, never headless. #165986.
     let skills = args.skills
-    if (!skills) {
+    if (!skills && !headless) {
       const skillsInput = (await prompts.text({ message: "Skills (comma-separated, or leave empty)", defaultValue: "" })) as string
       if (prompts.isCancel(skillsInput)) { prompts.outro("Cancelled"); return }
       skills = skillsInput || undefined
@@ -211,17 +227,24 @@ const CreateCommand = cmd({
         const pd = (await profileRes.json()) as any
         const p = pd?.data ?? pd
         profilePk = p?.pk
-        if (profilePk) prompts.log.info(`Profile: ${p.name} (pk ${profilePk})`)
+        if (profilePk && !args.json) prompts.log.info(`Profile: ${p.name} (pk ${profilePk})`)
       }
-      if (!profilePk) { prompts.log.error(`Profile '${args.profile}' not found`); prompts.outro("Done"); return }
+      if (!profilePk) {
+        const msg = `Profile '${args.profile}' not found`
+        if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+        else { prompts.log.error(msg); prompts.outro("Done") }
+        process.exitCode = 1
+        return
+      }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Creating…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Creating…")
 
     try {
       const payload: Record<string, unknown> = { title, description }
       if (profilePk) payload.profile_id = profilePk
+      if (args["program-id"]) payload.program_id = Number(args["program-id"])
       if (skills) payload.skills_required = skills.split(",").map((s: string) => s.trim())
       if (args["min-budget"]) payload.price_min = args["min-budget"]
       if (args["max-budget"]) payload.price_max = args["max-budget"]
@@ -230,19 +253,19 @@ const CreateCommand = cmd({
       if (args["equity-pool-pct"] !== undefined) payload.equity_pool_bps = Math.round(Number(args["equity-pool-pct"]) * 100)
       if (args["roles-file"]) {
         const rolesPath = String(args["roles-file"])
-        if (!existsSync(rolesPath)) { spinner.stop("Failed", 1); prompts.log.error(`Roles file not found: ${rolesPath}`); prompts.outro("Done"); return }
+        if (!existsSync(rolesPath)) { if (spinner) spinner.stop("Failed", 1); prompts.log.error(`Roles file not found: ${rolesPath}`); if (!args.json) prompts.outro("Done"); process.exitCode = 1; return }
         payload.roles = JSON.parse(readFileSync(rolesPath, "utf-8"))
       }
       if (args["pitch-file"]) {
         const pitchPath = String(args["pitch-file"])
-        if (!existsSync(pitchPath)) { spinner.stop("Failed", 1); prompts.log.error(`Pitch file not found: ${pitchPath}`); prompts.outro("Done"); return }
+        if (!existsSync(pitchPath)) { if (spinner) spinner.stop("Failed", 1); prompts.log.error(`Pitch file not found: ${pitchPath}`); if (!args.json) prompts.outro("Done"); process.exitCode = 1; return }
         payload.pitch_sections = JSON.parse(readFileSync(pitchPath, "utf-8"))
       }
       if (args.preview) payload.preview_mode = true
 
       // Bounty / Clip Campaign fields
       if (args.bounty) {
-        payload.bounty_type = args["bounty-type"] || "video_submission"
+        payload.bounty_type = args["bounty-type"] || "video_views"
         payload.is_public = true
         if (args["rate-per-mille"]) payload.rate_per_mille_cents = Number(args["rate-per-mille"])
         if (args.budget) payload.budget_pool_cents = Math.round(Number(args.budget) * 100)
@@ -251,22 +274,113 @@ const CreateCommand = cmd({
 
       const res = await irisFetch("/api/v1/marketplace/opportunities", { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create opportunity")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); process.exitCode = 1; return }
 
       const data = (await res.json()) as any
       const o = data?.data?.opportunity ?? data?.opportunity ?? data?.data ?? data
-      spinner.stop(`${success("✓")} Created: ${bold(String(o.title ?? o.id ?? "opportunity"))}`)
+
+      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+      spinner!.stop(`${success("✓")} Created: ${bold(String(o.title ?? o.id ?? "opportunity"))}`)
 
       printDivider()
       printKV("ID", o.id)
       printKV("Title", o.title)
+      if (o.program_id) printKV("Gated to program", o.program_id)
       printDivider()
 
       prompts.outro(dim(`iris opportunities get ${o.id}`))
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      if (!args.json) prompts.outro("Done")
+      process.exitCode = 1
+    }
+  },
+})
+
+// #166095: previously the only way to change an opportunity's content was the
+// file-based `push` (pull → edit JSON → push). This gives a direct, flag-driven,
+// headless-safe update path — only the flags you pass are sent (PATCH-like PUT).
+const UpdateCommand = cmd({
+  command: "update <id>",
+  aliases: ["edit"],
+  describe: "update an opportunity's fields directly (only the flags you pass are changed)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "opportunity ID", type: "number", demandOption: true })
+      .option("title", { describe: "title", type: "string" })
+      .option("description", { describe: "description", type: "string" })
+      .option("skills", { describe: "required skills (comma-separated; empty string clears)", type: "string" })
+      .option("min-budget", { describe: "minimum budget", type: "number" })
+      .option("max-budget", { describe: "maximum budget", type: "number" })
+      .option("deadline", { describe: "application deadline (YYYY-MM-DD)", type: "string" })
+      .option("funding-goal", { describe: "crowdfunding goal in dollars", type: "number" })
+      .option("equity-pool-pct", { describe: "equity pool percentage (e.g. 5 for 5%)", type: "number" })
+      .option("program-id", { describe: "gate applications to a program's members (0 to un-gate)", type: "number" })
+      .option("public", { describe: "make the opportunity public", type: "boolean" })
+      .option("private", { describe: "make the opportunity private (hidden)", type: "boolean" })
+      .option("preview", { describe: "toggle preview mode on/off", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    // Build the payload from only the flags actually provided (yargs sets the key
+    // when a flag is passed, even for empty strings, via hasOwnProperty).
+    const payload: Record<string, unknown> = {}
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(args, k)
+
+    if (args.title !== undefined) payload.title = args.title
+    if (args.description !== undefined) payload.description = args.description
+    if (has("skills")) {
+      const s = String(args.skills ?? "").trim()
+      payload.skills_required = s ? s.split(",").map((x) => x.trim()).filter(Boolean) : []
+    }
+    if (args["min-budget"] !== undefined) payload.price_min = args["min-budget"]
+    if (args["max-budget"] !== undefined) payload.price_max = args["max-budget"]
+    if (args.deadline !== undefined) payload.application_deadline = args.deadline
+    if (args["funding-goal"] !== undefined) payload.funding_goal_cents = Math.round(Number(args["funding-goal"]) * 100)
+    if (args["equity-pool-pct"] !== undefined) payload.equity_pool_bps = Math.round(Number(args["equity-pool-pct"]) * 100)
+    if (args["program-id"] !== undefined) payload.program_id = Number(args["program-id"]) === 0 ? null : Number(args["program-id"])
+    if (args.preview !== undefined) payload.preview_mode = args.preview
+    if (args.public) payload.is_public = true
+    if (args.private) payload.is_public = false
+
+    if (Object.keys(payload).length === 0) {
+      const msg = "Nothing to update — pass at least one field flag (e.g. --title, --description, --program-id)."
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Update Opportunity #${args.id}`) }
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Updating…")
+
+    try {
+      const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
+      const ok = await handleApiError(res, "Update opportunity")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); process.exitCode = 1; return }
+
+      const data = (await res.json()) as any
+      const o = data?.data?.opportunity ?? data?.opportunity ?? data?.data ?? data
+
+      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+
+      spinner!.stop(`${success("✓")} Updated`)
+      printDivider()
+      printKV("ID", o.id ?? args.id)
+      printKV("Title", o.title)
+      printKV("Changed", Object.keys(payload).join(", "))
+      printDivider()
+      prompts.outro(dim(`iris opportunities get ${args.id}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+      process.exitCode = 1
     }
   },
 })
@@ -803,6 +917,7 @@ export const PlatformOpportunitiesCommand = cmd({
       .command(ListCommand)
       .command(GetCommand)
       .command(CreateCommand)
+      .command(UpdateCommand)
       .command(PullCommand)
       .command(PushCommand)
       .command(DiffCommand)
