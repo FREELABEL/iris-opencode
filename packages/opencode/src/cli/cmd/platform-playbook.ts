@@ -1079,6 +1079,78 @@ const DetachCommand = cmd({
 })
 
 // ============================================================================
+// iris playbook publish — set an association scope and push to the cloud (#167269)
+// ============================================================================
+
+const PublishCommand = cmd({
+  command: "publish <name>",
+  describe: "publish a playbook with a scope: private | project | public",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { type: "string", demandOption: true })
+      .option("scope", {
+        type: "string",
+        choices: ["private", "project", "public"] as const,
+        demandOption: true,
+        describe: "association scope: private (you), project (a bloq/team), public (marketplace)",
+      })
+      .option("bloq", { type: "number", describe: "bloq (project) id — required when --scope project" })
+      .option("access", {
+        type: "string",
+        choices: ["free", "paid"] as const,
+        default: "free",
+        describe: "access level for a public/marketplace publish",
+      })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Publish Playbook — ${highlight(String(args.name))}`)
+
+    if (args.scope === "project" && !args.bloq) {
+      console.error("  --bloq <id> is required when --scope project")
+      prompts.outro("Done"); return
+    }
+
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    // 1. Set the association + route: iris-api records scope and upserts the marketplace row on public.
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(String(args.name))}/publish`, {
+      method: "POST",
+      body: JSON.stringify({
+        scope: args.scope,
+        bloq_id: args.bloq ?? null,
+        access_type: args.access,
+      }),
+    })
+    const ok = await handleApiError(res, "Publish playbook")
+    if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+
+    // 2. Project scope: also attach to the bloq so the team sees it (config.playbooks[], #157174).
+    if (args.scope === "project" && args.bloq) {
+      const attachRes = await irisFetch(`/api/v1/bloqs/${args.bloq}/attach-playbook`, {
+        method: "POST",
+        body: JSON.stringify({ playbook_name: args.name }),
+      })
+      await handleApiError(attachRes, "Attach to bloq")
+    }
+
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+
+    printDivider()
+    const pb = data?.playbook ?? {}
+    console.log(`  ${bold("Scope")}       ${pb.scope ?? args.scope}`)
+    if (pb.bloq_id) console.log(`  ${bold("Bloq")}        #${pb.bloq_id}`)
+    console.log(`  ${bold("Access")}      ${pb.access_type ?? args.access}`)
+    if (data?.marketplace) {
+      console.log(`  ${bold("Marketplace")} ${highlight(String(data.marketplace.slug))} ${dim(`(${data.marketplace.status})`)}`)
+    }
+    printDivider()
+    prompts.outro(`${success("✓")} Published ${highlight(String(args.name))} as ${bold(String(args.scope))}`)
+  },
+})
+
+// ============================================================================
 
 export const PlatformPlaybookCommand = cmd({
   command: "playbook <subcommand>",
@@ -1094,6 +1166,7 @@ export const PlatformPlaybookCommand = cmd({
       .command(PlaybookSyncCommand)
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
+      .command(PublishCommand)
       .command(AttachCommand)
       .command(DetachCommand)
       .command(AttachedCommand)
@@ -1117,6 +1190,7 @@ export const PlatformSkillCommand = cmd({
       .command(PlaybookSyncCommand)
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
+      .command(PublishCommand)
       .command(AttachCommand)
       .command(DetachCommand)
       .command(AttachedCommand)
