@@ -2293,7 +2293,11 @@ const BloqsUpdateItemCommand = cmd({
       .positional("item-id", { describe: "item ID", type: "number", demandOption: true })
       .option("status", { describe: "set item status", type: "string", choices: BLOQ_ITEM_STATUS_CHOICES })
       .option("title", { describe: "new title", type: "string" })
-      .option("content", { describe: "new content", type: "string" })
+      .option("content", { describe: "replace content wholesale", type: "string" })
+      .option("merge", {
+        describe: "merge key=value into content, preserving other fields (repeatable; dotted keys nest; e.g. --merge rate_cents=7900)",
+        type: "array",
+      })
       .option("due", { describe: "due date (ISO, e.g. 2026-07-22; 'none' to clear)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -2325,8 +2329,31 @@ const BloqsUpdateItemCommand = cmd({
       }
     }
 
+    // #169753: --merge sends a partial content object the backend deep-merges onto the
+    // stored content (BloqItemController::update -> content_merge), so one field can
+    // change without resending — and clobbering — the rest. Mutually exclusive with
+    // --content (full replace); the backend also 422s if both arrive.
+    if (args.content !== undefined && args.merge) {
+      const emsg = "Use either --content (full replace) or --merge (partial), not both"
+      if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+      else { prompts.log.error(emsg); prompts.outro("Done") }
+      process.exitCode = 2
+      return
+    }
+    if (args.merge) {
+      try {
+        payload.content_merge = parseMergePairs((args.merge as unknown[]).map(String))
+      } catch (e) {
+        const emsg = e instanceof Error ? e.message : String(e)
+        if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+        else { prompts.log.error(emsg); prompts.outro("Done") }
+        process.exitCode = 2
+        return
+      }
+    }
+
     if (Object.keys(payload).length === 0) {
-      const emsg = "Provide at least one of: --status, --title, --content, --due"
+      const emsg = "Provide at least one of: --status, --title, --content, --merge, --due"
       if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
       else { prompts.log.error(emsg); prompts.outro("Done") }
       process.exitCode = 2
@@ -2354,7 +2381,8 @@ const BloqsUpdateItemCommand = cmd({
       const parts: string[] = []
       if (args.status) parts.push(`status → ${payload.status}`)
       if (args.title) parts.push(`title updated`)
-      if (args.content) parts.push(`content updated`)
+      if (args.content) parts.push(`content replaced`)
+      if (args.merge) parts.push(`content merged (${Object.keys(payload.content_merge as object).length} field(s))`)
       if (payload.due_date !== undefined) parts.push(payload.due_date === null ? `due cleared` : `due → ${payload.due_date}`)
 
       spinner?.stop(`${success("✓")} Item #${args["item-id"]} updated (${parts.join(", ")})`)
@@ -2371,6 +2399,35 @@ const BloqsUpdateItemCommand = cmd({
 // ============================================================================
 // Helpers
 // ============================================================================
+
+// #169753: parse repeatable `--merge key=value` pairs into a partial content object
+// for the backend's content_merge deep-merge. Values are JSON-parsed when possible
+// (7900 → number, true → bool, {"seats":7} → object) and otherwise kept as a raw
+// string, so `rate_cents=7900` sets a number while `make=Toyota` sets a string. A
+// dotted key nests (`features.seats=7` → {features:{seats:7}}) to match the backend's
+// recursive merge. The value is split on the FIRST `=` so values may contain `=`.
+function parseMergePairs(pairs: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const raw of pairs) {
+    const eq = raw.indexOf("=")
+    if (eq < 0) throw new Error(`--merge expects key=value, got "${raw}"`)
+    const key = raw.slice(0, eq).trim()
+    if (!key) throw new Error(`--merge has an empty key in "${raw}"`)
+    const valStr = raw.slice(eq + 1)
+    let value: unknown
+    try { value = JSON.parse(valStr) } catch { value = valStr }
+    const path = key.split(".")
+    let node = out
+    for (let i = 0; i < path.length - 1; i++) {
+      const seg = path[i]
+      const next = node[seg]
+      if (typeof next !== "object" || next === null || Array.isArray(next)) node[seg] = {}
+      node = node[seg] as Record<string, unknown>
+    }
+    node[path[path.length - 1]] = value
+  }
+  return out
+}
 
 function generateListSuggestions(name: string, description: string, count: number): string[] {
   const topic = (description || name).toLowerCase()
