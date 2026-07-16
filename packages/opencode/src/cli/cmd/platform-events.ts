@@ -1797,6 +1797,58 @@ const RemoveLeadCommand = cmd({
     .option("force", { alias: "y", describe: "skip confirmation", type: "boolean" }),
 })
 
+const StaffingCommand = cmd({
+  command: "staffing <event-id>",
+  aliases: ["economics"],
+  describe: "event staffing economics — comp'd roles, committed budget, ledger refs (#170876)",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args.eventId)
+    await requireAuth()
+    const spinner = prompts.spinner()
+    spinner.start("Loading staffing economics…")
+    try {
+      const res = await irisFetch(`/api/v1/events/${eventId}/staffing`)
+      const ok = await handleApiError(res, "Load staffing")
+      if (!ok) { spinner.stop("Failed", 1); return }
+      const data = (await res.json()) as any
+      const d = data.data || data
+      spinner.stop(success(`${d.role_count} comp'd role${d.role_count === 1 ? "" : "s"}`))
+      if (args.json) { console.log(JSON.stringify(d, null, 2)); return }
+
+      const fmt = (c: number | null | undefined) => c == null ? "—" : `$${(Number(c) / 100).toFixed(2)}`
+      printDivider()
+      printKV("Event", `#${d.event_id} — ${d.event_name || "?"}`)
+      printDivider()
+      if (!d.roles || d.roles.length === 0) {
+        prompts.log.info(dim("No comp'd roles yet. Use: iris events add-lead <event> <lead> -r staff --comp-type hourly --rate 22 --hours 4 --guaranteed-min 88"))
+      } else {
+        for (const r of d.roles) {
+          const line = [
+            bold(r.lead_name || `Lead #${r.lead_id}`),
+            dim(r.role || "—"),
+            highlight(r.comp_type),
+            r.comp_type === "hourly" && r.rate_cents != null ? dim(`${fmt(r.rate_cents)}/hr × ${r.hours ?? "?"}h`) : "",
+            `→ committed ${bold(fmt(r.committed_cents))}`,
+            r.ledger_transaction_id ? dim(`(ledger #${r.ledger_transaction_id})`) : dim("(no ledger line)"),
+          ].filter(Boolean).join("  ")
+          console.log("  " + line)
+          if (r.upside_formula) console.log("    " + dim(`upside: ${r.upside_formula}`))
+        }
+      }
+      printDivider()
+      printKV("Committed total", bold(fmt(d.committed_total_cents)))
+      printDivider()
+      prompts.outro(dim(`iris atlas:ledger list --type expense  |  iris events production overview -e ${eventId}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
 // ============================================================================
 // Preflight — live system checks before going live
 // ============================================================================
@@ -2871,6 +2923,7 @@ export const PlatformEventsCommand = cmd({
       .command(AddLeadCommand)
       .command(UpdateLeadCommand)
       .command(RemoveLeadCommand)
+      .command(StaffingCommand)
       // Sales & Revenue
       .command(SalesCommand)
       .command(ResolveCommand)
