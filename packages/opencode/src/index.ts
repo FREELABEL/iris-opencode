@@ -59,6 +59,7 @@ import { PlatformBoardsCommand } from "./cli/cmd/platform-boards"
 import { PlatformDiscoverCommand } from "./cli/cmd/platform-discover"
 import { PlatformOpportunitiesCommand } from "./cli/cmd/platform-opportunities"
 import { PlatformBountiesCommand } from "./cli/cmd/platform-bounties"
+import { PlatformBookingsCommand } from "./cli/cmd/platform-bookings"
 import { PlatformTutorialsCommand } from "./cli/cmd/platform-tutorials"
 import { PlatformServicesCommand } from "./cli/cmd/platform-services"
 import { PlatformProductsCommand } from "./cli/cmd/platform-products"
@@ -292,6 +293,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDiscoverCommand))
   .command(reg(PlatformOpportunitiesCommand))
   .command(reg(PlatformBountiesCommand))
+  .command(reg(PlatformBookingsCommand))
   .command(reg(PlatformTutorialsCommand))
   .command(reg(PlatformServicesCommand))
   .command(reg(PlatformProductsCommand))
