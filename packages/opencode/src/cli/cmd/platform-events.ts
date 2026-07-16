@@ -1664,6 +1664,14 @@ const AddLeadCommand = cmd({
         status: String(args.status || "invited"),
       }
       if (args.notes) body.notes = String(args.notes)
+      // Comp model on the event role (#170876 Gap 2). Dollar amounts → cents.
+      if (args["comp-type"]) body.comp_type = String(args["comp-type"])
+      if (args.rate !== undefined) body.rate_cents = Math.round(Number(args.rate) * 100)
+      if (args.hours !== undefined) body.hours = Number(args.hours)
+      if (args["guaranteed-min"] !== undefined) body.guaranteed_minimum_cents = Math.round(Number(args["guaranteed-min"]) * 100)
+      if (args.upside) body.upside_formula = String(args.upside)
+      if (args.opportunity !== undefined) body.opportunity_id = Number(args.opportunity)
+      if (args.bounty !== undefined) body.bounty_id = Number(args.bounty)
 
       const res = await irisFetch(`/api/v1/events/${eventId}/leads`, { method: "POST", body: JSON.stringify(body) })
       const ok = await handleApiError(res, "Add lead to event")
@@ -1678,6 +1686,14 @@ const AddLeadCommand = cmd({
       printKV("Lead", `#${leadId} — ${lead.nickname || lead.name || "?"}`)
       printKV("Role", el.role)
       printKV("Status", el.status)
+      if (el.comp_type) {
+        const parts: string[] = [String(el.comp_type)]
+        if (el.rate_cents != null) parts.push(`$${(Number(el.rate_cents) / 100).toFixed(2)}/hr`)
+        if (el.hours != null) parts.push(`× ${el.hours}h`)
+        if (el.guaranteed_minimum_cents != null) parts.push(`min $${(Number(el.guaranteed_minimum_cents) / 100).toFixed(2)}`)
+        printKV("Comp", parts.join("  "))
+        if (el.opportunity_id) printKV("Opportunity", `#${el.opportunity_id}`)
+      }
       printDivider()
     } catch (err) {
       spinner.stop("Error", 1)
@@ -1690,6 +1706,14 @@ const AddLeadCommand = cmd({
     .option("role", { alias: "r", describe: "role: performer, organizer, judge, staff, vendor_contact, sponsor, speaker, vip, attendee, prospect", type: "string", default: "prospect" })
     .option("status", { alias: "s", describe: "status: invited, confirmed, attended, no_show, cancelled, waitlisted", type: "string", default: "invited" })
     .option("notes", { describe: "notes", type: "string" })
+    // Comp model (#170876 Gap 2)
+    .option("comp-type", { describe: "comp type: hourly (floor) | bounty (variable) | royalty (host share)", type: "string", choices: ["hourly", "bounty", "royalty"] })
+    .option("rate", { describe: "hourly rate in dollars (e.g. 22 → $22/hr)", type: "number" })
+    .option("hours", { describe: "hours worked/scheduled", type: "number" })
+    .option("guaranteed-min", { describe: "stated pay floor in dollars — the audit-clean minimum guarantee", type: "number" })
+    .option("upside", { describe: "free-text upside formula (variable pay above the floor)", type: "string" })
+    .option("opportunity", { describe: "opportunity ID this role was hired under", type: "number" })
+    .option("bounty", { describe: "bounty ID this role was hired under", type: "number" })
     .option("json", { describe: "JSON output", type: "boolean" }),
 })
 
@@ -1707,6 +1731,14 @@ const UpdateLeadCommand = cmd({
       if (args.role) body.role = String(args.role)
       if (args.status) body.status = String(args.status)
       if (args.notes) body.notes = String(args.notes)
+      // Comp model on the event role (#170876 Gap 2). Dollar amounts → cents.
+      if (args["comp-type"]) body.comp_type = String(args["comp-type"])
+      if (args.rate !== undefined) body.rate_cents = Math.round(Number(args.rate) * 100)
+      if (args.hours !== undefined) body.hours = Number(args.hours)
+      if (args["guaranteed-min"] !== undefined) body.guaranteed_minimum_cents = Math.round(Number(args["guaranteed-min"]) * 100)
+      if (args.upside) body.upside_formula = String(args.upside)
+      if (args.opportunity !== undefined) body.opportunity_id = Number(args.opportunity)
+      if (args.bounty !== undefined) body.bounty_id = Number(args.bounty)
 
       const res = await irisFetch(`/api/v1/events/${eventId}/leads/${leadId}`, { method: "PUT", body: JSON.stringify(body) })
       const ok = await handleApiError(res, "Update event lead")
@@ -1724,7 +1756,15 @@ const UpdateLeadCommand = cmd({
     .positional("lead-id", { describe: "lead ID", type: "string", demandOption: true })
     .option("role", { alias: "r", describe: "new role", type: "string" })
     .option("status", { alias: "s", describe: "new status", type: "string" })
-    .option("notes", { describe: "notes", type: "string" }),
+    .option("notes", { describe: "notes", type: "string" })
+    // Comp model (#170876 Gap 2)
+    .option("comp-type", { describe: "comp type: hourly | bounty | royalty", type: "string", choices: ["hourly", "bounty", "royalty"] })
+    .option("rate", { describe: "hourly rate in dollars", type: "number" })
+    .option("hours", { describe: "hours worked/scheduled", type: "number" })
+    .option("guaranteed-min", { describe: "stated pay floor in dollars", type: "number" })
+    .option("upside", { describe: "free-text upside formula", type: "string" })
+    .option("opportunity", { describe: "opportunity ID this role was hired under", type: "number" })
+    .option("bounty", { describe: "bounty ID this role was hired under", type: "number" }),
 })
 
 const RemoveLeadCommand = cmd({

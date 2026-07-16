@@ -629,6 +629,42 @@ const LinkLeadCommand = cmd({
   },
 })
 
+const LinkEventCommand = cmd({
+  command: "link-event <id> <eventId>",
+  describe: "link an opportunity/bounty to an event (sets opportunity.event_id) — the job listing a role was hired under",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "opportunity ID", type: "number", demandOption: true })
+      .positional("eventId", { describe: "event ID to link (use 0 to unlink)", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Link Opportunity #${args.id} → Event #${args.eventId}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start(args.eventId === 0 ? "Unlinking…" : `Linking to event ${args.eventId}…`)
+
+    try {
+      const body: Record<string, unknown> = { event_id: args.eventId === 0 ? null : args.eventId }
+      const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      })
+      const ok = await handleApiError(res, "Update opportunity")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} ${args.eventId === 0 ? "Unlinked" : `Linked to event #${args.eventId}`}`)
+      prompts.outro(dim(`iris events show ${args.eventId}  |  iris opportunities get ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const LinkProfileCommand = cmd({
   command: "link-profile <id> <profileSlug>",
   describe: "attach an opportunity to a profile (sets opportunity.profile_id)",
@@ -923,6 +959,7 @@ export const PlatformOpportunitiesCommand = cmd({
       .command(DiffCommand)
       .command(PreviewCommand)
       .command(LinkLeadCommand)
+      .command(LinkEventCommand)
       .command(LinkProfileCommand)
       .command(DeleteCommand)
       .command(InterestCommand)
