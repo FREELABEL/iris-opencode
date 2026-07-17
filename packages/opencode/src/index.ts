@@ -70,6 +70,7 @@ import { PlatformMagazineCommand } from "./cli/cmd/platform-magazine"
 import { PlatformRemotionCommand } from "./cli/cmd/platform-remotion"
 import { PlatformReleaseCommand } from "./cli/cmd/platform-release"
 import { PlatformAnnounceCommand } from "./cli/cmd/platform-announce"
+import { PlatformBroadcastCommand } from "./cli/cmd/platform-broadcast"
 import { PlatformHiveCommand } from "./cli/cmd/platform-hive"
 import { PlatformClipsCommand } from "./cli/cmd/platform-clips"
 import { PlatformPostCommand } from "./cli/cmd/platform-post"
@@ -122,6 +123,7 @@ import { PlatformProfileCommand } from "./cli/cmd/platform-profile"
 import { PlatformBloqIngestCommand } from "./cli/cmd/platform-bloq-ingest"
 import { PlatformDataSourcesCommand } from "./cli/cmd/platform-data-sources"
 import { PlatformBloqMembersCommand } from "./cli/cmd/platform-bloq-members"
+import { PlatformWisprCommand } from "./cli/cmd/platform-wispr"
 import { PlatformEvalCommand } from "./cli/cmd/platform-eval"
 import { PlatformSdkCallCommand } from "./cli/cmd/platform-sdk-call"
 import { PlatformDiaryCommand } from "./cli/cmd/platform-diary"
@@ -304,6 +306,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformRemotionCommand))
   .command(reg(PlatformReleaseCommand))
   .command(reg(PlatformAnnounceCommand))
+  .command(reg(PlatformBroadcastCommand))
   .command(reg(PlatformHiveCommand))
   .command(reg(PlatformClipsCommand))
   .command(reg(PlatformPostCommand))
@@ -370,6 +373,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformBloqIngestCommand))
   .command(reg(PlatformDataSourcesCommand))
   .command(reg(PlatformBloqMembersCommand))
+  .command(reg(PlatformWisprCommand))
   .command(reg(PlatformEvalCommand))
   .command(reg(PlatformSdkCallCommand))
   .command(reg(PlatformDiaryCommand))
