@@ -73,12 +73,23 @@ const DiaryTodayCommand = cmd({
     console.log()
 
     printDivider()
-    const timeline: any[] = data?.timeline ?? data?.data?.timeline ?? data?.entries ?? []
-    if (timeline.length === 0) console.log(`  ${dim("(no entries today)")}`)
-    else for (const e of timeline) {
-      const ts = e.timestamp ?? e.created_at ?? ""
-      const source = e.source === "heartbeat" ? dim(" [heartbeat]") : ""
-      console.log(`  ${bold(String(ts).slice(11, 19))}  ${String(e.content ?? e.summary ?? "").slice(0, 100)}${source}`)
+    const dayEntries: any[] = Array.isArray(data?.entries) ? data.entries : []
+    const timeline: any[] = data?.timeline ?? data?.data?.timeline ?? []
+    if (dayEntries.length === 0 && timeline.length === 0) {
+      console.log(`  ${dim("(no entries today)")}`)
+    } else {
+      // Session entries (from `iris diary sync`) — one line per entry.
+      for (const entry of dayEntries) {
+        const slugTag = entry.slug ? dim(`  (${entry.slug})`) : ""
+        const secs = entry.sections ? dim(` — ${entry.sections} sections`) : ""
+        console.log(`  ${bold(String(entry.title ?? "entry"))}${slugTag}${secs}`)
+      }
+      // Timeline sections (from `iris diary add` / heartbeats).
+      for (const e of timeline) {
+        const ts = e.timestamp ?? e.created_at ?? ""
+        const source = e.source === "heartbeat" ? dim(" [heartbeat]") : ""
+        console.log(`  ${bold(String(ts).slice(11, 19))}  ${String(e.content ?? e.summary ?? "").slice(0, 100)}${source}`)
+      }
     }
     printDivider()
     prompts.outro(dim(`iris diary add "your entry here"${args.agent ? ` --agent ${args.agent}` : args.bloq ? ` --bloq ${args.bloq}` : ""}`))
@@ -111,11 +122,18 @@ const DiaryListCommand = cmd({
     } else {
       for (const e of entries) {
         const indicators = []
-        if (e.has_diary) indicators.push(`${e.diary_sections} sections`)
+        const entryCount = e.entry_count ?? (e.has_diary ? 1 : 0)
+        if (entryCount) indicators.push(`${entryCount} ${entryCount === 1 ? "entry" : "entries"}`)
         if (e.has_heartbeats) indicators.push(`${e.heartbeat_count} heartbeats`)
         const meta = indicators.length > 0 ? dim(` (${indicators.join(", ")})`) : ""
         console.log(`  ${bold(String(e.date ?? "?"))}${meta}`)
-        if (e.summary) console.log(`    ${dim(String(e.summary).slice(0, 100))}`)
+        // Prefer explicit session titles; fall back to the day summary.
+        const titles: string[] = Array.isArray(e.entry_titles) ? e.entry_titles : []
+        if (titles.length > 0) {
+          for (const t of titles) console.log(`    ${dim("•")} ${dim(String(t).slice(0, 90))}`)
+        } else if (e.summary) {
+          console.log(`    ${dim(String(e.summary).slice(0, 100))}`)
+        }
       }
     }
     printDivider()
@@ -138,14 +156,24 @@ const DiaryViewCommand = cmd({
     const data = (await res.json()) as any
     if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
 
-    if (data.diary_content) {
+    // Multiple session entries per day: render each with its title/slug header.
+    const dayEntries: any[] = Array.isArray(data?.entries) ? data.entries : []
+    if (dayEntries.length > 0) {
+      for (const entry of dayEntries) {
+        console.log()
+        const slugTag = entry.slug ? dim(`  (${entry.slug})`) : ""
+        console.log(`  ${bold(String(entry.title ?? args.date))}${slugTag}`)
+        printDivider()
+        console.log(String(entry.content ?? ""))
+      }
+    } else if (data.diary_content) {
       console.log()
       console.log(data.diary_content)
     }
 
     printDivider()
     const timeline: any[] = data?.timeline ?? data?.data?.timeline ?? []
-    if (timeline.length === 0 && !data.diary_content) {
+    if (timeline.length === 0 && dayEntries.length === 0 && !data.diary_content) {
       console.log(`  ${dim("(no entries)")}`)
     } else {
       for (const e of timeline) {
@@ -154,7 +182,7 @@ const DiaryViewCommand = cmd({
       }
     }
     printDivider()
-    prompts.outro("Done")
+    prompts.outro(dayEntries.length > 1 ? dim(`${dayEntries.length} entries`) : "Done")
   },
 })
 
@@ -207,6 +235,17 @@ function deriveDiaryDate(fm: Record<string, any>, file: string): string | null {
   return m ? m[1] : null
 }
 
+// Derive the per-session slug so a day can hold many entries. Explicit
+// frontmatter `slug:` wins; otherwise the filename minus the date prefix and
+// `.md` (e.g. 2026-07-17-audit-notes.md → "audit-notes"). A bare date filename
+// (2026-07-17.md) has no slug → the "default" slot (legacy one-per-day shape).
+function deriveDiarySlug(fm: Record<string, any>, file: string): string | undefined {
+  if (fm.slug && String(fm.slug).trim()) return String(fm.slug).trim().slice(0, 190)
+  const name = basename(file).replace(/\.md$/i, "")
+  const rest = name.replace(/^\d{4}-\d{2}-\d{2}-?/, "")
+  return rest ? rest.slice(0, 190) : undefined
+}
+
 const DiarySyncCommand = cmd({
   command: "sync <paths..>",
   describe: "publish local markdown diary files to your IRIS diary (idempotent)",
@@ -233,8 +272,10 @@ const DiarySyncCommand = cmd({
       const fm: Record<string, any> = parsed.data || {}
       const date = deriveDiaryDate(fm, file)
       if (!date) { console.log(`  ${dim("skip")} ${basename(file)} — no date in frontmatter or filename`); skipped++; continue }
+      const slug = deriveDiarySlug(fm, file)
 
       const payload: any = { content: parsed.content.trim(), date, replace: true }
+      if (slug) payload.slug = slug
       if (args.agent) payload.agent_id = args.agent
       if (args.bloq) payload.bloq_id = args.bloq
       if (!args.agent && !args.bloq && userId) payload.user_id = parseInt(userId, 10)
@@ -263,7 +304,8 @@ const DiarySyncCommand = cmd({
       }
 
       const tag = data?.created ? success("new") : dim("updated")
-      console.log(`  ${tag}  ${bold(date)}  ${dim(basename(file))}${publicUrl ? `  ${dim(publicUrl)}` : ""}`)
+      const slugLabel = slug ? dim(`/${slug}`) : ""
+      console.log(`  ${tag}  ${bold(date)}${slugLabel}  ${dim(basename(file))}${publicUrl ? `  ${dim(publicUrl)}` : ""}`)
     }
 
     printDivider()
