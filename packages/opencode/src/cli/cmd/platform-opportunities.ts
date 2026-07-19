@@ -299,6 +299,49 @@ const CreateCommand = cmd({
   },
 })
 
+// #176521 — single source of truth for what pull/diff/push agree on.
+//
+// These lists used to be inline and divergent, and BOTH omitted every money and
+// linkage field. Result: edit a contest's prize table locally → `diff` reports
+// "No differences" → `push` reports "Pushed" → nothing was sent, leaving a
+// placement bounty with no reward_tiers, i.e. one that pays every winner $0.
+const SYNC_FIELDS = [
+  "title", "description", "status",
+  "price_min", "price_max", "application_deadline",
+  "funding_goal_cents", "equity_pool_bps", "roles", "pitch_sections",
+  "preview_mode", "is_public", "lead_id",
+  // money / payout — omitting these is how prize tables got silently dropped
+  "bounty_type", "reward_tiers", "rate_per_mille_cents",
+  "per_creator_cap_cents", "budget_pool_cents",
+  // linkage
+  "event_id", "program_id", "profile_id",
+] as const
+
+// The API serializes reward_tiers as a {rank: amount_cents} map (toPublicArray →
+// rewardTiers()), while the local file may hold the authoring shape
+// [{rank, amount_cents}, …] or a bare [amount_cents, …]. Compare on the
+// normalized map so we don't report a false difference.
+function normalizeForCompare(field: string, value: unknown): string {
+  if (field === "reward_tiers" && value != null) {
+    const map: Record<string, number> = {}
+    if (Array.isArray(value)) {
+      value.forEach((t: any, i: number) => {
+        const rank = Number(t?.rank ?? i + 1)
+        const amount = Number(t?.amount_cents ?? (typeof t === "number" ? t : 0))
+        if (rank >= 1 && amount > 0) map[String(rank)] = amount
+      })
+    } else if (typeof value === "object") {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        const rank = Number(k)
+        const amount = Number(v)
+        if (rank >= 1 && amount > 0) map[String(rank)] = amount
+      }
+    }
+    return JSON.stringify(map)
+  }
+  return JSON.stringify(value ?? null)
+}
+
 // #166095: previously the only way to change an opportunity's content was the
 // file-based `push` (pull → edit JSON → push). This gives a direct, flag-driven,
 // headless-safe update path — only the flags you pass are sent (PATCH-like PUT).
@@ -476,14 +519,17 @@ const PushCommand = cmd({
         return
       }
 
-      const payload: Record<string, unknown> = {
-        title: entity.title, description: entity.description, skills_required: skills,
-        price_min: entity.price_min ?? entity.min_budget, price_max: entity.price_max ?? entity.max_budget, application_deadline: entity.application_deadline ?? entity.deadline,
-        funding_goal_cents: entity.funding_goal_cents, equity_pool_bps: entity.equity_pool_bps,
-        roles: entity.roles, pitch_sections: entity.pitch_sections,
-        preview_mode: entity.preview_mode, is_public: entity.is_public,
-        lead_id: entity.lead_id,
+      // #176521 — build from SYNC_FIELDS so money/linkage fields can never be
+      // silently omitted again (the old inline list dropped reward_tiers et al).
+      const payload: Record<string, unknown> = {}
+      for (const f of SYNC_FIELDS) {
+        if (entity[f] !== undefined) payload[f] = entity[f]
       }
+      // Legacy aliases from older pulled files.
+      payload.skills_required = skills
+      if (payload.price_min === undefined && entity.min_budget !== undefined) payload.price_min = entity.min_budget
+      if (payload.price_max === undefined && entity.max_budget !== undefined) payload.price_max = entity.max_budget
+      if (payload.application_deadline === undefined && entity.deadline !== undefined) payload.application_deadline = entity.deadline
       for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
 
       const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
@@ -492,12 +538,54 @@ const PushCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const result = data?.data ?? data
+
+      // WRITE-CONFIRMATION (#176521): a 200 is not proof of persistence. The API has
+      // silently dropped fields that weren't mass-assignable (reward_tiers, #176520)
+      // while still returning success. Re-read and assert, so "Pushed" means
+      // "verified persisted" — and fail loudly (exit 1) when it doesn't.
+      spinner.message?.("Verifying…")
+      const unpersisted: { field: string; sent: unknown; live: unknown }[] = []
+      try {
+        const verifyRes = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`)
+        if (verifyRes.ok) {
+          const vJson = (await verifyRes.json()) as { data?: any }
+          const liveNow = vJson?.data?.opportunity ?? vJson?.data ?? vJson
+          for (const f of Object.keys(payload)) {
+            if (f === "skills_required") continue // server may normalize/rename
+            if (normalizeForCompare(f, liveNow?.[f]) !== normalizeForCompare(f, payload[f])) {
+              unpersisted.push({ field: f, sent: payload[f], live: liveNow?.[f] })
+            }
+          }
+        }
+      } catch {
+        // verification is best-effort; never mask a successful write with a network blip
+      }
+
+      if (unpersisted.length > 0) {
+        spinner.stop("Pushed, but some fields did NOT persist", 1)
+        printDivider()
+        printKV("ID", args.id)
+        for (const u of unpersisted) {
+          console.log(`  ${UI.Style.TEXT_DANGER}✗ ${u.field}${UI.Style.TEXT_NORMAL}`)
+          console.log(`    sent: ${String(JSON.stringify(u.sent)).slice(0, 120)}`)
+          console.log(`    live: ${String(JSON.stringify(u.live ?? null)).slice(0, 120)}`)
+        }
+        console.log()
+        console.log(`  ${UI.Style.TEXT_WARNING}The API accepted the request but did not store these fields.${UI.Style.TEXT_NORMAL}`)
+        console.log(`  ${dim("Likely a server-side mass-assignment ($fillable) gap — see #176520.")}`)
+        printDivider()
+        prompts.outro("Done")
+        process.exitCode = 1
+        return
+      }
+
       spinner.stop(success("Pushed"))
 
       printDivider()
       printKV("Title", result.title)
       printKV("ID", args.id)
       printKV("From", filepath)
+      printKV("Verified", `${Object.keys(payload).length} field(s) persisted`)
       printDivider()
 
       prompts.outro(dim(`iris opportunities diff ${args.id}`))
@@ -547,16 +635,10 @@ const DiffCommand = cmd({
 
       const local = JSON.parse(readFileSync(filepath, "utf-8"))
 
-      const fields = [
-        "title", "description", "status",
-        "price_min", "price_max", "application_deadline",
-        "funding_goal_cents", "equity_pool_bps", "roles", "pitch_sections",
-        "preview_mode", "is_public", "lead_id",
-      ]
       const changes: { field: string; live: unknown; local: unknown }[] = []
 
-      for (const f of fields) {
-        if (JSON.stringify(live[f] ?? null) !== JSON.stringify(local[f] ?? null)) {
+      for (const f of SYNC_FIELDS) {
+        if (normalizeForCompare(f, live[f]) !== normalizeForCompare(f, local[f])) {
           changes.push({ field: f, live: live[f], local: local[f] })
         }
       }
