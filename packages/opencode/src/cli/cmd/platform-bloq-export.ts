@@ -84,19 +84,138 @@ function itemToMarkdown(item: Record<string, any>, listName: string): string {
   return fm.join("\n") + heading + body.replace(/^\s+/, "") + "\n"
 }
 
+/** Export one bloq into baseDir. Returns its manifest. Shared by single + --all. */
+async function exportOneBloq(
+  bloqId: number,
+  userId: number,
+  baseDir: string,
+  opts: { attachments: boolean; markdown: boolean },
+  progress?: (msg: string) => void,
+): Promise<Record<string, any>> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}`)
+  if (!res.ok) throw new Error(`fetch bloq ${bloqId}: HTTP ${res.status}`)
+
+  const payload = (await res.json()) as { data?: any }
+  const bloq = payload?.data ?? payload
+  if (!bloq || (!bloq.id && !bloq.name)) throw new Error(`bloq ${bloqId}: empty response`)
+
+  const lists: any[] = bloq?.lists ?? []
+  const itemCount = lists.reduce((n, l) => n + (l?.items?.length ?? 0), 0)
+
+  progress?.("Fetching attachments…")
+  let files: any[] = []
+  try {
+    const filesRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/files`)
+    if (filesRes.ok) {
+      const filesData = (await filesRes.json()) as { data?: any[] }
+      files = filesData?.data ?? []
+    }
+  } catch {
+    // Non-fatal: an export missing attachments still beats no export. The
+    // manifest records what we got, so the gap is visible rather than silent.
+  }
+
+  const slug = slugify(bloq?.name ?? "", `bloq-${bloqId}`)
+  const outDir = path.join(baseDir, `bloq-${bloqId}-${slug}`)
+  fs.mkdirSync(outDir, { recursive: true })
+
+  progress?.("Writing JSON…")
+  fs.writeFileSync(path.join(outDir, "bloq.json"), JSON.stringify(bloq, null, 2))
+  if (files.length > 0) {
+    fs.writeFileSync(path.join(outDir, "files.json"), JSON.stringify(files, null, 2))
+  }
+
+  let markdownWritten = 0
+  if (opts.markdown) {
+    progress?.("Writing markdown…")
+    const itemsRoot = path.join(outDir, "items")
+    fs.mkdirSync(itemsRoot, { recursive: true })
+    for (const [li, list] of lists.entries()) {
+      const listName = list?.name ?? `list-${list?.id ?? li}`
+      const listDir = path.join(itemsRoot, `${String(li + 1).padStart(2, "0")}-${slugify(listName, `list-${li + 1}`)}`)
+      fs.mkdirSync(listDir, { recursive: true })
+      for (const [ii, item] of (list?.items ?? []).entries()) {
+        const fileName = `${String(ii + 1).padStart(3, "0")}-${slugify(exportItemTitle(item), `item-${ii + 1}`)}.md`
+        fs.writeFileSync(path.join(listDir, fileName), itemToMarkdown(item, listName))
+        markdownWritten++
+      }
+    }
+  }
+
+  let filesDownloaded = 0
+  let filesFailed = 0
+  let bytesDownloaded = 0
+  if (opts.attachments && files.length > 0) {
+    const filesDir = path.join(outDir, "attachments")
+    fs.mkdirSync(filesDir, { recursive: true })
+    for (const [fi, f] of files.entries()) {
+      const url = f?.url ?? f?.cdn_url ?? f?.public_url ?? f?.path
+      const name = f?.original_name ?? f?.name ?? f?.filename ?? `file-${f?.id ?? fi}`
+      if (!url) { filesFailed++; continue }
+      progress?.(`Downloading ${fi + 1}/${files.length}…`)
+      try {
+        const dl = await fetch(String(url))
+        if (!dl.ok) { filesFailed++; continue }
+        const buf = Buffer.from(await dl.arrayBuffer())
+        fs.writeFileSync(path.join(filesDir, `${String(fi + 1).padStart(3, "0")}-${name}`), buf)
+        filesDownloaded++
+        bytesDownloaded += buf.length
+      } catch {
+        filesFailed++
+      }
+    }
+  }
+
+  const manifest = {
+    format_version: EXPORT_FORMAT_VERSION,
+    exported_at: new Date().toISOString(),
+    source: { api: "iris", bloq_id: bloqId, bloq_name: bloq?.name ?? null, user_id: userId },
+    counts: {
+      lists: lists.length,
+      items: itemCount,
+      markdown_files: markdownWritten,
+      attachments_listed: files.length,
+      attachments_downloaded: filesDownloaded,
+      attachments_failed: filesFailed,
+      attachment_bytes: bytesDownloaded,
+    },
+    includes_attachments: opts.attachments,
+    notes: opts.attachments ? undefined : "Attachment BYTES were not downloaded (re-run with --attachments). files.json lists them.",
+    output_dir: outDir,
+  }
+  fs.writeFileSync(path.join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2))
+  return manifest
+}
+
 export const BloqsExportCommand = cmd({
-  command: "export <id>",
+  command: "export [id]",
   describe: "export a bloq (lists, items, attachments) to a local folder — your data, off our servers",
   builder: (yargs) =>
     yargs
-      .positional("id", { describe: "bloq ID or name", type: "string", demandOption: true })
+      .positional("id", { describe: "bloq ID or name (omit with --all)", type: "string" })
+      .option("all", { describe: "export EVERY bloq you own — a full workspace backup", type: "boolean", default: false })
       .option("out", { alias: "o", describe: "output directory (default: ./iris-export)", type: "string" })
       .option("attachments", { describe: "also download attached files (can be large)", type: "boolean", default: false })
       .option("no-markdown", { describe: "skip the human-readable markdown tree, JSON only", type: "boolean", default: false })
       .option("json", { describe: "JSON output (prints the manifest)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    if (!args.json) { UI.empty(); prompts.intro(`◈  Export bloq ${args.id}`) }
+    const wantsAll = Boolean(args.all)
+
+    // Guard before the intro — otherwise a bare `bloqs export` greets you with
+    // "Export bloq undefined" before telling you what it actually wants.
+    if (!wantsAll && !args.id) {
+      if (args.json) console.log(JSON.stringify({ error: "Pass a bloq id/name, or --all to export everything." }, null, 2))
+      else {
+        UI.empty()
+        console.error(`  Pass a bloq id/name, or ${bold("--all")} to export every bloq.`)
+        console.error(`  ${dim("e.g. iris bloqs export 503   ·   iris bloqs export --all -o ~/iris-backup")}`)
+        UI.empty()
+      }
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(wantsAll ? "◈  Export workspace" : `◈  Export bloq ${args.id}`) }
 
     const token = await requireAuth()
     if (!token) { if (!args.json) prompts.outro("Done"); return }
@@ -104,146 +223,109 @@ export const BloqsExportCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    const resolvedId = await resolveBloqId(args.id as any, userId, Boolean(args.json))
-    if (resolvedId === null) { if (!args.json) prompts.outro("Done"); return }
-
+    const baseDir = path.resolve(String(args.out ?? "./iris-export"))
+    const opts = { attachments: Boolean(args.attachments), markdown: !args["no-markdown"] }
     const spinner = args.json ? null : prompts.spinner()
-    if (spinner) spinner.start("Fetching bloq…")
 
     try {
-      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${resolvedId}`)
-      if (!res.ok) {
-        if (spinner) spinner.stop("Failed", 1)
-        await handleApiError(res, "Export bloq")
-        if (!args.json) prompts.outro("Done")
-        return
-      }
-
-      const payload = (await res.json()) as { data?: any }
-      const bloq = payload?.data ?? payload
-      if (!bloq || (!bloq.id && !bloq.name)) {
-        if (spinner) spinner.stop("Empty response", 1)
-        if (!args.json) prompts.outro("Done")
-        return
-      }
-
-      const lists: any[] = bloq?.lists ?? []
-      const itemCount = lists.reduce((n, l) => n + (l?.items?.length ?? 0), 0)
-
-      // Attachments are a separate endpoint — the bloq payload doesn't carry them.
-      if (spinner) spinner.message("Fetching attachments…")
-      let files: any[] = []
-      try {
-        const filesRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${resolvedId}/files`)
-        if (filesRes.ok) {
-          const filesData = (await filesRes.json()) as { data?: any[] }
-          files = filesData?.data ?? []
+      // ── Whole-workspace backup ────────────────────────────────────────────
+      // The point of --all is that one command (and therefore one cron line)
+      // captures everything. A per-bloq failure must not abort the run, or a
+      // single bad bloq costs you the whole backup — so failures are collected
+      // and reported, never thrown away silently.
+      if (wantsAll) {
+        if (spinner) spinner.start("Listing bloqs…")
+        const listRes = await irisFetch(`/api/v1/user/${userId}/bloqs?per_page=200`)
+        if (!listRes.ok) {
+          if (spinner) spinner.stop("Failed", 1)
+          await handleApiError(listRes, "List bloqs")
+          if (!args.json) prompts.outro("Done")
+          return
         }
-      } catch {
-        // Non-fatal: an export missing attachments still beats no export. The
-        // manifest records what we got, so the gap is visible rather than silent.
-      }
+        const listData = (await listRes.json()) as { data?: any[] }
+        const bloqs: any[] = listData?.data ?? []
 
-      const slug = slugify(bloq?.name ?? "", `bloq-${resolvedId}`)
-      const baseDir = path.resolve(String(args.out ?? "./iris-export"))
-      const outDir = path.join(baseDir, `bloq-${resolvedId}-${slug}`)
-      fs.mkdirSync(outDir, { recursive: true })
+        const results: Record<string, any>[] = []
+        const failures: { bloq_id: number; name: string | null; error: string }[] = []
 
-      // 1. Raw payload — the fidelity copy. Everything the API gave us, verbatim.
-      if (spinner) spinner.message("Writing JSON…")
-      fs.writeFileSync(path.join(outDir, "bloq.json"), JSON.stringify(bloq, null, 2))
-      if (files.length > 0) {
-        fs.writeFileSync(path.join(outDir, "files.json"), JSON.stringify(files, null, 2))
-      }
-
-      // 2. Markdown tree — the copy that stays readable without us.
-      let markdownWritten = 0
-      if (!args["no-markdown"]) {
-        if (spinner) spinner.message("Writing markdown…")
-        const itemsRoot = path.join(outDir, "items")
-        fs.mkdirSync(itemsRoot, { recursive: true })
-
-        for (const [li, list] of lists.entries()) {
-          const listName = list?.name ?? `list-${list?.id ?? li}`
-          const listDir = path.join(itemsRoot, `${String(li + 1).padStart(2, "0")}-${slugify(listName, `list-${li + 1}`)}`)
-          fs.mkdirSync(listDir, { recursive: true })
-
-          for (const [ii, item] of (list?.items ?? []).entries()) {
-            const fileName = `${String(ii + 1).padStart(3, "0")}-${slugify(exportItemTitle(item), `item-${ii + 1}`)}.md`
-            fs.writeFileSync(path.join(listDir, fileName), itemToMarkdown(item, listName))
-            markdownWritten++
-          }
-        }
-      }
-
-      // 3. Attachments — opt-in, because these are the bytes that get big.
-      let filesDownloaded = 0
-      let filesFailed = 0
-      let bytesDownloaded = 0
-      if (args.attachments && files.length > 0) {
-        const filesDir = path.join(outDir, "attachments")
-        fs.mkdirSync(filesDir, { recursive: true })
-
-        for (const [fi, f] of files.entries()) {
-          const url = f?.url ?? f?.cdn_url ?? f?.public_url ?? f?.path
-          const name = f?.original_name ?? f?.name ?? f?.filename ?? `file-${f?.id ?? fi}`
-          if (!url) { filesFailed++; continue }
-          if (spinner) spinner.message(`Downloading ${fi + 1}/${files.length}…`)
+        for (const [i, b] of bloqs.entries()) {
+          const bid = Number(b?.id)
+          if (!Number.isInteger(bid)) continue
+          if (spinner) spinner.message(`(${i + 1}/${bloqs.length}) ${b?.name ?? bid}…`)
           try {
-            const dl = await fetch(String(url))
-            if (!dl.ok) { filesFailed++; continue }
-            const buf = Buffer.from(await dl.arrayBuffer())
-            fs.writeFileSync(path.join(filesDir, `${String(fi + 1).padStart(3, "0")}-${name}`), buf)
-            filesDownloaded++
-            bytesDownloaded += buf.length
-          } catch {
-            filesFailed++
+            results.push(await exportOneBloq(bid, userId, baseDir, opts))
+          } catch (e: any) {
+            failures.push({ bloq_id: bid, name: b?.name ?? null, error: e?.message ?? String(e) })
           }
         }
+
+        const totals = results.reduce(
+          (acc, m) => ({
+            lists: acc.lists + (m.counts?.lists ?? 0),
+            items: acc.items + (m.counts?.items ?? 0),
+            attachments_downloaded: acc.attachments_downloaded + (m.counts?.attachments_downloaded ?? 0),
+          }),
+          { lists: 0, items: 0, attachments_downloaded: 0 },
+        )
+
+        const wsManifest = {
+          format_version: EXPORT_FORMAT_VERSION,
+          exported_at: new Date().toISOString(),
+          scope: "workspace",
+          source: { api: "iris", user_id: userId },
+          counts: { bloqs_found: bloqs.length, bloqs_exported: results.length, bloqs_failed: failures.length, ...totals },
+          failures,
+          includes_attachments: opts.attachments,
+          bloqs: results.map((m) => ({ bloq_id: m.source?.bloq_id, name: m.source?.bloq_name, ...m.counts })),
+          output_dir: baseDir,
+        }
+        fs.mkdirSync(baseDir, { recursive: true })
+        fs.writeFileSync(path.join(baseDir, "workspace-manifest.json"), JSON.stringify(wsManifest, null, 2))
+
+        if (spinner) spinner.stop(failures.length ? "Exported (with failures)" : "Exported")
+        if (args.json) { console.log(JSON.stringify(wsManifest, null, 2)); return }
+
+        printDivider()
+        printKV("Bloqs", `${results.length}/${bloqs.length} exported${failures.length ? ` ${dim(`· ${failures.length} failed`)}` : ""}`)
+        printKV("Lists", String(totals.lists))
+        printKV("Items", String(totals.items))
+        if (opts.attachments) printKV("Attachments", String(totals.attachments_downloaded))
+        printKV("Output", baseDir)
+        printDivider()
+        if (failures.length) {
+          console.log(`  ${dim("Failed:")}`)
+          for (const f of failures.slice(0, 10)) console.log(`    ${dim("—")} #${f.bloq_id} ${f.name ?? ""} ${dim(f.error)}`)
+          console.log()
+        }
+        console.log(`  ${success("✓")} ${dim("workspace-manifest.json lists every bloq and every failure")}`)
+        console.log()
+        prompts.outro("Done")
+        return
       }
 
-      // 4. Manifest — what this export contains and what it does NOT. An export
-      // you can't verify is an export you can't trust, so counts go on disk.
-      const manifest = {
-        format_version: EXPORT_FORMAT_VERSION,
-        exported_at: new Date().toISOString(),
-        source: { api: "iris", bloq_id: Number(resolvedId), bloq_name: bloq?.name ?? null, user_id: userId },
-        counts: {
-          lists: lists.length,
-          items: itemCount,
-          markdown_files: markdownWritten,
-          attachments_listed: files.length,
-          attachments_downloaded: filesDownloaded,
-          attachments_failed: filesFailed,
-        },
-        includes_attachments: Boolean(args.attachments),
-        notes: args.attachments
-          ? undefined
-          : "Attachment BYTES were not downloaded (re-run with --attachments). files.json lists them.",
-        output_dir: outDir,
-      }
-      fs.writeFileSync(path.join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2))
+      // ── Single bloq ───────────────────────────────────────────────────────
+      const resolvedId = await resolveBloqId(args.id as any, userId, Boolean(args.json))
+      if (resolvedId === null) { if (!args.json) prompts.outro("Done"); return }
 
+      if (spinner) spinner.start("Fetching bloq…")
+      const manifest = await exportOneBloq(resolvedId, userId, baseDir, opts, (m) => spinner?.message(m))
       if (spinner) spinner.stop("Exported")
 
-      if (args.json) {
-        console.log(JSON.stringify(manifest, null, 2))
-        return
-      }
+      if (args.json) { console.log(JSON.stringify(manifest, null, 2)); return }
 
       printDivider()
-      printKV("Bloq", `${bold(String(bloq?.name ?? resolvedId))} ${dim(`#${resolvedId}`)}`)
-      printKV("Lists", String(lists.length))
-      printKV("Items", String(itemCount))
-      if (files.length > 0) {
+      printKV("Bloq", `${bold(String(manifest.source?.bloq_name ?? resolvedId))} ${dim(`#${resolvedId}`)}`)
+      printKV("Lists", String(manifest.counts?.lists ?? 0))
+      printKV("Items", String(manifest.counts?.items ?? 0))
+      if ((manifest.counts?.attachments_listed ?? 0) > 0) {
         printKV(
           "Attachments",
-          args.attachments
-            ? `${filesDownloaded}/${files.length} downloaded ${dim(`(${formatBytes(bytesDownloaded)})`)}${filesFailed ? ` ${dim(`· ${filesFailed} failed`)}` : ""}`
-            : `${files.length} listed ${dim("(re-run with --attachments to download)")}`,
+          opts.attachments
+            ? `${manifest.counts.attachments_downloaded}/${manifest.counts.attachments_listed} downloaded ${dim(`(${formatBytes(manifest.counts.attachment_bytes ?? 0)})`)}${manifest.counts.attachments_failed ? ` ${dim(`· ${manifest.counts.attachments_failed} failed`)}` : ""}`
+            : `${manifest.counts.attachments_listed} listed ${dim("(re-run with --attachments to download)")}`,
         )
       }
-      printKV("Output", outDir)
+      printKV("Output", manifest.output_dir)
       printDivider()
       console.log(`  ${success("✓")} ${dim("bloq.json (full fidelity) · items/ (markdown) · manifest.json")}`)
       console.log()
