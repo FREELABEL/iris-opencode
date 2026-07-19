@@ -6,6 +6,7 @@ import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } f
 import { executePublish } from "./bloq-item-shared"
 import { RELATION_TYPES, isValidRelationType, formatRelationsGrouped, type RelationRow } from "./bloq-relation-format"
 import { createPageFromJson } from "./platform-pages"
+import { BloqsExportCommand } from "./platform-bloq-export"
 import path from "path"
 
 // ============================================================================
@@ -184,7 +185,7 @@ const BloqsListCommand = cmd({
  * client-side with the same tokenized matcher `bloqs search` uses. Returns the
  * numeric ID, or null (already having printed the reason) on no/ambiguous match.
  */
-async function resolveBloqId(idOrQuery: string | number, userId: number, json: boolean): Promise<number | null> {
+export async function resolveBloqId(idOrQuery: string | number, userId: number, json: boolean): Promise<number | null> {
   const numeric = Number(idOrQuery)
   if (Number.isInteger(numeric) && String(idOrQuery).trim() !== "") return numeric
 
@@ -2711,6 +2712,7 @@ export const PlatformBloqsCommand = cmd({
     yargs
       .command(BloqsListCommand)
       .command(BloqsGetCommand)
+      .command(BloqsExportCommand)
       .command(BloqsOpenCommand)
       .command(BloqsShareCommand)
       .command(BloqsLinksCommand)
