@@ -2187,7 +2187,10 @@ const BloqsItemsCommand = cmd({
       .option("list", { alias: "l", describe: "filter by list ID", type: "number" })
       .option("search", { alias: "s", describe: "search items by keyword", type: "string" })
       .option("status", { describe: "filter by status", type: "string" })
-      .option("limit", { describe: "max items to return", type: "number", default: 50 })
+      .option("limit", { describe: "items per page (max 200)", type: "number", default: 50 })
+      .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
+      .option("fields", { describe: "comma-separated fields for --json (default: id,title,status,list_name)", type: "string" })
+      .option("compact", { describe: "drop null/empty fields in --json output", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -2202,68 +2205,100 @@ const BloqsItemsCommand = cmd({
     const spinner = args.json ? null : prompts.spinner()
     if (spinner) spinner.start("Loading…")
 
-    try {
-      // Get items via bloq get endpoint (includes all lists with items)
-      {
-        const fallbackRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}`)
-        if (fallbackRes.ok) {
-          const bloq = await fallbackRes.json() as Record<string, any>
-          const lists = bloq?.data?.lists ?? bloq?.lists ?? []
-          let allItems: any[] = []
-          for (const list of lists) {
-            const listItems = list.items ?? []
-            for (const item of listItems) {
-              allItems.push({ ...item, list_id: list.id, list_name: list.name })
-            }
-          }
-
-          // Apply client-side filtering
-          if (args.search) {
-            const q = String(args.search).toLowerCase()
-            allItems = allItems.filter((i: any) =>
-              (i.title ?? "").toLowerCase().includes(q) ||
-              (i.content ?? "").toLowerCase().includes(q)
-            )
-          }
-          if (args.status) {
-            allItems = allItems.filter((i: any) => i.status === args.status)
-          }
-          if (args.list) {
-            allItems = allItems.filter((i: any) => i.list_id === args.list || i.bloq_list_id === args.list)
-          }
-          allItems = allItems.slice(0, args.limit as number)
-
-          if (args.json) { console.log(JSON.stringify(allItems, null, 2)); return }
-
-          if (spinner) spinner.stop(`${allItems.length} item(s)`)
-
-          if (allItems.length === 0) {
-            prompts.log.warn(args.search ? `No items matching "${args.search}"` : "No items found")
-            prompts.outro("Done")
-            return
-          }
-
-          console.log()
-          for (const item of allItems) {
-            const title = (item.title ?? item.content ?? "").slice(0, 80)
-            const statusLabel = item.status && item.status !== "active" ? `  ${dim(`[${item.status}]`)}` : ""
-            const listLabel = item.list_name ? dim(` (${item.list_name})`) : ""
-            console.log(`  ${dim(`#${item.id}`)}  ${title}${statusLabel}${listLabel}`)
-            if (item.is_public && (item.public_url || item.public_uuid)) {
-              console.log(`      ${dim("public:")} ${item.public_url ?? item.public_uuid}`)
-            }
-          }
-          console.log()
-          prompts.outro(dim("iris bloqs share <id>  (publish + shareable link)  |  iris bloqs update-item <id> --status <status>"))
-          return
+    // Lean default projection (#164357) — the fields an agent actually needs to
+    // scan a board. --fields overrides; --compact drops empties.
+    const DEFAULT_FIELDS = ["id", "title", "status", "list_name"]
+    const selectedFields = args.fields
+      ? String(args.fields).split(",").map((f) => f.trim()).filter(Boolean)
+      : DEFAULT_FIELDS
+    const project = (item: Record<string, any>) => {
+      const out: Record<string, any> = {}
+      for (const f of selectedFields) out[f] = item[f] ?? null
+      if (args.compact) {
+        for (const k of Object.keys(out)) {
+          if (out[k] === null || out[k] === undefined || out[k] === "") delete out[k]
         }
+      }
+      return out
+    }
 
+    try {
+      // Use the lean, server-paginated items endpoint (#164357/#164358). It returns
+      // a curated per-row projection + a pagination envelope (total/last_page), so we
+      // no longer dump the whole bloq's fat item models and slice client-side at 50.
+      const perPage = Math.min(Math.max(Number(args.limit) || 50, 1), 200)
+      const page = Math.max(Number(args.page) || 1, 1)
+      const params = new URLSearchParams()
+      params.set("per_page", String(perPage))
+      params.set("page", String(page))
+      if (args.search) params.set("search", String(args.search))
+      if (args.status) params.set("status", String(args.status))
+
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items?${params}`)
+      if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: "Failed to load bloq" })); return }
-        prompts.log.error("Failed to load bloq items")
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "List items")
         prompts.outro("Done")
         return
       }
+
+      const body = (await res.json()) as { data?: any }
+      const data = body?.data ?? body
+      let items: any[] = Array.isArray(data?.items) ? data.items : []
+      const pg = data?.pagination ?? {}
+
+      // --list is a client-side post-filter on the returned page (the endpoint scopes
+      // to the whole bloq). Narrow, but note it only filters the current page.
+      if (args.list !== undefined) {
+        items = items.filter((i: any) => i.bloq_list_id === args.list || i.list_id === args.list)
+      }
+
+      const total = pg.total ?? items.length
+      const lastPage = pg.last_page ?? 1
+      const currentPage = pg.current_page ?? page
+      const hasMore = currentPage < lastPage
+
+      if (args.json) {
+        console.log(JSON.stringify({
+          items: items.map(project),
+          pagination: {
+            total,
+            returned: items.length,
+            per_page: pg.per_page ?? perPage,
+            page: currentPage,
+            last_page: lastPage,
+            has_more: hasMore,
+          },
+        }, null, 2))
+        return
+      }
+
+      if (spinner) spinner.stop(`${items.length} of ${total} item(s)`)
+
+      if (items.length === 0) {
+        prompts.log.warn(args.search ? `No items matching "${args.search}"` : "No items found")
+        prompts.outro("Done")
+        return
+      }
+
+      console.log()
+      for (const item of items) {
+        const title = (item.title ?? item.content ?? "").toString().slice(0, 80)
+        const statusLabel = item.status && item.status !== "active" ? `  ${dim(`[${item.status}]`)}` : ""
+        const listLabel = item.list_name ? dim(` (${item.list_name})`) : ""
+        console.log(`  ${dim(`#${item.id}`)}  ${title}${statusLabel}${listLabel}`)
+        if (item.is_public && (item.public_url || item.public_uuid)) {
+          console.log(`      ${dim("public:")} ${item.public_url ?? item.public_uuid}`)
+        }
+      }
+      console.log()
+      const pageInfo = `Showing ${items.length} of ${total} (page ${currentPage}/${lastPage})`
+      const moreHint = hasMore ? dim(`  —  --page ${currentPage + 1} for more`) : ""
+      console.log(`  ${dim(pageInfo)}${moreHint}`)
+      console.log()
+      prompts.outro(dim("iris bloqs share <id>  (publish + shareable link)  |  iris bloqs update-item <id> --status <status>"))
+      return
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
       if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
