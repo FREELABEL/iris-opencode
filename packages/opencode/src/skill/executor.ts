@@ -58,7 +58,7 @@ export interface SkillPlan {
 
 export interface StepResult {
   id: string
-  status: "success" | "failed" | "skipped" | "pending"
+  status: "success" | "failed" | "skipped" | "pending" | "paused"
   output: string
   exit_code: number | null
   duration_ms: number
@@ -68,11 +68,13 @@ export interface StepResult {
 export interface SkillResult {
   run_id: string
   skill: string
-  status: "completed" | "failed" | "interrupted"
+  status: "completed" | "failed" | "interrupted" | "paused"
   steps: Record<string, StepResult>
   started_at: string
   finished_at: string
   args: Record<string, unknown>
+  /** Set when status is "paused" — the human step the run is waiting on. */
+  paused_on?: { id: string; title: string; instructions: string }
 }
 
 // ============================================================================
@@ -378,13 +380,13 @@ export function resolveArgs(
 // Checkpoint Management
 // ============================================================================
 
-interface Checkpoint {
+export interface Checkpoint {
   run_id: string
   skill: string
   args: Record<string, unknown>
   started_at: string
   updated_at: string
-  status: "running" | "interrupted" | "completed" | "failed"
+  status: "running" | "interrupted" | "completed" | "failed" | "paused"
   current_step: string | null
   steps: Record<string, StepResult>
 }
@@ -907,6 +909,17 @@ export interface ExecuteOptions {
   onStepStart?: (step: StepDef) => void
   onStepEnd?: (step: StepDef, result: StepResult) => void
   onManualPrompt?: (step: StepDef) => Promise<boolean>
+  /**
+   * Resume a specific paused run by id, reusing its run_id and completed steps.
+   * Takes precedence over `resume` (which only finds the latest run by skill name).
+   */
+  resumeRunId?: string
+  /**
+   * How to settle the step a run paused on, when resuming by run id.
+   * "done" (default) marks it success; "skip" marks it skipped, so dependent steps
+   * are skipped too rather than running on work that never happened.
+   */
+  resolvePaused?: "done" | "skip"
 }
 
 export async function executeSkill(
@@ -919,28 +932,55 @@ export async function executeSkill(
     throw new Error("Maximum skill nesting depth (3) exceeded")
   }
 
-  const runId = generateRunId()
   const now = new Date().toISOString()
   const stepResults: Record<string, StepResult> = {}
 
   // Load checkpoint if resuming
   let resumeCheckpoint: Checkpoint | null = null
-  if (opts.resume) {
+  if (opts.resumeRunId) {
+    // Resume a specific run — reuses its id so the run has one continuous history
+    resumeCheckpoint = loadCheckpoint(opts.resumeRunId)
+    if (!resumeCheckpoint) throw new Error(`Run "${opts.resumeRunId}" not found`)
+    if (resumeCheckpoint.skill !== plan.name) {
+      throw new Error(`Run "${opts.resumeRunId}" belongs to skill "${resumeCheckpoint.skill}", not "${plan.name}"`)
+    }
+  } else if (opts.resume) {
     resumeCheckpoint = findLatestCheckpoint(plan.name)
-    if (resumeCheckpoint) {
-      // Restore previous results
-      for (const [id, sr] of Object.entries(resumeCheckpoint.steps)) {
-        if (sr.status === "success") stepResults[id] = sr
+  }
+
+  // Steps carried over from a previous run — never re-executed on resume.
+  const restoredIds = new Set<string>()
+
+  if (resumeCheckpoint) {
+    for (const [id, sr] of Object.entries(resumeCheckpoint.steps)) {
+      if (sr.status === "success") {
+        stepResults[id] = sr
+        restoredIds.add(id)
+      } else if (sr.status === "paused" && opts.resumeRunId) {
+        // Explicitly resuming a run IS the human's answer for the step it paused on.
+        // Without this the step would re-pause immediately and the run could never finish.
+        const skipped = opts.resolvePaused === "skip"
+        stepResults[id] = {
+          ...sr,
+          status: skipped ? "skipped" : "success",
+          output: skipped ? "Human skipped step on resume" : "Human confirmed done on resume",
+          exit_code: skipped ? 1 : 0,
+        }
+        restoredIds.add(id)
       }
     }
   }
+
+  // A resumed run keeps its original id and start time; a fresh run gets new ones.
+  const runId = opts.resumeRunId ? resumeCheckpoint!.run_id : generateRunId()
+  const startedAt = opts.resumeRunId ? resumeCheckpoint!.started_at : now
 
   // Initialize checkpoint
   const checkpoint: Checkpoint = {
     run_id: runId,
     skill: plan.name,
     args: rawArgs,
-    started_at: now,
+    started_at: startedAt,
     updated_at: now,
     status: "running",
     current_step: null,
@@ -956,11 +996,12 @@ export async function executeSkill(
     }
   }
 
-  let finalStatus: "completed" | "failed" | "interrupted" = "completed"
+  let finalStatus: "completed" | "failed" | "interrupted" | "paused" = "completed"
+  let pausedOn: SkillResult["paused_on"] | undefined
 
   for (const step of stepsToRun) {
-    // Skip already-completed steps (resume mode)
-    if (stepResults[step.id]?.status === "success") continue
+    // Skip steps already settled by a previous run (resume mode)
+    if (restoredIds.has(step.id) || stepResults[step.id]?.status === "success") continue
 
     // Check depends
     if (step.depends) {
@@ -1015,6 +1056,32 @@ export async function executeSkill(
         opts.onStepEnd?.(step, stepResults[step.id])
         continue
       }
+    }
+
+    // Human-in-the-loop halt.
+    // A human step with no interactive handler (unattended run: --json, non-TTY,
+    // scheduled job) cannot be answered now. Persist a resumable pause instead of
+    // silently reporting success for work nobody did.
+    if ((step.mode === "human" || step.mode === "manual") && !opts.onManualPrompt && !opts.dryRun) {
+      const instructions = [interpolatedBody, interpolatedCode].filter(Boolean).join("\n\n").trim()
+      const sr: StepResult = {
+        id: step.id,
+        status: "paused",
+        output: instructions || step.title,
+        exit_code: null,
+        duration_ms: 0,
+        attempts: 0,
+      }
+      stepResults[step.id] = sr
+      checkpoint.steps[step.id] = sr
+      checkpoint.current_step = step.id
+      checkpoint.status = "paused"
+      checkpoint.updated_at = new Date().toISOString()
+      saveCheckpoint(checkpoint)
+      opts.onStepEnd?.(step, sr)
+      finalStatus = "paused"
+      pausedOn = { id: step.id, title: step.title, instructions: instructions || step.title }
+      break
     }
 
     // Dry run — skip actual execution
@@ -1228,10 +1295,13 @@ export async function executeSkill(
     }
   }
 
-  // Check if all steps succeeded
-  const allSucceeded = Object.values(stepResults).every((r) => r.status === "success" || r.status === "skipped")
-  if (allSucceeded && finalStatus !== "interrupted") finalStatus = "completed"
-  else if (finalStatus === "completed" && !allSucceeded) finalStatus = "failed"
+  // Check if all steps succeeded. A paused run is neither done nor failed —
+  // it is waiting on a human, so leave its status alone.
+  if (finalStatus !== "paused") {
+    const allSucceeded = Object.values(stepResults).every((r) => r.status === "success" || r.status === "skipped")
+    if (allSucceeded && finalStatus !== "interrupted") finalStatus = "completed"
+    else if (finalStatus === "completed" && !allSucceeded) finalStatus = "failed"
+  }
 
   // Save final checkpoint
   checkpoint.status = finalStatus
@@ -1243,9 +1313,10 @@ export async function executeSkill(
     skill: plan.name,
     status: finalStatus,
     steps: stepResults,
-    started_at: now,
+    started_at: startedAt,
     finished_at: new Date().toISOString(),
     args: rawArgs,
+    ...(pausedOn ? { paused_on: pausedOn } : {}),
   }
 }
 

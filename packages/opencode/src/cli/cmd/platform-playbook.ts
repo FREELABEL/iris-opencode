@@ -24,6 +24,15 @@ async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
   return Instance.provide({ directory: process.cwd(), fn })
 }
 
+/**
+ * Can we actually ask a human a question right now?
+ * False for --json and for non-interactive stdin (pipes, CI, scheduled jobs) —
+ * those runs pause at human steps instead of blocking on a prompt nobody sees.
+ */
+function canPromptHuman(json: boolean): boolean {
+  return !json && Boolean(process.stdin.isTTY)
+}
+
 // ============================================================================
 // iris skill list
 // ============================================================================
@@ -265,7 +274,11 @@ const SkillRunCommand = cmd({
         },
         onStepEnd(step, result) {
           if (args.json) return
-          const icon = result.status === "success" ? success("✓") : result.status === "skipped" ? dim("○") : "✗"
+          const icon =
+            result.status === "success" ? success("✓")
+            : result.status === "skipped" ? dim("○")
+            : result.status === "paused" ? "⏸"
+            : "✗"
           const dur = result.duration_ms > 0 ? dim(` (${(result.duration_ms / 1000).toFixed(1)}s)`) : ""
           sp.stop(`  ${icon} ${step.id}: ${step.title}${dur}`, result.status === "success" ? 0 : 1)
 
@@ -285,8 +298,12 @@ const SkillRunCommand = cmd({
           })
           return !prompts.isCancel(result) && result === true
         },
-        async onManualPrompt(step) {
-          if (args.json) return true
+      }
+
+      // Only offer an interactive "Done?" prompt when a human is actually watching.
+      // Unattended runs (--json, piped, scheduled) fall through to a persisted pause.
+      if (canPromptHuman(args.json as boolean)) {
+        opts.onManualPrompt = async (step) => {
           sp.stop(`  ${bold(step.id)}: ${step.title}`, 0)
           console.log()
           if (step.body) console.log(`    ${step.body.replace(/\n/g, "\n    ")}`)
@@ -294,7 +311,7 @@ const SkillRunCommand = cmd({
           console.log()
           const result = await prompts.confirm({ message: "Done?" })
           return !prompts.isCancel(result) && result === true
-        },
+        }
       }
 
       const result = await executeSkill(plan, resolvedArgs, opts)
@@ -315,6 +332,19 @@ const SkillRunCommand = cmd({
       if (result.status === "completed") {
         console.log(`  ${success("✓")} ${bold(result.skill)} completed`)
         console.log(dim(`  ${passed} passed${skippedCount ? `, ${skippedCount} skipped` : ""} in ${(totalMs / 1000).toFixed(1)}s`))
+      } else if (result.status === "paused") {
+        console.log(`  ⏸  ${bold(result.skill)} paused — waiting on a human`)
+        console.log(dim(`  ${passed} passed in ${(totalMs / 1000).toFixed(1)}s`))
+        if (result.paused_on) {
+          console.log()
+          console.log(`  ${bold(result.paused_on.id)}: ${result.paused_on.title}`)
+          if (result.paused_on.instructions) {
+            console.log()
+            console.log(`    ${result.paused_on.instructions.replace(/\n/g, "\n    ")}`)
+          }
+        }
+        console.log()
+        console.log(dim(`  Continue when done:  iris playbook resume ${result.run_id}`))
       } else {
         console.log(`  ✗ ${bold(result.skill)} ${result.status}`)
         console.log(`  ${passed} passed, ${failed} failed${skippedCount ? `, ${skippedCount} skipped` : ""} in ${(totalMs / 1000).toFixed(1)}s`)
@@ -331,8 +361,15 @@ const SkillRunCommand = cmd({
       }
 
       printDivider()
-      prompts.outro(result.status === "completed" ? success("Done") : "Done (with errors)")
-      if (result.status !== "completed") process.exitCode = 1
+      prompts.outro(
+        result.status === "completed" ? success("Done")
+        : result.status === "paused" ? "Paused"
+        : "Done (with errors)",
+      )
+      // 0 = done, 2 = paused on a human step, 1 = failed. Paused is not a failure,
+      // but it is not success either — callers must be able to tell the difference.
+      if (result.status === "paused") process.exitCode = 2
+      else if (result.status !== "completed") process.exitCode = 1
     })
   },
 })
@@ -470,14 +507,21 @@ const SkillHistoryCommand = cmd({
       console.log()
       console.log(bold("  Steps:"))
       for (const [id, sr] of Object.entries(run.steps)) {
-        const icon = sr.status === "success" ? success("✓") : sr.status === "skipped" ? dim("○") : "✗"
+        const icon =
+          sr.status === "success" ? success("✓")
+          : sr.status === "skipped" ? dim("○")
+          : sr.status === "paused" ? "⏸"
+          : "✗"
         const dur = sr.duration_ms > 0 ? dim(` (${(sr.duration_ms / 1000).toFixed(1)}s)`) : ""
         console.log(`    ${icon} ${bold(id)} — ${sr.status}${dur}`)
-        if (sr.output && sr.status === "failed") {
+        if (sr.output && (sr.status === "failed" || sr.status === "paused")) {
           console.log(dim(`      ${sr.output.slice(0, 200)}`))
         }
       }
       printDivider()
+      if (run.status === "paused") {
+        console.log(dim(`  Waiting on a human. Continue with: iris playbook resume ${run.run_id}`))
+      }
       prompts.outro("Done")
       return
     }
@@ -501,7 +545,11 @@ const SkillHistoryCommand = cmd({
 
     printDivider()
     for (const run of runs) {
-      const icon = run.status === "completed" ? success("✓") : run.status === "running" ? "◌" : "✗"
+      const icon =
+        run.status === "completed" ? success("✓")
+        : run.status === "running" ? "◌"
+        : run.status === "paused" ? "⏸"
+        : "✗"
       const stepCount = Object.keys(run.steps).length
       const time = dim(run.updated_at.replace("T", " ").slice(0, 19))
       console.log(`  ${icon} ${bold(run.run_id)} ${run.skill} — ${run.status} (${stepCount} steps) ${time}`)
@@ -509,6 +557,141 @@ const SkillHistoryCommand = cmd({
     printDivider()
     console.log(dim(`  ${runs.length} run(s). Use "iris skill history <run-id>" for details.`))
     prompts.outro("Done")
+  },
+})
+
+// ============================================================================
+// iris playbook resume <run-id>
+// ============================================================================
+
+const SkillResumeCommand = cmd({
+  command: "resume <runId>",
+  describe: "resume a paused run after the human step is done",
+  builder: (yargs) =>
+    yargs
+      .positional("runId", { type: "string", demandOption: true })
+      .option("skip", {
+        type: "boolean",
+        default: false,
+        describe: "mark the paused human step as NOT done (dependent steps are skipped)",
+      })
+      .option("yes", { type: "boolean", default: false, describe: "skip confirmation prompts", alias: "y" })
+      .option("verbose", { type: "boolean", default: false })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    await withInstance(async () => {
+      const runId = args.runId as string
+      const run = getRun(runId)
+      if (!run) {
+        console.error(`Run "${runId}" not found`)
+        process.exit(1)
+      }
+      if (run.status !== "paused") {
+        console.error(`Run "${runId}" is ${run.status}, not paused — nothing to resume.`)
+        process.exit(1)
+      }
+
+      const info = await Skill.get(run.skill)
+      if (!info) {
+        console.error(`Skill "${run.skill}" not found — it may have been renamed or removed since this run started.`)
+        process.exit(1)
+      }
+      const plan = await parsePlan(info)
+
+      if (!args.json) {
+        UI.empty()
+        prompts.intro(`◈  Resuming: ${run.skill}`)
+        console.log(dim(`  Run ${run.run_id}, paused at "${run.current_step}"`))
+        console.log()
+      }
+
+      const sp = prompts.spinner()
+
+      const opts: ExecuteOptions = {
+        resumeRunId: runId,
+        resolvePaused: args.skip ? "skip" : "done",
+        yes: args.yes as boolean,
+        verbose: args.verbose as boolean,
+        onStepStart(step) {
+          if (!args.json) sp.start(`  ${step.id}: ${step.title}`)
+        },
+        onStepEnd(step, result) {
+          if (args.json) return
+          const icon =
+            result.status === "success" ? success("✓")
+            : result.status === "skipped" ? dim("○")
+            : result.status === "paused" ? "⏸"
+            : "✗"
+          const dur = result.duration_ms > 0 ? dim(` (${(result.duration_ms / 1000).toFixed(1)}s)`) : ""
+          sp.stop(`  ${icon} ${step.id}: ${step.title}${dur}`, result.status === "success" ? 0 : 1)
+          if (result.status === "failed" && result.output) {
+            console.log(`    ${result.output.slice(0, 300)}`)
+          }
+        },
+        async onConfirm(stepId, command) {
+          if (!canPromptHuman(args.json as boolean)) return true
+          const preview = command.length > 200 ? command.slice(0, 200) + "..." : command
+          const result = await prompts.confirm({
+            message: `Step "${stepId}" will execute:\n\n    ${preview}\n\n  Continue?`,
+          })
+          return !prompts.isCancel(result) && result === true
+        },
+      }
+
+      // Same rule as `run`: only prompt when a human is actually watching,
+      // so a resume can itself pause again at the next human step.
+      if (canPromptHuman(args.json as boolean)) {
+        opts.onManualPrompt = async (step) => {
+          sp.stop(`  ${bold(step.id)}: ${step.title}`, 0)
+          console.log()
+          if (step.body) console.log(`    ${step.body.replace(/\n/g, "\n    ")}`)
+          if (step.code) console.log(`\n    ${dim(step.code.replace(/\n/g, "\n    "))}`)
+          console.log()
+          const result = await prompts.confirm({ message: "Done?" })
+          return !prompts.isCancel(result) && result === true
+        }
+      }
+
+      const result = await executeSkill(plan, run.args, opts)
+
+      if (args.json) {
+        console.log(JSON.stringify(result, null, 2))
+        if (result.status === "paused") process.exitCode = 2
+        else if (result.status !== "completed") process.exitCode = 1
+        return
+      }
+
+      console.log()
+      printDivider()
+      if (result.status === "completed") {
+        console.log(`  ${success("✓")} ${bold(result.skill)} completed`)
+      } else if (result.status === "paused") {
+        console.log(`  ⏸  ${bold(result.skill)} paused again — waiting on a human`)
+        if (result.paused_on) {
+          console.log()
+          console.log(`  ${bold(result.paused_on.id)}: ${result.paused_on.title}`)
+          if (result.paused_on.instructions) {
+            console.log()
+            console.log(`    ${result.paused_on.instructions.replace(/\n/g, "\n    ")}`)
+          }
+        }
+        console.log()
+        console.log(dim(`  Continue when done:  iris playbook resume ${result.run_id}`))
+      } else {
+        console.log(`  ✗ ${bold(result.skill)} ${result.status}`)
+        for (const [id, sr] of Object.entries(result.steps)) {
+          if (sr.status === "failed") console.log(`    ✗ ${id}: ${sr.output.slice(0, 200)}`)
+        }
+      }
+      printDivider()
+      prompts.outro(
+        result.status === "completed" ? success("Done")
+        : result.status === "paused" ? "Paused"
+        : "Done (with errors)",
+      )
+      if (result.status === "paused") process.exitCode = 2
+      else if (result.status !== "completed") process.exitCode = 1
+    })
   },
 })
 
@@ -1160,6 +1343,7 @@ export const PlatformPlaybookCommand = cmd({
       .command(SkillListCommand)
       .command(SkillShowCommand)
       .command(SkillRunCommand)
+      .command(SkillResumeCommand)
       .command(SkillTestCommand)
       .command(SkillHistoryCommand)
       .command(SkillE2ECommand)
@@ -1184,6 +1368,7 @@ export const PlatformSkillCommand = cmd({
       .command(SkillListCommand)
       .command(SkillShowCommand)
       .command(SkillRunCommand)
+      .command(SkillResumeCommand)
       .command(SkillTestCommand)
       .command(SkillHistoryCommand)
       .command(SkillE2ECommand)

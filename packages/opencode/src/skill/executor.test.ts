@@ -1,4 +1,7 @@
 import { describe, test, expect } from "bun:test"
+import { unlinkSync, existsSync } from "fs"
+import { homedir } from "os"
+import { join } from "path"
 import {
   parseSteps,
   interpolate,
@@ -6,11 +9,19 @@ import {
   shellEscape,
   resolveArgs,
   validatePlan,
+  executeSkill,
+  getRun,
   type StepDef,
   type StepResult,
   type SkillPlan,
   type ArgDef,
 } from "./executor"
+
+/** Remove the on-disk checkpoint a test run created, so tests don't litter ~/.iris. */
+const cleanupRun = (runId: string) => {
+  const p = join(homedir(), ".iris", "skill-runs", `${runId}.json`)
+  if (existsSync(p)) unlinkSync(p)
+}
 
 // ============================================================================
 // HELPERS
@@ -2096,5 +2107,132 @@ describe("STRESS: interpolateInput adversarial", () => {
     const original = JSON.parse(JSON.stringify(input))
     interpolateInput(input, { x: "replaced", y: "also" }, {})
     expect(input).toEqual(original)
+  })
+})
+
+// ############################################################################
+//
+//  HUMAN-IN-THE-LOOP: PAUSE & RESUME
+//
+//  A human step with no interactive handler must halt the run and persist a
+//  resumable checkpoint — never silently report success for work nobody did.
+//
+// ############################################################################
+
+describe("human-in-the-loop pause/resume", () => {
+  const hitlPlan: SkillPlan = {
+    ...basePlan,
+    name: "hitl-test",
+    steps: [
+      makeStep({ id: "before", mode: "shell", code: "echo BEFORE_RAN" }),
+      makeStep({ id: "approve", mode: "human", body: "Get written approval.", depends: "before" }),
+      makeStep({ id: "after", mode: "shell", code: "echo AFTER_RAN", depends: "approve" }),
+    ],
+  }
+
+  test("pauses at a human step when there is no interactive handler", async () => {
+    const result = await executeSkill(hitlPlan, {})
+    try {
+      expect(result.status).toBe("paused")
+      expect(result.steps["before"].status).toBe("success")
+      expect(result.steps["approve"].status).toBe("paused")
+      // The step after the human gate must NOT have run.
+      expect(result.steps["after"]).toBeUndefined()
+      expect(result.paused_on?.id).toBe("approve")
+      expect(result.paused_on?.instructions).toContain("Get written approval")
+    } finally {
+      cleanupRun(result.run_id)
+    }
+  })
+
+  test("does NOT pause when an interactive handler answers the step", async () => {
+    const result = await executeSkill(hitlPlan, {}, { onManualPrompt: async () => true })
+    try {
+      expect(result.status).toBe("completed")
+      expect(result.steps["after"].status).toBe("success")
+      expect(result.steps["after"].output).toContain("AFTER_RAN")
+    } finally {
+      cleanupRun(result.run_id)
+    }
+  })
+
+  test("persists a resumable paused checkpoint", async () => {
+    const result = await executeSkill(hitlPlan, {})
+    try {
+      const saved = getRun(result.run_id)
+      expect(saved).not.toBeNull()
+      expect(saved!.status).toBe("paused")
+      expect(saved!.current_step).toBe("approve")
+    } finally {
+      cleanupRun(result.run_id)
+    }
+  })
+
+  test("resume continues the SAME run and completes it", async () => {
+    const paused = await executeSkill(hitlPlan, {})
+    const resumed = await executeSkill(hitlPlan, {}, { resumeRunId: paused.run_id })
+    try {
+      // Same run id and original start time — one continuous history, not a new run.
+      expect(resumed.run_id).toBe(paused.run_id)
+      expect(resumed.started_at).toBe(paused.started_at)
+      expect(resumed.status).toBe("completed")
+      expect(resumed.steps["approve"].status).toBe("success")
+      expect(resumed.steps["after"].output).toContain("AFTER_RAN")
+    } finally {
+      cleanupRun(paused.run_id)
+    }
+  })
+
+  test("resume does not re-run steps that already succeeded", async () => {
+    const paused = await executeSkill(hitlPlan, {})
+    const firstDuration = paused.steps["before"].duration_ms
+    const resumed = await executeSkill(hitlPlan, {}, { resumeRunId: paused.run_id })
+    try {
+      // Restored verbatim from the checkpoint rather than executed again.
+      expect(resumed.steps["before"].duration_ms).toBe(firstDuration)
+    } finally {
+      cleanupRun(paused.run_id)
+    }
+  })
+
+  test("resume --skip marks the human step skipped and skips dependents", async () => {
+    const paused = await executeSkill(hitlPlan, {})
+    const resumed = await executeSkill(hitlPlan, {}, { resumeRunId: paused.run_id, resolvePaused: "skip" })
+    try {
+      expect(resumed.steps["approve"].status).toBe("skipped")
+      // Nothing may run on top of a human step that was never actually done.
+      expect(resumed.steps["after"].status).toBe("skipped")
+      expect(resumed.steps["after"].output).toContain("not met")
+    } finally {
+      cleanupRun(paused.run_id)
+    }
+  })
+
+  test("resuming an unknown run id throws", async () => {
+    await expect(executeSkill(hitlPlan, {}, { resumeRunId: "sk_doesnotexist" })).rejects.toThrow("not found")
+  })
+
+  test("resuming a run belonging to a different skill throws", async () => {
+    const paused = await executeSkill(hitlPlan, {})
+    try {
+      const otherPlan = { ...hitlPlan, name: "some-other-skill" }
+      await expect(executeSkill(otherPlan, {}, { resumeRunId: paused.run_id })).rejects.toThrow("belongs to skill")
+    } finally {
+      cleanupRun(paused.run_id)
+    }
+  })
+
+  test("a plan with no human steps is unaffected", async () => {
+    const plain: SkillPlan = {
+      ...basePlan,
+      name: "plain-test",
+      steps: [makeStep({ id: "only", mode: "shell", code: "echo OK" })],
+    }
+    const result = await executeSkill(plain, {})
+    try {
+      expect(result.status).toBe("completed")
+    } finally {
+      cleanupRun(result.run_id)
+    }
   })
 })
