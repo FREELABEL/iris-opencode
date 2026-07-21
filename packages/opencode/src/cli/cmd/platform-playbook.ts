@@ -1297,6 +1297,9 @@ const PublishCommand = cmd({
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     // 1. Set the association + route: iris-api records scope and upserts the marketplace row on public.
+    // NOTE: playbooks live on IRIS_API (freelabel.net), not the default FL_API base — without this
+    // the request hits fl-api, which has no publish route, and 404s.
+    const { IRIS_API } = await import("./iris-api")
     const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(String(args.name))}/publish`, {
       method: "POST",
       body: JSON.stringify({
@@ -1304,7 +1307,7 @@ const PublishCommand = cmd({
         bloq_id: args.bloq ?? null,
         access_type: args.access,
       }),
-    })
+    }, IRIS_API)
     const ok = await handleApiError(res, "Publish playbook")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
