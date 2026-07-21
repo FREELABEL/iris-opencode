@@ -17,6 +17,7 @@ import {
   getBridgeToken,
 } from "./iris-api"
 import { exec } from "child_process"
+import { detectNewConnection, extractConnections, type ConnectionRow } from "./integration-connect-state"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 
 // ============================================================================
@@ -986,6 +987,18 @@ const ConnectCommand = cmd({
       return
     }
 
+    // #171182: snapshot what already exists BEFORE authorising. Without this the
+    // poll below matches the very connection the user is trying to repair and
+    // reports success for a failed OAuth.
+    const snapshotUserId = await requireUserId().catch(() => null)
+    let connectionsBefore: ConnectionRow[] = []
+    if (snapshotUserId) {
+      try {
+        const beforeRes = await irisFetch(`/api/v1/users/${snapshotUserId}/integrations`)
+        if (beforeRes.ok) connectionsBefore = extractConnections(await beforeRes.json())
+      } catch {}
+    }
+
     console.log(`  ${success("→")} Opening ${highlight(type)} in your browser to authorize…`)
     openBrowser(url)
     console.log()
@@ -996,7 +1009,7 @@ const ConnectCommand = cmd({
     const pollSpinner = prompts.spinner()
     pollSpinner.start("Waiting for authorization… (complete in your browser)")
 
-    const pollUserId = await requireUserId().catch(() => null)
+    const pollUserId = snapshotUserId ?? (await requireUserId().catch(() => null))
     const pollStart = Date.now()
     const pollTimeout = 60_000
     let connected = false
@@ -1006,12 +1019,9 @@ const ConnectCommand = cmd({
       try {
         const checkRes = await irisFetch(`/api/v1/users/${pollUserId}/integrations`)
         if (checkRes.ok) {
-          const checkData = (await checkRes.json()) as any
-          const connections = checkData?.connections ?? checkData?.data ?? []
-          const match = connections.find((c: any) =>
-            (c.type ?? c.integration_type ?? "").toLowerCase() === type.toLowerCase() ||
-            (c.name ?? "").toLowerCase().includes(type.toLowerCase())
-          )
+          // #171182: only a NEW or newly-activated connection counts. An unchanged
+          // pre-existing row means the authorisation did not go through.
+          const match = detectNewConnection(connectionsBefore, extractConnections(await checkRes.json()), type)
           if (match) {
             connected = true
             break
@@ -1023,8 +1033,12 @@ const ConnectCommand = cmd({
     if (connected) {
       pollSpinner.stop(`${success("✓")} ${bold(type)} connected successfully!`)
     } else {
-      pollSpinner.stop(`${dim("Timed out waiting — check manually")}`)
+      pollSpinner.stop(`${dim("No new connection detected — authorization did not complete")}`)
+      console.log()
+      console.log(`  ${dim("The browser step may have failed (a redirect_uri_mismatch shows as a Google 400).")}`)
       console.log(`  ${dim("Verify with:")} ${highlight("iris integrations list-connected")}`)
+      console.log(`  ${dim("Retry and read the browser error:")} ${highlight(`iris integrations connect ${type} --print-url`)}`)
+      process.exitCode = 1
     }
     prompts.outro("Done")
   },
