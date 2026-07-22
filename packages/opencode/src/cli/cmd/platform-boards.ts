@@ -200,7 +200,9 @@ const BoardsCreateCommand = cmd({
       .option("bloq-id", { describe: "bloq ID (required)", type: "number", demandOption: true })
       .option("title", { describe: "item title", type: "string" })
       .option("description", { describe: "item description", type: "string" })
-      .option("type", { describe: "item type", type: "string", choices: ["default", "research", "content"], default: "default" }),
+      // Mirrors BloqItemController::VALID_ITEM_TYPES (bug #177261). Previously this
+      // list omitted diary/vehicle, which the API accepts.
+      .option("type", { describe: "item type", type: "string", choices: ["default", "research", "content", "diary", "vehicle", "task"], default: "default" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Board Item")
@@ -224,7 +226,9 @@ const BoardsCreateCommand = cmd({
       const userId = await resolveUserId()
       if (!userId) { spinner.stop("Failed — no user ID", 1); prompts.outro("Done"); return }
 
-      const payload: Record<string, unknown> = { title, content: args.description || title, type: args.type || "task" }
+      // `|| "task"` here defaulted to a value the API's create validator rejected
+      // outright (bug #177261). yargs already defaults this to "default".
+      const payload: Record<string, unknown> = { title, content: args.description || title, type: args.type || "default" }
 
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items`, {
         method: "POST",
@@ -411,15 +415,34 @@ const BoardsPushCommand = cmd({
       spinner.start(`Pushing ${basename(filepath)}…`)
 
       const item = JSON.parse(readFileSync(filepath, "utf-8"))
-      const payload: Record<string, unknown> = {
-        title: item.title,
-        description: item.description,
-        content: item.content,
-        type: item.type,
-        status: item.status,
+
+      // Send ONLY fields the caller actually changed. Echoing back every field from
+      // `pull` meant re-submitting values the user never touched — and if the API's
+      // write validator has drifted from what the read path emits (e.g. type "task",
+      // created by BugReportController but absent from the update enum), an unmodified
+      // round-trip is rejected outright. See bug #177261.
+      const liveRes = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`)
+      const liveOk = await handleApiError(liveRes, "Fetch item")
+      if (!liveOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const liveData = (await liveRes.json()) as { data?: any }
+      const live = liveData?.data ?? liveData
+
+      const payload: Record<string, unknown> = {}
+      for (const f of ["title", "description", "content", "type", "status"]) {
+        if (item[f] === undefined) continue
+        if (JSON.stringify(item[f] ?? null) !== JSON.stringify(live?.[f] ?? null)) {
+          payload[f] = item[f]
+        }
       }
-      for (const k of Object.keys(payload)) {
-        if (payload[k] === undefined) delete payload[k]
+
+      if (Object.keys(payload).length === 0) {
+        spinner.stop(success("Already in sync"))
+        printDivider()
+        printKV("Title", live?.title ?? `#${args.id}`)
+        printKV("ID", args.id)
+        printDivider()
+        prompts.outro("Done")
+        return
       }
 
       const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`, {
