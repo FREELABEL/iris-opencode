@@ -3,8 +3,8 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, success, IRIS_API } from "./iris-api"
 import { apiMakePublic, type ShareOptions } from "./bloq-item-shared"
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, chmodSync, rmSync } from "fs"
-import { join, basename, resolve } from "path"
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, chmodSync, rmSync, watch } from "fs"
+import { join, basename, resolve, dirname } from "path"
 import { homedir } from "os"
 import { execFileSync } from "child_process"
 import matter from "gray-matter"
@@ -248,6 +248,50 @@ function deriveDiarySlug(fm: Record<string, any>, file: string): string | undefi
   return rest ? rest.slice(0, 190) : undefined
 }
 
+// Push one markdown file to the cloud diary (keyed by date+slug, idempotent).
+// The lean core shared by `sync` and the `watch` daemon — no share-link or
+// frontmatter-writeback (writeback would change mtimes and loop a watcher).
+async function pushDiaryFile(
+  file: string,
+  opts: { agent?: number; bloq?: number; userId?: string },
+): Promise<{ status: "synced" | "skipped" | "error"; itemId?: number; date?: string; slug?: string }> {
+  let parsed: ReturnType<typeof matter>
+  try { parsed = matter(readFileSync(file, "utf8")) } catch { return { status: "error" } }
+  const fm: Record<string, any> = parsed.data || {}
+  const date = deriveDiaryDate(fm, file)
+  if (!date) return { status: "skipped" }
+  const slug = deriveDiarySlug(fm, file)
+
+  const payload: any = { content: parsed.content.trim(), date, replace: true }
+  if (slug) payload.slug = slug
+  if (opts.agent) payload.agent_id = opts.agent
+  else if (opts.bloq) payload.bloq_id = opts.bloq
+  else if (opts.userId) payload.user_id = parseInt(opts.userId, 10)
+
+  try {
+    const res = await irisFetch(`/api/v6/diary`, { method: "POST", body: JSON.stringify(payload) }, IRIS_API)
+    if (!res.ok) return { status: "error", date, slug }
+    const data = (await res.json()) as any
+    return { status: "synced", itemId: data?.item_id, date, slug }
+  } catch {
+    return { status: "error", date, slug }
+  }
+}
+
+// Persisted autosync config so the boot service can launch `iris diary watch`
+// with no args, and install/watch agree on the directory.
+const autosyncConfigPath = () => join(homedir(), ".iris", "diary-autosync.json")
+function readAutosyncConfig(): { dir?: string; agent?: number; bloq?: number } {
+  try { return JSON.parse(readFileSync(autosyncConfigPath(), "utf8")) } catch { return {} }
+}
+function writeAutosyncConfig(cfg: { dir: string; agent?: number; bloq?: number }) {
+  mkdirSync(dirname(autosyncConfigPath()), { recursive: true })
+  writeFileSync(autosyncConfigPath(), JSON.stringify(cfg, null, 2))
+}
+function defaultDiaryDir(): string {
+  return readAutosyncConfig().dir || join(process.cwd(), "daily-diary")
+}
+
 const DiarySyncCommand = cmd({
   command: "sync <paths..>",
   describe: "publish local markdown diary files to your IRIS diary (idempotent)",
@@ -316,61 +360,82 @@ const DiarySyncCommand = cmd({
 })
 
 // ── Auto-sync (background, on-write) ─────────────────────────────────────────
-// A macOS LaunchAgent whose WatchPaths fires on any change in the diary dir and
-// runs `iris diary sync` — so entries reach the cloud with no manual step,
-// regardless of who wrote them (you, an editor, another agent). This is the
-// product mechanism for "auto-sync-on-write" — NOT a Claude Code hook.
+// Two pieces, both shipping to every IRIS CLI user:
+//   • `iris diary watch [dir]` — a PORTABLE foreground daemon (Node fs.watch)
+//     that syncs entries within seconds of a change. Works on any platform.
+//   • `iris diary autosync install|uninstall|status` — wires the OS to keep the
+//     watcher alive at login: launchd on macOS, systemd --user on Linux.
+// Product mechanism for auto-sync-on-write — NOT a Claude Code hook.
 
 const AUTOSYNC_LABEL = "io.heyiris.diary-sync"
-const autosyncPaths = () => {
-  const home = homedir()
-  return {
-    home,
-    wrapper: join(home, ".iris", "cron", "diary-autosync.sh"),
-    plist: join(home, "Library", "LaunchAgents", `${AUTOSYNC_LABEL}.plist`),
-    log: join(home, ".iris", "logs", "diary-autosync.log"),
-  }
+
+const DiaryWatchCommand = cmd({
+  command: "watch [dir]",
+  describe: "foreground daemon that auto-syncs diary files as they change (used by autosync)",
+  builder: (y: any) =>
+    sharedOptions(y).option("full-interval", {
+      describe: "seconds between full catch-up syncs",
+      type: "number",
+      default: 14400,
+    }),
+  async handler(args: any) {
+    const dir = resolve(args.dir || defaultDiaryDir())
+    if (!existsSync(dir)) { console.error(`[diary-watch] directory not found: ${dir}`); process.exit(1) }
+    // Headless auth: relies on IRIS_API_KEY (from ~/.iris/sdk/.env). No prompts.
+    const token = await requireAuth()
+    if (!token) { console.error("[diary-watch] not authenticated — set IRIS_API_KEY"); process.exit(1) }
+
+    const opts = { agent: args.agent as number | undefined, bloq: args.bloq as number | undefined, userId: getSdkUserId() }
+    const log = (m: string) => console.error(`[diary-watch] ${m}`)
+
+    async function fullSync() {
+      const files = expandMarkdownPaths([dir])
+      let n = 0
+      for (const f of files) { if ((await pushDiaryFile(f, opts)).status === "synced") n++ }
+      log(`full catch-up: ${n}/${files.length} synced`)
+    }
+
+    // Debounce a burst of saves; sync only the files that actually changed.
+    const pending = new Set<string>()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    async function flush() {
+      timer = null
+      const batch = [...pending]; pending.clear()
+      for (const f of batch) {
+        if (!existsSync(f)) continue
+        const r = await pushDiaryFile(f, opts)
+        log(`${r.status} ${basename(f)}${r.slug ? ` (${r.slug})` : ""}`)
+      }
+    }
+
+    log(`watching ${dir}`)
+    await fullSync().catch((e) => log(`initial sync error: ${e}`))
+    const fullMs = Math.max(60, Number(args["full-interval"]) || 14400) * 1000
+    const interval = setInterval(() => { fullSync().catch((e) => log(`full sync error: ${e}`)) }, fullMs)
+
+    const watcher = watch(dir, (_evt, filename) => {
+      const name = filename ? String(filename) : ""
+      if (!name.endsWith(".md")) return
+      pending.add(join(dir, name))
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => { flush().catch((e) => log(`flush error: ${e}`)) }, 2000)
+    })
+
+    const shutdown = () => { try { watcher.close() } catch {} clearInterval(interval); process.exit(0) }
+    process.on("SIGTERM", shutdown)
+    process.on("SIGINT", shutdown)
+    await new Promise<void>(() => {}) // run until signalled
+  },
+})
+
+// The installed iris binary path for the boot service. In a compiled release
+// process.execPath IS the iris binary; fall back to `iris` on PATH.
+function irisBinaryPath(): string {
+  const p = process.execPath
+  return p && /iris/i.test(basename(p)) ? p : "iris"
 }
 
-// Wrapper is written for bash 3.2 (macOS /bin/bash): no mapfile. Diary filenames
-// are kebab-case (no spaces), so word-splitting on $files is safe. `--no-frontmatter`
-// avoids a WatchPaths loop (writing iris_diary_item_id back would change mtimes).
-const autosyncWrapper = (dir: string, home: string) => `#!/bin/bash
-# ${AUTOSYNC_LABEL} — auto-sync the daily diary to the cloud on any change.
-# Managed by \`iris diary autosync\` — edits will be overwritten on reinstall.
-export PATH="$HOME/.local/bin:$HOME/.iris/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
-DIARY_DIR="${dir}"
-LOG="${join(home, ".iris", "logs", "diary-autosync.log")}"
-LOCK="${join(home, ".iris", "logs", ".diary-autosync.lock")}"
-FULL_MARKER="${join(home, ".iris", "logs", ".diary-last-full-sync")}"
-
-if ! mkdir "$LOCK" 2>/dev/null; then exit 0; fi
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT
-
-sleep 2  # debounce a burst of saves
-ts() { date '+%Y-%m-%d %H:%M:%S'; }
-now=$(date +%s)
-last_full=$(cat "$FULL_MARKER" 2>/dev/null || echo 0)
-
-if [ $((now - last_full)) -gt 14400 ]; then
-  echo "[$(ts)] autosync: FULL catch-up" >> "$LOG"
-  iris diary sync "$DIARY_DIR" --no-frontmatter >> "$LOG" 2>&1
-  echo "$now" > "$FULL_MARKER"
-else
-  files=$(find "$DIARY_DIR" -maxdepth 1 -name '*.md' -mmin -5 2>/dev/null)
-  if [ -z "$files" ]; then
-    echo "[$(ts)] autosync: nothing new" >> "$LOG"
-  else
-    echo "[$(ts)] autosync: $(echo "$files" | grep -c .) changed file(s)" >> "$LOG"
-    iris diary sync $files --no-frontmatter >> "$LOG" 2>&1
-  fi
-fi
-echo "[$(ts)] autosync done (exit $?)" >> "$LOG"
-tail -n 500 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG" 2>/dev/null
-`
-
-const autosyncPlist = (dir: string, wrapper: string, home: string) => `<?xml version="1.0" encoding="UTF-8"?>
+const macPlist = (bin: string, watchArgs: string[], logFile: string) => `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -378,100 +443,130 @@ const autosyncPlist = (dir: string, wrapper: string, home: string) => `<?xml ver
   <string>${AUTOSYNC_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${wrapper}</string>
-  </array>
-  <key>WatchPaths</key>
-  <array>
-    <string>${dir}</string>
+${[bin, ...watchArgs].map((a) => `    <string>${a}</string>`).join("\n")}
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>KeepAlive</key>
+  <true/>
   <key>StandardOutPath</key>
-  <string>${join(home, ".iris", "logs", "diary-sync.launchd.log")}</string>
+  <string>${logFile}</string>
   <key>StandardErrorPath</key>
-  <string>${join(home, ".iris", "logs", "diary-sync.launchd.err")}</string>
+  <string>${logFile}</string>
 </dict>
 </plist>
 `
 
+const systemdUnit = (bin: string, watchArgs: string[], dir: string) => `[Unit]
+Description=IRIS daily-diary auto-sync (watches ${dir})
+After=network-online.target
+
+[Service]
+ExecStart=${[bin, ...watchArgs].join(" ")}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`
+
 const DiaryAutosyncCommand = cmd({
   command: "autosync <action>",
-  describe: "background auto-sync of local diary files to the cloud (install|uninstall|status)",
+  describe: "keep diary auto-sync running at login (install|uninstall|status)",
   builder: (y: any) =>
     y
       .positional("action", { choices: ["install", "uninstall", "status"], type: "string" })
-      .option("dir", { describe: "diary directory to watch (default: ./daily-diary)", type: "string" }),
+      .option("dir", { describe: "diary directory to watch (default: ./daily-diary or saved config)", type: "string" })
+      .option("agent", { alias: "a", type: "number", describe: "sync into an agent-scoped diary" })
+      .option("bloq", { alias: "b", type: "number", describe: "sync into a bloq-scoped diary" }),
   async handler(args: any) {
     UI.empty()
     prompts.intro("◈  Diary — Auto-sync")
 
-    if (process.platform !== "darwin") {
-      prompts.log.warn("Auto-sync currently supports macOS (launchd) only.")
-      prompts.outro("Done")
-      return
-    }
-
-    const p = autosyncPaths()
-
+    const home = homedir()
     const uid = () => String(process.getuid ? process.getuid() : "")
     const tryExec = (bin: string, cliArgs: string[]) => {
       try { execFileSync(bin, cliArgs, { stdio: "ignore" }); return true } catch { return false }
     }
-    const isLoaded = () => {
-      try { return execFileSync("launchctl", ["list"], { encoding: "utf8" }).includes(AUTOSYNC_LABEL) }
-      catch { return false }
+
+    const isMac = process.platform === "darwin"
+    const isLinux = process.platform === "linux"
+    if (!isMac && !isLinux) {
+      prompts.log.warn(`Install supports macOS + Linux. On ${process.platform}, run \`iris diary watch\` under your own process manager.`)
+      prompts.outro("Done")
+      return
     }
 
+    const plist = join(home, "Library", "LaunchAgents", `${AUTOSYNC_LABEL}.plist`)
+    const unit = join(home, ".config", "systemd", "user", "iris-diary-sync.service")
+    const logFile = join(home, ".iris", "logs", "diary-watch.log")
+
+    const macLoaded = () => { try { return execFileSync("launchctl", ["list"], { encoding: "utf8" }).includes(AUTOSYNC_LABEL) } catch { return false } }
+    const linuxActive = () => { try { return execFileSync("systemctl", ["--user", "is-active", "iris-diary-sync"], { encoding: "utf8" }).trim() === "active" } catch { return false } }
+
     if (args.action === "status") {
-      const loaded = isLoaded()
-      console.log(`  ${loaded ? success("● running") : dim("○ not installed")}  ${AUTOSYNC_LABEL}`)
-      console.log(`  ${dim("plist:  ")} ${existsSync(p.plist) ? p.plist : dim("(missing)")}`)
-      if (existsSync(p.log)) {
-        const tail = readFileSync(p.log, "utf8").trim().split("\n").slice(-4)
-        console.log(`  ${dim("recent:")}`)
-        for (const l of tail) console.log(`    ${dim(l)}`)
+      const running = isMac ? macLoaded() : linuxActive()
+      const cfg = readAutosyncConfig()
+      console.log(`  ${running ? success("● running") : dim("○ not installed")}  iris diary auto-sync (${process.platform})`)
+      if (cfg.dir) console.log(`  ${dim("watching:")} ${cfg.dir}`)
+      if (existsSync(logFile)) {
+        const tail = readFileSync(logFile, "utf8").trim().split("\n").filter(Boolean).slice(-4)
+        if (tail.length) { console.log(`  ${dim("recent:")}`); for (const l of tail) console.log(`    ${dim(l)}`) }
       }
       prompts.outro("Done")
       return
     }
 
     if (args.action === "uninstall") {
-      tryExec("launchctl", ["bootout", `gui/${uid()}/${AUTOSYNC_LABEL}`])
-      tryExec("launchctl", ["unload", p.plist])
-      for (const f of [p.plist, p.wrapper]) { try { rmSync(f) } catch {} }
+      if (isMac) {
+        tryExec("launchctl", ["bootout", `gui/${uid()}/${AUTOSYNC_LABEL}`])
+        tryExec("launchctl", ["unload", plist])
+        try { rmSync(plist) } catch {}
+      } else {
+        tryExec("systemctl", ["--user", "disable", "--now", "iris-diary-sync"])
+        try { rmSync(unit) } catch {}
+        tryExec("systemctl", ["--user", "daemon-reload"])
+      }
       prompts.log.success("Auto-sync removed. Local files stay; nothing is deleted from the cloud.")
       prompts.outro("Done")
       return
     }
 
     // install
-    const dir = resolve(args.dir || join(process.cwd(), "daily-diary"))
+    const dir = resolve(args.dir || defaultDiaryDir())
     if (!existsSync(dir)) {
-      prompts.log.error(`Diary directory not found: ${dir}\n  Pass one with --dir <path>.`)
+      prompts.log.error(`Diary directory not found: ${dir}\n  Create it or pass --dir <path>.`)
       prompts.outro("Done")
       return
     }
+    mkdirSync(join(home, ".iris", "logs"), { recursive: true })
+    writeAutosyncConfig({ dir, agent: args.agent, bloq: args.bloq })
 
-    mkdirSync(join(p.home, ".iris", "cron"), { recursive: true })
-    mkdirSync(join(p.home, ".iris", "logs"), { recursive: true })
-    mkdirSync(join(p.home, "Library", "LaunchAgents"), { recursive: true })
+    const bin = irisBinaryPath()
+    const watchArgs = ["diary", "watch", dir]
+    if (args.agent) watchArgs.push("--agent", String(args.agent))
+    else if (args.bloq) watchArgs.push("--bloq", String(args.bloq))
 
-    writeFileSync(p.wrapper, autosyncWrapper(dir, p.home))
-    chmodSync(p.wrapper, 0o755)
-    writeFileSync(p.plist, autosyncPlist(dir, p.wrapper, p.home))
-
-    // Reload cleanly (ignore errors from a not-yet-loaded agent).
-    tryExec("launchctl", ["bootout", `gui/${uid()}/${AUTOSYNC_LABEL}`])
-    tryExec("launchctl", ["unload", p.plist])
-    const ok = tryExec("launchctl", ["bootstrap", `gui/${uid()}`, p.plist]) ||
-               tryExec("launchctl", ["load", "-w", p.plist])
-
-    if (ok && isLoaded()) {
-      prompts.log.success(`Watching ${bold(dir)} — new/edited entries now sync automatically.`)
-      console.log(`  ${dim("On write → ~4s incremental sync · every 4h → full catch-up.")}`)
-      console.log(`  ${dim(`Status: iris diary autosync status  ·  Remove: iris diary autosync uninstall`)}`)
+    let ok = false
+    if (isMac) {
+      mkdirSync(dirname(plist), { recursive: true })
+      writeFileSync(plist, macPlist(bin, watchArgs, logFile))
+      tryExec("launchctl", ["bootout", `gui/${uid()}/${AUTOSYNC_LABEL}`])
+      tryExec("launchctl", ["unload", plist])
+      ok = (tryExec("launchctl", ["bootstrap", `gui/${uid()}`, plist]) || tryExec("launchctl", ["load", "-w", plist])) && macLoaded()
     } else {
-      prompts.log.warn(`Wrote the agent but launchctl load failed. Try:\n  launchctl load -w ${p.plist}`)
+      mkdirSync(dirname(unit), { recursive: true })
+      writeFileSync(unit, systemdUnit(bin, watchArgs, dir))
+      tryExec("systemctl", ["--user", "daemon-reload"])
+      ok = tryExec("systemctl", ["--user", "enable", "--now", "iris-diary-sync"]) && linuxActive()
+    }
+
+    if (ok) {
+      prompts.log.success(`Watching ${bold(dir)} — new/edited entries sync automatically.`)
+      console.log(`  ${dim("On write → within seconds · full catch-up every 4h & at login.")}`)
+      console.log(`  ${dim("Status: iris diary autosync status  ·  Remove: iris diary autosync uninstall")}`)
+    } else {
+      prompts.log.warn("Wrote the service but couldn't confirm it started. Check: iris diary autosync status")
     }
     prompts.outro("Done")
   },
@@ -487,6 +582,7 @@ export const PlatformDiaryCommand = cmd({
       .command(DiaryViewCommand)
       .command(DiaryAddCommand)
       .command(DiarySyncCommand)
+      .command(DiaryWatchCommand)
       .command(DiaryAutosyncCommand)
       .demandCommand(),
   async handler() {},
