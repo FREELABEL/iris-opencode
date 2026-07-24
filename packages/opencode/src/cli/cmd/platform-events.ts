@@ -84,7 +84,9 @@ const ListCommand = cmd({
     if (spinner) spinner.start("Loading…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit) })
+      // The events index reads `limit` (per_page is now accepted as an alias too);
+      // sending per_page alone silently capped results at 10 (#177629).
+      const params = new URLSearchParams({ limit: String(args.limit) })
       if (args.future) params.set("future_only", "true")
       if (args.past) params.set("past_only", "true")
       if (args.city) params.set("city", args.city)
@@ -1022,8 +1024,11 @@ function printTicket(t: Record<string, unknown>): void {
   if (t.url) console.log(`    ${dim(String(t.url))}`)
 }
 
-async function fetchTickets(eventId: number): Promise<any[] | null> {
-  const res = await irisFetch(`/api/v1/events/${eventId}/tickets`)
+async function fetchTickets(eventId: number, includeHidden = false): Promise<any[] | null> {
+  // include_hidden=true returns hidden tickets too (authed route) so pull/push
+  // round-trips and link-page idempotency don't miss hidden rows (#177628 follow-up).
+  const qs = includeHidden ? "?include_hidden=true" : ""
+  const res = await irisFetch(`/api/v1/events/${eventId}/tickets${qs}`)
   const ok = await handleApiError(res, "Fetch tickets")
   if (!ok) return null
   const data = (await res.json()) as any
@@ -1088,7 +1093,9 @@ const TicketsPullCommand = cmd({
     spinner.start("Fetching…")
 
     try {
-      const items = await fetchTickets(args["event-id"])
+      // Pull the full set (incl. hidden) so a pull → edit → push round-trip doesn't
+      // silently drop hidden tickets.
+      const items = await fetchTickets(args["event-id"], true)
       if (!items) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       // Normalize to clean ticket objects for local editing
@@ -1178,7 +1185,8 @@ const TicketsPushCommand = cmd({
 
       // 2. Fetch live tickets
       spinner.start("Comparing local vs live…")
-      const liveTickets = await fetchTickets(args["event-id"])
+      // incl. hidden — push manages the full set
+      const liveTickets = await fetchTickets(args["event-id"], true)
       if (!liveTickets) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const liveMap = new Map<number, any>()
@@ -1298,7 +1306,7 @@ const TicketsPushCommand = cmd({
 
       // 6. Re-pull to get fresh IDs for newly created tickets
       prompts.log.info("Re-pulling to sync local file with new IDs…")
-      const fresh = await fetchTickets(args["event-id"])
+      const fresh = await fetchTickets(args["event-id"], true)
       if (fresh) {
         const freshTickets = fresh.map((t: any) => ({
           id: t.id,
@@ -1356,8 +1364,8 @@ const TicketsDiffCommand = cmd({
         return t
       })
 
-      // Fetch live
-      const liveTickets = await fetchTickets(args["event-id"])
+      // Fetch live (incl. hidden — diff must match what push manages)
+      const liveTickets = await fetchTickets(args["event-id"], true)
       if (!liveTickets) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const liveMap = new Map<number, any>()
@@ -1570,8 +1578,9 @@ const LinkPageCommand = cmd({
         explicitBloq ?? (jc?.leadBloqId ?? jc?.lead_bloq_id ?? undefined)
 
       // 3. Idempotency — reuse any existing ticket that already links to a /p/ page.
+      //    include hidden so a previously-hidden link ticket is reused, not duplicated.
       spinner.message("Checking existing tickets…")
-      const tickets = (await fetchTickets(Number(eventId))) ?? []
+      const tickets = (await fetchTickets(Number(eventId), true)) ?? []
       const existing = tickets.find(
         (t: any) => typeof t.url === "string" && (t.url === url || t.url.includes(`/p/${slug}`) || t.url.includes("/p/")),
       )
