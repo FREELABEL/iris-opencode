@@ -5,6 +5,7 @@ import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bol
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
+import { getBySlug } from "./platform-pages"
 
 // ============================================================================
 // Sync helpers
@@ -1520,6 +1521,126 @@ const TicketCheckoutCommand = cmd({
 })
 
 // ============================================================================
+// Link Page — wire an event to a Genesis registration page in one command
+// ============================================================================
+//
+// The Discover → Genesis funnel needs three things wired together: the event
+// (on the Discover grid), the hosted /p/ registration page, and lead capture.
+// This does all three: it creates/updates a single "Register" ticket whose url
+// points at the page, which the event-detail UI renders as a real RSVP link
+// (EventTicketsSection.isOwnLandingPage gates /p/ pages into the external-link
+// path), and it links the event to the page's lead bloq so registrations land
+// in the CRM. Idempotent: re-running updates the existing link ticket in place.
+
+const LinkPageCommand = cmd({
+  command: "link-page <event-id> <page-slug>",
+  aliases: ["attach-page", "register-page"],
+  describe: "wire an event to a Genesis registration page — one 'Register' button → /p/<slug> + lead capture",
+  handler: async (args: Record<string, unknown>) => {
+    const eventId = String(args["event-id"])
+    const slug = String(args["page-slug"])
+    UI.empty()
+    prompts.intro(`◈  Link Page — Event #${eventId} → /p/${slug}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Resolving page…")
+    try {
+      // 1. Verify the page exists (and pull json_content for its lead bloq).
+      const page = await getBySlug(slug, true)
+      if (!page) {
+        spinner.stop("Page not found", 1)
+        prompts.log.error(`No page with slug '${slug}'. Create it first: ${highlight("iris pages create")}`)
+        prompts.outro("Failed")
+        return
+      }
+
+      // 2. Public URL — MUST match the frontend /p/ whitelist (isOwnLandingPage).
+      const url: string = page.public_url || `https://freelabel.net/p/${slug}`
+
+      // Derive the lead bloq from the page's json_content unless overridden.
+      let jc: any = page.json_content
+      if (typeof jc === "string") { try { jc = JSON.parse(jc) } catch { jc = {} } }
+      const bloqOpt = args.bloq !== undefined ? String(args.bloq) : undefined
+      const skipBloq = bloqOpt === "none"
+      const explicitBloq = bloqOpt && bloqOpt !== "none" ? Number(bloqOpt) : undefined
+      const leadBloqId: number | undefined =
+        explicitBloq ?? (jc?.leadBloqId ?? jc?.lead_bloq_id ?? undefined)
+
+      // 3. Idempotency — reuse any existing ticket that already links to a /p/ page.
+      spinner.message("Checking existing tickets…")
+      const tickets = (await fetchTickets(Number(eventId))) ?? []
+      const existing = tickets.find(
+        (t: any) => typeof t.url === "string" && (t.url === url || t.url.includes(`/p/${slug}`) || t.url.includes("/p/")),
+      )
+
+      const title = String(args.title ?? "Register")
+      const priceStr = String(args.price ?? "0")
+      const payload: Record<string, unknown> = {
+        title, url, price: priceStr, is_visible: true, status: "active", max_per_order: 1,
+      }
+      if (args.seats) payload.quantity_total = Number(args.seats)
+      if (args.description) payload.description = String(args.description)
+
+      spinner.message(existing ? "Updating Register link…" : "Creating Register link…")
+      let ticketId: number | undefined
+      if (existing) {
+        const res = await irisFetch(`/api/v1/events/${eventId}/tickets/${existing.id}`, { method: "PUT", body: JSON.stringify(payload) })
+        const ok = await handleApiError(res, "Update Register link")
+        if (!ok) { spinner.stop("Failed", 1); prompts.outro("Failed"); return }
+        ticketId = existing.id
+      } else {
+        const res = await irisFetch(`/api/v1/events/${eventId}/tickets`, { method: "POST", body: JSON.stringify(payload) })
+        const ok = await handleApiError(res, "Create Register link")
+        if (!ok) { spinner.stop("Failed", 1); prompts.outro("Failed"); return }
+        const data = (await res.json()) as any
+        ticketId = (data.data || data)?.id
+      }
+
+      // 4. Link the event to the page's lead bloq so registrations reach the CRM.
+      let bloqLinked: number | undefined
+      if (leadBloqId && !skipBloq) {
+        const res = await irisFetch(`/api/v1/events/${eventId}`, { method: "PUT", body: JSON.stringify({ bloq_id: Number(leadBloqId) }) })
+        if (res.ok) bloqLinked = Number(leadBloqId)
+      }
+
+      spinner.stop(success(existing ? "Register link updated" : "Register link created"))
+
+      if (args.json) {
+        console.log(JSON.stringify({ event_id: Number(eventId), page_slug: slug, url, ticket_id: ticketId ?? null, bloq_id: bloqLinked ?? null }, null, 2))
+        return
+      }
+      printDivider()
+      printKV("Event", `#${eventId}`)
+      printKV("Page", `/p/${slug}`)
+      printKV("Register URL", url)
+      printKV("Ticket", `#${ticketId} · ${title}${priceStr === "0" ? " · Free" : ` · $${priceStr}`}`)
+      if (bloqLinked) printKV("Leads → Bloq", `#${bloqLinked}`)
+      else if (skipBloq) printKV("Leads → Bloq", dim("skipped (--bloq none)"))
+      else printKV("Leads → Bloq", dim("none (page declares no leadBloqId)"))
+      printDivider()
+      console.log(dim("Discover event → 'Register' button → Genesis page → lead capture. Wired."))
+      prompts.outro(highlight(url))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+  builder: (y) => y
+    .positional("event-id", { describe: "event ID", type: "string", demandOption: true })
+    .positional("page-slug", { describe: "Genesis page slug (e.g. ai-for-lawyers)", type: "string", demandOption: true })
+    .option("title", { describe: "button/ticket label", type: "string", default: "Register" })
+    .option("price", { describe: "ticket price in dollars (0 = free RSVP)", type: "string" })
+    .option("seats", { describe: "capacity (quantity_total)", type: "number" })
+    .option("description", { describe: "ticket description shown under the button", type: "string" })
+    .option("bloq", { describe: "lead bloq id for registrations (default: the page's leadBloqId; 'none' to skip)", type: "string" })
+    .option("json", { describe: "JSON output", type: "boolean" }),
+})
+
+// ============================================================================
 // Venue Deal — link/unlink a venue to an event
 // ============================================================================
 
@@ -2915,6 +3036,7 @@ export const PlatformEventsCommand = cmd({
       .command(TicketsPushCommand)
       .command(TicketsDiffCommand)
       .command(TicketCheckoutCommand)
+      .command(LinkPageCommand)
       // Venue Deals
       .command(LinkVenueCommand)
       .command(UnlinkVenueCommand)
