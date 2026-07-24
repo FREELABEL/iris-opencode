@@ -726,6 +726,90 @@ const CloseCommand = cmd({
   },
 })
 
+// The marketplace Opportunity that funds bug-bounty payouts (config bounty.bug_opportunity_id).
+const BUG_OPPORTUNITY_ID = 581
+
+// Verify (accept) reported bugs for the bug bounty. This flips them to status=done — the state
+// BugBountyPayoutService/BloqItemObserver treat as "verified" — so they become payout-eligible
+// (the batch sweep keys off done; auto-pay fires on the todo->done transition). Owner-authed via
+// the marketplace verifyBug route; the response is the owner bug console (payout status per bug).
+const VerifyCommand = cmd({
+  command: "verify <id..>",
+  aliases: ["accept"],
+  describe: "verify bug report(s) for the bug bounty — marks them done so the reporter can be paid",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bug item ID(s) to verify", type: "number", array: true, demandOption: true })
+      .option("opportunity", { alias: "o", describe: "bounty opportunity id", type: "number", default: BUG_OPPORTUNITY_ID })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const ids = (args.id as number[]).filter(Boolean)
+    if (ids.length === 0) {
+      console.error("No bug IDs provided")
+      process.exitCode = 1
+      return
+    }
+    const oppId = Number(args.opportunity)
+
+    const spinner = prompts.spinner()
+    spinner.start(`Verifying ${ids.length} bug(s) for opportunity #${oppId}…`)
+
+    // The console returned by the LAST successful call — its per-bug rows carry the payout amount
+    // + status we surface (amount_cents, payout_status, severity).
+    let lastConsole: any = null
+    const results: Array<{ id: number; ok: boolean; error?: string }> = []
+    for (const bugId of ids) {
+      try {
+        const res = await irisFetch(
+          `/api/v1/marketplace/opportunities/${oppId}/bug-bounty/bugs/${bugId}/verify`,
+          { method: "POST" },
+        )
+        if (!res.ok) {
+          const text = await res.text().catch(() => "")
+          results.push({ id: bugId, ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` })
+          continue
+        }
+        lastConsole = ((await res.json()) as any)?.data ?? null
+        results.push({ id: bugId, ok: true })
+      } catch (e: any) {
+        results.push({ id: bugId, ok: false, error: e.message })
+      }
+    }
+
+    const okCount = results.filter((r) => r.ok).length
+    const failCount = results.filter((r) => !r.ok).length
+
+    if (args.json) {
+      spinner.stop("")
+      console.log(JSON.stringify({ results, ok: okCount, failed: failCount, console: lastConsole }, null, 2))
+      return
+    }
+
+    if (failCount === 0) {
+      spinner.stop(`${success("✓")} ${okCount} bug(s) verified`)
+    } else {
+      spinner.stop(`${okCount} verified, ${failCount} failed`)
+      for (const r of results.filter((r) => !r.ok)) prompts.log.error(`#${r.id}: ${r.error}`)
+    }
+
+    // Surface each verified bug's resulting payout state from the owner console.
+    const byId = new Map<number, any>()
+    for (const b of (lastConsole?.bugs ?? [])) byId.set(Number(b.id), b)
+    for (const r of results.filter((r) => r.ok)) {
+      const b = byId.get(r.id)
+      if (b) {
+        const amount = `$${(((b.amount_cents ?? 0) as number) / 100).toFixed(2)}`
+        console.log(`  ${dim(`#${r.id}`)} ${String(b.severity ?? "").toUpperCase()} → ${highlight(amount)}  ${dim(String(b.payout_status ?? ""))}`)
+      }
+    }
+    console.log(dim("  Verified bugs are payout-eligible. Pay: iris bounty pay <id> --execute (or the batch sweep)."))
+    console.log("")
+  },
+})
+
 // ============================================================================
 // Root command
 // ============================================================================
@@ -734,6 +818,6 @@ export const PlatformBugCommand = cmd({
   command: "bug",
   aliases: ["bugs", "report"],
   describe: "report bugs and view your submissions",
-  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(CloseCommand).demandCommand(),
+  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).demandCommand(),
   async handler() {},
 })
