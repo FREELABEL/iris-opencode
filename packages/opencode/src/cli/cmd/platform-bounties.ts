@@ -656,6 +656,77 @@ const PlaceCommand = cmd({
   },
 })
 
+// Enroll a CRM lead as a hunter on a bounty opportunity and fire the welcome
+// across whatever channels the backend resolves (email / SMS). Owner-auth; the
+// backend reports which channels went out (channels_sent) + any warnings
+// (e.g. no phone on file → SMS skipped).
+const AddHunterCommand = cmd({
+  command: "add-hunter",
+  describe: "enroll a CRM lead as a bounty hunter and send the welcome",
+  builder: (yargs) =>
+    yargs
+      .option("lead", { describe: "CRM lead ID to enroll", type: "number", demandOption: true })
+      .option("opportunity", { describe: "opportunity ID", type: "number", default: 581 })
+      .option("phone", { describe: "phone number for SMS welcome (optional)", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+
+    const token = await requireAuth()
+    if (!token) return
+
+    const oppId = args.opportunity
+    const leadId = args.lead
+
+    if (!args.json) prompts.intro(`◈  Enroll Lead #${leadId} as Hunter (Bounty #${oppId})`)
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Enrolling hunter…")
+
+    try {
+      const body: Record<string, unknown> = { lead_id: leadId }
+      if (args.phone) body.phone = args.phone
+
+      const res = await irisFetch(`/api/v1/marketplace/opportunities/${oppId}/hunters`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      })
+      const ok = await handleApiError(res, "Add hunter")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const json = await res.json()
+      const data = (json as any).data ?? json
+
+      if (spinner) spinner.stop(success("Hunter enrolled!"))
+
+      if (args.json) {
+        console.log(JSON.stringify(json, null, 2))
+        return
+      }
+
+      const leadName = data.lead_name ?? data.name ?? (data.lead && (data.lead.name ?? data.lead.full_name)) ?? `Lead #${leadId}`
+      const channels = Array.isArray(data.channels_sent) ? data.channels_sent : []
+      const warnings = Array.isArray(data.warnings) ? data.warnings : []
+
+      printDivider()
+      printKV("Lead", leadName)
+      printKV("Opportunity", `#${oppId}`)
+      printKV("Welcome sent on", channels.length ? channels.join(", ") : dim("(no channels)"))
+      printDivider()
+
+      if (warnings.length) {
+        for (const w of warnings) prompts.log.warn(String(w))
+      }
+    } catch (e: any) {
+      if (spinner) spinner.stop("Error", 1)
+      prompts.log.error(e.message)
+      if (!args.json) prompts.outro("Done")
+      return
+    }
+
+    if (!args.json) prompts.outro("Done")
+  },
+})
+
 export const PlatformBountiesCommand = cmd({
   command: "bounty",
   aliases: ["bounties"],
@@ -663,6 +734,7 @@ export const PlatformBountiesCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(CreateCommand)
+      .command(AddHunterCommand)
       .command(PlaceCommand)
       .command(ListCommand)
       .command(SubmitCommand)
