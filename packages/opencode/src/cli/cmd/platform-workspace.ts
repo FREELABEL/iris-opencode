@@ -181,18 +181,115 @@ const SyncCommand = cmd({
 })
 
 // ----------------------------------------------------------------------------
+// workspace org <bloqId> — the reporting tree (humans + AI), provenance-tagged
+// ----------------------------------------------------------------------------
+
+/** Recursively print a node + its reports as an indented tree. */
+function printOrgNode(node: any, prefix: string, isLast: boolean): void {
+  const kind = node.is_human ? "👤" : "🤖"
+  // provenance: synced = Google's truth (green ◆), iris = yours to arrange (purple ✦)
+  const prov = node.provenance === "synced" ? success("◆") : highlight("✦")
+  const meta = [node.title, node.department || node.org_unit].filter(Boolean).join(" · ")
+  const branch = prefix === "" ? "" : isLast ? "└─ " : "├─ "
+  console.log(`  ${prefix}${branch}${kind} ${bold(node.name)} ${prov}${meta ? dim(" " + meta) : ""}`)
+  const kids = node.reports || []
+  const childPrefix = prefix === "" ? "   " : prefix + (isLast ? "   " : "│  ")
+  kids.forEach((child: any, i: number) => printOrgNode(child, childPrefix, i === kids.length - 1))
+}
+
+const OrgCommand = cmd({
+  command: "org <bloqId>",
+  aliases: ["tree", "chart"],
+  describe: "print the Workforce org tree for a bloq (humans + AI, provenance-tagged)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloqId", { type: "number", demandOption: true })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Workspace · Org")
+    const data = await call("Get org tree", `/api/v1/bloqs/${args.bloqId}/org`)
+    if (!data) return
+    const payload = data?.data ?? data
+    if (args.json) {
+      console.log(JSON.stringify(payload, null, 2))
+      prompts.outro("Done")
+      return
+    }
+    printDivider()
+    const tree: any[] = payload?.tree ?? []
+    if (!tree.length) {
+      console.log(`  ${dim("No agents on bloq")} #${args.bloqId}`)
+    } else {
+      tree.forEach((root, i) => printOrgNode(root, "", i === tree.length - 1))
+    }
+    printDivider()
+    console.log(`  ${dim("Total:")} ${payload.count ?? 0} ${dim("·")} ${success(String(payload.synced_count ?? 0) + " synced")} ${dim("·")} ${highlight(String(payload.iris_count ?? 0) + " IRIS-owned")}`)
+    console.log(`  ${dim("legend:")} ${success("◆")} ${dim("Google-synced")}  ${highlight("✦")} ${dim("IRIS-owned")}`)
+    prompts.outro("Done")
+  },
+})
+
+// ----------------------------------------------------------------------------
+// workspace place <agentId> --under <managerAgentId> | --detach
+// ----------------------------------------------------------------------------
+
+const PlaceCommand = cmd({
+  command: "place <agentId>",
+  aliases: ["report"],
+  describe: "place an agent under a manager (e.g. an AI teammate under a human) — IRIS-owned",
+  builder: (yargs) =>
+    yargs
+      .positional("agentId", { type: "number", demandOption: true })
+      .option("under", { type: "number", describe: "manager agent ID to report to" })
+      .option("detach", { type: "boolean", default: false, describe: "remove the reporting link" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Workspace · Place")
+    if (!args.detach && (args.under === undefined || args.under === null)) {
+      console.log(`  ${dim("✗ pass --under <managerAgentId> (or --detach to remove the link)")}`)
+      prompts.outro("Done")
+      return
+    }
+    const managerId = args.detach ? null : args.under
+    const data = await call("Place agent", `/api/v1/agents/${args.agentId}/manager`, {
+      method: "POST",
+      body: JSON.stringify({ manager_agent_id: managerId }),
+    })
+    if (!data) return
+    const r = data?.data ?? data
+    if (args.json) {
+      console.log(JSON.stringify(r, null, 2))
+      prompts.outro("Done")
+      return
+    }
+    printDivider()
+    if (r.manager_agent_id) {
+      console.log(`  ${success("✓ placed")} ${dim("agent")} #${args.agentId} ${dim("→ reports to")} #${r.manager_agent_id}`)
+    } else {
+      console.log(`  ${success("✓ detached")} ${dim("agent")} #${args.agentId} ${dim("(now a root)")}`)
+    }
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
+// ----------------------------------------------------------------------------
 // Parent command
 // ----------------------------------------------------------------------------
 
 export const PlatformWorkspaceCommand = cmd({
   command: "workspace",
   aliases: ["workspaces", "ws"],
-  describe: "Workspace (team) ↔ Google Workspace identity sync (show, bind, sync)",
+  describe: "Workspace (team) ↔ Google Workspace identity sync (show, bind, sync, org, place)",
   builder: (yargs) =>
     yargs
       .command(ShowCommand)
       .command(BindCommand)
       .command(SyncCommand)
+      .command(OrgCommand)
+      .command(PlaceCommand)
       .demandCommand(),
   async handler() {},
 })
