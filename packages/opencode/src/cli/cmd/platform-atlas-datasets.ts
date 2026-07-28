@@ -982,11 +982,153 @@ const ApiCommand = cmd({
     console.log(`    GET    ${url}/summary   ${dim("(legacy — COUNT/SUM only)")}`)
     console.log(`    GET    ${url}/aggregate ${dim("?group_by=&metrics=avg:Field,median:Field,rate:F=V&min_sample=")}`)
     console.log(`    POST   ${url}/derive    ${dim('{"fields":["zone_id"],"force":false}')}`)
+    console.log(`    POST   ${url}/import    ${dim('{"records":[{"external_id":"…","data":{…}}]} — upsert, idempotent')}`)
     printDivider()
     if (fields.length) console.log(`  ${bold("Fields")}     ${fields.join(", ")}`)
     console.log()
     console.log(`  ${dim("POST body MUST be wrapped as { data, external_id } — a flat body fails:")}`)
     console.log(`  ${dim(curl)}`)
+    prompts.outro("Done")
+  },
+})
+
+// ── IMPORT ───────────────────────────────────────────────────────────────────
+
+/** Server cap per request; the CLI chunks to stay under it. */
+const IMPORT_CHUNK = 500
+
+/**
+ * Read a JSON array or CSV file into {external_id, data} rows.
+ *
+ * The external-id column is what makes a re-import merge instead of duplicate, so a file
+ * without it is refused rather than loaded — a dataset that silently doubles every month is
+ * worse than an import that failed.
+ */
+function readImportRows(file: string, idField: string): { rows: any[]; error?: string } {
+  const raw = fs.readFileSync(file, "utf8")
+
+  if (file.toLowerCase().endsWith(".json")) {
+    let parsed: any
+    try { parsed = JSON.parse(raw) } catch (e: any) { return { rows: [], error: `Invalid JSON: ${e.message}` } }
+    const list = Array.isArray(parsed) ? parsed : parsed?.records ?? parsed?.data
+    if (!Array.isArray(list)) return { rows: [], error: "Expected a JSON array, or {records:[…]}" }
+
+    const rows = list.map((r: any) =>
+      // Already in wire shape? Pass through. Otherwise treat the object as the data and pull
+      // the id out of it.
+      r && typeof r === "object" && "external_id" in r && "data" in r
+        ? r
+        : { external_id: String(r?.[idField] ?? ""), data: r },
+    )
+    const missing = rows.filter((r) => !r.external_id).length
+    if (missing) return { rows: [], error: `${missing} row(s) have no "${idField}" — no dedup key, so a re-import would duplicate` }
+    return { rows }
+  }
+
+  // Minimal CSV: comma-separated, optional double quotes, no embedded newlines.
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim() !== "")
+  if (lines.length < 2) return { rows: [], error: "CSV needs a header row and at least one data row" }
+  const split = (line: string) =>
+    (line.match(/("([^"]|"")*"|[^,]*)(,|$)/g) ?? [])
+      .slice(0, -1)
+      .map((c) => c.replace(/,$/, "").replace(/^"|"$/g, "").replace(/""/g, '"'))
+  const header = split(lines[0])
+  if (!header.includes(idField)) return { rows: [], error: `CSV has no "${idField}" column (columns: ${header.join(", ")})` }
+
+  const rows = lines.slice(1).map((line) => {
+    const cells = split(line)
+    const data: Record<string, any> = {}
+    header.forEach((h, i) => {
+      const v = cells[i] ?? ""
+      // Numeric-looking cells become numbers so money/number fields validate and aggregate.
+      data[h] = v !== "" && /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v
+    })
+    return { external_id: String(data[idField] ?? ""), data }
+  })
+  const missing = rows.filter((r) => !r.external_id).length
+  if (missing) return { rows: [], error: `${missing} CSV row(s) have an empty "${idField}"` }
+  return { rows }
+}
+
+const ImportCommand = cmd({
+  command: "import <file>",
+  describe: "bulk upsert rows from JSON/CSV — re-running merges instead of duplicating",
+  builder: (y) =>
+    y
+      .positional("file", { type: "string", describe: "path to a .json array or .csv file" })
+      .option("schema", { type: "string", demandOption: true, alias: "s", describe: "dataset slug" })
+      .option("id-field", { type: "string", default: "external_id", describe: "column holding the stable dedup key" })
+      .option("bloq", { type: "number" })
+      .option("no-validate", { type: "boolean", default: false, describe: "skip schema validation (trusted load)" })
+      .option("dry-run", { type: "boolean", default: false, describe: "parse and report, write nothing" })
+      .option("json", { type: "boolean", default: false })
+      .example('$0 datasets import ./bids.csv -s cci-bid-history --id-field "Project ID"', "monthly workbook drop"),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Import → ${args.schema}`)
+
+    const file = String(args.file)
+    if (!fs.existsSync(file)) { prompts.log.error(`File not found: ${file}`); prompts.outro("Done"); return }
+
+    const { rows, error } = readImportRows(file, String(args["id-field"]))
+    if (error) { prompts.log.error(error); prompts.outro("Done"); return }
+
+    console.log(`  ${bold("Parsed")}    ${rows.length} row(s) from ${path.basename(file)}`)
+    if (args["dry-run"]) {
+      console.log(`  ${dim("Dry run — nothing written. First row:")}`)
+      console.log(`  ${dim(JSON.stringify(rows[0]).slice(0, 200))}`)
+      prompts.outro("Done"); return
+    }
+
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    let created = 0, updated = 0, failedCount = 0, totalActive = 0
+    const failures: any[] = []
+    const chunks = Math.ceil(rows.length / IMPORT_CHUNK)
+
+    for (let c = 0; c < chunks; c++) {
+      const slice = rows.slice(c * IMPORT_CHUNK, (c + 1) * IMPORT_CHUNK)
+      const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/import`, {
+        method: "POST",
+        body: JSON.stringify({
+          records: slice,
+          validate: !args["no-validate"],
+          ...(args.bloq != null ? { bloq_id: args.bloq } : {}),
+        }),
+      })
+      const ok = await handleApiError(res, `Import chunk ${c + 1}/${chunks}`)
+      // Stop on a failed chunk rather than pressing on — continuing would report a total that
+      // mixes written and unwritten rows.
+      if (!ok) { prompts.outro("Done"); return }
+
+      const d = ((await res.json()) as any)?.data
+      created += d?.created ?? 0
+      updated += d?.updated ?? 0
+      failedCount += d?.failed_count ?? 0
+      totalActive = d?.total_active ?? totalActive
+      if (Array.isArray(d?.failed)) failures.push(...d.failed)
+      if (chunks > 1) console.log(`  ${dim(`chunk ${c + 1}/${chunks}: +${d?.created ?? 0} new, ${d?.updated ?? 0} merged`)}`)
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify({ created, updated, failed_count: failedCount, total_active: totalActive, failed: failures }, null, 2))
+      prompts.outro("Done"); return
+    }
+
+    printDivider()
+    console.log(`  ${bold("Created")}   ${created}`)
+    console.log(`  ${bold("Merged")}    ${updated} ${dim("(matched an existing dedup key)")}`)
+    console.log(`  ${bold("Total")}     ${totalActive} active record(s) in the dataset`)
+    // Never let rejected rows pass quietly — a partial load reported as complete is how a
+    // dataset ends up 80% full and trusted.
+    if (failedCount > 0) {
+      console.log(`  ${bold("Failed")}    ${failedCount} row(s) rejected:`)
+      for (const f of failures.slice(0, 10)) {
+        console.log(`    ${dim(`row ${f.index}${f.external_id ? ` (${f.external_id})` : ""}: ${JSON.stringify(f.error)}`)}`)
+      }
+      if (failures.length > 10) console.log(`    ${dim(`… ${failures.length - 10} more`)}`)
+    }
+    printDivider()
     prompts.outro("Done")
   },
 })
@@ -1184,7 +1326,7 @@ export const PlatformAtlasDatasetsCommand = cmd({
   aliases: ["atlas-datasets", "datasets"],
   describe: "Schema-driven datasets — define once, store anything, no migrations",
   builder: (y) =>
-    y.command(SchemasGroup).command(RecordsGroup).command(AggregateCommand).command(DeriveCommand)
+    y.command(SchemasGroup).command(RecordsGroup).command(ImportCommand).command(AggregateCommand).command(DeriveCommand)
      .command(ExportCommand).command(AuditCommand).command(ApiCommand).demandCommand(),
   async handler() {},
 })
