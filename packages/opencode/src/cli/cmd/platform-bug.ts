@@ -14,6 +14,8 @@ const BUG_BLOQ_ID = 297
 
 // Resolve a bug (record the fix/solution + commit) via PUBLIC endpoint — no auth required
 const bugResolveEndpoint = (itemId: number) => `/api/v1/public/bug-report/${itemId}/resolve`
+// Amend a bug after the fact (reporter attribution / severity / status / title / note) — no auth
+const bugUpdateEndpoint = (itemId: number) => `/api/v1/public/bug-report/${itemId}/update`
 
 // Best-effort current git commit info from the cwd (used to stamp the fix that closed a bug)
 function detectGitCommit(): { hash?: string; url?: string } {
@@ -810,6 +812,76 @@ const VerifyCommand = cmd({
   },
 })
 
+const UpdateCommand = cmd({
+  command: "update <id>",
+  aliases: ["edit", "amend"],
+  describe: "amend a bug — reporter attribution, severity, status, title, or an appended note",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bug item ID", type: "number", demandOption: true })
+      .option("reporter-lead", { describe: "lead ID to attribute as the reporter (bounty tally)", type: "number" })
+      .option("reporter-user", { describe: "user ID to attribute as the reporter", type: "number" })
+      .option("reporter-name", { describe: "display name of the reporter", type: "string" })
+      .option("severity", { alias: "s", describe: "low | medium | high | critical", type: "string" })
+      .option("status", { describe: "board status (todo, in_progress, done, …)", type: "string" })
+      .option("title", { describe: "new title (severity prefix preserved)", type: "string" })
+      .option("description", { alias: ["d", "note"], describe: "append an update note to the bug", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const itemId = args.id as number
+    const body: Record<string, unknown> = {}
+    if (args["reporter-lead"] != null) body.reporter_lead_id = args["reporter-lead"]
+    if (args["reporter-user"] != null) body.reporter_user_id = args["reporter-user"]
+    if (args["reporter-name"]) body.reporter_name = args["reporter-name"]
+    if (args.severity) body.severity = args.severity
+    if (args.status) body.status = args.status
+    if (args.title) body.title = args.title
+    if (args.description) body.description = args.description
+
+    if (Object.keys(body).length === 0) {
+      console.error(
+        "\n  Nothing to update. Pass at least one of:\n" +
+          "    --reporter-lead <id> [--reporter-name <name>]  ·  --severity <sev>  ·  --status <s>  ·  --title <t>  ·  --description <note>\n",
+      )
+      process.exitCode = 1
+      return
+    }
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15000)
+    let res: Response
+    try {
+      res = await fetch(`${FL_API}${bugUpdateEndpoint(itemId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+    } catch (e: any) {
+      clearTimeout(timeout)
+      console.error(e.name === "AbortError" ? "Update timed out after 15s." : `Network error: ${e.message}`)
+      process.exitCode = 1
+      return
+    } finally {
+      clearTimeout(timeout)
+    }
+
+    const data = await res.json().catch(() => ({}) as any)
+    if (!res.ok || data?.success === false) {
+      console.error(`Update failed: ${data?.error ?? `HTTP ${res.status}`}`)
+      process.exitCode = 1
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(data, null, 2))
+    } else {
+      const fields = (data?.data?.updated ?? Object.keys(body)) as string[]
+      console.log(success(`✓ Bug #${itemId} updated`) + dim(` (${fields.join(", ")})`))
+    }
+  },
+})
+
 // ============================================================================
 // Root command
 // ============================================================================
@@ -818,6 +890,6 @@ export const PlatformBugCommand = cmd({
   command: "bug",
   aliases: ["bugs", "report"],
   describe: "report bugs and view your submissions",
-  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).demandCommand(),
+  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).demandCommand(),
   async handler() {},
 })
