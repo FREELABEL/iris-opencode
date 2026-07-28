@@ -864,39 +864,55 @@ const AgentsDeleteCommand = cmd({
     yargs
       .positional("id", { describe: "agent ID", type: "number", demandOption: true })
       .option("force", { alias: "f", describe: "skip confirmation", type: "boolean", default: false })
+      .option("json", { describe: "JSON output (implies non-interactive)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Delete Agent #${args.id}`)
+    // JSON mode = scripting: no prompts/spinner (they'd corrupt stdout), emit one
+    // JSON object, and treat it as non-interactive (skip the confirm). (#177914)
+    const json = !!args.json
+    const emit = (obj: any) => console.log(JSON.stringify(obj))
+
+    if (!json) {
+      UI.empty()
+      prompts.intro(`◈  Delete Agent #${args.id}`)
+    }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (json) { emit({ success: false, error: "not authenticated" }) } else { prompts.outro("Done") } ; return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (json) { emit({ success: false, error: "no user id" }) } else { prompts.outro("Done") } ; return }
 
-    if (!args.force) {
+    // --json is non-interactive, so it never blocks on a confirm prompt.
+    if (!args.force && !json) {
       const confirmed = await prompts.confirm({ message: `Delete agent #${args.id}? This cannot be undone.` })
       if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Deleting…")
+    const spinner = json ? null : prompts.spinner()
+    if (spinner) { spinner.start("Deleting…") }
 
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`, {
         method: "DELETE",
       })
       const ok = await handleApiError(res, "Delete agent")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!ok) {
+        process.exitCode = 1
+        if (json) { emit({ success: false, id: args.id, error: `HTTP ${res.status}` }) } else { spinner!.stop("Failed", 1); prompts.outro("Done") }
+        return
+      }
 
-      spinner.stop(`${success("✓")} Agent #${args.id} deleted`)
-      prompts.outro(dim("iris agents list"))
+      if (json) {
+        emit({ success: true, deleted: true, id: args.id })
+      } else {
+        spinner!.stop(`${success("✓")} Agent #${args.id} deleted`)
+        prompts.outro(dim("iris agents list"))
+      }
     } catch (err) {
-      spinner.stop("Error", 1)
       process.exitCode = 1
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      const msg = err instanceof Error ? err.message : String(err)
+      if (json) { emit({ success: false, id: args.id, error: msg }) } else { spinner!.stop("Error", 1); prompts.log.error(msg); prompts.outro("Done") }
     }
   },
 })
