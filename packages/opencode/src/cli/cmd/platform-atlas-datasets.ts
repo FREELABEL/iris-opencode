@@ -992,6 +992,128 @@ const ApiCommand = cmd({
   },
 })
 
+// ── FEEDS ────────────────────────────────────────────────────────────────────
+
+const FeedCreateCommand = cmd({
+  command: "create",
+  aliases: ["mint", "new"],
+  describe: "mint a shareable read-only token for a dataset (shown ONCE)",
+  builder: (y) =>
+    y
+      .option("schema", { type: "string", demandOption: true, alias: "s", describe: "dataset slug you own" })
+      .option("label", { type: "string", describe: "human label for the feed" })
+      .option("filter", { type: "array", default: [] as string[], describe: 'pin the feed to a slice — "Region=north" (callers cannot widen it)' })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Mint feed token: ${args.schema}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const filters: Record<string, string> = {}
+    for (const raw of (args.filter as string[]) ?? []) {
+      const eq = String(raw).indexOf("=")
+      if (eq < 1) { prompts.log.error(`Filter "${raw}" must be Field=value`); prompts.outro("Done"); return }
+      filters[String(raw).slice(0, eq).trim()] = String(raw).slice(eq + 1)
+    }
+
+    const res = await irisFetch("/api/v1/atlas/feeds", {
+      method: "POST",
+      body: JSON.stringify({
+        schema_slug: args.schema,
+        ...(args.label ? { label: args.label } : {}),
+        ...(Object.keys(filters).length ? { filters } : {}),
+      }),
+    })
+    const ok = await handleApiError(res, "Create feed"); if (!ok) { prompts.outro("Done"); return }
+    const d = ((await res.json()) as any)?.data
+
+    if (args.json) { console.log(JSON.stringify(d, null, 2)); prompts.outro("Done"); return }
+
+    printDivider()
+    console.log(`  ${bold("Feed")}      #${d?.id}  ${d?.label ?? ""}`)
+    // Said plainly, because it is true and there is no recovery path — the API returns the
+    // full token exactly once and every later read shows only a prefix.
+    console.log(`  ${bold("Token")}     ${d?.token}`)
+    console.log(`  ${dim("This is the ONLY time the token is shown. Store it now.")}`)
+    printDivider()
+    console.log(`  ${bold("Aggregate")} ${d?.urls?.aggregate}`)
+    console.log(`  ${bold("CSV")}       ${d?.urls?.csv}  ${dim("(Excel Power Query)")}`)
+    console.log(`  ${bold("JSON")}      ${d?.urls?.json}`)
+    if (Object.keys(filters).length) {
+      console.log(`  ${bold("Pinned")}    ${JSON.stringify(filters)}  ${dim("— callers cannot widen this")}`)
+    }
+    printDivider()
+    console.log(`  ${dim("The token IS the auth. Anyone holding it can read this dataset.")}`)
+    console.log(`  ${dim(`Revoke with: iris datasets feeds revoke ${d?.id}`)}`)
+    prompts.outro("Done")
+  },
+})
+
+const FeedListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list feed tokens (prefixes only — full tokens are never re-shown)",
+  builder: (y) =>
+    y.option("schema", { type: "string", alias: "s", describe: "filter by dataset slug" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Feed tokens")
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const p = new URLSearchParams()
+    if (args.schema) p.set("schema", String(args.schema))
+
+    const res = await irisFetch(`/api/v1/atlas/feeds?${p}`)
+    const ok = await handleApiError(res, "List feeds"); if (!ok) { prompts.outro("Done"); return }
+    const feeds: any[] = ((await res.json()) as any)?.data?.feeds ?? []
+
+    if (args.json) { console.log(JSON.stringify(feeds, null, 2)); prompts.outro("Done"); return }
+    if (feeds.length === 0) {
+      prompts.log.warn("No feeds yet")
+      prompts.outro("iris datasets feeds create -s <slug>")
+      return
+    }
+
+    printDivider()
+    for (const f of feeds) {
+      const state = f.active ? bold("active") : dim("revoked")
+      console.log(
+        `  #${String(f.id).padEnd(5)} ${state.padEnd(16)} ${String(f.schema_slug).padEnd(24)} ` +
+          `${dim(f.token_prefix + "…")}  ${dim(`${f.access_count} hit(s)`)}  ${f.label ?? ""}`,
+      )
+      if (f.filters && Object.keys(f.filters).length) console.log(`         ${dim("pinned: " + JSON.stringify(f.filters))}`)
+    }
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
+const FeedRevokeCommand = cmd({
+  command: "revoke <id>",
+  describe: "permanently disable a feed token",
+  builder: (y) => y.positional("id", { type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Revoke feed #${args.id}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const res = await irisFetch(`/api/v1/atlas/feeds/${args.id}`, { method: "DELETE" })
+    const ok = await handleApiError(res, "Revoke feed"); if (!ok) { prompts.outro("Done"); return }
+
+    console.log(`  ${bold("Revoked")} — the token is permanently dead and cannot be reissued.`)
+    prompts.outro("Done")
+  },
+})
+
+const FeedsGroup = cmd({
+  command: "feeds",
+  aliases: ["feed"],
+  describe: "shareable read-only tokens for a dataset",
+  builder: (y) => y.command(FeedCreateCommand).command(FeedListCommand).command(FeedRevokeCommand).demandCommand(),
+  async handler() {},
+})
+
 // ── IMPORT ───────────────────────────────────────────────────────────────────
 
 /** Server cap per request; the CLI chunks to stay under it. */
@@ -1327,6 +1449,6 @@ export const PlatformAtlasDatasetsCommand = cmd({
   describe: "Schema-driven datasets — define once, store anything, no migrations",
   builder: (y) =>
     y.command(SchemasGroup).command(RecordsGroup).command(ImportCommand).command(AggregateCommand).command(DeriveCommand)
-     .command(ExportCommand).command(AuditCommand).command(ApiCommand).demandCommand(),
+     .command(FeedsGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).demandCommand(),
   async handler() {},
 })
