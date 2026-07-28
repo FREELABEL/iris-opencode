@@ -17,6 +17,35 @@ const bugResolveEndpoint = (itemId: number) => `/api/v1/public/bug-report/${item
 // Amend a bug after the fact (reporter attribution / severity / status / title / note) — no auth
 const bugUpdateEndpoint = (itemId: number) => `/api/v1/public/bug-report/${itemId}/update`
 
+/**
+ * Render the fix badge for a bug (#177916).
+ *
+ * The badge used to key off "a resolution exists", with no status check — so a bug that was
+ * WRONGLY closed and then reopened kept its green `✓ FIXED <commit>` stamp while showing
+ * `todo`. Both at once, which reads as "fixed" to anyone scanning the board, and is exactly
+ * how a bad batch close (#177912) survives a QA reopen invisibly.
+ *
+ * A resolution on a bug that is NOT done is a CONTRADICTED claim, so render it as one.
+ */
+export function fixBadge(status: unknown, hasResolution: boolean, fixCommit?: string): string {
+  if (!hasResolution) return ""
+  const commit = fixCommit ? ` ${fixCommit}` : ""
+  const done = String(status ?? "").toLowerCase() === "done"
+  return done ? success(`✓ FIXED${commit}`) : dim(`was marked fixed${commit} — REOPENED`)
+}
+
+/** Repo identity for the cwd, so a fix stamp can say WHICH repo it came from (#177912). */
+function detectGitRepo(): string | undefined {
+  try {
+    const remote = execSync("git config --get remote.origin.url", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim()
+    return remote.match(/github\.com[:/]([^/]+\/.+?)(?:\.git)?$/i)?.[1]
+  } catch {
+    return undefined
+  }
+}
+
 // Best-effort current git commit info from the cwd (used to stamp the fix that closed a bug)
 function detectGitCommit(): { hash?: string; url?: string } {
   try {
@@ -442,7 +471,8 @@ const ListCommand = cmd({
         // Surface the recorded fix (if any) so other machines can see what resolved it
         const fixCommit = contentStr.match(/Fix commit:\*?\*?\s*`?([0-9a-f]{6,40})`?/i)?.[1]
         const hasResolution = /###\s*✅?\s*Resolution/i.test(contentStr)
-        const fixTag = hasResolution ? `  ${success(`✓ FIXED${fixCommit ? ` ${fixCommit}` : ""}`)}` : ""
+        const badge = fixBadge(item.status, hasResolution, fixCommit)
+        const fixTag = badge ? `  ${badge}` : ""
         console.log(`  ${bold(String(item.title))}  ${dim(`#${item.id}`)}${sevTag}${status}${fixTag}`)
         if (contentStr) {
           // Show first meaningful line (skip markdown headers)
@@ -547,7 +577,8 @@ const ShowCommand = cmd({
     const meta: string[] = []
     if (severity) meta.push(`[${severity.toUpperCase()}]`)
     if (found.status) meta.push(dim(String(found.status)))
-    if (hasResolution) meta.push(success(`✓ FIXED${fixCommit ? ` ${fixCommit}` : ""}`))
+    const showBadge = fixBadge(found.status, hasResolution, fixCommit)
+    if (showBadge) meta.push(showBadge)
     if (meta.length) console.log(`  ${meta.join("  ")}`)
     printDivider()
     console.log(contentStr ? String(contentStr) : dim("  (no description)"))
@@ -632,9 +663,28 @@ const CloseCommand = cmd({
       let fixCommit = typeof args.commit === "string" ? (args.commit as string) : undefined
       let fixCommitUrl: string | undefined
       if (!fixCommit && !noCommit) {
+        // NEVER auto-stamp a BATCH close (#177912). cwd HEAD is a single commit in a single
+        // repo; N bugs closed together are rarely all fixed by it. This is exactly how
+        // #177889-#177893 (iris-opencode work) got stamped with fd678579 — an unrelated
+        // fl-api geo commit that happened to be the cwd's HEAD — making five "fixed"
+        // references untrustworthy and hiding that none were actually fixed.
+        if (ids.length > 1) {
+          prompts.log.error(
+            `Refusing to auto-stamp a commit across ${ids.length} bugs — cwd HEAD is one commit in one repo.`,
+          )
+          prompts.log.info(dim("Pass --commit <hash> if they really share a fix, --no-commit to record none,"))
+          prompts.log.info(dim("or close them one at a time so each gets its own commit."))
+          prompts.outro("Done")
+          return
+        }
         const git = detectGitCommit()
         fixCommit = git.hash
         fixCommitUrl = git.url
+        // Say WHICH repo the stamp came from. Silence is what let a wrong-repo hash through.
+        if (fixCommit) {
+          const repo = detectGitRepo()
+          prompts.log.info(dim(`Stamping ${fixCommit}${repo ? ` from ${repo}` : ""} (cwd HEAD) — use --commit to override.`))
+        }
       }
 
       const spinner = prompts.spinner()
