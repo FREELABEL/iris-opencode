@@ -42,6 +42,36 @@ function findLocalFile(dir: string, id: number): string | undefined {
   return files.length > 0 ? join(dir, files[0]) : undefined
 }
 
+/**
+ * Coerce a metadata value read back from the API into something safe to spread.
+ *
+ * The events GET can hand back `metadata` as a JSON *string* rather than an
+ * object. Spreading a string explodes it per character — `{...'abc'}` is
+ * `{0:'a',1:'b',2:'c'}` — and pushing that back destroys the column, growing it
+ * on every round-trip (#177952). Parse strings, and refuse anything that is not
+ * a plain object rather than silently mangling it.
+ */
+function asMetadataObject(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) return {}
+  let parsed = value
+  if (typeof parsed === "string") {
+    const text = parsed.trim()
+    if (text === "") return {}
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      throw new Error(
+        `Refusing to push: the API returned metadata as an unparseable string (${text.slice(0, 60)}…). ` +
+          `Pushing would corrupt it — see #177952.`,
+      )
+    }
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Refusing to push: expected metadata to be an object, got ${Array.isArray(parsed) ? "array" : typeof parsed}.`)
+  }
+  return parsed as Record<string, unknown>
+}
+
 // ============================================================================
 // Display helpers
 // ============================================================================
@@ -462,7 +492,7 @@ const PushCommand = cmd({
       // Merge extra fields into metadata so they're preserved
       const metaKeys = Object.keys(extraMetadata)
       if (metaKeys.length > 0) {
-        payload.metadata = { ...(entity.metadata ?? {}), ...extraMetadata }
+        payload.metadata = { ...asMetadataObject(entity.metadata), ...extraMetadata }
       }
 
       const res = await irisFetch(`/api/v1/events/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
