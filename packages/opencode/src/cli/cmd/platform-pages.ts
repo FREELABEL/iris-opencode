@@ -480,6 +480,10 @@ const PushCmd = cmd({
         return
       }
 
+      // Backfill any missing component ids before validating, so a file produced by
+      // `pages pull` (which may carry none) is valid push input (#177898).
+      const backfilled = assignComponentIds(jsonContent)
+
       // Validate component types BEFORE pushing
       const validation = await validateComponents(jsonContent)
       if (!validation.valid) {
@@ -509,6 +513,17 @@ const PushCmd = cmd({
       })
       if (!(await handleApiError(res, "Push page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const cnt = jsonContent?.components?.length ?? 0
+
+      // Persist the backfilled ids locally so the file matches what the server now holds —
+      // otherwise `pages diff` would report a permanent phantom difference on every page
+      // whose ids we generated at push time.
+      if (backfilled > 0) {
+        try {
+          writeFileSync(filePath, JSON.stringify(local, null, 2) + "\n")
+        } catch {
+          // Non-fatal: the push already succeeded; the local file just keeps its old shape.
+        }
+      }
 
       // --publish: push + publish in one step
       if (args.publish) {
@@ -803,7 +818,12 @@ const DuplicateCmd = cmd({
       .positional("source", { describe: "source page slug to clone", type: "string", demandOption: true })
       .option("slug", { describe: "new page slug", type: "string", demandOption: true })
       .option("title", { describe: "new page title (defaults to source title)", type: "string" })
-      .option("publish", { describe: "publish immediately", type: "boolean", default: false }),
+      .option("publish", { describe: "publish immediately", type: "boolean", default: false })
+      .option("force", {
+        describe: "overwrite an existing local ./pages/<slug>.json (default: keep it)",
+        type: "boolean",
+        default: false,
+      }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Duplicate ${args.source} → ${args.slug}`)
@@ -860,15 +880,30 @@ const DuplicateCmd = cmd({
         owner_id: payload.owner_id,
         json_content: jsonContent,
       }
-      writeFileSync(filePath, JSON.stringify(localData, null, 2))
+      // NEVER clobber an already-authored local file (#177899). The destination filename is
+      // derived from --slug, which is exactly the filename someone would have drafted the new
+      // page into — so the most natural use of `duplicate` was also its most destructive, and
+      // `pages diff` reported "In sync" afterwards because local and remote were both wrong the
+      // same way. Keep the local draft unless --force is explicit.
+      const fileExisted = existsSync(filePath)
+      const wroteFile = !fileExisted || args.force
+      if (wroteFile) writeFileSync(filePath, JSON.stringify(localData, null, 2) + "\n")
 
       printDivider()
       printKV("ID", p.id)
       printKV("Slug", args.slug)
       printKV("Source", args.source)
       printKV("Components", (jsonContent.components?.length ?? 0).toString())
-      printKV("File", filePath)
+      printKV("File", wroteFile ? filePath : `${filePath} ${dim("(kept — not overwritten)")}`)
       printDivider()
+
+      if (fileExisted && !args.force) {
+        prompts.log.warn(
+          `Local ${filePath} already existed and was left untouched — the remote page was cloned from ${args.source}.`,
+        )
+        prompts.log.info(dim(`Push your local version:  iris pages push ${args.slug}`))
+        prompts.log.info(dim(`Or take the clone's content: iris pages duplicate ${args.source} --slug=${args.slug} --force`))
+      }
 
       if (args.publish) {
         const pubRes = await pagesFetch(`/api/v1/pages/${p.id}/publish`, { method: "POST" })
@@ -1173,6 +1208,39 @@ async function getValidComponentTypes(): Promise<Set<string>> {
 
   _cachedValidTypes = FALLBACK_COMPONENT_TYPES
   return _cachedValidTypes
+}
+
+/**
+ * Give every component a stable `id`, in place.
+ *
+ * The API requires an `id` on each component, but a page's stored json_content may not carry
+ * one — so `pages pull` writes a file that `pages push` then rejects with `missing "id" field`,
+ * and the documented pull → edit → push loop can never complete (#177898). Backfilling here
+ * makes the round-trip work regardless of how the page was authored.
+ *
+ * Ids are derived from the component type + index rather than random, so re-running produces the
+ * same value and a no-op edit stays a no-op diff. Existing ids are never touched, and collisions
+ * (two components already sharing an id, or a generated id matching a real one) get a numeric
+ * suffix so ids stay unique within the page.
+ */
+export function assignComponentIds(jsonContent: any): number {
+  const components = jsonContent?.components
+  if (!Array.isArray(components)) return 0
+  const taken = new Set<string>(
+    components.map((c: any) => (typeof c?.id === "string" ? c.id : "")).filter(Boolean),
+  )
+  let added = 0
+  components.forEach((c: any, i: number) => {
+    if (!c || typeof c !== "object" || (typeof c.id === "string" && c.id)) return
+    const type = typeof c.type === "string" && c.type ? c.type : "component"
+    const base = `${type.charAt(0).toLowerCase()}${type.slice(1)}-${i}`
+    let id = base
+    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`
+    taken.add(id)
+    c.id = id
+    added++
+  })
+  return added
 }
 
 async function validateComponents(jsonContent: any): Promise<{ valid: boolean; errors: string[] }> {
