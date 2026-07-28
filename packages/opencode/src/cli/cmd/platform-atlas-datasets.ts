@@ -979,7 +979,9 @@ const ApiCommand = cmd({
     console.log(`    PATCH  ${url}/{id}`)
     console.log(`    DELETE ${url}/{id}`)
     console.log(`    POST   ${url}/upsert ${dim("(upsert by external_id)")}`)
-    console.log(`    GET    ${url}/summary`)
+    console.log(`    GET    ${url}/summary   ${dim("(legacy — COUNT/SUM only)")}`)
+    console.log(`    GET    ${url}/aggregate ${dim("?group_by=&metrics=avg:Field,median:Field,rate:F=V&min_sample=")}`)
+    console.log(`    POST   ${url}/derive    ${dim('{"fields":["zone_id"],"force":false}')}`)
     printDivider()
     if (fields.length) console.log(`  ${bold("Fields")}     ${fields.join(", ")}`)
     console.log()
@@ -989,11 +991,200 @@ const ApiCommand = cmd({
   },
 })
 
+// ── AGGREGATE ────────────────────────────────────────────────────────────────
+
+/**
+ * Parse a --filter token into the nested query shape the endpoint expects.
+ *
+ *   "Scope[in]=TXDOT,Lift Station"  ->  filter[Scope][in]=TXDOT,Lift Station
+ *   "Outcome=Won"                   ->  filter[Outcome]=Won        (bare = equality)
+ *
+ * Splits on the FIRST "=" so values containing "=" survive.
+ */
+function applyFilterToken(p: URLSearchParams, token: string): string | null {
+  const eq = token.indexOf("=")
+  if (eq < 1) return `Filter "${token}" must be Field=value or Field[op]=value`
+  const lhs = token.slice(0, eq).trim()
+  const value = token.slice(eq + 1)
+
+  const m = lhs.match(/^(.+?)\[(\w+)\]$/)
+  if (m) p.set(`filter[${m[1]}][${m[2]}]`, value)
+  else p.set(`filter[${lhs}]`, value)
+  return null
+}
+
+/** "avg:Estimated Margin" -> "Avg Estimated Margin" for a column header. */
+function metricHeader(spec: string): string {
+  const i = spec.indexOf(":")
+  if (i < 0) return spec.charAt(0).toUpperCase() + spec.slice(1)
+  const op = spec.slice(0, i)
+  return `${op.charAt(0).toUpperCase() + op.slice(1)} ${spec.slice(i + 1)}`
+}
+
+function fmtMetric(spec: string, m: any): string {
+  if (!m || m.value === null || m.value === undefined) return dim("—")
+  const n = Number(m.value)
+  if (Number.isNaN(n)) return String(m.value)
+  if (spec.startsWith("rate:")) return (n * 100).toFixed(1) + "%"
+  if (spec === "count" || Number.isInteger(n)) return n.toLocaleString()
+  return n.toFixed(2)
+}
+
+const AggregateCommand = cmd({
+  command: "aggregate",
+  aliases: ["agg"],
+  describe: "grouped metrics over a dataset — avg / median / rate / sum per group",
+  builder: (y) =>
+    y
+      .option("schema", { type: "string", demandOption: true, alias: "s", describe: "dataset slug" })
+      .option("group-by", { type: "string", alias: "g", describe: "field (or derived field) to group by; omit for a grand total" })
+      .option("metrics", {
+        type: "string",
+        alias: "m",
+        default: "count",
+        describe: "comma-separated: count, avg:Field, sum:Field, min:Field, max:Field, median:Field, rate:Field=Value",
+      })
+      .option("filter", {
+        type: "array",
+        alias: "f",
+        default: [] as string[],
+        describe: 'repeatable — "Outcome=Won", "Scope[in]=TXDOT,Lift Station", "Bid Date[gte]=2024-01-01"',
+      })
+      .option("min-sample", { type: "number", describe: "withhold metrics for groups smaller than this (server-side)" })
+      .option("bloq", { type: "number", describe: "scope to a bloq id" })
+      .option("json", { type: "boolean", default: false })
+      .example('$0 datasets aggregate -s cci-bid-history -g "Zone ID" -m "avg:Estimated Margin,count"', "average margin per zone")
+      .example('$0 datasets aggregate -s cci-bid-history -m "rate:Outcome=Won" -f "Outcome[in]=Won,Lost"', "win rate over decided bids")
+      .example('$0 datasets aggregate -s cci-bid-history -g size_band -m "avg:Estimated Margin"', "margin by derived size band"),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Aggregate: ${args.schema}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const p = new URLSearchParams()
+    if (args["group-by"]) p.set("group_by", String(args["group-by"]))
+    if (args.metrics) p.set("metrics", String(args.metrics))
+    if (args["min-sample"] != null) p.set("min_sample", String(args["min-sample"]))
+    if (args.bloq != null) p.set("bloq_id", String(args.bloq))
+
+    for (const raw of (args.filter as string[]) ?? []) {
+      const err = applyFilterToken(p, String(raw))
+      if (err) { console.log(`  ${err}`); prompts.outro("Done"); return }
+    }
+
+    const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/aggregate?${p}`)
+    // The endpoint is fail-loud by design (unknown field, non-numeric metric -> 422).
+    // Surface that reason rather than printing an empty table, which reads as "no data".
+    const ok = await handleApiError(res, "Aggregate"); if (!ok) { prompts.outro("Done"); return }
+    const data = ((await res.json()) as any)?.data
+
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+
+    const groups: any[] = data?.groups ?? []
+    const specs: string[] = [...new Set(groups.flatMap((g: any) => Object.keys(g.metrics ?? {})))] as string[]
+
+    printDivider()
+    console.log(`  ${bold("Records")}   ${(data?.total_records ?? 0).toLocaleString()}`)
+    if (data?.group_by) console.log(`  ${bold("Grouped")}   ${data.group_by}`)
+    if (data?.min_sample) console.log(`  ${bold("Min n")}     ${data.min_sample} ${dim("(metrics withheld below this)")}`)
+    printDivider()
+
+    if (groups.length === 0) {
+      console.log(`  ${dim("No groups matched.")}`)
+    } else {
+      const keyW = Math.max(12, ...groups.map((g: any) => String(g.key ?? "—").length))
+      console.log(
+        `  ${bold((data?.group_by ? "Group" : "All").padEnd(keyW))}  ${bold("n".padStart(7))}` +
+          specs.map((s) => "  " + bold(metricHeader(s).padStart(16))).join(""),
+      )
+      for (const g of groups) {
+        const label = String(g.key ?? "—")
+        const row =
+          `  ${label.padEnd(keyW)}  ${String(g.count).padStart(7)}` +
+          specs.map((s) => "  " + fmtMetric(s, g.metrics?.[s]).padStart(16)).join("")
+        // Suppressed groups keep their count and lose their metrics — show them dimmed
+        // rather than hiding them, since a vanished group reads as "no work here".
+        console.log(g.suppressed ? dim(row + "  (below sample)") : row)
+      }
+      // A per-metric n below the group count means the metric covers fewer rows than the
+      // group holds — the only signal that a number is thin, so never drop it.
+      const thin = groups.flatMap((g: any) =>
+        specs
+          .filter((s) => g.metrics?.[s]?.n != null && Number(g.metrics[s].n) !== Number(g.count))
+          .map((s) => `${g.key ?? "all"}/${s}: n=${g.metrics[s].n} of ${g.count}`),
+      )
+      if (thin.length) {
+        printDivider()
+        console.log(`  ${dim("Partial coverage (metric n < group size):")}`)
+        for (const t of thin.slice(0, 8)) console.log(`    ${dim(t)}`)
+        if (thin.length > 8) console.log(`    ${dim(`… ${thin.length - 8} more`)}`)
+      }
+    }
+
+    if (data?.groups_truncated) {
+      printDivider()
+      console.log(`  ${bold("Truncated")} — more than ${data.max_groups} groups; narrow the grouping.`)
+    }
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
+// ── DERIVE ───────────────────────────────────────────────────────────────────
+
+const DeriveCommand = cmd({
+  command: "derive",
+  describe: "materialize a dataset's computed dimensions (zones) so they can be grouped",
+  builder: (y) =>
+    y
+      .option("schema", { type: "string", demandOption: true, alias: "s", describe: "dataset slug" })
+      .option("field", { type: "array", default: [] as string[], describe: "limit to specific derived keys" })
+      .option("force", { type: "boolean", default: false, describe: "re-resolve rows that already have a value" })
+      .option("json", { type: "boolean", default: false })
+      .example("$0 datasets derive -s cci-bid-history --field zone_id", "resolve coordinates to boundary zones"),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Derive: ${args.schema}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}/derive`, {
+      method: "POST",
+      body: JSON.stringify({ fields: (args.field as string[]) ?? [], force: Boolean(args.force) }),
+    })
+    const ok = await handleApiError(res, "Derive"); if (!ok) { prompts.outro("Done"); return }
+    const data = ((await res.json()) as any)?.data
+
+    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+
+    printDivider()
+    const results: any[] = data?.results ?? []
+    if (results.length === 0) {
+      console.log(`  ${dim("No derived dimensions on this schema.")}`)
+    }
+    for (const r of results) {
+      if (r.inline) {
+        console.log(`  ${bold(r.key)}  ${dim(`(${r.type}) inline — computed at query time, nothing to materialize`)}`)
+        continue
+      }
+      console.log(`  ${bold(r.key)}  ${dim(`(${r.type})`)}  ${r.resolved} resolved, ${r.unmatched} unmatched of ${r.considered}`)
+      // Unmatched rows are the interesting number: coordinates outside every polygon mean a
+      // wrong boundary set or genuinely out-of-area data, and they group as "no zone".
+      if (r.unmatched > 0) {
+        const pct = ((r.unmatched / Math.max(1, r.considered)) * 100).toFixed(1)
+        console.log(`    ${bold("!")} ${r.unmatched} (${pct}%) matched no zone — check the boundary set covers this data.`)
+      }
+    }
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformAtlasDatasetsCommand = cmd({
   command: "atlas:datasets",
   aliases: ["atlas-datasets", "datasets"],
   describe: "Schema-driven datasets — define once, store anything, no migrations",
   builder: (y) =>
-    y.command(SchemasGroup).command(RecordsGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).demandCommand(),
+    y.command(SchemasGroup).command(RecordsGroup).command(AggregateCommand).command(DeriveCommand)
+     .command(ExportCommand).command(AuditCommand).command(ApiCommand).demandCommand(),
   async handler() {},
 })
