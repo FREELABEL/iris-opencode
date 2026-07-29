@@ -117,6 +117,7 @@ import { PlatformPagesBatchCommand } from "./cli/cmd/platform-pages-batch"
 import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
 import { PlatformScriptsCommand } from "./cli/cmd/platform-scripts"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
+import { PlatformCreativeCommand } from "./cli/cmd/platform-creative"
 import { PlatformPackagesCommand } from "./cli/cmd/platform-packages"
 import { PlatformMarketplaceCommand } from "./cli/cmd/platform-marketplace"
 import { PlatformMemoryCommand } from "./cli/cmd/platform-memory"
@@ -368,6 +369,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformPartialsCommand))
   .command(reg(PlatformScriptsCommand))
   .command(reg(PlatformCloudUploadCommand))
+  .command(reg(PlatformCreativeCommand))
   .command(reg(PlatformPackagesCommand))
   .command(reg(PlatformMarketplaceCommand))
   .command(reg(PlatformMemoryCommand))
