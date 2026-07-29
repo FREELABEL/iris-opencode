@@ -262,7 +262,9 @@ const BoardsUpdateCommand = cmd({
     yargs
       .positional("id", { describe: "item ID", type: "number", demandOption: true })
       .option("title", { describe: "new title", type: "string" })
-      .option("description", { describe: "new description", type: "string" })
+      .option("content", { describe: "new item body (alias of --description)", type: "string" })
+      .option("content-file", { describe: "read the item body from a file (use - for stdin)", type: "string" })
+      .option("description", { describe: "new item body (writes `content`)", type: "string" })
       .option("status", { describe: "new status", type: "string" })
       .option("type", { describe: "new type", type: "string" }),
   async handler(args) {
@@ -272,16 +274,48 @@ const BoardsUpdateCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
+    // The board item body lives in `content` (this is what `create` writes to).
+    // Writing to `description` here was a silent no-op (#157528). --description
+    // is kept as the historical spelling; --content is the honest name, and
+    // --content-file avoids argv limits + shell escaping for long bodies (#178191).
+    let body: string | undefined
+    const bodyFlags = [args.content, args["content-file"], args.description].filter((v) => v != null)
+    if (bodyFlags.length > 1) {
+      prompts.log.error("Use only one of --content, --content-file, or --description.")
+      prompts.outro("Done")
+      return
+    }
+    if (args["content-file"]) {
+      const path = String(args["content-file"])
+      try {
+        body = path === "-"
+          ? readFileSync(0, "utf-8")
+          : readFileSync(path, "utf-8")
+      } catch (err) {
+        prompts.log.error(`Could not read ${path}: ${err instanceof Error ? err.message : String(err)}`)
+        prompts.outro("Done")
+        return
+      }
+      // An empty file would silently blank the item body — make that explicit.
+      if (!body.trim()) {
+        prompts.log.error(`${path} is empty — refusing to blank the item body.`)
+        prompts.outro("Done")
+        return
+      }
+    } else if (args.content != null) {
+      body = String(args.content)
+    } else if (args.description != null) {
+      body = String(args.description)
+    }
+
     const payload: Record<string, unknown> = {}
     if (args.title) payload.title = args.title
-    // The board item body lives in `content` (this is what `create` writes to).
-    // Writing to `description` here was a silent no-op (#157528).
-    if (args.description) payload.content = args.description
+    if (body != null) payload.content = body
     if (args.status) payload.status = args.status
     if (args.type) payload.type = args.type
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --description, --status, or --type")
+      prompts.log.warn("Nothing to update. Use --title, --content, --content-file, --status, or --type")
       prompts.outro("Done")
       return
     }
