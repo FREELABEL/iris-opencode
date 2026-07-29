@@ -121,6 +121,72 @@
       "dest": "playbooks/agentic-loop/PLAYBOOK.md",
       "managed": true,
       "purpose": "Canonical reference loopable playbook (the 'fuel' for `iris loop run`). A v2 implement→verify loop — orchestrator → Builder/Scout/Growth → verify → synthesize → memory — whose verify step emits `VERDICT: SHIP|ITERATE` so the loop engine (platform-loop.ts) terminates correctly. Resolves `iris playbook show agentic-loop` and `iris loop run agentic-loop --until SHIP`, which the agentic-loops.md how-to points at."
+    },
+    {
+      "src": "how-to/atlas-datasets.md",
+      "dest": "how-to/atlas-datasets.md",
+      "managed": true,
+      "purpose": "How to: Use Atlas Datasets (schema-driven data)"
+    },
+    {
+      "src": "how-to/bespoke.md",
+      "dest": "how-to/bespoke.md",
+      "managed": true,
+      "purpose": "Bespoke Genesis Pages — How-To"
+    },
+    {
+      "src": "how-to/bloq-relations.md",
+      "dest": "how-to/bloq-relations.md",
+      "managed": true,
+      "purpose": "Link bloqs together — relations, filtering, and the graph view"
+    },
+    {
+      "src": "how-to/bug-bounty.md",
+      "dest": "how-to/bug-bounty.md",
+      "managed": true,
+      "purpose": "Bug Bounty — Source of Truth (READ BEFORE REPORTING ANY $)"
+    },
+    {
+      "src": "how-to/deploy-elon-build-lock.md",
+      "dest": "how-to/deploy-elon-build-lock.md",
+      "managed": true,
+      "purpose": "Recover the Elon frontend from a Railway build-lock race"
+    },
+    {
+      "src": "how-to/event-flyer-import.md",
+      "dest": "how-to/event-flyer-import.md",
+      "managed": true,
+      "purpose": "Import an Event Flyer (IG / any URL) → Events + Show on the Front"
+    },
+    {
+      "src": "how-to/event-production.md",
+      "dest": "how-to/event-production.md",
+      "managed": true,
+      "purpose": "Event Production — How-To"
+    },
+    {
+      "src": "how-to/expose-dataset-api.md",
+      "dest": "how-to/expose-dataset-api.md",
+      "managed": true,
+      "purpose": "How to: Expose Atlas dataset as a REST API"
+    },
+    {
+      "src": "how-to/iris-platform.md",
+      "dest": "how-to/iris-platform.md",
+      "managed": true,
+      "purpose": "IRIS Platform — Connect Any Frontend to IRIS as Its Backend"
+    },
+    {
+      "src": "how-to/onboarding-flows.md",
+      "dest": "how-to/onboarding-flows.md",
+      "managed": true,
+      "purpose": "How to: Create Schema-Driven Onboarding Flows"
+    },
+    {
+      "src": "how-to/pathways-cfo-workflow.md",
+      "dest": "how-to/pathways-cfo-workflow.md",
+      "managed": true,
+      "purpose": "How to: Run the Pathways CFO Workflow (Service AI → Atlas → QuickBooks)"
     }
   ]
 }

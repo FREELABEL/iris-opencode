@@ -48,9 +48,9 @@ Every recipe follows the same structure:
 
 ## Adding new recipes
 
-These files are managed by the IRIS installer and updated from `https://github.com/FREELABEL/iris-opencode/tree/dev/scaffold/how-to/`. To add a new recipe:
+These files are managed by the IRIS installer and updated from `https://github.com/FREELABEL/iris-opencode/tree/main/scaffold/how-to/`. To add a new recipe:
 
-1. Open a PR against `FREELABEL/iris-opencode` adding `scaffold/how-to/<your-recipe>.md`
+1. Open a PR against `FREELABEL/iris-opencode` (branch `main` — the installer fetches from main, not dev) adding `scaffold/how-to/<your-recipe>.md`
 2. Add an entry to `scaffold/manifest.json`
 3. Update this `README.md` with the user-intent mapping
 4. On next install (or `iris install --only-docs`), users get the new recipe
