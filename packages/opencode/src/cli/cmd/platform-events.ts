@@ -98,7 +98,9 @@ const ListCommand = cmd({
   describe: "list events",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("limit", { describe: "max results per page", type: "number", default: 20 })
+      .option("page", { alias: "p", describe: "page number (1-based) — walk forward through the full set", type: "number" })
+      .option("offset", { describe: "skip N events (converted to a page given --limit)", type: "number" })
       .option("future", { describe: "only future events", type: "boolean" })
       .option("past", { describe: "only past events", type: "boolean" })
       .option("city", { describe: "filter by city", type: "string" })
@@ -117,6 +119,11 @@ const ListCommand = cmd({
       // The events index reads `limit` (per_page is now accepted as an alias too);
       // sending per_page alone silently capped results at 10 (#177629).
       const params = new URLSearchParams({ limit: String(args.limit) })
+      // Pagination so `list` can walk the WHOLE set — raising --limit alone can't reach
+      // recent events when the default sort front-loads older ones (#178065). --offset is
+      // a convenience that maps to the API's 1-based `page` given the current --limit.
+      if (args.page != null) params.set("page", String(Math.max(1, args.page)))
+      else if (args.offset != null) params.set("page", String(Math.floor(Math.max(0, args.offset) / Math.max(1, args.limit)) + 1))
       if (args.future) params.set("future_only", "true")
       if (args.past) params.set("past_only", "true")
       if (args.city) params.set("city", args.city)
@@ -317,6 +324,9 @@ const UpdateCommand = cmd({
       .option("tags", { describe: "tags (comma-separated)", type: "string" })
       .option("bloq-id", { describe: "associated bloq ID", type: "number" })
       .option("status", { describe: "event status", type: "string" })
+      .option("photo", { describe: "photo/banner URL (attach generated artwork)", type: "string" })
+      .option("meta", { describe: "metadata key=value, repeatable (e.g. --meta video=https://… --meta video_status=ready)", type: "array", string: true })
+      .option("meta-json", { describe: "metadata as a JSON object string, merged server-side", type: "string" })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -343,9 +353,33 @@ const UpdateCommand = cmd({
     if (args.tags) payload.tags = args.tags
     if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
     if (args.status) payload.status = args.status
+    if (args.photo) payload.photo = args.photo
+
+    // --meta key=value (repeatable) and/or --meta-json build a metadata object the
+    // server MERGES into the existing metadata (preserving other keys), so attaching
+    // artwork/flags no longer forces the pull-edit-push path that corrupted six events
+    // (#178066/#177928).
+    const meta: Record<string, unknown> = {}
+    if (args["meta-json"]) {
+      try {
+        const parsed = JSON.parse(String(args["meta-json"]))
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object")
+        Object.assign(meta, parsed)
+      } catch {
+        prompts.log.error("--meta-json must be a JSON object, e.g. '{\"video\":\"https://…\"}'")
+        prompts.outro("Done"); return
+      }
+    }
+    for (const kv of ((args.meta as string[] | undefined) ?? [])) {
+      const s = String(kv)
+      const idx = s.indexOf("=")
+      if (idx === -1) { prompts.log.error(`--meta must be key=value (got "${s}")`); prompts.outro("Done"); return }
+      meta[s.slice(0, idx)] = s.slice(idx + 1)
+    }
+    if (Object.keys(meta).length > 0) payload.metadata = meta
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --description, --date, --time, --venue, --city, --state, --type, etc.")
+      prompts.log.warn("Nothing to update. Use --title, --description, --date, --time, --venue, --city, --state, --type, --photo, --meta key=value, etc.")
       prompts.outro("Done")
       return
     }
