@@ -10,6 +10,7 @@ import {
 import {
   HiveNodesCommandExport,
   HiveRunCommandExport,
+  fetchNodes,
 } from "./platform-hive-nodes"
 import {
   HiveDiscoverCommandExport,
@@ -1172,6 +1173,220 @@ const HiveTasksCommand = cmd({
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
     }
+    prompts.outro("Done")
+  },
+})
+
+// ── iris hive board ─────────────────────────────────────────────────────
+// The fleet cockpit: every task across every node in one view, grouped by
+// what needs a human. `hive tasks` answers "what is on this node"; the board
+// answers "what is blocked on me". Competitive gap G2 — bloq #503 item
+// #178177, bug #178193, https://heyiris.io/p/ao-gap-analysis
+
+type BoardTask = {
+  id: string
+  title: string
+  type: string
+  status: string
+  node: string
+  error?: string
+  ts?: string
+  durationMs?: number
+  progress?: number
+  stale?: boolean
+}
+
+type Lane = "needs" | "working" | "queued" | "done"
+
+const LANE_ORDER: Lane[] = ["needs", "working", "queued", "done"]
+
+const LANE_LABEL: Record<Lane, string> = {
+  needs: "NEEDS YOU",
+  working: "WORKING",
+  queued: "QUEUED",
+  done: "DONE",
+}
+
+// A task that reports "completed" but carries an error is a known lying-status
+// case — surface it rather than trusting the badge.
+function laneOf(t: BoardTask): Lane {
+  const s = (t.status || "").toLowerCase()
+  if (s === "failed" || s === "timeout" || s === "needs_input" || s === "blocked") return "needs"
+  if (t.stale) return "needs"
+  if (s === "running" || s === "dispatched") return "working"
+  if (s === "pending" || s === "queued") return "queued"
+  return "done"
+}
+
+function shortId(id: string): string {
+  return String(id ?? "").substring(0, 12)
+}
+
+function laneGlyph(lane: Lane, status: string): string {
+  if (lane === "needs") return "\x1b[31m✗\x1b[0m"
+  if (lane === "working") return "\x1b[34m▶\x1b[0m"
+  if (lane === "queued") return dim("◌")
+  return status === "failed" ? "\x1b[31m✗\x1b[0m" : success("✓")
+}
+
+const HiveBoardCommand = cmd({
+  command: "board",
+  aliases: ["fleet"],
+  describe: "fleet cockpit — every task across every node, grouped by what needs you",
+  builder: (yargs) =>
+    yargs
+      .option("all", { describe: "include the DONE lane (hidden by default)", type: "boolean", default: false })
+      .option("node", { describe: "filter to one node (name or id prefix)", type: "string" })
+      .option("since", { describe: "history window (e.g. 6h, 24h, 7d)", type: "string", default: "24h" })
+      .option("limit", { describe: "max history tasks to pull", type: "number", default: 60 })
+      .option("stale-after", { describe: "minutes before a queued task counts as stuck", type: "number", default: 60 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    const userId = await requireUserId(args["user-id"] as number | undefined)
+    if (!userId) process.exit(1)
+    const asJson = args.json as boolean
+    const staleAfterMs = Math.max(1, args["stale-after"] as number) * 60_000
+
+    if (!asJson) prompts.intro("◈  Hive Board")
+    const spinner = asJson ? null : prompts.spinner()
+    spinner?.start("Gathering the fleet…")
+
+    // Node roster — also gives us id → friendly name for task attribution.
+    let nodes: Awaited<ReturnType<typeof fetchNodes>> = []
+    try {
+      nodes = await fetchNodes(userId)
+    } catch { /* roster unavailable — tasks still render, just unattributed */ }
+    const nodeName = new Map<string, string>()
+    for (const n of nodes) nodeName.set(String(n.id), n.name)
+
+    const resolveNodeLabel = (t: Record<string, unknown>): string => {
+      const id = t.node_id ?? t.nodeId ?? t.node
+      if (t.node_name) return String(t.node_name)
+      if (id && nodeName.has(String(id))) return nodeName.get(String(id))!
+      return id ? shortId(String(id)) : "—"
+    }
+
+    const toBoardTask = (t: Record<string, unknown>, fallbackStatus: string): BoardTask => {
+      const created = (t.created_at ?? t.queued_at ?? null) as string | null
+      const status = String(t.status ?? fallbackStatus)
+      const isQueued = status === "pending" || status === "queued"
+      const ageMs = created ? Date.now() - new Date(created).getTime() : 0
+      return {
+        id: String(t.id ?? ""),
+        title: String(t.title ?? t.type ?? "untitled"),
+        type: String(t.type ?? "—"),
+        status,
+        node: resolveNodeLabel(t),
+        error: t.error ? String(t.error) : undefined,
+        ts: String(t.completed_at ?? t.started_at ?? created ?? ""),
+        durationMs: (t.duration_ms as number) ?? undefined,
+        progress: (t.progress as number) ?? undefined,
+        stale: isQueued && ageMs > staleAfterMs,
+      }
+    }
+
+    const byId = new Map<string, BoardTask>()
+    const add = (t: BoardTask) => { if (t.id && !byId.has(t.id)) byId.set(t.id, t) }
+    const degraded: string[] = []
+
+    // 1. Live running tasks from the local bridge daemon.
+    try {
+      const res = await bridgeFetch("/daemon/queue")
+      const data = await res.json() as Record<string, unknown>
+      for (const t of (data.tasks ?? []) as Record<string, unknown>[]) add(toBoardTask(t, "running"))
+    } catch { degraded.push("local daemon unreachable — running tasks on THIS node may be missing") }
+
+    // 2. Pending work claimed by this node.
+    try {
+      const res = await nodeFetch("/api/v6/node-agent/tasks/pending")
+      const data = await res.json() as Record<string, unknown>
+      for (const t of (data.tasks ?? []) as Record<string, unknown>[]) add(toBoardTask(t, "pending"))
+    } catch { degraded.push("node key missing — queued tasks may be missing") }
+
+    // 3. Fleet-wide history from the cloud (this is the cross-node source).
+    try {
+      const params = new URLSearchParams({
+        user_id: String(userId),
+        since: String(args.since),
+        limit: String(args.limit),
+      })
+      const res = await hiveFetch(`/api/v6/nodes/tasks?${params}`)
+      if (res.ok) {
+        const data = await res.json() as Record<string, unknown>
+        for (const t of (data.tasks ?? []) as Record<string, unknown>[]) add(toBoardTask(t, "completed"))
+      } else {
+        degraded.push(`fleet history HTTP ${res.status} — cross-node tasks may be missing`)
+      }
+    } catch { degraded.push("fleet history unreachable — cross-node tasks may be missing") }
+
+    let tasks = [...byId.values()]
+    if (args.node) {
+      const q = String(args.node).toLowerCase()
+      tasks = tasks.filter(t => t.node.toLowerCase().includes(q))
+    }
+
+    const lanes: Record<Lane, BoardTask[]> = { needs: [], working: [], queued: [], done: [] }
+    for (const t of tasks) lanes[laneOf(t)].push(t)
+    for (const l of LANE_ORDER) lanes[l].sort((a, b) => String(b.ts).localeCompare(String(a.ts)))
+
+    const online = nodes.filter(n => n.connection_status === "connected" || n.connection_status === "online").length
+
+    if (asJson) {
+      console.log(JSON.stringify({
+        nodes: { total: nodes.length, online },
+        counts: { needs: lanes.needs.length, working: lanes.working.length, queued: lanes.queued.length, done: lanes.done.length },
+        degraded,
+        lanes,
+      }, null, 2))
+      return
+    }
+
+    spinner?.stop(
+      `${lanes.needs.length} need you · ${lanes.working.length} working · ${lanes.queued.length} queued · ${lanes.done.length} done`,
+    )
+    printDivider()
+    console.log(
+      `  ${bold(String(online))}/${nodes.length} node(s) online` +
+      dim(`  ·  window ${args.since}  ·  stuck after ${args["stale-after"]}m`),
+    )
+
+    // Never let a partial fetch masquerade as an empty fleet.
+    for (const d of degraded) console.log(`  \x1b[33m⚠\x1b[0m ${dim(d)}`)
+    console.log()
+
+    for (const lane of LANE_ORDER) {
+      const items = lanes[lane]
+      if (lane === "done" && !args.all) {
+        if (items.length) console.log(dim(`  DONE (${items.length}) — hidden, use --all`))
+        continue
+      }
+      if (!items.length) continue
+
+      const heading = lane === "needs" && items.length ? `\x1b[31m${LANE_LABEL[lane]}\x1b[0m` : bold(LANE_LABEL[lane])
+      console.log(`  ${heading} (${items.length})`)
+      for (const t of items) {
+        const glyph = laneGlyph(lane, t.status)
+        const meta: string[] = [t.node]
+        if (t.durationMs) meta.push(formatDuration(t.durationMs))
+        if (t.progress != null && lane === "working") meta.push(`${t.progress}%`)
+        if (t.ts) meta.push(timeAgo(t.ts))
+        if (t.stale) meta.push("\x1b[33mstuck\x1b[0m")
+        console.log(`    ${glyph} ${dim(shortId(t.id))}  ${t.title.substring(0, 46).padEnd(46)}  ${dim(meta.join(" · "))}`)
+        if (t.error && lane === "needs") {
+          console.log(`        \x1b[31m${String(t.error).split("\n")[0].substring(0, 90)}\x1b[0m`)
+        }
+      }
+      console.log()
+    }
+
+    if (!tasks.length) {
+      console.log(dim("  Fleet is idle — no tasks in this window."))
+      console.log()
+    }
+
+    console.log(dim("  iris hive tasks get <id>  ·  iris hive tasks logs <id>  ·  iris hive cancel <id>"))
     prompts.outro("Done")
   },
 })
@@ -4365,6 +4580,7 @@ export const PlatformHiveCommand = cmd({
       .command(HiveScriptCommand)
       .command(HiveScheduleCommand)
       // Daemon operations (fast debugging)
+      .command(HiveBoardCommand)
       .command(HiveTasksCommand)
       .command(HiveCancelCommand)
       .command(HiveQueueCommand)
