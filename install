@@ -231,6 +231,66 @@ if [ "$(uname -s)" = "Darwin" ]; then
     fi
 fi
 
+# ─── Dependency bootstrap ────────────────────────────────────────────────────
+# MUST run before every dep check below. The unzip pre-flight, the tmux check,
+# install_bridge and install_remotion all branch on `command -v brew|node`, so
+# bootstrapping Homebrew at the END of this script (where it used to live) meant
+# a clean macOS box silently skipped the daemon, the bridge and Remotion.
+
+# Can we reach the terminal even though stdin is the curl pipe?
+IRIS_TTY=false
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    IRIS_TTY=true
+fi
+
+# Pick up an installed-but-unshimmed brew (common on fresh Apple Silicon)
+if ! command -v brew >/dev/null 2>&1; then
+    for _brew_path in /opt/homebrew/bin/brew /usr/local/bin/brew /home/linuxbrew/.linuxbrew/bin/brew; do
+        if [ -x "$_brew_path" ]; then eval "$("$_brew_path" shellenv)" || true; break; fi
+    done
+fi
+
+if [ "$(uname)" = "Darwin" ] && ! command -v brew >/dev/null 2>&1; then
+    echo -e "${CYAN}→${NC} Installing Homebrew (needed for tmux, Node.js and the Hive daemon)..."
+    if [ "$IRIS_TTY" = "true" ]; then
+        # Read the sudo password from the terminal, NOT the curl pipe. Without
+        # this redirect Homebrew aborts with "stdin is not a TTY".
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/tty || true
+    else
+        # No terminal at all — use Homebrew's own non-interactive mode. Needs
+        # passwordless sudo; degrade gracefully rather than aborting the install.
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true
+    fi
+    for _brew_path in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+        if [ -x "$_brew_path" ]; then eval "$("$_brew_path" shellenv)" || true; break; fi
+    done
+    if command -v brew >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Homebrew installed"
+    else
+        echo -e "${ORANGE}⚠${NC} Homebrew install failed — tmux, Node.js and the daemon will be skipped."
+        echo -e "${MUTED}  Install it from https://brew.sh, then re-run this installer.${NC}"
+    fi
+fi
+
+# Node.js — required by install_bridge (Agent Bridge + Hive daemon) and
+# install_remotion, both of which run long before the old end-of-script block.
+if ! command -v node >/dev/null 2>&1; then
+    echo -e "${CYAN}→${NC} Installing Node.js (required by the Agent Bridge and Remotion)..."
+    if command -v brew >/dev/null 2>&1; then
+        brew install node >/dev/null 2>&1 || true
+    elif command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y nodejs npm >/dev/null 2>&1 || true
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y nodejs npm >/dev/null 2>&1 || true
+    fi
+    if command -v node >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Node.js installed: $(node -v 2>/dev/null || echo unknown)"
+    else
+        echo -e "${ORANGE}⚠${NC} Node.js unavailable — Agent Bridge and Remotion will be skipped."
+        echo -e "${MUTED}  Install it from https://nodejs.org, then re-run this installer.${NC}"
+    fi
+fi
+
 # Soft pre-flight: warn (don't exit) about commands the binary install needs
 _missing_soft=""
 for _cmd in unzip; do
@@ -264,7 +324,9 @@ fi
 if ! command -v tmux >/dev/null 2>&1; then
     echo -e "${MUTED}Installing tmux (required for Hive compute sessions)...${NC}"
     if command -v brew >/dev/null 2>&1; then
-        brew install tmux >/dev/null 2>&1
+        # `|| true` matters: set -e is on, so a failed brew install would
+        # otherwise abort the whole installer here.
+        brew install tmux >/dev/null 2>&1 || true
     elif command -v apt-get >/dev/null 2>&1; then
         sudo apt-get install -y tmux >/dev/null 2>&1 || true
     elif command -v dnf >/dev/null 2>&1; then
@@ -1464,7 +1526,13 @@ echo -e ""
 echo -e "${CYAN}IRIS Login${NC}"
 echo -e ""
 echo -n "  Email: "
-read -r USER_EMAIL || USER_EMAIL=""
+# Prefer the terminal over stdin — stdin is the script itself when this is
+# reached via a pipe (curl | bash), which made the prompt unanswerable.
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    read -r USER_EMAIL < /dev/tty || USER_EMAIL=""
+else
+    read -r USER_EMAIL || USER_EMAIL=""
+fi
 if [ -z "$USER_EMAIL" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
 if ! echo "$USER_EMAIL" | grep -qE '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'; then
     echo -e "${RED}  Invalid email format.${NC}"
@@ -1490,7 +1558,11 @@ else
     echo -e "${GREEN}  Code sent!${NC} Check your inbox."
 fi
 echo -n "  Enter the 6-digit code: "
-read -r CODE || CODE=""
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    read -r CODE < /dev/tty || CODE=""
+else
+    read -r CODE || CODE=""
+fi
 # Strip all whitespace (spaces, tabs, non-breaking spaces from email copy-paste)
 CODE=$(echo "$CODE" | tr -d '[:space:]')
 if [ -z "$CODE" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
@@ -2191,8 +2263,11 @@ if [ "$(uname)" = "Darwin" ] && [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/n
         if [ "$_env_answer" != "n" ] && [ "$_env_answer" != "N" ]; then
             # Step 1: Homebrew
             if [ "$_needs_brew" = "true" ]; then
+                # Normally already handled by the bootstrap at the top; this is
+                # the fallback path. Redirect stdin to the terminal so Homebrew
+                # can prompt for sudo instead of failing on the curl pipe.
                 echo -e "${CYAN}→${NC} Installing Homebrew..."
-                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/tty || true
                 if [ -f /opt/homebrew/bin/brew ]; then
                     eval "$(/opt/homebrew/bin/brew shellenv)"
                 elif [ -f /usr/local/bin/brew ]; then
