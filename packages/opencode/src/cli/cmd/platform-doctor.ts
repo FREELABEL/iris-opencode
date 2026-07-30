@@ -87,11 +87,22 @@ export function aiProviderHealth(status: string, message?: string): CheckResult 
   return { name: "", ok: false, detail, hint: "unrecognised provider status" }
 }
 
+/**
+ * Timeout for platform API probes (#178279).
+ *
+ * raichu.heyiris.io/api/health measures 7-9s in production. The previous 5s
+ * budget produced a false "The operation timed out", which was then reported
+ * as a client-side firewall problem. Reproduced from a second machine:
+ * 7.19s / 9.05s / 8.68s. Connection-refused still fails fast, so a generous
+ * ceiling costs nothing when a service is genuinely down.
+ */
+export const PLATFORM_PROBE_TIMEOUT_MS = 20000
+
 async function checkEndpoint(name: string, url: string, base?: string): Promise<CheckResult> {
   try {
     const res = base
       ? await irisFetch(url, {}, base)
-      : await fetch(url, { signal: AbortSignal.timeout(5000) })
+      : await fetch(url, { signal: AbortSignal.timeout(PLATFORM_PROBE_TIMEOUT_MS) })
     if (res.ok) return { name, ok: true, detail: `${res.status} OK` }
     return { name, ok: false, detail: `HTTP ${res.status}` }
   } catch (e: any) {

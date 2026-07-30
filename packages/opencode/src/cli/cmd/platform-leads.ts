@@ -2163,10 +2163,15 @@ function bridgeHeaders(): Record<string, string> {
   return h
 }
 
-interface ChannelHealth {
+export interface ChannelHealth {
   name: string
   ok: boolean
-  status: "verified" | "expired" | "error" | "not_connected" | "no_permission"
+  /**
+   * "unverified" = the API responded but the connection could not be confirmed.
+   * Kept distinct from "verified" so the doctor can't claim a connection it
+   * has not actually proven (#178282).
+   */
+  status: "verified" | "unverified" | "expired" | "error" | "not_connected" | "no_permission"
   error?: string
   hint?: string
 }
@@ -2176,6 +2181,51 @@ interface ChannelHealth {
  * Each check is non-blocking — one failure doesn't stop others.
  * Exported so iris doctor can reuse it.
  */
+/**
+ * Map an HTTP status from the Gmail probe to an honest health verdict (#178282).
+ *
+ * The previous logic returned ok:true for ANY status except 401/403, on the
+ * reasoning that "any response means the integration is reachable". That
+ * conflates *endpoint reachable* with *integration connected*: a 500 carrying
+ * "Gmail integration is not connected for this user" was rendered to the user
+ * as "connected + verified", directly contradicting `iris gmail read_emails`.
+ *
+ * Note the probe targets lead 0, which never exists — so a 404 proves the API
+ * is up but says nothing about the integration. That is reported as
+ * indeterminate rather than claimed as verified.
+ */
+export function gmailHealthFromStatus(status: number): ChannelHealth {
+  if (status === 401 || status === 403) {
+    return { name: "Gmail", ok: false, status: "expired", error: "token expired", hint: "run: iris connect gmail" }
+  }
+
+  if (status >= 200 && status < 300) {
+    return { name: "Gmail", ok: true, status: "verified" }
+  }
+
+  if (status >= 500) {
+    return {
+      name: "Gmail",
+      ok: false,
+      status: "not_connected",
+      error: `integration error (HTTP ${status})`,
+      hint: "run: iris connect gmail",
+    }
+  }
+
+  if (status === 404) {
+    return {
+      name: "Gmail",
+      ok: false,
+      status: "unverified",
+      error: "reachable, but connection could not be confirmed",
+      hint: "confirm with: iris gmail read_emails limit=1",
+    }
+  }
+
+  return { name: "Gmail", ok: false, status: "error", error: `HTTP ${status}`, hint: "run: iris connect gmail" }
+}
+
 export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
   const results: ChannelHealth[] = []
 
