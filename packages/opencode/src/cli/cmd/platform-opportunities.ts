@@ -59,7 +59,9 @@ const ListCommand = cmd({
   describe: "list marketplace opportunities",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("limit", { describe: "max results per page (API caps at 50)", type: "number", default: 20 })
+      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("all", { describe: "fetch every page, not just the first", type: "boolean", default: false })
       .option("profile-id", { describe: "filter by profile PK", type: "number" })
       .option("bounties", { describe: "show only clip campaigns (bounties)", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
@@ -74,19 +76,50 @@ const ListCommand = cmd({
     if (spinner) spinner.start("Loading…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit) })
-      if (args["profile-id"]) params.set("profile_id", String(args["profile-id"]))
-      if (args.bounties) params.set("bounty_type", "video_views")
-      const res = await irisFetch(`/api/v1/marketplace/opportunities?${params}`)
-      const ok = await handleApiError(res, "List opportunities")
-      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+      // The API reads `limit` (OpportunityController::index), NOT `per_page`. Sending only
+      // per_page silently fell back to the default 12, so --limit did nothing and pages 2..N
+      // were unreachable — the bug bounty opportunity looked like it was missing from the
+      // marketplace when it was just on page 2. Send both; keep per_page for compatibility.
+      const fetchPage = async (page: number) => {
+        const params = new URLSearchParams({
+          limit: String(args.limit),
+          per_page: String(args.limit),
+          page: String(page),
+        })
+        if (args["profile-id"]) params.set("profile_id", String(args["profile-id"]))
+        if (args.bounties) params.set("bounty_type", "video_views")
+        const res = await irisFetch(`/api/v1/marketplace/opportunities?${params}`)
+        const ok = await handleApiError(res, "List opportunities")
+        if (!ok) return null
+        const raw = (await res.json()) as any
+        return {
+          items: (raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])) as any[],
+          pagination: raw?.data?.pagination ?? raw?.pagination ?? null,
+        }
+      }
 
-      const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
+      const first = await fetchPage(Number(args.page))
+      if (!first) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const items: any[] = [...first.items]
+      let pagination = first.pagination
+      if (args.all && pagination?.last_page) {
+        for (let p = Number(args.page) + 1; p <= Number(pagination.last_page); p++) {
+          const next = await fetchPage(p)
+          if (!next) break
+          items.push(...next.items)
+          pagination = next.pagination ?? pagination
+        }
+      }
 
       if (args.json) { console.log(JSON.stringify(items, null, 2)); return }
 
-      spinner!.stop(`${items.length} opportunity(ies)`)
+      const total = pagination?.total
+      spinner!.stop(
+        total != null && total > items.length
+          ? `${items.length} of ${total} opportunity(ies) — page ${pagination?.current_page ?? args.page}/${pagination?.last_page ?? "?"}`
+          : `${items.length} opportunity(ies)`,
+      )
 
       if (items.length === 0) { prompts.log.warn("No opportunities found"); prompts.outro("Done"); return }
 
@@ -94,7 +127,14 @@ const ListCommand = cmd({
       for (const o of items) { printOpportunity(o); console.log() }
       printDivider()
 
-      prompts.outro(dim("iris opportunities get <id>  |  iris opportunities pull <id>"))
+      const more = pagination?.last_page && Number(pagination.current_page) < Number(pagination.last_page)
+      prompts.outro(
+        dim(
+          more
+            ? `iris opportunities list --page ${Number(pagination.current_page) + 1}  |  --all  |  get <id>`
+            : "iris opportunities get <id>  |  iris opportunities pull <id>",
+        ),
+      )
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
