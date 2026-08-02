@@ -28,6 +28,9 @@
  *     rather than smoothed over.
  */
 
+import { query, parseAttributedBody, isAvailable } from "./imessage"
+import { resolveFromAddressBook } from "./address-book"
+
 export type Direction = "sent" | "received"
 
 export interface Payment {
@@ -111,13 +114,6 @@ function toEpoch(d: string): number {
 /** Compare only the digits, so "+18175269825" and "8175269825" are one handle. */
 function digitsOf(h: string): string {
   return (h ?? "").replace(/\D/g, "")
-}
-
-function sameHandle(a: string, b: string): boolean {
-  const da = digitsOf(a)
-  const db = digitsOf(b)
-  if (!da || !db) return false
-  return da === db || da.endsWith(db) || db.endsWith(da)
 }
 
 /**
@@ -369,4 +365,181 @@ export function reconcile(payments: Payment[]): ReconcileIssue[] {
   }
 
   return issues
+}
+
+// ── chat.db reader ───────────────────────────────────────────────────────────
+
+/** Apple Cash transfers carry this balloon type. */
+const PEER_PAYMENT = "PeerPaymentMessagesExtension"
+
+/** Unit separator — cannot occur in message text, unlike sqlite's default "|". */
+const SEP = String.fromCharCode(31)
+
+/**
+ * Two lessons from the first real-data run are baked into these queries, and
+ * both are easy to get wrong:
+ *
+ *  1. COUNTERPARTY COMES FROM THE CHAT, NOT THE HANDLE. An outbound message has
+ *     handle_id 0, so joining only `handle` silently drops every payment YOU
+ *     sent — which, for a payer, is all of them.
+ *  2. TEXT LIVES IN attributedBody. Modern macOS leaves `message.text` NULL and
+ *     stores content in a binary blob. Filtering on `text` found 0 of 2 real
+ *     labels while both sat in the database.
+ */
+// The joins every query needs: chat first (an outbound message has no handle),
+// handle as the fallback for inbound.
+const JOINS = `FROM message m
+  LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+  LEFT JOIN chat ch ON ch.ROWID = cmj.chat_id
+  LEFT JOIN handle h ON m.handle_id = h.ROWID`.replace(/\n\s*/g, " ")
+
+const WHEN = `datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime')`
+const WHO = `COALESCE(ch.chat_identifier, COALESCE(h.id, ''))`
+// CAST is load-bearing: strftime returns TEXT, and SQLite orders every INTEGER
+// below every TEXT, so an uncast comparison silently matches nothing.
+const since = (d: number) => `m.date/1000000000 + 978307200 > CAST(strftime('%s','now','-${d} days') AS INTEGER)`
+
+/**
+ * Fields are joined with char(31) INSIDE SQL rather than via sqlite's
+ * `.separator` dot-command, which does not survive the shell escaping in
+ * imessage.query(). Splitting on "|" — sqlite's default — would corrupt any row
+ * whose message text contains a pipe.
+ */
+function paymentRowsSql(sinceDays: number, limit: number): string {
+  return `SELECT m.ROWID || char(31) || ${WHEN} || char(31) || m.is_from_me || char(31) || ${WHO} ${JOINS} WHERE m.balloon_bundle_id LIKE '%${PEER_PAYMENT}%' AND ${since(sinceDays)} ORDER BY m.date DESC LIMIT ${limit};`
+}
+
+/** Local "YYYY-MM-DDTHH:MM:SS" → Apple's nanoseconds-since-2001 epoch. */
+function toAppleNs(localIso: string): number {
+  const ms = Date.parse(localIso)
+  if (Number.isNaN(ms)) return 0
+  return Math.round((ms / 1000 - 978307200) * 1e9)
+}
+
+/**
+ * Only the moments around a payment can contain that payment's label, so scan
+ * those windows instead of the whole history.
+ *
+ * This is what makes the command scale: cost is proportional to the number of
+ * PAYMENTS, not to how many messages you have. Selecting hex(attributedBody)
+ * across a year of messages overflowed the subprocess buffer outright — the
+ * blobs are enormous.
+ */
+function labelRowsSql(payments: Payment[], windowSeconds: number, limit: number): string {
+  const halfNs = windowSeconds * 1e9
+  const ranges = payments
+    .map((p) => toAppleNs(p.date))
+    .filter((n) => n > 0)
+    .map((n) => [n - halfNs, n + halfNs] as [number, number])
+    .sort((a, b) => a[0] - b[0])
+
+  // Merge overlapping windows so a burst of payments does not produce a
+  // thousand redundant clauses.
+  const merged: Array<[number, number]> = []
+  for (const r of ranges) {
+    const last = merged[merged.length - 1]
+    if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1])
+    else merged.push([...r] as [number, number])
+  }
+
+  const windows = merged.map(([a, b]) => `(m.date BETWEEN ${a} AND ${b})`).join(" OR ")
+
+  // Text last, so a stray separator inside a message cannot shift earlier fields.
+  return `SELECT m.ROWID || char(31) || ${WHEN} || char(31) || m.is_from_me || char(31) || ${WHO} || char(31) || COALESCE(hex(m.attributedBody),'') || char(31) || REPLACE(REPLACE(COALESCE(m.text,''), char(10), ' '), char(13), ' ') ${JOINS} WHERE (${windows}) AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL) ORDER BY m.date DESC LIMIT ${limit};`
+}
+
+function runRows(sql: string, fields: number): string[][] {
+  return query(sql)
+    .split("\n")
+    .map((l) => l.replace(/\r$/, ""))
+    .filter((l) => l.includes(SEP))
+    .map((l) => {
+      const parts = l.split(SEP)
+      // Re-join any overflow into the final field rather than dropping it.
+      if (parts.length > fields) {
+        return [...parts.slice(0, fields - 1), parts.slice(fields - 1).join(SEP)]
+      }
+      return parts
+    })
+}
+
+export interface ReadOptions {
+  /** How far back to look. */
+  days?: number
+  /** Hard cap on payment rows. */
+  limit?: number
+  /** How close a label must sit to count as this payment's label. */
+  windowSeconds?: number
+  /** Skip contact resolution (faster; handles only). */
+  skipContacts?: boolean
+}
+
+export interface ReadResult {
+  payments: Payment[]
+  /** Rows scanned for labels — lets the caller report cost at scale. */
+  messagesScanned: number
+  available: boolean
+  reason?: string
+}
+
+/**
+ * Read Apple Cash payments from the local Messages database and attach the
+ * label each one carries in a neighbouring message.
+ *
+ * `amount` is deliberately never set — it is not in the database. See the
+ * module header.
+ */
+export function readPayments(opts: ReadOptions = {}): ReadResult {
+  if (!isAvailable()) {
+    return {
+      payments: [],
+      messagesScanned: 0,
+      available: false,
+      reason:
+        process.platform !== "darwin"
+          ? "Apple Cash payments are macOS-only."
+          : "Cannot read Messages — grant Full Disk Access, then: iris permissions grant full-disk-access",
+    }
+  }
+
+  const days = opts.days ?? 365
+  const limit = opts.limit ?? 1000
+
+  const payments: Payment[] = runRows(paymentRowsSql(days, limit), 4).map((r) => ({
+    id: r[0],
+    date: (r[1] ?? "").replace(" ", "T"),
+    direction: r[2] === "1" ? "sent" : "received",
+    handle: r[3] ?? "",
+    rail: "apple_cash" as const,
+  }))
+
+  const windowSeconds = opts.windowSeconds ?? 300
+
+  // Only scan for labels when there is something to label.
+  let messages: RawMessage[] = []
+  if (payments.length) {
+    messages = runRows(labelRowsSql(payments, windowSeconds, 20000), 6)
+      .map((r) => {
+        // Prefer the text column; fall back to decoding attributedBody, which
+        // is where modern macOS actually keeps it.
+        const text = (r[5] ?? "").trim() || (r[4] ? parseAttributedBody(r[4]) : "")
+        return { id: r[0], date: (r[1] ?? "").replace(" ", "T"), from_me: r[2] === "1", handle: r[3] ?? "", text }
+      })
+      .filter((m) => m.text)
+  }
+
+  let linked = attachLabels(payments, messages, { windowSeconds })
+
+  if (!opts.skipContacts) {
+    // Resolve once per distinct handle, not once per payment.
+    const cache = new Map<string, string | null>()
+    linked = linked.map((p) => {
+      if (!p.handle) return p
+      if (!cache.has(p.handle)) cache.set(p.handle, resolveFromAddressBook(p.handle))
+      const name = cache.get(p.handle)
+      return name ? { ...p, contact: name } : p
+    })
+  }
+
+  return { payments: linked, messagesScanned: messages.length, available: true }
 }

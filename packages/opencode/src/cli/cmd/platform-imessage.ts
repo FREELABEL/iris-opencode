@@ -5,6 +5,7 @@ import { printDivider, dim, bold, success } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
 import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle } from "../lib/imessage"
 import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
+import { ImessagePaymentsCommand } from "./imessage-payments"
 
 const ImessageSearchCommand = cmd({
   command: "search <query>",
@@ -1209,6 +1210,7 @@ export const PlatformImessageCommand = cmd({
       .command(ImessageGroupsCommand)
       .command(ImessageReadGroupCommand)
       .command(ImessageSendGroupCommand)
+      .command(ImessagePaymentsCommand)
       .demandCommand(),
   async handler() {},
 })
