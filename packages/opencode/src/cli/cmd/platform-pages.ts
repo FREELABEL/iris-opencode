@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
@@ -1750,13 +1750,569 @@ const ReassignCmd = cmd({
 })
 
 // ============================================================================
+// Visibility + share links — who can actually reach a page (#178589)
+//
+// Two independent controls, easy to confuse:
+//
+//   visibility  a page COLUMN deciding which of the page's OWN urls resolve:
+//                 public    /p/{slug} ✓   /p/{uuid} ✓    (default — today's behaviour)
+//                 unlisted  /p/{slug} ✗   /p/{uuid} ✓    (hand someone the UUID link)
+//                 private   /p/{slug} ✗   /p/{uuid} ✗    (only /s/{token} works)
+//
+//   share links  disposable CAPABILITY urls at /s/{token}. They ignore visibility
+//                and serve the page even while it is unpublished — the token IS the
+//                grant. Anyone holding one is in; that is not access control.
+//
+// Endpoint routing gotcha: the share-link routes exist ONLY on fl-api. The iris-api
+// /v1/pages proxy has no route for them (verified in production: iris-api → 404,
+// fl-api → 200), so these use FL_API directly instead of pagesFetch. The visibility
+// write is a plain page-column PUT, so it goes through the normal proxied path.
+// ============================================================================
+
+const VISIBILITY_MODES = ["public", "unlisted", "private"] as const
+type VisibilityMode = (typeof VISIBILITY_MODES)[number]
+
+type ShareLink = {
+  id?: number
+  token: string
+  label?: string | null
+  expires_at?: string | null
+  max_views?: number | null
+  view_count?: number | null
+  revoked_at?: string | null
+  active?: boolean
+  share_url?: string
+}
+
+/** Share-link endpoints are fl-api-only — the iris-api pages proxy doesn't route them. */
+function shareFetch(path: string, options?: RequestInit): Promise<Response> {
+  return irisFetch(path, options ?? {}, FL_API)
+}
+
+/** Scheme + host that serves /p/ and /s/ urls. Prefers the host the API itself used. */
+function pagesOrigin(page?: { public_url?: string }): string {
+  const m = /^(https?:\/\/[^/]+)/.exec(page?.public_url ?? "")
+  if (m) return m[1]
+  const env = process.env.IRIS_ENV ?? "production"
+  return env === "local" ? "http://local.iris.freelabel.net:9300" : "https://freelabel.net"
+}
+
+/** The permanent unguessable /p/{uuid} alias (page.public_id), if the API exposes one. */
+function uuidUrl(page: any): string | null {
+  const id = page?.public_id
+  return id ? `${pagesOrigin(page)}/p/${id}` : null
+}
+
+function shareUrlFor(link: ShareLink, page?: any): string {
+  return link.share_url ?? `${pagesOrigin(page)}/s/${link.token}`
+}
+
+/**
+ * Read the page's visibility mode.
+ *
+ * `visibility` is newer than most pages and newer than some API builds — it comes
+ * back absent or null, which means the page behaves the way it always has: fully
+ * public. Report that as "public (default)" instead of crashing or printing
+ * `undefined`.
+ */
+function readVisibility(page: any): { mode: VisibilityMode; declared: boolean } {
+  for (const raw of [page?.visibility, page?.effective_visibility]) {
+    if (typeof raw === "string" && (VISIBILITY_MODES as readonly string[]).includes(raw)) {
+      return { mode: raw as VisibilityMode, declared: true }
+    }
+  }
+  // Matches the server's own fail-open rule (Page::effectiveVisibility): absent,
+  // null or unrecognised means the page behaves exactly as it always has.
+  return { mode: "public", declared: false }
+}
+
+function formatVisibility(v: { mode: VisibilityMode; declared: boolean }): string {
+  if (!v.declared) return `${success("public")} ${dim("(default — never set on this page)")}`
+  if (v.mode === "public") return success("public")
+  if (v.mode === "unlisted") return `${UI.Style.TEXT_WARNING}unlisted${UI.Style.TEXT_NORMAL}`
+  return `${UI.Style.TEXT_DANGER}private${UI.Style.TEXT_NORMAL}`
+}
+
+/** Which of the page's own urls resolve under a given mode. */
+function reachFor(mode: VisibilityMode): { slug: boolean; uuid: boolean } {
+  if (mode === "private") return { slug: false, uuid: false }
+  if (mode === "unlisted") return { slug: false, uuid: true }
+  return { slug: true, uuid: true }
+}
+
+/** Why a share link is (or isn't) currently usable — mirrors PageShareLink::isActive(). */
+function shareLinkState(l: ShareLink): { active: boolean; reason: string } {
+  if (l.revoked_at) return { active: false, reason: `revoked ${String(l.revoked_at).slice(0, 10)}` }
+  if (l.expires_at && new Date(l.expires_at).getTime() <= Date.now()) {
+    return { active: false, reason: `expired ${String(l.expires_at).slice(0, 10)}` }
+  }
+  if (l.max_views != null && (l.view_count ?? 0) >= l.max_views) {
+    return { active: false, reason: `view cap reached (${l.view_count ?? 0}/${l.max_views})` }
+  }
+  return { active: true, reason: "" }
+}
+
+function shareLinkIsActive(l: ShareLink): boolean {
+  return typeof l.active === "boolean" ? l.active : shareLinkState(l).active
+}
+
+/** `"Approval preview"  ·  expires 2026-08-13  ·  1/5 views` */
+function shareLinkMeta(l: ShareLink): string {
+  const seen = l.view_count ?? 0
+  const bits: string[] = []
+  if (l.label) bits.push(`"${l.label}"`)
+  bits.push(l.expires_at ? `expires ${String(l.expires_at).slice(0, 10)}` : "never expires")
+  bits.push(l.max_views != null ? `${seen}/${l.max_views} views` : `${seen} view${seen === 1 ? "" : "s"} · no cap`)
+  const st = shareLinkState(l)
+  if (!st.active) bits.push(st.reason)
+  return bits.join("  ·  ")
+}
+
+/** `--expires` accepts a duration (30m, 12h, 7d, 2w) or a date (2026-12-31, ISO 8601). */
+function parseExpiry(raw: string): { iso: string } | { error: string } {
+  const trimmed = raw.trim()
+  const rel = /^(\d+)\s*(m|h|d|w)$/i.exec(trimmed)
+  if (rel) {
+    const n = Number(rel[1])
+    if (n <= 0) return { error: `--expires ${raw}: duration must be greater than zero` }
+    const ms: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 }
+    return { iso: new Date(Date.now() + n * ms[rel[2].toLowerCase()]).toISOString() }
+  }
+  const at = new Date(trimmed)
+  if (isNaN(at.getTime())) {
+    return { error: `--expires ${raw}: use a duration (30m, 12h, 7d, 2w) or a date (2026-12-31, 2026-12-31T18:00:00Z)` }
+  }
+  if (at.getTime() <= Date.now()) return { error: `--expires ${raw}: that is already in the past` }
+  return { iso: at.toISOString() }
+}
+
+/**
+ * Fetch a page's share links. Returns null when they couldn't be read (not the
+ * owner, older API) so callers can say "unknown" rather than "none" — an empty
+ * list and an unreadable list mean very different things for a privacy report.
+ */
+async function fetchShareLinks(pageId: number, opts: { quiet?: boolean } = {}): Promise<ShareLink[] | null> {
+  const res = await shareFetch(`/api/v1/pages/${pageId}/share-links`)
+  if (!res.ok) {
+    if (!opts.quiet) await handleApiError(res, "List share links")
+    return null
+  }
+  const body = (await res.json()) as { data?: ShareLink[] }
+  return Array.isArray(body?.data) ? body.data : []
+}
+
+/**
+ * The whole point of `iris pages visibility <slug>`: print every url that points at
+ * this page and say plainly which of them work right now.
+ */
+function renderReach(page: any, v: { mode: VisibilityMode; declared: boolean }, links: ShareLink[] | null): void {
+  const r = reachFor(v.mode)
+  const published = page.status === "published"
+  const active = (links ?? []).filter(shareLinkIsActive)
+
+  printDivider()
+  printKV("Page", `${page.slug} (#${page.id})`)
+  printKV("Visibility", formatVisibility(v))
+  printKV("Status", formatStatus(page.status))
+  if (page.requires_auth) printKV("Login gate", `${UI.Style.TEXT_WARNING}on${UI.Style.TEXT_NORMAL} ${dim("(requires_auth — visitors must sign in)")}`)
+  console.log()
+  console.log(`  ${bold("Who can reach this page right now")}`)
+  console.log()
+
+  const row = (ok: boolean, url: string, note: string) => {
+    console.log(`  ${ok ? success("●") : dim("○")} ${ok ? url : dim(url)}`)
+    console.log(`      ${dim(note)}`)
+  }
+
+  // /p/{slug}
+  const slugOk = r.slug && published
+  row(
+    slugOk,
+    publicUrl(page),
+    !r.slug
+      ? `blocked — visibility is ${v.mode}, this url 404s for everyone`
+      : !published
+        ? `page is ${page.status} — 404s until you run: iris pages publish ${page.slug}`
+        : "anyone with the link · discoverable & search-indexable",
+  )
+
+  // /p/{uuid}
+  const uuid = uuidUrl(page)
+  if (uuid) {
+    const uuidOk = r.uuid && published
+    row(
+      uuidOk,
+      uuid,
+      !r.uuid
+        ? `blocked — visibility is private, this url 404s for everyone`
+        : !published
+          ? `page is ${page.status} — 404s until published`
+          : "anyone with the link · unguessable, not discoverable",
+    )
+  } else {
+    console.log(`  ${dim("○ /p/{uuid}")}`)
+    console.log(`      ${dim("this page has no public_id UUID alias")}`)
+  }
+
+  // /s/{token}
+  if (links === null) {
+    console.log(`  ${dim("? /s/{token}")}`)
+    console.log(`      ${dim("share links could not be read — you may not own this page")}`)
+  } else if (active.length === 0) {
+    console.log(`  ${dim("○ /s/{token}")}`)
+    console.log(`      ${dim(`no active share links — mint one: iris pages share ${page.slug}`)}`)
+  } else {
+    for (const l of active) {
+      row(true, shareUrlFor(l, page), `${shareLinkMeta(l)}  ·  works even while unpublished`)
+    }
+  }
+
+  const stale = (links ?? []).length - active.length
+  if (stale > 0) {
+    console.log()
+    console.log(`  ${dim(`${stale} inactive share link(s) — see: iris pages share:list ${page.slug}`)}`)
+  }
+  printDivider()
+}
+
+const VisibilityCmd = cmd({
+  command: "visibility <slug> [mode]",
+  aliases: ["vis"],
+  describe: "show or set who can reach a page (public | unlisted | private)",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .positional("mode", {
+        describe: "public | unlisted | private (omit to show the current mode + working urls)",
+        type: "string",
+        choices: VISIBILITY_MODES as unknown as string[],
+      })
+      .option("yes", { describe: "skip the confirmation when restricting visibility", type: "boolean", default: false })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const slug = String(args.slug)
+    const mode = args.mode ? (String(args.mode) as VisibilityMode) : null
+    prompts.intro(`◈  Visibility: ${slug}${mode ? ` → ${mode}` : ""}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Loading…")
+    try {
+      const page = await getBySlug(slug, false)
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const links = await fetchShareLinks(page.id, { quiet: true })
+      const current = readVisibility(page)
+
+      // ---- Report mode -----------------------------------------------------
+      if (!mode) {
+        sp.stop(`Visibility: ${current.declared ? current.mode : "public (default)"}`)
+        if (args.json) {
+          const r = reachFor(current.mode)
+          console.log(JSON.stringify({
+            slug: page.slug,
+            id: page.id,
+            visibility: current.declared ? current.mode : null,
+            effective_visibility: current.mode,
+            visibility_supported: current.declared,
+            status: page.status,
+            requires_auth: !!page.requires_auth,
+            slug_url: { url: publicUrl(page), reachable: r.slug && page.status === "published" },
+            uuid_url: { url: uuidUrl(page), reachable: !!uuidUrl(page) && r.uuid && page.status === "published" },
+            share_links: (links ?? []).map((l) => ({
+              token: l.token,
+              url: shareUrlFor(l, page),
+              label: l.label ?? null,
+              expires_at: l.expires_at ?? null,
+              max_views: l.max_views ?? null,
+              view_count: l.view_count ?? 0,
+              active: shareLinkIsActive(l),
+            })),
+            share_links_readable: links !== null,
+          }, null, 2))
+          prompts.outro("Done")
+          return
+        }
+        renderReach(page, current, links)
+        const next: VisibilityMode = current.mode === "public" ? "unlisted" : "public"
+        prompts.outro(dim(`iris pages visibility ${slug} ${next}   ·   iris pages share ${slug}`))
+        return
+      }
+
+      // ---- Set mode --------------------------------------------------------
+      if (current.declared && current.mode === mode) {
+        sp.stop(`Already ${mode}`)
+        renderReach(page, current, links)
+        prompts.outro("Done")
+        return
+      }
+      sp.stop(`Currently ${current.declared ? current.mode : "public (default)"}`)
+
+      // Restricting breaks every /p/{slug} link already in the wild. Say so before doing it.
+      const restricting = mode !== "public" && reachFor(current.mode).slug
+      if (restricting) {
+        console.log()
+        prompts.log.warn(
+          `Any /p/${slug} link you have already shared WILL BREAK — it 404s from the moment this lands.\n` +
+          `  Breaking now:  ${publicUrl(page)}` +
+          (mode === "private" && uuidUrl(page) ? `\n  Also breaking: ${uuidUrl(page)}` : "") +
+          `\n  Still works:   ${mode === "unlisted" ? (uuidUrl(page) ?? "(no UUID alias on this page)") : "only active /s/{token} share links"}`,
+        )
+        if (!args.yes && !isNonInteractive()) {
+          const ok = await prompts.confirm({ message: `Set ${slug} to ${mode}?` })
+          if (prompts.isCancel(ok) || !ok) { prompts.outro("Cancelled — nothing changed"); return }
+        }
+      }
+
+      const sp2 = prompts.spinner()
+      sp2.start(`Setting visibility to ${mode}…`)
+      const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ visibility: mode }),
+      })
+      if (!(await handleApiError(res, "Set visibility"))) { sp2.stop("Failed", 1); prompts.outro("Done"); return }
+      const updated = ((await res.json()) as any)?.data ?? {}
+      const after = readVisibility(updated)
+
+      // The API accepted the PUT but dropped the field → this build predates the
+      // visibility column. Don't claim a change that didn't happen.
+      if (!after.declared || after.mode !== mode) {
+        sp2.stop("Not applied", 1)
+        process.exitCode = 1
+        prompts.log.error(
+          `The API accepted the request but the page still reports visibility=${after.declared ? after.mode : "(absent)"}.\n` +
+          `  This backend doesn't support page visibility yet — nothing changed.`,
+        )
+        prompts.outro("Done")
+        return
+      }
+
+      // A stale rendered page would keep serving the old reachability, so purge it
+      // here rather than making the operator remember two cache keys.
+      await pagesFetch("/api/internal/cache/purge-page", {
+        method: "POST",
+        body: JSON.stringify({ slug }),
+      }).catch(() => {})
+
+      sp2.stop(success(`Visibility set to ${mode}`))
+      console.log()
+      if (mode === "public") {
+        console.log(`  ${bold("Share this:")}  ${highlight(publicUrl(page))}`)
+        console.log(`  ${dim("Anyone can reach it and search engines can index it.")}`)
+      } else if (mode === "unlisted") {
+        const uu = uuidUrl(page)
+        console.log(`  ${bold("Share this:")}  ${highlight(uu ?? publicUrl(page))}`)
+        console.log(`  ${dim(uu ? "Unguessable and not discoverable — but anyone holding it gets in." : "This page has no UUID alias; mint a share link instead.")}`)
+        console.log(`  ${dim(`Dead now:     ${publicUrl(page)}`)}`)
+      } else {
+        console.log(`  ${bold("Both /p/ urls are now dead.")} ${dim("The only way in is a share link:")}`)
+        console.log(`  ${highlight(`iris pages share ${slug}`)}`)
+        console.log(`  ${dim(`Dead now:     ${publicUrl(page)}${uuidUrl(page) ? `  and  ${uuidUrl(page)}` : ""}`)}`)
+      }
+      console.log()
+      console.log(`  ${dim(`Revert: iris pages visibility ${slug} ${current.mode}`)}`)
+      prompts.outro("Done")
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ShareCmd = cmd({
+  command: "share <slug>",
+  describe: "mint a disposable /s/{token} capability link (works even while unpublished)",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("expires", { describe: "expiry — duration (30m, 12h, 7d, 2w) or date (2026-12-31)", type: "string" })
+      .option("max-views", { describe: "burn the link after N views", type: "number" })
+      .option("label", { describe: "who/what this link is for (shown in share:list)", type: "string" })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const slug = String(args.slug)
+    prompts.intro(`◈  Share link: ${slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Minting…")
+    try {
+      let expiresAt: string | null = null
+      if (args.expires) {
+        const parsed = parseExpiry(String(args.expires))
+        if ("error" in parsed) {
+          sp.stop("Invalid --expires", 1)
+          process.exitCode = 1
+          prompts.log.error(parsed.error)
+          prompts.outro("Done")
+          return
+        }
+        expiresAt = parsed.iso
+      }
+      const maxViews = args["max-views"] as number | undefined
+      if (maxViews != null && (!Number.isInteger(maxViews) || maxViews < 1)) {
+        sp.stop("Invalid --max-views", 1)
+        process.exitCode = 1
+        prompts.log.error("--max-views must be a whole number of 1 or more")
+        prompts.outro("Done")
+        return
+      }
+
+      const page = await getBySlug(slug, false)
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+
+      const payload: Record<string, unknown> = {}
+      if (args.label) payload.label = String(args.label)
+      if (expiresAt) payload.expires_at = expiresAt
+      if (maxViews != null) payload.max_views = maxViews
+
+      const res = await shareFetch(`/api/v1/pages/${page.id}/share-links`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+      if (!(await handleApiError(res, "Create share link"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      const body = (await res.json()) as { data?: ShareLink; share_url?: string }
+      const link = body?.data
+      if (!link?.token) {
+        sp.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.log.error("The API returned no token for the new share link.")
+        prompts.outro("Done")
+        return
+      }
+      const url = body.share_url ?? shareUrlFor(link, page)
+      sp.stop(success("Share link created"))
+
+      if (args.json) {
+        console.log(JSON.stringify({ ...link, url }, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      console.log()
+      console.log(`  ${highlight(url)}`)
+      console.log()
+      printKV("Label", link.label ?? dim("(none)"))
+      printKV("Expires", link.expires_at ? `${String(link.expires_at).slice(0, 19).replace("T", " ")} UTC` : dim("never — this link lives forever until revoked"))
+      printKV("Max views", link.max_views != null ? String(link.max_views) : dim("unlimited"))
+      printKV("Serves", page.status === "published" ? "the published page" : `the ${page.status} page — share links bypass publishing`)
+      console.log()
+      prompts.log.warn(
+        "This is a capability url, not access control: anyone who has the link gets in —\n" +
+        "  no login, no allowlist. Forwarded, pasted, or logged means shared.",
+      )
+      console.log(`  ${dim(`Revoke: iris pages share:revoke ${link.token}`)}`)
+      prompts.outro("Done")
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ShareListCmd = cmd({
+  command: "share:list <slug>",
+  aliases: ["shares", "share-links"],
+  describe: "list a page's share links with view counts and expiry",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("all", { describe: "include revoked/expired/burnt links", type: "boolean", default: false })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const slug = String(args.slug)
+    prompts.intro(`◈  Share links: ${slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Loading…")
+    try {
+      const page = await getBySlug(slug, false)
+      if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      const links = await fetchShareLinks(page.id)
+      if (links === null) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const shown = args.all ? links : links.filter(shareLinkIsActive)
+      sp.stop(`${shown.length} ${args.all ? "" : "active "}link(s)${args.all ? "" : links.length > shown.length ? ` (${links.length - shown.length} inactive hidden — use --all)` : ""}`)
+
+      if (args.json) {
+        console.log(JSON.stringify(shown.map((l) => ({ ...l, url: shareUrlFor(l, page), active: shareLinkIsActive(l) })), null, 2))
+        prompts.outro("Done")
+        return
+      }
+      if (shown.length === 0) {
+        prompts.log.info(dim(`No ${args.all ? "" : "active "}share links. Mint one: iris pages share ${slug}`))
+        prompts.outro("Done")
+        return
+      }
+      printDivider()
+      for (const l of shown) {
+        const active = shareLinkIsActive(l)
+        console.log(`  ${active ? success("●") : dim("○")} ${active ? shareUrlFor(l, page) : dim(shareUrlFor(l, page))}`)
+        console.log(`      ${dim(shareLinkMeta(l))}`)
+        console.log()
+      }
+      printDivider()
+      prompts.log.warn("Every active link above grants full access to anyone holding it.")
+      prompts.outro(dim(`iris pages share:revoke <token>   ·   iris pages visibility ${slug}`))
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const ShareRevokeCmd = cmd({
+  command: "share:revoke <token>",
+  aliases: ["unshare"],
+  describe: "revoke a share link so its /s/{token} url stops working",
+  builder: (y) =>
+    y
+      .positional("token", { describe: "share token (from `iris pages share:list`) or a full /s/ url", type: "string", demandOption: true })
+      .option("yes", { describe: "skip the confirmation", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    // Accept a pasted /s/{token} url as well as a bare token — the url is what the
+    // operator actually has in hand.
+    const token = String(args.token).trim().replace(/^.*\/s\//, "").replace(/[/?#].*$/, "")
+    prompts.intro(`◈  Revoke share link`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    if (!args.yes && !isNonInteractive()) {
+      const ok = await prompts.confirm({ message: `Revoke ${token.slice(0, 12)}… permanently? Anyone using this link loses access immediately.` })
+      if (prompts.isCancel(ok) || !ok) { prompts.outro("Cancelled — nothing changed"); return }
+    }
+
+    const sp = prompts.spinner()
+    sp.start("Revoking…")
+    try {
+      const res = await shareFetch(`/api/v1/pages/share-links/${encodeURIComponent(token)}`, { method: "DELETE" })
+      if (!(await handleApiError(res, "Revoke share link"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      sp.stop(success("Revoked"))
+      console.log(`  ${dim(`/s/${token} now 404s for everyone.`)}`)
+      prompts.outro("Done")
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
 export const PlatformPagesCommand = cmd({
   command: "pages",
   aliases: ["genesis"],
-  describe: "manage composable pages — list, view, get/set, pull/push/diff, publish, preview, versions, qr, screenshot",
+  describe:
+    "manage composable pages — list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot",
   builder: (y) =>
     y
       .command(ListCmd)
@@ -1770,6 +2326,10 @@ export const PlatformPagesCommand = cmd({
       .command(PublishCmd)
       .command(UnpublishCmd)
       .command(PreviewCmd)
+      .command(VisibilityCmd)
+      .command(ShareCmd)
+      .command(ShareListCmd)
+      .command(ShareRevokeCmd)
       .command(CreateCmd)
       .command(DuplicateCmd)
       .command(RebrandCmd)
