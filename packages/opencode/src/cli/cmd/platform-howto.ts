@@ -31,34 +31,42 @@ async function listRecipes(): Promise<Array<{ name: string; title: string; path:
 
 // ── List ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Body of `how-to list`, extracted so the bare `iris how-to` can reuse it
+ * instead of duplicating the rendering (#178285).
+ */
+export async function runList(): Promise<void> {
+  UI.empty()
+  prompts.intro("◈  IRIS How-To Recipes")
+
+  const recipes = await listRecipes()
+
+  if (recipes.length === 0) {
+    console.log()
+    console.log(dim("  No recipes found in ~/.iris/how-to/"))
+    console.log(dim("  Create one with: ") + highlight("iris how-to add <name>"))
+    console.log()
+  } else {
+    printDivider()
+    console.log()
+    for (const r of recipes) {
+      console.log(`  ${bold(r.name)}  ${dim("—")}  ${r.title}`)
+    }
+    console.log()
+    console.log(dim(`  ${recipes.length} recipe(s) in ~/.iris/how-to/`))
+    console.log(dim("  View one with: ") + highlight("iris how-to view <name>"))
+    console.log()
+  }
+  prompts.outro("Done")
+}
+
 const HowToListCommand = cmd({
   command: "list",
   aliases: ["ls"],
   describe: "list all available how-to recipes",
   builder: (y) => y,
   async handler() {
-    UI.empty()
-    prompts.intro("◈  IRIS How-To Recipes")
-
-    const recipes = await listRecipes()
-
-    if (recipes.length === 0) {
-      console.log()
-      console.log(dim("  No recipes found in ~/.iris/how-to/"))
-      console.log(dim("  Create one with: ") + highlight("iris how-to add <name>"))
-      console.log()
-    } else {
-      printDivider()
-      console.log()
-      for (const r of recipes) {
-        console.log(`  ${bold(r.name)}  ${dim("—")}  ${r.title}`)
-      }
-      console.log()
-      console.log(dim(`  ${recipes.length} recipe(s) in ~/.iris/how-to/`))
-      console.log(dim("  View one with: ") + highlight("iris how-to view <name>"))
-      console.log()
-    }
-    prompts.outro("Done")
+    await runList()
   },
 })
 
@@ -96,17 +104,16 @@ const HowToViewCommand = cmd({
 
 // ── Search ───────────────────────────────────────────────────────────────────
 
-const HowToSearchCommand = cmd({
-  command: "search <query>",
-  aliases: ["find", "grep"],
-  describe: "search how-to recipes by keyword",
-  builder: (y) =>
-    y.positional("query", { type: "string", demandOption: true, describe: "search term" }),
-  async handler(args) {
+/**
+ * Body of `how-to search`, extracted so a bare topic (`iris how-to hive`) can
+ * route straight into it (#178286) without duplicating the matcher.
+ */
+export async function runSearch(rawQuery: string): Promise<void> {
+  {
     UI.empty()
     prompts.intro("◈  Search How-Tos")
 
-    const query = String(args.query).toLowerCase()
+    const query = String(rawQuery).toLowerCase()
     const recipes = await listRecipes()
     const fs = await import("fs")
 
@@ -147,6 +154,17 @@ const HowToSearchCommand = cmd({
       console.log()
     }
     prompts.outro("Done")
+  }
+}
+
+const HowToSearchCommand = cmd({
+  command: "search <query>",
+  aliases: ["find", "grep"],
+  describe: "search how-to recipes by keyword",
+  builder: (y) =>
+    y.positional("query", { type: "string", demandOption: true, describe: "search term" }),
+  async handler(args) {
+    await runSearch(String(args.query))
   },
 })
 
@@ -259,9 +277,50 @@ const HowToRemoveCommand = cmd({
 
 // ── Root command ─────────────────────────────────────────────────────────────
 
+/**
+ * Subcommand names + aliases. A bare positional that matches one of these is
+ * that subcommand; anything else is a search term (#178286). Kept explicit so
+ * the default handler and the tests agree on the precedence rule.
+ */
+export const HOWTO_SUBCOMMANDS = [
+  "list", "ls",
+  "view", "read", "show",
+  "search", "find", "grep",
+  "add", "create", "write", "save",
+  "remove", "rm", "delete",
+]
+
+/**
+ * What a bare `iris how-to [topic]` should do (#178285/#178286). Pure, so the
+ * precedence rule is testable without driving yargs or the filesystem.
+ *
+ *   (nothing)      -> list
+ *   --search x     -> search x            (explicit wins; the escape hatch for
+ *                                          a topic that shares a subcommand name)
+ *   a topic        -> search topic
+ *   a subcommand   -> list                (defensive only — yargs routes real
+ *                                          subcommands before $0 is reached)
+ */
+export function resolveDefaultAction(
+  topic?: unknown,
+  search?: unknown,
+): { action: "list" } | { action: "search"; query: string } {
+  const explicit = typeof search === "string" ? search.trim() : ""
+  if (explicit) return { action: "search", query: explicit }
+
+  const t = typeof topic === "string" ? topic.trim() : ""
+  if (!t) return { action: "list" }
+  if (HOWTO_SUBCOMMANDS.includes(t.toLowerCase())) return { action: "list" }
+
+  return { action: "search", query: t }
+}
+
 export const HowToCommand = cmd({
   command: "how-to",
-  aliases: ["howto", "recipes"],
+  // #178285: users reach for the plural, and "how-tos" / "howtos" used to be
+  // "Unknown command". Both forms now resolve, and so does every subcommand
+  // under them, because aliases apply to the whole subtree.
+  aliases: ["howto", "how-tos", "howtos", "recipes", "recipe"],
   describe: "manage IRIS how-to recipes — step-by-step guides for common workflows",
   builder: (yargs) =>
     yargs
@@ -270,6 +329,26 @@ export const HowToCommand = cmd({
       .command(HowToSearchCommand)
       .command(HowToAddCommand)
       .command(HowToRemoveCommand)
-      .demandCommand(),
+      // #178285/#178286: previously .demandCommand(), so a bare `iris how-to`
+      // died with "Not enough non-option arguments: got 0, need at least 1" —
+      // a parent command that refuses to do the obvious thing. Now:
+      //   iris how-to            -> list
+      //   iris how-to hive       -> search "hive"   (not a subcommand)
+      //   iris how-to list       -> list            (subcommand still wins)
+      //   iris how-to --search x -> search "x"      (explicit, for scripting)
+      // The one ambiguous case is a topic that shares a subcommand's name; the
+      // subcommand wins, which is the CLI convention, and --search is the way out.
+      .command({
+        command: "$0 [topic]",
+        describe: false as unknown as string,
+        builder: (y: any) =>
+          y
+            .positional("topic", { type: "string", describe: "search recipes for this topic" })
+            .option("search", { type: "string", describe: "search term (explicit form)" }),
+        handler: async (args: any) => {
+          const action = resolveDefaultAction(args.topic, args.search)
+          return action.action === "search" ? runSearch(action.query) : runList()
+        },
+      }),
   async handler() {},
 })
