@@ -220,10 +220,14 @@ const GmailLabelsCommand = cmd({
 
       printDivider()
       for (const l of [...system, ...user]) {
+        // GMAIL_LIST_LABELS returns only id/name/type/visibility — no messagesTotal or
+        // messagesUnread. Printing "0 msgs" for every label was a FABRICATED number: it
+        // looked like an empty mailbox rather than an absent field. Show counts only when
+        // the API actually supplies them (#178282).
         const unread = l.messages_unread > 0 ? success(` (${l.messages_unread} unread)`) : ""
-        const total = dim(`${l.messages_total} msgs`)
+        const total = l.messages_total > 0 ? dim(`  ${l.messages_total} msgs`) : ""
         const isUser = l.type !== "system" ? dim(" [custom]") : ""
-        console.log(`  ${bold(l.name)}  ${total}${unread}${isUser}`)
+        console.log(`  ${bold(l.name)}${total}${unread}${isUser}`)
       }
       printDivider()
       prompts.outro(`${success("✓")} ${labels.length} label${labels.length === 1 ? "" : "s"}`)

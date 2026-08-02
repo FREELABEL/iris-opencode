@@ -94,7 +94,21 @@ export function clearTokenCache(): void {
  * what is wrong when they do not. Distinguishing "never connected" from "expired" is the
  * whole point — conflating them is what made #178282 unreadable for weeks.
  */
-export async function getGmailStatus(): Promise<{ ok: boolean; reason: string }> {
+export async function getGmailStatus(opts: { deep?: boolean } = {}): Promise<{ ok: boolean; reason: string }> {
+  // Deep check: make a real Gmail call. The shallow check below reads the LOCAL
+  // integrations row, which is not authoritative — it reported "active" while Composio
+  // reported the connected account EXPIRED. Callers that must not be wrong (doctor,
+  // anything reporting health) should pass deep:true; the truth is only ever what a
+  // live request returns.
+  if (opts.deep) {
+    try {
+      await getLabels("")
+      return { ok: true, reason: "" }
+    } catch (e: any) {
+      return { ok: false, reason: String(e?.message ?? "Gmail request failed.") }
+    }
+  }
+
   try {
     const { irisFetch } = await import("../cmd/iris-api")
     const res = await irisFetch("/api/v1/integrations")
@@ -121,6 +135,9 @@ export async function getGmailStatus(): Promise<{ ok: boolean; reason: string }>
       }
     }
 
+    // A local row saying "active" is NOT proof the connection works — this exact row read
+    // active while Composio had the account EXPIRED. Treat it as "worth trying"; the
+    // authoritative answer comes from the execution error, which now propagates verbatim.
     return { ok: true, reason: "" }
   } catch (e: any) {
     return { ok: false, reason: `Could not reach the platform: ${e?.message ?? "unknown error"}` }

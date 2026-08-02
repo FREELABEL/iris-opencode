@@ -2180,24 +2180,36 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
   const results: ChannelHealth[] = []
 
   const checks = await Promise.allSettled([
-    // Gmail — verify via fl-api integration endpoint
+    // Gmail — make a REAL Gmail call and report what actually happened.
+    //
+    // This used to request /api/v1/leads/0/gmail-threads — lead 0 deliberately does not
+    // exist — and treat every status except 401/403 as success. It returned 404 and was
+    // rendered as "connected + verified". Two compounding errors (#178282):
+    //   (a) it proved an fl-api route was reachable, then reported that as Gmail being
+    //       verified — different claims;
+    //   (b) that endpoint reads the local lead_email_messages table and never contacts
+    //       Gmail, so it could not detect Gmail's state even in principle.
+    // Composio also signals expiry with 410, which is neither 401 nor 403, so the single
+    // failure mode it tried to catch was the one it structurally could not see.
+    //
+    // "Verified" now means a live Gmail request succeeded. Nothing less.
     (async (): Promise<ChannelHealth> => {
       try {
-        const res = await irisFetch("/api/v1/leads/0/gmail-threads")
-        // 401/403 = token expired; 404 = lead not found but integration works; 200 = ok
-        if (res.status === 401 || res.status === 403) {
-          return {
-            name: "Gmail",
-            ok: false,
-            status: "expired",
-            error: "token expired",
-            hint: "run: iris connect gmail",
-          }
-        }
-        // Any response (even 404 for lead 0) means the integration is reachable
+        const { getLabels } = await import("../lib/gmail")
+        await getLabels("")
         return { name: "Gmail", ok: true, status: "verified" }
-      } catch {
-        return { name: "Gmail", ok: false, status: "not_connected", hint: "run: iris connect gmail" }
+      } catch (e: any) {
+        const msg = String(e?.message ?? "unknown error")
+        const expired = /expired|1820|ConnectedAccountExpired|revoked/i.test(msg)
+        return {
+          name: "Gmail",
+          ok: false,
+          status: expired ? "expired" : "error",
+          // Surface the upstream text — a generic string here is what made this
+          // unreadable for weeks.
+          error: msg.slice(0, 160),
+          hint: expired ? "reconnect: iris integrations connect gmail --yes" : "check: iris gmail labels",
+        }
       }
     })(),
 
