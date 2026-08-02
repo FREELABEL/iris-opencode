@@ -945,7 +945,11 @@ const BloqsAddItemCommand = cmd({
       }
 
       const addBody = (await res.json().catch(() => null)) as { data?: any; id?: any } | null
-      const newItemId = addBody?.data?.id ?? addBody?.id
+      // Bug #178531: the create endpoint historically double-nested its envelope
+      // ({ data: { data: { id } } }) while every sibling create returns { data: { id } },
+      // so add-item reported `id: null`. fl-api now single-nests; keep the deep path as a
+      // fallback so the CLI still reports the id against an un-deployed API.
+      const newItemId = addBody?.data?.id ?? addBody?.data?.data?.id ?? addBody?.id
       if (args.json) { console.log(JSON.stringify({ success: true, id: newItemId ?? null, bloq_id: args["bloq-id"], list_id: args["list-id"] })); return }
       spinner?.stop(`${success("✓")} Item added${newItemId ? ` (#${newItemId})` : ""}`)
       const hint = newItemId

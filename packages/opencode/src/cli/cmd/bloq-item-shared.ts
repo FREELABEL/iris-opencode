@@ -132,8 +132,9 @@ async function createItem(
     await handleApiError(res, "Create item")
     return null
   }
-  // store() double-nests: { data: { data: { id, ... } } } → unwrap gives { data: {id} }.
-  // Other create paths return { data: { id } }. Normalize to the inner item either way.
+  // store() now returns { data: { id, ... } } like every other create path (bug #178531);
+  // it used to double-nest as { data: { data: { id } } }. unwrap() strips one layer, so
+  // `d?.data ?? d` normalizes to the item itself against either API version.
   const d = await unwrap(res)
   return d?.data ?? d
 }
