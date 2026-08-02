@@ -1,13 +1,23 @@
 /**
- * Gmail API utility — uses OAuth token from fl-api integrations table.
+ * Gmail access — routed through the IRIS backend, never straight to Google.
  *
- * Token flow: user connects Gmail via iris channels connect gmail (or fl-api OAuth),
- * token stored in integrations table, fetched via irisFetch, then calls Gmail API directly.
+ * WAS (broken for everyone, #178282): getToken() fetched a raw OAuth access token from
+ * /api/v1/integrations/gmail/credentials and this module called googleapis.com directly.
+ * That route DOES NOT EXIST in fl-api — grepping the whole routes tree finds no
+ * /credentials registration, and it 404s live. So getToken() always returned null and
+ * every `iris gmail` subcommand printed "No Gmail connected" regardless of the account's
+ * real state. It had never worked for anybody.
  *
- * Used by: platform-gmail.ts, platform-atlas-comms.ts, platform-inbox.ts
+ * NOW: everything goes through POST /api/v1/users/{id}/integrations/execute-direct on
+ * iris-api — the same path `iris integrations exec gmail ...` uses, which demonstrably
+ * reaches Gmail. That is also what CLAUDE.md requires ("Frontend calls backend API
+ * endpoints, never directly calls external APIs"), and it means a Google access token is
+ * never handed to the client.
+ *
+ * The exported signatures still take a leading `token` argument so the three consumers
+ * (platform-gmail.ts, platform-atlas-comms.ts, platform-inbox.ts) keep working unchanged.
+ * The value is now an opaque sentinel from getToken() and is deliberately ignored.
  */
-
-const GMAIL_API = "https://www.googleapis.com/gmail/v1"
 
 // ── Types ──
 
@@ -38,97 +48,145 @@ export interface GmailThread {
   messages: GmailMessage[]
 }
 
-// ── Token ──
+// ── Backend session ──
 
-let _cachedToken: string | null = null
+/**
+ * Opaque sentinel. Callers pass it back into the functions below; it carries no
+ * credential. Kept only so existing call sites (which expect a token string) work
+ * unchanged now that auth lives entirely on the backend.
+ */
+const BACKEND = "iris-backend"
 
+let _checked: string | null = null
+
+/**
+ * Confirm Gmail is usable via the backend. Returns the sentinel when it is, null when
+ * it is not — and on null, lastError() explains WHY, which the old implementation could
+ * never do because it had no idea whether a null token meant "not connected", "expired"
+ * or "the endpoint does not exist".
+ */
 export async function getToken(): Promise<string | null> {
-  if (_cachedToken) return _cachedToken
+  if (_checked) return _checked
 
-  try {
-    const { irisFetch } = await import("../cmd/iris-api")
+  const status = await getGmailStatus()
+  if (status.ok) {
+    _checked = BACKEND
+    return BACKEND
+  }
 
-    // Try the integration credentials endpoint
-    const res = await irisFetch("/api/v1/integrations/gmail/credentials")
-    if (res.ok) {
-      const data = (await res.json()) as any
-      const token = data?.data?.access_token ?? data?.access_token ?? data?.data?.token ?? null
-      if (token) { _cachedToken = token; return token }
-    }
-
-    // Fallback: try Google integration
-    const res2 = await irisFetch("/api/v1/integrations/google/credentials")
-    if (res2.ok) {
-      const data = (await res2.json()) as any
-      const token = data?.data?.access_token ?? data?.access_token ?? null
-      if (token) { _cachedToken = token; return token }
-    }
-  } catch {}
-
+  _lastError = status.reason
   return null
 }
 
-export function clearTokenCache(): void {
-  _cachedToken = null
+let _lastError = "No Gmail connected."
+
+/** Human-readable reason the last getToken() failed. */
+export function lastError(): string {
+  return _lastError
 }
 
-// ── API Calls ──
+export function clearTokenCache(): void {
+  _checked = null
+}
 
-async function gmailFetch(path: string, token: string): Promise<any> {
-  const res = await fetch(`${GMAIL_API}${path}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-    signal: AbortSignal.timeout(15000),
-  })
+/**
+ * Ask the platform whether this user has a usable Gmail connection, and say precisely
+ * what is wrong when they do not. Distinguishing "never connected" from "expired" is the
+ * whole point — conflating them is what made #178282 unreadable for weeks.
+ */
+export async function getGmailStatus(): Promise<{ ok: boolean; reason: string }> {
+  try {
+    const { irisFetch } = await import("../cmd/iris-api")
+    const res = await irisFetch("/api/v1/integrations")
 
-  if (res.status === 401) {
-    clearTokenCache()
-    throw new Error("Gmail token expired. Reconnect: iris channels connect gmail")
+    if (!res.ok) {
+      return { ok: false, reason: `Could not read your integrations (HTTP ${res.status}).` }
+    }
+
+    const body = (await res.json()) as any
+    const raw = body?.data ?? body?.integrations ?? body
+    const list: any[] = Array.isArray(raw) ? raw : Object.values(raw ?? {}).flat().filter((x: any) => x && typeof x === "object")
+
+    const gmail = list.filter((i) => /gmail/i.test(String(i?.name ?? i?.slug ?? i?.service ?? i?.type ?? "")))
+    if (gmail.length === 0) {
+      return { ok: false, reason: "No Gmail connection found. Connect it with: iris integrations connect gmail" }
+    }
+
+    const active = gmail.find((i) => String(i?.status ?? "").toLowerCase() === "active")
+    if (!active) {
+      const statuses = [...new Set(gmail.map((i) => String(i?.status ?? "unknown")))].join(", ")
+      return {
+        ok: false,
+        reason: `Gmail is connected but not usable (status: ${statuses}). Reconnect with: iris integrations connect gmail --yes`,
+      }
+    }
+
+    return { ok: true, reason: "" }
+  } catch (e: any) {
+    return { ok: false, reason: `Could not reach the platform: ${e?.message ?? "unknown error"}` }
   }
+}
+
+// ── API Calls (via the backend integration executor) ──
+
+/**
+ * Execute a Gmail action through iris-api. Throws with the upstream message on failure —
+ * including Composio's own errors (e.g. a connected account in EXPIRED state), which is
+ * the signal that used to be thrown away.
+ */
+async function gmailExec(action: string, params: Record<string, unknown>): Promise<any> {
+  const { irisFetch, IRIS_API, resolveUserId } = await import("../cmd/iris-api")
+
+  const userId = await resolveUserId()
+  if (!userId) throw new Error("Not signed in — run: iris auth login")
+
+  const res = await irisFetch(
+    `/api/v1/users/${userId}/integrations/execute-direct`,
+    { method: "POST", body: JSON.stringify({ integration: "gmail", action, params }) },
+    IRIS_API,
+  )
+
+  const data = (await res.json().catch(() => ({}))) as any
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as any
-    throw new Error(err?.error?.message || `Gmail API: HTTP ${res.status}`)
+    throw new Error(data?.error ?? data?.message ?? `Gmail request failed (HTTP ${res.status}).`)
   }
-  return res.json()
+  if (data?.success === false) {
+    clearTokenCache()
+    throw new Error(String(data?.error ?? data?.message ?? "Gmail request failed."))
+  }
+
+  return data?.data ?? data?.result ?? data
 }
 
 // ── Labels ──
 
-export async function getLabels(token: string): Promise<GmailLabel[]> {
-  const data = await gmailFetch("/users/me/labels", token)
-  return (data.labels ?? []).map((l: any) => ({
-    id: l.id,
-    name: l.name,
-    type: l.type,
-    messages_total: l.messagesTotal ?? 0,
-    messages_unread: l.messagesUnread ?? 0,
+export async function getLabels(_token: string): Promise<GmailLabel[]> {
+  const data = await gmailExec("get_labels", {})
+  const labels = data?.labels ?? data?.response_data?.labels ?? (Array.isArray(data) ? data : [])
+  return (labels ?? []).map((l: any) => ({
+    id: l.id ?? "",
+    name: l.name ?? "",
+    type: l.type ?? "",
+    messages_total: l.messagesTotal ?? l.messages_total ?? 0,
+    messages_unread: l.messagesUnread ?? l.messages_unread ?? 0,
   })) as GmailLabel[]
 }
 
 // ── Messages ──
 
-export async function listMessages(token: string, query = "", limit = 20): Promise<GmailMessage[]> {
-  const q = encodeURIComponent(query || "in:inbox")
-  const data = await gmailFetch(`/users/me/messages?q=${q}&maxResults=${Math.min(limit, 100)}`, token)
-  const messageIds = (data.messages ?? []).map((m: any) => m.id)
-
-  if (messageIds.length === 0) return []
-
-  // Fetch full message details in parallel (batch of up to 20)
-  const messages: GmailMessage[] = []
-  for (const id of messageIds.slice(0, limit)) {
-    try {
-      const msg = await getMessageById(token, id)
-      if (msg) messages.push(msg)
-    } catch { /* skip individual failures */ }
-  }
-
-  return messages
+export async function listMessages(_token: string, query = "", limit = 20): Promise<GmailMessage[]> {
+  const data = await gmailExec("read_emails", {
+    query: query || "in:inbox",
+    max_results: Math.min(limit, 100),
+  })
+  return extractMessages(data).slice(0, limit)
 }
 
-export async function getMessageById(token: string, messageId: string): Promise<GmailMessage | null> {
+export async function getMessageById(_token: string, messageId: string): Promise<GmailMessage | null> {
   try {
-    const data = await gmailFetch(`/users/me/messages/${messageId}?format=full`, token)
-    return parseMessage(data)
+    const data = await gmailExec("read_emails", { message_id: messageId, max_results: 1 })
+    return extractMessages(data)[0] ?? null
   } catch {
     return null
   }
@@ -140,53 +198,66 @@ export async function searchMessages(token: string, query: string, limit = 20): 
 
 // ── Threads ──
 
-export async function getThread(token: string, threadId: string): Promise<GmailThread | null> {
+export async function getThread(_token: string, threadId: string): Promise<GmailThread | null> {
   try {
-    const data = await gmailFetch(`/users/me/threads/${threadId}?format=full`, token)
-    const messages = (data.messages ?? []).map(parseMessage).filter(Boolean) as GmailMessage[]
-    return {
-      id: data.id,
-      snippet: data.snippet || "",
-      messages,
-    }
+    const data = await gmailExec("read_emails", { thread_id: threadId, max_results: 50 })
+    const messages = extractMessages(data)
+    return { id: threadId, snippet: messages[0]?.snippet ?? "", messages }
   } catch {
     return null
   }
 }
 
-// ── Helpers ──
+/**
+ * Normalise whatever shape the backend/Composio hands back into GmailMessage[].
+ *
+ * Deliberately tolerant across nestings and both camelCase and snake_case, because the
+ * response shape varies by Composio tool version. Note the lesson from #178548: a wide
+ * `??` chain across a service boundary can silently yield empty strings forever, so the
+ * fallbacks here are for KNOWN alias spellings of the same field, never a shrug.
+ */
+function extractMessages(data: any): GmailMessage[] {
+  const arr =
+    data?.messages ??
+    data?.response_data?.messages ??
+    data?.data?.messages ??
+    (Array.isArray(data) ? data : [])
 
-function parseMessage(data: any): GmailMessage | null {
-  if (!data) return null
+  if (!Array.isArray(arr)) return []
 
-  const headers = data.payload?.headers ?? []
-  const getHeader = (name: string) => headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase())?.value || ""
+  return arr.map((m: any): GmailMessage => {
+    // Composio may return pre-parsed fields, or raw Gmail payload headers.
+    const headers = m?.payload?.headers ?? []
+    const hdr = (name: string) =>
+      headers.find((h: any) => String(h?.name ?? "").toLowerCase() === name.toLowerCase())?.value ?? ""
 
-  // Extract body text
-  let bodyText = ""
-  const parts = data.payload?.parts ?? []
-  if (parts.length > 0) {
-    const textPart = parts.find((p: any) => p.mimeType === "text/plain")
-    if (textPart?.body?.data) {
-      bodyText = decodeBase64Url(textPart.body.data)
+    const labels = m.labelIds ?? m.label_ids ?? m.labels ?? []
+
+    return {
+      id: m.id ?? m.message_id ?? "",
+      thread_id: m.threadId ?? m.thread_id ?? "",
+      from: m.from ?? m.sender ?? hdr("From"),
+      to: m.to ?? m.recipient ?? hdr("To"),
+      subject: m.subject ?? hdr("Subject"),
+      date: m.date ?? m.messageTimestamp ?? m.message_timestamp ?? hdr("Date"),
+      snippet: m.snippet ?? m.preview ?? "",
+      body_text: m.body_text ?? m.messageText ?? m.message_text ?? m.body ?? decodePayload(m),
+      labels: Array.isArray(labels) ? labels : [],
+      is_unread: (Array.isArray(labels) ? labels : []).includes("UNREAD"),
     }
-  } else if (data.payload?.body?.data) {
-    bodyText = decodeBase64Url(data.payload.body.data)
-  }
-
-  return {
-    id: data.id,
-    thread_id: data.threadId,
-    from: getHeader("From"),
-    to: getHeader("To"),
-    subject: getHeader("Subject"),
-    date: getHeader("Date"),
-    snippet: data.snippet || "",
-    body_text: bodyText,
-    labels: data.labelIds ?? [],
-    is_unread: (data.labelIds ?? []).includes("UNREAD"),
-  }
+  })
 }
+
+/** Fall back to decoding a raw Gmail payload when no pre-parsed body is present. */
+function decodePayload(m: any): string {
+  const parts = m?.payload?.parts ?? []
+  const textPart = parts.find((p: any) => p?.mimeType === "text/plain")
+  if (textPart?.body?.data) return decodeBase64Url(textPart.body.data)
+  if (m?.payload?.body?.data) return decodeBase64Url(m.payload.body.data)
+  return ""
+}
+
+// ── Helpers ──
 
 function decodeBase64Url(encoded: string): string {
   try {
