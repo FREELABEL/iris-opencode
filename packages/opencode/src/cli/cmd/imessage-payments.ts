@@ -11,6 +11,7 @@ import {
   reconcile,
   type Payment,
 } from "../lib/payments"
+import { loadIdentities, applyIdentities, groupByIdentity, resolveIdentity } from "../lib/identity"
 
 /**
  * `iris imessage payments` (#178595).
@@ -61,6 +62,7 @@ export const ImessagePaymentsCommand = cmd({
       .option("offset", { describe: "skip N rows", type: "number", default: 0 })
       .option("days", { describe: "how far back to search", type: "number", default: 365 })
       .option("check", { describe: "report reconciliation issues instead of rows", type: "boolean", default: false })
+      .option("by-person", { describe: "group by resolved identity instead of listing rows", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const started = Date.now()
@@ -76,14 +78,34 @@ export const ImessagePaymentsCommand = cmd({
     const direction = args.sent ? "sent" : args.received ? "received" : undefined
     const labelled = args.labelled ? true : args.unlabelled ? false : undefined
 
-    const matched = filterPayments(res.payments, {
-      contact: args.contact,
-      direction: direction as "sent" | "received" | undefined,
-      since: args.since,
-      until: args.until,
-      reference: args.reference,
-      labelled,
-    })
+    // Stamp the canonical identity onto every payment (#178599). The contact
+    // card that actually received the money is preserved — unifying must not
+    // erase which card was paid, because that is the reconciliation evidence.
+    const identities = loadIdentities()
+    const identified = applyIdentities(res.payments, identities)
+
+    // Searching by contact must reach EVERY alias of that person. "Flo" has to
+    // return the payment that landed on the "Flozzel Smith" card, which is the
+    // exact miss that hid a real $50.
+    let pool = identified
+    if (args.contact) {
+      const hit = resolveIdentity(identities, { name: args.contact, handle: args.contact })
+      if (hit) pool = identified.filter((p) => p.identityId === hit.id)
+    }
+
+    const matched = filterPayments(
+      // When an identity matched, the contact filter has already been applied
+      // across all of its aliases; re-applying it here would re-narrow to one card.
+      pool as Payment[],
+      {
+        contact: pool === identified ? args.contact : undefined,
+        direction: direction as "sent" | "received" | undefined,
+        since: args.since,
+        until: args.until,
+        reference: args.reference,
+        labelled,
+      },
+    ) as typeof identified
 
     const sorted = sortPayments(matched, { sort: args.sort as any, order: args.order as any })
     const page = paginate(sorted, { limit: args.limit, offset: args.offset })
@@ -121,6 +143,20 @@ export const ImessagePaymentsCommand = cmd({
       }
       printDivider()
       prompts.outro(dim(`${issues.length} issue(s) · ${elapsed}ms`))
+      return
+    }
+
+    if (args["by-person"]) {
+      const groups = groupByIdentity(matched)
+      printDivider()
+      for (const g of groups) {
+        const cards = g.handles.length > 1 ? dim(`  (${g.handles.length} numbers)`) : ""
+        console.log(`  ${String(g.count).padStart(4)}  ${bold(g.name)}${g.identityId ? "" : dim(" — unresolved")}${cards}`)
+      }
+      printDivider()
+      printKV("People", groups.length)
+      printKV("Payments", matched.length)
+      prompts.outro(dim(`unresolved rows group by handle · iris identity suggest`))
       return
     }
 
