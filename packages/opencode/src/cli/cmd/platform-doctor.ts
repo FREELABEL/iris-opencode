@@ -24,6 +24,69 @@ interface CheckResult {
   hint?: string
 }
 
+/**
+ * Interpret an ai_* status from /api/health?deep=true (#178281).
+ *
+ * The doctor used to accept only "key_valid" or "ok" and label everything else
+ * "check API key". That is backwards for the healthiest state there is:
+ * `billing_active` is what the server returns when the DEEP probe — a real
+ * 1-token completion — SUCCEEDS (routes/api.php:218). It is strictly stronger
+ * than key_valid, which only means the models endpoint answered.
+ *
+ * So `iris doctor` reported working OpenAI and XAI keys as broken, and running
+ * the more thorough check made the result look worse. That is not a cosmetic
+ * bug: this output is what led to a wrong root cause on #178291 — "billing_active
+ * (check API key)" was read as bad credentials when the real fault was a 429
+ * from a different provider entirely.
+ *
+ * Exported so the mapping is testable without a live server.
+ */
+export function aiProviderHealth(status: string, message?: string): CheckResult {
+  const detail = message ? `${status} — ${message}` : status
+
+  switch (status) {
+    // Healthy. billing_active is the BEST case, not a warning.
+    case "billing_active":
+      return { name: "", ok: true, detail: "billing active (live completion succeeded)" }
+    case "key_valid":
+      return { name: "", ok: true, detail: "key valid" }
+    case "ok":
+      return { name: "", ok: true, detail: "ok" }
+
+    // Real problems, each with the action that actually fixes it — "check API
+    // key" is wrong for most of these.
+    case "quota_exceeded":
+      return { name: "", ok: false, detail, hint: "quota exhausted — add credits or raise the limit" }
+    case "payment_required":
+      return { name: "", ok: false, detail, hint: "billing needs payment on the provider account" }
+    case "billing_blocked":
+      return { name: "", ok: false, detail, hint: "provider blocked this account — check billing status" }
+    case "rate_limited":
+      // Billing is fine; the key is fine. Transient, but calls ARE failing now.
+      return { name: "", ok: false, detail, hint: "rate limited — transient, retry shortly" }
+    case "missing":
+    case "not_configured":
+      return { name: "", ok: false, detail, hint: "no API key configured for this provider" }
+    case "error":
+      return { name: "", ok: false, detail, hint: "provider probe failed — see message" }
+  }
+
+  if (/^http_4\d\d$/.test(status)) {
+    const code = status.slice(5)
+    return {
+      name: "",
+      ok: false,
+      detail,
+      hint: code === "401" || code === "403" ? "check API key" : `provider rejected the request (HTTP ${code})`,
+    }
+  }
+  if (/^http_5\d\d$/.test(status)) {
+    return { name: "", ok: false, detail, hint: "provider outage — not your key" }
+  }
+
+  return { name: "", ok: false, detail, hint: "unrecognised provider status" }
+}
+
 async function checkEndpoint(name: string, url: string, base?: string): Promise<CheckResult> {
   try {
     const res = base
@@ -226,11 +289,12 @@ export const PlatformDoctorCommand = cmd({
             if (key.startsWith("ai_")) {
               const providerName = key.replace("ai_", "").toUpperCase()
               const status = (val as any)?.status ?? "unknown"
+              const health = aiProviderHealth(status, (val as any)?.message)
               allResults.push({
                 name: `AI: ${providerName}`,
-                ok: status === "key_valid" || status === "ok",
-                detail: status,
-                hint: status !== "key_valid" ? "check API key" : undefined,
+                ok: health.ok,
+                detail: health.detail,
+                hint: health.hint,
               })
             }
           }
