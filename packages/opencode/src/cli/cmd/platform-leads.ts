@@ -2380,10 +2380,14 @@ const LeadsSyncCommsCommand = cmd({
               const threads = d?.data ?? d?.threads ?? []
               const msgs = Array.isArray(threads)
                 ? threads.slice(0, msgLimit).map((t: any) => ({
-                    subject: t.subject ?? t.snippet ?? "(no subject)",
-                    from: t.from ?? "",
+                    // Field names must match fl-api Bloq/LeadController::getGmailThreads(),
+                    // which emits latest_subject / latest_from / latest_snippet / thread_id.
+                    // Reading t.subject/t.from/t.gmail_thread_id silently yielded the ?? fallback
+                    // on every row, so every ingested message was blank (#178548).
+                    subject: t.latest_subject ?? t.latest_snippet ?? "(no subject)",
+                    from: t.latest_from ?? "",
                     date: t.last_message_at ?? t.first_message_at ?? "",
-                    thread_id: t.gmail_thread_id ?? "",
+                    thread_id: t.thread_id ?? "",
                   }))
                 : []
               channels.push({ name: "Gmail", messages: msgs })
@@ -3467,16 +3471,35 @@ const LeadsPulseCommand = cmd({
                   // Flatten thread summaries into message-like entries
                   const msgs = Array.isArray(threads)
                     ? threads.slice(0, msgLimit).map((t: any) => ({
-                        subject: t.subject ?? t.snippet ?? "(no subject)",
-                        from: t.from ?? "",
+                        // Must match fl-api getGmailThreads(): latest_subject / latest_from /
+                        // latest_snippet / thread_id. The old names never existed on the response,
+                        // so every field below fell through to its ?? default (#178548).
+                        subject: t.latest_subject ?? t.latest_snippet ?? "(no subject)",
+                        from: t.latest_from ?? "",
                         date: t.last_message_at ?? t.first_message_at ?? "",
                         message_count: t.message_count ?? 1,
-                        thread_id: t.gmail_thread_id ?? "",
+                        sent_count: Number(t.sent_count ?? 0),
+                        thread_id: t.thread_id ?? "",
                       }))
                     : []
-                  // Filter to only threads involving ANY of the lead's emails (#55723)
+                  // Filter to only threads involving ANY of the lead's emails (#55723).
+                  // NOTE: this filter was INERT until #178548 — `from` was always "" because it
+                  // read a field the API does not emit, so the guard below matched every row and
+                  // nothing was ever filtered. With `from` now populated it runs for the first time.
+                  // The fail-open branch is kept deliberately: the source endpoint is already
+                  // scoped byLead($leadId) server-side, so an unknown sender is not evidence the
+                  // thread belongs to someone else, and dropping it would lose real history.
+                  //
+                  // CRITICAL: the original predicate keeps a thread only when the SENDER is the
+                  // lead, i.e. inbound only. Enabling it unchanged would have silently dropped
+                  // every OUTBOUND thread from Pulse — the first real thread checked was
+                  // "Follow-Up on Genesis Website Agreement" from alex@freelabel.net, which the
+                  // lead did not send. That would have starved the comms_freshness /
+                  // last_outbound_at signals that Pulse and the recap window depend on.
+                  // sent_count > 0 means we participated in the thread outbound, so keep it.
                   const filtered = msgs.filter((m: any) => {
-                    if (!m.from) return true // keep if no from info
+                    if (!m.from) return true // unknown sender — source is already lead-scoped
+                    if ((m.sent_count ?? 0) > 0) return true // we sent into this thread
                     const fromLower = m.from.toLowerCase()
                     return allEmails.some((e) => fromLower.includes(e))
                   })
@@ -11240,9 +11263,18 @@ const LeadsCollectCommand = cmd({
     const results: Record<string, unknown> = { lead_id: leadId, steps: [] }
     const steps = results.steps as string[]
 
-    // Get lead info
+    // Get lead info. Bail if we cannot read the lead — this command creates BILLING
+    // against it, so silently degrading the name to "Lead #<id>" on a 403/404 would
+    // charge against a lead we could not even fetch (#178552).
     const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
     const leadData = await leadRes.json().catch(() => ({}))
+    if (!leadRes.ok) {
+      const detail = (leadData as any)?.error ?? (leadData as any)?.message ?? `HTTP ${leadRes.status}`
+      if (args.json) console.log(JSON.stringify({ ...results, error: "lead_fetch_failed", detail }, null, 2))
+      else console.log(highlight(`  ⚠ Could not load lead #${leadId} — ${detail}`))
+      process.exitCode = 1
+      return
+    }
     const lead = leadData?.data ?? leadData?.lead ?? leadData
     const leadName = lead?.name ?? `Lead #${leadId}`
 
@@ -11316,8 +11348,26 @@ const LeadsCollectCommand = cmd({
         }),
       })
       const subBody = await subRes.json().catch(() => ({}))
+      // irisFetch does NOT throw on 4xx/5xx — it returns the Response. Validate before
+      // announcing or recording anything, or a failed charge prints a green tick and
+      // writes "subscription_created" into the machine-readable steps[] (#178552).
+      if (!subRes.ok) {
+        const detail = subBody?.error ?? subBody?.message ?? `HTTP ${subRes.status}`
+        if (args.json) console.log(JSON.stringify({ ...results, error: "subscription_creation_failed", detail }, null, 2))
+        else console.log(highlight(`  ⚠ Failed to create subscription — ${detail}`))
+        process.exitCode = 1
+        return
+      }
       invoiceId = subBody?.data?.id ?? subBody?.invoice?.id
       results.checkout_url = subBody?.data?.checkout_url ?? subBody?.checkout_url
+      // A 200 with an unrecognised body shape is still a failure — say so as a
+      // subscription, not as an invoice.
+      if (!invoiceId) {
+        if (args.json) console.log(JSON.stringify({ ...results, error: "subscription_creation_failed", detail: "no subscription id in response" }, null, 2))
+        else console.log(highlight("  ⚠ Failed to create subscription — the server returned no subscription id"))
+        process.exitCode = 1
+        return
+      }
       steps.push("subscription_created")
       if (!args.json) console.log(success(`  ✓ Subscription created (#${invoiceId})`))
     } else {
@@ -11327,6 +11377,13 @@ const LeadsCollectCommand = cmd({
         body: JSON.stringify({ price: args.amount, title: args.title ?? `Payment from ${leadName}` }),
       })
       const createBody = await createRes.json().catch(() => ({}))
+      if (!createRes.ok) {
+        const detail = createBody?.error ?? createBody?.message ?? `HTTP ${createRes.status}`
+        if (args.json) console.log(JSON.stringify({ ...results, error: "invoice_creation_failed", detail }, null, 2))
+        else console.log(highlight(`  ⚠ Failed to create invoice — ${detail}`))
+        process.exitCode = 1
+        return
+      }
       invoiceId = createBody?.data?.id ?? createBody?.invoice?.id ?? createBody?.id
       steps.push("invoice_created")
       if (!args.json) console.log(success(`  ✓ Invoice created (#${invoiceId})`))
