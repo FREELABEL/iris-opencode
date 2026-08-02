@@ -727,10 +727,137 @@ const AddHunterCommand = cmd({
   },
 })
 
+
+// ── Bug-bounty operator verbs (#178606) ─────────────────────────────────────
+// The bug-bounty money path lived entirely in artisan, so checking who is owed
+// what meant `railway ssh -s fl-api -- php artisan bounty:hunters`. These wrap
+// the endpoints that ALREADY exist, so a hunter can see their own standing and
+// an owner can see the board without shell access to production.
+
+const BUG_BOUNTY_OPP = 581
+
+const HuntersCommand = cmd({
+  command: "hunters [opportunity-id]",
+  aliases: ["leaderboard", "board"],
+  describe: "bug-bounty hunters ranked — reported, verified, owed, paid (owner only)",
+  builder: (yargs) =>
+    yargs
+      .positional("opportunity-id", { describe: `opportunity ID (default ${BUG_BOUNTY_OPP})`, type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const oppId = (args["opportunity-id"] as number) ?? BUG_BOUNTY_OPP
+
+    const res = await irisFetch(`/api/v1/marketplace/opportunities/${oppId}/bug-bounty/leaderboard`)
+    if (!(await handleApiError(res, "Bug-bounty leaderboard"))) return
+    const body = (await res.json().catch(() => null)) as any
+    const data = body?.data ?? body
+    const rows: any[] = data?.leaderboard ?? []
+    const opp = data?.opportunity ?? {}
+
+    if (args.json) { console.log(JSON.stringify({ success: true, ...data }, null, 2)); return }
+
+    UI.empty()
+    prompts.intro(`◈  Bug Bounty Hunters — #${oppId}`)
+    printDivider()
+    if (!rows.length) {
+      prompts.log.info("No attributed hunters yet.")
+    } else {
+      for (const [i, h] of rows.entries()) {
+        const money = (c: unknown) => `$${(Number(c ?? 0) / 100).toFixed(2)}`
+        console.log(
+          `  ${String(i + 1).padStart(2)}. ${bold(String(h.name ?? h.hunter ?? "unknown").padEnd(22))}` +
+            ` reported ${String(h.reported ?? 0).padStart(4)}` +
+            `  verified ${String(h.verified ?? 0).padStart(4)}` +
+            `  owed ${money(h.owed_cents).padStart(9)}` +
+            `  paid ${money(h.paid_cents).padStart(9)}`,
+        )
+      }
+    }
+    printDivider()
+    if (opp.budget_pool_cents !== undefined) {
+      printKV("Pool", `$${(Number(opp.budget_pool_cents) / 100).toFixed(2)}`)
+      printKV("Remaining", `$${(Number(opp.budget_remaining_cents ?? 0) / 100).toFixed(2)}`)
+    }
+    prompts.outro(dim(`iris bounty me ${oppId}   ·   iris bounty bugs ${oppId}`))
+  },
+})
+
+const MyBountyCommand = cmd({
+  command: "me [opportunity-id]",
+  aliases: ["mine-bugs", "standing"],
+  describe: "your own bug-bounty standing — what you reported, what is verified, what you are owed",
+  builder: (yargs) =>
+    yargs
+      .positional("opportunity-id", { describe: `opportunity ID (default ${BUG_BOUNTY_OPP})`, type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const oppId = (args["opportunity-id"] as number) ?? BUG_BOUNTY_OPP
+
+    const res = await irisFetch(`/api/v1/marketplace/opportunities/${oppId}/bug-bounty/hunter`)
+    if (!(await handleApiError(res, "Bug-bounty standing"))) return
+    const body = (await res.json().catch(() => null)) as any
+    const d = body?.data ?? body
+
+    if (args.json) { console.log(JSON.stringify({ success: true, ...d }, null, 2)); return }
+
+    const money = (c: unknown) => `$${(Number(c ?? 0) / 100).toFixed(2)}`
+    UI.empty()
+    prompts.intro(`◈  Your Bug Bounty — #${oppId}`)
+    printDivider()
+    printKV("Reported", d?.reported ?? 0)
+    printKV("Verified", d?.verified ?? 0)
+    printKV("Pending", d?.pending ?? 0)
+    printKV("Owed", money(d?.owed_cents))
+    printKV("Paid", money(d?.paid_cents))
+    printDivider()
+    // Verification is the gate between reporting and money, so say so here.
+    prompts.outro(dim("verified = fixed, live in production, and closed — that is when it pays"))
+  },
+})
+
+const BugsCommand = cmd({
+  command: "bugs [opportunity-id]",
+  describe: "bugs attributed to this bounty, with their verification status",
+  builder: (yargs) =>
+    yargs
+      .positional("opportunity-id", { describe: `opportunity ID (default ${BUG_BOUNTY_OPP})`, type: "number" })
+      .option("limit", { describe: "max rows", type: "number", default: 30 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+    const oppId = (args["opportunity-id"] as number) ?? BUG_BOUNTY_OPP
+
+    const res = await irisFetch(`/api/v1/marketplace/opportunities/${oppId}/bug-bounty/bugs`)
+    if (!(await handleApiError(res, "Bug-bounty bugs"))) return
+    const body = (await res.json().catch(() => null)) as any
+    const d = body?.data ?? body
+    const rows: any[] = Array.isArray(d) ? d : (d?.bugs ?? [])
+
+    if (args.json) { console.log(JSON.stringify({ success: true, count: rows.length, bugs: rows }, null, 2)); return }
+
+    UI.empty()
+    prompts.intro(`◈  Bug Bounty Bugs — #${oppId}`)
+    printDivider()
+    for (const b of rows.slice(0, args.limit)) {
+      const sev = String(b.severity ?? "?").toUpperCase().padEnd(8)
+      const st = String(b.status ?? "?").padEnd(12)
+      console.log(`  #${String(b.id ?? b.bug_item_id ?? "?").padEnd(8)} ${sev} ${st} ${String(b.title ?? "").slice(0, 60)}`)
+    }
+    printDivider()
+    printKV("Total", rows.length)
+    prompts.outro(dim(`iris bounty hunters ${oppId}`))
+  },
+})
+
 export const PlatformBountiesCommand = cmd({
   command: "bounty",
   aliases: ["bounties"],
-  describe: "UGC content bounty campaigns — create, submit, approve, payout",
+  describe: "bounty campaigns — UGC/clip submissions, and the bug-bounty operator board",
   builder: (yargs) =>
     yargs
       .command(CreateCommand)
@@ -744,6 +871,9 @@ export const PlatformBountiesCommand = cmd({
       .command(ApproveCommand)
       .command(RejectCommand)
       .command(PayoutCommand)
+      .command(HuntersCommand)
+      .command(MyBountyCommand)
+      .command(BugsCommand)
       .demandCommand(1, "Specify a subcommand"),
   async handler() {},
 })
