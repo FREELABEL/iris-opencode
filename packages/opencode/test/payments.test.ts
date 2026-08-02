@@ -250,6 +250,32 @@ describe("filterPayments", () => {
     expect(filterPayments(ALL, { contact: "8175269825" })).toHaveLength(1)
   })
 
+  test("a partial number still matches", () => {
+    expect(filterPayments(ALL, { contact: "5269825" })).toHaveLength(1)
+  })
+
+  test("a name containing a digit does NOT match every phone number", () => {
+    // Found by the scale matrix: digitsOf("Person 1") is "1", and every phone
+    // number contains a 1, so this returned all 10,000 payments. A query only
+    // digit-matches when it actually looks like a handle.
+    const named: Payment[] = ALL.map((p) => ({ ...p, contact: "Agent 1" }))
+    expect(filterPayments(named, { contact: "Agent 1" })).toHaveLength(4)
+    expect(filterPayments(named, { contact: "Agent 9" })).toHaveLength(0)
+  })
+
+  test("a one- or two-digit query does not match the world", () => {
+    expect(filterPayments(ALL, { contact: "1" })).toHaveLength(0)
+    expect(filterPayments(ALL, { contact: "18" })).toHaveLength(0)
+  })
+
+  test("an email query matches on the handle", () => {
+    const withEmail: Payment[] = [
+      { ...FLO_PAYMENT, id: "e1", handle: "flo@example.com", contact: undefined },
+    ]
+    expect(filterPayments(withEmail, { contact: "flo@example.com" })).toHaveLength(1)
+    expect(filterPayments(withEmail, { contact: "someone@else.com" })).toHaveLength(0)
+  })
+
   test("CRITICAL: searching 'Flo' finds the payment on the 'Flozzel Smith' card", () => {
     // This is the exact failure that hid Flo's $50. A prefix match on the
     // contact name must reach Flozzel, or attachment breaks again.

@@ -187,10 +187,23 @@ export function filterPayments(payments: Payment[], f: PaymentFilter): Payment[]
     if (f.contact) {
       const q = f.contact.trim().toLowerCase()
       const qDigits = digitsOf(q)
-      const nameHit = (p.contact ?? "").toLowerCase().includes(q)
       // Substring, not equality — "Flo" MUST reach "Flozzel Smith", which is
       // the exact match that hid a real payment.
-      const handleHit = qDigits.length > 0 && digitsOf(p.handle).includes(qDigits)
+      const nameHit = (p.contact ?? "").toLowerCase().includes(q)
+
+      // Only digit-match when the query actually looks like a handle. Caught by
+      // the scale matrix: digitsOf("Person 1") is "1", and every phone number
+      // contains a 1, so a name carrying any digit matched EVERY payment —
+      // 10,000 of 10,000. Four digits is short enough for a partial number and
+      // long enough that a name's stray digit cannot match the world.
+      const MIN_HANDLE_DIGITS = 4
+      const looksLikeHandle = q.includes("@") || qDigits.length >= MIN_HANDLE_DIGITS
+      const handleHit =
+        looksLikeHandle &&
+        (q.includes("@")
+          ? p.handle.toLowerCase().includes(q)
+          : digitsOf(p.handle).includes(qDigits))
+
       if (!nameHit && !handleHit) return false
     }
 
