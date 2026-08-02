@@ -451,14 +451,32 @@ export namespace SessionProcessor {
             if (badFinish && !hasOutput && input.assistantMessage.tokens.output === 0) {
               log.error("empty finalization", {
                 finish: finish ?? "unknown",
+                model: input.model?.id,
+                provider: input.model?.providerID,
                 sessionID: input.assistantMessage.sessionID,
                 messageID: input.assistantMessage.id,
               })
+              // #178291: the old text was a generic "the upstream provider may be
+              // rate-limited or exhausted", which was accurate but unactionable —
+              // it named neither the model that failed nor a way forward, so a
+              // credentials problem and a rate limit read identically and we spent
+              // a day chasing the wrong one. Name the model and provider the CLI
+              // actually asked for, and point at the command that lists alternatives.
+              //
+              // The upstream identity (e.g. OpenCode Zen) and HTTP status live
+              // server-side; the proxy records them to telemetry and, since the
+              // failover work (#178556), only lets a stream finish empty once EVERY
+              // provider has failed. So by the time a user sees this, "try another
+              // model" is genuinely the right next step.
+              const who = input.model?.id
+                ? `${input.model.id}${input.model.providerID ? ` (${input.model.providerID})` : ""}`
+                : "The model"
               input.assistantMessage.error = new MessageV2.APIError(
                 {
                   message:
-                    `Model stream ended without output (finish reason: ${finish ?? "unknown"}). ` +
-                    `The upstream provider may be rate-limited or exhausted — no response was produced.`,
+                    `${who} returned no output (finish reason: ${finish ?? "unknown"}). ` +
+                    `Every upstream attempt failed — most often a rate limit or an exhausted/invalid API key. ` +
+                    `Check with: iris doctor    ·    Pick another model: iris models`,
                   isRetryable: false,
                 },
                 {},
