@@ -256,6 +256,64 @@ export async function requireAuth(): Promise<string | null> {
 // Response helpers
 // ============================================================================
 
+/**
+ * Turn a 402 body into what the user should actually read (#178276).
+ *
+ * fl-api's RequireActiveSubscription / CheckCredits / OkfAccess middleware each
+ * answer an entitlement gate with a remediation payload: a human `message`,
+ * where to pay, and often the exact CLI command to run. Before this, a 402 fell
+ * through to the generic !res.ok handler, which prefers `error` over `message`
+ * and drops everything else — so a gated user saw the bare slug
+ * "subscription_required" and nothing about what to do, while the answer was
+ * already on the wire.
+ *
+ * Pure and exported so it can be tested without stubbing the terminal.
+ */
+export function formatPaymentRequired(body: unknown): { message: string; details: string[] } {
+  const b = (body ?? {}) as {
+    error?: string
+    message?: string
+    cli_command?: string
+    checkout_url?: string
+    onboarding_url?: string
+    buy_credits_url?: string
+    upgrade_url?: string
+    cost?: number
+    data?: { balance?: number; cost?: number; balance_needed?: number }
+  }
+
+  // Human sentence first — the opposite of the generic handler's precedence,
+  // because here `error` is a machine slug and `message` is the explanation.
+  // Some 402s (OkfAccess) send only the slug, so humanise it rather than
+  // printing snake_case at the user.
+  const message =
+    b.message ||
+    (b.error ? b.error.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) : "Payment required")
+
+  const details: string[] = []
+
+  // Credit gates carry the numbers that make the message actionable.
+  const balance = b.data?.balance
+  const cost = b.data?.cost ?? b.cost
+  const needed = b.data?.balance_needed
+  const parts: string[] = []
+  if (balance !== undefined) parts.push(`balance ${balance}`)
+  if (cost !== undefined) parts.push(`cost ${cost}`)
+  if (needed !== undefined && needed > 0) parts.push(`short by ${needed}`)
+  if (parts.length) details.push(parts.join(", "))
+
+  if (b.cli_command) {
+    details.push(`Fix:  ${UI.Style.TEXT_HIGHLIGHT}${b.cli_command}${UI.Style.TEXT_NORMAL}`)
+  }
+
+  for (const key of ["checkout_url", "onboarding_url", "buy_credits_url", "upgrade_url"] as const) {
+    const url = b[key]
+    if (url) details.push(`${key.replace(/_url$/, "").replace(/_/g, " ")}: ${url}`)
+  }
+
+  return { message, details }
+}
+
 export async function handleApiError(res: Response, action: string): Promise<boolean> {
   if (res.status === 401) {
     prompts.log.warn("Authentication failed — your token may be expired or invalid.")
@@ -272,6 +330,18 @@ export async function handleApiError(res: Response, action: string): Promise<boo
       msg = body.error || body.message || msg
     } catch {}
     prompts.log.warn(msg)
+    process.exitCode = 1
+    return false
+  }
+  // 402 Payment Required — an entitlement gate, not a crash (#178276).
+  if (res.status === 402) {
+    let body: unknown = null
+    try {
+      body = await res.json()
+    } catch {}
+    const { message, details } = formatPaymentRequired(body)
+    prompts.log.warn(message)
+    for (const d of details) prompts.log.info(d)
     process.exitCode = 1
     return false
   }
