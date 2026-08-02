@@ -233,19 +233,34 @@ function extractMessages(data: any): GmailMessage[] {
 
     const labels = m.labelIds ?? m.label_ids ?? m.labels ?? []
 
+    // Verified field names from a live GMAIL_FETCH_EMAILS response (2026-08-02):
+    //   messageId · threadId · sender · to · subject · messageTimestamp ·
+    //   messageText · labelIds · preview{body,subject} · payload{...}
+    // NOTE `preview` is an OBJECT, not a string — reading it as one crashed the
+    // renderer with "msg.snippet.slice is not a function". str() coerces defensively
+    // so a shape change degrades to "" instead of throwing mid-render.
     return {
-      id: m.id ?? m.message_id ?? "",
-      thread_id: m.threadId ?? m.thread_id ?? "",
-      from: m.from ?? m.sender ?? hdr("From"),
-      to: m.to ?? m.recipient ?? hdr("To"),
-      subject: m.subject ?? hdr("Subject"),
-      date: m.date ?? m.messageTimestamp ?? m.message_timestamp ?? hdr("Date"),
-      snippet: m.snippet ?? m.preview ?? "",
-      body_text: m.body_text ?? m.messageText ?? m.message_text ?? m.body ?? decodePayload(m),
+      id: str(m.messageId ?? m.id ?? m.message_id),
+      thread_id: str(m.threadId ?? m.thread_id),
+      from: str(m.sender ?? m.from ?? hdr("From")),
+      to: str(m.to ?? m.recipient ?? hdr("To")),
+      subject: str(m.subject ?? m.preview?.subject ?? hdr("Subject")),
+      date: str(m.messageTimestamp ?? m.date ?? m.message_timestamp ?? hdr("Date")),
+      snippet: str(m.preview?.body ?? m.snippet ?? m.preview),
+      body_text: str(m.messageText ?? m.body_text ?? m.message_text ?? m.body) || decodePayload(m),
       labels: Array.isArray(labels) ? labels : [],
       is_unread: (Array.isArray(labels) ? labels : []).includes("UNREAD"),
     }
   })
+}
+
+/**
+ * Coerce to a string. Composio returns some fields as objects (notably `preview`), and
+ * the renderer calls .slice() on them — so anything non-string must become "" here
+ * rather than crash the command halfway through printing results.
+ */
+function str(v: any): string {
+  return typeof v === "string" ? v : ""
 }
 
 /** Fall back to decoding a raw Gmail payload when no pre-parsed body is present. */
