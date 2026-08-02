@@ -101,6 +101,7 @@ import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
 import { PlatformDoctorCommand } from "./cli/cmd/platform-doctor"
+import { PlatformPermissionsCommand } from "./cli/cmd/platform-permissions"
 import { PlatformSystemAppsScanCommand } from "./cli/cmd/platform-system-apps-scan"
 import { PlatformIdeasCommand } from "./cli/cmd/platform-ideas"
 import { PlatformOnboardCommand } from "./cli/cmd/platform-onboard"
@@ -353,6 +354,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformInstagramCommand))
   .command(reg(PlatformInstagramFeedCommand))
   .command(reg(PlatformDoctorCommand))
+  .command(reg(PlatformPermissionsCommand))
   .command(reg(PlatformSystemAppsScanCommand))
   .command(reg(PlatformIdeasCommand))
   .command(reg(PlatformObsCommand))
