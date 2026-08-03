@@ -1001,6 +1001,11 @@ const UpdateCommand = cmd({
       .option("reporter-lead", { describe: "lead ID to attribute as the reporter (bounty tally)", type: "number" })
       .option("reporter-user", { describe: "user ID to attribute as the reporter", type: "number" })
       .option("reporter-name", { describe: "display name of the reporter", type: "string" })
+      .option("clear-reporter", {
+        describe: "detach reporter attribution entirely (lead, user and name)",
+        type: "boolean",
+        default: false,
+      })
       .option("severity", { alias: "s", describe: "low | medium | high | critical", type: "string" })
       .option("status", { describe: "board status (todo, in_progress, done, …)", type: "string" })
       .option("title", { describe: "new title (severity prefix preserved)", type: "string" })
@@ -1009,9 +1014,25 @@ const UpdateCommand = cmd({
   async handler(args) {
     const itemId = args.id as number
     const body: Record<string, unknown> = {}
-    if (args["reporter-lead"] != null) body.reporter_lead_id = args["reporter-lead"]
-    if (args["reporter-user"] != null) body.reporter_user_id = args["reporter-user"]
-    if (args["reporter-name"]) body.reporter_name = args["reporter-name"]
+    // --reporter-lead had no inverse: once a bug was attributed, nothing in the CLI
+    // could detach it, so a mis-attribution could only be corrected with production DB
+    // access. On a system whose value is an auditable money trail, that made the trail
+    // append-only by accident (#178618). Send explicit nulls so the server clears the
+    // keys rather than merely omitting them.
+    if (args["clear-reporter"]) {
+      body.reporter_lead_id = null
+      body.reporter_user_id = null
+      body.reporter_name = null
+    } else {
+      // Accept 0 / negative as "detach" too, so `--reporter-lead 0` does the obvious thing.
+      const lead = args["reporter-lead"] as number | undefined
+      if (lead != null) body.reporter_lead_id = lead > 0 ? lead : null
+      if (args["reporter-user"] != null) {
+        const u = args["reporter-user"] as number
+        body.reporter_user_id = u > 0 ? u : null
+      }
+      if (args["reporter-name"]) body.reporter_name = args["reporter-name"]
+    }
     if (args.severity) body.severity = args.severity
     if (args.status) body.status = args.status
     if (args.title) body.title = args.title
