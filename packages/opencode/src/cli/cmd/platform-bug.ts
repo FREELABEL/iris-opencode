@@ -167,9 +167,16 @@ function stableMachineId(): string {
  * genuinely named `build-box-01` or `node-2` keeps its name.
  */
 export function normalizeHostname(host: string): string {
-  return host
-    .replace(/\.local$/i, "")
-    .replace(/-\d{3,5}$/, "")
+  // Keep only the first LABEL: the rest is the network domain (.local, .attlocal.net,
+  // .lan), which says which network the machine was on when it filed, not which machine it
+  // is. Measured: one Mac appeared as three reporters purely for moving between home wifi,
+  // tethering and mDNS.
+  const label = host.split(".")[0] ?? host
+  // Then the mDNS collision counter. 3-5 digits only, so `build-box-01` and `node-2` keep
+  // their names — and digits INSIDE the label are left alone, because `AlexMaysnow1063` and
+  // `AlexMaysnow1008` are two real machines on this fleet and merging them would be worse
+  // than leaving them split.
+  return label.replace(/-\d{3,5}$/, "")
 }
 
 // ============================================================================
