@@ -103,12 +103,23 @@ function formatDate(iso: string): string {
   }
 }
 
+/**
+ * Google returns start/end as OBJECTS — {dateTime, timeZone} for timed events, {date} for
+ * all-day ones — not as strings. This renderer assumed strings, so once events actually reached
+ * it the row printed "[object Object]" and .includes() threw. Normalise both shapes.
+ */
+function eventTime(v: any): string {
+  if (!v) return ""
+  if (typeof v === "string") return v
+  return v.dateTime || v.date || ""
+}
+
 function printEvent(ev: any): void {
-  const start = ev.start || ""
-  const end = ev.end || ""
+  const start = eventTime(ev.start)
+  const end = eventTime(ev.end)
   const time = start.includes("T")
     ? `${formatTime(start)} – ${formatTime(end)}`
-    : "All day"
+    : (start ? `${start} (all day)` : "All day")
   console.log(`  ${bold(time)}  ${ev.summary || "(no title)"}`)
   if (ev.location) console.log(`  ${dim("  " + ev.location)}`)
   if (ev.description) {
@@ -123,25 +134,66 @@ function printEvent(ev: any): void {
 const CalendarListCommand = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "list upcoming calendar events",
+  describe: "list calendar events — future by default, past via --since or a negative --days",
   builder: (yargs) =>
     addAccountOptions(yargs)
-      .option("days", { type: "number", default: 7, describe: "look ahead N days" })
+      .option("days", { type: "number", default: 7, describe: "look ahead N days (negative looks BACK)" })
+      // #178634: every calendar read verb was present or future tense, so "what meeting did I
+      // have last Thursday" — one of the most common things anyone asks a calendar — was
+      // unanswerable. --since/--until mirror `iris imessage payments`, which already filters
+      // this way.
+      .option("since", { type: "string", describe: "start of window, YYYY-MM-DD (past allowed)" })
+      .option("until", { type: "string", describe: "end of window, YYYY-MM-DD" })
+      .option("search", { type: "string", alias: "q", describe: "filter by event title (case-insensitive)" })
       .option("limit", { type: "number", default: 20, describe: "max events" })
       .option("calendar", { type: "string", alias: "c", describe: "calendar ID (default: primary)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!(await requireAuth())) return
     UI.empty()
-    prompts.intro(`◈  Calendar — Next ${args.days} days`)
 
+    // Resolve the window. Explicit --since/--until win; otherwise --days, which may be
+    // negative to look backwards.
     const now = new Date()
-    const end = new Date(now.getTime() + (args.days as number) * 86400000)
+    const dayMs = 86400000
+    const parseDay = (v: unknown, endOfDay = false): Date | undefined => {
+      if (typeof v !== "string" || !v.trim()) return undefined
+      const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? `${v.trim()}T${endOfDay ? "23:59:59" : "00:00:00"}` : v.trim())
+      return Number.isNaN(d.getTime()) ? undefined : d
+    }
+
+    const sinceArg = parseDay(args.since)
+    const untilArg = parseDay(args.until, true)
+    const days = (args.days as number) ?? 7
+
+    let start: Date
+    let end: Date
+    let label: string
+    if (sinceArg || untilArg) {
+      start = sinceArg ?? new Date(now.getTime() - 365 * dayMs)
+      end = untilArg ?? now
+      if (end < start) {
+        prompts.log.warn("--until is before --since — nothing can match that window.")
+        prompts.outro("Done")
+        return
+      }
+      label = `${start.toISOString().slice(0, 10)} → ${end.toISOString().slice(0, 10)}`
+    } else if (days < 0) {
+      start = new Date(now.getTime() + days * dayMs)
+      end = now
+      label = `Last ${Math.abs(days)} days`
+    } else {
+      start = now
+      end = new Date(now.getTime() + days * dayMs)
+      label = `Next ${days} days`
+    }
+
+    prompts.intro(`◈  Calendar — ${label}${args.search ? ` · "${args.search}"` : ""}`)
     let result: any
     try {
       result = await calExec("get_events", {
         max_results: args.limit,
-        time_min: now.toISOString(),
+        time_min: start.toISOString(),
         time_max: end.toISOString(),
         ...(args.calendar ? { calendar_id: args.calendar } : {}),
       }, getAccountOpts(args))
@@ -161,16 +213,27 @@ const CalendarListCommand = cmd({
       return
     }
 
-    const events: any[] = result.events ?? []
+    // The Google Calendar API returns events at data.items; result.events does not exist and
+    // never did, so the human-readable list has ALWAYS printed "No events" while --json quietly
+    // returned them. Found 2026-08-02 with 5 real events in the window. Accept both shapes so a
+    // future response change cannot silently blank the list again.
+    let events: any[] = result.events ?? result.data?.items ?? result.items ?? []
+    if (args.search) {
+      const q = String(args.search).toLowerCase()
+      events = events.filter((e: any) =>
+        String(e.summary ?? e.title ?? "").toLowerCase().includes(q) ||
+        String(e.description ?? "").toLowerCase().includes(q),
+      )
+    }
     if (events.length === 0) {
-      prompts.log.info(`No events in the next ${args.days} days`)
+      prompts.log.info(`No events — ${label}${args.search ? ` matching "${args.search}"` : ""}`)
       prompts.outro("Done")
       return
     }
 
     let lastDate = ""
     for (const ev of events) {
-      const d = formatDate(ev.start)
+      const d = formatDate(eventTime(ev.start))
       if (d !== lastDate) {
         printDivider()
         console.log(`  ${bold(d)}`)
