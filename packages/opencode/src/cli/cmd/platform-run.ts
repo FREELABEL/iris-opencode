@@ -18,6 +18,7 @@ import {
 } from "./iris-api"
 import { exec } from "child_process"
 import { detectNewConnection, extractConnections, type ConnectionRow } from "./integration-connect-state"
+import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 
 // ============================================================================
@@ -41,6 +42,8 @@ const INTEGRATION_TYPES = [
   "stripe",
   // Secrets
   "1password",
+  // Legal practice management
+  "clio",
   // Infrastructure
   "cloudflare", "github",
   // Internal
@@ -673,7 +676,16 @@ const ConnectCommand = cmd({
       .option("name", {
         type: "string",
         describe: "label for this connection (e.g. \"Personal\" or \"Work\") — required when adding a 2nd account of the same type",
-      }),
+      })
+      // CLI-native OAuth (clio, …) — providers we drive from the binary rather
+      // than through Composio or the web UI.
+      .option("client-id", { type: "string", describe: "OAuth app client id (CLI-native providers; or <TYPE>_CLIENT_ID)" })
+      .option("client-secret", { type: "string", describe: "OAuth app client secret (CLI-native providers; or <TYPE>_CLIENT_SECRET)" })
+      .option("port", { type: "number", default: 8787, describe: "loopback port for the OAuth callback (CLI-native providers)" })
+      .option("paste", { type: "boolean", default: false, describe: "paste the code instead of running a loopback listener (SSH/headless)" })
+      .option("bloq", { type: "number", describe: "share this integration with a bloq" })
+      .option("json", { type: "boolean", default: false, describe: "JSON output" })
+      .option("user-id", { type: "number", describe: "user ID (or IRIS_USER_ID env)" }),
   async handler(args) {
     UI.empty()
     const labelSuffix = args.name ? ` ${dim(`(${args.name})`)}` : ""
@@ -725,6 +737,13 @@ const ConnectCommand = cmd({
       } catch {
         // non-fatal — fall through to normal connect
       }
+    }
+
+    // CLI-native OAuth: the server has no authorize-URL case for these, so the
+    // whole dance runs here (loopback listener → token exchange → persist).
+    if (isLocalOAuthProvider(type)) {
+      await runLocalOAuthConnect(type, args as any)
+      return
     }
 
     if (APIKEY_TYPES.includes(type)) {

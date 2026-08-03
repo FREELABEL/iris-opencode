@@ -18,6 +18,7 @@ import {
   HiveSshSetupCommandExport,
 } from "./platform-hive-enroll"
 import { HiveVpnCommandExport } from "./platform-hive-vpn"
+import { runLocalOAuthConnect } from "./integration-oauth-connect"
 import { HiveKeysCommandExport } from "./platform-hive-keys"
 import { HiveHostCommandExport } from "./platform-hive-host"
 import {
@@ -4553,6 +4554,47 @@ const HiveLogsCommand = cmd({
 })
 
 // ============================================================================
+// Clio — alias onto the CLI-native OAuth flow
+// ============================================================================
+
+/**
+ * `iris hive clio connect` — the same code path as `iris integrations connect clio`.
+ * Aliased here because that is where the muscle memory is; the implementation is
+ * shared so the two can never drift.
+ */
+const HiveClioConnectCommand = cmd({
+  command: "connect",
+  describe: "connect Clio via OAuth (loopback listener; --paste for headless)",
+  builder: (y) =>
+    y
+      .option("client-id", { type: "string", describe: "Clio app client id (or CLIO_CLIENT_ID)" })
+      .option("client-secret", { type: "string", describe: "Clio app client secret (or CLIO_CLIENT_SECRET)" })
+      .option("port", { type: "number", default: 8787, describe: "loopback port for the OAuth callback" })
+      .option("paste", { type: "boolean", default: false, describe: "paste the code instead of a loopback listener (SSH/headless)" })
+      .option("print-url", { type: "boolean", default: false, describe: "print the authorize URL and exit" })
+      .option("name", { type: "string", describe: "label for this connection" })
+      .option("bloq", { type: "number", describe: "share this integration with a bloq" })
+      .option("json", { type: "boolean", default: false, describe: "JSON output" })
+      .option("user-id", { type: "number", describe: "user ID (or IRIS_USER_ID env)" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Connect: Clio")
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
+    await runLocalOAuthConnect("clio", args as any)
+  },
+})
+
+const HiveClioCommand = cmd({
+  command: "clio <subcommand>",
+  describe: "Clio (legal practice management) — OAuth connect",
+  builder: (y) => y.command(HiveClioConnectCommand).demandCommand(),
+  async handler() {},
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -4636,6 +4678,7 @@ export const PlatformHiveCommand = cmd({
       .command(HivePanesCommand)
       .command(HiveWatchCommand)
       .command(HiveLogsCommand)
+      .command(HiveClioCommand)
       .demandCommand(),
   async handler() {},
 })
