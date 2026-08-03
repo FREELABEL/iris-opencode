@@ -225,11 +225,72 @@ export async function irisFetch(
     console.error(`[irisFetch] token: ${token ? "(present)" : "(none)"}`)
     console.error(`[irisFetch] body keys: ${options.body ? Object.keys(JSON.parse(String(options.body))).join(", ") : "(none)"}`)
   }
-  const res = await fetch(url, { ...options, headers })
+  const res = await fetchWithRetry(url, { ...options, headers })
   if (process.argv.includes("--print-logs")) {
     console.error(`[irisFetch] → ${res.status} ${res.statusText}`)
   }
   return res
+}
+
+/**
+ * #178675 — a single transient network blip hard-failed the whole command.
+ *
+ * `iris hive nodes list` died with `code: "ConnectionRefused"` while the endpoint was
+ * demonstrably reachable (curl to the same URL returned 401 — DNS resolved, TCP connected,
+ * TLS completed, the app answered). Re-running ~60s later worked and returned 11 nodes.
+ * Note the reported `errno: 0` — "no error" — so "ConnectionRefused" was a fallback label
+ * on a rejected fetch, not an observed refusal, and it sent the reader off checking DNS
+ * and firewalls instead of just retrying.
+ *
+ * Transient failures are NORMAL on the Hive rails specifically (mesh VPN, remote nodes),
+ * so the client should assume them rather than treat the first one as terminal.
+ *
+ * TWO DELIBERATE LIMITS:
+ *  1. Only a THROWN fetch (network/DNS/TLS level) is retried. An HTTP error status is a
+ *     real answer from the server and is returned untouched — retrying a 401/422/500 would
+ *     be wrong and could mask a genuine failure.
+ *  2. Only IDEMPOTENT methods (GET/HEAD) are retried. This helper backs every iris command,
+ *     including `bug report`, `bloqs add-item` and program checkout — silently replaying a
+ *     POST could duplicate an item or create a second Stripe session. A non-idempotent call
+ *     fails on the first error, exactly as before.
+ */
+export async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  // Injected so tests can drive the retry deterministically and assert the backoff
+  // schedule without sleeping through it. Defaults to the real fetch/timer.
+  fetchImpl: (input: string, init: RequestInit) => Promise<Response> = (u, i) => fetch(u, i),
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase()
+  const idempotent = method === "GET" || method === "HEAD"
+  const attempts = idempotent ? 3 : 1
+  const debug = process.argv.includes("--print-logs")
+
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fetchImpl(url, init)
+    } catch (err) {
+      lastErr = err
+      if (attempt === attempts) break
+      const backoffMs = 400 * attempt // 400ms, then 800ms
+      if (debug) {
+        console.error(`[irisFetch] network error on attempt ${attempt}/${attempts}, retrying in ${backoffMs}ms: ${String(err)}`)
+      }
+      await sleep(backoffMs)
+    }
+  }
+
+  // Out of attempts. Re-throw with context that points at the real cause instead of
+  // implying the host is unreachable — the caller could not COMPLETE the request, which
+  // is not the same as the server refusing it.
+  const detail = lastErr instanceof Error ? lastErr.message : String(lastErr)
+  const tried = attempts > 1 ? ` after ${attempts} attempts` : ""
+  const hint = idempotent
+    ? ""
+    : ` (${method} is not retried automatically — it may not be safe to repeat; re-run manually if appropriate)`
+  throw new Error(`Network request to ${url} failed${tried}: ${detail}${hint}`)
 }
 
 // ============================================================================
