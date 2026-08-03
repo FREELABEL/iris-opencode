@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, dim, bold, success } from "./iris-api"
 
 // ============================================================================
@@ -137,9 +138,37 @@ const HiveNodesListCommand = cmd({
       const ip = n.last_ip ?? dim("—")
       console.log(`  ${name}${youTag}  ${status}  ${slot}  ${heartbeat}  ${ip}`)
       console.log(`    ${dim("id:")} ${n.id}`)
+
+      // Which BUILD, and can it serve local data sources.
+      //
+      // Nothing surfaced this, so a fleet where 10 of 11 nodes ran daemons predating
+      // `bridge_call` looked healthy: the stale ones were correctly EXCLUDED from routing
+      // and completely invisible while being excluded, so Obsidian/Mail/Calendar silently
+      // worked on exactly one machine (#178758). A fleet you cannot inventory cannot be
+      // rolled out to.
+      const ver = (n as any).daemon_version
+      const caps = (n as any).bridge_capabilities
+      if (ver || caps) {
+        const bits: string[] = []
+        if (ver) bits.push(`${dim("daemon:")} ${ver}`)
+        if (caps && typeof caps === "object") {
+          const ready = Object.entries(caps).filter(([, v]: any) => v?.available).map(([k]) => k)
+          bits.push(ready.length ? `${dim("local:")} ${ready.join(", ")}` : dim("local: none available"))
+        }
+        console.log(`    ${bits.join(dim("  ·  "))}`)
+      } else if (n.connection_status === "online") {
+        // Online but silent about capabilities means an OLD daemon — say so plainly rather
+        // than leaving a gap the reader fills in with "probably fine".
+        console.log(`    ${UI.Style.TEXT_WARNING}⚠ daemon predates bridge_call — cannot serve local data sources; update it${UI.Style.TEXT_NORMAL}`)
+      }
     }
+
+    const stale = nodes.filter((n) => n.connection_status === "online" && !(n as any).bridge_capabilities).length
     console.log()
     console.log(dim(`  ${nodes.length} node(s).  Run on one: iris hive run <name|id> "<command>"`))
+    if (stale > 0) {
+      console.log(`  ${UI.Style.TEXT_WARNING}${stale} online node(s) run an outdated daemon and are excluded from local data-source routing.${UI.Style.TEXT_NORMAL}`)
+    }
   },
 })
 

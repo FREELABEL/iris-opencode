@@ -185,8 +185,31 @@ const ListCommand = cmd({
       console.log(`  ${dim("(no connected sources — add one with:")} ${highlight("iris integrations connect <type>")}${dim(")")}`)
     } else {
       for (const s of sources) {
-        const valid = s.credentials_valid === false ? dim(" ⚠ creds invalid") : ""
-        console.log(`  ${bold(s.type)}  ${dim(s.name ?? "")}${valid}`)
+        // Show the HEALTH of each source, not just its name.
+        //
+        // This listed type/name/functions and nothing else, so a source that could not
+        // execute a single call looked identical to a working one. Measured: three of four
+        // bridge sources were listed plainly while none of them could run — the operator's
+        // only way to find out was to try each and wait 20s for a timeout (#178755).
+        // `credentials_valid` was already rendered for gmail; the pattern just was not
+        // applied to the rest.
+        const bits: string[] = []
+        if (s.credentials_valid === false) bits.push(`${UI.Style.TEXT_WARNING}⚠ creds invalid${UI.Style.TEXT_NORMAL}`)
+        if (s.requires_bridge || s.execution === "bridge") {
+          // Prefer the REASON the API computed over a guess. "No vault on this machine"
+          // and "grant Full Disk Access" have different fixes.
+          if (s.enabled === false) {
+            bits.push(`${UI.Style.TEXT_DANGER}✗ ${s.bridge_reason || "bridge unavailable"}${UI.Style.TEXT_NORMAL}`)
+          } else if (s.bridge_state === "unknown") {
+            bits.push(dim("? capabilities not reported yet"))
+          } else {
+            bits.push(`${UI.Style.TEXT_SUCCESS}✓ local${UI.Style.TEXT_NORMAL}`)
+          }
+        }
+        if (s.status && s.status !== "available") bits.push(dim(`(${s.status})`))
+
+        const suffix = bits.length ? "  " + bits.join(dim(" · ")) : ""
+        console.log(`  ${bold(s.type)}  ${dim(s.name ?? "")}${suffix}`)
         const fns = (s.functions ?? []).map((f: any) => f.name ?? f).filter(Boolean)
         if (fns.length) console.log(`    ${dim("functions:")} ${fns.join(", ")}`)
       }
