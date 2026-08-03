@@ -26,8 +26,34 @@ const ListMembersCommand = cmd({
     const ok = await handleApiError(res, "List members")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const raw = data?.data ?? data?.users ?? data
-    const users: any[] = Array.isArray(raw) ? raw : []
+
+    // #158137: this reported as "sharing is broken — add succeeds, list is empty, the row never
+    // persists". The row DID persist. Verified in production: user_bloq_users has had
+    // rdelgado (5365) and dbaker (5485) on bloqs 368/378/402 since 2026-07-06, and the endpoint
+    // returns both with HTTP 200. The bug was here, in the reader.
+    //
+    // The API answers { success, message, data: { shared_users: [...] } }, so `data.data` is an
+    // OBJECT. The old code did `Array.isArray(raw) ? raw : []` — the isArray check failed and it
+    // SILENTLY substituted an empty list. A populated payload rendered as "(no members)", which
+    // reads exactly like a failed write and sent the investigation at the database for a month.
+    //
+    // Unwrap the envelope first, then look for the collection by name.
+    const payload = data?.data ?? data
+    const raw = payload?.shared_users ?? payload?.users ?? payload
+
+    // Do NOT quietly coerce an unexpected shape to empty — that is the whole defect. An empty
+    // list and "the response was not what we expected" are different facts and must look different.
+    if (!Array.isArray(raw)) {
+      prompts.outro("Done")
+      UI.error(
+        `Unexpected response shape from shared-users — expected a list, got ${
+          raw === null || raw === undefined ? String(raw) : Array.isArray(raw) ? "array" : typeof raw
+        }. Keys: ${payload && typeof payload === "object" ? Object.keys(payload).join(", ") || "(none)" : "n/a"}`,
+      )
+      return
+    }
+
+    const users: any[] = raw
     if (args.json) { console.log(JSON.stringify(users, null, 2)); prompts.outro("Done"); return }
     printDivider()
     if (users.length === 0) console.log(`  ${dim("(no members)")}`)
