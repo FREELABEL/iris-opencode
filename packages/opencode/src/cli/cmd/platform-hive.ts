@@ -18,6 +18,7 @@ import {
   HiveSshSetupCommandExport,
 } from "./platform-hive-enroll"
 import { HiveVpnCommandExport } from "./platform-hive-vpn"
+import { HiveKeysCommandExport } from "./platform-hive-keys"
 import { HiveHostCommandExport } from "./platform-hive-host"
 import {
   HiveSendCommand,
@@ -4568,6 +4569,9 @@ export const PlatformHiveCommand = cmd({
       // Node management + remote exec
       .command(HiveNodesCommandExport)
       .command(HiveRunCommandExport)
+      // Envelope encryption keys (#177946 phase 3) — a node must register one before it can
+      // RECEIVE an envelope transfer; the send path fails closed rather than falling back.
+      .command(HiveKeysCommandExport)
       // Remote enrollment (SSH-based)
       .command(HiveSshSetupCommandExport)
       .command(HiveDiscoverCommandExport)
