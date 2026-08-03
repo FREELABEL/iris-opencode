@@ -122,6 +122,26 @@ export const PlatformPagesBatchCommand = cmd({
 
         const existing = await getBySlug(slug)
         let pageId: number | null = null
+        // Surface what the API actually said. A bare "HTTP 422" is unactionable — it sent
+        // me hand-rolling a raw PUT to find out, and that full-replace silently reset the
+        // page's visibility to unlisted so /p/{slug} began 404ing while /p/{uuid} kept
+        // working. The validation payload was on the wire the whole time (#178609).
+        const describeFailure = async (res: Response, what: string): Promise<string> => {
+          const body = await res.text().catch(() => "")
+          let detail = body.slice(0, 400)
+          try {
+            const j = JSON.parse(body) as any
+            if (j?.errors && typeof j.errors === "object") {
+              detail = Object.entries(j.errors)
+                .map(([field, msgs]) => `${field}: ${Array.isArray(msgs) ? msgs.join("; ") : msgs}`)
+                .join(" | ")
+            } else if (j?.message || j?.error) {
+              detail = String(j.message ?? j.error)
+            }
+          } catch {}
+          return `${what} failed — HTTP ${res.status}${detail ? `: ${detail}` : ""}`
+        }
+
         let action: "created" | "updated" = "created"
 
         if (existing && existing.id) {
@@ -133,7 +153,7 @@ export const PlatformPagesBatchCommand = cmd({
             method: "PUT",
             body: JSON.stringify(updateData),
           })
-          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          if (!res.ok) throw new Error(await describeFailure(res, "Update"))
           pageId = existing.id
           action = "updated"
         } else {
@@ -149,18 +169,32 @@ export const PlatformPagesBatchCommand = cmd({
           if (ogImage) createData.og_image = ogImage
           if (jsonContent) createData.json_content = jsonContent
           const res = await irisFetch("/api/v1/pages", { method: "POST", body: JSON.stringify(createData) })
-          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          if (!res.ok) throw new Error(await describeFailure(res, "Create"))
           const body = (await res.json()) as { data?: any; id?: any }
           pageId = body?.data?.id ?? body?.id ?? null
           action = "created"
         }
 
         let published = false
+        let visibilityWarning: string | null = null
         if (args.publish && pageId) {
-          try {
-            const pres = await irisFetch(`/api/v1/pages/${pageId}/publish`, { method: "POST" })
-            published = pres.ok
-          } catch {}
+          const pres = await irisFetch(`/api/v1/pages/${pageId}/publish`, { method: "POST" })
+          published = pres.ok
+          if (!pres.ok) {
+            // Publishing used to fail silently inside a bare catch, so a page could report
+            // "updated" and never actually go live.
+            prompts.log.warn(`  ${await describeFailure(pres, "Publish")}`)
+          } else {
+            // status and visibility are INDEPENDENT: a page can be status=published and
+            // still 404 on /p/{slug} because visibility is unlisted, while /p/{uuid}
+            // keeps working. That combination reads as published everywhere and is the
+            // hardest kind of broken to notice (#178609).
+            const body = (await pres.json().catch(() => ({}))) as any
+            const vis = body?.data?.visibility ?? body?.visibility ?? null
+            if (vis && vis !== "public") {
+              visibilityWarning = vis
+            }
+          }
         }
 
         results.push({ slug, title, action, id: pageId, published, url: publicUrl(slug) })
@@ -168,6 +202,12 @@ export const PlatformPagesBatchCommand = cmd({
           const label = action === "created" ? success("created") : `${UI.Style.TEXT_WARNING}updated${UI.Style.TEXT_NORMAL}`
           const pub = published ? ` + ${success("published")}` : ""
           prompts.log.success(`  → ${label}${pub} #${pageId}`)
+          if (visibilityWarning) {
+            prompts.log.warn(
+              `     published but visibility="${visibilityWarning}" — ${publicUrl(slug)} will 404. ` +
+              `Only the /p/{uuid} link works. Set visibility to public.`,
+            )
+          }
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)

@@ -212,7 +212,9 @@ async function fetchAndRenderPages(args: {
     printDivider()
     for (const p of pages) {
       const tpl = p?.json_content?.meta?.template ?? p?.json_content?.type ?? "-"
-      console.log(`  ${bold(p.slug)}  ${dim(`#${p.id}`)}  ${formatStatus(p.status)}`)
+      const vis = readVisibility(p)
+      const visNote = vis.declared && vis.mode !== "public" ? `  ${formatVisibility(vis)}` : ""
+      console.log(`  ${bold(p.slug)}  ${dim(`#${p.id}`)}  ${formatStatus(p.status)}${visNote}`)
       console.log(`    ${dim(p.title ?? "")}  ${dim(`[${tpl}]`)}`)
       console.log(`    ${dim(publicUrl(p))}`)
       console.log()
