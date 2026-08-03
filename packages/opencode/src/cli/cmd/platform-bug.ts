@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, resolveUserId, requireUserId } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
+import { Auth } from "../../auth"
 import { homedir, platform, release, arch, hostname, userInfo } from "os"
 import { join } from "path"
 import { existsSync, readFileSync } from "fs"
@@ -44,6 +45,47 @@ function detectGitRepo(): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * The caller's API key, if we have one — used to attribute a bug report to a real person
+ * instead of to the machine it was filed from (#178532, #158230).
+ *
+ * Checked in the order a key is most likely to be authoritative:
+ *   1. the stored credential from `iris auth login`
+ *   2. IRIS_API_KEY / FL_API_TOKEN in the environment — this is the one that matters for MCP,
+ *      because McpController mints a per-user key and hands it to the iris-exec runner
+ *   3. ~/.iris/sdk/.env, which is where the installer writes it (same file platform-hive-enroll
+ *      reads for exactly this reason)
+ *
+ * Returns "" rather than throwing. Bug reporting must never fail because auth had a bad day —
+ * an unattributed report is worth far more than no report.
+ */
+async function resolveReporterToken(): Promise<string> {
+  try {
+    const stored = await Auth.get("iris")
+    if (stored?.type === "api" && stored.key) return stored.key
+  } catch {}
+
+  if (process.env.IRIS_API_KEY) return process.env.IRIS_API_KEY
+  if (process.env.FL_API_TOKEN) return process.env.FL_API_TOKEN
+
+  try {
+    const envPath = join(homedir(), ".iris", "sdk", ".env")
+    if (existsSync(envPath)) {
+      for (const line of readFileSync(envPath, "utf8").split("\n")) {
+        const trimmed = line.trim()
+        if (!trimmed || trimmed.startsWith("#")) continue
+        const eq = trimmed.indexOf("=")
+        if (eq < 0) continue
+        if (trimmed.slice(0, eq).trim() === "IRIS_API_KEY") {
+          return trimmed.slice(eq + 1).trim()
+        }
+      }
+    }
+  } catch {}
+
+  return ""
 }
 
 // Best-effort current git commit info from the cwd (used to stamp the fix that closed a bug)
@@ -129,9 +171,21 @@ async function submitBug(args: {
   json?: boolean
 }): Promise<void> {
   const sysInfo = collectSystemInfo()
+
+  // `reporter` is DIAGNOSTICS now, not identity (#178532, #158230). It used to be the only thing
+  // the server had, and under the MCP connector the CLI runs in a container — so this string is a
+  // container id that rotates every deploy. One person became four reporters over a few weeks;
+  // everyone on a single deploy became one. Keep it (the /app cwd is what exposed the bug), but
+  // the Authorization header below is what actually says who filed this.
   const reporter = `${sysInfo.user}@${sysInfo.hostname}`
 
-  // POST to public bug report endpoint — no auth required, always writes to user 193's bloq
+  // The endpoint stays public — an unauthenticated tester must still be able to report. But when
+  // we DO hold a key, send it: fl-api derives reporter_user_id from the token server-side, marks
+  // it reporter_verified, and ignores any claim in the body. Without this header the report is
+  // recorded as honestly-unattributed, which is better than a container id but still means a beta
+  // user who reports through Claude cannot be thanked, followed up, or paid a bounty.
+  const authToken = await resolveReporterToken()
+
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 15000)
 
@@ -139,7 +193,11 @@ async function submitBug(args: {
   try {
     res = await fetch(`${FL_API}${BUG_REPORT_ENDPOINT}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
       body: JSON.stringify({
         title: args.title,
         description: args.description,
