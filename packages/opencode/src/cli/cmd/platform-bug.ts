@@ -711,6 +711,39 @@ const ShowCommand = cmd({
     if (meta.length) console.log(`  ${meta.join("  ")}`)
     printDivider()
     console.log(contentStr ? String(contentStr) : dim("  (no description)"))
+
+    // ATTRIBUTION — who this bug is credited to, and from which machine.
+    //
+    // The API never serialised `attachments`, so there was no read path anywhere that
+    // could answer "who gets paid for this". Resolving a mis-attribution meant filing a
+    // probe bug and watching `bounty:hunters` move, which is an absurd way to read a
+    // field — and verifying machine_id had landed was impossible outright.
+    const att = (found as any).attachments
+    if (att && typeof att === "object" && Object.keys(att).length) {
+      printDivider()
+      console.log(`  ${bold("Attribution")}`)
+      if (att.reporter_name) console.log(`    ${dim("name:")}        ${att.reporter_name}`)
+      if (att.reporter_lead_id) console.log(`    ${dim("lead:")}        ${att.reporter_lead_id}`)
+      if (att.reporter_user_id) console.log(`    ${dim("user:")}        ${att.reporter_user_id}`)
+      if ("reporter_verified" in att) {
+        // Verified means the TOKEN proved it. An unverified claim is still recorded, and
+        // a payout must be able to tell "we know who this is" from "someone typed a number".
+        console.log(
+          `    ${dim("verified:")}    ` +
+          (att.reporter_verified
+            ? `${UI.Style.TEXT_SUCCESS}yes${UI.Style.TEXT_NORMAL}`
+            : `${UI.Style.TEXT_WARNING}no — claimed, not proven${UI.Style.TEXT_NORMAL}`),
+        )
+      }
+      if (att.machine_id) {
+        const eph = att.machine_id_ephemeral ? dim("  (ephemeral — differs next run)") : ""
+        console.log(`    ${dim("machine:")}     ${String(att.machine_id).slice(0, 18)}…${eph}`)
+      }
+      if (!att.reporter_lead_id && !att.reporter_user_id) {
+        console.log(`    ${dim("unattributed — set one with:")} iris bug update ${found.id} --reporter-lead <id>`)
+      }
+    }
+
     printDivider()
     console.log(dim(`  iris bug close ${found.id} --solution "..." — record the fix`))
     console.log("")
