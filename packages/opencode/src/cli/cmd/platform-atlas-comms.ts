@@ -320,18 +320,185 @@ const CommsListCommand = cmd({
 
 // ── ingest ──
 
+/**
+ * Can this lead plausibly have anything to ingest on this channel?
+ *
+ * Mirrors what the per-channel ingesters ACTUALLY look at rather than guessing — my first pass
+ * assumed iMessage meant "has a phone", but ingestImessage() also accepts an email (Apple ID) and
+ * an instagram handle, so a phone-only filter skipped leads that would have ingested fine.
+ * Sweeping a lead with no usable identifier is wasted work; skipping one that has a usable
+ * identifier is a silent gap, which is the bug this whole command exists to close.
+ */
+function leadHasHandleForChannel(lead: any, channel: string): boolean {
+  const has = (v: any) => String(v ?? "").trim() !== ""
+  const ci = lead?.contact_info ?? {}
+
+  if (["imessage", "whatsapp", "sms"].includes(channel)) {
+    return has(lead?.phone) || has(ci.phone) || has(lead?.email) || has(ci.email) || has(lead?.instagram)
+  }
+  if (["gmail", "gmail_api", "apple_mail"].includes(channel)) {
+    return has(lead?.email) || has(ci.email)
+  }
+  return false
+}
+
+/** Channels --all knows how to select leads for. */
+const SWEEPABLE_CHANNELS = ["imessage", "whatsapp", "sms", "gmail", "gmail_api", "apple_mail"]
+
+/**
+ * Sweep every lead that has a usable handle for `channel` (#178647).
+ *
+ * The per-lead command has always worked; what was missing was any way to run it over the whole
+ * book, which meant the comms log could only ever be as current as the last time someone
+ * remembered to type a specific lead id. On the day this was written, 27 of 28 leads with iMessage
+ * history were more than a week stale and several were ~2 months behind — including our co-founder
+ * and the investor whose thread prompted the report.
+ *
+ * Deliberately sequential: this reads a local SQLite database and posts to the API per lead. Doing
+ * it in parallel would buy little and risks hammering both. One lead failing must never abort the
+ * sweep — a single unresolvable handle should not cost you the other 27.
+ */
+async function ingestAllLeads(channel: string, limit: number, dryRun: boolean): Promise<void> {
+  if (!SWEEPABLE_CHANNELS.includes(channel)) {
+    prompts.log.error(
+      `--all does not support channel "${channel}" — it cannot tell which leads have a usable handle. ` +
+        `Supported: ${SWEEPABLE_CHANNELS.join(", ")}.`,
+    )
+    prompts.outro("Done")
+    return
+  }
+
+  const sp = prompts.spinner()
+  sp.start("Finding leads with a usable handle…")
+
+  let leads: any[] = []
+  try {
+    const res = await irisFetch(`/api/v1/leads?per_page=500`)
+    if (!res.ok) {
+      sp.stop("Could not list leads")
+      await handleApiError(res, "List leads")
+      prompts.outro("Done")
+      return
+    }
+    const body = (await res.json()) as any
+    const raw = body?.data?.data ?? body?.data ?? []
+    const pool = Array.isArray(raw) ? raw : []
+    // --limit caps how many leads we SWEEP, applied after filtering. Applying it to the fetch
+    // instead would silently mean "the newest N leads" — which are the least likely to have any
+    // history at all, and would make the sweep look like it found nothing.
+    leads = pool.filter((l: any) => leadHasHandleForChannel(l, channel)).slice(0, Math.max(1, limit))
+  } catch (e: any) {
+    sp.stop("Could not list leads")
+    prompts.log.error(String(e?.message ?? e).slice(0, 200))
+    prompts.outro("Done")
+    return
+  }
+
+  if (leads.length === 0) {
+    sp.stop(`No leads have a usable handle for ${channel}.`)
+    prompts.outro("Done")
+    return
+  }
+
+  sp.stop(`${leads.length} lead(s) with a usable ${channel} handle`)
+
+  if (dryRun) {
+    printDivider()
+    for (const l of leads) {
+      const shown = l.phone ?? l.email ?? l?.contact_info?.phone ?? l?.contact_info?.email ?? "?"
+      console.log(`  ${dim(String(l.id).padStart(6))}  ${String(l.name ?? l.nickname ?? "?").slice(0, 34)}  ${dim(String(shown))}`)
+    }
+    printDivider()
+    console.log(`  ${dim(`dry run — nothing ingested. Re-run without --dry-run to sweep ${leads.length} lead(s).`)}`)
+    prompts.outro("Done")
+    return
+  }
+
+  let totalNew = 0
+  let totalSkipped = 0
+  let failed = 0
+
+  printDivider()
+  for (const lead of leads) {
+    const label = `${String(lead.id).padStart(6)}  ${String(lead.name ?? lead.nickname ?? "?").slice(0, 28)}`
+    try {
+      const items = channel === "imessage" ? ingestImessage(lead)
+        : channel === "whatsapp" ? ingestWhatsapp(lead)
+        : await ingestGmail(lead)
+
+      if (!items.length) {
+        console.log(`  ${dim(label)}  ${dim("no messages")}`)
+        continue
+      }
+
+      const res = await irisFetch("/api/v1/atlas/comms/ingest", {
+        method: "POST",
+        body: JSON.stringify({
+          lead_id: lead.id,
+          channel,
+          items: items.map((i: any) => ({ ...i, channel: i.channel ?? channel })),
+        }),
+      })
+
+      if (!res.ok) {
+        failed++
+        console.log(`  ${dim(label)}  ${dim(`HTTP ${res.status}`)}`)
+        continue
+      }
+
+      const result = (await res.json()) as any
+      const data = result?.data ?? result
+      const n = Number(data?.new ?? 0)
+      const s = Number(data?.skipped ?? 0)
+      totalNew += n
+      totalSkipped += s
+      console.log(`  ${dim(label)}  ${n > 0 ? success(`${n} new`) : dim("0 new")}${s ? dim(`, ${s} known`) : ""}`)
+    } catch (e: any) {
+      // One bad lead must not end the sweep — that is the whole point of doing this in bulk.
+      failed++
+      console.log(`  ${dim(label)}  ${dim(`error: ${String(e?.message ?? e).slice(0, 60)}`)}`)
+    }
+  }
+  printDivider()
+
+  console.log(
+    `  Swept ${leads.length} lead(s): ${success(`${totalNew} new`)} + ${dim(`${totalSkipped} already logged`)}` +
+      (failed ? dim(`  ·  ${failed} failed`) : ""),
+  )
+  prompts.outro("Done")
+}
+
 const CommsIngestCommand = cmd({
-  command: "ingest <id>",
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  command: "ingest [id]",
   aliases: ["sync", "pull"],
-  describe: "ingest comms from a channel into the log (deduped)",
+  describe: "ingest comms from a channel into the log (deduped). --all sweeps every lead with a handle",
   builder: (y) =>
     y
-      .positional("id", { type: "string", describe: "lead ID or name", demandOption: true })
-      .option("channel", { type: "string", describe: "gmail|imessage|apple_mail (or 'all')", demandOption: true }),
+      .positional("id", { type: "string", describe: "lead ID or name (omit when using --all)" })
+      .option("channel", { type: "string", describe: "gmail|imessage|apple_mail (or 'all')", demandOption: true })
+      // #178647: without a bulk mode there is nothing to schedule, so the comms log was only ever
+      // as current as the last time a human remembered to run this for one specific lead. Measured
+      // on production the day this was added: 27 of 28 leads with iMessage history were more than
+      // a week stale, several by ~2 months, including our own co-founder.
+      .option("all", { type: "boolean", default: false, describe: "sweep every lead that has a usable handle for this channel" })
+      .option("limit", { type: "number", default: 100, describe: "max leads to sweep with --all" })
+      .option("dry-run", { type: "boolean", default: false, describe: "with --all, list what would be swept and stop" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Ingest Comms")
     if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    if (args.all) {
+      await ingestAllLeads(String(args.channel).toLowerCase(), Number(args.limit), Boolean(args["dry-run"]))
+      return
+    }
+
+    if (!args.id) {
+      prompts.log.error("Provide a lead id, or use --all to sweep every lead with a handle.")
+      prompts.outro("Done")
+      return
+    }
 
     const sp = prompts.spinner()
     sp.start("Resolving lead…")
