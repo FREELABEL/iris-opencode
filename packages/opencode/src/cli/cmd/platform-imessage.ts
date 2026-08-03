@@ -293,21 +293,74 @@ const ImessageChatsCommand = cmd({
 
       // Resolve handles → contact names in bulk (Contacts first, then CRM) (#58888).
       // Done before the JSON branch so programmatic consumers (MCP) get names too.
-      const phones = chats.filter(c => /^\+?\d{10,}$/.test(c.identifier.replace(/[^+\d]/g, "")) || c.identifier.includes("@"))
+      // One definition of "this handle is a person we could have named", used by the resolver, the
+      // JSON output and the display alike — three copies of this predicate would drift.
+      //
+      // The `chat…` guard matters: a GROUP chat id is a long digit run once punctuation is
+      // stripped, so a naive /\d{10,}/ test classifies it as a phone number. My first pass at the
+      // #58896 flag did exactly that and reported group threads as "unknown contact", which would
+      // have made the new warning noisy enough to ignore — the fate of every false-positive alert.
+      const isPersonHandle = (identifier: string): boolean => {
+        if (/^chat\d+$/i.test(identifier)) return false
+        if (identifier.includes("@")) return true
+        return /^\+?\d{10,15}$/.test(identifier.replace(/[^+\d]/g, ""))
+      }
+
+      const phones = chats.filter(c => isPersonHandle(c.identifier))
       const phoneMap = await resolveContactNames(phones.map(c => c.identifier))
 
       if (args.json) {
-        console.log(JSON.stringify(chats.map(c => ({ ...c, name: phoneMap.get(c.identifier) ?? null })), null, 2))
+        // `unresolved` is emitted explicitly rather than left implicit in `name: null` (#58896),
+        // so an automated consumer can act on a resolution gap instead of having to infer one.
+        console.log(
+          JSON.stringify(
+            chats.map((c) => {
+              const name = phoneMap.get(c.identifier) ?? null
+              return { ...c, name, unresolved: !name && isPersonHandle(c.identifier) }
+            }),
+            null,
+            2,
+          ),
+        )
         return
       }
 
       printDivider()
+
+      // #58896: an unresolved handle used to render as a bare phone number with no hint that it
+      // might be someone we already know. Richard Delgado had been a lead since April 3 with no
+      // phone on his record; when he texted, his thread showed as an anonymous number and nobody
+      // had any reason to connect the two. The resolution gap was invisible, so it stayed open.
+      //
+      // A number we cannot name is not noise — it is usually either a lead missing a phone, or a
+      // real person nobody has captured yet. Say so, and say how many.
+      let unresolved = 0
       for (const chat of chats) {
         const name = phoneMap.get(chat.identifier)
-        const label = name ? `${bold(name)} ${dim(chat.identifier)}` : bold(chat.identifier)
+        const looksLikeAPerson = isPersonHandle(chat.identifier)
+        if (!name && looksLikeAPerson) unresolved++
+
+        const label = name
+          ? `${bold(name)} ${dim(chat.identifier)}`
+          : looksLikeAPerson
+            ? `${bold(chat.identifier)} ${dim("· unknown contact")}`
+            : bold(chat.identifier)
         console.log(`  ${label}  ${dim(`${chat.message_count} msgs`)}  ${dim(chat.last_message)}`)
       }
       printDivider()
+
+      if (unresolved > 0) {
+        // Deliberately actionable rather than decorative — the original complaint was that the
+        // system failed silently, not that it lacked a label.
+        console.log(
+          `  ${dim(`${unresolved} unresolved — these may be existing leads with no phone on record.`)}`,
+        )
+        console.log(
+          `  ${dim(`Check with: iris leads list --search "<name>"   ·   link with: iris leads update <id> --phone <number>`)}`,
+        )
+        printDivider()
+      }
+
       prompts.outro(`${success("✓")} ${chats.length} conversation${chats.length === 1 ? "" : "s"}`)
     } catch (err: any) {
       prompts.log.error(`Query failed: ${err.message?.slice(0, 200)}`)
