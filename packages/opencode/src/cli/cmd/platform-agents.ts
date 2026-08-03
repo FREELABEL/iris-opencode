@@ -374,6 +374,15 @@ const AgentsCreateCommand = cmd({
       }
       payload.settings = settings
 
+      // The V6 runtime reads the system prompt from config.system_prompt ONLY —
+      // ReactLoopService::buildInitialMessages does
+      //   $config['systemPrompt'] ?? $config['system_prompt'] ?? getDefaultSystemPrompt()
+      // so settings.system_prompt / initial_prompt alone leave the agent falling back
+      // to the name+description persona and behaving like a generic assistant (#178763).
+      const config: Record<string, unknown> = { model, modelName: model }
+      if (settings.system_prompt) config.system_prompt = settings.system_prompt
+      payload.config = config
+
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents`, {
         method: "POST",
         body: JSON.stringify(payload),
@@ -537,25 +546,39 @@ const AgentsUpdateCommand = cmd({
             payload.settings = settings
           }
 
-          // ── config.tools allowlist (add/remove). config can be a list OR a dict in the
-          // wild (#); coerce to a dict so $agent->config['tools'] resolves server-side.
-          if (wantsTools) {
+          // ── config.* — the system prompt, the model and the tools allowlist all live
+          // here. config can be a list OR a dict in the wild (#); coerce to a dict so
+          // $agent->config['system_prompt'] / ['tools'] resolve server-side.
+          if (wantsTools || wantsSettings) {
             const curConfig: any = a?.config
             const baseConfig: Record<string, unknown> =
               curConfig && !Array.isArray(curConfig) && typeof curConfig === "object" ? { ...curConfig } : {}
-            const curTools: string[] = Array.isArray(curConfig?.tools)
-              ? curConfig.tools
-              : (Array.isArray(curConfig) ? curConfig.filter((x: any) => typeof x === "string") : [])
-            let nextTools = [...new Set(curTools)]
-            if (args["add-tools"]) {
-              const add = args["add-tools"].split(",").map((t: string) => t.trim()).filter(Boolean)
-              nextTools = [...new Set([...nextTools, ...add])]
+
+            // V6 reads the system prompt from config.system_prompt ONLY — writing it to
+            // settings.system_prompt alone leaves the agent on the name+description
+            // fallback persona and it ignores every instruction it was given (#178763).
+            if (args["system-prompt"]) baseConfig.system_prompt = args["system-prompt"]
+            if (args.model) {
+              baseConfig.model = args.model
+              baseConfig.modelName = args.model
             }
-            if (args["remove-tools"]) {
-              const rm = new Set(args["remove-tools"].split(",").map((t: string) => t.trim()))
-              nextTools = nextTools.filter((t) => !rm.has(t))
+
+            if (wantsTools) {
+              const curTools: string[] = Array.isArray(curConfig?.tools)
+                ? curConfig.tools
+                : (Array.isArray(curConfig) ? curConfig.filter((x: any) => typeof x === "string") : [])
+              let nextTools = [...new Set(curTools)]
+              if (args["add-tools"]) {
+                const add = args["add-tools"].split(",").map((t: string) => t.trim()).filter(Boolean)
+                nextTools = [...new Set([...nextTools, ...add])]
+              }
+              if (args["remove-tools"]) {
+                const rm = new Set(args["remove-tools"].split(",").map((t: string) => t.trim()))
+                nextTools = nextTools.filter((t) => !rm.has(t))
+              }
+              baseConfig.tools = nextTools
             }
-            payload.config = { ...baseConfig, tools: nextTools }
+            payload.config = baseConfig
           }
         } else {
           // Fall back to top-level if we can't read current settings
