@@ -5,8 +5,9 @@ import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bol
 import { hiveFetch } from "./platform-hive-nodes"
 import { Auth } from "../../auth"
 import { homedir, platform, release, arch, hostname, userInfo } from "os"
-import { join } from "path"
-import { existsSync, readFileSync } from "fs"
+import { join, dirname } from "path"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
+import { randomUUID } from "crypto"
 import { execSync } from "child_process"
 
 // Bug reports go to bloq #297 (under user 193) via PUBLIC endpoint — no auth required
@@ -116,6 +117,62 @@ function detectGitCommit(): { hash?: string; url?: string } {
 }
 
 // ============================================================================
+// Stable reporter identity
+// ============================================================================
+
+/**
+ * A hostname is NOT a stable identity, and on macOS it is barely stable at all.
+ *
+ * mDNS appends a collision counter whenever another device claims the same name on the
+ * network, so one Mac reports as `Alexs-MacBook-Pro-7653.local` today and
+ * `Alexs-MacBook-Pro-7087.local` next week. Measured on the live bug board: 144 clinical
+ * tickets carried 20 distinct reporter strings that collapse to 8 actual people — one
+ * person appeared as 20 reporters across suffixes 5563, 5988, 6841, 7087, 7195, 7285,
+ * 7653. Under the MCP connector it is worse: the hostname is a container id that rotates
+ * every deploy, so everyone on one deploy also collapses into a single fake reporter.
+ *
+ * Attribution that fragments cannot be used to thank, follow up, or pay anybody — which
+ * is the whole point of recording it.
+ */
+function stableMachineId(): string {
+  const idPath = join(homedir(), ".iris", "machine-id")
+  try {
+    if (existsSync(idPath)) {
+      const existing = readFileSync(idPath, "utf-8").trim()
+      if (existing) return existing
+    }
+  } catch {}
+
+  // Random, not derived from hardware: a machine id that can be recomputed from serial
+  // numbers or MAC addresses is a fingerprint, and this only needs to be *consistent*,
+  // not identifying. Persisted so it survives hostname churn and CLI upgrades.
+  const id = randomUUID()
+  try {
+    mkdirSync(dirname(idPath), { recursive: true })
+    writeFileSync(idPath, id + "\n", { mode: 0o600 })
+  } catch {
+    // Unwritable home (sandbox, read-only container) — fall back to a per-run id rather
+    // than failing the report. Marked so the server can tell it apart from a real one.
+    return "ephemeral-" + id
+  }
+  return id
+}
+
+/**
+ * Strip the mDNS collision counter and `.local` so the same machine reads the same way
+ * even before `machine_id` exists (older reports, and the human-facing display).
+ *
+ * `Alexs-MacBook-Pro-7653.local` → `Alexs-MacBook-Pro`
+ * Deliberately conservative: only a trailing `-<3-5 digits>` is removed, so a machine
+ * genuinely named `build-box-01` or `node-2` keeps its name.
+ */
+export function normalizeHostname(host: string): string {
+  return host
+    .replace(/\.local$/i, "")
+    .replace(/-\d{3,5}$/, "")
+}
+
+// ============================================================================
 // System info collection
 // ============================================================================
 
@@ -177,7 +234,10 @@ async function submitBug(args: {
   // container id that rotates every deploy. One person became four reporters over a few weeks;
   // everyone on a single deploy became one. Keep it (the /app cwd is what exposed the bug), but
   // the Authorization header below is what actually says who filed this.
-  const reporter = `${sysInfo.user}@${sysInfo.hostname}`
+  // Normalised, so the same machine reads the same way across mDNS renames. The raw
+  // hostname stays in system_info for diagnostics — that is what exposed the /app cwd
+  // under the MCP connector — but it must not be the thing that names a person.
+  const reporter = `${sysInfo.user}@${normalizeHostname(sysInfo.hostname)}`
 
   // The endpoint stays public — an unauthenticated tester must still be able to report. But when
   // we DO hold a key, send it: fl-api derives reporter_user_id from the token server-side, marks
@@ -203,6 +263,10 @@ async function submitBug(args: {
         description: args.description,
         severity: args.severity,
         reporter,
+        // Survives hostname churn AND container redeploys, so reports from one machine
+        // stay one machine. Not identifying on its own — it is a random persisted UUID,
+        // deliberately not derived from hardware.
+        machine_id: stableMachineId(),
         reporter_lead_id: args.reporterLeadId ?? null,
         reporter_name: args.reporterName ?? null,
         system_info: sysInfo,
