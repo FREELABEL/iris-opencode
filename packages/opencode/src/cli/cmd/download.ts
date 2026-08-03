@@ -12,9 +12,43 @@ export function which(bin: string): string | null {
   return p && r.status === 0 ? p : null
 }
 
+/** Days after which a yt-dlp build is considered stale enough to break YouTube. */
+const YTDLP_STALE_DAYS = 90
+
+/**
+ * Warn when yt-dlp is old enough that YouTube extraction silently degrades.
+ *
+ * yt-dlp versions are date-stamped (YYYY.MM.DD[.HHMMSS]). Once a build is a few months
+ * behind, YouTube's player/n-challenge has rotated past it: unauthenticated it falls back
+ * to the legacy muxed 360p format 18, and WITH cookies the JS challenge solver fails
+ * outright and returns no video formats at all — while the download still exits 0. That
+ * silently caps every clip this platform publishes at 360p (#178722, recurrence of
+ * #152290). Warn loudly instead of shipping a degraded artifact.
+ */
+export function warnIfYtDlpStale(ytdlp: string): void {
+  try {
+    const out = spawnSync(ytdlp, ["--version"], { encoding: "utf8", timeout: 15_000 })
+    const raw = (out.stdout || "").trim()
+    const m = raw.match(/^(\d{4})\.(\d{2})\.(\d{2})/)
+    if (!m) return
+    const built = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    const ageDays = Math.floor((Date.now() - built) / 86_400_000)
+    if (ageDays < YTDLP_STALE_DAYS) return
+    prompts.log.warn(
+      `yt-dlp ${raw} is ${ageDays} days old — YouTube downloads may silently drop to 360p ` +
+        `or return no formats at all.\n  Upgrade:  pip3 install --upgrade yt-dlp   (or: brew upgrade yt-dlp)`,
+    )
+  } catch {
+    // Never let a version probe block a download.
+  }
+}
+
 export function ensureYtDlp(): string | null {
   let ytdlp = which("yt-dlp")
-  if (ytdlp) return ytdlp
+  if (ytdlp) {
+    warnIfYtDlpStale(ytdlp)
+    return ytdlp
+  }
   prompts.log.info("Installing yt-dlp...")
   spawnSync("brew", ["install", "yt-dlp"], { stdio: "pipe", timeout: 120_000 })
   ytdlp = which("yt-dlp")
@@ -47,7 +81,7 @@ async function downloadFile(
   outPath: string,
   formatSpec: string,
   mergeFormat?: string,
-  opts?: { quality?: number; section?: string },
+  opts?: { quality?: number; section?: string; extractAudio?: string },
 ): Promise<{ ok: boolean; error?: string; timedOut?: boolean }> {
   // Cap resolution when --quality is set: rewrite the height-agnostic default into a
   // height-bounded selector so a 6h source isn't pulled at 1080p when 720p will do (#137385).
@@ -62,6 +96,11 @@ async function downloadFile(
     // Only pull the requested minutes instead of the whole multi-hour file.
     ...(opts?.section ? ["--download-sections", opts.section] : []),
     ...(mergeFormat ? ["--merge-output-format", mergeFormat] : []),
+    // Strip the video stream for audio artifacts. Without -x, a source that offers no
+    // audio-only format (e.g. YouTube serving only the muxed format 18) falls through
+    // the selector to the muxed file, and we write a byte-identical copy of the mp4
+    // under a .m4a name — an "audio" file containing an h264 stream (#178765).
+    ...(opts?.extractAudio ? ["-x", "--audio-format", opts.extractAudio] : []),
   ]
 
   // Stream yt-dlp's own progress/errors when the user asked for logs — otherwise a
@@ -492,11 +531,13 @@ export const PlatformDownloadCommand = cmd({
       const sp = prompts.spinner()
       sp.start("Downloading audio...")
 
+      // -x guarantees the artifact is audio-only even when the source has no
+      // audio-only format and the selector falls through to a muxed stream (#178765).
       const r = await downloadFile(
         ytdlp, url, audioPath,
         "bestaudio[ext=m4a]/bestaudio/best",
         undefined,
-        { section: args.section as string | undefined },
+        { section: args.section as string | undefined, extractAudio: "m4a" },
       )
 
       if (r.ok && existsSync(audioPath)) {
