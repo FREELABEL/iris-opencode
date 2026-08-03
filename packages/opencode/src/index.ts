@@ -120,6 +120,7 @@ import { PlatformPartialsCommand } from "./cli/cmd/platform-partials"
 import { PlatformScriptsCommand } from "./cli/cmd/platform-scripts"
 import { PlatformCloudUploadCommand } from "./cli/cmd/platform-cloud-upload"
 import { PlatformDriveCommand } from "./cli/cmd/platform-drive"
+import { PlatformObsidianCommand } from "./cli/cmd/platform-obsidian"
 import { PlatformCreativeCommand } from "./cli/cmd/platform-creative"
 import { PlatformPackagesCommand } from "./cli/cmd/platform-packages"
 import { PlatformMarketplaceCommand } from "./cli/cmd/platform-marketplace"
@@ -377,6 +378,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformScriptsCommand))
   .command(reg(PlatformCloudUploadCommand))
   .command(reg(PlatformDriveCommand))
+  .command(reg(PlatformObsidianCommand))
   .command(reg(PlatformCreativeCommand))
   .command(reg(PlatformPackagesCommand))
   .command(reg(PlatformMarketplaceCommand))
