@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, FL_API, IRIS_API } from "./iris-api"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
@@ -257,11 +257,8 @@ const MODE_RULES: Record<CarouselMode, string> = {
 }
 
 export async function aiGenerateCarouselProps(context: string, brand: string, mode: CarouselMode = "recruit"): Promise<Record<string, unknown> | null> {
-  const apiKey = await resolveOpenAIKey()
-  if (!apiKey) {
-    prompts.log.error("No OpenAI API key. Set OPENAI_API_KEY in env or ~/.iris/sdk/.env")
-    return null
-  }
+  // No OpenAI key needed — routed through the IRIS model proxy on the existing IRIS token
+  // (#178794). Keeping the old guard would refuse work the proxy can serve.
 
   const systemPrompt = `You generate Instagram carousel content from source material.
 Return ONLY valid JSON — no markdown fences, no commentary.
@@ -271,9 +268,11 @@ ${CAROUSEL_SCHEMA}
 
 ${MODE_RULES[mode]}`
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  // #178794 — through the IRIS model proxy, not api.openai.com directly. See the note in
+  // platform-article-qa.ts: a direct call skips every server-side gate and needs a raw
+  // platform key on the operator's disk. Auth is the existing IRIS token.
+  const res = await irisFetch("/api/v6/openai/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: "gpt-4o-mini",
       temperature: 0.7,
@@ -282,10 +281,10 @@ ${MODE_RULES[mode]}`
         { role: "user", content: `Brand: ${brand}\n\nSource material:\n${context}` },
       ],
     }),
-  })
+  }, IRIS_API)
 
   if (!res.ok) {
-    prompts.log.error(`OpenAI error: ${res.status} ${res.statusText}`)
+    prompts.log.error(`IRIS model proxy error: ${res.status} ${res.statusText}`)
     return null
   }
 

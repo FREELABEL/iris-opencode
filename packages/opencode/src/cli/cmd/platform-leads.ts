@@ -3994,14 +3994,18 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
               }
             } catch {}
 
-            const callModel = async (url: string, key: string, model: string, label: string, extra?: Record<string, unknown>): Promise<SentimentResult | null> => {
+            // #178794 — through the IRIS model proxy. This one matters most of the three: the
+            // payload is LEAD DATA, and for Pathways/Vanguard tenants a lead record is a
+            // patient. A direct client->OpenAI call reaches a vendor the BAA registry marks
+            // PHI-allowed: NO, with no server-side gate in the path and no audit that it
+            // happened. Auth is the existing IRIS token; no OpenAI key on disk.
+            const callModel = async (model: string, label: string, extra?: Record<string, unknown>): Promise<SentimentResult | null> => {
               const t0 = Date.now()
               try {
-                const res = await fetch(url, {
+                const res = await irisFetch("/api/v6/openai/chat/completions", {
                   method: "POST",
-                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
                   body: JSON.stringify({ model, max_completion_tokens: 200, messages: [{ role: "system", content: sysPrompt }, { role: "user", content: userPrompt }], ...extra }),
-                })
+                }, IRIS_API)
                 const ms = Date.now() - t0
                 if (!res.ok) return null
                 const data = (await res.json()) as any
@@ -4011,8 +4015,11 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
               } catch { return null }
             }
 
-            if (openaiKey) {
-              const r = await callModel("https://api.openai.com/v1/chat/completions", openaiKey, "gpt-5-nano", "gpt-5-nano", { reasoning_effort: "low" })
+            // No key check: the proxy authenticates with the IRIS token the CLI already holds,
+            // so this no longer silently skips sentiment when an operator lacks a personal
+            // OPENAI_API_KEY — which is how this analysis quietly produced no results at all.
+            {
+              const r = await callModel("gpt-5-nano", "gpt-5-nano", { reasoning_effort: "low" })
               if (r) sentimentResults.push(r)
             }
           }

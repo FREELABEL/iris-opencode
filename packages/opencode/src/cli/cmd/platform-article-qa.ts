@@ -83,11 +83,9 @@ interface ScoreResult {
 }
 
 async function scoreArticle(text: string, title: string, framework: QualityFramework): Promise<ScoreResult | null> {
-  const apiKey = await resolveOpenAIKey()
-  if (!apiKey) {
-    prompts.log.error("No OpenAI API key found. Set OPENAI_API_KEY in your environment or ~/.iris/sdk/.env")
-    return null
-  }
+  // No OpenAI key needed — the call goes through the IRIS model proxy on the caller's existing
+  // IRIS token (#178794). The old guard aborted for anyone without a personal OPENAI_API_KEY,
+  // which would now refuse a request the proxy can serve perfectly well.
 
   const criteriaBlock = framework.criteria
     .map((c, i) => `${i + 1}. **${c.label}** (key: "${c.key}"): ${c.description}`)
@@ -119,12 +117,15 @@ ${framework.criteria.map((c) => `    "${c.key}": { "score": <1-10>, "pass": <tru
 }`
 
   try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    // #178794 — routed through the IRIS model proxy, NOT api.openai.com directly.
+    // CLAUDE.md's backend-centric rule is not stylistic here: a direct client->OpenAI call
+    // traverses none of the server-side gates (provider enable/disable, budget accounting,
+    // failure telemetry) and requires a raw platform OPENAI_API_KEY sitting in plaintext on
+    // every operator's disk, which makes key rotation impossible to ever complete.
+    // Auth is the existing IRIS token via irisFetch — no OpenAI key is needed at all.
+    // Same shape as platform-ideas.ts:38 / platform-discover.ts:1579, which already do this.
+    const res = await irisFetch("/api/v6/openai/chat/completions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
       body: JSON.stringify({
         model: MODEL,
         messages: [
@@ -134,11 +135,11 @@ ${framework.criteria.map((c) => `    "${c.key}": { "score": <1-10>, "pass": <tru
         temperature: 0.2,
         max_tokens: 1024,
       }),
-    })
+    }, IRIS_API)
 
     if (!res.ok) {
       const err = await res.text().catch(() => "")
-      prompts.log.error(`OpenAI API error: HTTP ${res.status} ${err.slice(0, 200)}`)
+      prompts.log.error(`IRIS model proxy error: HTTP ${res.status} ${err.slice(0, 200)}`)
       return null
     }
 
