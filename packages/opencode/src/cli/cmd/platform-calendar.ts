@@ -287,7 +287,11 @@ const CalendarTodayCommand = cmd({
       return
     }
 
-    const events: any[] = result.events ?? []
+    // Same shape bug the `list` fix caught: the Google Calendar API returns events at
+    // data.items, so `result.events` is always undefined and this printed "nothing on
+    // your calendar" over a full day. Fixing only `list` left today/tomorrow lying —
+    // a fix applied at one call site and not its siblings is a fix that looks done.
+    const events: any[] = result.events ?? result.data?.items ?? result.items ?? []
     if (events.length === 0) {
       prompts.log.info("Nothing on your calendar today")
       prompts.outro("Done")
@@ -339,7 +343,11 @@ const CalendarTomorrowCommand = cmd({
       return
     }
 
-    const events: any[] = result.events ?? []
+    // Same shape bug the `list` fix caught: the Google Calendar API returns events at
+    // data.items, so `result.events` is always undefined and this printed "nothing on
+    // your calendar" over a full day. Fixing only `list` left today/tomorrow lying —
+    // a fix applied at one call site and not its siblings is a fix that looks done.
+    const events: any[] = result.events ?? result.data?.items ?? result.items ?? []
     if (events.length === 0) {
       prompts.log.info("Nothing on your calendar tomorrow")
       prompts.outro("Done")
