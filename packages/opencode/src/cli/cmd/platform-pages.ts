@@ -429,6 +429,13 @@ const PullCmd = cmd({
         seo_description: page.seo_description ?? null,
         og_image: page.og_image ?? null,
         status: page.status,
+        // Round-trip visibility so the local file is a COMPLETE representation of the
+        // page. It was omitted, which made `pull` lossy: nothing downstream could restore
+        // it, and a page whose visibility drifted had no CLI path back — `pages visibility`
+        // is a separate command a user has no reason to know they now need. Page 318 has
+        // been silently demoted to `unlisted` twice this way, and an unlisted page 404s on
+        // its /p/{slug} address, so it reads as deleted. (#178609)
+        visibility: page.visibility ?? null,
         owner_type: page.owner_type ?? "system",
         owner_id: page.owner_id ?? null,
         json_content: page.json_content ?? {},
@@ -505,6 +512,12 @@ const PushCmd = cmd({
       if (local.og_image) updateData.og_image = local.og_image
       if (local.owner_type) updateData.owner_type = local.owner_type
       if (local.owner_id !== undefined) updateData.owner_id = local.owner_id
+      // Re-assert visibility when the local file carries one. Unlike status (below), this
+      // is safe: visibility is orthogonal to the publish cycle, and re-sending the value
+      // we pulled can only preserve it. Sending nothing is what let it drift silently, and
+      // a page demoted to `unlisted` 404s on its /p/{slug} address — indistinguishable
+      // from deleted.
+      if (local.visibility) updateData.visibility = local.visibility
       // Never send status during push — use publish/unpublish commands instead.
       // Sending status=published here caused the page to briefly publish with OLD content
       // before createVersion saved the new json_content, poisoning the iris-api cache.
