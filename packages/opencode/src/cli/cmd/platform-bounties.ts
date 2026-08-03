@@ -808,11 +808,18 @@ const MyBountyCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Your Bug Bounty — #${oppId}`)
     printDivider()
-    printKV("Reported", d?.reported ?? 0)
-    printKV("Verified", d?.verified ?? 0)
-    printKV("Pending", d?.pending ?? 0)
-    printKV("Owed", money(d?.owed_cents))
-    printKV("Paid", money(d?.paid_cents))
+    // The API nests these under `totals`; reading them off the root rendered a hunter
+    // who is owed money as "Owed $0.00" with 0 reported, while `bounty hunters` showed
+    // the real figures at the same instant (#178839). This is the ONLY self-serve way a
+    // hunter checks their own balance, and a zero reads as a settled account — so a wrong
+    // field path here looks exactly like "the programme owes you nothing".
+    // Fall back to the root so an older/flatter response shape still renders.
+    const t = d?.totals ?? d ?? {}
+    printKV("Reported", t.reported ?? d?.bugs?.length ?? 0)
+    printKV("Verified", t.verified ?? 0)
+    printKV("Pending", t.pending ?? 0)
+    printKV("Owed", money(t.owed_cents))
+    printKV("Paid", money(t.paid_cents))
     printDivider()
     // Verification is the gate between reporting and money, so say so here.
     prompts.outro(dim("verified = fixed, live in production, and closed — that is when it pays"))
