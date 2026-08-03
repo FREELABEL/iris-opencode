@@ -346,6 +346,74 @@ function leadHasHandleForChannel(lead: any, channel: string): boolean {
 const SWEEPABLE_CHANNELS = ["imessage", "whatsapp", "sms", "gmail", "gmail_api", "apple_mail"]
 
 /**
+ * Every handle with iMessage traffic in the last `days`, newest first. ONE query.
+ *
+ * This is the pivot of the inverted sweep (#178647): ask the message store who has actually been
+ * talking, instead of asking the CRM who might have. Same SQL shape `imessage chats` already uses.
+ */
+function activeImessageHandles(days: number, cap: number): { identifier: string; count: number; last: string }[] {
+  // NOTE: the export is `query`; platform-imessage.ts imports it as `query as queryMessages`.
+  // Requiring `queryMessages` directly yields undefined, and the try/catch below would swallow
+  // the TypeError and report "no conversations" — a silent empty sweep. Caught by dry-running it.
+  const { query: queryMessages } = require("../lib/imessage")
+  const cutoff = Math.max(1, days) * 86400
+  const sql = `
+    SELECT c.chat_identifier, COUNT(m.rowid) as msg_count,
+           MAX(datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime')) as last_msg
+    FROM chat c
+    JOIN chat_message_join cmj ON c.rowid = cmj.chat_id
+    JOIN message m ON cmj.message_id = m.rowid
+    WHERE m.date/1000000000 + 978307200 > unixepoch('now') - ${cutoff}
+    GROUP BY c.chat_identifier
+    ORDER BY MAX(m.date) DESC
+    LIMIT ${Math.max(1, cap)};
+  `.replace(/\n/g, " ").trim()
+
+  try {
+    const raw = queryMessages(sql)
+    if (!raw) return []
+    return raw
+      .split("\n")
+      .map((line: string) => {
+        const [identifier, count, last] = line.split("|")
+        return { identifier: identifier ?? "", count: parseInt(count || "0"), last: last ?? "" }
+      })
+      .filter((h: any) => h.identifier && !/^chat\d+$/i.test(h.identifier))
+  } catch {
+    return []
+  }
+}
+
+/** Find the lead that owns this handle, or null. Matches on the last 10 digits for phones. */
+async function findLeadForHandle(handle: string): Promise<any | null> {
+  const digits = handle.replace(/\D/g, "")
+  const isPhone = digits.length >= 10
+  // Search by the last 10 digits so stored formats like "(972) 469-5970", "+19724695970" and
+  // "9724695970" all match the same person.
+  const term = isPhone ? digits.slice(-10) : handle
+
+  try {
+    const res = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(term)}&per_page=5`)
+    if (!res.ok) return null
+    const body = (await res.json()) as any
+    const leads = body?.data?.data ?? body?.data ?? []
+    if (!Array.isArray(leads) || leads.length === 0) return null
+
+    if (!isPhone) return leads[0]
+
+    const tail = digits.slice(-10)
+    return (
+      leads.find((l: any) => {
+        const ld = String(l?.phone ?? l?.contact_info?.phone ?? "").replace(/\D/g, "")
+        return ld.length >= 10 && ld.slice(-10) === tail
+      }) ?? leads[0]
+    )
+  } catch {
+    return null
+  }
+}
+
+/**
  * Sweep every lead that has a usable handle for `channel` (#178647).
  *
  * The per-lead command has always worked; what was missing was any way to run it over the whole
@@ -358,112 +426,94 @@ const SWEEPABLE_CHANNELS = ["imessage", "whatsapp", "sms", "gmail", "gmail_api",
  * it in parallel would buy little and risks hammering both. One lead failing must never abort the
  * sweep — a single unresolvable handle should not cost you the other 27.
  */
-async function ingestAllLeads(channel: string, limit: number, dryRun: boolean): Promise<void> {
-  if (!SWEEPABLE_CHANNELS.includes(channel)) {
+async function ingestAllLeads(channel: string, days: number, limit: number, dryRun: boolean): Promise<void> {
+  if (channel !== "imessage") {
     prompts.log.error(
-      `--all does not support channel "${channel}" — it cannot tell which leads have a usable handle. ` +
-        `Supported: ${SWEEPABLE_CHANNELS.join(", ")}.`,
+      `--all currently supports only --channel imessage. It works by asking the local message store ` +
+        `who has been talking; other channels have no equivalent local index yet.`,
     )
     prompts.outro("Done")
     return
   }
 
   const sp = prompts.spinner()
-  sp.start("Finding leads with a usable handle…")
+  sp.start(`Reading conversations from the last ${days} days…`)
 
-  let leads: any[] = []
-  try {
-    const res = await irisFetch(`/api/v1/leads?per_page=500`)
-    if (!res.ok) {
-      sp.stop("Could not list leads")
-      await handleApiError(res, "List leads")
-      prompts.outro("Done")
-      return
-    }
-    const body = (await res.json()) as any
-    const raw = body?.data?.data ?? body?.data ?? []
-    const pool = Array.isArray(raw) ? raw : []
-    // --limit caps how many leads we SWEEP, applied after filtering. Applying it to the fetch
-    // instead would silently mean "the newest N leads" — which are the least likely to have any
-    // history at all, and would make the sweep look like it found nothing.
-    leads = pool.filter((l: any) => leadHasHandleForChannel(l, channel)).slice(0, Math.max(1, limit))
-  } catch (e: any) {
-    sp.stop("Could not list leads")
-    prompts.log.error(String(e?.message ?? e).slice(0, 200))
+  // ONE local query. The previous version walked the CRM instead — /api/v1/leads?per_page=500 —
+  // and filtered to leads with a handle. That fetched the NEWEST 500 leads (ids 28515..29022), so
+  // Richard (15743), Rashad (16750) and Flo (28165) were all outside the page and could never be
+  // swept. A scheduled job would have reported success daily while touching none of the stale
+  // records it existed to fix: silent success, the exact failure mode of the original bug.
+  const handles = activeImessageHandles(days, Math.max(limit * 4, 200))
+  if (handles.length === 0) {
+    sp.stop("No conversations in that window (or the message store is unreadable).")
     prompts.outro("Done")
     return
   }
 
-  if (leads.length === 0) {
-    sp.stop(`No leads have a usable handle for ${channel}.`)
-    prompts.outro("Done")
-    return
+  sp.stop(`${handles.length} active conversation(s)`)
+  sp.start("Matching conversations to leads…")
+
+  // Resolve handle -> lead. N is the number of ACTIVE handles, not the size of the CRM, and the
+  // conversations that have new messages are by definition the ones worth ingesting.
+  const byLead = new Map<number, { lead: any; handles: string[] }>()
+  const unmatched: string[] = []
+  for (const h of handles) {
+    const lead = await findLeadForHandle(h.identifier)
+    if (!lead?.id) { unmatched.push(h.identifier); continue }
+    const entry = byLead.get(lead.id) ?? { lead, handles: [] }
+    entry.handles.push(h.identifier)
+    byLead.set(lead.id, entry)
   }
 
-  sp.stop(`${leads.length} lead(s) with a usable ${channel} handle`)
+  const targets = [...byLead.values()].slice(0, Math.max(1, limit))
+  sp.stop(`${targets.length} lead(s) matched · ${unmatched.length} unmatched handle(s)`)
 
   if (dryRun) {
     printDivider()
-    for (const l of leads) {
-      const shown = l.phone ?? l.email ?? l?.contact_info?.phone ?? l?.contact_info?.email ?? "?"
-      console.log(`  ${dim(String(l.id).padStart(6))}  ${String(l.name ?? l.nickname ?? "?").slice(0, 34)}  ${dim(String(shown))}`)
+    for (const t of targets) {
+      console.log(`  ${dim(String(t.lead.id).padStart(6))}  ${String(t.lead.name ?? t.lead.nickname ?? "?").slice(0, 32)}  ${dim(t.handles.join(", "))}`)
+    }
+    if (unmatched.length) {
+      console.log(`  ${dim(`unmatched (no lead): ${unmatched.slice(0, 8).join(", ")}${unmatched.length > 8 ? " …" : ""}`)}`)
+      console.log(`  ${dim("these are real conversations with nobody in the CRM — worth capturing as leads.")}`)
     }
     printDivider()
-    console.log(`  ${dim(`dry run — nothing ingested. Re-run without --dry-run to sweep ${leads.length} lead(s).`)}`)
+    console.log(`  ${dim(`dry run — nothing ingested. Re-run without --dry-run to sweep ${targets.length} lead(s).`)}`)
     prompts.outro("Done")
     return
   }
 
-  let totalNew = 0
-  let totalSkipped = 0
-  let failed = 0
-
+  let totalNew = 0, totalSkipped = 0, failed = 0
   printDivider()
-  for (const lead of leads) {
-    const label = `${String(lead.id).padStart(6)}  ${String(lead.name ?? lead.nickname ?? "?").slice(0, 28)}`
+  for (const t of targets) {
+    const label = `${String(t.lead.id).padStart(6)}  ${String(t.lead.name ?? t.lead.nickname ?? "?").slice(0, 26)}`
     try {
-      const items = channel === "imessage" ? ingestImessage(lead)
-        : channel === "whatsapp" ? ingestWhatsapp(lead)
-        : await ingestGmail(lead)
-
-      if (!items.length) {
-        console.log(`  ${dim(label)}  ${dim("no messages")}`)
-        continue
-      }
+      const items = ingestImessage(t.lead)
+      if (!items.length) { console.log(`  ${dim(label)}  ${dim("no messages")}`); continue }
 
       const res = await irisFetch("/api/v1/atlas/comms/ingest", {
         method: "POST",
-        body: JSON.stringify({
-          lead_id: lead.id,
-          channel,
-          items: items.map((i: any) => ({ ...i, channel: i.channel ?? channel })),
-        }),
+        body: JSON.stringify({ lead_id: t.lead.id, channel, items: items.map((i: any) => ({ ...i, channel: i.channel ?? channel })) }),
       })
-
-      if (!res.ok) {
-        failed++
-        console.log(`  ${dim(label)}  ${dim(`HTTP ${res.status}`)}`)
-        continue
-      }
+      if (!res.ok) { failed++; console.log(`  ${dim(label)}  ${dim(`HTTP ${res.status}`)}`); continue }
 
       const result = (await res.json()) as any
       const data = result?.data ?? result
-      const n = Number(data?.new ?? 0)
-      const s = Number(data?.skipped ?? 0)
-      totalNew += n
-      totalSkipped += s
+      const n = Number(data?.new ?? 0), s = Number(data?.skipped ?? 0)
+      totalNew += n; totalSkipped += s
       console.log(`  ${dim(label)}  ${n > 0 ? success(`${n} new`) : dim("0 new")}${s ? dim(`, ${s} known`) : ""}`)
     } catch (e: any) {
-      // One bad lead must not end the sweep — that is the whole point of doing this in bulk.
+      // One bad lead must never end the sweep — the whole point of doing this in bulk.
       failed++
       console.log(`  ${dim(label)}  ${dim(`error: ${String(e?.message ?? e).slice(0, 60)}`)}`)
     }
   }
   printDivider()
-
   console.log(
-    `  Swept ${leads.length} lead(s): ${success(`${totalNew} new`)} + ${dim(`${totalSkipped} already logged`)}` +
-      (failed ? dim(`  ·  ${failed} failed`) : ""),
+    `  Swept ${targets.length} lead(s) from ${handles.length} conversation(s): ${success(`${totalNew} new`)} + ${dim(`${totalSkipped} already logged`)}` +
+      (failed ? dim(`  ·  ${failed} failed`) : "") +
+      (unmatched.length ? dim(`  ·  ${unmatched.length} handle(s) matched no lead`) : ""),
   )
   prompts.outro("Done")
 }
@@ -481,7 +531,8 @@ const CommsIngestCommand = cmd({
       // as current as the last time a human remembered to run this for one specific lead. Measured
       // on production the day this was added: 27 of 28 leads with iMessage history were more than
       // a week stale, several by ~2 months, including our own co-founder.
-      .option("all", { type: "boolean", default: false, describe: "sweep every lead that has a usable handle for this channel" })
+      .option("all", { type: "boolean", default: false, describe: "sweep every lead with an ACTIVE conversation (reads the message store, not the CRM)" })
+      .option("days", { type: "number", default: 30, describe: "with --all, how far back to look for active conversations" })
       .option("limit", { type: "number", default: 100, describe: "max leads to sweep with --all" })
       .option("dry-run", { type: "boolean", default: false, describe: "with --all, list what would be swept and stop" }),
   async handler(args) {
@@ -490,7 +541,7 @@ const CommsIngestCommand = cmd({
     if (!(await requireAuth())) { prompts.outro("Done"); return }
 
     if (args.all) {
-      await ingestAllLeads(String(args.channel).toLowerCase(), Number(args.limit), Boolean(args["dry-run"]))
+      await ingestAllLeads(String(args.channel).toLowerCase(), Number(args.days), Number(args.limit), Boolean(args["dry-run"]))
       return
     }
 
