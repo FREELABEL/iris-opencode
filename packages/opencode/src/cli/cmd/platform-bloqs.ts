@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
@@ -2190,6 +2191,8 @@ const BloqsItemsCommand = cmd({
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
       .option("list", { alias: "l", describe: "filter by list ID", type: "number" })
       .option("search", { alias: "s", describe: "search items by keyword", type: "string" })
+      .option("source", { describe: "also search these sources: obsidian, drive (repeatable)", type: "string", array: true })
+      .option("include-all", { describe: "search every available source", type: "boolean", default: false })
       .option("status", { describe: "filter by status", type: "string" })
       .option("limit", { describe: "items per page (max 200)", type: "number", default: 50 })
       .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
@@ -2205,6 +2208,55 @@ const BloqsItemsCommand = cmd({
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // FEDERATED SEARCH (#178646). Only when --source/--include-all is given, so the
+    // meaning of an existing `--search` never changes underneath anyone. Content is not
+    // copied into bloq items — each source stays the owner of its own data and is queried
+    // live, because a second copy is a second truth that drifts.
+    const federationRequested = Boolean(args["include-all"] || (args.source && (args.source as string[]).length))
+    if (args.search && federationRequested) {
+      // On `bloqs items` the bloq is the context, so --source ADDS sources rather than
+      // replacing them. Anything else would make `--source obsidian` silently stop
+      // searching the board you explicitly named.
+      const sources = [...new Set(["bloq" as const, ...resolveSources({ source: args.source as string[], includeAll: args["include-all"] as boolean })])]
+      const fedSpinner = args.json ? null : prompts.spinner()
+      if (fedSpinner) fedSpinner.start(`Searching ${sources.join(", ")}…`)
+
+      const { results, outcomes } = await federatedSearch(String(args.search), {
+        sources,
+        bloqId: Number(args["bloq-id"]),
+        userId,
+        limit: Number(args.limit) || 25,
+      })
+
+      if (fedSpinner) fedSpinner.stop(`${results.length} result(s)`)
+
+      if (args.json) {
+        // outcomes ride along in --json too: a machine caller must be able to tell a
+        // genuinely empty result from a source that never ran.
+        console.log(JSON.stringify({ query: args.search, sources, results, outcomes }, null, 2))
+        return
+      }
+
+      printDivider()
+      if (!results.length) console.log(`  ${dim(`No results for "${args.search}"`)}`)
+      for (const r of results) {
+        const where = r.location ? dim(`  ${r.location}`) : ""
+        console.log(`  ${dim(`[${r.source}]`)} ${bold(r.title)}${where}`)
+        if (r.snippet) console.log(`      ${dim(r.snippet.slice(0, 110))}`)
+      }
+      printDivider()
+      // Always print outcomes. A source that was skipped or errored MUST be named —
+      // silently returning fewer results is how a dead dependency passes for "no matches".
+      console.log(`  ${dim(formatOutcomes(outcomes))}`)
+      const degraded = outcomes.filter((o) => o.state !== "ok")
+      prompts.outro(
+        degraded.length
+          ? `${results.length} result(s) — ${degraded.length} source(s) unavailable`
+          : `${success("✓")} ${results.length} result(s)`,
+      )
+      return
+    }
 
     const spinner = args.json ? null : prompts.spinner()
     if (spinner) spinner.start("Loading…")
