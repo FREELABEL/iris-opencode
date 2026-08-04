@@ -7,3 +7,21 @@ if [ "$CURRENT_VERSION" != "$EXPECTED_VERSION" ]; then
   exit 1
 fi
 bun typecheck
+
+# Capability index must cover every command.
+#
+# The index is what `iris find` and the MCP discovery tools read. A command that is not in
+# it is invisible to every agent — which is exactly how the old hand-typed catalog decayed
+# to 15 entries out of 120 without anyone noticing. Adding a command should make it
+# discoverable by DEFAULT, not when someone remembers to update a list.
+#
+# Non-blocking on a missing project checkout: playbooks and skills live in the workspace
+# repo, and a contributor without it should not be stopped from pushing a CLI change.
+if [ -d "$HOME/sites/freelabel" ] || [ -n "$IRIS_PROJECT_ROOT" ]; then
+  (cd packages/opencode && bun run capabilities:check) || {
+    echo ""
+    echo "  The capability index is stale — new capabilities would be undiscoverable."
+    echo "  Fix: cd packages/opencode && bun run capabilities  (then commit capabilities.json)"
+    exit 1
+  }
+fi

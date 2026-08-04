@@ -111,6 +111,7 @@ import { PlatformOnboardFlowsCommand } from "./cli/cmd/platform-onboard-flows"
 import { PlatformProposalsCommand } from "./cli/cmd/platform-proposals"
 import { PlatformContractsCommand } from "./cli/cmd/platform-contracts"
 import { PlatformPagesCommand } from "./cli/cmd/platform-pages"
+import { PlatformFindCommand } from "./cli/cmd/platform-find"
 import { PlatformDashboardCommand } from "./cli/cmd/platform-dashboard"
 import { PlatformContentEngineCommand } from "./cli/cmd/platform-content-engine"
 import { PlatformSitesCommand } from "./cli/cmd/platform-sites"
@@ -246,6 +247,7 @@ const cli = yargs(rawArgs)
   .completion("completion", "generate shell completion script")
   // Guide / discoverability (must be before TuiThreadCommand's $0 [project])
   .command(reg(GuideCommand))
+  .command(reg(PlatformFindCommand))
   // Core CLI commands
   .command(reg(AcpCommand))
   .command(reg(McpCommand))
