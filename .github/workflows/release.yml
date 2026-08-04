@@ -81,6 +81,32 @@ jobs:
           OPENCODE_VERSION: ${{ steps.version.outputs.version }}
           OPENCODE_CHANNEL: latest
 
+      # The compiled binary must be able to answer a discovery query before we ship it.
+      #
+      # v1.3.156 shipped `iris find` with its capability index loaded by filesystem path.
+      # `bun build --compile` bundles static imports but NOT files merely read with fs at
+      # runtime, so the index existed nowhere in the artifact: it worked under
+      # `bun run src/index.ts` (the only surface anyone tested) and failed on every install.
+      #
+      # Run from `/` so a stray capabilities.json in the build tree cannot fake a pass, and
+      # assert on RESULTS rather than the exit code — the broken build printed an error and
+      # exited 1, which a plain `--version` check sails straight past.
+      - name: Smoke test — capability discovery in the compiled binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$(pwd)/packages/opencode/dist/opencode-"*"/bin/iris"
+          BIN=$(ls -d $BIN | head -1)
+          echo "testing: $BIN"
+          OUT=$(cd / && "$BIN" find "genesis bespoke html page" --json)
+          echo "$OUT" | head -20
+          if ! echo "$OUT" | grep -q '"matched": [1-9]'; then
+            echo "::error::Compiled binary cannot search capabilities — discovery is dead in this build. Refusing to release."
+            exit 1
+          fi
+          echo "ok — discovery reachable from the compiled binary"
+
       - name: Package binary (Unix)
         if: runner.os != 'Windows'
         shell: bash
