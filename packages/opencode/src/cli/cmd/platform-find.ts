@@ -67,7 +67,7 @@ const KIND_LABEL: Record<string, string> = {
  * searching "pages" must surface the `pages` command, not the twelve playbooks that
  * happen to say the word.
  */
-function score(e: Entry, terms: string[], raw: string): number {
+function score(e: Entry, terms: string[], raw: string, rarity: Map<string, number>): number {
   let s = 0
   const name = e.name.toLowerCase()
 
@@ -81,7 +81,12 @@ function score(e: Entry, terms: string[], raw: string): number {
     else if (name.split(/[\s:-]/).includes(t)) s += 30
     else if (name.includes(t)) s += 15
     if (e.describe.toLowerCase().includes(t)) s += 10
-    if (e.haystack.includes(t)) s += 3
+    // Body hits weighted by RARITY. A flat score here meant "SiteFooter" — which appears in
+    // exactly one guide and is the whole reason someone is searching — counted the same as
+    // "error", which appears in hundreds. So the query "SiteFooter validation error" ranked
+    // the generic `pages` docs above the one page that actually explains SiteFooter.
+    // A term found in few places is far more discriminating than one found everywhere.
+    if (e.haystack.includes(t)) s += rarity.get(t) ?? 3
   }
 
   // A how-to or playbook is usually the better answer to an intent-shaped question than a
@@ -163,8 +168,19 @@ export const PlatformFindCommand = cmd({
     let pool = index.entries
     if (args.kind) pool = pool.filter((e) => e.kind === args.kind)
 
+    // How rare is each query term across the whole index? Cheap to compute (1,300 entries
+    // x a handful of terms) and it is what lets a distinctive word beat a common one.
+    const rarity = new Map<string, number>()
+    for (const t of expanded) {
+      const df = index.entries.reduce((n, e) => n + (e.haystack.includes(t) ? 1 : 0), 0)
+      // 1 doc -> ~28pts, 10 -> ~18, 100 -> ~9, everywhere -> ~2. Floored so a common term
+      // still counts for something; a word the user typed is never worth zero.
+      const total = index.entries.length
+      rarity.set(t, df === 0 ? 0 : Math.max(2, Math.round(12 * Math.log10(total / df))))
+    }
+
     const hits = pool
-      .map((e) => ({ e, s: score(e, [...expanded], raw) }))
+      .map((e) => ({ e, s: score(e, [...expanded], raw, rarity) }))
       .filter((h) => h.s > 0)
       .sort((a, b) => b.s - a.s)
       .slice(0, Math.max(1, Number(args.limit) || 12))
