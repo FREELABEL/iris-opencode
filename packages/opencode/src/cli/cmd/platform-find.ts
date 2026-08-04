@@ -4,6 +4,15 @@ import { dim, bold, highlight, printDivider } from "./iris-api"
 import { readFileSync, existsSync } from "fs"
 import { join } from "path"
 
+// EMBEDDED at build time. This import is the only reason `iris find` works in a shipped
+// binary: `bun build --compile` bundles JS and static imports, but it does NOT carry along
+// files that are merely read with fs at runtime. The first release of this command loaded
+// the index purely by path, which worked in dev (`bun run src/index.ts` reads the real file
+// off disk) and failed on EVERY installed binary with "capability index not found" — the
+// index shipped nowhere, and dev was the one surface that could never expose it.
+// ~870KB of JSON against a ~100MB binary, to make the discovery layer actually reachable.
+import embeddedIndex from "../../../capabilities.json"
+
 /**
  * `iris find <intent>` — the entry point for "what can IRIS do about X".
  *
@@ -38,19 +47,30 @@ type Index = {
   entries: Entry[]
 }
 
-/** Ship-adjacent first, then dev locations. Returns null rather than throwing. */
-function loadIndex(): Index | null {
-  const candidates = [
+/**
+ * Prefer a file on disk, fall back to the embedded copy.
+ *
+ * On-disk wins so a developer who regenerates the index sees the change immediately without
+ * a rebuild. In a compiled binary these paths resolve inside bunfs and simply do not exist,
+ * so every installed CLI transparently uses the embedded index — which is the case that was
+ * broken before and is the one nearly every caller is in.
+ *
+ * `process.cwd()` is deliberately NOT a candidate: any directory containing an unrelated
+ * `capabilities.json` would silently take over the search results.
+ */
+function loadIndex(): Index {
+  for (const p of [
     join(import.meta.dir, "../../../capabilities.json"),
     join(import.meta.dir, "../../../../capabilities.json"),
-    join(process.cwd(), "capabilities.json"),
-  ]
-  for (const p of candidates) {
+  ]) {
     try {
       if (existsSync(p)) return JSON.parse(readFileSync(p, "utf-8"))
-    } catch {}
+    } catch {
+      // A malformed dev file must not take the command down — the embedded index is valid
+      // by construction, so falling through always leaves `find` working.
+    }
   }
-  return null
+  return embeddedIndex as Index
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -114,17 +134,8 @@ export const PlatformFindCommand = cmd({
       .option("json", { describe: "JSON output (for agents)", type: "boolean", default: false }),
 
   async handler(args) {
+    // Always resolves — the index is embedded, so there is no "unavailable" path to handle.
     const index = loadIndex()
-    if (!index) {
-      const msg = "capability index not found — run: bun run capabilities"
-      if (args.json) console.log(JSON.stringify({ error: msg }, null, 2))
-      else {
-        UI.empty()
-        console.log(`  ${UI.Style.TEXT_DANGER}${msg}${UI.Style.TEXT_NORMAL}`)
-      }
-      process.exitCode = 1
-      return
-    }
 
     const raw = ((args.query as string[]) ?? []).join(" ").trim().toLowerCase()
 
