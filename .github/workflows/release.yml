@@ -96,8 +96,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BIN="$(pwd)/packages/opencode/dist/opencode-"*"/bin/iris"
-          BIN=$(ls -d $BIN | head -1)
+          # `--single` can emit more than one binary for the same os/arch — on Linux it
+          # builds both glibc and `-musl`. Picking blindly ran the musl binary on a glibc
+          # runner and died with "cannot execute: required file not found" (exit 127), which
+          # looks exactly like a real discovery failure. Prefer the plain native variant and
+          # fall back only if nothing else was built.
+          cd packages/opencode/dist
+          BIN=$(ls -d opencode-*/bin/iris 2>/dev/null | grep -v -- '-musl' | grep -v -- '-baseline' | head -1 || true)
+          [ -n "$BIN" ] || BIN=$(ls -d opencode-*/bin/iris | head -1)
+          BIN="$(pwd)/$BIN"
+          cd - >/dev/null
           echo "testing: $BIN"
           OUT=$(cd / && "$BIN" find "genesis bespoke html page" --json)
           echo "$OUT" | head -20
