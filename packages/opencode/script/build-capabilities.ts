@@ -47,70 +47,121 @@ type Entry = {
 // Parsed STATICALLY from the cmd({...}) blocks rather than by booting yargs: importing
 // every command file pulls in the whole CLI (and its side effects) just to read three
 // strings, and a generator that can crash on an unrelated import is a generator nobody runs.
+
+/** The source text of one `cmd({ ... })` block, brace-matched. */
+type Block = { command: string; describe: string; aliases: string[]; body: string }
+
+/**
+ * Extract the block starting at the `{` of `cmd({`. Brace-matched rather than
+ * length-capped: an earlier version read a fixed 900 chars, which silently truncated any
+ * group whose builder chain was longer than that — and the longest chains belong to the
+ * biggest command groups, i.e. exactly the ones worth indexing.
+ */
+function readBlock(src: string, openIdx: number): string | null {
+  let depth = 0
+  for (let i = openIdx; i < src.length; i++) {
+    const c = src[i]
+    if (c === "{") depth++
+    else if (c === "}") {
+      depth--
+      if (depth === 0) return src.slice(openIdx, i + 1)
+    }
+  }
+  return null
+}
+
+/** Every `const X = cmd({...})` in the tree, keyed by const name. */
+function collectBlocks(dir: string): Map<string, Block> {
+  const blocks = new Map<string, Block>()
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue
+    const src = readFileSync(join(dir, file), "utf-8")
+    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+Command)\s*=\s*cmd\(\s*\{/g)) {
+      const openIdx = m.index! + m[0].length - 1
+      const body = readBlock(src, openIdx)
+      if (!body) continue
+      const command = body.match(/command:\s*"([^"]+)"/)?.[1]
+      if (!command) continue
+      const aliasRaw = body.match(/aliases:\s*\[([^\]]*)\]/)?.[1] ?? ""
+      blocks.set(m[1], {
+        command,
+        describe: body.match(/describe:\s*"([^"]*)"/)?.[1] ?? "",
+        aliases: [...aliasRaw.matchAll(/"([^"]+)"/g)].map((a) => a[1]),
+        body,
+      })
+    }
+  }
+  return blocks
+}
+
 function collectCommands(): Entry[] {
   const dir = join(ROOT, "src/cli/cmd")
   const out: Entry[] = []
+  const blocks = collectBlocks(dir)
 
   // The AUTHORITATIVE top-level list is what index.ts actually registers. A first attempt
   // scraped every cmd({...}) block in the tree and produced 1299 "commands" — including 110
   // separate entries called `list`, because every group has one. `iris list` is not a thing,
   // so an index full of them is worse than no index: it answers with commands that do not
-  // exist. Subcommands are indexed too, but always qualified by their parent.
+  // exist.
   const indexSrc = readFileSync(join(ROOT, "src/index.ts"), "utf-8")
-  const registered = new Set(
-    [...indexSrc.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+Command)/g)].map((m) => m[1]),
-  )
+  const registered = [...indexSrc.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+Command)/g)].map((m) => m[1])
 
-  for (const file of readdirSync(dir)) {
-    if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue
-    const src = readFileSync(join(dir, file), "utf-8")
+  /**
+   * Walk the REAL builder tree — each group declares its children as `.command(XCommand)`.
+   *
+   * The flat per-file scan this replaces attributed every `cmd({...})` in a file to that
+   * file's top-level command, which collapsed nesting: `discover promos list` and
+   * `discover sponsors list` both became "discover list", 9 times over, advertising
+   * `iris discover list` — a command that does not exist. Same defect as the phantom
+   * top-level `list` entries, one level down and less visible.
+   *
+   * `seen` is per-path, so a command reachable from two groups is indexed under both, while
+   * a cycle still terminates.
+   */
+  function walk(constName: string, prefix: string[], seen: Set<string>, depth: number): string[] {
+    const b = blocks.get(constName)
+    if (!b || depth > 4 || seen.has(constName)) return []
 
-    // Which exported consts in this file are top-level commands?
-    const exported = [...src.matchAll(/export const ([A-Za-z0-9_]+Command)\s*=\s*cmd\(\{([\s\S]{0,900}?)\}\)/g)]
+    const token = b.command.split(/\s+/)[0]
+    if (token === "*" || token === "$0") return [] // yargs internals, not capabilities
 
-    for (const [, constName, body] of exported) {
-      if (!registered.has(constName)) continue
+    const path = [...prefix, token]
+    const rest = b.command.slice(token.length).trim()
+    const nextSeen = new Set(seen).add(constName)
 
-      const command = body.match(/command:\s*"([^"]+)"/)?.[1]
-      if (!command) continue
-      const describe = body.match(/describe:\s*"([^"]*)"/)?.[1] ?? ""
-      const aliasRaw = body.match(/aliases:\s*\[([^\]]*)\]/)?.[1] ?? ""
-      const aliases = [...aliasRaw.matchAll(/"([^"]+)"/g)].map((m) => m[1])
-      const name = command.split(/\s+/)[0]
-      if (name === "*" || name === "$0") continue // yargs internals, not capabilities
-
-      // Subcommands of THIS group, qualified so the `run` string is executable as written.
-      const subs: string[] = []
-      for (const b of src.matchAll(/cmd\(\{([\s\S]{0,600}?)\}\)/g)) {
-        const sc = b[1].match(/command:\s*"([^"]+)"/)?.[1]
-        if (!sc) continue
-        const sn = sc.split(/\s+/)[0]
-        if (sn === name || sn === "*" || sn === "$0") continue
-        const sd = b[1].match(/describe:\s*"([^"]*)"/)?.[1] ?? ""
-        subs.push(sn)
-        out.push({
-          kind: "command",
-          name: `${name} ${sn}`,
-          describe: sd,
-          aliases: [],
-          run: `iris ${name} ${sc}`,
-          haystack: [name, sn, sd, describe].join(" ").toLowerCase(),
-        })
-      }
-
-      out.push({
-        kind: "command",
-        name,
-        describe,
-        aliases,
-        run: `iris ${command}`,
-        // Subcommand names go in the parent's haystack too, so searching "publish" finds
-        // `pages` even when the user does not know it is a subcommand.
-        haystack: [name, ...aliases, describe, command, ...subs].join(" ").toLowerCase(),
-      })
+    // Direct children only — those named in THIS block's builder.
+    const childNames = [...b.body.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+Command)/g)].map((m) => m[1])
+    const childTokens: string[] = []
+    for (const child of childNames) {
+      childTokens.push(...walk(child, path, nextSeen, depth + 1))
     }
+
+    out.push({
+      kind: "command",
+      name: path.join(" "),
+      describe: b.describe,
+      aliases: prefix.length ? [] : b.aliases,
+      // Fully qualified, so the string is executable exactly as printed.
+      run: `iris ${path.join(" ")}${rest ? " " + rest : ""}`,
+      // Descendant tokens go in the haystack too, so searching "publish" finds `pages`
+      // even when the user does not know it is a subcommand.
+      haystack: [...path, ...b.aliases, b.describe, ...childTokens].join(" ").toLowerCase(),
+    })
+
+    return [token, ...childTokens]
   }
-  return out
+
+  for (const constName of registered) walk(constName, [], new Set(), 0)
+
+  // A command reachable by two routes can still yield the same qualified name twice; keep
+  // the richest description rather than emitting a visibly duplicated row.
+  const byName = new Map<string, Entry>()
+  for (const e of out) {
+    const prev = byName.get(e.name)
+    if (!prev || (e.describe?.length ?? 0) > (prev.describe?.length ?? 0)) byName.set(e.name, e)
+  }
+  return [...byName.values()]
 }
 
 // ── markdown-backed sources (how-to, playbooks, skills) ─────────────────────
