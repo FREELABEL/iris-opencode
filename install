@@ -862,7 +862,7 @@ scaffold_mcp_config() {
     "iris-platform": {
       "_comment": "Remote IRIS platform — agents, integrations, workflows",
       "type": "remote",
-      "url": "https://heyiris.io/mcp",
+      "url": "https://heyiris.io/api/mcp",
       "enabled": false
     }
   }

@@ -152,7 +152,7 @@ if (Test-Path $McpConfig) {
     "iris-platform": {
       "_comment": "Remote IRIS platform - agents, integrations, workflows",
       "type": "remote",
-      "url": "https://heyiris.io/mcp",
+      "url": "https://heyiris.io/api/mcp",
       "enabled": false
     }
   }
@@ -476,12 +476,30 @@ Write-Host "Next: iris-daemon start to join the Hive compute network" -Foregroun
 Write-Host "  Or: iris to start the AI coding agent" -ForegroundColor DarkGray
 '@
 
-Set-Content -Path "$INSTALL_DIR\iris-login.ps1" -Value $LoginScript -Encoding UTF8
+# The login implementation lives OUTSIDE the PATH directory, and only the .cmd
+# shim is named `iris-login` on PATH. This is deliberate (#179080).
+#
+# We used to ship BOTH iris-login.ps1 and iris-login.cmd in $INSTALL_DIR. That
+# looks redundant-but-harmless and is not: PowerShell resolves .ps1 BEFORE .cmd,
+# so `iris-login` always hit the raw script and died under the default execution
+# policy ("cannot be loaded because running scripts is disabled on this system")
+# — while the .cmd shim that exists precisely to pass -ExecutionPolicy Bypass was
+# never reached. The same command worked in cmd.exe, which made it look flaky.
+# Keeping the .ps1 off PATH means nothing can shadow the shim.
+$LibDir = "$IRIS_DIR\lib"
+New-Item -ItemType Directory -Force -Path $LibDir | Out-Null
+Set-Content -Path "$LibDir\iris-login.ps1" -Value $LoginScript -Encoding UTF8
 
-# Also create a .cmd shim so iris-login works from cmd.exe
+# Remove the shadowing copy left by older installers, or the upgrade silently
+# keeps the bug: the stale $INSTALL_DIR\iris-login.ps1 still wins name resolution.
+if (Test-Path "$INSTALL_DIR\iris-login.ps1") {
+    Remove-Item -Force "$INSTALL_DIR\iris-login.ps1" -ErrorAction SilentlyContinue
+}
+
+# The only `iris-login` on PATH. Works from both PowerShell and cmd.exe.
 $LoginCmdShim = @"
 @echo off
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.iris\bin\iris-login.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\.iris\lib\iris-login.ps1" %*
 "@
 Set-Content -Path "$INSTALL_DIR\iris-login.cmd" -Value $LoginCmdShim -Encoding ASCII
 
