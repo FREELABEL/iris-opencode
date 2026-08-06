@@ -73,7 +73,7 @@ function deriveTitle(row: WisprRow, text: string): string {
 
 const WisprImportCommand = cmd({
   command: "import",
-  describe: "Import Wispr Flow dictation transcripts into an IRIS bloq as content items",
+  describe: "Import Wispr Flow DICTATION snippets into a bloq as content items (for recorded MEETINGS use `iris meetings`)",
   builder: (yargs) =>
     yargs
       .option("bloq-id", {
@@ -302,7 +302,7 @@ const WisprImportCommand = cmd({
 
 export const PlatformWisprCommand = cmd({
   command: "wispr",
-  describe: "Import Wispr Flow dictation history into IRIS",
+  describe: "Import Wispr Flow DICTATION history (for recorded MEETINGS use `iris meetings`)",
   builder: (yargs) => yargs.command(WisprImportCommand).demandCommand(),
   async handler() {},
 })

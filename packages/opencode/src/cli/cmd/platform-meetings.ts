@@ -143,7 +143,7 @@ ${transcript}`
 
 export const PlatformMeetingsCommand = cmd({
   command: "meetings [session]",
-  describe: "list recorded MEETINGS from Wispr Flow and file a summary on a bloq (see `iris wispr import` for dictation snippets)",
+  describe: "list recorded meetings from Wispr Flow and file a summary on a bloq",
   builder: (y) =>
     y
       .positional("session", { type: "string", describe: "session id (or its first 8 chars). Omit to list." })

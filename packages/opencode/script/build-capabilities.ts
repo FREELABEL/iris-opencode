@@ -30,6 +30,22 @@ const ROOT = join(import.meta.dir, "..")
 const OUT = join(ROOT, "capabilities.json")
 const PROJECT = process.env.IRIS_PROJECT_ROOT || join(homedir(), "sites/freelabel")
 
+/**
+ * How-to recipes: prefer the REPO, fall back to the installed copy.
+ *
+ * This used to read only ~/.iris/how-to — the INSTALLED directory. That made the shipped
+ * capability index depend on whatever the person running the build happened to have
+ * installed locally: a recipe added in this repo was invisible to `iris find` until someone
+ * installed it first, and a stale local install could ship entries for recipes that no
+ * longer exist. Neither failure is visible in the output.
+ *
+ * scaffold/how-to is what the installer actually distributes, so it is the source of truth.
+ * The ~/.iris fallback keeps this working when the script is run outside a repo checkout.
+ */
+const REPO_HOWTO = join(ROOT, "..", "..", "scaffold", "how-to")
+const INSTALLED_HOWTO = join(homedir(), ".iris/how-to")
+const HOWTO_DIR = existsSync(REPO_HOWTO) ? REPO_HOWTO : INSTALLED_HOWTO
+
 type Entry = {
   kind: "command" | "how-to" | "playbook" | "skill"
   name: string
@@ -245,7 +261,7 @@ const TERMS: Record<string, string[]> = {
 
 const entries: Entry[] = [
   ...collectCommands(),
-  ...collectMarkdown(join(homedir(), ".iris/how-to"), "how-to", (n) => `iris how-to ${n}`),
+  ...collectMarkdown(HOWTO_DIR, "how-to", (n) => `iris how-to ${n}`),
   // Project content lives in the workspace, not in this package. IRIS_PROJECT_ROOT lets CI
   // and the generator agree on where that is; the default is the repo this CLI ships beside.
   ...collectMarkdown(join(PROJECT, ".iris/playbooks"), "playbook", (n) => `iris playbook run ${n}`),

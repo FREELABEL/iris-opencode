@@ -2,7 +2,7 @@ name: typecheck
 
 on:
   pull_request:
-    branches: [dev]
+    branches: [dev, main]
   workflow_dispatch:
 
 jobs:
@@ -17,3 +17,15 @@ jobs:
 
       - name: Run typecheck
         run: bun typecheck
+
+      # `iris find` does NOT scan commands at runtime — it reads capabilities.json, embedded
+      # at build time. A new command or how-to is therefore INVISIBLE to find until the index
+      # is regenerated, and nothing catches that: the command works, it just cannot be found.
+      # This check already existed and was wired to nothing.
+      - name: Check capability index is current
+        working-directory: packages/opencode
+        run: |
+          bun run capabilities:check || {
+            echo "::error::capabilities.json is stale. Run 'bun run capabilities' in packages/opencode and commit the result."
+            exit 1
+          }
