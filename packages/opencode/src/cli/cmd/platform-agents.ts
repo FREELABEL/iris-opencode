@@ -7,6 +7,37 @@ import { executeChat } from "./platform-chat"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
+/**
+ * Resolve a mission argument to its text.
+ *
+ * Accepts a literal string or `@path/to/file` — a real mission is multi-line and
+ * shell-quoting 1700 characters is miserable enough that people give up and put the
+ * mission in the wrong field instead.
+ *
+ * Warns past 2000 chars because heartbeat silently truncates there
+ * (HeartbeatExecutorService, Str::limit($agentMission, 2000)) while the chat path allows
+ * 50K on the same column — so an author has every reason to assume there is room, and the
+ * cut lands mid-sentence with no signal anywhere.
+ */
+const HEARTBEAT_MISSION_LIMIT = 2000
+
+function readPromptArg(raw: string): string {
+  let text = raw
+  if (raw.startsWith("@")) {
+    const path = raw.slice(1)
+    if (!existsSync(path)) {
+      throw new Error(`Mission file not found: ${path}`)
+    }
+    text = readFileSync(path, "utf8")
+  }
+  if (text.length > HEARTBEAT_MISSION_LIMIT) {
+    prompts.log.warn(
+      `Mission is ${text.length} chars — heartbeat uses only the first ${HEARTBEAT_MISSION_LIMIT} and truncates the rest silently. Trim it, or the agent runs on half an instruction.`,
+    )
+  }
+  return text
+}
+
 // ============================================================================
 // Sync helpers
 // ============================================================================
@@ -300,7 +331,7 @@ const AgentsCreateCommand = cmd({
       .option("description", { alias: "d", describe: "agent description", type: "string" })
       .option("prompt", { alias: "p", describe: "system prompt / instructions", type: "string" })
       .option("system-prompt", { describe: "system prompt (alias of --prompt)", type: "string" })
-      .option("initial-prompt", { describe: "initial prompt sent on first heartbeat", type: "string" })
+      .option("initial-prompt", { alias: "mission", describe: "the agent's recurring MISSION — injected into every heartbeat, not just the first (heartbeat truncates at 2000 chars). Accepts a string or @path/to/file", type: "string" })
       .option("model", { alias: "m", describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
       .option("type", { describe: "agent type (content, chat, assistant, support)", type: "string", default: "content" })
       .option("bloq-id", { alias: "b", describe: "knowledge base bloq ID", type: "number" })
@@ -360,7 +391,7 @@ const AgentsCreateCommand = cmd({
     try {
       const payload: Record<string, unknown> = { name, description: description ?? "", initial_prompt: prompt, model, type: args.type ?? "content" }
       if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
-      if (args["initial-prompt"]) payload.initial_prompt = args["initial-prompt"]
+      if (args["initial-prompt"]) payload.initial_prompt = readPromptArg(args["initial-prompt"])
       if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
       // These three persist under settings.*, NOT top-level — top-level model /
       // system_prompt / heartbeat_tools are silently dropped by the API (#146506).
@@ -461,7 +492,8 @@ const AgentsUpdateCommand = cmd({
       .option("description", { describe: "new description", type: "string" })
       .option("bloq", { alias: "b", describe: "repoint the agent's persistent knowledge-base bloq (#146918)", type: "number" })
       .option("model", { describe: "new model", type: "string" })
-      .option("system-prompt", { describe: "new system prompt (persists to settings.system_prompt)", type: "string" })
+      .option("system-prompt", { describe: "the agent's IDENTITY — who it is (settings.system_prompt; used as the LLM system message)", type: "string" })
+      .option("initial-prompt", { alias: "mission", describe: "the agent's MISSION — what it does every heartbeat (initial_prompt). Accepts a string or @path/to/file", type: "string" })
       .option("heartbeat-tools", { describe: "comma-separated heartbeat tool names (settings.heartbeat_tools)", type: "string" })
       .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "briefing"] })
       .option("reset-health", { describe: "reset health_status to healthy and clear consecutive_failures", type: "boolean", default: false })
@@ -485,6 +517,11 @@ const AgentsUpdateCommand = cmd({
     if (args.description) payload.description = args.description
     if (args.bloq !== undefined) payload.bloq_id = args.bloq
     if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
+    // MISSION. Top-level column, NOT settings.* — heartbeat reads $agent->initial_prompt.
+    // --system-prompt writes settings.system_prompt, which is the agent's IDENTITY (the LLM
+    // system message). Both are real and both are used, in different slots; until now only
+    // identity was editable from the CLI, so "change what this agent does" meant a raw PATCH.
+    if (args["initial-prompt"]) payload.initial_prompt = readPromptArg(args["initial-prompt"])
     if (args["reset-health"]) {
       payload.health_status = "healthy"
       payload.consecutive_failures = 0
@@ -501,7 +538,7 @@ const AgentsUpdateCommand = cmd({
     const needsCurrent = wantsSettings || wantsIntegration || wantsTools
 
     if (Object.keys(payload).length === 0 && !needsCurrent) {
-      prompts.log.warn("Nothing to update. Use --name, --description, --bloq, --model, --system-prompt, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, or --reset-health")
+      prompts.log.warn("Nothing to update. Use --name, --description, --bloq, --model, --system-prompt, --initial-prompt/--mission, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, or --reset-health")
       prompts.outro("Done")
       return
     }
