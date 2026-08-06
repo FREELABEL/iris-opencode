@@ -96,6 +96,7 @@ import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
 import { PlatformAtlasBrandKitCommand } from "./cli/cmd/platform-atlas-brand-kit"
 import { PlatformAtlasCommsCommand } from "./cli/cmd/platform-atlas-comms"
 import { PlatformLeadsMeetingCommand } from "./cli/cmd/platform-leads-meeting"
+import { PlatformMeetingsCommand } from "./cli/cmd/platform-meetings"
 import { PlatformCampaignCommand } from "./cli/cmd/platform-campaign"
 import { PlatformDaemonCommand } from "./cli/cmd/platform-daemon"
 import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
@@ -349,6 +350,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAtlasBrandKitCommand))
   .command(reg(PlatformAtlasCommsCommand))
   .command(reg(PlatformLeadsMeetingCommand))
+  .command(reg(PlatformMeetingsCommand))
   .command(reg(PlatformCampaignCommand))
   .command(reg(PlatformDaemonCommand))
   .command(reg(PlatformChannelsCommand))
