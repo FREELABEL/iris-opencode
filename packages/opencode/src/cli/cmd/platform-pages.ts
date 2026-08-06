@@ -1374,6 +1374,8 @@ const ComposeCmd = cmd({
       .option("theme", { describe: "dark or light", type: "string", default: "dark", choices: ["dark", "light"] })
       .option("style", { describe: "page style", type: "string", default: "landing", choices: ["landing", "dashboard", "product", "portfolio"] })
       .option("model", { describe: "AI model override", type: "string" })
+      .option("domain", { describe: "publish onto this connected custom domain (e.g. catodrive.com)", type: "string" })
+      .option("publish", { describe: "publish immediately (use --no-publish to leave a draft)", type: "boolean", default: true })
       .option("json", { type: "boolean" }),
   async handler(args) {
     UI.empty()
@@ -1393,10 +1395,12 @@ const ComposeCmd = cmd({
         user_id: userId,
         style: args.style,
         theme_mode: args.theme,
+        publish: args.publish !== false,
       }
       if (args.slug) payload.slug = args.slug
       if (args.title) payload.title = args.title
       if (args.model) payload.model = args.model
+      if (args.domain) payload.domain = args.domain
 
       const res = await pagesFetch("/api/v1/pages/compose", {
         method: "POST",
@@ -1419,11 +1423,15 @@ const ComposeCmd = cmd({
         return
       }
 
-      sp.stop(success(`Created "${data.slug}"`))
+      const published = data.published !== false
+
+      sp.stop(success(`Created "${data.slug}"${published ? "" : " (draft)"}`))
       printDivider()
       printKV("Page ID", data.page_id)
       printKV("Slug", data.slug)
+      if (data.domain) printKV("Domain", data.domain)
       printKV("URL", data.url)
+      printKV("Status", published ? "Published" : "Draft")
       printKV("Components", data.component_count ?? data.components?.length)
       if (data.self_heal_attempts) printKV("Self-heal attempts", data.self_heal_attempts)
       printDivider()
@@ -1434,6 +1442,7 @@ const ComposeCmd = cmd({
 
       prompts.log.info(`View: ${dim(`iris pages view ${data.slug}`)}`)
       prompts.log.info(`Edit: ${dim(`iris pages pull ${data.slug}`)}`)
+      if (!published) prompts.log.info(`Publish: ${dim(`iris pages publish ${data.slug}`)}`)
       prompts.outro("Done")
     } catch (err) {
       sp.stop("Error", 1)
