@@ -91,26 +91,57 @@ const AddMemberCommand = cmd({
 
 const InviteMemberCommand = cmd({
   command: "invite <bloqId>",
-  describe: "invite a user by email",
+  describe: "invite a user by email (optionally scoped to one list or item)",
   builder: (yargs) =>
     yargs
       .positional("bloqId", { type: "number", demandOption: true })
       .option("email", { alias: "e", type: "string", demandOption: true })
       .option("name", { type: "string" })
       .option("permission", { alias: "p", type: "string", default: "viewer" })
-      .option("no-email", { type: "boolean", default: false }),
+      // #179082 — scope the grant. Default stays the whole bloq so existing
+      // behaviour is unchanged; these narrow it.
+      .option("scope-list", { type: "number", describe: "grant access to ONE list only" })
+      .option("scope-item", { type: "number", describe: "grant access to ONE item only" })
+      .option("scope-own", { type: "boolean", default: false, describe: "grant access only to rows this person authored" })
+      // Sending mail is OPT-IN. The old --no-email flag never worked: it sent
+      // `send_email`, but the API reads `send_notification_email` and defaults it
+      // to TRUE — so every invite mailed someone regardless of the flag. Making
+      // it explicit means an agent minting invites cannot silently email people.
+      .option("send-email", { type: "boolean", default: false, describe: "actually email the invitation (default: do not send)" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Invite ${args.email}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
-    const payload: any = { email: args.email, permission: args.permission, send_email: !args["no-email"] }
+
+    const scopes = [args["scope-list"] != null, args["scope-item"] != null, args["scope-own"]].filter(Boolean)
+    if (scopes.length > 1) {
+      prompts.log.error("Pick at most one of --scope-list, --scope-item, --scope-own")
+      prompts.outro("Done")
+      return
+    }
+
+    const payload: any = {
+      email: args.email,
+      permission: args.permission,
+      send_notification_email: args["send-email"],
+    }
     if (args.name) payload.name = args.name
+    if (args["scope-list"] != null) { payload.scope_type = "list"; payload.scope_id = args["scope-list"] }
+    else if (args["scope-item"] != null) { payload.scope_type = "item"; payload.scope_id = args["scope-item"] }
+    else if (args["scope-own"]) { payload.scope_type = "own" }
+
     const res = await irisFetch(`/api/v1/user/bloqs/${args.bloqId}/invite`, {
       method: "POST",
       body: JSON.stringify(payload),
     })
     const ok = await handleApiError(res, "Invite")
     if (!ok) { prompts.outro("Done"); return }
+
+    const scopeLabel = payload.scope_type
+      ? `${payload.scope_type}${payload.scope_id ? ` #${payload.scope_id}` : ""}`
+      : "whole bloq"
+    prompts.log.info(`Scope: ${scopeLabel}`)
+    if (!args["send-email"]) prompts.log.info("No email sent — re-run with --send-email to notify them")
     prompts.outro(`${success("✓")} Invited`)
   },
 })

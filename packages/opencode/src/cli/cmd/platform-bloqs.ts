@@ -37,7 +37,15 @@ function inviteWebUrl(token: string): string {
 async function mintShareLink(
   bloqId: number,
   userId: number,
-  opts: { permission?: string; expiresAt?: string | null; maxUses?: number | null } = {},
+  opts: {
+    permission?: string
+    expiresAt?: string | null
+    maxUses?: number | null
+    // #179082 — address the link to a person, and/or narrow what it grants.
+    email?: string | null
+    scopeType?: string | null
+    scopeId?: number | null
+  } = {},
 ): Promise<{ token: string; permission: string; expires_at: string | null; max_uses: number | null }> {
   const res = await irisFetch(`/api/v1/user/bloqs/${bloqId}/share-link`, {
     method: "POST",
@@ -46,6 +54,9 @@ async function mintShareLink(
       expires_at: opts.expiresAt ?? null,
       max_uses: opts.maxUses ?? null,
       user_id: userId,
+      email: opts.email ?? null,
+      scope_type: opts.scopeType ?? null,
+      scope_id: opts.scopeId ?? null,
     }),
   })
   if (!res.ok) {
@@ -2604,6 +2615,13 @@ const BloqsShareCommand = cmd({
       .option("permission", { describe: "access granted to the link (viewer|editor)", type: "string", default: "viewer", choices: ["viewer", "editor"] })
       .option("expires", { describe: "expiry as an ISO date/time (e.g. 2026-12-31)", type: "string" })
       .option("max-uses", { describe: "max number of redemptions", type: "number" })
+      // #179082 — address the link to a person, and narrow what it grants.
+      // Naming the invitee does NOT email them; it records who the link is for.
+      // Use `iris bloq-members invite --send-email` to actually notify someone.
+      .option("email", { describe: "address the invite to this person (does not send mail)", type: "string" })
+      .option("scope-list", { describe: "grant access to ONE list only", type: "number" })
+      .option("scope-item", { describe: "grant access to ONE item only", type: "number" })
+      .option("scope-own", { describe: "grant access only to rows this person authored", type: "boolean", default: false })
       .option("open", { describe: "also open the link in a browser", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -2615,10 +2633,22 @@ const BloqsShareCommand = cmd({
 
     let link: { token: string; permission: string; expires_at: string | null; max_uses: number | null }
     try {
+      const picked = [args["scope-list"] != null, args["scope-item"] != null, args["scope-own"]].filter(Boolean)
+      if (picked.length > 1) {
+        prompts.log.error("Pick at most one of --scope-list, --scope-item, --scope-own")
+        return
+      }
+      const scopeType =
+        args["scope-list"] != null ? "list" : args["scope-item"] != null ? "item" : args["scope-own"] ? "own" : null
+      const scopeId = args["scope-list"] ?? args["scope-item"] ?? null
+
       link = await mintShareLink(args.id, userId, {
         permission: args.permission,
         expiresAt: args.expires ?? null,
         maxUses: args["max-uses"] ?? null,
+        email: args.email ?? null,
+        scopeType,
+        scopeId,
       })
     } catch (err) {
       prompts.log.error(err instanceof Error ? err.message : String(err))
