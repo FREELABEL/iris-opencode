@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch } from "./iris-api"
+import { mailRows } from "./mail-response"
 
 // macOS Apple Mail integration via IRIS Bridge (localhost:3200)
 // Bridge endpoint: GET /api/mail/search?from=X&subject=X&days=N&limit=N&include_body=1&max_body=N
@@ -63,7 +64,7 @@ const MailSearchCommand = cmd({
     }
 
     const data = (await res.json()) as any
-    const messages: any[] = data?.messages ?? []
+    const messages: any[] = mailRows(data)
 
     if (args.json) {
       console.log(JSON.stringify(messages, null, 2))
@@ -141,7 +142,7 @@ const MailReadCommand = cmd({
     }
 
     const data = (await res.json()) as any
-    const messages: any[] = data?.messages ?? []
+    const messages: any[] = mailRows(data)
 
     if (messages.length === 0) {
       prompts.log.info(`No emails from "${args.query}" in the last ${args.days} days`)
