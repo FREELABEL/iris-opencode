@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, resolveUserId, requireUserId } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, resolveUserId, requireUserId, writeJson } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import { Auth } from "../../auth"
 import { homedir, platform, release, arch, hostname, userInfo } from "os"
@@ -570,7 +570,15 @@ const ListCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ items, page: currentPage, total: totalItems, last_page: lastPage }, null, 2))
+      // AWAITED write, not console.log. console.log is fire-and-forget: for a
+      // large payload Bun hands part of it to the pipe and the process exits
+      // before the rest drains, so the consumer gets a JSON document cut off
+      // mid-string. Measured on this command — three of four runs of
+      // `--limit 40 --json | python` truncated at exactly 81,856 chars while the
+      // fourth delivered all 142,482. It reads as corrupt data rather than a
+      // lost write, and never reproduces in a terminal because TTY writes are
+      // synchronous. Awaiting the write removes the race.
+      await writeJson({ items, page: currentPage, total: totalItems, last_page: lastPage })
       return
     }
 

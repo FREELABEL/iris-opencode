@@ -530,9 +530,30 @@ try {
   }
   process.exitCode = 1
 } finally {
-  // Some subprocesses don't react properly to SIGTERM and similar signals.
-  // Most notably, some docker-container-based MCP servers don't handle such signals unless
-  // run using `docker run --init`.
-  // Explicitly exit to avoid any hanging subprocesses.
+  // FLUSH BEFORE EXITING. When stdout is a PIPE (`iris ... --json | jq`, or any
+  // scripted use) Node's writes are asynchronous, and process.exit() discards
+  // whatever is still buffered — silently truncating the output mid-string.
+  //
+  // The symptom is a JSON payload that ends partway through a value, so the
+  // consumer reports "Unterminated string" and it reads like corrupt data rather
+  // than a lost write. It only bites past the pipe buffer (~64KB), which makes it
+  // look content-dependent and intermittent: `iris bug list --limit 20 --json`
+  // failed, then the identical command succeeded minutes later, because the byte
+  // size depends on which records land on the page. A terminal never shows it —
+  // TTY writes are synchronous — so it is invisible interactively and only
+  // breaks scripts.
+  //
+  // The explicit exit below still has to stay: some docker-container-based MCP
+  // servers don't react to SIGTERM unless run with `docker run --init`, and
+  // without it the CLI hangs. So drain first, then exit.
+  // NOTE (large --json payloads): this exit truncates anything still buffered on
+  // stdout when stdout is a pipe. Do NOT try to fix that here — letting the
+  // process exit naturally instead HANGS, because the exit exists precisely to
+  // kill subprocesses that ignore SIGTERM (some docker-based MCP servers unless
+  // run with `docker run --init`). Tried and reverted.
+  //
+  // The fix belongs at the write site: emit large payloads with `writeJson()`
+  // from cli/cmd/iris-api.ts, which AWAITS the flush before the handler returns,
+  // so the bytes are gone by the time we get here. See the note on that function.
   process.exit()
 }

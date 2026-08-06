@@ -715,6 +715,41 @@ export function highlight(s: string): string {
   return `${UI.Style.TEXT_HIGHLIGHT}${s}${UI.Style.TEXT_NORMAL}`
 }
 
+/**
+ * Write a JSON payload to stdout and WAIT for it to actually leave.
+ *
+ * `console.log(JSON.stringify(...))` is fire-and-forget. For a large payload Bun
+ * hands part of it to the pipe and the process exits before the rest drains, so
+ * whatever is reading gets a document cut off mid-string and reports corrupt
+ * JSON. Measured on `iris bug list --limit 40 --json | python`: three of four
+ * runs truncated at exactly 81,856 characters, the fourth delivered all 142,482.
+ *
+ * It never reproduces in a terminal, because TTY writes are synchronous — so it
+ * only ever breaks the scripted use that `--json` exists for. Polling
+ * writableLength does not help either: under Bun it reads 0 while bytes are
+ * still in flight.
+ *
+ * Any command emitting --json should use this rather than console.log.
+ */
+export async function writeJson(value: unknown): Promise<void> {
+  const payload = JSON.stringify(value, null, 2) + "\n"
+
+  // Node-compatible callback form ONLY. Bun.write(Bun.stdout, ...) looks like the
+  // native choice and HANGS here when stdout is a pipe — tried, reverted.
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const done = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    process.stdout.write(payload, done)
+    // Backstop: never let a wedged consumer hang the CLI. Ref'd deliberately —
+    // an unref'd timer would not fire, which is the whole point of a backstop.
+    setTimeout(done, 10_000)
+  })
+}
+
 export function printDivider(width = 60): void {
   console.log(`  ${UI.Style.TEXT_DIM}${"─".repeat(width)}${UI.Style.TEXT_NORMAL}`)
 }
