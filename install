@@ -50,6 +50,37 @@ Examples:
 EOF
 }
 
+# ─── Install beacon (#179077) ─────────────────────────────────────────────────
+# Anonymous, metadata-only, fire-and-forget. Nothing about an install ATTEMPT
+# reached us before this: the CLI beacon needs a token, and there is no token
+# until after iris-login — which happens after the install. So a failed install
+# looked exactly like nobody trying.
+#
+# Never blocks (3s timeout, backgrounded) and never fails the install — the `||
+# true` is load-bearing under `set -e`. Opt out with IRIS_TELEMETRY=0.
+IRIS_BEACON_URL="https://heyiris.io/api/v6/telemetry/install"
+IRIS_INSTALLER_VERSION="2026-08-06"
+
+send_install_beacon() {
+    case "${IRIS_TELEMETRY:-}" in 0|off|false) return 0 ;; esac
+    command -v curl >/dev/null 2>&1 || return 0
+
+    local event_type="$1" step="${2:-}" reason="${3:-}"
+    local os arch has_git has_node
+    os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    arch=$(uname -m 2>/dev/null)
+    has_git=$(command -v git >/dev/null 2>&1 && echo true || echo false)
+    has_node=$(command -v node >/dev/null 2>&1 && echo true || echo false)
+
+    # Metadata only — no paths, no hostname, no username.
+    local payload
+    payload=$(printf '{"event_type":"%s","os":"%s","arch":"%s","installer_version":"%s","shell":"bash","has_git":%s,"has_node":%s,"step":"%s","reason":"%s"}' \
+        "$event_type" "$os" "$arch" "$IRIS_INSTALLER_VERSION" "$has_git" "$has_node" "$step" "$(printf '%s' "$reason" | tr -d '"\\' | cut -c1-200)")
+
+    (curl -fsS -m 3 -X POST -H 'Content-Type: application/json' -d "$payload" "$IRIS_BEACON_URL" >/dev/null 2>&1 &) || true
+    return 0
+}
+
 requested_version=${VERSION:-}
 no_modify_path=false
 binary_path=""
@@ -480,6 +511,8 @@ else
         fi
     fi
 
+    send_install_beacon "install_start"
+
     if [ -z "$requested_version" ]; then
         url="https://github.com/FREELABEL/iris-opencode/releases/latest/download/$filename"
         specific_version=$(curl -s https://api.github.com/repos/FREELABEL/iris-opencode/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p') || true
@@ -768,6 +801,7 @@ fi
 # Add to PATH for current session
 export PATH="$INSTALL_DIR:$PATH"
 
+send_install_beacon "install_success" "cli"
 print_message info "\n${GREEN}[1/7]${NC} IRIS CLI ${MUTED}..........................${NC} ${GREEN}installed${NC}"
 
 # ─── Component 2: IRIS SDK / CLI ─────────────────────────────────────────────

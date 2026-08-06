@@ -29,6 +29,50 @@ function Write-Muted {
     Write-Host "      $Message" -ForegroundColor DarkGray
 }
 
+# ─── Install beacon (#179077) ─────────────────────────────────────────────────
+# Anonymous, metadata-only, fire-and-forget. Nothing about an install attempt
+# reached us before this: the CLI beacon needs a token, and you have no token
+# until after iris-login — which is after the install. So a failed install was
+# indistinguishable from someone who never tried, and the only reason we knew
+# Windows onboarding was broken at all is that a user typed a bug report by hand.
+#
+# NEVER blocks and NEVER throws. Telemetry that can break an install is worse
+# than no telemetry. Opt out entirely with IRIS_TELEMETRY=0.
+$script:BeaconUrl = "https://heyiris.io/api/v6/telemetry/install"
+$script:InstallerVersion = "2026-08-06"
+
+function Send-InstallBeacon {
+    param(
+        [string]$EventType,
+        [string]$Step = $null,
+        [string]$Reason = $null
+    )
+
+    if ($env:IRIS_TELEMETRY -in @("0", "off", "false")) { return }
+
+    try {
+        $body = @{
+            event_type        = $EventType
+            os                = "windows"
+            arch              = $(if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" })
+            installer_version = $script:InstallerVersion
+            shell             = "powershell"
+            has_git           = [bool](Get-Command git -ErrorAction SilentlyContinue)
+            has_node          = [bool](Get-Command node -ErrorAction SilentlyContinue)
+        }
+        if ($Step)   { $body.step = $Step }
+        if ($Reason) { $body.reason = $Reason }
+
+        Invoke-RestMethod -Uri $script:BeaconUrl -Method Post `
+            -Body ($body | ConvertTo-Json -Compress) `
+            -ContentType "application/json" `
+            -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
+    } catch {
+        # Deliberately silent. A user installing IRIS should never see, or be
+        # stopped by, a telemetry failure.
+    }
+}
+
 # ─── Step 1: Download and install IRIS Code binary ────────────────────────────
 
 Write-Host ""
@@ -44,6 +88,8 @@ $Arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else {
 
 $Target = "windows-$Arch"
 $Filename = "$APP-$Target.zip"
+
+Send-InstallBeacon -EventType "install_start"
 
 # Determine version and download URL
 if ($RequestedVersion) {
@@ -93,6 +139,7 @@ try {
     Write-Host " done." -ForegroundColor Green
 } catch {
     Write-Host " failed." -ForegroundColor Red
+    Send-InstallBeacon -EventType "install_failed" -Step "download" -Reason "$_"
     Write-Host "Download URL: $Url" -ForegroundColor DarkGray
     Write-Host "Error: $_" -ForegroundColor Red
     Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
@@ -113,6 +160,7 @@ try {
 
     Copy-Item -Path $Binary.FullName -Destination "$INSTALL_DIR\iris.exe" -Force
 } catch {
+    Send-InstallBeacon -EventType "install_failed" -Step "extract" -Reason "$_"
     Write-Host "Error extracting archive: $_" -ForegroundColor Red
     Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
     exit 1
@@ -171,9 +219,11 @@ $BridgeDir = "$IRIS_DIR\bridge"
 
 if (-not $HasNode) {
     Write-StepSkipped "5/5" "Agent Bridge" "skipped (Node.js not found)"
+    Send-InstallBeacon -EventType "install_step_skipped" -Step "agent_bridge" -Reason "node_missing"
     Write-Muted "Install Node.js to enable: https://nodejs.org"
 } elseif (-not $HasGit) {
     Write-StepSkipped "5/5" "Agent Bridge" "skipped (Git not found)"
+    Send-InstallBeacon -EventType "install_step_skipped" -Step "agent_bridge" -Reason "git_missing"
     Write-Muted "Install Git to enable: https://git-scm.com"
 } else {
     $BridgeUpdated = $false
@@ -524,6 +574,8 @@ if ($UserPath -notlike "*$INSTALL_DIR*") {
 # ─── Final output ────────────────────────────────────────────────────────────
 
 Write-Host ""
+Send-InstallBeacon -EventType "install_success"
+
 Write-Host "IRIS Code installed successfully!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Binary:  $INSTALL_DIR\iris.exe" -ForegroundColor DarkGray
