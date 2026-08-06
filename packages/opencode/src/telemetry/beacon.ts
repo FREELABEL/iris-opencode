@@ -12,7 +12,7 @@ import { Auth } from "../auth"
  * (3s timeout). Telemetry must never break the CLI.
  */
 export namespace Beacon {
-  export type EventType = "cli_uncaught" | "cli_command_error" | "cli_request_error"
+  export type EventType = "cli_uncaught" | "cli_command_error" | "cli_request_error" | "first_command"
 
   /**
    * Span kinds (#178533). Unlike the error types above these describe the HAPPY
@@ -68,6 +68,50 @@ export namespace Beacon {
   }
 
   /** 32-char trace id — one per run/session. */
+  /**
+   * ACTIVATION: the first command this person ever ran after authenticating.
+   *
+   * install_success says the software landed. It does not say a person arrived —
+   * someone can install, fail to log in, and never come back, and the install
+   * looks identical to a success. This is the event that separates "installed"
+   * from "actually used", and it is the last step of the signup funnel the
+   * server cannot see: by the time a command runs, auth is long finished.
+   *
+   * Fires ONCE per machine, guarded by a marker file next to machine-id. Sending
+   * it on every command would make it a usage counter, which the spans already
+   * are — the value here is precisely that it happens once.
+   *
+   * Best-effort and silent, like everything else in this file: a telemetry
+   * failure must never be visible to someone using the CLI.
+   */
+  export async function firstCommand(command?: string): Promise<void> {
+    try {
+      if (disabled()) return
+
+      const { homedir } = await import("os")
+      const { join } = await import("path")
+      const { existsSync, writeFileSync, mkdirSync } = await import("fs")
+
+      const marker = join(homedir(), ".iris", "first-command")
+      if (existsSync(marker)) return
+
+      // Only meaningful once authenticated — an unauthenticated run is not
+      // activation, it is someone still trying to get in.
+      const token = await Auth.get("iris").catch(() => null)
+      if (!token) return
+
+      // Write the marker BEFORE reporting. If the POST fails we still do not want
+      // to re-fire on every subsequent command; one lost activation event is a far
+      // smaller problem than a counter masquerading as a milestone.
+      mkdirSync(join(homedir(), ".iris"), { recursive: true })
+      writeFileSync(marker, new Date().toISOString() + "\n", { mode: 0o600 })
+
+      await report("first_command", { command })
+    } catch {
+      // deliberately silent
+    }
+  }
+
   export function newTraceId(): string {
     return hex(16)
   }

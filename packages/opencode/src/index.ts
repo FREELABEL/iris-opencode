@@ -487,6 +487,13 @@ try {
 
 try {
   await cli.parse()
+
+  // ACTIVATION (#179077 follow-up). Fires once, ever, on the first command run
+  // after authenticating — the step that separates "installed" from "actually
+  // used". Deliberately after parse() succeeds: a command that threw is not
+  // activation. Awaited so it flushes before the finally{} exit, and internally
+  // silent, so it can neither delay nor break the command that triggered it.
+  await Beacon.firstCommand(rawArgs[0])
 } catch (e) {
   let data: Record<string, any> = {}
   if (e instanceof NamedError) {
