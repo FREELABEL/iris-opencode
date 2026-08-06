@@ -18,6 +18,7 @@ import {
   HiveSshSetupCommandExport,
 } from "./platform-hive-enroll"
 import { HiveVpnCommandExport } from "./platform-hive-vpn"
+import { HiveConnectCommandExport } from "./platform-hive-connect"
 import { exitCodeForResult, verdictForResult, renderOutput, type ScriptRunResult } from "./hive-script-result"
 import { runLocalOAuthConnect } from "./integration-oauth-connect"
 import { HiveKeysCommandExport } from "./platform-hive-keys"
@@ -4628,7 +4629,9 @@ export const PlatformHiveCommand = cmd({
       // Envelope encryption keys (#177946 phase 3) — a node must register one before it can
       // RECEIVE an envelope transfer; the send path fails closed rather than falling back.
       .command(HiveKeysCommandExport)
-      // Remote enrollment (SSH-based)
+      // Self enrollment (outbound) — run ON the machine; no SSH, no VPN, no open ports
+      .command(HiveConnectCommandExport)
+      // Remote enrollment (SSH-based) — run FROM your machine; needs to reach the target
       .command(HiveSshSetupCommandExport)
       .command(HiveDiscoverCommandExport)
       .command(HiveEnrollCommandExport)
