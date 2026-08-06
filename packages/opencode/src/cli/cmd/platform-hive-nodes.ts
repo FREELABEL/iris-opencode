@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, dim, bold, success } from "./iris-api"
+import { resolveLocalNode } from "./hive-local-node"
 
 // ============================================================================
 // iris hive nodes / run
@@ -110,25 +111,45 @@ const HiveNodesListCommand = cmd({
       return
     }
 
-    // Detect local node for "(you)" marker
-    let localNodeId: string | null = null
+    // Detect local node for the "(you)" marker.
+    //
+    // This used to read ONLY config.node_id — a key nothing ever writes — then fall back to
+    // `n.name.includes(os.hostname())`. Both always failed, so "(you)" never appeared: macOS
+    // rewrites the hostname on each mDNS collision, so one machine showed as -5054 (registered),
+    // -8435 (daemon) and -8436 (os.hostname) in a single run. The daemon knew its own node_id all
+    // along. See hive-local-node.ts.
+    let configNodeId: string | null = null
     try {
       const fs = require("fs"), path = require("path")
       const configPath = path.join(require("os").homedir(), ".iris", "config.json")
       if (fs.existsSync(configPath)) {
-        const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
-        localNodeId = config.node_id || null
+        configNodeId = JSON.parse(fs.readFileSync(configPath, "utf-8")).node_id || null
       }
     } catch {}
-    // Fallback: match by hostname
-    const thisHostname = require("os").hostname()
+
+    let daemonNodeId: string | null = null
+    try {
+      const res = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(1500) })
+      if (res.ok) daemonNodeId = ((await res.json()) as any)?.node_id ?? null
+    } catch { /* daemon not running — fall through to the weaker sources */ }
+
+    const local = resolveLocalNode({
+      daemonNodeId,
+      configNodeId,
+      hostname: require("os").hostname(),
+      nodes: nodes.map((n) => ({ id: String(n.id), name: String(n.name) })),
+    })
+    const localNodeId = local.nodeId
 
     console.log()
     console.log(bold("  Name                          Status       Active  Last heartbeat   IP"))
     console.log(dim("  " + "─".repeat(80)))
     for (const n of nodes) {
-      const isLocal = n.id === localNodeId || n.name.includes(thisHostname)
-      const youTag = isLocal ? success(" (you)") : ""
+      // The hostname `includes` check is gone: it compared a mutating name against a frozen one
+      // and could never match. resolveLocalNode already did the hostname work, on a stem, and
+      // refused to guess when several nodes shared one.
+      const isLocal = localNodeId !== null && String(n.id) === localNodeId
+      const youTag = isLocal ? success(local.uncertain ? " (you?)" : " (you)") : ""
       const name = n.name.padEnd(28)
       const status = statusBadge(n.connection_status).padEnd(22)
       const active = String(n.active_tasks ?? 0).padStart(2)

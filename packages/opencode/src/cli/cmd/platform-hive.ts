@@ -18,6 +18,7 @@ import {
   HiveSshSetupCommandExport,
 } from "./platform-hive-enroll"
 import { HiveVpnCommandExport } from "./platform-hive-vpn"
+import { exitCodeForResult, verdictForResult, renderOutput, type ScriptRunResult } from "./hive-script-result"
 import { runLocalOAuthConnect } from "./integration-oauth-connect"
 import { HiveKeysCommandExport } from "./platform-hive-keys"
 import { HiveHostCommandExport } from "./platform-hive-host"
@@ -1822,7 +1823,10 @@ const HiveScriptPushCommand = cmd({
       .positional("file", { type: "string", describe: "local file path" })
       .option("project", { alias: "p", type: "string", describe: "inject env vars from a hive project" })
       .option("persist", { type: "boolean", default: true, describe: "keep script on node after execution" })
-      .option("args", { type: "array", string: true, default: [], describe: "arguments to pass to the script" }),
+      .option("args", { type: "array", string: true, default: [], describe: "arguments to pass to the script" })
+      // `exec` has always had this; `push` — the command that actually runs the script — did
+      // not, and sent no timeout at all, so the node silently applied its own default.
+      .option("timeout", { type: "number", default: 30000, describe: "timeout in ms (node caps at 300000)" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Push Script")
@@ -1870,6 +1874,7 @@ const HiveScriptPushCommand = cmd({
           content,
           persist: args.persist,
           args: args.args,
+          timeout_ms: args.timeout,
           env: Object.keys(projectEnv).length > 0 ? projectEnv : undefined,
         }),
       })
@@ -1877,34 +1882,43 @@ const HiveScriptPushCommand = cmd({
       if (!res.ok) {
         const errMsg = await reportBridgeFailure("POST", url, res)
         spinner.stop(`Failed: HTTP ${res.status} — ${errMsg}`, 1)
+        process.exitCode = 1
         prompts.outro("Done")
         return
       }
 
-      const result = await res.json() as Record<string, unknown>
-      spinner.stop(result.status === "completed" ? success("Completed") : highlight(String(result.status)))
+      const result = await res.json() as ScriptRunResult
+      const verdict = verdictForResult(result)
+      spinner.stop(verdict === "completed" ? success("Completed") : highlight(verdict))
+
+      // THE FIX THAT MATTERS. This handler used to set no exit code at all, so a script ending
+      // `exit 42` on the node still made `iris` exit 0 — every Hive script in CI was a no-op
+      // check. Measured 2026-08-05.
+      process.exitCode = exitCodeForResult(result)
 
       printDivider()
-      printKV("Exit code", String(result.exit_code ?? "?"))
+      // A null exit code means killed-by-signal, not unknown. Printing "?" for both is how a
+      // SIGKILL got read as "the daemon didn't say".
+      printKV("Exit code", result.exit_code === null || result.exit_code === undefined
+        ? (result.signal ? `killed (${result.signal})` : "none reported")
+        : String(result.exit_code))
       printKV("Duration", `${result.duration_ms}ms`)
+      if (result.timed_out) printKV("Timed out", highlight(`yes — node killed it after ${args.timeout}ms`))
       if (result.script_path) printKV("Persisted", success(String(result.script_path)))
       if (result.machine) printKV("Machine", dim(String(result.machine)))
 
-      const stdout = String(result.stdout ?? "").trim()
-      const stderr = String(result.stderr ?? "").trim()
-      if (stdout) {
+      for (const [label, text, limit, upstream] of [
+        ["stdout", result.stdout, 50, result.stdout_truncated],
+        ["stderr", result.stderr, 20, result.stderr_truncated],
+      ] as const) {
+        const rendered = renderOutput(text, limit, Boolean(upstream))
+        if (!rendered.lines.length && !rendered.notice) continue
         console.log()
-        console.log(bold("  stdout:"))
-        for (const line of stdout.split("\n").slice(0, 50)) {
-          console.log(`    ${line}`)
-        }
-      }
-      if (stderr) {
-        console.log()
-        console.log(highlight("  stderr:"))
-        for (const line of stderr.split("\n").slice(0, 20)) {
-          console.log(`    ${line}`)
-        }
+        console.log(label === "stdout" ? bold(`  ${label}:`) : highlight(`  ${label}:`))
+        // Truncation is announced. Output that vanishes without a marker is indistinguishable
+        // from output that was never produced.
+        if (rendered.notice) console.log(dim(`    [${rendered.notice}]`))
+        for (const line of rendered.lines) console.log(`    ${line}`)
       }
     } catch (err) {
       spinner.stop("Error", 1)
