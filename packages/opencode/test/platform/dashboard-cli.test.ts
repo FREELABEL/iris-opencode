@@ -284,3 +284,62 @@ describe("summaryPairs", () => {
     expect(summaryPairs(42)).toEqual([])
   })
 })
+
+/**
+ * panelLines — the 44 rules genuinely do not share a schema.
+ *
+ * Measured against production immediately after deploying: 5 of the 11 exposed rules rendered
+ * NOTHING, because the first renderer only understood { summary, entries } and these do not use
+ * it. Special-casing every shape would put the manifest's job in the CLI; printing every scalar
+ * and counting every array is generic and cannot silently show nothing.
+ */
+import { panelLines } from "../../src/cli/cmd/platform-dashboard-rules"
+
+describe("panelLines", () => {
+  test("renders `team`, which is a person and has no summary at all", () => {
+    const lines = panelLines({ name: "Bison Law", role: "39 cases", subtitle: "$1,227,596", status: "active" }, "name")
+    expect(lines.join("\n")).toContain("39 cases")
+    expect(lines.join("\n")).toContain("active")
+    // The heading field is not repeated in the body.
+    expect(lines.join("\n")).not.toContain("Bison Law")
+  })
+
+  test("renders `economics`, counting lineItems instead of dumping them", () => {
+    const lines = panelLines({ title: "Pipeline Economics", totalLabel: "Total", totalValue: 16396106.22, lineItems: [1, 2, 3] })
+    const s = lines.join("\n")
+    expect(s).toContain("16396106.22")
+    expect(s).toContain("3 row(s)")
+  })
+
+  test("renders `provider-ledger`, a flat table row", () => {
+    const lines = panelLines({ provider: "Medical Validation", cases: 120, billed: 0, collected: 0 }, "provider")
+    expect(lines.join("\n")).toContain("120")
+    // Zero is a real value and must not be dropped as falsy.
+    expect(lines.join("\n")).toContain("billed")
+  })
+
+  test("prefers a curated summary block when the rule has one", () => {
+    const lines = panelLines({ title: "Case Stats", summary: [{ label: "Active Cases", value: 2143 }] })
+    expect(lines[0]).toContain("Active Cases")
+    expect(lines[0]).toContain("2143")
+  })
+
+  test("drops presentation noise that is not data", () => {
+    const s = panelLines({ label: "X", value: 1, icon: "folder", color: "blue", chartType: "bar" }, "label").join("\n")
+    expect(s).not.toContain("folder")
+    expect(s).not.toContain("blue")
+    expect(s).not.toContain("bar")
+  })
+
+  test("NEVER renders a raw object, whatever the shape", () => {
+    for (const p of [{ a: { b: 1 } }, { series: [{ x: 1 }] }, {}, null, "str", 7]) {
+      for (const line of panelLines(p)) expect(line).not.toContain("[object")
+    }
+  })
+
+  test("returns nothing rather than throwing on junk", () => {
+    expect(panelLines(null)).toEqual([])
+    expect(panelLines(undefined)).toEqual([])
+    expect(panelLines("nope")).toEqual([])
+  })
+})

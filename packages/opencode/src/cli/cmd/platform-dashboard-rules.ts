@@ -66,6 +66,51 @@ export function summaryPairs(summary: unknown): Array<[string, string]> {
   return Object.entries(summary as Record<string, unknown>).map(([k, v]) => [k, scalar(v)])
 }
 
+
+/**
+ * Turn ONE panel into display lines, whatever shape it happens to be.
+ *
+ * The 44 rules do not share a schema, and assuming they did produced two visible failures against
+ * real production data within a minute of deploying:
+ *
+ *   stats            { summary: [{label,value}, …] }              // array of tiles
+ *   ar-ap-aging      { summary: { current: "$12,000", … } }       // flat map
+ *   team             { name, role, subtitle, status }             // a person
+ *   economics        { title, totalLabel, totalValue, lineItems } // a total + rows
+ *   chart-data       { title, chartType, categories, series }     // a chart
+ *   provider-ledger  { provider, cases, billed, collected, … }    // a table row
+ *
+ * Special-casing 44 shapes would put the manifest's job in the CLI and rot immediately. Instead:
+ * print every SCALAR the panel carries, count every array, and always say --json has the rest.
+ * A generic renderer that under-promises beats a specific one that silently shows nothing — which
+ * is what the first version did for 5 of the 11 exposed rules.
+ */
+const NOISE = new Set(["icon", "color", "chartType", "type", "id", "slug"])
+
+export function panelLines(panel: unknown, headingKey?: string): string[] {
+  if (!panel || typeof panel !== "object") return []
+  const p = panel as Record<string, unknown>
+  const out: string[] = []
+
+  // A rule's own summary block, when it has one, is the curated view — prefer it.
+  const pairs = summaryPairs(p.summary)
+  for (const [k, v] of pairs) out.push(`${k.padEnd(22)} ${v}`)
+
+  for (const [k, v] of Object.entries(p)) {
+    if (k === "summary" || NOISE.has(k)) continue
+    if (k === "title" || k === "subtitle" || k === headingKey) continue // already the heading
+    if (Array.isArray(v)) {
+      out.push(`${k.padEnd(22)} ${v.length} row(s) — use --json`)
+    } else if (v !== null && typeof v === "object") {
+      out.push(`${k.padEnd(22)} (nested — use --json)`)
+    } else if (v !== null && v !== undefined && String(v) !== "") {
+      out.push(`${k.padEnd(22)} ${String(v)}`)
+    }
+  }
+
+  return out
+}
+
 const DEFAULT_SLUG = "pathways-dashboard"
 
 const RulesListCommand = cmd({
@@ -179,15 +224,11 @@ const RuleGetCommand = cmd({
 
       printDivider()
       for (const panel of (body.data ?? []) as any[]) {
-        if (panel?.title) console.log(`  ${bold(String(panel.title))}`)
+        // Whichever field names this panel becomes the heading and is not repeated below.
+        const headingKey = ["title", "name", "provider", "label"].find((k) => panel?.[k])
+        if (headingKey) console.log(`  ${bold(String(panel[headingKey]))}`)
         if (panel?.subtitle) console.log(`  ${dim(String(panel.subtitle))}`)
-        for (const [k, v] of summaryPairs(panel?.summary)) {
-          console.log(`      ${k.padEnd(22)} ${v}`)
-        }
-        const entries: any[] = panel?.entries ?? []
-        if (entries.length) {
-          console.log(`      ${dim(`${entries.length} row(s) — use --json for the full payload`)}`)
-        }
+        for (const line of panelLines(panel, headingKey)) console.log(`      ${line}`)
         console.log()
       }
     } catch (err) {
