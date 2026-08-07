@@ -4,7 +4,7 @@ import { Skill } from "./skill"
 import { ConfigMarkdown } from "../config/markdown"
 import { Log } from "../util/log"
 import { homedir } from "os"
-import { join } from "path"
+import { join, dirname, resolve as resolvePath, relative as relativePath, isAbsolute } from "path"
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from "fs"
 
 const log = Log.create({ service: "skill-executor" })
@@ -246,14 +246,90 @@ export function shellEscape(s: string): string {
   return s.replace(/'/g, "'\\''")
 }
 
+// ============================================================================
+// The container
+// ============================================================================
+//
+// A playbook is a directory, not a file. PLAYBOOK.md is simply the entry point;
+// the SOP prose, the screenshots it references, and the scripts its steps run
+// all live beside it. That only works if there is one way to name a sibling —
+// otherwise the SOP links `assets/screenshot.png` (relative to the doc) and a
+// step runs `./assets/screenshot.png` (relative to wherever the CLI was
+// invoked), and the two silently mean different files.
+//
+// So: paths inside a playbook are named relative to the container, via
+// ${{playbook.root}} / ${{playbook.assets}} / ${{playbook.file}}. Never via the
+// process cwd, which the author does not control.
+//
+// The guard below is the other half. `${{playbook.root}}/${{args.name}}` is the
+// obvious thing to write, and `--name ../../../.ssh/id_rsa` is the obvious way
+// to abuse it. This is not a sandbox — a shell step can `cd` anywhere it likes
+// — it just makes sure a container-relative path stays inside the container it
+// claims to be relative to.
+
+export interface PlaybookPaths {
+  root: string
+  assets: string
+  file: string
+}
+
+/** Derive the container paths from a plan's PLAYBOOK.md location. */
+export function playbookPaths(location: string): PlaybookPaths {
+  const root = dirname(resolvePath(location))
+  return { root, assets: join(root, "assets"), file: resolvePath(location) }
+}
+
+/**
+ * Resolve a path that claims to be inside `root`, refusing to leave it.
+ * Absolute inputs are permitted only if they already live under root.
+ */
+export function resolveContainerPath(root: string, p: string): string {
+  const abs = isAbsolute(p) ? resolvePath(p) : resolvePath(root, p)
+  const rel = relativePath(resolvePath(root), abs)
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`path escapes the playbook container: ${p}`)
+  }
+  return abs
+}
+
+// Where a path ends in a shell line: whitespace, quoting, redirection, or the
+// end of a command. Deliberately generous — false negatives just mean we skip
+// a check we could have made, false positives would break legitimate commands.
+const PATH_RUN = /[^\s'"`;|&()<>]*/
+
+/**
+ * After interpolation, verify that every path built off the container root is
+ * still inside it. Catches `${{playbook.root}}/${{args.file}}` where the caller
+ * supplied `../../secrets`.
+ */
+function assertNoContainerEscape(text: string, root: string): void {
+  let i = text.indexOf(root)
+  while (i !== -1) {
+    const tail = text.slice(i + root.length).match(PATH_RUN)?.[0] ?? ""
+    if (tail.includes("..")) resolveContainerPath(root, root + tail) // throws
+    i = text.indexOf(root, i + root.length)
+  }
+}
+
+export interface InterpolateOptions {
+  /** Escape substituted values for a single-quoted bash string. */
+  shellSafe?: boolean
+  /** Absolute path to the playbook container, enabling ${{playbook.*}}. */
+  root?: string
+}
+
 export function interpolate(
   template: string,
   args: Record<string, unknown>,
   stepResults: Record<string, StepResult>,
-  shellSafe = false,
+  options: boolean | InterpolateOptions = {},
 ): string {
-  const escape = shellSafe ? shellEscape : (s: string) => s
-  return template.replace(/\$\{\{(\s*[\w.\-]+\s*)\}\}/g, (_match, expr: string) => {
+  // 4th param used to be a bare `shellSafe` boolean; keep those callers working.
+  const opts: InterpolateOptions = typeof options === "boolean" ? { shellSafe: options } : options
+  const escape = opts.shellSafe ? shellEscape : (s: string) => s
+  const paths = opts.root ? { root: opts.root, assets: join(opts.root, "assets"), file: "" } : null
+
+  const out = template.replace(/\$\{\{(\s*[\w.\-]+\s*)\}\}/g, (_match, expr: string) => {
     const path = expr.trim().split(".")
     if (path[0] === "args" && path.length === 2) {
       return escape(String(args[path[1]] ?? ""))
@@ -270,9 +346,19 @@ export function interpolate(
     if (path[0] === "env" && path.length === 2) {
       return process.env[path[1]] ?? ""
     }
+    // Container paths are ours, not user input — never shell-escaped away.
+    if (path[0] === "playbook" && path.length === 2 && paths) {
+      if (path[1] === "root") return paths.root
+      if (path[1] === "assets") return paths.assets
+      if (path[1] === "file") return paths.file || join(paths.root, "PLAYBOOK.md")
+      return ""
+    }
     return ""
   })
     .replace(/\$ARGUMENTS/g, escape(String(args._raw ?? "")))
+
+  if (opts.root) assertNoContainerEscape(out, opts.root)
+  return out
 }
 
 /**
@@ -284,9 +370,10 @@ export function interpolateInput(
   obj: Record<string, any>,
   args: Record<string, unknown>,
   stepResults: Record<string, StepResult>,
+  root?: string,
 ): Record<string, any> {
   const walk = (val: unknown): unknown => {
-    if (typeof val === "string") return interpolate(val, args, stepResults)
+    if (typeof val === "string") return interpolate(val, args, stepResults, { root })
     if (Array.isArray(val)) return val.map(walk)
     if (val !== null && typeof val === "object") {
       const out: Record<string, unknown> = {}
@@ -306,9 +393,10 @@ function evaluateCondition(
   condition: string,
   args: Record<string, unknown>,
   stepResults: Record<string, StepResult>,
+  root?: string,
 ): boolean {
   // Interpolate variables first
-  const interpolated = interpolate(condition, args, stepResults)
+  const interpolated = interpolate(condition, args, stepResults, { root })
 
   // Simple != and == checks
   const neqMatch = interpolated.match(/^\s*(.+?)\s*!=\s*(.+?)\s*$/)
@@ -999,6 +1087,9 @@ export async function executeSkill(
   let finalStatus: "completed" | "failed" | "interrupted" | "paused" = "completed"
   let pausedOn: SkillResult["paused_on"] | undefined
 
+  // The container every ${{playbook.*}} in this run resolves against.
+  const root = plan.location ? playbookPaths(plan.location).root : undefined
+
   for (const step of stepsToRun) {
     // Skip steps already settled by a previous run (resume mode)
     if (restoredIds.has(step.id) || stepResults[step.id]?.status === "success") continue
@@ -1018,7 +1109,7 @@ export async function executeSkill(
 
     // Check condition
     if (step.condition) {
-      if (!evaluateCondition(step.condition, rawArgs, stepResults)) {
+      if (!evaluateCondition(step.condition, rawArgs, stepResults, root)) {
         stepResults[step.id] = {
           id: step.id, status: "skipped", output: `Condition not met: ${step.condition}`,
           exit_code: null, duration_ms: 0, attempts: 0,
@@ -1034,8 +1125,29 @@ export async function executeSkill(
     // Interpolate code and body
     // Shell mode uses shellSafe=true to escape args (prevents injection from CLI-supplied values)
     const isShell = step.mode === "shell"
-    const interpolatedCode = step.code ? interpolate(step.code, rawArgs, stepResults, isShell) : null
-    const interpolatedBody = interpolate(step.body, rawArgs, stepResults)
+    let interpolatedCode: string | null
+    let interpolatedBody: string
+    try {
+      interpolatedCode = step.code
+        ? interpolate(step.code, rawArgs, stepResults, { shellSafe: isShell, root })
+        : null
+      interpolatedBody = interpolate(step.body, rawArgs, stepResults, { root })
+    } catch (e) {
+      // A container escape is a bad argument, not a crash. Fail this step the
+      // way any other step failure is reported, and let on-error decide.
+      const sr: StepResult = {
+        id: step.id, status: "failed", output: e instanceof Error ? e.message : String(e),
+        exit_code: null, duration_ms: 0, attempts: 1,
+      }
+      stepResults[step.id] = sr
+      checkpoint.steps[step.id] = sr
+      checkpoint.updated_at = new Date().toISOString()
+      saveCheckpoint(checkpoint)
+      opts.onStepEnd?.(step, sr)
+      if (plan.onError === "continue") continue
+      finalStatus = "failed"
+      break
+    }
 
     // Confirmation gate
     const needsConfirm =
@@ -1162,7 +1274,7 @@ export async function executeSkill(
             lastResult = { output: "Not authenticated — cannot execute cloud workflow", exit_code: 1 }
           } else {
             const interpolatedInput = step.input
-              ? interpolateInput(step.input, rawArgs, stepResults)
+              ? interpolateInput(step.input, rawArgs, stepResults, root)
               : null
             const stepWithInput = { ...step, input: interpolatedInput }
             lastResult = await executeCloudWorkflow(
@@ -1177,19 +1289,19 @@ export async function executeSkill(
         }
 
         case "n8n": {
-          const n8nInput = step.input ? interpolateInput(step.input, rawArgs, stepResults) : null
+          const n8nInput = step.input ? interpolateInput(step.input, rawArgs, stepResults, root) : null
           lastResult = await executeN8n(interpolatedBody, { ...step, input: n8nInput }, plan.timeout * 1000)
           break
         }
 
         case "langgraph": {
-          const lgInput = step.input ? interpolateInput(step.input, rawArgs, stepResults) : null
+          const lgInput = step.input ? interpolateInput(step.input, rawArgs, stepResults, root) : null
           lastResult = await executeLanggraph(interpolatedBody, { ...step, input: lgInput }, plan.timeout * 1000)
           break
         }
 
         case "schedule": {
-          const schedInput = step.input ? interpolateInput(step.input, rawArgs, stepResults) : null
+          const schedInput = step.input ? interpolateInput(step.input, rawArgs, stepResults, root) : null
           lastResult = await executeSchedule(interpolatedBody, { ...step, input: schedInput }, plan)
           break
         }

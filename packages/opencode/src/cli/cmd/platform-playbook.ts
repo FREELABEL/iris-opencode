@@ -12,11 +12,13 @@ import {
   listRuns,
   getRun,
   pruneRuns,
+  playbookPaths,
   type SkillPlan,
   type StepDef,
   type StepResult,
   type ExecuteOptions,
 } from "../../skill/executor"
+import { existsSync, readdirSync } from "fs"
 import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCoverage } from "../../skill/e2e/runner"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
@@ -138,6 +140,18 @@ const SkillShowCommand = cmd({
       printKV("Location", plan.location)
       printKV("On Error", plan.onError)
       printKV("Timeout", `${plan.timeout}s`)
+
+      // The container. Show what ${{playbook.root}} and ${{playbook.assets}}
+      // actually resolve to here — a path convention nobody can see is one
+      // nobody uses, and the SOP prose and the steps have to agree on it.
+      const paths = playbookPaths(plan.location)
+      printKV("Container", paths.root)
+      printKV(
+        "Assets",
+        existsSync(paths.assets)
+          ? `${paths.assets} ${dim(`(${readdirSync(paths.assets).length} files)`)}`
+          : dim("none — ${{playbook.assets}} would point at " + paths.assets),
+      )
 
       if (Object.keys(plan.args).length > 0) {
         console.log()

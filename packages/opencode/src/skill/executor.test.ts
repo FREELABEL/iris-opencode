@@ -6,6 +6,8 @@ import {
   parseSteps,
   interpolate,
   interpolateInput,
+  playbookPaths,
+  resolveContainerPath,
   shellEscape,
   resolveArgs,
   validatePlan,
@@ -2234,5 +2236,65 @@ describe("human-in-the-loop pause/resume", () => {
     } finally {
       cleanupRun(result.run_id)
     }
+  })
+})
+
+// ============================================================================
+// Container-relative paths
+// ============================================================================
+
+describe("playbook container paths", () => {
+  const LOC = "/home/u/.iris/playbooks/deploy/PLAYBOOK.md"
+  const ROOT = "/home/u/.iris/playbooks/deploy"
+
+  test("playbookPaths derives root, assets and file from the doc location", () => {
+    const p = playbookPaths(LOC)
+    expect(p.root).toBe(ROOT)
+    expect(p.assets).toBe(join(ROOT, "assets"))
+    expect(p.file).toBe(LOC)
+  })
+
+  test("${{playbook.root}} and ${{playbook.assets}} resolve", () => {
+    const out = interpolate("cat ${{playbook.assets}}/notes.md", {}, {}, { root: ROOT })
+    expect(out).toBe(`cat ${join(ROOT, "assets")}/notes.md`)
+  })
+
+  test("${{playbook.file}} points at PLAYBOOK.md", () => {
+    expect(interpolate("${{playbook.file}}", {}, {}, { root: ROOT })).toBe(join(ROOT, "PLAYBOOK.md"))
+  })
+
+  test("the namespace yields empty when no container is in scope", () => {
+    // A v1 playbook, or any caller that did not pass a root, must not crash —
+    // it just gets nothing, same as an unknown ${{args.x}}.
+    expect(interpolate("[${{playbook.root}}]", {}, {})).toBe("[]")
+  })
+
+  test("an arg cannot walk out of the container", () => {
+    expect(() =>
+      interpolate("cat ${{playbook.root}}/${{args.f}}", { f: "../../../.ssh/id_rsa" }, {}, { root: ROOT }),
+    ).toThrow(/escapes the playbook container/)
+  })
+
+  test("a harmless .. that stays inside is allowed", () => {
+    const out = interpolate("cat ${{playbook.assets}}/../README.md", {}, {}, { root: ROOT })
+    expect(out).toContain("README.md")
+  })
+
+  test("the 4th param still accepts a bare shellSafe boolean", () => {
+    // Existing call sites pass `isShell` positionally; that must keep working.
+    expect(interpolate("${{args.x}}", { x: "it's" }, {}, true)).toBe("it'\\''s")
+    expect(interpolate("${{args.x}}", { x: "it's" }, {}, false)).toBe("it's")
+  })
+
+  test("resolveContainerPath rejects escapes and accepts insiders", () => {
+    expect(resolveContainerPath(ROOT, "assets/x.png")).toBe(join(ROOT, "assets/x.png"))
+    expect(resolveContainerPath(ROOT, join(ROOT, "a/b"))).toBe(join(ROOT, "a/b"))
+    expect(() => resolveContainerPath(ROOT, "../other/x")).toThrow(/escapes/)
+    expect(() => resolveContainerPath(ROOT, "/etc/passwd")).toThrow(/escapes/)
+  })
+
+  test("interpolateInput threads the container into nested values", () => {
+    const out = interpolateInput({ a: { b: "${{playbook.root}}/x" } }, {}, {}, ROOT)
+    expect(out.a.b).toBe(`${ROOT}/x`)
   })
 })
