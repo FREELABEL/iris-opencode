@@ -8,6 +8,15 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { getRegistry, CATEGORIES, COMMAND_CATEGORY_MAP } from "./command-groups"
+import {
+  loadPlaybooks,
+  toolsFor,
+  resourcesFor,
+  readPlaybookResource,
+  callPlaybookTool,
+  PLAYBOOK_URI_PREFIX,
+  TOOL_PREFIX,
+} from "./mcp-playbooks"
 import { homedir } from "os"
 import { join } from "path"
 import { readFileSync, existsSync } from "fs"
@@ -274,10 +283,29 @@ async function execIris(args: string[]): Promise<{ stdout: string; stderr: strin
 
 export const McpServeCommand = cmd({
   command: "serve",
-  describe: "start IRIS MCP gateway server (stdio)",
-  async handler() {
+  describe: "start IRIS MCP gateway server (stdio, or streamable HTTP with --http)",
+  builder: (yargs) =>
+    yargs
+      .option("playbooks", {
+        type: "boolean",
+        default: true,
+        describe: "expose playbooks as typed tools + readable resources",
+      })
+      .option("http", {
+        type: "boolean",
+        default: false,
+        describe: "serve streamable HTTP on loopback instead of stdio",
+      })
+      .option("port", { type: "number", default: 3210, describe: "port for --http" })
+      .option("token", {
+        type: "string",
+        describe: "bearer token for --http (generated and printed if omitted)",
+      }),
+  async handler(argv) {
     // Build registry so knownCommands is populated
     buildCommandCatalog()
+
+    const playbooksEnabled = argv.playbooks !== false
 
     const server = new Server(
       { name: "IRIS OS", version: "1.0.0" },
@@ -291,11 +319,18 @@ export const McpServeCommand = cmd({
         { uri: "iris://guide", name: "IRIS CLI Guide", description: "Install, authenticate, and use the IRIS CLI", mimeType: "text/markdown" },
         { uri: "iris://commands", name: "Command Catalog", description: "Full catalog of 120+ IRIS CLI commands grouped by category", mimeType: "text/markdown" },
         { uri: "iris://recipes", name: "How-To Recipes", description: "User-created workflow recipes from ~/.iris/how-to/", mimeType: "text/markdown" },
+        // Every playbook is readable, whether or not it can be run. Most are
+        // written procedures with no steps at all — that IS the artefact.
+        ...(playbooksEnabled ? resourcesFor(await loadPlaybooks()) : []),
       ],
     }))
 
     server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       const { uri } = request.params
+      if (playbooksEnabled && uri.startsWith(PLAYBOOK_URI_PREFIX)) {
+        const name = uri.slice(PLAYBOOK_URI_PREFIX.length)
+        return { contents: [{ uri, mimeType: "text/markdown", text: await readPlaybookResource(name) }] }
+      }
       switch (uri) {
         case "iris://guide":
           return { contents: [{ uri, mimeType: "text/markdown", text: buildGuide() }] }
@@ -388,11 +423,25 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
             required: ["session", "pane", "text"],
           },
         },
+        // One properly-typed tool per executable playbook. `iris_run` could
+        // already run these as a command string; the difference is that a model
+        // can now see the arguments, their types, and their enums.
+        ...(playbooksEnabled ? toolsFor(await loadPlaybooks()) : []),
       ],
     }))
 
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params
+
+      if (playbooksEnabled && name.startsWith(TOOL_PREFIX)) {
+        try {
+          const r = await callPlaybookTool(name, (args ?? {}) as Record<string, unknown>)
+          return { content: [{ type: "text" as const, text: r.text }], isError: r.isError }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          return { content: [{ type: "text" as const, text: `Playbook error: ${msg}` }], isError: true }
+        }
+      }
 
       if (name === "iris_run") {
         const command = (args?.command as string) ?? ""
@@ -500,6 +549,69 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
 
       return { content: [{ type: "text" as const, text: `Unknown tool: ${name}` }], isError: true }
     })
+
+    // --- Streamable HTTP transport (--http) ---
+    //
+    // Every tool here runs something on this machine, so an HTTP listener is a
+    // remote-execution endpoint by definition. Two non-negotiables, both
+    // enforced below rather than documented and hoped for: bind loopback only,
+    // and require a bearer token. The token is printed once at startup — it is
+    // not persisted, so killing the server invalidates it.
+    if (argv.http) {
+      const { StreamableHTTPServerTransport } = await import(
+        "@modelcontextprotocol/sdk/server/streamableHttp.js"
+      )
+      const token = (argv.token as string) || crypto.randomUUID()
+      const port = argv.port as number
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+        // The client is a local process on loopback, so a browser-style DNS
+        // rebinding attack is the realistic threat, not a cross-origin one.
+        enableDnsRebindingProtection: true,
+        allowedHosts: [`127.0.0.1:${port}`, `localhost:${port}`],
+      })
+      await server.connect(transport)
+
+      // node:http, not Bun.serve — the SDK transport takes IncomingMessage /
+      // ServerResponse directly, and adapting Web Request/Response to that is
+      // pure overhead for no gain.
+      const { createServer } = await import("node:http")
+      createServer((req, res) => {
+        if (req.headers.authorization !== `Bearer ${token}`) {
+          res.writeHead(401).end("Unauthorized")
+          return
+        }
+        if (req.method !== "POST") {
+          // GET (SSE stream) and DELETE (session close) carry no body.
+          transport.handleRequest(req, res).catch(() => res.writeHead(500).end())
+          return
+        }
+        const chunks: Buffer[] = []
+        req.on("data", (c) => chunks.push(c))
+        req.on("end", () => {
+          let body: unknown
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString("utf-8"))
+          } catch {
+            res.writeHead(400).end("Parse error")
+            return
+          }
+          transport.handleRequest(req, res, body).catch(() => res.writeHead(500).end())
+        })
+      }).listen(port, "127.0.0.1") // never 0.0.0.0 — this endpoint executes commands
+
+      // stdout is the JSON-RPC channel in stdio mode; in HTTP mode it's free.
+      console.log(`IRIS MCP (streamable HTTP) on http://127.0.0.1:${port}`)
+      console.log(`Authorization: Bearer ${token}`)
+      console.log(playbooksEnabled ? "Playbooks: exposed as tools + resources" : "Playbooks: disabled")
+
+      await new Promise<void>((resolve) => {
+        process.on("SIGINT", resolve)
+        process.on("SIGTERM", resolve)
+      })
+      return
+    }
 
     // --- Start stdio transport ---
     const transport = new StdioServerTransport()
