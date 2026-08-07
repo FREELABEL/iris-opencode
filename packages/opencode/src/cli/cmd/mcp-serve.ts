@@ -300,6 +300,11 @@ export const McpServeCommand = cmd({
       .option("token", {
         type: "string",
         describe: "bearer token for --http (generated and printed if omitted)",
+      })
+      .option("stateful", {
+        type: "boolean",
+        default: false,
+        describe: "keep MCP session state (blocks serverless/edge and horizontal scaling)",
       }),
   async handler(argv) {
     // Build registry so knownCommands is populated
@@ -564,8 +569,24 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
       const token = (argv.token as string) || crypto.randomUUID()
       const port = argv.port as number
 
+      // Stateless by default (MCP no longer requires session state). Two
+      // reasons, and the second is the one that actually bit:
+      //
+      //  1. A server holding session state can only run where that state lives
+      //     — no serverless, no edge, and no second instance behind a load
+      //     balancer, because a client's follow-up request can land on a box
+      //     that never saw its `initialize`.
+      //
+      //  2. This handler keeps ONE transport for every request. That is exactly
+      //     right stateless, and wrong when sessions exist — the SDK's model is
+      //     one transport per session, so the first version was neither one
+      //     thing nor the other. Dropping the session generator makes the
+      //     single shared transport correct rather than accidental.
+      //
+      // --stateful is kept for resumability (an eventStore replaying missed
+      // messages needs a session to replay onto), but nothing needs it yet.
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
+        sessionIdGenerator: argv.stateful ? () => crypto.randomUUID() : undefined,
         // The client is a local process on loopback, so a browser-style DNS
         // rebinding attack is the realistic threat, not a cross-origin one.
         enableDnsRebindingProtection: true,
@@ -604,6 +625,7 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
       // stdout is the JSON-RPC channel in stdio mode; in HTTP mode it's free.
       console.log(`IRIS MCP (streamable HTTP) on http://127.0.0.1:${port}`)
       console.log(`Authorization: Bearer ${token}`)
+      console.log(`Mode: ${argv.stateful ? "stateful (sessions)" : "stateless"}`)
       console.log(playbooksEnabled ? "Playbooks: exposed as tools + resources" : "Playbooks: disabled")
 
       await new Promise<void>((resolve) => {
