@@ -147,6 +147,12 @@
       "purpose": "Link bloqs together \u2014 relations, filtering, and the graph view"
     },
     {
+      "src": "how-to/bloq-access-control.md",
+      "dest": "how-to/bloq-access-control.md",
+      "managed": true,
+      "purpose": "Sharing a bloq board safely \u2014 scoped invites (--scope-list/--scope-item/--scope-own), auditing and revoking links, and the two non-obvious exposures: the invite default is the WHOLE board, and scoping does NOT protect the CRM notes of attached lead contacts."
+    },
+    {
       "src": "how-to/bug-bounty.md",
       "dest": "how-to/bug-bounty.md",
       "managed": true,
