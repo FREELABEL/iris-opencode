@@ -2632,15 +2632,17 @@ const BloqsShareCommand = cmd({
     if (!userId) return
 
     let link: { token: string; permission: string; expires_at: string | null; max_uses: number | null }
+    // Hoisted out of the try: the post-mint summary and the board-wide warning
+    // both need to know what was actually granted.
+    const scopeType =
+      args["scope-list"] != null ? "list" : args["scope-item"] != null ? "item" : args["scope-own"] ? "own" : null
+    const scopeId = args["scope-list"] ?? args["scope-item"] ?? null
     try {
       const picked = [args["scope-list"] != null, args["scope-item"] != null, args["scope-own"]].filter(Boolean)
       if (picked.length > 1) {
         prompts.log.error("Pick at most one of --scope-list, --scope-item, --scope-own")
         return
       }
-      const scopeType =
-        args["scope-list"] != null ? "list" : args["scope-item"] != null ? "item" : args["scope-own"] ? "own" : null
-      const scopeId = args["scope-list"] ?? args["scope-item"] ?? null
 
       link = await mintShareLink(args.id, userId, {
         permission: args.permission,
@@ -2663,10 +2665,27 @@ const BloqsShareCommand = cmd({
     }
 
     console.log(url)
-    const meta: string[] = [`${link.permission} access`]
+    const meta: string[] = [`${link.permission} access`, describeScope(scopeType, scopeId)]
     if (link.expires_at) meta.push(`expires ${link.expires_at}`)
     if (link.max_uses) meta.push(`max ${link.max_uses} uses`)
     console.log(dim(`  ${meta.join("  ·  ")}`))
+
+    // #179337 — the widest possible grant was the one you got by typing the
+    // obvious command, with nothing said about it. Say it. Printed AFTER the
+    // URL so the happy path still starts with the thing you came for.
+    //
+    // Only unscoped links warn: since #179373 a scoped member reaches neither
+    // the rest of the board nor its attached CRM leads, so there is nothing
+    // left to caution them about. Warning on every mint would train people to
+    // ignore it, which is how the next real warning gets missed.
+    if (!scopeType) {
+      const extra = await countAttachedLeads(args.id, userId)
+      prompts.log.warn(
+        `This link grants EVERY list and item on bloq ${args.id}` +
+          (extra ? `, plus the CRM notes on its ${extra} attached lead${extra === 1 ? "" : "s"}` : "") +
+          `.\n  Narrow it with --scope-list <listId> / --scope-item <itemId> / --scope-own.`,
+      )
+    }
 
     if (args.open) {
       const opened = openBrowser(url)
@@ -2674,6 +2693,43 @@ const BloqsShareCommand = cmd({
     }
   },
 })
+
+/**
+ * How many leads are attached to a bloq — used only to make the board-wide
+ * warning concrete (#179337). Best-effort: a warning is a courtesy, so a failed
+ * lookup must never take down the mint that already succeeded.
+ */
+async function countAttachedLeads(bloqId: number, userId: number): Promise<number> {
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}`)
+    if (!res.ok) return 0
+    const body = (await res.json()) as any
+    const bloq = body?.data ?? body
+    return Array.isArray(bloq?.leads) ? bloq.leads.length : 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Render a link's scope for humans (#179342).
+ *
+ * A NULL scope_type is a pre-#179082 row and has always meant the whole board,
+ * so it reads the same as an explicit `bloq` — the distinction is a storage
+ * detail, and showing "unknown" would imply doubt that does not exist.
+ */
+function describeScope(scopeType?: string | null, scopeId?: number | null): string {
+  switch (scopeType) {
+    case "list":
+      return `list #${scopeId}`
+    case "item":
+      return `item #${scopeId}`
+    case "own":
+      return "own rows only"
+    default:
+      return "WHOLE BOARD"
+  }
+}
 
 const BloqsLinksCommand = cmd({
   command: "links <id>",
@@ -2705,6 +2761,10 @@ const BloqsLinksCommand = cmd({
       const active = l.is_usable ?? l.is_active
       const flag = active ? success("●") : dim("○")
       const meta: string[] = [String(l.permission)]
+      // #179342 — scope is the ONLY field that says whether this link hands over
+      // one list or the entire board. Omitting it made this listing look
+      // complete while being unable to show the risk it exists to surface.
+      meta.push(describeScope(l.scope_type, l.scope_id))
       if (l.expires_at) meta.push(`exp ${String(l.expires_at).slice(0, 10)}`)
       meta.push(`${l.use_count ?? 0}${l.max_uses ? `/${l.max_uses}` : ""} uses`)
       console.log(`  ${flag} ${dim(`#${l.id}`)}  ${inviteWebUrl(l.token)}`)
