@@ -484,7 +484,11 @@ const CreateCommand = cmd({
         describe: "bounty type ('placement' = fixed prizes by rank via --reward-tiers)",
         type: "string",
         default: "video_views",
-        choices: ["video_views", "audio_streams", "social_impressions", "ugc_views", "placement"],
+        // gig/fde/task are ENGAGEMENT types priced by FixedAmountCalculator
+        // (role.pay_amount -> proposed_budget -> fixed cents), as opposed to the
+        // view/impression types metered per 1K. They were reachable over the API
+        // but not from the CLI, so `--type gig` failed the choices check.
+        choices: ["video_views", "audio_streams", "social_impressions", "ugc_views", "placement", "gig", "fde", "task"],
       })
       .option("rate-per-mille", { describe: "pay rate per 1K views in cents (e.g. 500 = $5)", type: "number" })
       .option("reward-tiers", { describe: "placement prizes in dollars, best-first (e.g. \"250,100,50\" = 1st/2nd/3rd)", type: "string" })
