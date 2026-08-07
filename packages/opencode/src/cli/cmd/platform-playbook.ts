@@ -1160,12 +1160,26 @@ const PlaybookSyncCommand = cmd({
             let plan
             try { plan = await parsePlan(info) } catch { continue }
 
+            // `content` is the SOP body, and without it this sync uploads a
+            // catalogue: the API knows a playbook NAMED deploy exists, and
+            // nothing about what it says. That is why the cloud connector could
+            // list playbooks but never show one — the bodies were never sent.
+            // The server only overwrites content when it is non-null, so
+            // sending it here cannot wipe anything.
+            let content: string | undefined
+            try {
+              content = await Bun.file(info.location).text()
+            } catch {
+              // Unreadable file — still register the metadata rather than skip.
+            }
+
             const payload = {
               name: plan.name,
               description: plan.description,
               args_schema: plan.args,
               steps_summary: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode })),
               version: plan.version,
+              ...(content ? { content } : {}),
             }
 
             const { IRIS_API } = await import("./iris-api")
