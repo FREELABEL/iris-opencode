@@ -83,7 +83,32 @@ function getNestedValue(obj: any, path: string): unknown {
   return cur
 }
 
-function setNestedValue(obj: any, path: string, value: unknown): void {
+/**
+ * Pull the version rows out of whatever `/pages/{id}/versions` returns (#179314).
+ *
+ * It returns a LARAVEL PAGINATOR: `{ current_page, data: [...], first_page_url, last_page,
+ * links, next_page_url, path, per_page, ... }`. The previous code fell back to
+ * `Object.values(raw)` for any object, so it enumerated the paginator's OWN FIELDS — reporting
+ * "13 version(s)" when 13 was the number of envelope keys, printing `v?` for the scalars, and
+ * then throwing `null is not an object` on `next_page_url: null`.
+ *
+ * The count was wrong before it ever crashed, which is the worse half: a version list you
+ * cannot read is obvious, a version COUNT that is silently the wrong thing is not. Handles the
+ * bare array and the `{data: {data: []}}` double-wrap too, since this API does both elsewhere.
+ */
+export function extractVersions(raw: unknown): Record<string, any>[] {
+  const rows = Array.isArray(raw)
+    ? raw
+    : raw !== null && typeof raw === "object" && Array.isArray((raw as any).data)
+      ? (raw as any).data
+      : []
+  return rows.filter((v: unknown): v is Record<string, any> => v !== null && typeof v === "object" && !Array.isArray(v))
+}
+
+/** Append tokens: `foo.-1`, `foo.+` and `foo.[]` all mean "push onto this array". */
+const APPEND_TOKENS = new Set(["-1", "+", "[]"])
+
+export function setNestedValue(obj: any, path: string, value: unknown): void {
   const parts = path.split(".")
   let cur: any = obj
   for (let i = 0; i < parts.length - 1; i++) {
@@ -95,7 +120,41 @@ function setNestedValue(obj: any, path: string, value: unknown): void {
     }
     cur = cur[key as any]
   }
+
   const last = parts[parts.length - 1]
+
+  // APPEND. Previously `-1` fell through to the string-key branch below, because
+  // /^\d+$/ does not match a leading minus. That set a NON-INDEX property on the array
+  // — which JSON.stringify drops — so the command reported success and wrote nothing.
+  // A write path that prints "Updated" after changing nothing is worse than one that
+  // errors, because the natural next move is to trust it.
+  if (APPEND_TOKENS.has(last)) {
+    if (!Array.isArray(cur)) {
+      throw new Error(`Cannot append at "${path}" — the target is ${cur === null ? "null" : typeof cur}, not an array.`)
+    }
+    cur.push(value)
+    return
+  }
+
+  if (Array.isArray(cur)) {
+    // A numeric index is fine, including one position past the end (that is an append).
+    // Anything else would become a property the array ignores, so refuse it rather than
+    // pretend. Out-of-range past the end would create holes; say so.
+    if (!/^\d+$/.test(last)) {
+      throw new Error(
+        `Cannot set "${last}" on an array at "${path}" — use a numeric index, or -1 to append.`,
+      )
+    }
+    const idx = Number(last)
+    if (idx > cur.length) {
+      throw new Error(
+        `Index ${idx} is past the end of the array at "${path}" (length ${cur.length}) — use -1 to append.`,
+      )
+    }
+    cur[idx] = value
+    return
+  }
+
   cur[/^\d+$/.test(last) ? Number(last) : last] = value
 }
 
@@ -1105,16 +1164,26 @@ const VersionsCmd = cmd({
       if (!(await handleApiError(res, "Versions"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       const data = (await res.json()) as { data?: any }
       // Bug #57236: API may return {} or {data: {}} instead of an array — normalize
-      const raw = data?.data
-      const versions: any[] = Array.isArray(raw) ? raw : (typeof raw === "object" && raw !== null ? Object.values(raw) : [])
+      const versions = extractVersions(data?.data)
+      // A paginated history that quietly shows page 1 is the same failure as the count being
+      // wrong — you would roll back to "the oldest version" that is merely the oldest ON SCREEN.
+      const pager: any = data?.data
+      const more =
+        pager && !Array.isArray(pager) && typeof pager === "object" && Number(pager.last_page ?? 1) > 1
+          ? { page: Number(pager.current_page ?? 1), pages: Number(pager.last_page), total: Number(pager.total ?? 0) }
+          : null
       sp.stop(`${versions.length} version(s)`)
       if (versions.length === 0) { prompts.outro("None"); return }
       printDivider()
       for (const v of versions) {
-        console.log(`  ${bold(`v${v.version_number ?? "?"}`)}  ${dim(v.created_at ?? "")}  ${dim(`by ${v.changed_by ?? "?"}`)}`)
-        if (v.change_summary) console.log(`    ${dim(v.change_summary)}`)
+        const num = v.version_number ?? v.version ?? v.id
+        console.log(`  ${bold(`v${num ?? "?"}`)}  ${dim(String(v.created_at ?? v.updated_at ?? ""))}  ${dim(`by ${v.changed_by ?? v.created_by ?? "?"}`)}`)
+        if (v.change_summary) console.log(`    ${dim(String(v.change_summary))}`)
       }
       printDivider()
+      if (more) {
+        console.log(`  ${dim(`showing page ${more.page} of ${more.pages}${more.total ? ` — ${more.total} versions total` : ""}`)}`)
+      }
       prompts.outro(dim(`iris pages rollback ${args.slug} --version=N`))
     } catch (err) {
       sp.stop("Error", 1)
