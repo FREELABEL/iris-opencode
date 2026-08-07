@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { DashboardRulesListCommand, DashboardRuleGetCommand } from "./platform-dashboard-rules"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
@@ -482,12 +483,15 @@ const AddAssistantCmd = cmd({
 
 export const PlatformDashboardCommand = cmd({
   command: "dashboard",
-  describe: "manage client dashboards — create, status, add-assistant",
+  describe: "manage client dashboards — create, status, add-assistant, rules",
   builder: (y) =>
     y
       .command(CreateCmd)
       .command(StatusCmd)
       .command(AddAssistantCmd)
+      // Query the Atlas rule surface behind a dashboard. See platform-dashboard-rules.ts.
+      .command(DashboardRulesListCommand)
+      .command(DashboardRuleGetCommand)
       .demandCommand(1, "Run iris dashboard <command> --help"),
   handler() {},
 })
