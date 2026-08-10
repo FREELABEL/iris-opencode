@@ -170,6 +170,7 @@ import { PlatformMsgCommand } from "./cli/cmd/platform-msg"
 import { PlatformAffiliatesCommand } from "./cli/cmd/platform-affiliates"
 import { PlatformPlaybookCommand, PlatformSkillCommand } from "./cli/cmd/platform-playbook"
 import { PlatformLoopCommand } from "./cli/cmd/platform-loop"
+import { PlatformUsageCommand, PlatformTracesCommand } from "./cli/cmd/platform-usage"
 import { GuideCommand } from "./cli/cmd/guide"
 import { registerCommand, getRegistry } from "./cli/cmd/command-groups"
 import { renderGroupedHelp, renderNamespacedHelp } from "./cli/help-renderer"
@@ -422,6 +423,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformMsgCommand))
   .command(reg(PlatformAffiliatesCommand))
   .command(reg(PlatformLoopCommand))
+  .command(reg(PlatformUsageCommand))
+  .command(reg(PlatformTracesCommand))
   .command(reg(PlatformPlaybookCommand))
   .command(PlatformSkillCommand) // hidden alias for backward compat
   .fail((msg, err) => {
@@ -485,8 +488,42 @@ try {
   }
 } catch {}
 
+// COMMAND-LEVEL TRACE (#178533 follow-up). Until now the only spans that existed
+// came from session/processor.ts — the agent loop. But `iris <cmd>` never goes near
+// that loop, and `iris <cmd>` is 100% of what the MCP connector executes: iris-exec
+// spawns the binary with one command and reads stdout. So the surface we shipped the
+// beta on produced no run_start, no run_end, no successes — only a cli_command_error
+// when something threw.
+//
+// That is an error log without a denominator, which is the exact failure the trace
+// spine was built to end: "0 errors" and "nobody ran anything" were the same reading.
+// A run_start/run_end pair per invocation is what makes `iris usage` able to say a
+// command was run 40 times and failed twice, instead of only ever knowing about the two.
+const commandTraceId = Beacon.newTraceId()
+const commandSpanId = Beacon.newSpanId()
+const commandStartedAt = Date.now()
+
+// The command WORD only (`leads`, `pages`, `bug`) — never argv. Flags and positionals
+// carry search terms, names and record ids, and this table is metadata-only.
+const commandName = rawArgs.find((a) => !a.startsWith("-"))
+
+Beacon.span("run_start", {
+  trace_id: commandTraceId,
+  span_id: commandSpanId,
+  command: commandName,
+})
+
 try {
   await cli.parse()
+
+  Beacon.span("run_end", {
+    trace_id: commandTraceId,
+    span_id: Beacon.newSpanId(),
+    parent_span_id: commandSpanId,
+    command: commandName,
+    outcome: "ok",
+    duration_ms: Date.now() - commandStartedAt,
+  })
 
   // ACTIVATION (#179077 follow-up). Fires once, ever, on the first command run
   // after authenticating — the step that separates "installed" from "actually
@@ -524,6 +561,19 @@ try {
     })
   }
   Log.Default.error("fatal", data)
+
+  // Close the trace on the failure path too. A run_start with no run_end reads as
+  // "died without reporting", and a command that threw cleanly is not that — it is a
+  // known outcome, and conflating the two hides the crashes that genuinely vanish.
+  Beacon.span("run_end", {
+    trace_id: commandTraceId,
+    span_id: Beacon.newSpanId(),
+    parent_span_id: commandSpanId,
+    command: commandName,
+    outcome: "error",
+    duration_ms: Date.now() - commandStartedAt,
+  })
+
   // Beacon the fatal command error to telemetry. Awaited so the POST flushes
   // before the finally{} process.exit() — reliable client error visibility.
   await Beacon.report("cli_command_error", {
@@ -539,6 +589,14 @@ try {
   }
   process.exitCode = 1
 } finally {
+  // Spans are buffered and coalesced on a 2s unref'd timer, which a CLI process
+  // never lives long enough to reach — and process.exit() below discards the
+  // buffer. Without this await, run_end is written for every invocation and sent
+  // for none, which is worse than not recording it: every run would look abandoned.
+  // Capped at 800ms rather than the 3s default: this await is the last thing
+  // between the user and their prompt. It never throws.
+  await Beacon.flush(800)
+
   // FLUSH BEFORE EXITING. When stdout is a PIPE (`iris ... --json | jq`, or any
   // scripted use) Node's writes are asynchronous, and process.exit() discards
   // whatever is still buffered — silently truncating the output mid-string.
