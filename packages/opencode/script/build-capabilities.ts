@@ -92,7 +92,7 @@ function collectBlocks(dir: string): Map<string, Block> {
   for (const file of readdirSync(dir)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue
     const src = readFileSync(join(dir, file), "utf-8")
-    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+Command)\s*=\s*cmd\(\s*\{/g)) {
+    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group))\s*=\s*cmd\(\s*\{/g)) {
       const openIdx = m.index! + m[0].length - 1
       const body = readBlock(src, openIdx)
       if (!body) continue
@@ -147,7 +147,7 @@ function collectCommands(): Entry[] {
     const nextSeen = new Set(seen).add(constName)
 
     // Direct children only — those named in THIS block's builder.
-    const childNames = [...b.body.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+Command)/g)].map((m) => m[1])
+    const childNames = [...b.body.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+(?:Command|Group))/g)].map((m) => m[1])
     const childTokens: string[] = []
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1))
