@@ -1,5 +1,13 @@
 # Bespoke Genesis Pages — How-To
 
+> **STOP — read the design standard first:** `iris how-to view genesis-design-standard`
+> Score every page against the 10-point audit before publishing. Check 01 (subject-derived) predicts
+> the rest: if the design could be moved onto a different subject unchanged, it is a template and
+> local fixes will not rescue it.
+> Three that break pages silently: switch themes on `html.dark` **not** `prefers-color-scheme`;
+> never let a CustomHtml block paint its own `background`; namespace every selector.
+
+
 Ship a hand-designed **custom HTML+CSS** page as a live Genesis page at `heyiris.io/p/<slug>`.
 Use this when the composable component catalog can't express the design and you want full freedom
 (audit reports, one-pagers, animated landings, spec sheets).

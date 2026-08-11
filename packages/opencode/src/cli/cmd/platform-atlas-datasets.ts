@@ -1443,12 +1443,175 @@ const DeriveCommand = cmd({
   },
 })
 
+// ── ECONOMICS ────────────────────────────────────────────────────────────────
+//
+// How a dataset rolls up money, and what the expandable rows on the CaseEconomics
+// dashboard card drill into. The rule is field-agnostic: a dataset says which key
+// groups its rows, which holds the value, and an ORDERED list of breakdown
+// dimensions. Order matters — it is a fallback chain, and the first dimension that
+// actually splits a group wins.
+
+export type EconDimension = { type: "field" | "list" | "age"; field: string; emptyLabel?: string; buckets?: number[] }
+
+/**
+ * Parse `--breakdown` into dimensions. Forms, comma-separated:
+ *   law_firm                       → field
+ *   list:service_providers         → multi-value (a record is split across its values)
+ *   age:referral_date:30/90/180    → day buckets
+ */
+export function parseBreakdown(input?: string): EconDimension[] {
+  if (!input) return []
+  return input.split(",").map((raw) => {
+    const part = raw.trim()
+    if (!part) return null
+    const [head, ...rest] = part.split(":")
+    const kind = head.trim().toLowerCase()
+    if (kind === "list") return { type: "list", field: (rest[0] ?? "").trim() } as EconDimension
+    if (kind === "age") {
+      const buckets = (rest[1] ?? "").split("/").map((n) => parseInt(n.trim(), 10)).filter((n) => Number.isFinite(n) && n > 0)
+      const dim: EconDimension = { type: "age", field: (rest[0] ?? "").trim() }
+      if (buckets.length) dim.buckets = buckets
+      return dim
+    }
+    // Bare field name (or explicit `field:` prefix).
+    return { type: "field", field: (kind === "field" ? (rest[0] ?? "") : part).trim() } as EconDimension
+  }).filter((d): d is EconDimension => d !== null && d.field !== "")
+}
+
+function printEconomics(spec: any, defaults: any, configured: boolean) {
+  const effective = configured ? spec : defaults
+  printDivider()
+  if (!configured) {
+    console.log(`  ${dim("Not configured — showing the built-in default this dataset falls back to.")}`)
+  }
+  console.log(`  ${dim("Group rows by:")} ${effective?.groupBy ?? dim("—")}`)
+  console.log(`  ${dim("Sum value in:")}  ${effective?.valueBy ?? dim("—")}`)
+  console.log(`  ${dim("Count noun:")}    ${effective?.countNoun ?? "case"}`)
+  if (effective?.title) console.log(`  ${dim("Card title:")}    ${effective.title}`)
+  if (effective?.totalLabel) console.log(`  ${dim("Total label:")}   ${effective.totalLabel}`)
+  console.log(`  ${bold("Breakdown (tried in order):")}`)
+  const dims: EconDimension[] = effective?.breakdown ?? []
+  if (!dims.length) console.log(`    ${dim("none — rows will not expand")}`)
+  for (const [i, d] of dims.entries()) {
+    const extra = d.type === "age" && d.buckets?.length ? dim(` buckets ${d.buckets.join("/")} days`) : ""
+    const empty = d.emptyLabel ? dim(` empty→"${d.emptyLabel}"`) : ""
+    console.log(`    ${i + 1}. ${bold(d.field)} ${dim(`(${d.type})`)}${extra}${empty}`)
+  }
+  printDivider()
+}
+
+const EconomicsShowCommand = cmd({
+  command: "show <slug>",
+  describe: "show a dataset's economics roll-up config",
+  builder: (y) => y.positional("slug", { type: "string", demandOption: true }).option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Economics: ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const res = await irisFetch(`/api/v1/atlas/datasets/${args.slug}/economics`)
+    const ok = await handleApiError(res, "Show economics"); if (!ok) { prompts.outro("Done"); return }
+    const body = (await res.json()) as any
+
+    if (args.json) { console.log(JSON.stringify(body, null, 2)); prompts.outro("Done"); return }
+    printEconomics(body?.economics, body?.defaults, Boolean(body?.configured))
+    prompts.outro("Done")
+  },
+})
+
+const EconomicsSetCommand = cmd({
+  command: "set <slug>",
+  describe: "set how a dataset rolls up and breaks down",
+  builder: (y) =>
+    y.positional("slug", { type: "string", demandOption: true })
+      .option("group-by", { type: "string", describe: "field whose value becomes each row (e.g. stage_name)" })
+      .option("value-by", { type: "string", describe: "numeric field to total per row (e.g. invoice_total)" })
+      .option("count-noun", { type: "string", describe: 'pluralised in labels — "case" → "12 cases"' })
+      .option("title", { type: "string", describe: "card title" })
+      .option("total-label", { type: "string", describe: "label on the total row" })
+      .option("breakdown", {
+        type: "string",
+        describe: 'ordered dimensions: "law_firm,list:service_providers,age:referral_date:30/90/180"',
+      })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Economics: ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const economics: Record<string, unknown> = {}
+    if (args["group-by"]) economics.groupBy = args["group-by"]
+    if (args["value-by"]) economics.valueBy = args["value-by"]
+    if (args["count-noun"]) economics.countNoun = args["count-noun"]
+    if (args.title) economics.title = args.title
+    if (args["total-label"]) economics.totalLabel = args["total-label"]
+    const dims = parseBreakdown(args.breakdown as string | undefined)
+    if (dims.length) economics.breakdown = dims
+
+    if (Object.keys(economics).length === 0) {
+      // Sending {} would clear the config, which `reset` already does explicitly. Saying
+      // nothing should never silently wipe a client's setup.
+      console.log(`  ${bold("!")} Nothing to set. Pass at least one option, or use ${bold("economics reset")} to clear.`)
+      prompts.outro("Done")
+      return
+    }
+
+    const res = await irisFetch(`/api/v1/atlas/datasets/${args.slug}/economics`, {
+      method: "PATCH",
+      body: JSON.stringify({ economics }),
+    })
+    const ok = await handleApiError(res, "Set economics"); if (!ok) { prompts.outro("Done"); return }
+    const body = (await res.json()) as any
+
+    if (args.json) { console.log(JSON.stringify(body, null, 2)); prompts.outro("Done"); return }
+    console.log(`  ${bold("✓")} Saved.`)
+    printEconomics(body?.economics, body?.defaults, Boolean(body?.configured))
+    prompts.outro("Done")
+  },
+})
+
+const EconomicsResetCommand = cmd({
+  command: "reset <slug>",
+  describe: "clear the config and fall back to the built-in default",
+  builder: (y) =>
+    y.positional("slug", { type: "string", demandOption: true })
+      .option("force", { alias: "y", type: "boolean", default: false, describe: "skip confirmation" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Economics reset: ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    if (!args.force && !isNonInteractive()) {
+      const go = await prompts.confirm({ message: `Clear the economics config for "${args.slug}"?` })
+      if (!go || prompts.isCancel(go)) { prompts.outro("Cancelled"); return }
+    }
+
+    const res = await irisFetch(`/api/v1/atlas/datasets/${args.slug}/economics`, {
+      method: "PATCH",
+      body: JSON.stringify({ economics: null }),
+    })
+    const ok = await handleApiError(res, "Reset economics"); if (!ok) { prompts.outro("Done"); return }
+    const body = (await res.json()) as any
+    console.log(`  ${bold("✓")} Cleared — this dataset now uses the built-in default.`)
+    printEconomics(body?.economics, body?.defaults, Boolean(body?.configured))
+    prompts.outro("Done")
+  },
+})
+
+const EconomicsGroup = cmd({
+  command: "economics",
+  aliases: ["econ"],
+  describe: "how a dataset rolls up money and what its rows expand into",
+  builder: (y) => y.command(EconomicsShowCommand).command(EconomicsSetCommand).command(EconomicsResetCommand).demandCommand(),
+  async handler() {},
+})
+
 export const PlatformAtlasDatasetsCommand = cmd({
   command: "atlas:datasets",
   aliases: ["atlas-datasets", "datasets"],
   describe: "Schema-driven datasets — define once, store anything, no migrations",
   builder: (y) =>
     y.command(SchemasGroup).command(RecordsGroup).command(ImportCommand).command(AggregateCommand).command(DeriveCommand)
-     .command(FeedsGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).demandCommand(),
+     .command(FeedsGroup).command(ExportCommand).command(AuditCommand).command(ApiCommand).command(EconomicsGroup).demandCommand(),
   async handler() {},
 })
