@@ -610,6 +610,7 @@ const PushCmd = cmd({
         }).catch(() => {})
         sp.stop(success(`Pushed (${cnt} components) + published`))
         console.log(`  ${highlight(publicUrl(args.slug))}`)
+        printDesignStandardHint()
       // Safe-by-default: unpublish after push so live page is untouched
       } else if (!args.live && page.status === "published") {
         await pagesFetch(`/api/v1/pages/${page.id}/unpublish`, { method: "POST" })
@@ -875,6 +876,7 @@ const CreateCmd = cmd({
       printKV("Status", p.status)
       printKV("URL", publicUrl(p))
       printDivider()
+      printDesignStandardHint()
       prompts.outro(dim(`iris pages publish ${p.slug}`))
     } catch (err) {
       sp.stop("Error", 1)
@@ -2401,11 +2403,23 @@ const ShareRevokeCmd = cmd({
 // Root
 // ============================================================================
 
+/**
+ * The house design standard is easy to have and easy to skip — it lived in a Genesis page, a bloq
+ * item and agent memory, and pages still shipped that had never been scored against it. Printing it
+ * at the moment a page is created or published puts it in front of the person actually shipping,
+ * which is the only place it reliably lands.
+ */
+function printDesignStandardHint(): void {
+  console.log()
+  console.log(`  ${dim("Design standard:")} ${highlight("iris how-to view genesis-design-standard")}`)
+  console.log(`  ${dim("Score the 10-point audit before this goes out — and open it in a browser.")}`)
+}
+
 export const PlatformPagesCommand = cmd({
   command: "pages",
   aliases: ["genesis"],
   describe:
-    "manage composable pages — list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot",
+    "manage composable pages — list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot. Design standard: `iris how-to view genesis-design-standard`",
   builder: (y) =>
     y
       .command(ListCmd)
