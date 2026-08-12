@@ -199,6 +199,18 @@
       "dest": "how-to/pathways-cfo-workflow.md",
       "managed": true,
       "purpose": "How to: Run the Pathways CFO Workflow (Service AI \u2192 Atlas \u2192 QuickBooks)"
+    },
+    {
+      "src": "playbooks/hive-secure-mesh/PLAYBOOK.md",
+      "dest": "playbooks/hive-secure-mesh/PLAYBOOK.md",
+      "managed": true,
+      "purpose": "Runnable SOP for the Hive + Tailscale secure mesh \u2014 onboard a machine, lock it down with a least-privilege ACL, connect, enroll it as a Hive node, and diagnose bottom-up. Companion to the hive-tailscale how-to, which explains the model; this is the half you run."
+    },
+    {
+      "src": "how-to/hive-tailscale.md",
+      "dest": "how-to/hive-tailscale.md",
+      "managed": true,
+      "purpose": "How to: Reach a machine that isn't on your network (Hive + Tailscale) \u2014 the three layers (mesh / ACL / Hive node), the two independent rails (daemon dials out vs tailnet dials in) and how to pick, plus lockdown and bottom-up diagnosis."
     }
   ]
 }
