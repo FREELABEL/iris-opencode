@@ -35,6 +35,10 @@ interface LedgerRow {
   expiryDate?: string | null
   documentHash?: string | null
   signingUrl?: string | null
+  partyLinks?: Array<{ role: string; name?: string | null; status: string; url: string }>
+  partiesTotal?: number
+  partiesSigned?: number
+  waitingOn?: string | null
   live?: boolean
   waitingDays?: number | null
   expiringSoon?: boolean
@@ -124,6 +128,10 @@ const ListCommand = cmd({
       )
       const detail = [
         r.org ? r.org : null,
+        // Half-signed is a different situation from not-started and needs different chasing.
+        r.partiesTotal && r.partiesTotal > 1
+          ? `${r.partiesSigned ?? 0}/${r.partiesTotal} signed${r.waitingOn ? ` — waiting on ${r.waitingOn}` : ""}`
+          : null,
         r.executedAt ? `executed ${r.executedAt}` : null,
         r.expiryDate ? `expires ${r.expiryDate}` : null,
         r.documentHash ? `seal ${shortHash(r.documentHash)}` : null,
@@ -226,11 +234,26 @@ const LinkCommand = cmd({
       prompts.log.info(`Already executed on ${body.agreement.executedAt} — nothing to chase.`)
     }
 
+    const links = body.agreement.partyLinks ?? []
     console.log()
-    console.log(`  ${body.agreement.signingUrl}`)
+    if (links.length > 1) {
+      // One URL is not enough when there are two sides and they are not interchangeable.
+      // Printing them together with the role makes it obvious which goes to whom.
+      for (const l of links) {
+        const mark = l.status === "signed" ? success("signed  ") : dim("pending ")
+        console.log(`  ${mark} ${bold(l.role.padEnd(16))} ${l.url}`)
+        if (l.name) console.log(`           ${dim(l.name)}`)
+      }
+    } else {
+      console.log(`  ${body.agreement.signingUrl}`)
+    }
     console.log()
-    // Said every time it is printed, because that is the moment someone is about to paste it.
-    prompts.log.warn("Anyone with that URL can sign. Give it to the counterparty only.")
+    // Said every time one is printed, because that is the moment someone is about to paste it.
+    prompts.log.warn(
+      links.length > 1
+        ? "Each link signs for ONE party. Do not send the wrong one — and do not send both to the same person."
+        : "Anyone with that URL can sign. Give it to the counterparty only.",
+    )
     prompts.outro("Done")
   },
 })
