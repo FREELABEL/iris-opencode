@@ -473,7 +473,7 @@ const AgentsCreateCommand = cmd({
       printDivider()
       printKV("ID", a.id)
       printKV("Name", a.name)
-      printKV("Model", a.model ?? (a.settings as Record<string, unknown>)?.model)
+      printKV("Model", (a.config as any)?.model ?? (a.settings as Record<string, unknown>)?.model ?? a.model)
       if (a.bloq_id) printKV("Bloq", a.bloq_id)
       if (args["heartbeat-mode"]) printKV("Heartbeat", args["heartbeat-mode"])
       printDivider()
@@ -669,13 +669,47 @@ const AgentsUpdateCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
-      const a = data?.data ?? data
+      let a = data?.data ?? data
+
+      // VERIFY THE WRITE LANDED (#179802). The response echoes the payload, so printing
+      // `a.model` proved only that we asked — not that anything persisted. The model lives in
+      // config.model / config.modelName / settings.model, and there is a fallback path above
+      // that sends a TOP-LEVEL `model` the API does not read; that combination printed
+      // "Model: <new>" while the agent stayed on its old one. Re-read and compare.
+      if (args.model) {
+        let landed: string | null = null
+        try {
+          const check = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
+          const body = (await check.json()) as any
+          const fresh = body?.data ?? body
+          landed =
+            fresh?.config?.model ?? fresh?.settings?.model ?? fresh?.model ?? null
+          if (fresh) a = fresh
+        } catch {
+          landed = null
+        }
+
+        if (landed !== null && landed !== args.model) {
+          spinner.stop("Not applied", 1)
+          prompts.log.error(
+            `The API accepted the request but the agent is still on '${landed}', not '${args.model}'.\n` +
+              `Nothing was changed. Re-run, or check: iris agents get ${args.id}`,
+          )
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+        if (landed === null) {
+          prompts.log.warn(`Could not read the agent back to confirm. Check: iris agents get ${args.id}`)
+        }
+      }
+
       spinner.stop(`${success("✓")} Updated: ${bold(String(a.name ?? a.id))}`)
 
       printDivider()
       printKV("ID", a.id)
       printKV("Name", a.name)
-      printKV("Model", a.model ?? (a.settings as Record<string, unknown>)?.model)
+      printKV("Model", (a.config as any)?.model ?? (a.settings as Record<string, unknown>)?.model ?? a.model)
       if (wantsIntegration) {
         const ints = (a.settings as Record<string, unknown>)?.integrations
         const names = Array.isArray(ints) ? ints.map((it: any) => (typeof it === "string" ? it : (it?.type ?? it?.name))).filter(Boolean) : []
