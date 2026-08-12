@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API } from "./iris-api"
 
 // ============================================================================
 // Execution-verification helpers (#146511) — `run` reports "dispatched", then
@@ -821,14 +821,58 @@ const SchedulesToggleCommand = cmd({
     spinner.start(`${action === "Enable" ? "Enabling" : "Disabling"}…`)
 
     try {
-      // toggle via PUT update with is_active flag
+      // Send `status`, which is the field the API has always actually read. This command used
+      // to send only `is_active` — a field the controller did not know — so the write fell
+      // through, the job saved unchanged, a 200 came back, and this printed a checkmark while
+      // the schedule kept firing (#179802). The API now accepts is_active as an alias too, so
+      // both are sent: `status` is correct, `is_active` keeps older backends working.
       const endpoint = `/api/v1/users/${userId}/bloqs/scheduled-jobs/${args.id}`
+      const wanted = args.disable ? "paused" : "scheduled"
 
-      const res = await irisFetch(endpoint, { method: "PUT", body: JSON.stringify({ is_active: !args.disable }) })
+      const res = await irisFetch(endpoint, {
+        method: "PUT",
+        body: JSON.stringify({ status: wanted, is_active: !args.disable }),
+      })
       const ok = await handleApiError(res, `${action} schedule`)
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      spinner.stop(`${success("✓")} Schedule ${action.toLowerCase()}d`)
+      // VERIFY THE WRITE LANDED. Disabling a schedule is the emergency brake — it is what you
+      // reach for when an agent is looping or burning tokens. A checkmark the operator trusts
+      // and does not re-check is worse than an error, so success is now asserted against the
+      // server's own view rather than against a 200.
+      let landed: string | null = null
+      try {
+        const body = (await res.json()) as any
+        landed = body?.data?.status ?? body?.status ?? null
+      } catch {
+        // Non-JSON body — fall through to the explicit re-read below.
+      }
+      if (landed === null) {
+        try {
+          const check = await irisFetch(endpoint)
+          const body = (await check.json()) as any
+          landed = body?.data?.status ?? body?.status ?? null
+        } catch {
+          landed = null
+        }
+      }
+
+      if (landed !== null && landed !== wanted) {
+        spinner.stop("Not applied", 1)
+        prompts.log.error(
+          `The API accepted the request but the schedule is still '${landed}', not '${wanted}'.\n` +
+            `Nothing was changed. Stop it with: iris schedules delete ${args.id} --yes`,
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      spinner.stop(`${success("✓")} Schedule ${action.toLowerCase()}d${landed ? dim(` (status: ${landed})`) : ""}`)
+      if (landed === null) {
+        // Could not confirm — say so rather than implying it is done.
+        prompts.log.warn(`Could not read the schedule back to confirm. Check: iris schedules get ${args.id}`)
+      }
       prompts.outro(dim(`iris schedules get ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
@@ -1009,7 +1053,9 @@ const SchedulesDeleteCommand = cmd({
     yargs
       .positional("id", { describe: "schedule ID", type: "number", demandOption: true })
       .option("dry-run", { describe: "show what would be deleted without deleting", type: "boolean", default: false })
-      .option("force", { alias: "f", describe: "skip confirmation", type: "boolean", default: false })
+      // `yes` aliased because that is what every other tool calls it, and the reporter of
+      // #179802 concluded there was no such flag while `--force` sat right here.
+      .option("force", { alias: ["f", "yes", "y"], describe: "skip confirmation", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -1050,6 +1096,18 @@ const SchedulesDeleteCommand = cmd({
       }
 
       if (!args.force) {
+        // Deleting is the only mechanism that reliably STOPS a schedule, so it is what a script
+        // reaches for in an incident. Prompting with no TTY hung the process instead of failing
+        // — the worst outcome available: a runaway job keeps firing while the operator's script
+        // sits waiting on a question nobody can answer (#179802).
+        if (isNonInteractive()) {
+          prompts.log.error(
+            `Refusing to prompt with no TTY. Re-run with --yes to confirm:\n  iris schedules delete ${args.id} --yes`,
+          )
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
         const confirmed = await prompts.confirm({ message: `Delete schedule #${args.id}? This cannot be undone.` })
         if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
       }
