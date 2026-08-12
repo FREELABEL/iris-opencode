@@ -1114,10 +1114,51 @@ const UpdateCommand = cmd({
       return
     }
 
-    if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+    // VERIFY THE WRITE LANDED (#179802). This used to fall back to Object.keys(body) — the
+    // fields we SENT — whenever the server did not say what it changed, so a multi-field
+    // update that applied only one of them still printed all three as updated. Observed:
+    // `bug update <id> -s high --title … --description …` applied only the description while
+    // reporting success; re-running each flag alone worked. Assert against the item itself.
+    const requested = Object.keys(body)
+    const serverSaid = Array.isArray(data?.data?.updated) ? (data.data.updated as string[]) : null
+    let missed: string[] = []
+
+    if (serverSaid) {
+      missed = requested.filter((k) => !serverSaid.includes(k))
     } else {
-      const fields = (data?.data?.updated ?? Object.keys(body)) as string[]
+      // No per-field receipt — re-read and compare the fields we can check directly.
+      try {
+        const check = await irisFetch(`/api/v1/bloqs/items/${itemId}`)
+        const fresh = ((await check.json()) as any)?.data ?? null
+        if (fresh) {
+          const cmp: Record<string, unknown> = {
+            severity: fresh.severity,
+            status: fresh.status,
+            title: fresh.title,
+          }
+          missed = requested.filter(
+            (k) => k in cmp && cmp[k] != null && String(cmp[k]) !== String(body[k]),
+          )
+        }
+      } catch {
+        // Unreadable — say nothing rather than claiming either way.
+      }
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify({ ...data, requested, not_applied: missed }, null, 2))
+    } else if (missed.length) {
+      console.log(
+        `${success("✓")} Bug #${itemId} updated` +
+          dim(` (${requested.filter((k) => !missed.includes(k)).join(", ") || "nothing"})`),
+      )
+      prompts.log.error(
+        `These did NOT apply: ${missed.join(", ")}.\n` +
+          `Re-run them one at a time — a multi-field update can silently drop fields.`,
+      )
+      process.exitCode = 1
+    } else {
+      const fields = serverSaid ?? requested
       console.log(success(`✓ Bug #${itemId} updated`) + dim(` (${fields.join(", ")})`))
     }
   },
