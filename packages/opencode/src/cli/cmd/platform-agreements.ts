@@ -235,11 +235,160 @@ const LinkCommand = cmd({
   },
 })
 
+
+const RaiseCommand = cmd({
+  command: "raise",
+  aliases: ["new", "create"],
+  describe: "raise an agreement and optionally issue it",
+  builder: (y) =>
+    y
+      .option("name", { type: "string", describe: "counterparty full name", demandOption: true })
+      .option("email", { type: "string", describe: "counterparty email — required to issue" })
+      .option("org", { type: "string" })
+      .option("type", { type: "string", default: "nda", choices: ["nda", "baa"] })
+      .option("disclosing", { type: "string", default: "IRIS", describe: "the disclosing party" })
+      .option("subject", { type: "string", describe: "what this agreement gates" })
+      .option("tier", { type: "string", default: "standard", choices: ["standard", "phi"] })
+      .option("term", { type: "string", default: "one year" })
+      .option("expires", { type: "string", describe: "YYYY-MM-DD; derived from --term when omitted" })
+      .option("issue", { type: "boolean", describe: "email the signing link straight away" })
+      .option("json", { type: "boolean" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Raise an agreement")
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    if (args.issue && !args.email) {
+      // Issuing means emailing. Without an address the agreement would be marked sent while
+      // nothing left the building — the exact failure send() was fixed for.
+      prompts.log.error("--issue needs --email: there is nowhere to send the link")
+      prompts.outro("Failed")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Raising…")
+    const res = await irisFetch("/api/v1/agreements", {
+      method: "POST",
+      body: JSON.stringify({
+        agreement_type: args.type,
+        counterparty_name: args.name,
+        counterparty_email: args.email ?? null,
+        counterparty_org: args.org ?? null,
+        disclosing_party: args.disclosing,
+        subject_ref: args.subject ?? null,
+        access_tier: args.tier,
+        term: args.term,
+        expiry_date: args.expires ?? null,
+        issue: Boolean(args.issue),
+      }),
+    })
+    if (!res.ok) {
+      spinner.stop("Failed")
+      await handleApiError(res, "raise agreement")
+      prompts.outro("Failed")
+      return
+    }
+    const body = (await res.json()) as any
+    spinner.stop("Raised")
+
+    if (args.json) { console.log(JSON.stringify(body, null, 2)); prompts.outro("Done"); return }
+
+    const a = body.agreement
+    printDivider()
+    console.log(`  ${dim("agreement")}  #${a.id}  ${bold(a.type)}`)
+    console.log(`  ${dim("between")}    ${a.disclosingParty}  and  ${bold(a.counterparty)}`)
+    console.log(`  ${dim("term")}       ${a.expiryDate ? `expires ${a.expiryDate}` : "—"}  ·  tier ${a.tier}`)
+    console.log(`  ${dim("state")}      ${highlight(stateLabel(a))}`)
+    if (a.signingUrl) console.log(`  ${dim("sign at")}    ${a.signingUrl}`)
+    printDivider()
+    if (args.issue) {
+      prompts.log.warn("That URL is a bearer link — anyone holding it can sign.")
+    } else {
+      prompts.log.info(`Not issued yet: iris agreements issue ${a.id}`)
+    }
+    prompts.outro("Done")
+  },
+})
+
+const IssueCommand = cmd({
+  command: "issue <id>",
+  aliases: ["send", "resend"],
+  describe: "email the signing link (also re-sends)",
+  builder: (y) => y.positional("id", { type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Issue agreement #${args.id}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const res = await irisFetch(`/api/v1/agreements/${args.id}/issue`, { method: "POST" })
+    if (!res.ok) {
+      await handleApiError(res, "issue agreement")
+      prompts.outro("Failed")
+      return
+    }
+    const a = ((await res.json()) as any).agreement
+    console.log()
+    console.log(`  ${success("issued")}   ${bold(a.counterparty)}  ·  ${a.signingUrl}`)
+    console.log()
+    prompts.log.warn("That URL is a bearer link — give it to the counterparty only.")
+    prompts.outro("Done")
+  },
+})
+
+const RevokeCommand = cmd({
+  command: "revoke <id>",
+  describe: "revoke an agreement and close the access it authorised",
+  builder: (y) =>
+    y
+      .positional("id", { type: "number", demandOption: true })
+      .option("reason", { type: "string", describe: "why — recorded on the audit chain" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Revoke agreement #${args.id}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    // Asked for rather than defaulted. A revocation withdraws access someone was relying on,
+    // and "revoked" with no reason is a question for whoever reads the chain later.
+    let reason = args.reason as string | undefined
+    if (!reason) {
+      const answer = await prompts.text({
+        message: "Why is this being revoked? (recorded on the audit chain)",
+        placeholder: "engagement ended",
+      })
+      if (prompts.isCancel(answer) || !answer) { prompts.outro("Cancelled"); return }
+      reason = String(answer)
+    }
+
+    const res = await irisFetch(`/api/v1/agreements/${args.id}/revoke`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    })
+    if (!res.ok) {
+      await handleApiError(res, "revoke agreement")
+      prompts.outro("Failed")
+      return
+    }
+    const a = ((await res.json()) as any).agreement
+    console.log()
+    console.log(`  ${bold("revoked")}  ${a.counterparty}  ·  any access this authorised is now closed`)
+    console.log()
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformAgreementsCommand = cmd({
   command: "agreements",
   aliases: ["nda", "contracts"],
   describe: "[Agreements] NDAs, BAAs — what is outstanding, executed, or expiring",
   builder: (yargs) =>
-    yargs.command(ListCommand).command(ShowCommand).command(LinkCommand).demandCommand(),
+    yargs
+      .command(ListCommand)
+      .command(ShowCommand)
+      .command(LinkCommand)
+      .command(RaiseCommand)
+      .command(IssueCommand)
+      .command(RevokeCommand)
+      .demandCommand(),
   async handler() {},
 })
