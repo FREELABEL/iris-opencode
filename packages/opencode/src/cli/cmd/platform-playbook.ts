@@ -20,6 +20,7 @@ import {
 } from "../../skill/executor"
 import { existsSync, readdirSync } from "fs"
 import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCoverage } from "../../skill/e2e/runner"
+import { PlaybookDraftCommand } from "./playbook-draft"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
 async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
@@ -1371,6 +1372,7 @@ export const PlatformPlaybookCommand = cmd({
   describe: "playbooks — orchestrate workflows across all engines (shell, AI, Hive, n8n, Neuron)",
   builder: (yargs) =>
     yargs
+      .command(PlaybookDraftCommand)
       .command(SkillListCommand)
       .command(SkillShowCommand)
       .command(SkillRunCommand)
@@ -1396,6 +1398,7 @@ export const PlatformSkillCommand = cmd({
   describe: false as any, // hidden from help (playbook is the primary)
   builder: (yargs) =>
     yargs
+      .command(PlaybookDraftCommand)
       .command(SkillListCommand)
       .command(SkillShowCommand)
       .command(SkillRunCommand)
