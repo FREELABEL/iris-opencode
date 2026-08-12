@@ -28,41 +28,47 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8").trim()
 }
 
-/** nano pass: split raw dictation into discrete, titled ideas. */
+/**
+ * Split dictation into discrete ideas — server-side.
+ *
+ * The prompt used to live here. It now lives in TranscriptTreatments on the API, as the `idea`
+ * treatment, alongside clean/notes/meeting/standup/captions. Same prompt, verbatim, so what this
+ * command returns has not changed; what changed is that there is one copy of it instead of two
+ * drifting apart the first time either is improved.
+ *
+ * Fail-soft still applies, and still on the server: unusable model output comes back as a single
+ * idea holding the transcript, rather than nothing. Somebody dictated this.
+ */
 async function structureIdeas(transcript: string, model: string): Promise<Idea[]> {
-  const sys =
-    "You turn a person's raw dictated thoughts into a clean list of discrete ideas. "
-    + "Split the input into self-contained ideas (one idea = one thing they want to do/remember/explore). "
-    + "Clean up filler and false starts but keep their meaning and voice. "
-    + 'Return ONLY a JSON array, each item {"title": "<=8 words", "body": "1-3 cleaned sentences"}. No prose, no code fences.'
-  const res = await irisFetch("/api/v6/openai/chat/completions", {
-    method: "POST",
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: sys },
-        { role: "user", content: transcript },
-      ],
-      temperature: 0.3,
-      max_tokens: 1500,
-    }),
-  }, IRIS_API)
+  const res = await irisFetch(
+    "/api/v1/walkthrough/treat",
+    {
+      method: "POST",
+      body: JSON.stringify({ transcript, treatment: "idea", model }),
+    },
+    IRIS_API,
+  )
+
   if (!res.ok) {
-    throw new Error(`Idea structuring failed (HTTP ${res.status})`)
+    const body = await res.text().catch(() => "")
+    let message = ""
+    try {
+      message = JSON.parse(body)?.error ?? ""
+    } catch {
+      /* non-JSON body — fall back to the status */
+    }
+    throw new Error(message || `Idea structuring failed (HTTP ${res.status})`)
   }
+
   const data = (await res.json()) as any
-  let content = String(data?.choices?.[0]?.message?.content ?? "").trim()
-  const m = content.match(/\[[\s\S]*\]/)
-  if (m) content = m[0]
-  let parsed: any
-  try {
-    parsed = JSON.parse(content)
-  } catch {
-    // Fail soft: treat the whole transcript as one idea rather than losing it.
+  const items = data?.data?.items
+  if (!Array.isArray(items) || !items.length) {
+    // The server already fails soft, so an empty array here means something else went wrong.
+    // Keep the words rather than the shape.
     return [{ title: "Captured idea", body: transcript.slice(0, 500) }]
   }
-  if (!Array.isArray(parsed)) return [{ title: "Captured idea", body: transcript.slice(0, 500) }]
-  return parsed
+
+  return items
     .map((i: any) => ({ title: String(i?.title ?? "").trim() || "Idea", body: String(i?.body ?? "").trim() }))
     .filter((i: Idea) => i.body)
 }
