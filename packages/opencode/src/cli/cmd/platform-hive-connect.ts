@@ -94,6 +94,9 @@ function machineFingerprint(): string | undefined {
 }
 
 interface IrisConfig {
+  /** Which node this machine IS. Read by hive-local-node.ts to answer "(you)" with
+   *  certainty rather than guessing from a hostname that mutates. */
+  node_id?: string
   node_api_key?: string
   local_api_key?: string
   user_id?: number
@@ -256,6 +259,19 @@ const HiveConnectCommand = cmd({
     writeConfig({
       node_api_key: apiKey,
       user_id: userId,
+      // Persist WHICH node this machine is, not just how it authenticates.
+      //
+      // hive-local-node.ts reads `node_id` from this file as its second-most-authoritative
+      // source, and its header note says "if anything ever writes it" — nothing did. So
+      // whenever the daemon was not running to answer /health, resolution fell through to
+      // matching os.hostname(), which on macOS is LocalHostName and gets INCREMENTED by the
+      // OS on every mDNS collision. That is why the node list printed "(you?)" with a
+      // question mark instead of "(you)".
+      //
+      // The value was already in hand — the registration response returns node.id and it was
+      // simply dropped on the floor. Writing it makes local-node identity certain even with
+      // the daemon down, which is exactly when someone is most likely to be debugging.
+      ...(nodeId ? { node_id: nodeId } : {}),
       ...(previousKey && previousKey !== apiKey ? { node_api_key_previous: previousKey } : {}),
     })
     sp.stop(success(`Registered ${bold(name)}`))
