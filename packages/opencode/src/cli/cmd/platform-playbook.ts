@@ -19,6 +19,7 @@ import {
   type ExecuteOptions,
 } from "../../skill/executor"
 import { existsSync, readdirSync } from "fs"
+import { join as pathJoin } from "path"
 import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCoverage } from "../../skill/e2e/runner"
 import { PlaybookDraftCommand } from "./playbook-draft"
 
@@ -1182,7 +1183,6 @@ const PlaybookSyncCommand = cmd({
               version: plan.version,
               ...(content ? { content } : {}),
             }
-
             const { IRIS_API } = await import("./iris-api")
             const res = await irisFetch("/api/v1/playbooks", {
               method: "POST",
@@ -1365,6 +1365,129 @@ const PublishCommand = cmd({
   },
 })
 
+
+// ============================================================================
+// iris playbook available / install — the PULL half
+// ============================================================================
+// publish/attach/sync covered author → server → the author's own .claude/skills.
+// Nothing brought a PUBLISHED playbook DOWN to somebody else's machine, so an
+// operator could install the CLI, wire MCP, open Claude Code — and receive zero
+// procedures. `sync` is local → local; it only rewrites playbooks already on disk.
+//
+// GET /api/v1/playbooks is already scope-filtered server-side (visibleTo), and
+// GET /api/v1/playbooks/{name} returns the full markdown body under the same
+// filter — so this is a client change only. An unknown or invisible name 404s
+// rather than 403s, deliberately: telling someone a private playbook EXISTS is
+// itself a disclosure.
+
+/** Where an installed playbook lands. `sync` only picks up .iris/playbooks/. */
+function installTarget(name: string): { dir: string; file: string } {
+  const dir = pathJoin(process.cwd(), ".iris", "playbooks", name)
+  return { dir, file: pathJoin(dir, "PLAYBOOK.md") }
+}
+
+const PlaybookAvailableCommand = cmd({
+  command: "available",
+  aliases: ["remote-list"],
+  describe: "list published playbooks you can install (scoped to what you can see)",
+  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Playbooks — Available to Install")
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const { IRIS_API } = await import("./iris-api")
+    const res = await irisFetch(`/api/v1/playbooks`, {}, IRIS_API)
+    const ok = await handleApiError(res, "List playbooks"); if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    const list: any[] = data?.playbooks ?? data?.data ?? []
+
+    if (args.json) { console.log(JSON.stringify(list, null, 2)); prompts.outro("Done"); return }
+    if (!list.length) {
+      printDivider()
+      console.log(`  ${dim("Nothing published that you can see.")}`)
+      prompts.outro("Done"); return
+    }
+
+    printDivider()
+    const { existsSync } = await import("fs")
+    for (const p of list) {
+      const installed = existsSync(installTarget(String(p.name)).file)
+      const mark = installed ? success("✓") : dim("·")
+      const scope = p.scope ? dim(`[${p.scope}]`) : ""
+      console.log(`  ${mark} ${highlight(String(p.name))} ${scope}`)
+      if (p.description) console.log(`      ${dim(String(p.description))}`)
+    }
+    printDivider()
+    prompts.outro(`${list.length} available — install with: iris playbook install <name>`)
+  },
+})
+
+const PlaybookInstallCommand = cmd({
+  command: "install <name>",
+  aliases: ["pull"],
+  describe: "download a published playbook into .iris/playbooks/ and sync it to .claude/skills/",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { type: "string", demandOption: true })
+      .option("force", { type: "boolean", default: false, describe: "overwrite a local copy (discards local edits)" })
+      .option("sync", { type: "boolean", default: true, describe: "also regenerate .claude/skills/ (--no-sync to skip)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const name = String(args.name)
+    UI.empty()
+    prompts.intro(`◈  Install Playbook — ${highlight(name)}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const { IRIS_API } = await import("./iris-api")
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`, {}, IRIS_API)
+    const ok = await handleApiError(res, "Fetch playbook"); if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    const pb = data?.playbook ?? {}
+    const content: string = pb.content ?? ""
+
+    // A playbook row with no body is a publish that never uploaded one — say so
+    // rather than writing an empty file that then fails to parse later.
+    if (!content.trim()) {
+      console.error(`  ${bold("No content")} — '${name}' is published but has no markdown body stored.`)
+      console.error(`  ${dim("The author needs to run: iris playbook sync --api")}`)
+      prompts.outro("Done"); return
+    }
+
+    const { dir, file } = installTarget(name)
+    const { existsSync, mkdirSync, writeFileSync } = await import("fs")
+
+    if (existsSync(file) && !args.force) {
+      console.error(`  ${bold("Already installed")} ${dim(file)}`)
+      console.error(`  ${dim("Re-download and discard local edits with: --force")}`)
+      prompts.outro("Done"); return
+    }
+
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(file, content, "utf8")
+
+    if (args.json) {
+      console.log(JSON.stringify({ installed: name, path: file, scope: pb.scope ?? null }, null, 2))
+      prompts.outro("Done"); return
+    }
+
+    printDivider()
+    printKV("Name", name)
+    if (pb.scope) printKV("Scope", String(pb.scope))
+    if (pb.version) printKV("Version", String(pb.version))
+    printKV("Path", file)
+    printDivider()
+
+    if (args.sync) {
+      // Reuse the existing writer rather than reimplementing the SKILL.md transform
+      // (frontmatter rebuild, step-block stripping, usage hint) — one copy, one behaviour.
+      await (PlaybookSyncCommand as any).handler({ json: false, api: false })
+    }
+
+    prompts.outro(`${success("✓")} Installed ${highlight(name)}${args.sync ? " and synced to .claude/skills/" : ""}`)
+  },
+})
+
 // ============================================================================
 
 export const PlatformPlaybookCommand = cmd({
@@ -1384,6 +1507,8 @@ export const PlatformPlaybookCommand = cmd({
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
       .command(PublishCommand)
+      .command(PlaybookAvailableCommand)
+      .command(PlaybookInstallCommand)
       .command(AttachCommand)
       .command(DetachCommand)
       .command(AttachedCommand)
@@ -1410,6 +1535,8 @@ export const PlatformSkillCommand = cmd({
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
       .command(PublishCommand)
+      .command(PlaybookAvailableCommand)
+      .command(PlaybookInstallCommand)
       .command(AttachCommand)
       .command(DetachCommand)
       .command(AttachedCommand)
