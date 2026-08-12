@@ -307,9 +307,21 @@ const HiveConnectCommand = cmd({
     }
 
     const sp2 = prompts.spinner()
-    sp2.start("Starting daemon…")
+    // RESTART, not start, whenever we just rotated the key.
+    //
+    // `start` no-ops on a running daemon and prints "Daemon already running" — which after
+    // a key rotation leaves the OLD process alive holding the OLD key. It then 401s on
+    // every heartbeat forever while this command cheerfully reports success. Measured on a
+    // real machine 2026-08-12: `hive connect --force` left the node unable to authenticate,
+    // and the only symptom was "Invalid API key" buried in daemon.log.
+    //
+    // A rotation invalidates the credential the running process is holding, so the process
+    // MUST be replaced. Only a fresh install can safely `start`.
+    const rotated = Boolean(previousKey && previousKey !== apiKey)
+    const action = rotated ? "restart" : "start"
+    sp2.start(rotated ? "Restarting daemon with the new key…" : "Starting daemon…")
     try {
-      execSync(`${ctl} start 2>&1`, { timeout: 20000 })
+      execSync(`${ctl} ${action} 2>&1`, { timeout: 30000 })
     } catch {
       // Non-fatal: registration already succeeded, so the useful state is saved.
       sp2.stop("Daemon did not start", 1)
