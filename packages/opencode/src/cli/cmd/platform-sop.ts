@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { SopDraftCommand } from "./sop-draft"
 
 // Endpoints (from SopCommand.php):
 //   GET    /api/v1/services/requests/simplified
@@ -155,6 +156,7 @@ export const PlatformSopCommand = cmd({
   describe: "manage Standard Operating Procedures (SOPs)",
   builder: (yargs) =>
     yargs
+      .command(SopDraftCommand)
       .command(SopRequestsCommand)
       .command(SopListCommand)
       .command(SopCreateCommand)

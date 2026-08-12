@@ -2,9 +2,9 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, printDivider, irisFetch, requireAuth, IRIS_API } from "./iris-api"
-import { transcribeLocal } from "../lib/transcription"
-import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "fs"
-import { join, resolve, extname } from "path"
+import { resolveWalkthrough, extractJson, slugify } from "../lib/walkthrough"
+import { existsSync, mkdirSync, writeFileSync } from "fs"
+import { join, resolve } from "path"
 
 // ============================================================================
 // iris playbook draft — the missing link between talking and having a procedure
@@ -20,8 +20,6 @@ import { join, resolve, extname } from "path"
 // procedure that presents itself as authoritative is worse than no procedure at all.
 // ============================================================================
 
-const AUDIO_EXT = new Set([".m4a", ".mp3", ".wav", ".aiff", ".aac", ".ogg", ".flac", ".mp4", ".mov", ".webm"])
-
 interface DraftedStep {
   id: string
   title: string
@@ -33,27 +31,6 @@ interface Drafted {
   description: string
   steps: DraftedStep[]
   notes: string[]
-}
-
-/** Fetch the caller's brand vocabulary so the walkthrough's domain nouns survive transcription. */
-async function fetchGlossary(): Promise<string | undefined> {
-  try {
-    const res = await irisFetch("/api/v1/transcribe/glossary", {}, IRIS_API)
-    if (!res.ok) return undefined
-    const body = (await res.json()) as any
-    const g = body?.data?.glossary
-    return typeof g === "string" && g.trim() ? g : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48)
 }
 
 /**
@@ -74,38 +51,7 @@ async function draftFromTranscript(transcript: string, model: string): Promise<D
     "No prose, no code fences.",
   ].join(" ")
 
-  const res = await irisFetch(
-    "/api/v6/openai/chat/completions",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: sys },
-          { role: "user", content: transcript },
-        ],
-        temperature: 0.2,
-        max_tokens: 3000,
-      }),
-    },
-    IRIS_API,
-  )
-
-  if (!res.ok) {
-    throw new Error(`Draft failed (HTTP ${res.status}). ${(await res.text().catch(() => "")).slice(0, 200)}`)
-  }
-
-  const data = (await res.json()) as any
-  let content = String(data?.choices?.[0]?.message?.content ?? "").trim()
-  const m = content.match(/\{[\s\S]*\}/)
-  if (m) content = m[0]
-
-  let parsed: any
-  try {
-    parsed = JSON.parse(content)
-  } catch {
-    throw new Error("The model did not return a usable procedure. The transcript is still saved.")
-  }
+  const parsed = await extractJson<any>(sys, transcript, model)
 
   const steps: DraftedStep[] = Array.isArray(parsed?.steps)
     ? parsed.steps
@@ -225,48 +171,25 @@ export const PlaybookDraftCommand = cmd({
       return
     }
 
-    const input = resolve(String(args.input))
-    if (!existsSync(input)) {
-      prompts.log.error(`Not found: ${input}`)
-      process.exitCode = 1
-      prompts.outro("Done")
-      return
-    }
-
     // ---- 1. Get the transcript -------------------------------------------------
-    let transcript: string
-    let sourceNote: string
-
-    if (AUDIO_EXT.has(extname(input).toLowerCase())) {
-      const glossary = await fetchGlossary()
-      const sp = prompts.spinner()
-      sp.start(glossary ? "Transcribing (on-device, brand vocabulary)…" : "Transcribing (on-device)…")
-      try {
-        transcript = await transcribeLocal(input, { prompt: glossary })
-        sp.stop("Transcribed")
-      } catch (e) {
-        // No server fallback here on purpose. `iris transcribe` owns that chain; duplicating it
-        // would mean two places to fix the next time it changes.
-        sp.stop("Transcription failed", 1)
-        prompts.log.error(e instanceof Error ? e.message : String(e))
-        prompts.log.info(dim("Transcribe it first with `iris transcribe`, then pass the .txt here."))
-        process.exitCode = 1
-        prompts.outro("Done")
-        return
-      }
-      sourceNote = `spoken walkthrough, ${input.split("/").pop()}`
-    } else {
-      transcript = readFileSync(input, "utf8").trim()
-      sourceNote = `transcript, ${input.split("/").pop()}`
-    }
-
-    if (transcript.length < 80) {
-      // A three-word recording produces a confident, empty procedure. Say so instead.
-      prompts.log.error("That transcript is too short to be a walkthrough of anything.")
+    // Shared with `iris sop draft` — same words, different artifact. See lib/walkthrough.
+    const sp = prompts.spinner()
+    let walk
+    try {
+      walk = await resolveWalkthrough(String(args.input), {
+        onTranscribeStart: (hinted) =>
+          sp.start(hinted ? "Transcribing (on-device, brand vocabulary)…" : "Transcribing (on-device)…"),
+      })
+      sp.stop("Transcribed")
+    } catch (e) {
+      sp.stop("Failed", 1)
+      prompts.log.error(e instanceof Error ? e.message : String(e))
       process.exitCode = 1
       prompts.outro("Done")
       return
     }
+    const transcript = walk.transcript
+    const sourceNote = walk.source
 
     // ---- 2. Structure it -------------------------------------------------------
     const sp2 = prompts.spinner()
