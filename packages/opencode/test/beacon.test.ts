@@ -18,7 +18,7 @@ const { Beacon } = await import("../src/telemetry/beacon")
  */
 
 const realFetch = globalThis.fetch
-let posted: Array<{ url: string; body: any }> = []
+let posted: Array<{ url: string; body: any; auth?: string }> = []
 
 beforeEach(() => {
   posted = []
@@ -27,7 +27,14 @@ beforeEach(() => {
   // Capture what would go on the wire. Combined with the Auth stub above this
   // makes every assertion below run on every machine, logged in or not.
   globalThis.fetch = (async (url: any, init: any) => {
-    posted.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : undefined })
+    posted.push({
+      url: String(url),
+      body: init?.body ? JSON.parse(init.body) : undefined,
+      // Captured because WHICH token attributed the row is the whole point of
+      // the resolution tests below — asserting only on the body would let a
+      // wrong-identity regression through.
+      auth: init?.headers?.Authorization,
+    })
     return new Response("{}", { status: 202 })
   }) as any
 })
@@ -118,4 +125,79 @@ describe("Beacon.span", () => {
     expect(await Beacon.flush()).toBe(true)
     expect(posted.length).toBe(0)
   })
+})
+
+/**
+ * Token resolution — the bug that made the whole MCP beta invisible.
+ *
+ * flush() used to read the token from Auth.get("iris") alone, which only ever
+ * looks at auth.json on disk. iris-exec spawns the binary in a container with
+ * IRIS_API_KEY in the ENVIRONMENT and no auth.json, so every span from the
+ * connector was dropped at `if (!key) return false` — silently, by design, since
+ * telemetry may never complain. The tests below are the regression guard: they
+ * describe the two environments the binary actually runs in.
+ */
+describe("Beacon token resolution", () => {
+  const saved = { key: process.env.IRIS_API_KEY, fl: process.env.FL_API_TOKEN, home: process.env.HOME }
+
+  const restore = (k: "IRIS_API_KEY" | "FL_API_TOKEN" | "HOME", v: string | undefined) => {
+    if (v === undefined) delete process.env[k]
+    else process.env[k] = v
+  }
+
+  afterEach(() => {
+    restore("IRIS_API_KEY", saved.key)
+    restore("FL_API_TOKEN", saved.fl)
+    restore("HOME", saved.home)
+  })
+
+  test("attributes spans from IRIS_API_KEY when there is no auth.json (the MCP case)", async () => {
+    process.env.IRIS_API_KEY = "env-mcp-token"
+    Beacon.span("run_start", { trace_id: "t-env", command: "leads" })
+    await Beacon.flush()
+
+    expect(posted.length).toBe(1)
+    expect(posted[0].auth).toBe("Bearer env-mcp-token")
+  })
+
+  test("prefers the environment over the stored token", async () => {
+    // A caller that set IRIS_API_KEY for this process means THAT identity — the
+    // container runs one user's command with one user's minted key, and whatever
+    // happens to be cached on the box is not it. Auth is stubbed at the top of
+    // this file to return "test-iris-token", so the env value winning is the
+    // observable difference.
+    process.env.IRIS_API_KEY = "env-wins"
+    Beacon.span("run_start", { trace_id: "t-pref", command: "pages" })
+    await Beacon.flush()
+
+    expect(posted.length).toBe(1)
+    expect(posted[0].auth).toBe("Bearer env-wins")
+  })
+
+  test("falls back to the stored token when the environment carries none", async () => {
+    delete process.env.IRIS_API_KEY
+    delete process.env.FL_API_TOKEN
+    Beacon.span("run_start", { trace_id: "t-stored", command: "bug" })
+    await Beacon.flush()
+
+    expect(posted.length).toBe(1)
+    expect(posted[0].auth).toBe("Bearer test-iris-token")
+  })
+
+  test("accepts FL_API_TOKEN when IRIS_API_KEY is absent", async () => {
+    delete process.env.IRIS_API_KEY
+    process.env.FL_API_TOKEN = "fl-token"
+    Beacon.span("run_start", { trace_id: "t-fl", command: "leads" })
+    await Beacon.flush()
+
+    expect(posted.length).toBe(1)
+    expect(posted[0].auth).toBe("Bearer fl-token")
+  })
+
+  // NOT TESTED HERE: "sends nothing when no token exists anywhere". The last leg
+  // of the cascade reads ~/.iris/sdk/.env, and Bun caches os.homedir() at first
+  // call, so HOME cannot be redirected at an empty dir from inside a test — the
+  // result would depend on whether the machine running it happens to be logged
+  // in. That branch (`if (!key) return false`) is unchanged from before the
+  // cascade existed; what regressed, and what is guarded above, is precedence.
 })

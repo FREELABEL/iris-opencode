@@ -45,6 +45,63 @@ export namespace Beacon {
     return process.env.IRIS_API_URL ?? process.env.IRIS_LOCAL_URL ?? "https://freelabel.net"
   }
 
+  /**
+   * The token the spans are attributed to — and the reason the beta looked idle.
+   *
+   * This used to be `Auth.get("iris")` alone, which reads ONLY auth.json on disk.
+   * That is correct for a laptop and wrong for every other way the binary runs.
+   * Under the MCP connector, iris-exec spawns the binary in a fresh container with
+   * `IRIS_API_KEY` in the ENVIRONMENT and no auth.json anywhere — so `get()` returned
+   * undefined, `flush()` hit `if (!key) return false`, and every span from the entire
+   * MCP surface was dropped on the floor without a log line. The beta ships through
+   * MCP. That is why 30 days of fleet telemetry was 230 rows from two people: not
+   * "nobody hit errors", but "the only clients that could report were the two of us
+   * running it from a shell".
+   *
+   * Same cascade as platform-bug.ts:resolveReporterToken() — which already had this
+   * right. Env first: a caller that went to the trouble of setting IRIS_API_KEY for
+   * this process means that identity, not whatever is cached on the box.
+   */
+  async function resolveToken(): Promise<string> {
+    if (process.env.IRIS_API_KEY) return process.env.IRIS_API_KEY
+    if (process.env.FL_API_TOKEN) return process.env.FL_API_TOKEN
+
+    try {
+      // Any stored shape that carries a key, not just type:"api" — oauth and
+      // wellknown entries have one too, and the previous implementation read it
+      // without discriminating. Narrowing here would have quietly un-attributed
+      // whichever users are on those flows.
+      const stored = (await Auth.get("iris")) as { key?: string } | undefined
+      if (stored?.key) return stored.key
+    } catch {}
+
+    try {
+      const { homedir } = await import("os")
+      const { join } = await import("path")
+      const { existsSync, readFileSync } = await import("fs")
+      const envPath = join(homedir(), ".iris", "sdk", ".env")
+      if (existsSync(envPath)) {
+        for (const line of readFileSync(envPath, "utf8").split("\n")) {
+          const trimmed = line.trim()
+          if (!trimmed || trimmed.startsWith("#")) continue
+          const eq = trimmed.indexOf("=")
+          if (eq < 0) continue
+          if (trimmed.slice(0, eq).trim() === "IRIS_API_KEY") return trimmed.slice(eq + 1).trim()
+        }
+      }
+    } catch {}
+
+    return ""
+  }
+
+  /**
+   * Which surface this process is. Read in one place so `source` cannot drift
+   * between spans and errors — they have to be comparable to be worth grouping.
+   */
+  function source(): "mcp" | "cli" {
+    return process.env.IRIS_MCP === "1" ? "mcp" : "cli"
+  }
+
   function clip(s: string | undefined, n: number): string | undefined {
     if (s === undefined) return undefined
     return s.length > n ? s.slice(0, n) : s
@@ -97,7 +154,7 @@ export namespace Beacon {
 
       // Only meaningful once authenticated — an unauthenticated run is not
       // activation, it is someone still trying to get in.
-      const token = await Auth.get("iris").catch(() => null)
+      const token = await resolveToken()
       if (!token) return
 
       // Write the marker BEFORE reporting. If the POST fails we still do not want
@@ -141,7 +198,7 @@ export namespace Beacon {
     if (disabled()) return
     try {
       buffer.push({
-        source: process.env.IRIS_MCP === "1" ? "mcp" : "cli",
+        source: source(),
         event_type: spanType,
         severity: "info",
         trace_id: clip(span.trace_id, 32),
@@ -178,7 +235,15 @@ export namespace Beacon {
    * not lost when the process ends — an unflushed run_end is indistinguishable
    * from a run that died, which is exactly the signal we are trying to collect.
    */
-  export async function flush(): Promise<boolean> {
+  /**
+   * @param timeoutMs how long the POST may take. The default suits a background
+   *   flush. Exit paths pass something short: every `iris <cmd>` now closes a
+   *   trace, so this await sits between the user and their shell prompt, and a
+   *   telemetry write must never be the slowest thing a command does. A span
+   *   lost to a bad network costs a row; three seconds of dead terminal on every
+   *   command costs the CLI.
+   */
+  export async function flush(timeoutMs = 3000): Promise<boolean> {
     if (flushTimer) {
       clearTimeout(flushTimer)
       flushTimer = undefined
@@ -187,8 +252,7 @@ export namespace Beacon {
 
     const events = buffer.splice(0, buffer.length)
     try {
-      const auth = await Auth.get("iris")
-      const key = (auth as { key?: string } | undefined)?.key
+      const key = await resolveToken()
       if (!key) return false // nothing to attribute the spans to
 
       const res = await fetch(`${baseUrl()}/api/v6/telemetry/errors`, {
@@ -199,7 +263,7 @@ export namespace Beacon {
           Accept: "application/json",
         },
         body: JSON.stringify({ events }),
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(timeoutMs),
       }).catch(() => null)
 
       return !!res?.ok
@@ -215,8 +279,7 @@ export namespace Beacon {
   export async function report(eventType: EventType, event: Event = {}): Promise<boolean> {
     if (disabled()) return false
     try {
-      const auth = await Auth.get("iris")
-      const key = (auth as { key?: string } | undefined)?.key
+      const key = await resolveToken()
       if (!key) return false // no iris token → nothing to attribute, skip silently
 
       const res = await fetch(`${baseUrl()}/api/v6/telemetry/errors`, {
@@ -227,7 +290,9 @@ export namespace Beacon {
           Accept: "application/json",
         },
         body: JSON.stringify({
-          source: "cli",
+          // Not hardcoded "cli" — an MCP-originated crash that reads as a CLI crash
+          // sends you debugging the wrong surface.
+          source: source(),
           event_type: eventType,
           message: clip(event.message, 2000),
           command: clip(event.command, 128),
