@@ -213,6 +213,16 @@ const HiveConnectCommand = cmd({
         // Lets the server reclaim this machine's existing row instead of minting a ghost
         // on every reinstall (#179932). Omitted entirely when unavailable.
         ...(machineFingerprint() ? { machine_fingerprint: machineFingerprint() } : {}),
+        // THE TRANSITION CASE, and it is not hypothetical — it cost one ghost node per
+        // machine when the fingerprint first shipped. A node registered BEFORE fingerprints
+        // existed has a null one stored, and a null never matches, so the first
+        // fingerprint-aware registration could only create a new row and abandon the old.
+        //
+        // The key we currently hold is proof we ARE that node — it is the node's own bearer
+        // credential — so sending it lets the server adopt that row and stamp the
+        // fingerprint onto it. After one registration every machine is self-identifying and
+        // this field stops mattering.
+        ...(config.node_api_key ? { previous_node_api_key: config.node_api_key } : {}),
         capabilities,
         max_concurrent: Math.max(1, Math.min(20, Math.round(args["max-concurrent"] ?? 2))),
       }),
