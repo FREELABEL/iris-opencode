@@ -167,35 +167,82 @@ function readLocalUsage(days: number): { rows: LocalUsage[]; files: number; skip
     }
 
     for (const line of text.split("\n")) {
-      if (!line.trim()) continue
-      let d: any
-      try {
-        d = JSON.parse(line)
-      } catch {
-        continue // A truncated final line is normal in an active session.
+      const parsed = parseUsageLine(line, cutoff)
+      if (!parsed) continue
+
+      const key = `${source}|${parsed.model}|${parsed.day}`
+      const row = acc.get(key) ?? {
+        source,
+        model: parsed.model,
+        day: parsed.day,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        messages: 0,
       }
-      const m = d?.message
-      const u = m?.usage
-      if (!u || typeof u !== "object") continue
-
-      const ts = Date.parse(d.timestamp ?? m?.timestamp ?? "")
-      const when = Number.isFinite(ts) ? ts : null
-      if (when !== null && when < cutoff) continue
-
-      const day = new Date(when ?? Date.now()).toISOString().slice(0, 10)
-      const model = String(m.model ?? "unknown")
-      const key = `${source}|${model}|${day}`
-      const row = acc.get(key) ?? { source, model, day, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 }
-      row.input += Number(u.input_tokens ?? 0)
-      row.output += Number(u.output_tokens ?? 0)
-      row.cacheRead += Number(u.cache_read_input_tokens ?? 0)
-      row.cacheWrite += Number(u.cache_creation_input_tokens ?? 0)
+      row.input += parsed.input
+      row.output += parsed.output
+      row.cacheRead += parsed.cacheRead
+      row.cacheWrite += parsed.cacheWrite
       row.messages += 1
       acc.set(key, row)
     }
   }
 
   return { rows: [...acc.values()], files, skipped }
+}
+
+/**
+ * One transcript line → one usage delta, or null to skip it.
+ *
+ * Split out from readLocalUsage so it can be tested without a filesystem. This parses
+ * ANOTHER tool's private format: Claude Code and Codex owe us no compatibility and change
+ * their transcript shape whenever they like. So every field is defensive, and the rule is
+ * that a line we do not understand costs that line and nothing more — never the file, and
+ * never the report. A crash here would take out a command whose entire job is telling you
+ * what happened.
+ */
+export function parseUsageLine(
+  line: string,
+  cutoff = 0,
+  now = Date.now(),
+): { model: string; day: string; input: number; output: number; cacheRead: number; cacheWrite: number } | null {
+  if (!line.trim()) return null
+
+  let d: any
+  try {
+    d = JSON.parse(line)
+  } catch {
+    return null // A truncated final line is normal in a session still being written.
+  }
+
+  const m = d?.message
+  const u = m?.usage
+  // `typeof [] === "object"`, so a bare object check lets an array through and adds a
+  // zero-token message to the count — inflating the message tally with rows that carry
+  // no usage at all.
+  if (!u || typeof u !== "object" || Array.isArray(u)) return null
+
+  const ts = Date.parse(d?.timestamp ?? m?.timestamp ?? "")
+  const when = Number.isFinite(ts) ? ts : null
+  // An undated line is kept and counted as today. Dropping it would silently undercount,
+  // and undercounting is the failure mode this command exists to end.
+  if (when !== null && when < cutoff) return null
+
+  const n = (v: unknown) => {
+    const x = Number(v ?? 0)
+    return Number.isFinite(x) ? x : 0
+  }
+
+  return {
+    model: String(m.model ?? "unknown"),
+    day: new Date(when ?? now).toISOString().slice(0, 10),
+    input: n(u.input_tokens),
+    output: n(u.output_tokens),
+    cacheRead: n(u.cache_read_input_tokens),
+    cacheWrite: n(u.cache_creation_input_tokens),
+  }
 }
 
 function renderLocalUsage(days: number, json: boolean): void {
