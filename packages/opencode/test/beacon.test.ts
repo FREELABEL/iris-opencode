@@ -194,6 +194,27 @@ describe("Beacon token resolution", () => {
     expect(posted[0].auth).toBe("Bearer fl-token")
   })
 
+  // The join between a run and what it cost rests entirely on this being stable.
+  // If two callers in one process get two ids, the run_start span says one thing,
+  // the X-Iris-Trace-Id header on the model-proxy call says another, and the spend
+  // row points at a run that never existed — silently, and unrecoverably, because
+  // nothing downstream can tell a wrong trace id from a right one. (#179797)
+  test("traceId() is stable across callers within a process", () => {
+    const first = Beacon.traceId()
+    const second = Beacon.traceId()
+
+    expect(first).toBe(second)
+    expect(first).toMatch(/^[0-9a-f]{32}$/)
+  })
+
+  test("newTraceId() still mints a fresh id, and is not the process id", () => {
+    const process1 = Beacon.traceId()
+    const fresh = Beacon.newTraceId()
+
+    expect(fresh).not.toBe(process1)
+    expect(Beacon.traceId()).toBe(process1)
+  })
+
   // NOT TESTED HERE: "sends nothing when no token exists anywhere". The last leg
   // of the cascade reads ~/.iris/sdk/.env, and Bun caches os.homedir() at first
   // call, so HOME cannot be redirected at an empty dir from inside a test — the

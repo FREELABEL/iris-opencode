@@ -37,6 +37,7 @@ import { createPerplexity } from "@ai-sdk/perplexity"
 import { createVercel } from "@ai-sdk/vercel"
 import { ProviderTransform } from "./transform"
 import { loadIrisSdkEnvSync } from "../cli/cmd/iris-api"
+import { Beacon } from "../telemetry/beacon"
 
 // Sync preload IRIS_API_KEY from ~/.iris/sdk/.env into process.env
 // Must run at module load time BEFORE async provider state initializes
@@ -686,7 +687,12 @@ export namespace Provider {
         family: "iris",
         api: { id: `iris/${modelKey}`, url: irisApiUrl, npm: "@ai-sdk/openai-compatible" },
         status: "active",
-        headers: {},
+        // Tells the proxy which run this spend belongs to (#179797). Without it
+        // ai_usage_logs_enhanced records the money and not the work that spent it, and
+        // that association cannot be reconstructed later — a cost row written without a
+        // trace is unjoinable forever, not merely unreported. Beacon owns the id so this
+        // is the same run the run_start span opened.
+        headers: { "X-Iris-Trace-Id": Beacon.traceId() },
         options: {},
         cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
         limit: { context: 131072, output: 16384 },

@@ -499,7 +499,10 @@ try {
 // spine was built to end: "0 errors" and "nobody ran anything" were the same reading.
 // A run_start/run_end pair per invocation is what makes `iris usage` able to say a
 // command was run 40 times and failed twice, instead of only ever knowing about the two.
-const commandTraceId = Beacon.newTraceId()
+// Beacon owns the id, not this file — the model provider stamps the same one on spend so
+// cost can be joined to this run (#179797), and it is built lazily, so whoever asks first
+// must get the same answer.
+const commandTraceId = Beacon.traceId()
 const commandSpanId = Beacon.newSpanId()
 const commandStartedAt = Date.now()
 

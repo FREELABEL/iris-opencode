@@ -173,6 +173,25 @@ export namespace Beacon {
     return hex(16)
   }
 
+  /**
+   * The trace id for THIS process — created once, then stable.
+   *
+   * One `iris <cmd>` invocation is one run, so the run_start span and anything that wants
+   * to say "I belong to that run" have to agree on the id. They cannot agree if each
+   * caller mints its own, and they cannot agree by ordering either: the model provider is
+   * built lazily and may be constructed before or after index.ts opens the trace. Owning
+   * it here removes the ordering question rather than documenting it.
+   *
+   * This is what lets the model proxy stamp spend with the run that caused it (#179797) —
+   * a join that is impossible to reconstruct after the fact, so the id has to be correct
+   * at the moment of the request, not merely available somewhere.
+   */
+  let processTraceId: string | undefined
+  export function traceId(): string {
+    if (!processTraceId) processTraceId = newTraceId()
+    return processTraceId
+  }
+
   /** 16-char span id — one per step. */
   export function newSpanId(): string {
     return hex(8)
