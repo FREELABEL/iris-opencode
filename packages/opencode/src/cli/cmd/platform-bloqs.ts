@@ -2679,11 +2679,9 @@ const BloqsShareCommand = cmd({
     // left to caution them about. Warning on every mint would train people to
     // ignore it, which is how the next real warning gets missed.
     if (!scopeType) {
-      const extra = await countAttachedLeads(args.id, userId)
       prompts.log.warn(
-        `This link grants EVERY list and item on bloq ${args.id}` +
-          (extra ? `, plus the CRM notes on its ${extra} attached lead${extra === 1 ? "" : "s"}` : "") +
-          `.\n  Narrow it with --scope-list <listId> / --scope-item <itemId> / --scope-own.`,
+        `This link grants EVERY list and item on bloq ${args.id}, and the CRM notes on any lead attached to it.\n` +
+          `  Narrow it with --scope-list <listId> / --scope-item <itemId> / --scope-own.`,
       )
     }
 
@@ -2693,23 +2691,6 @@ const BloqsShareCommand = cmd({
     }
   },
 })
-
-/**
- * How many leads are attached to a bloq — used only to make the board-wide
- * warning concrete (#179337). Best-effort: a warning is a courtesy, so a failed
- * lookup must never take down the mint that already succeeded.
- */
-async function countAttachedLeads(bloqId: number, userId: number): Promise<number> {
-  try {
-    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}`)
-    if (!res.ok) return 0
-    const body = (await res.json()) as any
-    const bloq = body?.data ?? body
-    return Array.isArray(bloq?.leads) ? bloq.leads.length : 0
-  } catch {
-    return 0
-  }
-}
 
 /**
  * Render a link's scope for humans (#179342).
