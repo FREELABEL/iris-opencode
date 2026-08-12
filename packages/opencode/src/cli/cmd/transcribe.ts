@@ -13,7 +13,7 @@ import {
   highlight,
 } from "./iris-api"
 import { spawnSync } from "child_process"
-import { existsSync, mkdirSync, statSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { transcribeLocal } from "../lib/transcription"
 import { homedir, tmpdir } from "os"
 import { join, basename, extname, resolve } from "path"
@@ -25,6 +25,75 @@ function which(bin: string): string | null {
   const r = spawnSync("which", [bin], { encoding: "utf8" })
   const p = r.stdout.trim()
   return p && r.status === 0 ? p : null
+}
+
+
+/**
+ * Server-side transcription — the fallback when local whisper cannot run.
+ *
+ * POSTs the audio to iris-api, which transcribes with **gpt-transcribe** ($0.0045/min, and the
+ * model OpenAI rates highest for accuracy). Deliberately server-side rather than calling OpenAI
+ * from here: the API key stays on the server, the model choice stays in one place, and the call
+ * is metered with everything else.
+ *
+ * Returns null when the fallback is unavailable too, so the caller can fail loudly rather than
+ * proceed on an empty transcript.
+ */
+async function transcribeViaServer(absPath: string, language?: string): Promise<string | null> {
+  const sp = prompts.spinner()
+  sp.start("Transcribing on the server (gpt-transcribe)…")
+
+  // The endpoint caps uploads at 25MB. Saying so beats a 413 the user has to decode, and the
+  // remedy (install whisper-cpp, which has no size limit) is genuinely the right answer here.
+  const SERVER_MAX_MB = 25
+  try {
+    const sizeMb = statSync(absPath).size / 1024 / 1024
+    if (sizeMb > SERVER_MAX_MB) {
+      sp.stop("Too large for the server", 1)
+      prompts.log.error(
+        `${sizeMb.toFixed(1)}MB exceeds the ${SERVER_MAX_MB}MB server limit.\n` +
+          `For files this size install local transcription: brew install whisper-cpp`,
+      )
+      return null
+    }
+  } catch {
+    // Unreadable size is not itself fatal — let the upload attempt report the real problem.
+  }
+
+  try {
+    const form = new FormData()
+    // Buffer -> Uint8Array: Node's Buffer is not a BlobPart under this tsconfig.
+    const bytes = new Uint8Array(readFileSync(absPath))
+    form.append("file", new Blob([bytes]), basename(absPath))
+    if (language) form.append("language", language)
+    // 'whisper' is the server's name for the OpenAI leg — Supadata only handles URLs, and this
+    // path is always a local file.
+    form.append("provider", "whisper")
+
+    const res = await irisFetch("/api/v1/transcribe", { method: "POST", body: form }, IRIS_API)
+    if (!res.ok) {
+      sp.stop("Failed", 1)
+      prompts.log.error(`Server transcription failed (HTTP ${res.status}). ${await res.text().catch(() => "")}`.slice(0, 300))
+      return null
+    }
+
+    const body = (await res.json()) as any
+    const text = body?.data?.text ?? body?.text ?? ""
+    if (!text.trim()) {
+      // An empty transcript from a successful call is the silent-failure shape: it looks like
+      // "this audio had no speech" and is usually "the provider returned nothing".
+      sp.stop("Empty transcript", 1)
+      prompts.log.error("The server returned no text. Nothing was written.")
+      return null
+    }
+
+    sp.stop(`${success("✓")} Transcribed on the server ${dim("(gpt-transcribe)")}`)
+    return text
+  } catch (err) {
+    sp.stop("Failed", 1)
+    prompts.log.error(err instanceof Error ? err.message : String(err))
+    return null
+  }
 }
 
 async function runLocalWhisper(
@@ -41,10 +110,23 @@ async function runLocalWhisper(
   try {
     text = await transcribeLocal(abs, { language })
   } catch (e) {
-    sp.stop("Failed", 1)
-    prompts.log.error(e instanceof Error ? e.message : String(e))
-    process.exitCode = 1 // #152292 — fail loudly so automation doesn't proceed on no transcript
-    return false
+    // Local whisper is optional infrastructure: it needs `brew install whisper-cpp` and a
+    // 148MB model download. Before this, a machine without it got "install whisper-cpp" and
+    // an exit 1 — on a product whose whole pitch is "talk through it once and it becomes the
+    // procedure". The first thing a new user does is the thing that did not work.
+    //
+    // So fall through to the server, which transcribes with gpt-transcribe. The API key stays
+    // server-side; the client only uploads audio.
+    const localError = e instanceof Error ? e.message : String(e)
+    sp.stop(dim("Local transcription unavailable"))
+    prompts.log.info(dim(localError))
+
+    const remote = await transcribeViaServer(abs, language)
+    if (remote === null) {
+      process.exitCode = 1 // #152292 — fail loudly so automation doesn't proceed on no transcript
+      return false
+    }
+    text = remote
   }
   if (!text || !text.trim()) {
     sp.stop("Failed", 1)
