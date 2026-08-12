@@ -9094,7 +9094,7 @@
       "name": "transcribe",
       "describe": "transcribe a video/audio from a URL or local file",
       "aliases": [],
-      "run": "iris transcribe <url>",
+      "run": "iris transcribe [url]",
       "haystack": "transcribe transcribe a video/audio from a url or local file"
     },
     {
