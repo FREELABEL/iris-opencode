@@ -439,11 +439,30 @@ export const PlatformUsageCommand = cmd({
       console.log(`  ${dim("by type:")} ${s.by_type.map((t: any) => `${t.usage_type ?? "—"} ${money(Number(t.cost))}`).join(dim(" · "))}`)
     }
 
-    // Per-task was asked for and genuinely is not recorded. Say which change would make it
-    // answerable rather than letting the absence read as "you had no tasks".
-    if (s.available && s.per_task && s.per_task.available === false) {
+    // Per-run cost (#179797). Still says WHY when it cannot answer, rather than letting an
+    // absence read as "you had no runs" — and when it can, it shows how much spend is
+    // untraced, because early on that is most of it and a short list of cheap runs would
+    // otherwise look like complete coverage.
+    const run = s.per_run
+    if (s.available && run && run.available === false) {
       console.log()
-      console.log(dim(`  No per-task cost: ${s.per_task.reason}`))
+      console.log(dim(`  No per-run cost: ${run.reason}`))
+    } else if (s.available && run?.available) {
+      console.log()
+      if (run.note) console.log(dim(`  ${run.note}`))
+      if ((run.runs ?? []).length) {
+        console.log(`  ${dim("run")}${" ".repeat(28)}${dim("calls")}${dim("      tokens")}${dim("      cost")}`)
+        for (const r of run.runs.slice(0, 10)) {
+          const id = String(r.trace_id ?? "—").slice(0, 12)
+          console.log(
+            `  ${id.padEnd(30)}${String(r.calls).padStart(5)}${String(r.tokens).padStart(12)}${money(Number(r.cost)).padStart(10)}`,
+          )
+        }
+      }
+      console.log(
+        dim(`  ${run.traced_rows} of ${run.traced_rows + run.untraced_rows} cost rows carry a run id.`) +
+          dim(" Rows written before the stamp shipped cannot be attributed retroactively."),
+      )
     }
 
     console.log()
