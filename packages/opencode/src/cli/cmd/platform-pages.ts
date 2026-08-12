@@ -415,7 +415,33 @@ const SetCmd = cmd({
       //   iris pages set <slug> requires_auth true
       // actually gates the page (PublicPageController reads the column) instead of
       // nesting a dead `json_content.requires_auth` key that the gate ignores.
-      const PAGE_COLUMNS = new Set(["requires_auth", "status", "title", "seo_title", "seo_description", "og_image"])
+      // Real record columns. `visibility` and `owner_*` were missing here, which meant
+      // `iris pages set <slug> visibility public` nested a dead json_content key instead of
+      // changing the column — the same #137875 failure the comment above describes.
+      const PAGE_COLUMNS = new Set([
+        "requires_auth", "status", "title", "seo_title", "seo_description", "og_image",
+        "visibility", "slug", "owner_type", "owner_id",
+      ])
+
+      // Legitimate TOP-LEVEL json_content keys. Anything else with no dot is almost certainly
+      // a column the caller expected to exist — nesting it silently is how
+      // `set <slug> thumbnail_url ""` reported "Updated thumbnail_url" while writing a dead
+      // `json_content.thumbnail_url` that nothing reads (#179802). Refuse rather than guess.
+      const JSON_TOP_KEYS = new Set(["version", "type", "theme", "layout", "components", "requireOtp"])
+      if (!args.path.includes(".") && !PAGE_COLUMNS.has(args.path) && !JSON_TOP_KEYS.has(args.path)) {
+        sp.stop("Refused", 1)
+        prompts.log.error(
+          `'${args.path}' is not a page column and not a known json_content key.\n` +
+            `Writing it here would nest a dead key that nothing reads.\n\n` +
+            `  Columns:      ${[...PAGE_COLUMNS].sort().join(", ")}\n` +
+            `  json_content: ${[...JSON_TOP_KEYS].sort().join(", ")}\n\n` +
+            `If you really meant a nested value, be explicit: json_content.${args.path}`,
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
       if (PAGE_COLUMNS.has(args.path)) {
         const colVal = parseValue(args.value)
         const colRes = await pagesFetch(`/api/v1/pages/${page.id}`, {
@@ -423,7 +449,28 @@ const SetCmd = cmd({
           body: JSON.stringify({ [args.path]: colVal }),
         })
         if (!(await handleApiError(colRes, `Update ${args.path}`))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+
+        // VERIFY THE WRITE LANDED (#179802). This printed "Updated" on a page whose slug did
+        // not even resolve. Re-read the record and compare rather than trusting the 200.
+        let landed: unknown = undefined
+        try {
+          const fresh = await getBySlug(args.slug, false)
+          if (fresh) landed = (fresh as any)[args.path]
+        } catch { /* unreadable — fall through to the honest warning below */ }
+
+        if (landed !== undefined && String(landed) !== String(colVal)) {
+          sp.stop("Not applied", 1)
+          prompts.log.error(
+            `The API accepted the request but ${args.path} is still ${JSON.stringify(landed)}, not ${JSON.stringify(colVal)}.`,
+          )
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
         sp.stop(success(`Updated page column ${args.path} = ${JSON.stringify(colVal)}`))
+        if (landed === undefined) {
+          prompts.log.warn(`Could not read the page back to confirm. Check: iris pages view ${args.slug}`)
+        }
         prompts.outro(dim(`iris pages cache-clear ${args.slug}   # purge the rendered cache so the change takes effect`))
         return
       }
