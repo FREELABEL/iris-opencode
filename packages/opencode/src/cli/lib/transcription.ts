@@ -39,7 +39,10 @@ export interface TranscriptionResult {
  * Throws on missing deps / conversion / transcription failure. Writes only to
  * a tmp dir and cleans up (callers decide where, if anywhere, to persist).
  */
-export async function transcribeLocal(audioPath: string, opts: { language?: string } = {}): Promise<string> {
+export async function transcribeLocal(
+  audioPath: string,
+  opts: { language?: string; prompt?: string } = {},
+): Promise<string> {
   const abs = resolve(audioPath)
   if (!existsSync(abs)) throw new Error(`File not found: ${abs}`)
 
@@ -66,6 +69,10 @@ export async function transcribeLocal(audioPath: string, opts: { language?: stri
   const outBase = join(tmpdir(), `iris-transcript-${Date.now()}-${basename(abs, extname(abs))}`)
   const args = ["-m", modelPath, "-otxt", "-of", outBase]
   if (opts.language) args.push("-l", opts.language)
+  // Domain vocabulary. whisper.cpp caps the initial prompt at n_text_ctx/2 tokens and silently
+  // truncates past that, so keep it to the same 2000 chars the server leg allows rather than
+  // letting a long glossary quietly lose its tail.
+  if (opts.prompt) args.push("--prompt", opts.prompt.slice(0, 2000))
   args.push(wavPath)
   const res = spawnSync(whisper, args, { encoding: "utf8" })
   spawnSync("rm", ["-f", wavPath])

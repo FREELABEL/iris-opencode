@@ -29,6 +29,31 @@ function which(bin: string): string | null {
 
 
 /**
+ * The account's own transcription vocabulary, resolved server-side.
+ *
+ * On-device whisper is the default for local files, and it was the one path that could never
+ * use the tenant's vocabulary — whisper.cpp cannot look up a brand. It does take `--prompt`,
+ * so we fetch the resolved string and pass it locally. Only the vocabulary crosses the wire;
+ * the audio never leaves the machine, which is the whole point of the local default.
+ *
+ * Never throws and never blocks: no auth, no network, no glossary set — all of them mean
+ * "transcribe unhinted", which is the correct degradation. A missing hint costs accuracy; a
+ * failed transcription costs the recording.
+ */
+async function fetchGlossary(brandId?: number): Promise<string | undefined> {
+  try {
+    const qs = brandId ? `?brand_id=${brandId}` : ""
+    const res = await irisFetch(`/api/v1/transcribe/glossary${qs}`, {}, IRIS_API)
+    if (!res.ok) return undefined
+    const body = (await res.json()) as any
+    const g = body?.data?.glossary
+    return typeof g === "string" && g.trim() ? g : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Server-side transcription — the fallback when local whisper cannot run.
  *
  * POSTs the audio to iris-api, which transcribes with **gpt-transcribe** ($0.0045/min, and the
@@ -39,7 +64,7 @@ function which(bin: string): string | null {
  * Returns null when the fallback is unavailable too, so the caller can fail loudly rather than
  * proceed on an empty transcript.
  */
-async function transcribeViaServer(absPath: string, language?: string): Promise<string | null> {
+async function transcribeViaServer(absPath: string, language?: string, brandId?: number): Promise<string | null> {
   const sp = prompts.spinner()
   sp.start("Transcribing on the server (gpt-transcribe)…")
 
@@ -66,6 +91,9 @@ async function transcribeViaServer(absPath: string, language?: string): Promise<
     const bytes = new Uint8Array(readFileSync(absPath))
     form.append("file", new Blob([bytes]), basename(absPath))
     if (language) form.append("language", language)
+    // Which brand's vocabulary, for an account managing several. The server filters it by
+    // owner, so this cannot reach another tenant's glossary.
+    if (brandId) form.append("brand_id", String(brandId))
     // 'whisper' is the server's name for the OpenAI leg — Supadata only handles URLs, and this
     // path is always a local file.
     form.append("provider", "whisper")
@@ -102,13 +130,33 @@ async function runLocalWhisper(
   asJson: boolean,
   sourceUrl?: string,
   output?: string,
+  brandId?: number,
+  forceRemote?: boolean,
 ): Promise<boolean> {
   const abs = resolve(filePath)
+  let provider = "whisper.cpp (local)"
+
+  // --remote skips the device entirely. Handled here rather than in a parallel branch so the
+  // save location, JSON shape, and knowledge-base sync stay in ONE place — a second copy of
+  // the persistence logic is a second thing to forget to update.
+  if (forceRemote) {
+    const remote = await transcribeViaServer(abs, language, brandId)
+    if (remote === null) {
+      process.exitCode = 1
+      return false
+    }
+    return finishTranscript(abs, remote, "gpt-transcribe (server)", asJson, sourceUrl, output, filePath)
+  }
+
+  // Fetched BEFORE the spinner starts so a slow lookup does not look like slow transcription.
+  // Undefined here just means unhinted — see fetchGlossary.
+  const glossary = await fetchGlossary(brandId)
+
   const sp = prompts.spinner()
-  sp.start("Transcribing locally (whisper.cpp)…")
+  sp.start(glossary ? "Transcribing locally (whisper.cpp, brand vocabulary)…" : "Transcribing locally (whisper.cpp)…")
   let text: string
   try {
-    text = await transcribeLocal(abs, { language })
+    text = await transcribeLocal(abs, { language, prompt: glossary })
   } catch (e) {
     // Local whisper is optional infrastructure: it needs `brew install whisper-cpp` and a
     // 148MB model download. Before this, a machine without it got "install whisper-cpp" and
@@ -121,12 +169,13 @@ async function runLocalWhisper(
     sp.stop(dim("Local transcription unavailable"))
     prompts.log.info(dim(localError))
 
-    const remote = await transcribeViaServer(abs, language)
+    const remote = await transcribeViaServer(abs, language, brandId)
     if (remote === null) {
       process.exitCode = 1 // #152292 — fail loudly so automation doesn't proceed on no transcript
       return false
     }
     text = remote
+    provider = "gpt-transcribe (server)"
   }
   if (!text || !text.trim()) {
     sp.stop("Failed", 1)
@@ -136,6 +185,22 @@ async function runLocalWhisper(
   }
   sp.stop("Done")
 
+  return finishTranscript(abs, text, provider, asJson, sourceUrl, output, filePath)
+}
+
+/**
+ * Persist, sync, and print a finished transcript. Shared by every route into the command so
+ * "where did it save" has one answer regardless of which engine produced the text.
+ */
+async function finishTranscript(
+  abs: string,
+  text: string,
+  provider: string,
+  asJson: boolean,
+  sourceUrl: string | undefined,
+  output: string | undefined,
+  filePath: string,
+): Promise<boolean> {
   // Output location (#152293): default to ~/.iris/transcripts — NOT the CWD (it littered
   // git repos). Honor --output (dir or file). Skip the file entirely for --json with no
   // explicit --output, since the JSON already carries the text.
@@ -162,7 +227,10 @@ async function runLocalWhisper(
         body: JSON.stringify({
           url: syncUrl,
           text,
-          provider: "whisper.cpp (local)",
+          // The real engine, not a hardcoded "local" — the knowledge base was recording every
+          // transcript as whisper.cpp even when the server produced it, which quietly made the
+          // provenance wrong for exactly the transcripts most likely to be re-checked.
+          provider,
           duration_seconds: estimatedDuration,
         }),
       })
@@ -172,7 +240,7 @@ async function runLocalWhisper(
   }
 
   if (asJson) {
-    console.log(JSON.stringify({ provider: "whisper.cpp (local)", file: abs, transcript_path: txtPath, text }, null, 2))
+    console.log(JSON.stringify({ provider, file: abs, transcript_path: txtPath, text }, null, 2))
     return true
   }
 
@@ -345,6 +413,15 @@ export const PlatformTranscribeCommand = cmd({
         default: false,
         describe: "Force local offline transcription via whisper.cpp",
       })
+      .option("remote", {
+        type: "boolean",
+        default: false,
+        describe: "Transcribe on the server (gpt-transcribe) instead of on-device",
+      })
+      .option("brand", {
+        type: "number",
+        describe: "Brand id whose vocabulary to bias toward (for accounts managing several)",
+      })
       .option("output", {
         type: "string",
         alias: "o",
@@ -361,7 +438,20 @@ export const PlatformTranscribeCommand = cmd({
 
     // ── Local file ──────────────────────────────────────────────
     if (looksLikeFile) {
-      await runLocalWhisper(url, args.language as string | undefined, !!args.json, undefined, args.output as string | undefined)
+      // --remote sends the audio to the server's gpt-transcribe instead of running on-device.
+      // Worth having explicitly: until now the ONLY way to reach that engine was for local
+      // whisper to fail, and a capability you can only get by breaking something is one nobody
+      // uses. On-device stays the default — audio not leaving the machine is the right posture
+      // for a product that transcribes clinical walkthroughs.
+      await runLocalWhisper(
+        url,
+        args.language as string | undefined,
+        !!args.json,
+        undefined,
+        args.output as string | undefined,
+        args.brand ? Number(args.brand) : undefined,
+        !!args.remote,
+      )
       prompts.outro("Done")
       return
     }
