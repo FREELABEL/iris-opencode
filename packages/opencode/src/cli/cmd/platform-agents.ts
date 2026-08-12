@@ -87,6 +87,20 @@ function printAgent(a: Record<string, unknown>): void {
   if (a.description) {
     console.log(`    ${dim(String(a.description).slice(0, 100))}`)
   }
+  // Last run (#179799). A list that shows only name and model cannot distinguish a working
+  // agent from one that has been dead for a fortnight, which is how NCMA Newsletter Agent
+  // #528 stayed invisible while a client's content engine produced nothing. Only printed for
+  // agents that have ever run or are active — an inert draft agent showing "NEVER" in red is
+  // the noise that gets a signal ignored.
+  const lastRun = a.last_run_at ? new Date(String(a.last_run_at)) : null
+  if (lastRun && !Number.isNaN(lastRun.getTime())) {
+    const days = (Date.now() - lastRun.getTime()) / 86_400_000
+    const ago = days >= 1 ? `${Math.round(days)}d ago` : `${Math.max(1, Math.round(days * 24))}h ago`
+    const stale = days >= 2 && a.active
+    console.log(`    ${dim("last run")} ${stale ? `${ago}  ⚠` : ago}`)
+  } else if (a.active && a.last_run_at === null) {
+    console.log(`    ${dim("last run  never")}`)
+  }
 }
 
 // ============================================================================
@@ -307,6 +321,31 @@ const AgentsGetCommand = cmd({
       printKV("Heartbeat", a.heartbeat_mode)
       printKV("Active", a.active)
       printKV("Created", a.created_at)
+
+      // HEALTH (#179799). `Active: true` was the only signal this screen showed, and an agent
+      // that had been circuit-broken for fifteen days showed exactly that. The status column
+      // describes intent; last run describes reality, and only the second one would have
+      // caught it. Silence is printed in days because that is the scale the failure occurs at.
+      const h = a.health as Record<string, any> | undefined
+      if (h) {
+        console.log()
+        const hours = typeof h.silent_for_hours === "number" ? h.silent_for_hours : null
+        const quiet = hours !== null && hours >= 24
+        const status = String(h.status ?? "healthy")
+        printKV("Health", status === "healthy" ? status : `${status}  (${h.consecutive_failures ?? 0} consecutive failures)`)
+        printKV(
+          "Last run",
+          h.last_run_at
+            ? `${h.last_run_at}${hours !== null ? `  (${hours >= 48 ? `${Math.round(hours / 24)}d` : `${hours}h`} ago)` : ""}`
+            : "NEVER",
+        )
+        // An agent that is active, healthy, and silent for days is the exact shape of the
+        // failure — call it out rather than leaving the reader to do the subtraction.
+        if (quiet && a.active) {
+          console.log(`  ${dim("⚠  active but producing nothing for")} ${Math.round(hours / 24)}d`)
+        }
+        if (h.last_error) printKV("Last error", String(h.last_error).slice(0, 160))
+      }
       console.log()
       printDivider()
 
