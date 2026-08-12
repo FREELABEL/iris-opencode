@@ -99,42 +99,62 @@ export async function resolveWalkthrough(
   return { transcript, source, hinted }
 }
 
+export interface StructuredWalkthrough {
+  format: "sop" | "playbook"
+  title: string
+  markdown: string
+  structured: Record<string, any>
+}
+
 /**
- * Ask a nano model for JSON and get an object back, or throw.
+ * Turn a transcript into a procedure, server-side.
  *
- * Shared because the failure mode is shared: a model that returns prose around its JSON, or
- * nothing usable, must not be reported as a successful empty artifact.
+ * THE PROMPTS DELIBERATELY DO NOT LIVE HERE. They were in this file first; the moment the
+ * CardEditor capture tab needed them the choice was to copy them into Vue or move them to the
+ * one place both callers already talk to. Copied prompts do not stay equal — somebody improves
+ * the SOP wording on one surface and the two quietly produce different documents from the same
+ * recording, while both look correct. That is the same failure shape as the glossary resolution
+ * having lived in three places, which is why that is single-sourced too.
+ *
+ * This does not weaken the on-device posture: transcription still runs locally, and the
+ * transcript already crossed the wire to a model proxy before this change. Only the audio is
+ * privileged, and the audio still never leaves the machine.
  */
-export async function extractJson<T>(system: string, user: string, model: string, maxTokens = 3000): Promise<T> {
+export async function structureWalkthrough(
+  transcript: string,
+  format: "sop" | "playbook",
+  model?: string,
+): Promise<StructuredWalkthrough> {
   const res = await irisFetch(
-    "/api/v6/openai/chat/completions",
+    "/api/v1/walkthrough/structure",
     {
       method: "POST",
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        temperature: 0.2,
-        max_tokens: maxTokens,
-      }),
+      body: JSON.stringify({ transcript, format, ...(model ? { model } : {}) }),
     },
     IRIS_API,
   )
 
   if (!res.ok) {
-    throw new Error(`Generation failed (HTTP ${res.status}). ${(await res.text().catch(() => "")).slice(0, 200)}`)
+    // The server distinguishes "your input is unusable" (422) from "we could not produce a
+    // document" (502), and its message says which. Passing it through beats a status code the
+    // reader has to decode.
+    const body = await res.text().catch(() => "")
+    let message = ""
+    try {
+      message = JSON.parse(body)?.error ?? ""
+    } catch {
+      /* non-JSON body — fall back to the status */
+    }
+    throw new Error(message || `Could not structure the walkthrough (HTTP ${res.status}).`)
   }
 
   const data = (await res.json()) as any
-  let content = String(data?.choices?.[0]?.message?.content ?? "").trim()
-  const m = content.match(/\{[\s\S]*\}/)
-  if (m) content = m[0]
-
-  try {
-    return JSON.parse(content) as T
-  } catch {
-    throw new Error("The model did not return a usable result. Your transcript is still saved.")
+  const result = data?.data
+  if (!result?.markdown) {
+    // A 200 with no document is the silent-failure shape: it reads as "your walkthrough had no
+    // steps in it" when the truth is that extraction returned nothing.
+    throw new Error("Nothing came back. Your transcript is unchanged.")
   }
+
+  return result as StructuredWalkthrough
 }

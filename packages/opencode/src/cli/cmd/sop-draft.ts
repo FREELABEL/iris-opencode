@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, printDivider, irisFetch, requireAuth, handleApiError } from "./iris-api"
-import { resolveWalkthrough, extractJson, slugify } from "../lib/walkthrough"
+import { resolveWalkthrough, structureWalkthrough, slugify } from "../lib/walkthrough"
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import { join, resolve } from "path"
 
@@ -19,111 +19,6 @@ import { join, resolve } from "path"
 // So this asks for different information from the same transcript, rather than restyling the
 // playbook output.
 // ============================================================================
-
-interface SopStep {
-  action: string
-  /** How the operator knows the step succeeded. The part a generated procedure always omits. */
-  expected: string
-}
-
-interface Sop {
-  title: string
-  purpose: string
-  /** Who performs this. Vague is fine and honest; invented is not. */
-  role: string
-  prerequisites: string[]
-  steps: SopStep[]
-  verification: string[]
-  pitfalls: string[]
-  /** What the speaker never covered. Named rather than smoothed over. */
-  gaps: string[]
-}
-
-const SYSTEM = [
-  "You turn a spoken walkthrough into a standard operating procedure written for a HUMAN reader",
-  "who has not done this before and cannot ask the speaker any questions.",
-  "",
-  "Rules:",
-  "- Use only what the speaker actually said. Never invent a command, path, flag, URL, threshold,",
-  "  role, or approval step. If they were vague, keep it vague rather than inventing precision.",
-  "- Each step is one action, in the order performed, phrased as an instruction to the reader.",
-  "- For each step give the expected result — how the reader knows it worked. If the speaker did",
-  '  not say, write "not stated in the walkthrough" rather than guessing.',
-  "- Keep warnings and gotchas the speaker mentioned; those are the most valuable part.",
-  '- List in "gaps" anything a person would obviously need that the speaker never covered',
-  "  (who approves it, how often it runs, what to do when a step fails, access required).",
-  "  Be specific. This is what tells the author what to record next.",
-  "",
-  'Return ONLY JSON: {"title":"Title Case","purpose":"1-2 sentences","role":"who does this",',
-  '"prerequisites":["..."],"steps":[{"action":"...","expected":"..."}],"verification":["..."],',
-  '"pitfalls":["..."],"gaps":["..."]}',
-  "No prose, no code fences.",
-].join("\n")
-
-function renderSop(s: Sop, source: string): string {
-  const L: string[] = []
-  const bullets = (xs: string[], empty: string) =>
-    xs.length ? xs.map((x) => `- ${x}`) : [`- ${empty}`]
-
-  L.push(`# ${s.title}`, "")
-  L.push(
-    "> **Draft — not yet approved.** Generated from a spoken walkthrough and not reviewed by",
-    "> anyone. Check it against what actually happens before handing it to someone who is going",
-    "> to follow it.",
-    "",
-  )
-  L.push(`_Source: ${source}_`, "")
-
-  L.push("## Purpose", "", s.purpose, "")
-  L.push("## Who does this", "", s.role || "Not stated in the walkthrough.", "")
-
-  L.push("## Before you start", "")
-  L.push(...bullets(s.prerequisites, "Nothing stated in the walkthrough."))
-  L.push("")
-
-  L.push("## Procedure", "")
-  L.push("| # | Do this | You should see |")
-  L.push("|---|---------|----------------|")
-  s.steps.forEach((st, i) => {
-    const cell = (t: string) => t.replace(/\|/g, "\\|").replace(/\n+/g, " ").trim()
-    L.push(`| ${i + 1} | ${cell(st.action)} | ${cell(st.expected || "Not stated in the walkthrough.")} |`)
-  })
-  L.push("")
-
-  L.push("## How to tell it worked", "")
-  L.push(...bullets(s.verification, "Not stated in the walkthrough."))
-  L.push("")
-
-  if (s.pitfalls.length) {
-    L.push("## Known mistakes to avoid", "")
-    L.push(...bullets(s.pitfalls, ""))
-    L.push("")
-  }
-
-  // The most useful section, and the one a polished-looking generated SOP normally hides. An SOP
-  // that silently omits "who approves this" reads as complete and gets followed as if it were.
-  L.push("## Not covered in the walkthrough", "")
-  if (s.gaps.length) {
-    L.push(
-      "These came up as missing while writing this up. Record a follow-up covering them, or answer",
-      "them here by hand before this SOP is handed to anyone.",
-      "",
-    )
-    L.push(...bullets(s.gaps, ""))
-  } else {
-    L.push("Nothing obvious. That is unusual for a first pass — read the procedure once more before", "trusting it.")
-  }
-  L.push("")
-
-  L.push("---", "")
-  L.push(
-    "_Drafted by `iris sop draft`. Steps and expected results come from the recording; anything",
-    "the speaker did not say is marked as such rather than filled in._",
-    "",
-  )
-
-  return L.join("\n")
-}
 
 export const SopDraftCommand = cmd({
   command: "draft <input>",
@@ -172,29 +67,12 @@ export const SopDraftCommand = cmd({
     }
 
     // ---- 2. Structure ---------------------------------------------------------
+    // Server-side, so the CLI and the CardEditor produce the same document from the same words.
     const sp2 = prompts.spinner()
     sp2.start("Writing it up…")
-    let sop: Sop
+    let doc
     try {
-      const raw = await extractJson<any>(SYSTEM, walk.transcript, String(args.model))
-      sop = {
-        title: String(raw?.title ?? "").trim() || "Untitled Procedure",
-        purpose: String(raw?.purpose ?? "").trim() || "Not stated in the walkthrough.",
-        role: String(raw?.role ?? "").trim(),
-        prerequisites: asList(raw?.prerequisites),
-        steps: Array.isArray(raw?.steps)
-          ? raw.steps
-              .map((s: any) => ({
-                action: String(s?.action ?? "").trim(),
-                expected: String(s?.expected ?? "").trim(),
-              }))
-              .filter((s: SopStep) => s.action)
-          : [],
-        verification: asList(raw?.verification),
-        pitfalls: asList(raw?.pitfalls),
-        gaps: asList(raw?.gaps),
-      }
-      if (!sop.steps.length) throw new Error("No steps could be extracted. Was this a walkthrough of a process?")
+      doc = await structureWalkthrough(walk.transcript, "sop", String(args.model))
       sp2.stop("Written")
     } catch (e) {
       sp2.stop("Failed", 1)
@@ -204,8 +82,11 @@ export const SopDraftCommand = cmd({
       return
     }
 
+    const gaps: string[] = Array.isArray(doc.structured?.gaps) ? doc.structured.gaps : []
+    const stepCount = Array.isArray(doc.structured?.steps) ? doc.structured.steps.length : 0
+
     // ---- 3. Save --------------------------------------------------------------
-    const name = slugify(String(args.name ?? sop.title)) || "sop"
+    const name = slugify(String(args.name ?? doc.title)) || "sop"
     const target = args.output ? resolve(String(args.output)) : join(process.cwd(), "sops", `${name}.md`)
 
     if (existsSync(target) && !args.force) {
@@ -215,7 +96,7 @@ export const SopDraftCommand = cmd({
       return
     }
 
-    const markdown = renderSop(sop, walk.source)
+    const markdown = doc.markdown
     mkdirSync(join(target, ".."), { recursive: true })
     writeFileSync(target, markdown)
 
@@ -224,7 +105,7 @@ export const SopDraftCommand = cmd({
     if (args.request) {
       const res = await irisFetch(`/api/v1/services/requests/${Number(args.request)}/sops`, {
         method: "POST",
-        body: JSON.stringify({ title: sop.title, description: sop.purpose, content: markdown }),
+        body: JSON.stringify({ title: doc.title, description: doc.structured?.purpose ?? '', content: markdown }),
       })
       const ok = await handleApiError(res, "File SOP")
       if (ok) {
@@ -236,13 +117,13 @@ export const SopDraftCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ title: sop.title, path: target, steps: sop.steps.length, gaps: sop.gaps, sop_id: filedAs }, null, 2))
+      console.log(JSON.stringify({ title: doc.title, path: target, steps: stepCount, gaps, sop_id: filedAs }, null, 2))
       prompts.outro("Done")
       return
     }
 
     printDivider()
-    console.log(`  ${bold("Drafted:")}  ${highlight(sop.title)}  ${dim(`${sop.steps.length} steps`)}`)
+    console.log(`  ${bold("Drafted:")}  ${highlight(doc.title)}  ${dim(`${stepCount} steps`)}`)
     console.log(`  ${bold("Written:")}  ${highlight(target)}`)
     if (filedAs) console.log(`  ${bold("Filed:")}    ${highlight(`SOP #${filedAs}`)} ${dim(`on request ${args.request}`)}`)
     printDivider()
@@ -256,9 +137,9 @@ export const SopDraftCommand = cmd({
       console.log()
     }
 
-    if (sop.gaps.length) {
+    if (gaps.length) {
       console.log(`  ${bold("Not covered in the walkthrough")} ${dim("— record a follow-up or fill these in:")}`)
-      for (const g of sop.gaps) console.log(`    ${dim("·")} ${g}`)
+      for (const g of gaps) console.log(`    ${dim("·")} ${g}`)
       console.log()
     }
 
@@ -271,7 +152,3 @@ export const SopDraftCommand = cmd({
   },
 })
 
-function asList(v: any): string[] {
-  if (!Array.isArray(v)) return []
-  return v.map((x) => String(x).trim()).filter(Boolean)
-}
