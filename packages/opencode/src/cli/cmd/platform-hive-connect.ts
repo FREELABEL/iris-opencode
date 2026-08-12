@@ -6,6 +6,7 @@ import { join } from "path"
 import { homedir, hostname, platform, arch, cpus, totalmem } from "os"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { execSync } from "child_process"
+import { createHash } from "crypto"
 
 // ============================================================================
 // iris hive connect  —  enroll THIS machine, outbound, in one command
@@ -36,6 +37,61 @@ import { execSync } from "child_process"
 
 const CONFIG_DIR = join(homedir(), ".iris")
 const CONFIG_PATH = join(CONFIG_DIR, "config.json")
+
+/**
+ * A stable id for THIS physical machine, hashed. (#179932)
+ *
+ * Node identity on the server was the api_key, and a reinstall throws the api_key away — so
+ * re-registering produced a SECOND node for the same computer and orphaned the first. Eight
+ * rows for two machines in production, two of them sharing a name, and no way to answer
+ * "which node am I".
+ *
+ * Hostname cannot fix it: on macOS os.hostname() returns LocalHostName, which the OS
+ * INCREMENTS on every mDNS collision, so one laptop reported three different names in a
+ * single run. The value has to come from the hardware, not the network.
+ *
+ * ALWAYS HASHED. The raw values below are real hardware/install identifiers, and a hardware
+ * UUID is the kind of thing that should never leave a machine in the clear or end up in a
+ * log. sha256 keeps it stable and comparable while making it useless as an identifier
+ * anywhere else. The server only ever needs equality.
+ *
+ * Returns undefined when nothing stable is available, and that is a supported outcome — the
+ * server treats a missing fingerprint as "create a new node", i.e. exactly today's behaviour.
+ * A GUESSED fingerprint would be far worse than none: two machines colliding on a weak value
+ * would silently share one node row.
+ */
+function machineFingerprint(): string | undefined {
+  const read = (cmd: string): string | undefined => {
+    try {
+      const out = execSync(cmd, { encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"] }).trim()
+      return out || undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  let raw: string | undefined
+  const os = platform()
+
+  if (os === "darwin") {
+    // IOPlatformUUID — burned into the hardware, survives OS reinstalls.
+    raw = read(`ioreg -rd1 -c IOPlatformExpertDevice | awk -F'"' '/IOPlatformUUID/{print $4}'`)
+  } else if (os === "linux") {
+    // machine-id is per-INSTALL rather than per-hardware, which is the right granularity
+    // here: a reimaged box genuinely is a new node.
+    raw = read("cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null")
+  } else if (os === "win32") {
+    raw = read(
+      'powershell -NoProfile -Command "(Get-ItemProperty HKLM:\\SOFTWARE\\Microsoft\\Cryptography).MachineGuid"',
+    )
+  }
+
+  if (!raw) return undefined
+
+  // Salted with the platform so the same string on two OSes cannot collide, and so the
+  // digest is not a plain hash of a value someone else could also compute and assert.
+  return createHash("sha256").update(`iris-node:${os}:${raw}`).digest("hex")
+}
 
 interface IrisConfig {
   node_api_key?: string
@@ -154,6 +210,9 @@ const HiveConnectCommand = cmd({
       body: JSON.stringify({
         user_id: userId,
         name,
+        // Lets the server reclaim this machine's existing row instead of minting a ghost
+        // on every reinstall (#179932). Omitted entirely when unavailable.
+        ...(machineFingerprint() ? { machine_fingerprint: machineFingerprint() } : {}),
         capabilities,
         max_concurrent: Math.max(1, Math.min(20, Math.round(args["max-concurrent"] ?? 2))),
       }),
