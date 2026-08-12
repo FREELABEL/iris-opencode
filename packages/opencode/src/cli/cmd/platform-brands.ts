@@ -734,6 +734,194 @@ const GlossaryGroup = cmd({
   async handler() {},
 })
 
+
+// ============================================================================
+// brands treatments <subcommand> — a brand's own transcript treatments
+//
+// The platform ships seven treatments (clean, notes, meeting, standup, captions, idea, raw).
+// A client's work is not our work: a clinic's intake note and a label's session recap keep
+// entirely different things. Until now defining one meant hand-editing brands.metadata, which
+// is not something to ask a client to do.
+// ============================================================================
+
+const TreatmentsListCommand = cmd({
+  command: "list <slug>",
+  aliases: ["ls", "get"],
+  describe: "show a brand's own treatments",
+  builder: (yargs) =>
+    yargs.positional("slug", { type: "string", demandOption: true }).option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Transcript Treatments — ${args.slug}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const brandId = await resolveBrandId(String(args.slug))
+    if (!brandId) { prompts.log.error(`No brand found for "${args.slug}"`); process.exitCode = 1; prompts.outro("Done"); return }
+
+    const res = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`)
+    const ok = await handleApiError(res, "Get treatments")
+    if (!ok) { prompts.outro("Done"); return }
+
+    const data = (await res.json()) as any
+    const treatments = data?.data?.treatments ?? {}
+    const ids = Object.keys(treatments)
+
+    if (args.json) { console.log(JSON.stringify(treatments, null, 2)); prompts.outro("Done"); return }
+
+    printDivider()
+    if (!ids.length) {
+      // Not an error state — the built-ins are a working default, and saying so beats an empty
+      // list that reads as "something went wrong".
+      console.log(`  ${dim("No custom treatments. The built-ins still apply:")}`)
+      console.log(`  ${dim("clean · notes · meeting · standup · captions · idea")}`)
+      console.log()
+      console.log(`  ${dim("$")} iris brands treatments set ${args.slug} intake --prompt "..."`)
+    } else {
+      for (const id of ids) {
+        const t = treatments[id] || {}
+        console.log(`  ${bold(id)}  ${dim(t.label || "")}`)
+        if (t.description) console.log(`    ${dim(t.description)}`)
+        console.log(`    ${dim(String(t.prompt || "").slice(0, 110))}${String(t.prompt || "").length > 110 ? dim("…") : ""}`)
+        console.log()
+      }
+    }
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
+const TreatmentsSetCommand = cmd({
+  command: "set <slug> <id>",
+  describe: "add or replace one treatment (keeps the others)",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { type: "string", demandOption: true })
+      .positional("id", { type: "string", demandOption: true, describe: "Short id, e.g. intake" })
+      .option("prompt", { type: "string", describe: "The instruction. Required unless --file is given." })
+      .option("file", { type: "string", describe: "Read the prompt from a file" })
+      .option("label", { type: "string", describe: "Name shown in pickers" })
+      .option("description", { type: "string", describe: "One line explaining what it keeps" })
+      .option("shape", { type: "string", choices: ["text", "markdown"], default: "markdown" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Set Treatment — ${args.id}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    let prompt = args.prompt ? String(args.prompt) : ""
+    if (args.file) {
+      const { readFileSync, existsSync } = await import("fs")
+      const path = String(args.file)
+      if (!existsSync(path)) { prompts.log.error(`Not found: ${path}`); process.exitCode = 1; prompts.outro("Done"); return }
+      prompt = readFileSync(path, "utf8").trim()
+    }
+    if (!prompt) {
+      prompts.log.error("A treatment IS its prompt. Pass --prompt \"...\" or --file <path>.")
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    const brandId = await resolveBrandId(String(args.slug))
+    if (!brandId) { prompts.log.error(`No brand found for "${args.slug}"`); process.exitCode = 1; prompts.outro("Done"); return }
+
+    // Read-modify-write: the endpoint takes the whole map, and a naive set would silently drop
+    // every other treatment the brand had defined.
+    const cur = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`)
+    const existing = cur.ok ? (((await cur.json()) as any)?.data?.treatments ?? {}) : {}
+
+    const merged = {
+      ...existing,
+      [String(args.id)]: {
+        label: args.label ? String(args.label) : String(args.id),
+        description: args.description ? String(args.description) : "Custom treatment.",
+        shape: String(args.shape),
+        prompt,
+      },
+    }
+
+    const res = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`, {
+      method: "PATCH",
+      body: JSON.stringify({ treatments: merged }),
+    })
+    const ok = await handleApiError(res, "Set treatment")
+    if (!ok) { process.exitCode = 1; prompts.outro("Done"); return }
+
+    // Read it back. A 200 means the request was accepted, not that the field changed — the
+    // lesson from #179802, where a control reported success for months while doing nothing.
+    const verify = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`)
+    const after = verify.ok ? (((await verify.json()) as any)?.data?.treatments ?? {}) : {}
+    if (!after[String(args.id)]) {
+      prompts.log.error("The API accepted the write but the treatment is not there. Nothing was saved.")
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    printDivider()
+    console.log(`  ${success("✓")} ${bold(String(args.id))} saved on ${bold(String(args.slug))}`)
+    console.log(`  ${dim(`${Object.keys(after).length} custom treatment(s) on this brand`)}`)
+    printDivider()
+    console.log()
+    console.log(`  ${dim("$")} iris transcribe recording.m4a --treatment ${args.id}`)
+    console.log()
+    prompts.outro("Done")
+  },
+})
+
+const TreatmentsRemoveCommand = cmd({
+  command: "remove <slug> <id>",
+  aliases: ["rm", "delete"],
+  describe: "remove one treatment (the built-in of that name, if any, comes back)",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { type: "string", demandOption: true })
+      .positional("id", { type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Remove Treatment — ${args.id}`)
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const brandId = await resolveBrandId(String(args.slug))
+    if (!brandId) { prompts.log.error(`No brand found for "${args.slug}"`); process.exitCode = 1; prompts.outro("Done"); return }
+
+    const cur = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`)
+    const existing = cur.ok ? (((await cur.json()) as any)?.data?.treatments ?? {}) : {}
+
+    if (!existing[String(args.id)]) {
+      prompts.log.error(`"${args.id}" is not a custom treatment on this brand.`)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    delete existing[String(args.id)]
+
+    const res = await irisFetch(`/api/v1/brands/${brandId}/transcript-treatments`, {
+      method: "PATCH",
+      body: JSON.stringify({ treatments: existing }),
+    })
+    const ok = await handleApiError(res, "Remove treatment")
+    if (!ok) { process.exitCode = 1; prompts.outro("Done"); return }
+
+    prompts.outro(`${success("✓")} Removed ${args.id}`)
+  },
+})
+
+const TreatmentsGroup = cmd({
+  command: "treatments <subcommand>",
+  describe: "a brand's own transcript treatments — list, set, remove",
+  builder: (yargs) =>
+    yargs
+      .command(TreatmentsListCommand)
+      .command(TreatmentsSetCommand)
+      .command(TreatmentsRemoveCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
 // ============================================================================
 // brands design-tokens <subcommand>
 // ============================================================================
@@ -1493,6 +1681,7 @@ export const PlatformBrandsCommand = cmd({
       .command(PersonasGroup)
       .command(DesignTokensGroup)
       .command(GlossaryGroup)
+      .command(TreatmentsGroup)
       .command(ProfileGroup)
       .demandCommand(),
   async handler() {},
