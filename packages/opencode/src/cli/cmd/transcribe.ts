@@ -15,6 +15,7 @@ import {
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { transcribeLocal } from "../lib/transcription"
+import { treatTranscript, listTreatments } from "../lib/walkthrough"
 import { homedir, tmpdir } from "os"
 import { join, basename, extname, resolve } from "path"
 
@@ -132,6 +133,7 @@ async function runLocalWhisper(
   output?: string,
   brandId?: number,
   forceRemote?: boolean,
+  treatment?: string,
 ): Promise<boolean> {
   const abs = resolve(filePath)
   let provider = "whisper.cpp (local)"
@@ -145,7 +147,7 @@ async function runLocalWhisper(
       process.exitCode = 1
       return false
     }
-    return finishTranscript(abs, remote, "gpt-transcribe (server)", asJson, sourceUrl, output, filePath)
+    return finishTranscript(abs, remote, "gpt-transcribe (server)", asJson, sourceUrl, output, filePath, treatment)
   }
 
   // Fetched BEFORE the spinner starts so a slow lookup does not look like slow transcription.
@@ -185,7 +187,7 @@ async function runLocalWhisper(
   }
   sp.stop("Done")
 
-  return finishTranscript(abs, text, provider, asJson, sourceUrl, output, filePath)
+  return finishTranscript(abs, text, provider, asJson, sourceUrl, output, filePath, treatment)
 }
 
 /**
@@ -200,7 +202,15 @@ async function finishTranscript(
   sourceUrl: string | undefined,
   output: string | undefined,
   filePath: string,
+  treatment?: string,
 ): Promise<boolean> {
+  // A treatment rewrites what somebody said. If one ran, BOTH files are written — the treated
+  // transcript where the reader expects it, and the untouched original next to it. A rewrite
+  // you cannot compare against the original is one you cannot audit, and this path handles
+  // clinical dictation.
+  const treated = await treatTranscript(text, treatment ?? "raw")
+  const rawText = text
+  text = treated.text
   // Output location (#152293): default to ~/.iris/transcripts — NOT the CWD (it littered
   // git repos). Honor --output (dir or file). Skip the file entirely for --json with no
   // explicit --output, since the JSON already carries the text.
@@ -216,6 +226,9 @@ async function finishTranscript(
     txtPath = join(dir, name)
   }
   if (txtPath) writeFileSync(txtPath, text)
+  if (txtPath && treated.changed) {
+    writeFileSync(txtPath.replace(/(\.[^.]+)?$/, ".raw$1"), rawText)
+  }
 
   // Best-effort server sync so it's searchable in the knowledge base.
   const estimatedDuration = Math.round((text.split(/\s+/).length / 150) * 60)
@@ -395,13 +408,14 @@ async function invokeTranscribeTool(url: string, userId?: number): Promise<{ ok:
  * - --local flag → always local pipeline
  */
 export const PlatformTranscribeCommand = cmd({
-  command: "transcribe <url>",
+  command: "transcribe [url]",
   describe: "transcribe a video/audio from a URL or local file",
   builder: (y) =>
     y
       .positional("url", {
         type: "string",
-        demandOption: true,
+        // Optional so `--list-treatments` can answer "what can I do with a recording" without
+        // needing one. Missing-and-not-listing is caught in the handler with a real message.
         describe: "Video/audio URL or local file path",
       })
       .option("language", {
@@ -422,6 +436,15 @@ export const PlatformTranscribeCommand = cmd({
         type: "number",
         describe: "Brand id whose vocabulary to bias toward (for accounts managing several)",
       })
+      .option("treatment", {
+        type: "string",
+        describe: "What this recording IS: clean, notes, meeting, standup, captions, idea (default: raw)",
+      })
+      .option("list-treatments", {
+        type: "boolean",
+        default: false,
+        describe: "Show the treatments available to you, including your brand's own",
+      })
       .option("output", {
         type: "string",
         alias: "o",
@@ -431,6 +454,35 @@ export const PlatformTranscribeCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Transcribe")
+
+    // Answer "what can I do with a recording" without needing one.
+    if (args["list-treatments"]) {
+      const list = await listTreatments()
+      if (!list.length) {
+        prompts.log.error("Could not reach the treatments list. Check `iris login`.")
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      printDivider()
+      for (const t of list) {
+        const tag = t.custom ? dim(" (yours)") : ""
+        console.log(`  ${bold(t.id.padEnd(10))} ${t.description}${tag}`)
+      }
+      printDivider()
+      console.log()
+      console.log(`  ${dim("$")} iris transcribe recording.m4a --treatment meeting`)
+      console.log()
+      prompts.outro("Done")
+      return
+    }
+
+    if (!args.url) {
+      prompts.log.error("Nothing to transcribe. Pass a file or URL, or use --list-treatments.")
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
 
     const url = String(args.url)
     const looksLikeFile =
@@ -451,6 +503,7 @@ export const PlatformTranscribeCommand = cmd({
         args.output as string | undefined,
         args.brand ? Number(args.brand) : undefined,
         !!args.remote,
+        args.treatment as string | undefined,
       )
       prompts.outro("Done")
       return

@@ -99,6 +99,66 @@ export async function resolveWalkthrough(
   return { transcript, source, hinted }
 }
 
+export interface TreatedTranscript {
+  treatment: string
+  shape: string
+  text: string
+  /** The untouched transcript. Always present — a rewrite you cannot compare is one you cannot audit. */
+  raw: string
+  changed: boolean
+  items?: Array<{ title: string; body: string }>
+}
+
+/**
+ * Apply a named treatment to a transcript.
+ *
+ * Returns the ORIGINAL on any failure rather than throwing. The words are the valuable part; a
+ * tidy-up pass is a convenience on top of them, and losing a recording because the convenience
+ * failed would be the worst possible trade. The server takes the same position internally.
+ */
+export async function treatTranscript(
+  transcript: string,
+  treatment: string,
+  model?: string,
+): Promise<TreatedTranscript> {
+  const untouched: TreatedTranscript = {
+    treatment: "raw",
+    shape: "text",
+    text: transcript,
+    raw: transcript,
+    changed: false,
+  }
+
+  if (!treatment || treatment === "raw" || !transcript.trim()) return untouched
+
+  try {
+    const res = await irisFetch(
+      "/api/v1/walkthrough/treat",
+      { method: "POST", body: JSON.stringify({ transcript, treatment, ...(model ? { model } : {}) }) },
+      IRIS_API,
+    )
+    if (!res.ok) return untouched
+    const data = (await res.json()) as any
+    const out = data?.data
+    return out?.text ? (out as TreatedTranscript) : untouched
+  } catch {
+    return untouched
+  }
+}
+
+/** Treatments the server will accept for this caller, including their brand's own. */
+export async function listTreatments(): Promise<Array<{ id: string; label: string; description: string; shape: string; custom: boolean }>> {
+  try {
+    const res = await irisFetch("/api/v1/walkthrough/treatments", {}, IRIS_API)
+    if (!res.ok) return []
+    const data = (await res.json()) as any
+    const map = data?.data?.treatments ?? {}
+    return Object.keys(map).map((id) => ({ id, ...map[id] }))
+  } catch {
+    return []
+  }
+}
+
 export interface StructuredWalkthrough {
   format: "sop" | "playbook"
   title: string
