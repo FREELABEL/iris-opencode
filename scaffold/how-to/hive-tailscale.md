@@ -97,8 +97,23 @@ contractor joins.
 $ iris hive vpn grant <group> <node-tag>
 ```
 
-Scaffolds a least-privilege ACL — one group, one tagged node, one port — and prints it for
-you to paste into the Tailscale admin console. The shape it produces:
+Scaffolds a least-privilege ACL and prints it for you to paste into the Tailscale admin
+console.
+
+**Read this before you paste.** A Tailscale policy is **default-deny the moment `acls` is
+non-empty**, and a fresh tailnet ships with a single allow-all rule. So the output
+*replaces* your policy — it is not an addition, and anything not listed stops working when
+you save. The command therefore emits a complete policy with two doors deliberately held
+open: each user keeps their own devices, and admins keep the tagged host. Without the
+second, tagging a machine takes away your own access to it, because a tagged device stops
+being owned by a user.
+
+**Tag the host before you save**, or the rules match nothing and the people you meant to
+grant access to lose it while you keep yours — an asymmetry your client discovers before
+you do. Then use the admin console's preview pane, and verify from the other side after
+saving.
+
+The shape it produces:
 
 - a **group** (e.g. your accounting team) is the only source allowed
 - a **tag** on the target machine is the only destination
@@ -119,6 +134,37 @@ $ iris hive vpn connect <name>   # launches the remote desktop session directly
 
 `connect` is the one-command path — it resolves the name, finds the right client for your
 OS, and opens the session.
+
+## Step 5b: Publishing a local service (the safe door)
+
+To read a local dashboard from your phone, the tempting move is to bind the service to all
+interfaces:
+
+```bash
+$ iris web --hostname 0.0.0.0 --port 4096     # works, and over-shares
+```
+
+That serves it to the tailnet **and** to whatever network the machine is physically on —
+the café wifi, the client's guest VLAN, the conference centre. Much bigger door than you
+meant to open, opened by a flag people copy without reading.
+
+```bash
+$ iris hive vpn serve 4096          # publish loopback to the tailnet, over HTTPS
+$ iris hive vpn serve 4096 --status # what this machine currently publishes
+$ iris hive vpn serve 4096 --off    # stop
+```
+
+The service stays bound to `127.0.0.1`; Tailscale proxies it onto the tailnet with a real
+certificate and a stable URL. Same outcome from your phone, no exposure to the room you
+are standing in.
+
+First run may need HTTPS certificates enabled once for the tailnet (admin → DNS → MagicDNS,
+then HTTPS Certificates). The command names that when it fails, because the raw error does
+not.
+
+**`serve` is tailnet-only.** Tailscale also has `funnel`, which publishes to the public
+internet. Nothing described here should ever use it — the whole value is that there is no
+public surface.
 
 ## Step 6: Make it a Hive node (optional, and the point of doing all this)
 

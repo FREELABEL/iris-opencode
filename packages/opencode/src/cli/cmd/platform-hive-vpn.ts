@@ -423,26 +423,40 @@ const VpnGrantCommand = cmd({
     const membersProvided = Boolean(argv.members)
     const members = membersProvided
       ? String(argv.members).split(",").map((m) => m.trim()).filter(Boolean)
-      : ["haroon@example.com", "mohammed@example.com"]
+      : ["first@example.com", "second@example.com"]
 
-    // Least-privilege ACL: only `group:<group>` may reach `tag:<tag>` on `port`,
-    // nothing else on the mesh. Groups should be SSO-synced from Google Workspace.
+    // A COMPLETE policy, not a fragment — and that distinction is a lockout bug, not a
+    // preference. A Tailscale policy is default-deny the moment `acls` is non-empty, and
+    // the tailnet ships with a single allow-all rule. Emitting only the scoped rule and
+    // telling someone to paste it into Access Controls therefore revokes their access to
+    // every machine they own, including the one they are trying to protect. The earlier
+    // version of this command did exactly that.
+    //
+    // So the policy below keeps two doors open on purpose and says why:
+    //   1. members reach their OWN devices          — laptop to phone, unchanged
+    //   2. admins reach the tagged host on any port — a tagged device has no owner, so
+    //      without this the person applying the ACL loses the host to the group
+    //   3. the group reaches the host on ONE port   — the rule you actually asked for
     const policy = {
       groups: { [`group:${group}`]: members },
       tagOwners: { [`tag:${tag}`]: ["autogroup:admin"] },
       acls: [
-        {
-          action: "accept",
-          src: [`group:${group}`],
-          dst: [`tag:${tag}:${port}`],
-        },
+        { action: "accept", src: ["autogroup:member"], dst: ["autogroup:self:*"] },
+        { action: "accept", src: ["autogroup:admin"], dst: [`tag:${tag}:*`] },
+        { action: "accept", src: [`group:${group}`], dst: [`tag:${tag}:${port}`] },
       ],
       // ssh: scoped session logging can be added here for the audit trail
     }
     const blob = JSON.stringify(policy, null, 2)
     console.log()
-    console.log(bold(`Tailscale ACL — ${group} → tag:${tag} on port ${port} (RDP)`))
-    console.log(dim("  Paste into the Tailscale admin → Access Controls, or `tailscale set` via API."))
+    console.log(bold(`Tailscale ACL — ${group} → tag:${tag} on port ${port}`))
+    console.log()
+    console.log(`${highlight("!")} ${bold("This REPLACES your whole policy, it is not an addition.")}`)
+    console.log(dim("  A tailnet ships allow-all; a policy is default-deny as soon as acls is set."))
+    console.log(dim("  Anything not listed below stops working the moment you save."))
+    console.log()
+    console.log(dim("  Before saving: Tailscale admin → Access Controls → Preview, and check a device"))
+    console.log(dim("  you own can still reach what it needs. Tag the host first, or rule 2 matches nothing."))
     console.log()
     console.log(blob)
     if (argv.write) {
@@ -487,6 +501,90 @@ const VpnEnrollCommand = cmd({
   },
 })
 
+// ── vpn serve  (publish a LOCAL port to the tailnet — not to every interface) ──
+//
+// The gap this closes. To read a local dashboard from your phone the advice was
+// `--hostname 0.0.0.0`, which serves it to the tailnet AND to whatever network the
+// machine is sitting on — the café wifi, the client's guest VLAN, the conference
+// centre. That is a much larger door than the one you meant to open, and it is
+// opened by a flag people copy without reading.
+//
+// `tailscale serve` proxies a loopback port onto the tailnet only, over HTTPS with
+// a real certificate, while the service stays bound to 127.0.0.1. Same outcome,
+// no exposure, and the URL is stable.
+
+const VpnServeCommand = cmd({
+  command: "serve <port>",
+  describe: "publish a LOCAL port to the tailnet over HTTPS (safer than binding 0.0.0.0)",
+  builder: (y) =>
+    y
+      .positional("port", { describe: "the local port to publish, e.g. 4096", type: "number", demandOption: true })
+      .option("path", { describe: "mount under a path instead of the root, e.g. /iris", type: "string" })
+      .option("off", { describe: "stop publishing this port", type: "boolean", default: false })
+      .option("status", { describe: "show what this machine is currently publishing", type: "boolean", default: false }),
+  async handler(argv) {
+    if (!tailscaleBin()) {
+      console.log()
+      console.log(`${highlight("!")} Tailscale is not installed — run ${bold("iris hive vpn install")}`)
+      process.exit(1)
+    }
+
+    if (argv.status) {
+      const st = ts(["serve", "status"])
+      console.log()
+      console.log(bold("Published to the tailnet from this machine"))
+      console.log(st.stdout.trim() || dim("  nothing — this machine publishes no local ports"))
+      return
+    }
+
+    const port = Number(argv.port)
+    const path = argv.path ? String(argv.path) : undefined
+
+    if (argv.off) {
+      const args = path ? ["serve", "--https=443", `--set-path=${path}`, "off"] : ["serve", "--https=443", "off"]
+      const r = ts(args)
+      console.log()
+      console.log(r.ok ? `${success("✓")} stopped publishing port ${port}` : `${highlight("!")} ${r.stderr.trim() || "failed"}`)
+      return
+    }
+
+    // --bg so the proxy outlives this process. Without it the mapping dies with the
+    // command and the URL 502s a second later, which reads as "it doesn't work".
+    const args = ["serve", "--bg", "--https=443"]
+    if (path) args.push(`--set-path=${path}`)
+    args.push(String(port))
+
+    const r = ts(args, 30)
+    console.log()
+    if (!r.ok) {
+      const err = r.stderr.trim()
+      console.log(`${highlight("!")} ${err || "tailscale serve failed"}`)
+      // The two failures worth naming, because the raw message explains neither.
+      if (/HTTPS|cert/i.test(err)) {
+        console.log(dim("  HTTPS certificates must be enabled once for the tailnet:"))
+        console.log(dim("  Tailscale admin → DNS → enable MagicDNS, then enable HTTPS Certificates."))
+      }
+      if (/not.*logged|NeedsLogin/i.test(err)) {
+        console.log(dim("  This machine is not on the tailnet yet — run: iris hive vpn up"))
+      }
+      process.exit(1)
+    }
+
+    console.log(`${success("✓")} localhost:${port} is now published to the tailnet`)
+    console.log(r.stdout.trim())
+    console.log()
+    console.log(dim("  Reachable by tailnet devices only. The service stays bound to 127.0.0.1;"))
+    console.log(dim("  nothing is exposed to the network this machine is physically on."))
+    console.log()
+    console.log(dim(`  Stop with:  iris hive vpn serve ${port} --off`))
+    console.log(dim(`  Inventory:  iris hive vpn serve ${port} --status`))
+    console.log()
+    console.log(
+      `${highlight("!")} ${bold("serve")} is tailnet-only. ${dim("Tailscale `funnel` would publish to the public internet — do not.")}`,
+    )
+  },
+})
+
 // ── group command ─────────────────────────────────────────────────────────────
 
 export const HiveVpnCommandExport = cmd({
@@ -502,6 +600,7 @@ export const HiveVpnCommandExport = cmd({
       .command(VpnConnectCommand)
       .command(VpnDoctorCommand)
       .command(VpnGrantCommand)
+      .command(VpnServeCommand)
       .command(VpnEnrollCommand)
       .demandCommand(1, "Run: iris hive vpn check"),
   handler() {},
