@@ -540,6 +540,42 @@ const VpnServeCommand = cmd({
     const port = Number(argv.port)
     const path = argv.path ? String(argv.path) : undefined
 
+    // PRECONDITION, checked before we run anything. Found by stress-testing this command
+    // against a real tailnet that had never enabled HTTPS: `tailscale serve` does not
+    // fail in that state, it BLOCKS — apparently waiting on the certificate decision —
+    // so the wrapper's timeout fired and reported "failed" with an empty stderr. A hang
+    // reported as a failure with no reason is worse than either honest outcome.
+    //
+    // CertDomains is populated only once HTTPS Certificates is on for the tailnet, so it
+    // is a cheap, reliable read of exactly the thing that would otherwise hang us.
+    if (!argv.off) {
+      const probe = ts(["status", "--json"], 10)
+      if (probe.ok) {
+        try {
+          const st = JSON.parse(probe.stdout) as { CertDomains?: string[] | null; MagicDNSSuffix?: string }
+          if (!st.CertDomains || st.CertDomains.length === 0) {
+            console.log()
+            console.log(`${highlight("!")} ${bold("HTTPS certificates are not enabled for this tailnet.")}`)
+            console.log(dim("  `tailscale serve` needs them, and without them it hangs rather than erroring."))
+            console.log()
+            console.log("  Enable once, in the Tailscale admin console:")
+            console.log(dim("    DNS  ->  enable MagicDNS"))
+            console.log(dim("    DNS  ->  enable HTTPS Certificates"))
+            if (st.MagicDNSSuffix) {
+              console.log()
+              console.log(dim(`  This machine will then publish under *.${st.MagicDNSSuffix}`))
+            }
+            console.log()
+            console.log(dim("  Re-run this command afterwards. Nothing was changed."))
+            process.exit(1)
+          }
+        } catch {
+          // Unparseable status is not a reason to block the command — fall through and
+          // let serve speak for itself.
+        }
+      }
+    }
+
     if (argv.off) {
       const args = path ? ["serve", "--https=443", `--set-path=${path}`, "off"] : ["serve", "--https=443", "off"]
       const r = ts(args)
@@ -558,7 +594,16 @@ const VpnServeCommand = cmd({
     console.log()
     if (!r.ok) {
       const err = r.stderr.trim()
-      console.log(`${highlight("!")} ${err || "tailscale serve failed"}`)
+      // Distinguish "it said no" from "it never answered". The empty-stderr case is a
+      // timeout, and reporting that as a failure sends you looking for a config error
+      // that does not exist.
+      if (!err) {
+        console.log(`${highlight("!")} ${bold("tailscale serve did not respond within 30s.")}`)
+        console.log(dim("  It is blocked on something, most likely waiting on input rather than refusing."))
+        console.log(dim("  Run it directly to see what it wants:  tailscale serve --bg --https=443 " + port))
+        process.exit(1)
+      }
+      console.log(`${highlight("!")} ${err}`)
       // The two failures worth naming, because the raw message explains neither.
       if (/HTTPS|cert/i.test(err)) {
         console.log(dim("  HTTPS certificates must be enabled once for the tailnet:"))
