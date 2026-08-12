@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success } from "./iris-api"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
 import { join } from "path"
 
@@ -581,6 +581,155 @@ const PersonasGroup = cmd({
       .command(PersonasUpdateCommand)
       .command(PersonasDeleteCommand)
       .command(PersonasDefaultCommand)
+      .demandCommand(),
+  async handler() {},
+})
+
+
+// ============================================================================
+// brands glossary <subcommand> — per-tenant transcription vocabulary
+//
+// A hardcoded IRIS glossary was briefly applied to every tenant's audio, which biased other
+// people's transcripts toward our product's nouns. Vocabulary is per-brand for the same reason
+// design tokens are: it belongs to the client, not to the platform.
+// ============================================================================
+
+/** slug -> brand id, the same lookup the design-tokens set path uses. */
+async function resolveBrandId(slug: string): Promise<number | null> {
+  const res = await irisFetch(`/api/v1/brands?slug=${encodeURIComponent(slug)}&per_page=1`)
+  if (!res.ok) return null
+  const body = (await res.json()) as { data?: any }
+  const brands: any[] = body?.data?.data ?? body?.data ?? []
+  return brands.length ? brands[0].id : null
+}
+
+const GlossaryGetCommand = cmd({
+  command: "get <slug>",
+  describe: "show a brand's transcription vocabulary",
+  builder: (yargs) => yargs.positional("slug", { describe: "brand slug", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Transcription Glossary — ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner(); spinner.start("Loading…")
+    try {
+      const brandId = await resolveBrandId(String(args.slug))
+      if (!brandId) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+
+      const res = await irisFetch(`/api/v1/brands/${brandId}/transcription-glossary`)
+      const ok = await handleApiError(res, "Get glossary"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const body = (await res.json()) as any
+      const glossary = body?.data?.glossary ?? null
+
+      spinner.stop(String(args.slug))
+      printDivider()
+      if (!glossary) {
+        // Not an error state. No glossary means transcription sends no hint at all, which is
+        // the safe default — a wrong hint is worse than none.
+        console.log(`  ${dim("No glossary set. Transcription runs without domain hints.")}`)
+        console.log(`  ${dim(`Set one: iris brands glossary set ${args.slug} "term, term, term"`)}`)
+      } else {
+        console.log(`  ${Array.isArray(glossary) ? glossary.join(", ") : glossary}`)
+      }
+      printDivider()
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const GlossarySetCommand = cmd({
+  command: "set <slug> <terms>",
+  describe: "set a brand's transcription vocabulary (a sentence or comma-separated terms)",
+  builder: (yargs) =>
+    yargs
+      .positional("slug", { describe: "brand slug", type: "string", demandOption: true })
+      .positional("terms", { describe: 'e.g. "deposition, lien, subrogation"', type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Set Glossary — ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner(); spinner.start("Saving…")
+    try {
+      const brandId = await resolveBrandId(String(args.slug))
+      if (!brandId) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+
+      const res = await irisFetch(`/api/v1/brands/${brandId}/transcription-glossary`, {
+        method: "PATCH",
+        body: JSON.stringify({ glossary: String(args.terms) }),
+      })
+      const ok = await handleApiError(res, "Set glossary"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      // Read it back. A 200 says the request was accepted, not that the value stored — the
+      // lesson from #179802, which printed a checkmark while nothing changed.
+      const check = await irisFetch(`/api/v1/brands/${brandId}/transcription-glossary`)
+      const stored = ((await check.json()) as any)?.data?.glossary ?? null
+
+      if (!stored) {
+        spinner.stop("Not applied", 1)
+        prompts.log.error("The API accepted the request but no glossary is stored.")
+        process.exitCode = 1
+        prompts.outro("Done"); return
+      }
+
+      spinner.stop(`${success("✓")} Glossary set`)
+      printDivider()
+      console.log(`  ${Array.isArray(stored) ? stored.join(", ") : stored}`)
+      printDivider()
+      console.log(dim("  Applies to this brand's transcriptions only."))
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const GlossaryClearCommand = cmd({
+  command: "clear <slug>",
+  describe: "remove a brand's transcription vocabulary",
+  builder: (yargs) => yargs.positional("slug", { describe: "brand slug", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Clear Glossary — ${args.slug}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner(); spinner.start("Clearing…")
+    try {
+      const brandId = await resolveBrandId(String(args.slug))
+      if (!brandId) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
+
+      const res = await irisFetch(`/api/v1/brands/${brandId}/transcription-glossary`, {
+        method: "PATCH",
+        body: JSON.stringify({ glossary: null }),
+      })
+      const ok = await handleApiError(res, "Clear glossary"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} Glossary cleared`)
+      console.log(dim("  Transcription will run without domain hints for this brand."))
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const GlossaryGroup = cmd({
+  command: "glossary <subcommand>",
+  describe: "transcription vocabulary for a brand — get, set, clear",
+  builder: (yargs) =>
+    yargs
+      .command(GlossaryGetCommand)
+      .command(GlossarySetCommand)
+      .command(GlossaryClearCommand)
       .demandCommand(),
   async handler() {},
 })
@@ -1343,6 +1492,7 @@ export const PlatformBrandsCommand = cmd({
       .command(BrandsDetachCommand)
       .command(PersonasGroup)
       .command(DesignTokensGroup)
+      .command(GlossaryGroup)
       .command(ProfileGroup)
       .demandCommand(),
   async handler() {},
