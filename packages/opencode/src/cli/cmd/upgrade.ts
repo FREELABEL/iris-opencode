@@ -130,6 +130,44 @@ export const UpgradeCommand = {
         }
       }
 
+      // Refresh the how-to recipes (#180295).
+      //
+      // These are the agent's on-demand documentation and they were NOT part of an update —
+      // they arrived only from `install --only-docs`, which is undocumented in any help text.
+      // On a machine updated continuously for months, 26 of 34 recipes were installed and
+      // eight were stale, including the design audit CLAUDE.md calls mandatory reading.
+      //
+      // Driven by the same scaffold/manifest.json the installer uses, so there is ONE list
+      // rather than a second copy that drifts. Best-effort and quiet on failure: a docs
+      // refresh must never be the reason an upgrade reports failure.
+      try {
+        const manifestUrl =
+          process.env["IRIS_SCAFFOLD_BASE_URL"] ??
+          "https://raw.githubusercontent.com/FREELABEL/iris-opencode/main/scaffold"
+        const res = await fetch(`${manifestUrl}/manifest.json`, { signal: AbortSignal.timeout(8000) })
+        if (res.ok) {
+          const manifest = (await res.json()) as { files?: Array<{ src: string; dest: string }> }
+          const recipes = (manifest.files ?? []).filter((f) => f.src.startsWith("how-to/"))
+          const { mkdirSync, writeFileSync } = await import("fs")
+          mkdirSync(`${home}/.iris/how-to`, { recursive: true })
+
+          let written = 0
+          for (const f of recipes) {
+            try {
+              const r = await fetch(`${manifestUrl}/${f.src}`, { signal: AbortSignal.timeout(8000) })
+              if (!r.ok) continue
+              writeFileSync(`${home}/.iris/${f.dest}`, await r.text())
+              written++
+            } catch {
+              // one bad recipe must not abandon the rest
+            }
+          }
+          if (written > 0) prompts.log.info(`How-to recipes refreshed (${written})`)
+        }
+      } catch {
+        // Offline, or GitHub unreachable. The binary already updated; say nothing.
+      }
+
       // Fix stale API URLs in daemon config (pre-Railway migration)
       const configFile = `${home}/.iris/config.json`
       const fixResult = await $`test -f ${configFile} && grep -qE 'ondigitalocean\\.app|main\\.heyiris\\.io|apiv2\\.heyiris\\.io' ${configFile} 2>/dev/null && sed -i.bak -e 's|https://[^"]*ondigitalocean\\.app[^"]*|https://freelabel.net|g' -e 's|https://main\\.heyiris\\.io[^"]*|https://freelabel.net|g' -e 's|https://apiv2\\.heyiris\\.io[^"]*|https://freelabel.net|g' ${configFile} && rm -f ${configFile}.bak && echo "config-fixed"`.nothrow().quiet().text()
