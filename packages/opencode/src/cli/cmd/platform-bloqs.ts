@@ -2572,7 +2572,10 @@ const BloqsUpdateItemCommand = cmd({
       .positional("item-id", { describe: "item ID", type: "number", demandOption: true })
       .option("status", { describe: "set item status", type: "string", choices: BLOQ_ITEM_STATUS_CHOICES })
       .option("title", { describe: "new title", type: "string" })
-      .option("content", { describe: "replace content wholesale", type: "string" })
+      // `add-item` names this field --text, so muscle memory brings --text here too and
+      // strict mode rejects it ("Unknown argument: text") without naming the right flag.
+      // Same field, one name. #180234
+      .option("content", { describe: "replace content wholesale", type: "string", alias: "text" })
       .option("merge", {
         describe: "merge key=value into content, preserving other fields (repeatable; dotted keys nest; e.g. --merge rate_cents=7900)",
         type: "array",
