@@ -25,3 +25,27 @@ if [ -d "$HOME/sites/freelabel" ] || [ -n "$IRIS_PROJECT_ROOT" ]; then
     exit 1
   }
 fi
+
+# Every how-to in scaffold/ must be in scaffold/manifest.json.
+#
+# The installer fetches the MANIFEST and downloads what it lists — adding a recipe file
+# does nothing on its own. That is not hypothetical: genesis-design-standard.md sat in the
+# repo un-manifested, so the design audit CLAUDE.md calls mandatory reading had never
+# installed on a single machine. Same failure shape as the capability index above: a thing
+# that exists, is discoverable in the repo, and reaches nobody.
+node -e '
+const fs=require("fs"),p=require("path");
+const dir=p.join(__dirname,"scaffold","how-to");
+if(!fs.existsSync(dir))process.exit(0);
+const man=JSON.parse(fs.readFileSync(p.join(__dirname,"scaffold","manifest.json"),"utf8"));
+const listed=new Set(man.files.map(f=>f.src));
+const missing=fs.readdirSync(dir).filter(f=>f.endsWith(".md")&&f!=="README.md")
+  .filter(f=>!listed.has("how-to/"+f));
+if(missing.length){
+  console.error("\npre-push: these how-to recipes are not in scaffold/manifest.json,");
+  console.error("so the installer will never fetch them:\n");
+  missing.forEach(f=>console.error("  - how-to/"+f));
+  console.error("\nAdd an entry with src, dest and purpose.\n");
+  process.exit(1);
+}
+' || exit 1
