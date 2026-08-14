@@ -211,7 +211,18 @@ const ShowCommand = cmd({
 const LinkCommand = cmd({
   command: "link <id>",
   describe: "print the signing link for an agreement",
-  builder: (y) => y.positional("id", { type: "number", demandOption: true }),
+  builder: (y) =>
+    y
+      .positional("id", { type: "number", demandOption: true })
+      .epilogue(
+        [
+          "The link is a BEARER CREDENTIAL: anyone holding the URL can sign, and there is no",
+          "login in front of it. Give it to the counterparty only — never a shared channel.",
+          "",
+          "On a multi-party agreement this prints one URL per party. A link signs for exactly",
+          "one party, so sending the wrong one to the right person will be refused.",
+        ].join("\n"),
+      ),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Signing link — agreement #${args.id}`)
@@ -275,7 +286,26 @@ const RaiseCommand = cmd({
       .option("term", { type: "string", default: "one year" })
       .option("expires", { type: "string", describe: "YYYY-MM-DD; derived from --term when omitted" })
       .option("issue", { type: "boolean", describe: "email the signing link straight away" })
-      .option("json", { type: "boolean" }),
+      .option("json", { type: "boolean" })
+      .example(
+        '$0 agreements raise --name="Dana Whitfield" --email=dana@example.com --term="two years" --issue',
+        "raise an NDA and email the signing link",
+      )
+      .example(
+        '$0 agreements raise --type=baa --name="Dana Whitfield" --email=dana@example.com --tier=phi --issue',
+        "a BAA — the signer must verify their email before signing",
+      )
+      .epilogue(
+        [
+          "--term and the expiry date state the same fact, so the date is DERIVED from the term.",
+          'A term this cannot read ("for the duration of the engagement") is refused, not guessed —',
+          "pass --expires=YYYY-MM-DD instead.",
+          "",
+          "The clause wording is PLACEHOLDER pending counsel review and says so on the document.",
+          "",
+          "Full recipe:  iris how-to view agreements-and-signing",
+        ].join("\n"),
+      ),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Raise an agreement")
@@ -365,7 +395,16 @@ const RevokeCommand = cmd({
   builder: (y) =>
     y
       .positional("id", { type: "number", demandOption: true })
-      .option("reason", { type: "string", describe: "why — recorded on the audit chain" }),
+      .option("reason", { type: "string", describe: "why — recorded on the audit chain" })
+      .epilogue(
+        [
+          "The reason is required. A revocation withdraws access someone was relying on, and",
+          "the chain should say why without anyone reconstructing it from a timestamp.",
+          "",
+          "Access closes on the NEXT gate call — nothing has to run in between. Assignments",
+          "already made are withdrawn by:  php artisan agreements:sweep-access --apply",
+        ].join("\n"),
+      ),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Revoke agreement #${args.id}`)
@@ -412,6 +451,19 @@ export const PlatformAgreementsCommand = cmd({
       .command(RaiseCommand)
       .command(IssueCommand)
       .command(RevokeCommand)
-      .demandCommand(),
+      .demandCommand()
+      .epilogue(
+        [
+          "Agreements GATE work: an NDA before someone sees anything confidential, a BAA before",
+          "they touch PHI. For selling — proposals, invoices, Stripe — see `iris invoices` and",
+          "the payment-gate-contracts recipe instead.",
+          "",
+          "There is no `sign` command, deliberately. The value of the audit chain is that a",
+          "signature is attributable to the person who gave it, and an operator running a flag",
+          "is not that person.",
+          "",
+          "Recipe:  iris how-to view agreements-and-signing",
+        ].join("\n"),
+      ),
   async handler() {},
 })
