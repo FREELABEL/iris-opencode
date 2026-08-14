@@ -555,6 +555,92 @@ const BloqsCreateCommand = cmd({
 })
 
 /**
+ * Rename a bloq.
+ *
+ * There was no way to do this from the CLI: `create` existed, `delete` existed, and a bloq
+ * created with a name you later regretted could only be fixed in the web UI or by deleting and
+ * recreating it — which loses the id every item, lead and agent already points at.
+ *
+ * The API accepts `name` only (BloqController@update validates exactly that), so this does not
+ * pretend to edit anything else.
+ */
+const BloqsUpdateCommand = cmd({
+  command: "update <id>",
+  aliases: ["rename"],
+  describe: "rename a bloq",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("name", { describe: "new bloq name", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Update Bloq ${args.id}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    let name = args.name
+    if (!name) {
+      try {
+        name = (await promptOrFail("name", () =>
+          prompts.text({
+            message: "New bloq name",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          }),
+        )) as string
+      } catch (err) {
+        if (err instanceof MissingFlagError) {
+          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          else { prompts.log.error(err.message); prompts.outro("Done") }
+          process.exitCode = 2
+          return
+        }
+        throw err
+      }
+      if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Updating bloq…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name }),
+      })
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Update bloq")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as { data?: any }
+      const b = data?.data?.bloq ?? data?.data ?? data
+      if (args.json) { console.log(JSON.stringify({ success: true, id: b?.id ?? args.id, name: b?.name ?? name })); return }
+      spinner?.stop(`${success("✓")} Renamed to: ${bold(String(b?.name ?? name))}`)
+
+      printDivider()
+      printKV("ID", b?.id ?? args.id)
+      printKV("Name", b?.name ?? name)
+      printDivider()
+
+      prompts.outro(`${dim("iris bloqs get " + (b?.id ?? args.id))}  View it`)
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+/**
  * Auto-detect which CSV column should be used as the bloq item title.
  */
 function detectTitleColumn(headers: string[], rows: Record<string, string>[]): string {
@@ -2880,6 +2966,7 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsLinksCommand)
       .command(BloqsRevokeLinkCommand)
       .command(BloqsCreateCommand)
+      .command(BloqsUpdateCommand)
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
       .command(BloqsDeleteItemCommand)
