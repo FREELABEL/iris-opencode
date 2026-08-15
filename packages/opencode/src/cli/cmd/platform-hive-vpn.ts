@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import { dim, bold, success, highlight } from "./iris-api"
 import { spawnSync, spawn } from "child_process"
-import { existsSync, writeFileSync } from "fs"
+import { existsSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 
@@ -313,13 +313,48 @@ const VpnHostCommand = cmd({
 
 // ── vpn connect  (one command → launch remote desktop to a host) ─────────────
 
+/**
+ * Remember the Windows username per host.
+ *
+ * `connect` took --user and threw it away, so every session began by retyping a username
+ * you had already told it, or by typing it into the RDP prompt instead. The account is
+ * per-host and stable — that is the whole point of `hive host add-user` creating a
+ * dedicated one — so the CLI is the right place to hold it. Stored by host name in the
+ * config we already own; nothing sensitive, and deliberately NOT the password, which is
+ * one-time and force-rotated at first logon.
+ */
+const RDP_USERS_PATH = join(homedir(), ".iris", "config.json")
+
+function rdpUserFor(host: string): string | undefined {
+  try {
+    const cfg = JSON.parse(readFileSync(RDP_USERS_PATH, "utf8")) as { rdp_users?: Record<string, string> }
+    return cfg.rdp_users?.[host]
+  } catch {
+    return undefined
+  }
+}
+
+function rememberRdpUser(host: string, user: string): void {
+  try {
+    const cfg = existsSync(RDP_USERS_PATH)
+      ? (JSON.parse(readFileSync(RDP_USERS_PATH, "utf8")) as Record<string, unknown>)
+      : {}
+    const users = { ...((cfg.rdp_users as Record<string, string>) ?? {}), [host]: user }
+    // Merge, never overwrite — this file also holds the node key and daemon settings.
+    writeFileSync(RDP_USERS_PATH, JSON.stringify({ ...cfg, rdp_users: users }, null, 2) + "\n", { mode: 0o600 })
+  } catch {
+    // Remembering is a convenience. Failing to remember must never fail the connection.
+  }
+}
+
 const VpnConnectCommand = cmd({
-  command: "connect <name>",
+  command: "connect [name]",
   describe: "launch a remote-desktop session to a host on the tailnet (one command)",
   builder: (y) =>
     y
-      .positional("name", { describe: "host name, e.g. qb-host", type: "string", demandOption: true })
-      .option("user", { describe: "windows username to prefill", type: "string" }),
+      .positional("name", { describe: "host name, e.g. qb-host — omit to list what you can reach", type: "string" })
+      .option("user", { describe: "windows username to prefill (remembered per host)", type: "string" })
+      .option("forget", { describe: "forget the remembered username for this host", type: "boolean", default: false }),
   async handler(argv) {
     const s = readStatus()
     if (!s.installed) {
@@ -330,6 +365,30 @@ const VpnConnectCommand = cmd({
       console.log(`${highlight("!")} not on the tailnet — run: ${bold("iris hive vpn up")}`)
       process.exit(1)
     }
+    // No name given? Show what is reachable instead of erroring. This used to be a dead
+    // end that told you to go run a different command, read a name off it, and type it
+    // back in — for the one command people reach for when they are in a hurry.
+    if (!argv.name) {
+      const reachable = s.peers.filter((p) => p.tailscaleIP)
+      console.log()
+      console.log(bold("Machines you can connect to"))
+      if (reachable.length === 0) {
+        console.log(dim("  none — is anything else on the tailnet? run: iris hive vpn status"))
+        return
+      }
+      for (const p of reachable) {
+        const who = rdpUserFor(p.name)
+        console.log(
+          `  ${p.online ? success("●") : dim("○")} ${bold(p.name.padEnd(22))} ${dim(p.tailscaleIP.padEnd(16))} ${dim(p.os.padEnd(9))}` +
+            (who ? dim(`  as ${who}`) : ""),
+        )
+      }
+      console.log()
+      console.log(dim(`  Connect:  iris hive vpn connect ${reachable[0].name}`))
+      console.log()
+      return
+    }
+
     const node = resolveHost(String(argv.name))
     if (!node) {
       console.log(`${highlight("!")} no machine matching ${bold(String(argv.name))} — run: ${bold("iris hive vpn status")}`)
@@ -337,7 +396,18 @@ const VpnConnectCommand = cmd({
     }
     if (!node.online) console.log(`${highlight("!")} ${node.name} looks offline — trying anyway...`)
     const ip = node.tailscaleIP
-    const user = argv.user ? String(argv.user) : null
+
+    if (argv.forget) {
+      rememberRdpUser(node.name, "")
+      console.log(`${success("✓")} forgot the saved username for ${bold(node.name)}`)
+      return
+    }
+
+    // Explicit --user wins and is remembered; otherwise reuse what we were told last time.
+    // The account is per-host and stable by design — `hive host add-user` creates a
+    // dedicated one — so asking for it every session was pure friction.
+    const user = argv.user ? String(argv.user) : rdpUserFor(node.name) || null
+    if (argv.user) rememberRdpUser(node.name, String(argv.user))
     console.log(`${dim("→")} opening remote desktop to ${bold(node.name)} ${dim(ip)}...`)
     const plat = process.platform
     if (plat === "win32") {
@@ -346,7 +416,21 @@ const VpnConnectCommand = cmd({
       spawn("mstsc", args, { detached: true, stdio: "ignore" }).unref()
     } else if (plat === "darwin") {
       // write a minimal .rdp and open it with the default RDP client (Windows App)
-      const rdp = [`full address:s:${ip}`, user ? `username:s:${user}` : "", "screen mode id:i:2"]
+      // A usable session, not merely a reachable one. The old file set three keys and
+      // produced a window with no clipboard — so no copying an account number out of
+      // QuickBooks, which is most of why anyone opens this.
+      const rdp = [
+        `full address:s:${ip}`,
+        user ? `username:s:${user}` : "",
+        "screen mode id:i:2", // fullscreen
+        "smart sizing:i:1", // scale instead of scroll on a laptop display
+        "redirectclipboard:i:1", // copy/paste both ways — the one people notice missing
+        "redirectprinters:i:0", // do not push local printers onto someone else's machine
+        "audiocapturemode:i:0", // no microphone redirection
+        "audiomode:i:2", // leave sound on the remote host
+        "autoreconnection enabled:i:1", // a network roam should not end the session
+        "authentication level:i:2",
+      ]
         .filter(Boolean)
         .join("\n")
       const out = join(homedir(), ".iris", `connect-${node.name}.rdp`)
@@ -359,7 +443,11 @@ const VpnConnectCommand = cmd({
         process.exit(1)
       }
     }
-    console.log(`${success("✓")} launched. Log in with the Windows account we set up for you.`)
+    console.log(
+      `${success("✓")} launched.` +
+        (user ? ` ${dim(`as ${user}`)}` : " " + dim("Log in with the Windows account set up for you.")),
+    )
+    if (!user) console.log(dim(`  Tip: pass --user <name> once and it is remembered for ${node.name}.`))
   },
 })
 
