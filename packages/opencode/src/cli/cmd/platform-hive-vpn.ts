@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import { dim, bold, success, highlight } from "./iris-api"
 import { spawnSync, spawn } from "child_process"
-import { existsSync, writeFileSync, readFileSync } from "fs"
+import { existsSync, writeFileSync, readFileSync, appendFileSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 
@@ -325,6 +325,39 @@ const VpnHostCommand = cmd({
  */
 const RDP_USERS_PATH = join(homedir(), ".iris", "config.json")
 
+/**
+ * An append-only record of who opened a session to what, and when.
+ *
+ * WHAT THIS IS. The tailnet rail reaches machines that hold real records — a QuickBooks
+ * host, a clinical box. Hive audits Hive TASKS; an RDP session was audited by nothing at
+ * all, so "who reached that host in March" had no answer. This answers the access question:
+ * host, tailnet address, account used, and when.
+ *
+ * WHAT THIS IS NOT, and the distinction matters more than the feature. It records that a
+ * session was OPENED. It does not record what happened inside it, and it cannot — once you
+ * are at a remote desktop you are at a desktop. It is also LOCAL: written on the machine
+ * that initiated the connection, which means it is evidence for the operator, not yet
+ * evidence for an auditor. Anyone who can open the session can also edit this file.
+ *
+ * Server-side is the real requirement and is deliberately not faked here. The audit spine
+ * (request_audit_events) lives on the shared connection precisely so it survives a deploy
+ * and cannot be edited by the actor; putting RDP access there needs an authenticated
+ * endpoint, which is a compliance surface that deserves its own review rather than being
+ * appended to the end of a CLI change. Filed rather than half-built.
+ *
+ * JSONL because it is append-only by construction: a crash mid-write costs one line, not
+ * the file, and nothing has to parse the whole history to add to it.
+ */
+const RDP_LOG_PATH = join(homedir(), ".iris", "rdp-sessions.jsonl")
+
+function recordRdpSession(entry: Record<string, unknown>): void {
+  try {
+    appendFileSync(RDP_LOG_PATH, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n", { mode: 0o600 })
+  } catch {
+    // Never let bookkeeping block the connection someone is trying to make.
+  }
+}
+
 function rdpUserFor(host: string): string | undefined {
   try {
     const cfg = JSON.parse(readFileSync(RDP_USERS_PATH, "utf8")) as { rdp_users?: Record<string, string> }
@@ -354,7 +387,8 @@ const VpnConnectCommand = cmd({
     y
       .positional("name", { describe: "host name, e.g. qb-host — omit to list what you can reach", type: "string" })
       .option("user", { describe: "windows username to prefill (remembered per host)", type: "string" })
-      .option("forget", { describe: "forget the remembered username for this host", type: "boolean", default: false }),
+      .option("forget", { describe: "forget the remembered username for this host", type: "boolean", default: false })
+      .option("phone", { describe: "print connection details + an rdp:// link for a phone on the tailnet", type: "boolean", default: false }),
   async handler(argv) {
     const s = readStatus()
     if (!s.installed) {
@@ -408,6 +442,31 @@ const VpnConnectCommand = cmd({
     // dedicated one — so asking for it every session was pure friction.
     const user = argv.user ? String(argv.user) : rdpUserFor(node.name) || null
     if (argv.user) rememberRdpUser(node.name, String(argv.user))
+
+    // PHONE PATH. Tailscale runs on iOS and Android, so the phone is already on the mesh —
+    // what is missing is getting the connection details into a remote-desktop app without
+    // squinting at a 100.x address and retyping it. Microsoft's Remote Desktop registers
+    // the rdp:// scheme, so the URI below opens it preconfigured.
+    if (argv.phone) {
+      const uri = `rdp://full%20address=s:${ip}:3389${user ? `&username=s:${encodeURIComponent(user)}` : ""}`
+      console.log()
+      console.log(bold(`Connect to ${node.name} from a phone`))
+      console.log(`  ${dim("host:")}      ${bold(ip)}`)
+      console.log(`  ${dim("port:")}      3389`)
+      if (user) console.log(`  ${dim("username:")}  ${bold(user)}`)
+      console.log()
+      console.log(dim("  1. Install Tailscale on the phone and sign in to the same tailnet."))
+      console.log(dim("  2. Install Microsoft's Remote Desktop app (Windows App)."))
+      console.log(dim("  3. Add a PC with the host above — or open this link on the phone:"))
+      console.log()
+      console.log(`  ${uri}`)
+      console.log()
+      console.log(dim("  The phone must be ON the tailnet for this to resolve — 100.x is private."))
+      console.log(dim("  Check it is:  iris hive vpn status"))
+      console.log()
+      recordRdpSession({ event: "details_shared", host: node.name, ip, user, target: "phone" })
+      return
+    }
     console.log(`${dim("→")} opening remote desktop to ${bold(node.name)} ${dim(ip)}...`)
     const plat = process.platform
     if (plat === "win32") {
@@ -443,6 +502,8 @@ const VpnConnectCommand = cmd({
         process.exit(1)
       }
     }
+    recordRdpSession({ event: "session_opened", host: node.name, ip, user, from: s.self?.name ?? null })
+
     console.log(
       `${success("✓")} launched.` +
         (user ? ` ${dim(`as ${user}`)}` : " " + dim("Log in with the Windows account set up for you.")),
@@ -718,6 +779,71 @@ const VpnServeCommand = cmd({
   },
 })
 
+// ── vpn sessions  (read the local access ledger) ─────────────────────────────
+
+const VpnSessionsCommand = cmd({
+  command: "sessions",
+  describe: "who opened a remote session to what, and when (local record)",
+  builder: (y) =>
+    y
+      .option("host", { describe: "filter to one host", type: "string" })
+      .option("limit", { describe: "how many to show", type: "number", default: 20 })
+      .option("json", { describe: "machine-readable", type: "boolean", default: false }),
+  async handler(argv) {
+    if (!existsSync(RDP_LOG_PATH)) {
+      console.log()
+      console.log(dim("  No sessions recorded yet on this machine."))
+      console.log(dim("  Recording starts the first time you run: iris hive vpn connect <host>"))
+      console.log()
+      return
+    }
+
+    let rows = readFileSync(RDP_LOG_PATH, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      // A truncated final line from a killed process must not take the whole ledger down.
+      .map((l) => {
+        try {
+          return JSON.parse(l) as Record<string, unknown>
+        } catch {
+          return null
+        }
+      })
+      .filter((r): r is Record<string, unknown> => r !== null)
+
+    if (argv.host) rows = rows.filter((r) => String(r.host ?? "").includes(String(argv.host)))
+    rows = rows.slice(-Math.max(1, Number(argv.limit)))
+
+    if (argv.json) {
+      console.log(JSON.stringify(rows, null, 2))
+      return
+    }
+
+    console.log()
+    console.log(bold("Remote sessions from this machine"))
+    if (rows.length === 0) {
+      console.log(dim("  nothing matching."))
+      console.log()
+      return
+    }
+    for (const r of rows) {
+      const when = String(r.ts ?? "").replace("T", " ").slice(0, 19)
+      const ev = r.event === "details_shared" ? dim("shared ") : "opened "
+      console.log(
+        `  ${dim(when)}  ${ev} ${bold(String(r.host ?? "?").padEnd(20))} ${dim(String(r.ip ?? ""))}` +
+          (r.user ? dim(`  as ${r.user}`) : ""),
+      )
+    }
+    console.log()
+    // Say what this evidence is worth, because an access log that overstates itself is
+    // worse than none — someone will cite it.
+    console.log(dim("  This is a LOCAL record of sessions opened from this machine. It does not"))
+    console.log(dim("  capture what happened inside a session, and anyone who can open one can"))
+    console.log(dim("  also edit this file. Operator evidence, not auditor evidence."))
+    console.log()
+  },
+})
+
 // ── group command ─────────────────────────────────────────────────────────────
 
 export const HiveVpnCommandExport = cmd({
@@ -734,6 +860,7 @@ export const HiveVpnCommandExport = cmd({
       .command(VpnDoctorCommand)
       .command(VpnGrantCommand)
       .command(VpnServeCommand)
+      .command(VpnSessionsCommand)
       .command(VpnEnrollCommand)
       .demandCommand(1, "Run: iris hive vpn check"),
   handler() {},
