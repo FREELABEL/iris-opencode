@@ -373,7 +373,7 @@ const ImessageChatsCommand = cmd({
 const ImessageSendCommand = cmd({
   command: "send <handle> <message>",
   aliases: ["text", "msg"],
-  describe: "send an iMessage to a phone number or contact",
+  describe: "send an iMessage (routed through the comms router so it is logged)",
   builder: (yargs) =>
     yargs
       .positional("handle", { type: "string", demandOption: true, describe: "phone number, lead ID, contact name, or 'me'/'self'" })
@@ -1286,7 +1286,7 @@ const ImessageMeCommand = cmd({
 export const PlatformImessageCommand = cmd({
   command: "imessage",
   aliases: ["sms", "messages"],
-  describe: "read and send iMessages via macOS Messages.app (requires Full Disk Access)",
+  describe: "read + send iMessages (macOS Messages.app; sends are logged to the comms ledger)",
   builder: (yargs) =>
     yargs
       .command(ImessageMeCommand)

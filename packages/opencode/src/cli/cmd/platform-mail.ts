@@ -182,7 +182,7 @@ const MailReadCommand = cmd({
 
 const MailSendCommand = cmd({
   command: "send <to>",
-  describe: "send an email via Apple Mail.app",
+  describe: "send an email via Apple Mail.app (routed through the comms router so it is logged)",
   builder: (yargs) =>
     yargs
       .positional("to", { type: "string", demandOption: true, describe: "recipient email" })
@@ -261,7 +261,7 @@ const MailSendCommand = cmd({
 
 export const PlatformMailCommand = cmd({
   command: "mail",
-  describe: "read and send email via Apple Mail.app (macOS, requires bridge)",
+  describe: "Apple Mail — search/read, and send via the comms router so it lands in the log",
   builder: (yargs) =>
     yargs
       .command(MailSearchCommand)
