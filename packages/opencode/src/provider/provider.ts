@@ -720,21 +720,36 @@ export namespace Provider {
         "gpt-4.1-nano": makeIrisModel("gpt-4.1-nano", "GPT-4.1 Nano"),
         "gpt-5-nano": makeIrisModel("gpt-5-nano", "GPT-5 Nano"),
         "gpt-5.4-nano": makeIrisModel("gpt-5.4-nano", "GPT-5.4 Nano"),
-        "do-120b": makeIrisModel("do-120b", "DO GPT-OSS 120B", { toolcall: false }),
-        "do-20b": makeIrisModel("do-20b", "DO GPT-OSS 20B", { toolcall: false }),
-        "qwen3-32b": makeIrisModel("qwen3-32b", "Qwen3 32B"),
-        "qwen3-coder": makeIrisModel("qwen3-coder", "Qwen3 Coder Flash"),
-        "gemma-4": makeIrisModel("gemma-4", "Gemma 4", { toolcall: false }),
-        "ministral-14b": makeIrisModel("ministral-14b", "Ministral 14B", { toolcall: false }),
-        "deepseek-v4": makeIrisModel("deepseek-v4", "DeepSeek V4 Pro"),
-        "qwen3.5-397b": makeIrisModel("qwen3.5-397b", "Qwen3.5 397B MoE"),
-        // OpenCode Zen free models
+        "gpt-5.6-luna": makeIrisModel("gpt-5.6-luna", "GPT-5.6 Luna"),
+        "gpt-5.6-terra": makeIrisModel("gpt-5.6-terra", "GPT-5.6 Terra"),
+        "gpt-5.6-sol": makeIrisModel("gpt-5.6-sol", "GPT-5.6 Sol"),
+        // The eight DigitalOcean models (do-120b, do-20b, qwen3-32b, qwen3-coder,
+        // gemma-4, ministral-14b, deepseek-v4, qwen3.5-397b) were removed here on
+        // 2026-08-15. DO was decommissioned server-side back on 2026-08-02, so the
+        // `available` filter already hid them — but only when the /models fetch
+        // SUCCEEDS. On any fetch failure this catalog is the fallback, and it was
+        // offering eight models that had no route at all. A fallback that lists dead
+        // models is worse than a short one.
+        // OpenCode Zen free models. Nemotron 3 Super, GLM 4.7 and Grok Code Fast 1
+        // were removed on 2026-08-15: all three were retired upstream (absent from
+        // opencode.ai/zen/v1/models) while still sitting in this picker, and two of
+        // them were in most users' Recent list. The proxy maps the retired ids
+        // forward, so a saved config still works — it just no longer offers them.
         "big-pickle": makeIrisModel("big-pickle", "Big Pickle"),
         "deepseek-v4-flash": makeIrisModel("deepseek-v4-flash", "DeepSeek V4 Flash"),
         "mimo-v2.5": makeIrisModel("mimo-v2.5", "MiMo V2.5"),
-        "nemotron-3-super": makeIrisModel("nemotron-3-super", "Nemotron 3 Super"),
-        "grok-code": makeIrisModel("grok-code", "Grok Code Fast 1"),
-        "glm-4.7": makeIrisModel("glm-4.7", "GLM 4.7"),
+        "nemotron-3.5-lightning": makeIrisModel("nemotron-3.5-lightning", "Nemotron 3.5 Lightning"),
+        // OpenCode Go — a separate $10/mo subscription served through the same proxy.
+        // These are hidden until OPENCODE_GO_API_KEY is set server-side, because the
+        // /models `available` flag below is what decides, not this catalog. Curated to
+        // the Go models that speak chat/completions; Grok 4.5 and GPT 5.6 Luna
+        // (/v1/responses) and the MiniMax + Qwen Max/Plus family (Anthropic
+        // /v1/messages) are deliberately absent until the proxy speaks those formats.
+        "deepseek-v4-pro": makeIrisModel("deepseek-v4-pro", "DeepSeek V4 Pro"),
+        "mimo-v2.5-pro": makeIrisModel("mimo-v2.5-pro", "MiMo V2.5 Pro"),
+        "kimi-k2.7-code": makeIrisModel("kimi-k2.7-code", "Kimi K2.7 Code"),
+        "glm-5.2": makeIrisModel("glm-5.2", "GLM 5.2"),
+        "kimi-k3": makeIrisModel("kimi-k3", "Kimi K3"),
       }
 
       // Ask the proxy which models are actually serveable right now (provider
