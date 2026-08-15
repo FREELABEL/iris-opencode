@@ -746,7 +746,7 @@ const HuntersCommand = cmd({
   describe: "bug-bounty hunters ranked — reported, verified, owed, paid (owner only)",
   builder: (yargs) =>
     yargs
-      .positional("opportunity-id", { describe: `opportunity ID (default ${BUG_BOUNTY_OPP})`, type: "number" })
+      .positional("opportunity-id", { describe: "one campaign; omit for everything you have across all of them", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const token = await requireAuth()
@@ -794,13 +794,52 @@ const MyBountyCommand = cmd({
   describe: "your own bug-bounty standing — what you reported, what is verified, what you are owed",
   builder: (yargs) =>
     yargs
-      .positional("opportunity-id", { describe: `opportunity ID (default ${BUG_BOUNTY_OPP})`, type: "number" })
+      .positional("opportunity-id", { describe: "one campaign; omit for everything you have across all of them", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const token = await requireAuth()
     if (!token) return
-    const oppId = (args["opportunity-id"] as number) ?? BUG_BOUNTY_OPP
+    const explicitOpp = args["opportunity-id"] as number | undefined
 
+    // No opportunity given → the WHOLE position (#180387). This used to fall back to a
+    // hardcoded opportunity constant and 500, which is the shape of the original problem:
+    // every bounty surface is per-opportunity, so a hunter had to already know an id to see
+    // anything, and in practice that meant asking a colleague for it.
+    if (!explicitOpp) {
+      const meRes = await irisFetch(`/api/v1/bounty/me`)
+      if (!(await handleApiError(meRes, "Bounty standing"))) return
+      const me = (await meRes.json().catch(() => null)) as any
+      if (!me) return
+
+      if (args.json) { console.log(JSON.stringify(me, null, 2)); return }
+
+      printDivider()
+      printKV("Owed", `${me.earnings?.unpaid ?? "$0.00"}`)
+      printKV("Paid to date", `${me.earnings?.paid ?? "$0.00"}`)
+      printKV("Bugs", String((me.bugs ?? []).length))
+
+      const outstanding = (me.agreements ?? []).filter((a: any) => !a.signed)
+      if (outstanding.length) {
+        printKV("Unsigned", outstanding.map((a: any) => a.type).join(", "))
+      }
+
+      // The one thing to do next, in the terms the API already decided. Repeating that
+      // ordering here would eventually disagree with it.
+      if (me.nextStep) {
+        printDivider()
+        console.log(`  ${bold(me.nextStep.label)}`)
+        console.log(`  ${dim(me.nextStep.detail)}`)
+        if (me.nextStep.href) console.log(`  ${me.nextStep.href}`)
+      } else {
+        printDivider()
+        console.log(`  ${dim("Nothing outstanding.")}`)
+      }
+      printDivider()
+      prompts.outro(dim("iris bounty me <opportunity-id>   for one campaign"))
+      return
+    }
+
+    const oppId = explicitOpp
     const res = await irisFetch(`/api/v1/marketplace/opportunities/${oppId}/bug-bounty/hunter`)
     if (!(await handleApiError(res, "Bug-bounty standing"))) return
     const body = (await res.json().catch(() => null)) as any
@@ -835,7 +874,7 @@ const BugsCommand = cmd({
   describe: "bugs attributed to this bounty, with their verification status",
   builder: (yargs) =>
     yargs
-      .positional("opportunity-id", { describe: `opportunity ID (default ${BUG_BOUNTY_OPP})`, type: "number" })
+      .positional("opportunity-id", { describe: "one campaign; omit for everything you have across all of them", type: "number" })
       .option("limit", { describe: "max rows", type: "number", default: 30 })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
