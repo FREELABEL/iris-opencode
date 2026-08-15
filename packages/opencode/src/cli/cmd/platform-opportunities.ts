@@ -1069,7 +1069,7 @@ const InterestCommand = cmd({
 export const PlatformOpportunitiesCommand = cmd({
   command: "opportunities",
   aliases: ["opps"],
-  describe: "manage marketplace opportunities — pull, push, diff, CRUD",
+  describe: "Bounty OS records — the opportunity a bounty runs on. CRUD, pull/push/diff, links",
   builder: (yargs) =>
     yargs
       .command(ListCommand)

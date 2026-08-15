@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { BountyAdminCommand } from "./platform-bounty-admin"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive } from "./iris-api"
@@ -1027,7 +1028,7 @@ const BugsCommand = cmd({
 export const PlatformBountiesCommand = cmd({
   command: "bounty",
   aliases: ["bounties"],
-  describe: "bounty campaigns — UGC/clip submissions, and the bug-bounty operator board",
+  describe: "Bounty OS — campaigns, submissions, hunters, payouts, and `admin` ledger checks",
   builder: (yargs) =>
     yargs
       .command(CreateCommand)
@@ -1046,6 +1047,7 @@ export const PlatformBountiesCommand = cmd({
       .command(ConnectCommand)
       .command(ClaimCommand)
       .command(BugsCommand)
+      .command(BountyAdminCommand)
       .demandCommand(1, "Specify a subcommand"),
   async handler() {},
 })

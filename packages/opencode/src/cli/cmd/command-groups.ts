@@ -45,25 +45,30 @@ export const CATEGORIES: Record<string, CommandCategory> = {
     description: "Phone, voice, email (Apple Mail), iMessage, calendar, transcription",
     order: 8,
   },
+  bounty: {
+    name: "Bounty OS",
+    description: "Opportunities, bounty campaigns, hunters, submissions, payouts, ledger",
+    order: 9,
+  },
   finance: {
     name: "Finance",
     description: "Wallets, payments, Good Deals planning",
-    order: 9,
+    order: 10,
   },
   compute: {
     name: "Hive & Compute",
     description: "Hive nodes, tasks, projects, IRIS-hosted apps",
-    order: 10,
+    order: 11,
   },
   system: {
     name: "System & Admin",
     description: "Users, config, bug reports, SDK calls, eval, diary, SOPs",
-    order: 11,
+    order: 12,
   },
   core: {
     name: "Core CLI",
     description: "Run, auth, models, sessions, export/import, MCP, ACP",
-    order: 12,
+    order: 13,
   },
 }
 
@@ -151,9 +156,13 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   venues: "entities",
   programs: "entities",
   discover: "entities",
-  opportunities: "entities",
-  bounty: "entities",
-  bounties: "entities",
+  // Bounty OS is a PRODUCT (IrisProducts::PRODUCTS['bounty-os']), not an entity type. Filed
+  // under "entities" it never appeared as a coherent thing in grouped help, which is most of
+  // why its control surfaces felt like they were hiding under `opportunities`.
+  opportunities: "bounty",
+  opps: "bounty",
+  bounty: "bounty",
+  bounties: "bounty",
   tutorials: "entities",
   packages: "entities",
   profile: "entities",
