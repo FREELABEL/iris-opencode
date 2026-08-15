@@ -438,12 +438,14 @@ export const PlatformTranscribeCommand = cmd({
       })
       .option("treatment", {
         type: "string",
-        describe: "What this recording IS: clean, notes, meeting, standup, captions, idea (default: raw)",
+        describe:
+          "What this recording IS: clean, notes, meeting, standup, captions, idea (default: raw). " +
+          "sop/playbook/article are documents — see --list-treatments",
       })
       .option("list-treatments", {
         type: "boolean",
         default: false,
-        describe: "Show the treatments available to you, including your brand's own",
+        describe: "What can I do with a recording? Lists every treatment, yours included",
       })
       .option("output", {
         type: "string",
@@ -464,14 +466,40 @@ export const PlatformTranscribeCommand = cmd({
         prompts.outro("Done")
         return
       }
+      // SPLIT BY WHAT YOU CAN ACTUALLY DO WITH THEM.
+      //
+      // A flat list put `article` and `sop` next to `meeting`, so the obvious next move was
+      // `--treatment article` — which 422s, because document-shaped treatments are produced by a
+      // different endpoint. Listing an option without saying how to run it is how a discovery
+      // command creates the confusion it exists to prevent.
+      const prose = list.filter((t) => t.shape !== "document")
+      const documents = list.filter((t) => t.shape === "document")
+
       printDivider()
-      for (const t of list) {
+      console.log(`  ${dim("Applied with --treatment:")}`)
+      console.log()
+      for (const t of prose) {
         const tag = t.custom ? dim(" (yours)") : ""
         console.log(`  ${bold(t.id.padEnd(10))} ${t.description}${tag}`)
       }
+
+      if (documents.length) {
+        console.log()
+        console.log(`  ${dim("Documents — these produce structure, not prose:")}`)
+        console.log()
+        for (const t of documents) {
+          console.log(`  ${bold(t.id.padEnd(10))} ${t.description}`)
+        }
+        console.log()
+        console.log(`  ${dim("  sop / playbook  →")} iris sop draft <file>`)
+        console.log(`  ${dim("  article         →")} POST /api/v1/article/structure`)
+        console.log(`  ${dim("                    or")} php artisan article:draft <bloq> --file=<file>`)
+      }
+
       printDivider()
       console.log()
       console.log(`  ${dim("$")} iris transcribe recording.m4a --treatment meeting`)
+      console.log(`  ${dim("$")} iris transcribe recording.m4a --treatment raw -o ./notes.txt`)
       console.log()
       prompts.outro("Done")
       return

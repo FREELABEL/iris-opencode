@@ -5,18 +5,18 @@ import { McpClients } from "../../mcp/clients"
 
 /**
  * `iris mcp install` — idempotently register `iris mcp serve` into detected MCP
- * client configs (Claude Code, Claude Desktop, Cursor, opencode, project
- * .mcp.json) using an ABSOLUTE binary path so GUI-launched clients (no login
- * shell) can resolve it. Closes bug #150264.
+ * client configs (Claude Code, Claude Desktop, Cursor, Gemini CLI, opencode,
+ * project .mcp.json) using an ABSOLUTE binary path so GUI-launched clients (no
+ * login shell) can resolve it. Closes bug #150264.
  */
 export const McpInstallCommand = cmd({
   command: "install",
-  describe: "register the IRIS MCP server into your MCP clients (Claude Code, Cursor, opencode, ...)",
+  describe: "register the IRIS MCP server into your MCP clients (Claude Code, Cursor, Gemini CLI, opencode, ...)",
   builder: (yargs) =>
     yargs
       .option("client", {
         type: "string",
-        describe: "wire only this client (claude-code|claude-desktop|cursor|opencode|project)",
+        describe: "wire only this client (claude-code|claude-desktop|cursor|gemini|opencode|project)",
       })
       .option("all", {
         type: "boolean",
@@ -91,6 +91,15 @@ export const McpInstallCommand = cmd({
       const icon = r.action === "error" ? "✗" : r.action === "unchanged" ? "○" : "✓"
       const label = r.action === "error" ? `failed — ${(r as any).error}` : r.action
       prompts.log.info(`${icon} ${r.client.label} ${UI.Style.TEXT_DIM}${label}\n    ${UI.Style.TEXT_DIM}${r.client.configPath}`)
+    }
+
+    // Gemini refuses to START a stdio MCP server in an untrusted folder, and the
+    // failure surfaces as "no IRIS tools" rather than as an auth error — so say
+    // it here, at the one moment the user is looking.
+    if (results.some((r) => r.client.id === "gemini" && r.action !== "error")) {
+      prompts.log.info(
+        `Gemini CLI: stdio servers only start in a trusted folder — run ${UI.Style.TEXT_HIGHLIGHT}gemini trust${UI.Style.TEXT_NORMAL} there, then ${UI.Style.TEXT_HIGHLIGHT}/mcp${UI.Style.TEXT_NORMAL} to confirm the tools loaded.`,
+      )
     }
 
     const changed = results.filter((r) => r.action === "created" || r.action === "updated").length
