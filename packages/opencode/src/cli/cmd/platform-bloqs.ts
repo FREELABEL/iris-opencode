@@ -2280,14 +2280,70 @@ const BloqsContributorsCommand = cmd({
 // Items — list items in a bloq (with optional search)
 // ============================================================================
 
+/**
+ * Page through a bloq's items collecting only those in one list (#180303).
+ *
+ * The items endpoint is scoped to the whole bloq and paginated, with no
+ * server-side list filter — so a client-side filter applied to a single page
+ * answers "nothing here" for any list whose items sit further in. That is a wrong
+ * answer wearing the costume of a definitive one: bloq #503 has 558 items, and
+ * `-l 1449` reported "No items found" for a list with six.
+ *
+ * Walks pages until `limit` matches are collected or the bloq runs out, capped at
+ * `maxPages` so a pathological board cannot spin forever. `exhausted` reports
+ * whether the whole bloq was actually seen — the caller must not present an
+ * incomplete scan as a complete one.
+ */
+export async function collectListFiltered(
+  fetchPage: (page: number, perPage: number) => Promise<{ items: any[]; pagination: any }>,
+  listId: number,
+  limit: number,
+  maxPages = 25,
+): Promise<{ items: any[]; total: number; exhausted: boolean; pagesScanned: number }> {
+  const inList = (i: any) => i?.bloq_list_id === listId || i?.list_id === listId
+  const perPage = 200 // scan wide; `limit` governs what we return, not what we read
+  const collected: any[] = []
+  let page = 1
+  let total = 0
+  let lastPage = 1
+  let pagesScanned = 0
+
+  while (page <= lastPage && pagesScanned < maxPages) {
+    const { items, pagination } = await fetchPage(page, perPage)
+    pagesScanned++
+    total = pagination?.total ?? total
+    lastPage = pagination?.last_page ?? 1
+
+    for (const item of items) {
+      if (inList(item)) collected.push(item)
+    }
+    if (collected.length >= limit) {
+      return { items: collected.slice(0, limit), total, exhausted: true, pagesScanned }
+    }
+    if (!items.length) break
+    page++
+  }
+
+  return {
+    items: collected.slice(0, limit),
+    total,
+    // The whole bloq was seen only if we ran off the end rather than hit the cap.
+    exhausted: page > lastPage || pagesScanned < maxPages,
+    pagesScanned,
+  }
+}
+
 const BloqsItemsCommand = cmd({
   command: "items <bloq-id>",
-  describe: "list items in a bloq (optionally filter by list or search)",
+  // There is no `get-item`/`show-item` — every other item verb mutates. This is the only
+  // way to READ one, so say so here rather than leaving people to guess a verb that does
+  // not exist. `--search <term> --fields id,title,content` is the "show me this one item".
+  describe: "list AND read items in a bloq — this is the read path; there is no separate get-item",
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
-      .option("list", { alias: "l", describe: "filter by list ID", type: "number" })
-      .option("search", { alias: "s", describe: "search items by keyword", type: "string" })
+      .option("list", { alias: "l", describe: "filter by list ID (scans across pages; warns if it stops early)", type: "number" })
+      .option("search", { alias: "s", describe: "search items by keyword — pair with --fields content to read one item's body", type: "string" })
       .option("source", { describe: "also search these sources: obsidian, drive (repeatable)", type: "string", array: true })
       .option("include-all", { describe: "search every available source", type: "boolean", default: false })
       .option("status", { describe: "filter by status", type: "string" })
@@ -2400,11 +2456,32 @@ const BloqsItemsCommand = cmd({
       const data = body?.data ?? body
       let items: any[] = Array.isArray(data?.items) ? data.items : []
       const pg = data?.pagination ?? {}
+      let listScanIncomplete = false
 
-      // --list is a client-side post-filter on the returned page (the endpoint scopes
-      // to the whole bloq). Narrow, but note it only filters the current page.
+      // --list used to be a client-side post-filter on whichever single page came
+      // back (#180303). The endpoint paginates over the WHOLE bloq, so on bloq #503
+      // — 558 items — filtering page 1 of 50 reported "No items found" for a list
+      // that has six. Now we keep pulling pages until the limit is satisfied, and
+      // if we stop early we say so instead of presenting a short list as the whole
+      // truth.
       if (args.list !== undefined) {
-        items = items.filter((i: any) => i.bloq_list_id === args.list || i.list_id === args.list)
+        const collected = await collectListFiltered(
+          async (p, per) => {
+            const pageParams = new URLSearchParams(params)
+            pageParams.set("page", String(p))
+            pageParams.set("per_page", String(per))
+            const r = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items?${pageParams}`)
+            if (!r.ok) throw new Error(`HTTP ${r.status}`)
+            const b = (await r.json()) as { data?: any }
+            const d = b?.data ?? b
+            return { items: Array.isArray(d?.items) ? d.items : [], pagination: d?.pagination ?? {} }
+          },
+          Number(args.list),
+          perPage,
+        )
+        items = collected.items
+        listScanIncomplete = !collected.exhausted
+        if (collected.total) pg.total = collected.total
       }
 
       const total = pg.total ?? items.length
@@ -2422,6 +2499,9 @@ const BloqsItemsCommand = cmd({
             page: currentPage,
             last_page: lastPage,
             has_more: hasMore,
+            // A machine caller must be able to tell "this list has 2 items" from
+            // "we stopped looking after 25 pages" (#180303).
+            ...(args.list !== undefined ? { list_scan_complete: !listScanIncomplete } : {}),
           },
         }, null, 2))
         return
@@ -2430,9 +2510,19 @@ const BloqsItemsCommand = cmd({
       if (spinner) spinner.stop(`${items.length} of ${total} item(s)`)
 
       if (items.length === 0) {
-        prompts.log.warn(args.search ? `No items matching "${args.search}"` : "No items found")
+        // "Nothing here" and "I stopped looking" are different answers (#180303).
+        if (listScanIncomplete) {
+          prompts.log.warn(
+            `No items found in list ${args.list} within the first pages scanned — the bloq is large and the scan was capped, so this is NOT proof the list is empty.`,
+          )
+        } else {
+          prompts.log.warn(args.search ? `No items matching "${args.search}"` : "No items found")
+        }
         prompts.outro("Done")
         return
+      }
+      if (listScanIncomplete) {
+        prompts.log.warn(`Scan capped before the end of the bloq — there may be more items in list ${args.list}.`)
       }
 
       console.log()

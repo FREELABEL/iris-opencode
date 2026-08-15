@@ -162,6 +162,33 @@ function pagesDir(custom?: string): string {
   return custom ?? join(process.cwd(), "pages")
 }
 
+/**
+ * Accept a file path where a slug is expected.
+ *
+ * `pull` writes `./pages/<slug>.json`, so the obvious next move is to hand that
+ * path straight back to `push` — and every slug-positional command then rebuilt
+ * the path around it and looked for `./pages/pages/<slug>.json.json`. The error
+ * said "Local file not found" and advised `pull` (which had already been run),
+ * so the one thing it never mentioned was the actual mistake.
+ *
+ * Nothing is lost by accepting both: a real slug can contain neither `/` nor a
+ * `.json` suffix, so this is unambiguous rather than a guess.
+ *
+ * Returns the normalized slug and whether it changed, so callers can say so.
+ */
+export function normalizeSlugArg(input: string): { slug: string; corrected: boolean } {
+  const trimmed = input.trim()
+  // Basename, then drop a .json extension. Handles "pages/x.json", "./pages/x.json", "x.json".
+  const base = trimmed.split("/").pop() ?? trimmed
+  const slug = base.endsWith(".json") ? base.slice(0, -".json".length) : base
+  return { slug, corrected: slug !== trimmed }
+}
+
+/** Print the "I took a path, using the slug" note. Keeps the wording in one place. */
+function noteSlugCorrection(original: string, slug: string) {
+  prompts.log.info(dim(`Read "${original}" as slug "${slug}" — these commands take a slug, not a file path.`))
+}
+
 // Create a page from already-built json_content (reused by `sites clone`).
 // Returns the created page record, or null on failure.
 export async function createPageFromJson(opts: {
@@ -510,23 +537,25 @@ const SetCmd = cmd({
 
 const PullCmd = cmd({
   command: "pull <slug>",
-  describe: "download page JSON to local file",
+  describe: "download page JSON to ./pages/<slug>.json (overwrites local edits — run `pages diff` first)",
   builder: (y) =>
     y
-      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
       .option("dir", { describe: "output directory", type: "string", default: "./pages" }),
   async handler(args) {
+    const { slug, corrected } = normalizeSlugArg(args.slug)
     UI.empty()
-    prompts.intro(`◈  Pull ${args.slug}`)
+    prompts.intro(`◈  Pull ${slug}`)
+    if (corrected) noteSlugCorrection(args.slug, slug)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     const sp = prompts.spinner()
     sp.start("Fetching…")
     try {
-      const page = await getBySlug(args.slug, true)
+      const page = await getBySlug(slug, true)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const dir = pagesDir(args.dir)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      const filePath = join(dir, `${args.slug}.json`)
+      const filePath = join(dir, `${slug}.json`)
       const exp = {
         id: page.id,
         slug: page.slug,
@@ -542,6 +571,13 @@ const PullCmd = cmd({
         // been silently demoted to `unlisted` twice this way, and an unlisted page 404s on
         // its /p/{slug} address, so it reads as deleted. (#178609)
         visibility: page.visibility ?? null,
+        // Same lossy-pull defect as visibility above, one field over — and this is the
+        // field that decides whether the page is readable by strangers. `requires_auth`
+        // turns on the OTP email gate; without it here, `pull` → edit → `push` silently
+        // returned a gated page to fully open, serving its whole body to anonymous
+        // requests. That is exactly how page 395 went public with client material in it
+        // (#180009). Round-trip it so an edit cycle cannot drop the gate.
+        requires_auth: page.requires_auth ?? false,
         owner_type: page.owner_type ?? "system",
         owner_id: page.owner_id ?? null,
         json_content: page.json_content ?? {},
@@ -549,7 +585,7 @@ const PullCmd = cmd({
       writeFileSync(filePath, JSON.stringify(exp, null, 2) + "\n")
       const cnt = exp.json_content?.components?.length ?? 0
       sp.stop(success(`Pulled → ${filePath} (${cnt} components)`))
-      prompts.outro(dim(`iris pages push ${args.slug}`))
+      prompts.outro(dim(`iris pages push ${slug}`))
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -560,29 +596,34 @@ const PullCmd = cmd({
 
 const PushCmd = cmd({
   command: "push <slug>",
-  describe: "upload local page JSON to API (auto-drafts for safe preview)",
+  // A push on an already-live page DEMOTES it to draft unless --publish is passed,
+  // and a drafted page 404s at its public url. Say that here — it is the single
+  // most surprising thing this command does.
+  describe: "upload local page JSON (a SLUG, not a path). Live pages drop to draft — pass --publish to keep them up",
   builder: (y) =>
     y
-      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
       .option("dir", { describe: "input directory", type: "string", default: "./pages" })
       .option("live", { describe: "skip draft — push directly to live (dangerous)", type: "boolean", default: false })
-      .option("publish", { describe: "publish immediately after push", type: "boolean", default: false }),
+      .option("publish", { describe: "publish right after push — use this on any page that is already live, or it 404s until you publish", type: "boolean", default: false }),
   async handler(args) {
+    const { slug, corrected } = normalizeSlugArg(args.slug)
     UI.empty()
-    prompts.intro(`◈  Push ${args.slug}`)
+    prompts.intro(`◈  Push ${slug}`)
+    if (corrected) noteSlugCorrection(args.slug, slug)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     const sp = prompts.spinner()
     try {
-      const filePath = join(pagesDir(args.dir), `${args.slug}.json`)
+      const filePath = join(pagesDir(args.dir), `${slug}.json`)
       if (!existsSync(filePath)) {
         prompts.log.error(`Local file not found: ${filePath}`)
-        prompts.log.info(dim(`Pull first: iris pages pull ${args.slug}`))
+        prompts.log.info(dim(`Pull first: iris pages pull ${slug}`))
         prompts.outro("Done")
         return
       }
       sp.start("Pushing…")
       const local = JSON.parse(readFileSync(filePath, "utf-8"))
-      const page = await getBySlug(args.slug, false)
+      const page = await getBySlug(slug, false)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
 
       let jsonContent: any
@@ -624,6 +665,17 @@ const PushCmd = cmd({
       // a page demoted to `unlisted` 404s on its /p/{slug} address — indistinguishable
       // from deleted.
       if (local.visibility) updateData.visibility = local.visibility
+      // Re-assert the OTP gate for the same reason, and more urgently: dropping
+      // `visibility` makes a page hard to find, dropping `requires_auth` makes a
+      // private page PUBLIC. (#180009)
+      //
+      // `!== undefined` rather than a truthy check so an explicit `false` is still sent.
+      // Note it may not be HONOURED: fl-api PageController::update forces requires_auth
+      // back on whenever json_content.requireOtp is true, and that block runs after the
+      // explicit assignment — so turning a gate off needs requireOtp cleared in the same
+      // push. Measured on page 406. Failing safe (gate stuck ON) is the right direction,
+      // so this is left as-is here and tracked against fl-api.
+      if (local.requires_auth !== undefined) updateData.requires_auth = local.requires_auth
       // Never send status during push — use publish/unpublish commands instead.
       // Sending status=published here caused the page to briefly publish with OLD content
       // before createVersion saved the new json_content, poisoning the iris-api cache.
@@ -653,10 +705,10 @@ const PushCmd = cmd({
         // Explicitly purge iris-api cache
         await pagesFetch("/api/internal/cache/purge-page", {
           method: "POST",
-          body: JSON.stringify({ slug: args.slug }),
+          body: JSON.stringify({ slug }),
         }).catch(() => {})
         sp.stop(success(`Pushed (${cnt} components) + published`))
-        console.log(`  ${highlight(publicUrl(args.slug))}`)
+        console.log(`  ${highlight(publicUrl(slug))}`)
         printDesignStandardHint()
       // Safe-by-default: unpublish after push so live page is untouched
       } else if (!args.live && page.status === "published") {
@@ -664,14 +716,14 @@ const PushCmd = cmd({
         sp.stop(success(`Pushed (${cnt} components) → draft`))
 
         // Re-fetch to get rotated cache_key for preview URL
-        const updated = await getBySlug(args.slug, false)
+        const updated = await getBySlug(slug, false)
         if (updated?.cache_key) {
           const token = Buffer.from(`${updated.id}:${updated.cache_key}`).toString("base64")
-          const url = `${publicUrl(args.slug)}?preview=true&token=${token}`
+          const url = `${publicUrl(slug)}?preview=true&token=${token}`
           console.log()
           console.log(`  ${highlight("Preview:")} ${url}`)
           console.log()
-          console.log(`  ${dim("Share with client, then: iris pages publish " + args.slug)}`)
+          console.log(`  ${dim("Share with client, then: iris pages publish " + slug)}`)
         }
       } else {
         sp.stop(success(`Pushed (${cnt} components, new version)`))
@@ -688,19 +740,21 @@ const PushCmd = cmd({
 
 const DiffCmd = cmd({
   command: "diff <slug>",
-  describe: "compare local vs remote page",
+  describe: "compare local ./pages/<slug>.json against what is live",
   builder: (y) =>
     y
-      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .positional("slug", { describe: "page slug \u2014 e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
       .option("dir", { describe: "directory", type: "string", default: "./pages" }),
   async handler(args) {
+    const { slug, corrected } = normalizeSlugArg(args.slug)
     UI.empty()
-    prompts.intro(`◈  Diff ${args.slug}`)
+    prompts.intro(`◈  Diff ${slug}`)
+    if (corrected) noteSlugCorrection(args.slug, slug)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     const sp = prompts.spinner()
     sp.start("Comparing…")
     try {
-      const filePath = join(pagesDir(args.dir), `${args.slug}.json`)
+      const filePath = join(pagesDir(args.dir), `${slug}.json`)
       if (!existsSync(filePath)) {
         sp.stop("Failed", 1)
         prompts.log.error(`Local file not found: ${filePath}`)
@@ -708,7 +762,7 @@ const DiffCmd = cmd({
         return
       }
       const local = JSON.parse(readFileSync(filePath, "utf-8"))
-      const page = await getBySlug(args.slug, true)
+      const page = await getBySlug(slug, true)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
 
       const localContent = local.json_content ?? {}
@@ -875,29 +929,11 @@ const CreateCmd = cmd({
         version: "1.0",
         type: template,
         theme: { mode: "dark", backgroundColor: "#000000", branding: { name: args.title, primaryColor: "#34d399" } },
-        components: [
-          {
-            type: "Hero",
-            id: `${args.slug}-hero`,
-            props: {
-              themeMode: "dark",
-              title: args.title,
-              subtitle: args["seo-description"] ?? "",
-              labelText: "NEW",
-              labelColor: "#34d399",
-              textAlign: "center",
-            },
-          },
-          {
-            type: "SiteFooter",
-            id: `${args.slug}-footer`,
-            props: {
-              themeMode: "dark",
-              brandName: args.title,
-              links: [],
-            },
-          },
-        ],
+        components: scaffoldComponents({
+          slug: args.slug,
+          title: args.title,
+          seoDescription: args["seo-description"],
+        }),
       }
 
       const payload: Record<string, unknown> = {
@@ -1408,7 +1444,48 @@ async function validateComponents(jsonContent: any): Promise<{ valid: boolean; e
 // Component Registry — available component types for the page builder
 // ============================================================================
 
-const COMPONENT_REGISTRY: { type: string; description: string; requiredProps: string[] }[] = [
+/**
+ * The components `pages create` starts a new page with.
+ *
+ * Extracted from the command handler so it can be checked against
+ * COMPONENT_REGISTRY in a test (#180123). It was inline, and it shipped a
+ * SiteFooter with no `copyright` — a prop this very file lists as required —
+ * so `pages create` rejected every page it built: "Component validation failed
+ * … SiteFooter: The copyright field is required." Since `pages push` errors
+ * with "Page not found" on a slug that does not exist yet, that left no
+ * create-then-push path at all.
+ */
+export function scaffoldComponents(opts: { slug: string; title: string; seoDescription?: string }) {
+  const { slug, title, seoDescription } = opts
+  return [
+    {
+      type: "Hero",
+      id: `${slug}-hero`,
+      props: {
+        themeMode: "dark",
+        title,
+        subtitle: seoDescription ?? "",
+        labelText: "NEW",
+        labelColor: "#34d399",
+        textAlign: "center",
+      },
+    },
+    {
+      type: "SiteFooter",
+      id: `${slug}-footer`,
+      props: {
+        themeMode: "dark",
+        brandName: title,
+        // Required by COMPONENT_REGISTRY below, and by the API. Derived from the
+        // page's own title so a fresh page is valid without the author editing it.
+        copyright: `© ${new Date().getFullYear()} ${title}`,
+        links: [],
+      },
+    },
+  ]
+}
+
+export const COMPONENT_REGISTRY: { type: string; description: string; requiredProps: string[] }[] = [
   // Core layout
   { type: "Hero", description: "Full-width hero banner with title, subtitle, CTA buttons", requiredProps: ["title"] },
   { type: "SiteNavigation", description: "Top navigation bar with logo, links, CTA button", requiredProps: ["logo"] },
@@ -2056,7 +2133,24 @@ function renderReach(page: any, v: { mode: VisibilityMode; declared: boolean }, 
   printKV("Page", `${page.slug} (#${page.id})`)
   printKV("Visibility", formatVisibility(v))
   printKV("Status", formatStatus(page.status))
-  if (page.requires_auth) printKV("Login gate", `${UI.Style.TEXT_WARNING}on${UI.Style.TEXT_NORMAL} ${dim("(requires_auth — visitors must sign in)")}`)
+  // Print this in BOTH states. Reporting only the "on" case made an ungated page look
+  // exactly like a page nobody had checked, which is how the leak in #180009 read as
+  // fine. "off" is the answer people most need to see, so it is the one that must show.
+  printKV(
+    "Email gate",
+    page.requires_auth
+      ? `${UI.Style.TEXT_WARNING}on${UI.Style.TEXT_NORMAL} ${dim("(requires_auth — visitors must pass an OTP emailed to them)")}`
+      : `${dim("off — the full page body is served to anyone with a working url, no login")}`,
+  )
+  if (page.requires_auth) {
+    // requires_auth alone is lead capture, not access control: any address that completes
+    // the OTP is accepted and an Atlas record is created for it on the spot. Only an
+    // allowedDomains list makes it a restriction.
+    console.log(
+      `      ${dim("check the allowlist: iris pages get " + page.slug + " gate.allowedDomains")}\n` +
+      `      ${dim("without one, ANY email that completes the OTP gets in")}`,
+    )
+  }
   console.log()
   console.log(`  ${bold("Who can reach this page right now")}`)
   console.log()
@@ -2120,12 +2214,16 @@ function renderReach(page: any, v: { mode: VisibilityMode; declared: boolean }, 
 const VisibilityCmd = cmd({
   command: "visibility <slug> [mode]",
   aliases: ["vis"],
-  describe: "show or set who can reach a page (public | unlisted | private)",
+  // NOT an access gate, and it reads like one. `unlisted`/`private` change whether a
+  // page is LISTED and indexed; anyone holding the url still gets the full body. The
+  // gate is `requires_auth` + json_content.gate.allowedDomains. Setting visibility and
+  // believing the page was protected is how a client page stayed readable (#180009).
+  describe: "show or set how a page is LISTED (public | unlisted | private) — discoverability, not access",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
       .positional("mode", {
-        describe: "public | unlisted | private (omit to show the current mode + working urls)",
+        describe: "public | unlisted | private (omit to show the current mode + working urls). Does NOT require a login — anyone with the url still reads the page",
         type: "string",
         choices: VISIBILITY_MODES as unknown as string[],
       })
