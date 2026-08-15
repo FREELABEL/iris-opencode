@@ -2044,8 +2044,50 @@ const LeadsMergeCommand = cmd({
         console.log(`  ${dim(`${alternateEmails.length} alternate email(s) will be preserved: ${alternateEmails.join(", ")}`)}`)
       }
 
-      // Dry-run mode — show preview and exit
+      // TASKS were never mentioned in the preview, so the 5 tasks destroyed on 2026-08-10 were
+      // invisible before the merge ran (#179656 defect 3). Count them from the server rather
+      // than the already-fetched payload, which does not carry them.
+      let taskTotal = 0
+      for (const rid of removeIds) {
+        try {
+          const tr = await irisFetch(`/api/v1/leads/${rid}/tasks`)
+          if (tr.ok) {
+            const tb = (await tr.json()) as any
+            const list = Array.isArray(tb?.data) ? tb.data : Array.isArray(tb) ? tb : []
+            taskTotal += list.length
+          }
+        } catch { /* counting is best-effort; never block the preview */ }
+      }
+      if (taskTotal > 0) {
+        console.log(`  ${dim(`${taskTotal} task(s) will move to #${args.keep}`)}`)
+      }
+
+      // Dry-run mode — show preview and exit.
       if (args.dryRun) {
+        // The preview used to describe the SERVER merge plan while the LEGACY path was what
+        // actually executed — it promised "2 note(s) will be copied" and copied none (#179656
+        // defect 2). Probe the endpoint so the preview reflects the path that would really run.
+        // Only in a dry run: on the real path the merge call below IS the probe.
+        let serverMergeReachable = false
+        try {
+          // remove:[] is a no-op merge — enough for the route to answer, not enough to change
+          // anything. Even a 4xx proves the route exists.
+          const probe = await irisFetch(`/api/v1/leads/${args.keep}/merge`, {
+            method: "POST",
+            body: JSON.stringify({ remove: [], alternate_emails: [] }),
+          })
+          serverMergeReachable = probe.status !== 404 && probe.status !== 405
+        } catch {
+          serverMergeReachable = false
+        }
+        if (!serverMergeReachable) {
+          console.log()
+          prompts.log.warn(
+            `The server merge endpoint is NOT reachable, so this merge would be refused.\n` +
+              `Nothing above would happen. Retry when the API is available.`,
+          )
+        }
+
         console.log()
         console.log(`  ${bold("Dry run")} — no changes made`)
         prompts.outro("Done")
@@ -2083,47 +2125,25 @@ const LeadsMergeCommand = cmd({
         const result = await mergeRes.json().catch(() => ({}))
         mergeSpinner.stop(`${success("✓")} ${result.message ?? `Merged ${removeIds.length} lead(s) into #${args.keep}`}`)
       } else {
-        // Fallback to legacy client-side merge if endpoint not available
-        mergeSpinner.stop(dim("Server merge unavailable — falling back to legacy merge"))
-        const legacySpinner = prompts.spinner()
-        legacySpinner.start("Legacy merge…")
-
-        for (const rid of removeIds) {
-          const r = leads[rid]
-          const notes: any[] = Array.isArray(r.notes) ? r.notes : []
-          for (const n of notes) {
-            const content = typeof n === "object" ? (n.content ?? JSON.stringify(n)) : String(n)
-            await irisFetch(`/api/v1/leads/${args.keep}/notes`, {
-              method: "POST",
-              body: JSON.stringify({ content: `[Merged from #${rid}] ${content}` }),
-            })
-          }
-
-          const updates: Record<string, unknown> = {}
-          for (const field of ["company", "phone", "website", "city", "state", "country"]) {
-            if (!primary[field] && r[field]) updates[field] = r[field]
-          }
-          if (Object.keys(updates).length > 0) {
-            await irisFetch(`/api/v1/leads/${args.keep}`, {
-              method: "PATCH",
-              body: JSON.stringify(updates),
-            })
-          }
-
-          await irisFetch(`/api/v1/leads/${rid}`, { method: "DELETE" })
-        }
-
-        // Legacy: preserve alternate emails via contact_info update
-        if (alternateEmails.length > 0) {
-          const ci = primary.contact_info ?? {}
-          ci.emails = [...new Set([...(ci.emails ?? []), ...alternateEmails])]
-          await irisFetch(`/api/v1/leads/${args.keep}`, {
-            method: "PATCH",
-            body: JSON.stringify({ contact_info: ci }),
-          })
-        }
-
-        legacySpinner.stop(`${success("✓")} Merged ${removeIds.length} lead(s) into #${args.keep} (legacy)`)
+        // The legacy client-side fallback DELETED the source lead after copying only the notes
+        // that happened to be present in the already-fetched payload — and never touched tasks
+        // at all. On 2026-08-10 that destroyed 2 notes and 5 tasks on lead #29006, unrecoverably
+        // (#179656).
+        //
+        // A fallback that is strictly MORE destructive than the primary path must never be
+        // selected automatically and silently. Merge is either atomic or it does not happen, so
+        // this now refuses and leaves every lead intact rather than half-migrating and deleting.
+        mergeSpinner.stop("Refused", 1)
+        prompts.log.error(
+          `The server merge endpoint is unavailable, and the old client-side fallback is unsafe:\n` +
+            `it deletes the source lead while migrating only some notes and NO tasks.\n\n` +
+            `Nothing was changed — all ${removeIds.length + 1} leads are intact.\n\n` +
+            `Back up first, then retry when the API is reachable:\n` +
+            removeIds.map((rid) => `  iris leads pull ${rid}`).join("\n"),
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
       }
 
       // Clean up orphaned local .iris/leads/ files for merged-away leads
