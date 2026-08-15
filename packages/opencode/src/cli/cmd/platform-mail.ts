@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch } from "./iris-api"
 import { mailRows } from "./mail-response"
+import { routerSend, describeSend } from "./comms-send"
 
 // macOS Apple Mail integration via IRIS Bridge (localhost:3200)
 // Bridge endpoint: GET /api/mail/search?from=X&subject=X&days=N&limit=N&include_body=1&max_body=N
@@ -199,6 +200,39 @@ const MailSendCommand = cmd({
       prompts.outro("Done")
       return
     }
+
+    // ROUTE THROUGH THE COMMS ROUTER (CR-8) so the send lands in lead_comms. This used to POST
+    // straight to the bridge and return — the mail went out and nothing recorded it, which is
+    // why the comms log was only ever as fresh as the last manual `atlas:comms ingest`.
+    //
+    // Attachments and cc have no router path yet, and silently dropping them would be worse
+    // than not routing: fall back to the direct bridge call and say so, rather than sending a
+    // different email than the operator asked for.
+    const needsDirectBridge = Boolean(args.attachment || args.cc || args.from)
+
+    if (!needsDirectBridge) {
+      const result = await routerSend({
+        toHandle: args.to,
+        channel: "apple_mail",
+        subject: args.subject,
+        message: args.body,
+        origin: "cli.reachr",
+      })
+
+      if (result.ok && result.sent) {
+        prompts.log.info(describeSend(result))
+        prompts.outro(`${success("✓")} Email sent to ${args.to}`)
+        return
+      }
+
+      // A router failure is reported, not silently retried through the bridge — a fallback that
+      // hides the reason is how "sent but unlogged" became invisible in the first place.
+      prompts.log.error(`Router send failed: ${result.error ?? "unknown"}`)
+      prompts.outro("Done")
+      return
+    }
+
+    prompts.log.warn("Attachment/cc/from set — sending direct via the bridge (not logged to comms).")
 
     const payload: any = {
       to_email: args.to,

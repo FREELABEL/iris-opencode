@@ -228,6 +228,38 @@ async function executeMacosLocal(
   const route = routes[fn]
   if (!route) return null // unknown function — fall back to remote API
 
+  // CR-14 bypass 2. `iris run send_imessage` / `send_email` mapped straight onto the bridge, so
+  // they had full send capability and wrote nothing to the comms log. Route them through the
+  // Comms Router instead, exactly as `iris imessage send` and `iris mail send` now are.
+  //
+  // On router failure we FALL THROUGH to the bridge rather than blocking the send — `run` is the
+  // low-level escape hatch and taking away someone's ability to send when the API is down would
+  // be a worse trade than an unlogged message. It is announced on stderr either way, because an
+  // unlogged send that nobody is told about is the failure this whole epic is about.
+  if (fn === "send_imessage" || fn === "send_email") {
+    const handle = String(params.handle ?? params.chat_guid ?? params.to_email ?? params.to ?? "")
+    const message = String(params.text ?? params.body_text ?? params.message ?? "")
+
+    if (handle && message) {
+      try {
+        const { routerSend } = await import("./comms-send")
+        const routed = await routerSend({
+          toHandle: handle,
+          channel: fn === "send_imessage" ? "imessage" : "apple_mail",
+          subject: params.subject ? String(params.subject) : undefined,
+          message,
+          origin: "cli.reachr",
+        })
+        if (routed.ok && routed.sent) {
+          return { sent: true, channel: routed.channel, comm_id: routed.commId, logged: Boolean(routed.commId) }
+        }
+        console.error(`[iris run] comms router declined (${routed.error ?? "unknown"}) — sending via bridge, NOT logged.`)
+      } catch (e) {
+        console.error(`[iris run] comms router unavailable — sending via bridge, NOT logged.`)
+      }
+    }
+  }
+
   let url = `${bridgeBase}${route.path}`
   let body: string | undefined
 
