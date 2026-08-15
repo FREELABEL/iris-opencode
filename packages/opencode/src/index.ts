@@ -442,6 +442,10 @@ const cli = yargs(rawArgs)
     process.exit(1)
   })
   .strict()
+  // Turn "Unknown argument: sceduals" into "Did you mean schedules?". strict() already
+  // rejects the typo, but rejection plus a 60-line command dump leaves the reader to
+  // spot the near-match themselves. Costs nothing when the input is not close to anything.
+  .recommendCommands()
 
 // Intercept top-level --help after all commands are registered
 const hasHelp = rawArgs.includes("--help") || rawArgs.includes("-h")
