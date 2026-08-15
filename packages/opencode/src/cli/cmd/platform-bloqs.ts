@@ -1702,19 +1702,120 @@ const BloqsComposeCommand = cmd({
   },
 })
 
-const BloqsSearchCommand = cmd({
+/**
+ * Search boards AND the writing inside them.
+ *
+ * This used to search board NAMES only — it forwarded to `bloqs list --search`. That is
+ * almost never the question being asked: you type `iris bloqs search "denial risk"` because
+ * you want the note, not the board it happens to live on. Cross-board content search already
+ * existed server-side (`GET user/{id}/bloqs/content-items?search=` matches title + content
+ * across every board you own) but it was named for the Review Studio feed that shipped first,
+ * so nothing pointed at it and nobody could find it.
+ *
+ * Both halves are reported, always, even at zero — an empty section is information ("that
+ * phrase is nowhere in your items"), whereas a silently-omitted section reads as "no such
+ * capability". Same rule federated-search.ts states for skipped sources.
+ */
+export const BloqsSearchCommand = cmd({
   command: "search <query>",
   aliases: ["find", "q"],
-  describe: "search bloqs by name or description",
+  describe: "search across every board — item titles, item content, and board names",
   builder: (yargs) =>
     yargs
       .positional("query", { describe: "search term", type: "string", demandOption: true })
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("limit", { describe: "max results per section", type: "number", default: 20 })
+      .option("boards-only", { describe: "only match board names/descriptions (the old behaviour)", type: "boolean", default: false })
+      .option("items-only", { describe: "only match item titles/content", type: "boolean", default: false })
+      .option("bloq", { describe: "restrict item matches to one board ID", type: "number" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    // Delegate to list with --search flag
-    await BloqsListCommand.handler({ ...args, search: args.query } as any)
+    const query = String(args.query)
+    const limit = Number(args.limit) || 20
+    const wantItems = !args["boards-only"]
+    const wantBoards = !args["items-only"]
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Search — "${query}"`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Searching…")
+
+    // ── boards (name + description) ──
+    // The index endpoint ACCEPTS ?search= and ignores it, returning every board — so the
+    // filter has to happen here or every board would report as a match. Same tokenized
+    // AND-match `bloqs list --search` uses, so the two agree.
+    let boards: any[] = []
+    if (wantBoards) {
+      try {
+        const res = await irisFetch(`/api/v1/user/${userId}/bloqs`)
+        if (res.ok) {
+          const data = (await res.json()) as any
+          const rows: any[] = data?.data ?? []
+          boards = (Array.isArray(rows) ? rows : [])
+            .filter((b) => matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, query))
+            .slice(0, limit)
+        }
+      } catch { /* reported as 0 below — never silently narrowed */ }
+    }
+
+    // ── items (title + content, every board) ──
+    let items: any[] = []
+    if (wantItems) {
+      try {
+        const params = new URLSearchParams({ search: query, per_page: String(limit) })
+        // A board-scoped item search has its own endpoint; reuse it so --bloq is exact.
+        const url = args.bloq
+          ? `/api/v1/user/${userId}/bloqs/${args.bloq}/items?${params}`
+          : `/api/v1/user/${userId}/bloqs/content-items?${params}`
+        const res = await irisFetch(url)
+        if (res.ok) {
+          const data = (await res.json()) as any
+          const rows = data?.data?.items ?? data?.items ?? data?.data ?? []
+          items = Array.isArray(rows) ? rows.slice(0, limit) : []
+        }
+      } catch { /* same */ }
+    }
+
+    spinner?.stop(`${boards.length} board(s), ${items.length} item(s)`)
+
+    if (args.json) {
+      console.log(JSON.stringify({ query, boards, items, counts: { boards: boards.length, items: items.length } }, null, 2))
+      return
+    }
+
+    if (wantItems) {
+      printDivider()
+      console.log(`  ${bold("Items")} ${dim(`(${items.length})`)}`)
+      if (!items.length) console.log(`  ${dim(`No item matches for "${query}"`)}`)
+      for (const i of items) {
+        const where = [i.bloq_name, i.list_name].filter(Boolean).join(" › ")
+        console.log(`  ${dim(`#${i.id}`)} ${bold(itemTitle(i))}`)
+        if (where) console.log(`      ${dim(where)}${i.bloq_id ? dim(`  ·  bloq #${i.bloq_id}`) : ""}`)
+        const preview = itemContentPreview(i)
+        if (preview) console.log(`      ${dim(preview.replace(/\s+/g, " ").slice(0, 110))}`)
+      }
+    }
+
+    if (wantBoards) {
+      printDivider()
+      console.log(`  ${bold("Boards")} ${dim(`(${boards.length})`)}`)
+      if (!boards.length) console.log(`  ${dim(`No board-name matches for "${query}"`)}`)
+      for (const b of boards) {
+        console.log(`  ${dim(`#${b.id}`)} ${bold(b.name ?? "(untitled)")}`)
+        if (b.description) console.log(`      ${dim(String(b.description).slice(0, 110))}`)
+      }
+    }
+
+    printDivider()
+    console.log(`  ${dim("Open an item:")}  iris bloqs get <bloq-id>`)
+    console.log(`  ${dim("Widen the net:")} iris bloqs items <bloq-id> --search "${query}" --include-all  ${dim("(+ Obsidian, Drive)")}`)
+    prompts.outro("Done")
   },
 })
 
@@ -2952,10 +3053,24 @@ const BloqsPublishPagesCommand = cmd({
   },
 })
 
+/**
+ * Top-level `iris search <query>` — the same command as `iris bloqs search`, promoted.
+ *
+ * Discoverability was the whole point of the request. A search buried three tokens deep
+ * under a noun you have to already know ("bloqs") is a search nobody runs. `iris search`
+ * is the form people actually try first, so it is the form that has to work.
+ */
+export const PlatformSearchCommand = cmd({
+  ...BloqsSearchCommand,
+  command: "search <query>",
+  aliases: ["find"],
+  describe: "search everything you have written — item titles, item content, and board names",
+})
+
 export const PlatformBloqsCommand = cmd({
   command: "bloqs",
   aliases: ["kb", "knowledge", "memory", "projects", "atlas"],
-  describe: "manage knowledge bases (bloqs)",
+  describe: "manage knowledge bases (bloqs) — start with: iris search <query>",
   builder: (yargs) =>
     yargs
       .command(BloqsListCommand)

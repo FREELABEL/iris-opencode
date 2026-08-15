@@ -96,6 +96,7 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
 
   // Knowledge & Content
   content: "knowledge",
+  search: "knowledge",
   bloqs: "knowledge",
   memory: "knowledge",
   boards: "knowledge",
