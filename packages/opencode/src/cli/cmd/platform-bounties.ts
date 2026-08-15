@@ -788,6 +788,126 @@ const HuntersCommand = cmd({
   },
 })
 
+
+const ConnectCommand = cmd({
+  command: "connect",
+  aliases: ["setup-payouts", "payout-setup"],
+  describe: "set up or check your payout account, so money can actually reach you",
+  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    prompts.intro("◈  Payout account")
+
+    const res = await irisFetch(`/api/v1/earnings/connect-status`)
+    if (!(await handleApiError(res, "Payout status"))) return
+    const st = ((await res.json().catch(() => null)) as any) ?? {}
+
+    if (args.json) { console.log(JSON.stringify(st, null, 2)); return }
+
+    if (st.connected && st.payouts_enabled) {
+      printDivider()
+      console.log(`  ${success("Connected")} — payouts are enabled.`)
+      if (st.login_url) console.log(`  ${dim(st.login_url)}`)
+      printDivider()
+      prompts.outro(dim("iris bounty claim   to take what you are owed"))
+      return
+    }
+
+    // Connected but not payable is its own state, and the most confusing one to be in:
+    // Stripe has the account and is still waiting on something. Say which, rather than
+    // sending someone round the onboarding loop again for no reason.
+    if (st.connected && !st.payouts_enabled) {
+      printDivider()
+      console.log(`  ${bold("Connected, but payouts are not enabled yet.")}`)
+      const due = st.requirements?.currently_due ?? []
+      if (due.length) {
+        console.log(`  ${dim("Stripe still needs:")}`)
+        for (const r of due.slice(0, 8)) console.log(`    ${dim("·")} ${r}`)
+      }
+      if (st.login_url) console.log(`\n  ${st.login_url}`)
+      printDivider()
+      prompts.outro("Done")
+      return
+    }
+
+    const start = await irisFetch(`/api/v1/earnings/setup-connect`, { method: "POST" })
+    if (!(await handleApiError(start, "Payout setup"))) return
+    const body = ((await start.json().catch(() => null)) as any) ?? {}
+    const url = body.onboarding_url ?? body.data?.onboarding_url
+
+    if (!url) {
+      prompts.log.error("No onboarding link came back. Nothing has changed.")
+      prompts.outro("Failed")
+      return
+    }
+
+    console.log()
+    console.log(`  ${url}`)
+    console.log()
+    prompts.log.info("Open that to finish setup. Verified bugs already waiting will pay out")
+    prompts.log.info("automatically once it completes — you do not have to claim them again.")
+    prompts.outro("Done")
+  },
+})
+
+const ClaimCommand = cmd({
+  command: "claim",
+  aliases: ["cashout"],
+  describe: "claim what you are owed — pays out to your connected account",
+  builder: (y) => y.option("yes", { type: "boolean", describe: "skip the confirmation" }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    UI.empty()
+    prompts.intro("◈  Claim")
+
+    // Show the amount BEFORE asking. "Confirm cashout?" with no number is a prompt people
+    // accept without reading, which is the wrong habit to build around money.
+    const meRes = await irisFetch(`/api/v1/bounty/me`)
+    const me = meRes.ok ? (((await meRes.json().catch(() => null)) as any) ?? {}) : {}
+    const owed = me.earnings?.unpaid ?? null
+
+    if (me.earnings && (me.earnings.unpaidCents ?? 0) <= 0) {
+      prompts.log.info("Nothing owed right now.")
+      prompts.outro("Done")
+      return
+    }
+
+    // An unsigned agreement will have the gate withhold this anyway. Better to say so here
+    // than to let someone claim into a refusal.
+    const outstanding = (me.agreements ?? []).filter((a: any) => !a.signed)
+    if (outstanding.length) {
+      prompts.log.warn(`You still have an unsigned ${outstanding[0].type}.`)
+      prompts.log.info(outstanding[0].signingUrl ?? "Run: iris bounty me")
+    }
+
+    if (!args.yes && !isNonInteractive()) {
+      const ok = await prompts.confirm({ message: `Claim ${owed ?? "your balance"} now?` })
+      if (prompts.isCancel(ok) || !ok) { prompts.outro("Cancelled"); return }
+    }
+
+    const res = await irisFetch(`/api/v1/earnings/cashout`, { method: "POST" })
+    const body = ((await res.json().catch(() => null)) as any) ?? {}
+
+    if (!res.ok || body.success === false) {
+      // The API distinguishes "not available" from "failed"; pass its own words through
+      // rather than flattening both into a generic error.
+      prompts.log.error(body.message ?? "Claim did not go through. Nothing was paid.")
+      if (String(body.message ?? "").toLowerCase().includes("connect")) {
+        prompts.log.info("Set up your payout account first: iris bounty connect")
+      }
+      prompts.outro("Failed")
+      return
+    }
+
+    printDivider()
+    console.log(`  ${success("Paid")}  ${body.amount ? `$${body.amount}` : ""}`)
+    if (body.transfer_id) console.log(`  ${dim(`transfer ${body.transfer_id}`)}`)
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
 const MyBountyCommand = cmd({
   command: "me [opportunity-id]",
   aliases: ["mine-bugs", "standing"],
@@ -923,6 +1043,8 @@ export const PlatformBountiesCommand = cmd({
       .command(PayoutCommand)
       .command(HuntersCommand)
       .command(MyBountyCommand)
+      .command(ConnectCommand)
+      .command(ClaimCommand)
       .command(BugsCommand)
       .demandCommand(1, "Specify a subcommand"),
   async handler() {},
