@@ -3,6 +3,53 @@ import { UI } from "../ui"
 import * as prompts from "./clack"
 import { Installation } from "../../installation"
 
+/**
+ * Refresh the on-demand how-to recipes — #180295.
+ *
+ * Called on BOTH update paths, including "already on latest". Recipes are fetched from the
+ * scaffold on `main` and change independently of the binary, so gating them on a version
+ * bump means anybody already current never gets new documentation — which is the state that
+ * left the mandatory Genesis design audit installed on zero machines.
+ *
+ * Driven by the same scaffold/manifest.json the installer reads, so there is ONE list rather
+ * than a second copy that drifts. Best-effort: a docs refresh must never be the reason an
+ * upgrade reports failure, and one unreachable recipe must not abandon the rest. It does
+ * report WHY it failed, though — the first version swallowed everything and was
+ * indistinguishable from not running at all.
+ */
+async function refreshHowTos(home: string): Promise<void> {
+  const base =
+    process.env["IRIS_SCAFFOLD_BASE_URL"] ??
+    "https://raw.githubusercontent.com/FREELABEL/iris-opencode/main/scaffold"
+  try {
+    const res = await fetch(`${base}/manifest.json`, { signal: AbortSignal.timeout(8000) })
+    if (!res.ok) {
+      prompts.log.warn(`How-to recipes not refreshed (manifest ${res.status})`)
+      return
+    }
+    const manifest = (await res.json()) as { files?: Array<{ src: string; dest: string }> }
+    const recipes = (manifest.files ?? []).filter((f) => f.src.startsWith("how-to/"))
+    const { mkdirSync, writeFileSync } = await import("fs")
+    mkdirSync(`${home}/.iris/how-to`, { recursive: true })
+
+    let written = 0
+    for (const f of recipes) {
+      try {
+        const r = await fetch(`${base}/${f.src}`, { signal: AbortSignal.timeout(8000) })
+        if (!r.ok) continue
+        writeFileSync(`${home}/.iris/${f.dest}`, await r.text())
+        written++
+      } catch {
+        // one bad recipe must not abandon the rest
+      }
+    }
+    if (written > 0) prompts.log.info(`How-to recipes refreshed (${written})`)
+    else prompts.log.warn("How-to recipes not refreshed (no recipe could be fetched)")
+  } catch (e) {
+    prompts.log.warn(`How-to recipes not refreshed (${e instanceof Error ? e.message : "offline"})`)
+  }
+}
+
 export const UpgradeCommand = {
   command: "upgrade [target]",
   aliases: ["update"],
@@ -50,6 +97,9 @@ export const UpgradeCommand = {
 
     if (Installation.VERSION === target) {
       prompts.log.warn(`Already on latest: ${target}`)
+      // Still refresh the docs. Recipes live on `main` and move independently of releases,
+      // so an up-to-date binary is not evidence of up-to-date documentation.
+      await refreshHowTos(process.env.HOME || process.env.USERPROFILE || "")
       prompts.outro("Done")
       return
     }
@@ -130,43 +180,7 @@ export const UpgradeCommand = {
         }
       }
 
-      // Refresh the how-to recipes (#180295).
-      //
-      // These are the agent's on-demand documentation and they were NOT part of an update —
-      // they arrived only from `install --only-docs`, which is undocumented in any help text.
-      // On a machine updated continuously for months, 26 of 34 recipes were installed and
-      // eight were stale, including the design audit CLAUDE.md calls mandatory reading.
-      //
-      // Driven by the same scaffold/manifest.json the installer uses, so there is ONE list
-      // rather than a second copy that drifts. Best-effort and quiet on failure: a docs
-      // refresh must never be the reason an upgrade reports failure.
-      try {
-        const manifestUrl =
-          process.env["IRIS_SCAFFOLD_BASE_URL"] ??
-          "https://raw.githubusercontent.com/FREELABEL/iris-opencode/main/scaffold"
-        const res = await fetch(`${manifestUrl}/manifest.json`, { signal: AbortSignal.timeout(8000) })
-        if (res.ok) {
-          const manifest = (await res.json()) as { files?: Array<{ src: string; dest: string }> }
-          const recipes = (manifest.files ?? []).filter((f) => f.src.startsWith("how-to/"))
-          const { mkdirSync, writeFileSync } = await import("fs")
-          mkdirSync(`${home}/.iris/how-to`, { recursive: true })
-
-          let written = 0
-          for (const f of recipes) {
-            try {
-              const r = await fetch(`${manifestUrl}/${f.src}`, { signal: AbortSignal.timeout(8000) })
-              if (!r.ok) continue
-              writeFileSync(`${home}/.iris/${f.dest}`, await r.text())
-              written++
-            } catch {
-              // one bad recipe must not abandon the rest
-            }
-          }
-          if (written > 0) prompts.log.info(`How-to recipes refreshed (${written})`)
-        }
-      } catch {
-        // Offline, or GitHub unreachable. The binary already updated; say nothing.
-      }
+      await refreshHowTos(home)
 
       // Fix stale API URLs in daemon config (pre-Railway migration)
       const configFile = `${home}/.iris/config.json`
