@@ -4,6 +4,12 @@ The bug-bounty payout state (opp **#581**) had drifted — internal wallet **acc
 reported as real **payouts**. It's reconciled now. **Do not compute bounty money yourself from raw
 records.** Use the commands/endpoints below — they all share one definition.
 
+This doc is the LEDGER: what the money states mean and how to read them without inventing a
+second answer. What a hunter does — the email gate, applying, signing, self-serve payouts —
+is [bounty-os-hunter-journey](bounty-os-hunter-journey.md). A hunter's own view of these same
+numbers is `GET /v1/bounty/gated`, which aggregates the services below rather than
+recomputing them.
+
 ## The money states — exact meanings
 
 | State | Means | Counts as "paid"? |
@@ -71,7 +77,10 @@ Response money fields: `paid_cents` (real), `accrued_cents` (wallet, not paid), 
 5. **To record a real off-platform payment** (Apple Pay/cash), use `bounty:log-manual-hunter`
    (dry-run first). It draws the pool down, marks bugs paid, and credits no wallet.
 
-## Current true state (opp #581, as of 2026-07-28)
+## A dated snapshot (opp #581, 2026-07-28 — NOT live)
+
+Kept as a worked example of the states above, not as current state. Figures move; re-read
+them with the commands in this doc rather than quoting the numbers below.
 
 Real disbursed **$24** (Rashad, Apple Pay) · Accrued **$0** (the fake $35 was voided) · Stripe **$0** ·
 Owed **~$49** (Rashad $19 + Flo $30). Full audit page: `heyiris.io/p/bounty-audit-581`.

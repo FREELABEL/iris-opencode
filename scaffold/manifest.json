@@ -159,6 +159,12 @@
       "purpose": "Bug Bounty — Source of Truth (READ BEFORE REPORTING ANY $)"
     },
     {
+      "src": "how-to/bounty-os-hunter-journey.md",
+      "dest": "how-to/bounty-os-hunter-journey.md",
+      "managed": true,
+      "purpose": "The hunter's path on /p/bounty — email gate, apply with signup folded in, agreements raised on acceptance, self-serve payouts. The person-facing counterpart to bug-bounty (money states) and agreements-and-signing (operator side)."
+    },
+    {
       "src": "how-to/deploy-elon-build-lock.md",
       "dest": "how-to/deploy-elon-build-lock.md",
       "managed": true,

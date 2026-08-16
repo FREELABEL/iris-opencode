@@ -1048,6 +1048,14 @@ export const PlatformBountiesCommand = cmd({
       .command(ClaimCommand)
       .command(BugsCommand)
       .command(BountyAdminCommand)
+      // Hunters do not have the CLI. Everything they need — proving their email, seeing what
+      // they are owed, applying (account created in the flow), signing, connecting Stripe —
+      // is one page, and nothing here said so. An operator reaching for `iris bounty` is
+      // usually one question away from "where do I send them".
+      .epilogue(
+        "Hunters use https://heyiris.io/p/bounty — sign in by email, see earnings, apply, sign, get paid.\n" +
+          "How it fits together: iris how-to view bounty-os-hunter-journey",
+      )
       .demandCommand(1, "Specify a subcommand"),
   async handler() {},
 })

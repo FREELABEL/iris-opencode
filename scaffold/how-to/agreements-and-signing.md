@@ -13,6 +13,16 @@ billed, and the signature is a precondition for access rather than a step toward
 the question is "how do I get paid", read that one. If it is "may this person see this",
 read this one.
 
+**Applicants get theirs automatically.** When somebody is accepted to an opportunity,
+`ApplicantAgreementIssuer` raises exactly what the access gate is about to ask for — the NDA,
+plus the BAA on a PHI-tier opportunity — emails each signing link, and is idempotent, so
+re-reviewing an application does not raise a second one or send a second email. Nothing below
+needs doing by hand for that path; see
+[bounty-os-hunter-journey](bounty-os-hunter-journey.md) for the chain the applicant sees.
+
+The manual path below is for counterparties who are not applicants: a vendor, a partner, a
+contractor you are bringing in directly.
+
 ## Prerequisites
 
 - `iris auth login` completed
