@@ -68,6 +68,9 @@ interface TsNode {
 interface TsStatus {
   installed: boolean
   loggedIn: boolean
+  /** Did the status query actually return an answer? false = we could not tell, which is
+   *  NOT the same as logged out and must not be reported as it. */
+  queryOk: boolean
   tailnet: string | null
   self: TsNode | null
   peers: TsNode[]
@@ -84,19 +87,49 @@ function toNode(raw: any, self: boolean): TsNode {
   }
 }
 
+/**
+ * "Not logged in" and "I could not tell" are different answers, and this used to give the
+ * same one for both.
+ *
+ * Any failure of `tailscale status --json` — a timeout, a transient error, unparseable
+ * output — fell through to `loggedIn: false`, which callers render as "not on the tailnet
+ * — run: iris hive vpn up". Observed live on 2026-08-16: `connect --phone` refused with
+ * that message seconds after `doctor` reported the tailnet healthy, and five re-runs all
+ * passed. The advice was not just unhelpful, it was WRONG — you are already up, and being
+ * told to run `up` sends you to fix a thing that is not broken.
+ *
+ * (The old NeedsLogin branch was also a no-op: it assigned `false` to a field already
+ * initialised `false`, so it looked like it handled the logged-out case and did nothing.)
+ *
+ * Now the query result is reported separately from its answer. One cheap retry absorbs the
+ * transient case; if the query still cannot be answered, callers say so rather than
+ * asserting a state they did not observe.
+ */
 function readStatus(): TsStatus {
-  const out: TsStatus = { installed: false, loggedIn: false, tailnet: null, self: null, peers: [] }
+  const out: TsStatus = { installed: false, loggedIn: false, queryOk: false, tailnet: null, self: null, peers: [] }
   const bin = tailscaleBin()
   if (!bin) return out
   out.installed = true
-  const r = ts(["status", "--json"])
+
+  let r = ts(["status", "--json"])
   if (!r.ok || !r.stdout.trim()) {
-    // BackendState=NeedsLogin still returns JSON on most versions; fall through
-    if (/NeedsLogin|Logged out|logged out/i.test(r.stderr + r.stdout)) out.loggedIn = false
+    // One retry. The failure this exists for is transient, and a second call costs
+    // milliseconds against being wrong about whether someone is on their own network.
+    r = ts(["status", "--json"])
+  }
+
+  if (!r.ok || !r.stdout.trim()) {
+    // An explicit logged-out signal IS an answer — record it as one.
+    if (/NeedsLogin|Logged out|logged out/i.test(r.stderr + r.stdout)) {
+      out.queryOk = true
+      out.loggedIn = false
+    }
     return out
   }
+
   try {
     const j = JSON.parse(r.stdout)
+    out.queryOk = true
     out.loggedIn = j?.BackendState === "Running"
     out.tailnet = j?.CurrentTailnet?.Name ?? j?.MagicDNSSuffix ?? null
     if (j?.Self) out.self = toNode(j.Self, true)
@@ -104,7 +137,7 @@ function readStatus(): TsStatus {
       out.peers = Object.values(j.Peer).map((p) => toNode(p, false))
     }
   } catch {
-    /* leave defaults */
+    // Unparseable output is not evidence of being logged out either.
   }
   return out
 }
@@ -283,7 +316,16 @@ const VpnHostCommand = cmd({
       process.exit(1)
     }
     if (!s.loggedIn) {
-      console.log(`${highlight("!")} not on the tailnet — run: ${bold("iris hive vpn up")}`)
+      // Distinguish "you are logged out" from "I could not ask". Telling someone to run
+      // `vpn up` when they are already up sends them to fix a thing that is not broken.
+      if (!s.queryOk) {
+        console.log(`${highlight("!")} could not read Tailscale status — the query failed twice.`)
+        console.log(dim("  This is NOT the same as being logged out. Check the app is running, then:"))
+        console.log(dim("    tailscale status        (does it answer?)"))
+        console.log(dim("    iris hive vpn doctor"))
+      } else {
+        console.log(`${highlight("!")} not on the tailnet — run: ${bold("iris hive vpn up")}`)
+      }
       process.exit(1)
     }
     const node = resolveHost(String(argv.name))
@@ -396,7 +438,16 @@ const VpnConnectCommand = cmd({
       process.exit(1)
     }
     if (!s.loggedIn) {
-      console.log(`${highlight("!")} not on the tailnet — run: ${bold("iris hive vpn up")}`)
+      // Distinguish "you are logged out" from "I could not ask". Telling someone to run
+      // `vpn up` when they are already up sends them to fix a thing that is not broken.
+      if (!s.queryOk) {
+        console.log(`${highlight("!")} could not read Tailscale status — the query failed twice.`)
+        console.log(dim("  This is NOT the same as being logged out. Check the app is running, then:"))
+        console.log(dim("    tailscale status        (does it answer?)"))
+        console.log(dim("    iris hive vpn doctor"))
+      } else {
+        console.log(`${highlight("!")} not on the tailnet — run: ${bold("iris hive vpn up")}`)
+      }
       process.exit(1)
     }
     // No name given? Show what is reachable instead of erroring. This used to be a dead
