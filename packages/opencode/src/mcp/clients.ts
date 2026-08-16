@@ -22,6 +22,17 @@ export namespace McpClients {
   export const SERVER_NAME = "IRIS OS"
 
   /**
+   * Gemini CLI cannot use the canonical key. It builds every tool's function
+   * name as `mcp_<serverName>_<toolName>` and then parses the server back out
+   * with `/^([^_]+)_(.+)$/` — i.e. the server name is everything up to the FIRST
+   * underscore. "IRIS OS" sanitizes to "IRIS_OS", so Gemini reads the server as
+   * "IRIS" and the tool as "OS_iris_run", which silently breaks per-server
+   * `includeTools`/`excludeTools`, trust and the `/mcp` display. Its own docs say
+   * it outright: do not put underscores (or, therefore, spaces) in server names.
+   */
+  export const GEMINI_SERVER_KEY = "iris"
+
+  /**
    * True if a client entry already launches `iris mcp serve`, under ANY key or
    * format (stdio array, command+args, or a `/bin/bash -l -c "exec iris mcp
    * serve"` wrapper). Used to de-dupe and to detect existing registration.
@@ -44,6 +55,9 @@ export namespace McpClients {
    *      { "mcpServers": { "iris": { "command": "<abs>", "args": ["mcp","serve"] } } }
    *  - "opencode": opencode.json
    *      { "mcp": { "iris": { "type": "local", "command": ["<abs>","mcp","serve"], "enabled": true } } }
+   *
+   * Gemini CLI reuses the "mcpServers" shape (in ~/.gemini/settings.json), so it
+   * needs no new format — only a different server KEY. See GEMINI_SERVER_KEY.
    */
   export type Format = "mcpServers" | "opencode"
 
@@ -58,6 +72,16 @@ export namespace McpClients {
      * always "available" (we can always write a project .mcp.json).
      */
     detected: boolean
+    /**
+     * Key the server is written under, when the client cannot handle the
+     * canonical SERVER_NAME. Defaults to SERVER_NAME.
+     */
+    serverKey?: string
+  }
+
+  /** The key this client's config should store the IRIS server under. */
+  export function serverKey(client: Client): string {
+    return client.serverKey ?? SERVER_NAME
   }
 
   /**
@@ -155,6 +179,26 @@ export namespace McpClients {
       detected: exists(opencode) || exists(opencodeDir),
     })
 
+    // Gemini CLI — ~/.gemini/settings.json, same "mcpServers" shape as Claude
+    // Code, but keyed "iris" (GEMINI_SERVER_KEY) because of its tool-name
+    // parsing. Two other Gemini-specific facts, verified against the shipped
+    // bundle rather than assumed:
+    //  - stdio servers only start in a TRUSTED folder (`gemini trust`), and
+    //  - Gemini force-redacts *KEY*/*TOKEN*/*SECRET* host env vars from the
+    //    spawned process. That is survivable here because `iris` reads its
+    //    canonical token from ~/.iris/sdk/.env and HOME is never redacted — but
+    //    a user who only exports IRIS_API_KEY would lose it, so we pass it
+    //    through explicitly (entry `env` is applied AFTER sanitization).
+    const gemini = path.join(home, ".gemini", "settings.json")
+    clients.push({
+      id: "gemini",
+      label: "Gemini CLI",
+      configPath: gemini,
+      format: "mcpServers",
+      serverKey: GEMINI_SERVER_KEY,
+      detected: exists(gemini) || exists(path.join(home, ".gemini")),
+    })
+
     // Project — a .mcp.json in the working directory (Claude Code reads this).
     clients.push({
       id: "project",
@@ -171,10 +215,19 @@ export namespace McpClients {
     return all(projectDir).find((c) => c.id === id)
   }
 
-  /** Build the IRIS server entry in the shape the given format expects. */
-  function entryFor(format: Format, bin: string): Record<string, unknown> {
-    if (format === "opencode") {
+  /** Build the IRIS server entry in the shape the given client expects. */
+  function entryFor(client: Client, bin: string): Record<string, unknown> {
+    if (client.format === "opencode") {
       return { type: "local", command: [bin, "mcp", "serve"], enabled: true }
+    }
+    if (client.id === "gemini") {
+      // Explicit env survives Gemini's forced redaction of *KEY* host vars: the
+      // entry is merged in AFTER sanitization, and — unlike `headers`, which
+      // Gemini expands against the SANITIZED env and would therefore silently
+      // turn "$IRIS_API_KEY" into "" — stdio `env` is expanded against the raw
+      // process env. An unset variable just expands to "", and the CLI then
+      // falls back to ~/.iris/sdk/.env, its canonical token location.
+      return { command: bin, args: ["mcp", "serve"], env: { IRIS_API_KEY: "$IRIS_API_KEY" } }
     }
     return { command: bin, args: ["mcp", "serve"] }
   }
@@ -204,7 +257,8 @@ export namespace McpClients {
   export async function wire(client: Client, bin = irisBinary()): Promise<WireResult> {
     const existed = exists(client.configPath)
     const config = await readJson(client.configPath)
-    const entry = entryFor(client.format, bin)
+    const entry = entryFor(client, bin)
+    const key = serverKey(client)
 
     const mapKey = client.format === "opencode" ? "mcp" : "mcpServers"
     if (typeof config[mapKey] !== "object" || config[mapKey] === null) config[mapKey] = {}
@@ -212,17 +266,19 @@ export namespace McpClients {
 
     // De-dupe (#152285): remove any OTHER key that already runs `iris mcp serve`
     // (legacy "iris"/"iris-local", or a hand-written "IRIS OS" under a different
-    // casing) so the client doesn't load the same tools twice.
+    // casing) so the client doesn't load the same tools twice. For Gemini this
+    // also migrates a previously hand-written "IRIS OS" entry onto the key its
+    // tool-name parser can actually read.
     let removedOther = false
     for (const k of Object.keys(map)) {
-      if (k !== SERVER_NAME && isIrisServeEntry(map[k])) {
+      if (k !== key && isIrisServeEntry(map[k])) {
         delete map[k]
         removedOther = true
       }
     }
 
-    const before = JSON.stringify(map[SERVER_NAME])
-    map[SERVER_NAME] = entry
+    const before = JSON.stringify(map[key])
+    map[key] = entry
     const after = JSON.stringify(entry)
 
     if (existed && !removedOther && before === after) {
@@ -244,7 +300,7 @@ export namespace McpClients {
     const mapKey = client.format === "opencode" ? "mcp" : "mcpServers"
     const map = config?.[mapKey]
     if (!map || typeof map !== "object") return false
-    if (map[SERVER_NAME]) return true
+    if (map[serverKey(client)]) return true
     return Object.values(map).some((e) => isIrisServeEntry(e))
   }
 }
