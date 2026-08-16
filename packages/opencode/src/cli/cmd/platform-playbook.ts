@@ -1325,10 +1325,60 @@ const PublishCommand = cmd({
 
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
+    const { IRIS_API } = await import("./iris-api")
+
+    // 0. Upload the local playbook first (#180423).
+    //
+    // publish used to POST straight to /publish, which only ever succeeds for a playbook
+    // the SERVER already knows. A playbook authored locally has never been uploaded, so
+    // publish answered `not found` for something `list`, `show`, `test` and `sync` all
+    // resolved happily — and since `.iris/` is gitignored, publish is the only way it can
+    // leave the machine at all. The result was an author holding a working playbook with
+    // no path to anyone else.
+    //
+    // So resolve it the same way every other verb does and upsert it before publishing.
+    // Same endpoint and payload as `sync --api`; the server only overwrites content when
+    // it is non-null, so this cannot blank an existing body.
+    let foundLocally = false
+    try {
+      const local = await withInstance(async () => {
+        const info = await Skill.get(String(args.name))
+        if (!info) return null
+        const plan = await parsePlan(info)
+        let content: string | undefined
+        try { content = await Bun.file(info.location).text() } catch { /* register metadata anyway */ }
+        return { plan, content }
+      })
+
+      if (local) {
+        foundLocally = true
+        const upRes = await irisFetch("/api/v1/playbooks", {
+          method: "POST",
+          body: JSON.stringify({
+            name: local.plan.name,
+            description: local.plan.description,
+            args_schema: local.plan.args,
+            steps_summary: local.plan.steps.map((s: any) => ({ id: s.id, title: s.title, mode: s.mode })),
+            version: local.plan.version,
+            ...(local.content ? { content: local.content } : {}),
+          }),
+        }, IRIS_API)
+
+        if (!upRes.ok) {
+          // Don't stop — the playbook may already exist server-side and still be publishable.
+          // But say so, because publishing a stale body silently is its own bug.
+          console.log(dim(`  ! Could not upload the local copy (${upRes.status}) — publishing whatever the server already holds.`))
+        } else if (!args.json) {
+          console.log(`  ${success(">")} Uploaded local copy`)
+        }
+      }
+    } catch {
+      // Local resolution is best-effort. A server-side-only playbook must still publish.
+    }
+
     // 1. Set the association + route: iris-api records scope and upserts the marketplace row on public.
     // NOTE: playbooks live on IRIS_API (freelabel.net), not the default FL_API base — without this
     // the request hits fl-api, which has no publish route, and 404s.
-    const { IRIS_API } = await import("./iris-api")
     const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(String(args.name))}/publish`, {
       method: "POST",
       body: JSON.stringify({
@@ -1338,7 +1388,15 @@ const PublishCommand = cmd({
       }),
     }, IRIS_API)
     const ok = await handleApiError(res, "Publish playbook")
-    if (!ok) { prompts.outro("Done"); return }
+    if (!ok) {
+      if (!foundLocally) {
+        // The old failure mode, now explained rather than just reported: nothing named
+        // this exists on the server AND nothing resolves locally, so there was nothing
+        // to upload on the way through.
+        console.error(`  ${dim(`No playbook named '${args.name}' was found locally either — check \`iris playbook list\` for the exact name.`)}`)
+      }
+      prompts.outro("Done"); return
+    }
     const data = (await res.json()) as any
 
     // 2. Project scope: also attach to the bloq so the team sees it (config.playbooks[], #157174).
