@@ -139,6 +139,7 @@ import { PlatformDiaryCommand } from "./cli/cmd/platform-diary"
 // PlatformSkillsCommand (plural) is now merged into PlatformSkillCommand (singular)
 // Keep the old "skills" command as an alias that points to "skill remote"
 import { PlatformSkillsCommand } from "./cli/cmd/platform-skills"
+import { PlatformArticleCommand } from "./cli/cmd/platform-article"
 import { PlatformSopCommand } from "./cli/cmd/platform-sop"
 import { PlatformToolsCommand } from "./cli/cmd/platform-tools"
 import { PlatformUsersCommand } from "./cli/cmd/platform-users"
@@ -400,6 +401,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformSdkCallCommand))
   .command(reg(PlatformDiaryCommand))
   .command(reg(PlatformSkillsCommand))
+  .command(reg(PlatformArticleCommand))
   .command(reg(PlatformSopCommand))
   .command(reg(PlatformToolsCommand))
   .command(reg(PlatformUsersCommand))

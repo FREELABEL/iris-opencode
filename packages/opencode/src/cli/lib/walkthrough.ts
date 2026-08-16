@@ -146,8 +146,16 @@ export async function treatTranscript(
   }
 }
 
-/** Treatments the server will accept for this caller, including their brand's own. */
-export async function listTreatments(): Promise<Array<{ id: string; label: string; description: string; shape: string; custom: boolean }>> {
+/**
+ * Treatments the server will accept for this caller, including their brand's own.
+ *
+ * `endpoint` is non-null for document-shaped treatments (sop, playbook, article), which are NOT
+ * applied by `--treatment` — they are produced by a different POST. The server ships the
+ * destination alongside the option precisely so a picker can say where it goes; without it a
+ * caller reads `article` off the list, passes `--treatment article`, and gets a 422 for asking
+ * a reasonable question of a listed option.
+ */
+export async function listTreatments(): Promise<Array<{ id: string; label: string; description: string; shape: string; custom: boolean; endpoint: string | null }>> {
   try {
     const res = await irisFetch("/api/v1/walkthrough/treatments", {}, IRIS_API)
     if (!res.ok) return []
