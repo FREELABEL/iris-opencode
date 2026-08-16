@@ -5,6 +5,7 @@ import { printDivider, dim, bold, success } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
 import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle } from "../lib/imessage"
 import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
+import { routerSend, describeSend } from "./comms-send"
 import { ImessagePaymentsCommand } from "./imessage-payments"
 
 const ImessageSearchCommand = cmd({
@@ -372,7 +373,7 @@ const ImessageChatsCommand = cmd({
 const ImessageSendCommand = cmd({
   command: "send <handle> <message>",
   aliases: ["text", "msg"],
-  describe: "send an iMessage to a phone number or contact",
+  describe: "send an iMessage (routed through the comms router so it is logged)",
   builder: (yargs) =>
     yargs
       .positional("handle", { type: "string", demandOption: true, describe: "phone number, lead ID, contact name, or 'me'/'self'" })
@@ -415,6 +416,9 @@ const ImessageSendCommand = cmd({
 
     // Local Contacts first — text a personal contact by name (not just leads).
     let sendResolved = false
+    // Captured so the router can attribute the send to the CRM lead rather than logging a
+    // bare handle. Stays undefined for personal contacts, which is the correct outcome.
+    let resolvedLeadId: number | undefined
     if (!isLeadId && !isPhone && !handle.includes("@")) {
       const c = resolveHandleByName(handle)
       if (c) {
@@ -436,6 +440,7 @@ const ImessageSendCommand = cmd({
             if (lead?.phone) {
               const name = lead.name || lead.nickname || `Lead #${handle}`
               prompts.log.info(`Resolved lead #${handle} → ${name} (${lead.phone})`)
+              resolvedLeadId = Number(lead.id ?? handle)
               handle = lead.phone
             } else {
               prompts.log.error(`Lead #${handle} has no phone number`)
@@ -457,6 +462,7 @@ const ImessageSendCommand = cmd({
             if (withPhone) {
               const name = withPhone.name || withPhone.nickname || handle
               prompts.log.info(`Resolved "${handle}" → ${name} (${withPhone.phone})`)
+              resolvedLeadId = Number(withPhone.id) || undefined
               handle = withPhone.phone
             } else {
               prompts.log.error(`No lead with phone found for "${handle}"`)
@@ -478,6 +484,36 @@ const ImessageSendCommand = cmd({
     const escapedMessage = cleanMessage
       .replace(/\\/g, "\\\\")
       .replace(/"/g, '\\"')
+
+    // ROUTE THROUGH THE COMMS ROUTER (CR-8). This command used to shell straight out to
+    // osascript, so the message went out and nothing recorded it — the reason 27 of 28 leads
+    // with iMessage history were more than a week stale in production (#178647).
+    //
+    // The handle was already resolved above (macOS Contacts first, then the CRM), which the API
+    // cannot do — so the CLI keeps owning resolution and hands the router a resolved target.
+    // resolvedLeadId is set when resolution went through the CRM, which is what earns the send
+    // full outreach attribution instead of a bare handle row.
+    {
+      const routed = await routerSend({
+        toLeadId: resolvedLeadId,
+        toHandle: resolvedLeadId ? undefined : handle,
+        channel: "imessage",
+        message: cleanMessage,
+        origin: "cli.reachr",
+      })
+
+      if (routed.ok && routed.sent) {
+        prompts.log.info(describeSend(routed))
+        console.log(`  ${dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)}`)
+        prompts.outro("Done")
+        return
+      }
+
+      // Falling back to the local AppleScript path keeps the operator able to send when the API
+      // is unreachable — but it is announced, because an unlogged send is a real gap and the
+      // person sending is the only one who can decide whether to accept it.
+      prompts.log.warn(`Comms router unavailable (${routed.error ?? "unknown"}) — sending locally, NOT logged.`)
+    }
 
     const script = `
 tell application "Messages"
@@ -1250,7 +1286,7 @@ const ImessageMeCommand = cmd({
 export const PlatformImessageCommand = cmd({
   command: "imessage",
   aliases: ["sms", "messages"],
-  describe: "read and send iMessages via macOS Messages.app (requires Full Disk Access)",
+  describe: "read + send iMessages (macOS Messages.app; sends are logged to the comms ledger)",
   builder: (yargs) =>
     yargs
       .command(ImessageMeCommand)

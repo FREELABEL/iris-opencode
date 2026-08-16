@@ -97,6 +97,54 @@ describe("McpClients registration", () => {
     expect(config.mcpServers["IRIS OS"].command).toBe("/abs/iris")
   })
 
+  test("wires Gemini CLI into ~/.gemini/settings.json under a parseable key", async () => {
+    const client = McpClients.get("gemini")!
+    expect(client.configPath).toBe(path.join(home, ".gemini", "settings.json"))
+
+    const res = await McpClients.wire(client, "/abs/iris")
+    expect(res.action).toBe("created")
+
+    const config = JSON.parse(await fs.readFile(client.configPath, "utf8"))
+    // NOT "IRIS OS": Gemini names tools mcp_<server>_<tool> and parses the
+    // server back out at the FIRST underscore, so a key containing a space or
+    // underscore breaks includeTools/excludeTools/trust for the whole server.
+    expect(Object.keys(config.mcpServers)).toEqual(["iris"])
+    expect(config.mcpServers.iris).toEqual({
+      command: "/abs/iris",
+      args: ["mcp", "serve"],
+      // Gemini force-redacts *KEY* host env vars from stdio servers; an explicit
+      // entry is applied after that redaction, so this is what preserves a
+      // user's exported IRIS_API_KEY.
+      env: { IRIS_API_KEY: "$IRIS_API_KEY" },
+    })
+  })
+
+  test("Gemini: migrates a hand-written 'IRIS OS' entry onto the parseable key", async () => {
+    const client = McpClients.get("gemini")!
+    await fs.mkdir(path.dirname(client.configPath), { recursive: true })
+    await fs.writeFile(
+      client.configPath,
+      JSON.stringify({
+        theme: "Default",
+        mcpServers: { "IRIS OS": { command: "iris", args: ["mcp", "serve"] } },
+      }),
+    )
+    await McpClients.wire(client, "/abs/iris")
+
+    const config = JSON.parse(await fs.readFile(client.configPath, "utf8"))
+    expect(config.theme).toBe("Default")
+    expect(Object.keys(config.mcpServers)).toEqual(["iris"])
+    expect(config.mcpServers.iris.command).toBe("/abs/iris")
+  })
+
+  test("Gemini: idempotent, and isWired reflects the client-specific key", async () => {
+    const client = McpClients.get("gemini")!
+    expect(await McpClients.isWired(client)).toBe(false)
+    expect((await McpClients.wire(client, "/abs/iris")).action).toBe("created")
+    expect((await McpClients.wire(client, "/abs/iris")).action).toBe("unchanged")
+    expect(await McpClients.isWired(client)).toBe(true)
+  })
+
   test("is idempotent — second wire reports unchanged", async () => {
     const client = McpClients.get("cursor")!
     const first = await McpClients.wire(client, "/abs/iris")
