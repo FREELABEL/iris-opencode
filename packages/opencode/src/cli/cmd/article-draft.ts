@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, success, printDivider, requireAuth } from "./iris-api"
 import { resolveWalkthrough } from "../lib/walkthrough"
-import { draftArticle, fileArticle, articleSlug, type LintFinding } from "../lib/article"
+import { draftArticle, fileArticle, articleSlug, type LintFinding, type DraftedArticle } from "../lib/article"
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import { join, resolve } from "path"
 
@@ -20,7 +20,7 @@ import { join, resolve } from "path"
 // are the same article; the difference is only how you invoked it.
 // ============================================================================
 
-function renderFindings(findings: LintFinding[]): void {
+export function renderFindings(findings: LintFinding[]): void {
   if (!findings.length) {
     console.log(`  ${success("✓")} verification: clean`)
     return
@@ -182,32 +182,7 @@ export const ArticleDraftCommand = cmd({
       return
     }
 
-    printDivider()
-    console.log(`  ${bold(doc.title)}`)
-    if (doc.dek) console.log(`  ${dim(doc.dek)}`)
-    console.log()
-    for (const [i, s] of (doc.sections ?? []).entries()) {
-      console.log(`  ${dim(String(i + 1) + ".")} ${s.heading}`)
-    }
-    console.log()
-    console.log(
-      `  ${dim(`${doc.wordCount ?? 0} words · ${doc.sections?.length ?? 0} sections · ${doc.pullQuotes?.length ?? 0} quotes verified`)}`,
-    )
-    console.log()
-    renderFindings(drafted.lint ?? [])
-
-    // GAPS ARE PRINTED EVEN THOUGH THEY NEVER REACH THE PAGE.
-    //
-    // They are the most useful part of a draft and are deliberately excluded from the published
-    // components. If they only lived in the markdown, someone running --publish would never see
-    // them — and the point of the section is that it is read before the thing goes live.
-    if (gaps.length) {
-      console.log()
-      console.log(`  ${bold("Not covered in the source")}`)
-      for (const g of gaps) console.log(`    · ${g}`)
-    }
-    printDivider()
-    console.log()
+    renderArticleSummary(drafted)
 
     if (target) console.log(`  ${dim("saved")}  ${target}`)
     if (filed) {
@@ -227,3 +202,40 @@ export const ArticleDraftCommand = cmd({
     prompts.outro("Done")
   },
 })
+
+/**
+ * The draft, as a person reads it. Exported because `iris meetings --article` produces the same
+ * artifact and must show the same thing — a second copy would drift, and the two surfaces would
+ * disagree about what verification found while both looked correct.
+ */
+export function renderArticleSummary(drafted: DraftedArticle): void {
+  const doc = drafted.document
+  const gaps = doc.gaps ?? []
+
+  printDivider()
+  console.log(`  ${bold(doc.title)}`)
+  if (doc.dek) console.log(`  ${dim(doc.dek)}`)
+  console.log()
+  for (const [i, s] of (doc.sections ?? []).entries()) {
+    console.log(`  ${dim(String(i + 1) + ".")} ${s.heading}`)
+  }
+  console.log()
+  console.log(
+    `  ${dim(`${doc.wordCount ?? 0} words · ${doc.sections?.length ?? 0} sections · ${doc.pullQuotes?.length ?? 0} quotes verified`)}`,
+  )
+  console.log()
+  renderFindings(drafted.lint ?? [])
+
+  // GAPS ARE PRINTED EVEN THOUGH THEY NEVER REACH THE PAGE.
+  //
+  // They are the most useful part of a draft and are deliberately excluded from the published
+  // components. If they only lived in the markdown, someone running --publish would never see
+  // them — and the point of the section is that it is read before the thing goes live.
+  if (gaps.length) {
+    console.log()
+    console.log(`  ${bold("Not covered in the source")}`)
+    for (const g of gaps) console.log(`    · ${g}`)
+  }
+  printDivider()
+  console.log()
+}

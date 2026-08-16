@@ -15,6 +15,8 @@ import {
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { join } from "path"
 import { homedir, tmpdir } from "os"
+import { draftArticle, fileArticle, type FiledArticle, type LintFinding } from "../lib/article"
+import { renderArticleSummary, renderFindings } from "./article-draft"
 
 /**
  * Wispr Flow keeps one directory per meeting, each holding a `refined.ndjson` of
@@ -155,6 +157,9 @@ export const PlatformMeetingsCommand = cmd({
       .option("agent", { alias: "a", type: "string", default: "420", describe: "agent used for extraction" })
       .option("raw", { type: "boolean", describe: "file the transcript verbatim, no AI summary" })
       .option("export", { type: "string", describe: "write the rendered transcript to this path and stop" })
+      .option("article", { type: "boolean", describe: "draft a publishable article from it instead of a summary" })
+      .option("publish", { type: "boolean", describe: "with --article and --bloq, publish it as a Genesis page" })
+      .option("angle", { type: "string", describe: 'with --article: what to foreground, e.g. "the pricing change"' })
       .option("limit", { type: "number", default: 15 })
       .option("json", { type: "boolean" })
       .option("timeout", { alias: "t", type: "number", default: 300 }),
@@ -191,6 +196,7 @@ export const PlatformMeetingsCommand = cmd({
       printDivider()
       console.log(dim(`  iris meetings <id> --bloq <bloqId>     file a summary`))
       console.log(dim(`  iris meetings <id> --export out.txt    just get the transcript`))
+      console.log(dim(`  iris meetings <id> --article           draft a publishable article`))
       prompts.outro("Done")
       return
     }
@@ -219,6 +225,71 @@ export const PlatformMeetingsCommand = cmd({
       printKV("Segments", String(segments))
       printKV("Written", String(args.export))
       prompts.outro(success("Exported"))
+      return
+    }
+
+    // ── article ──────────────────────────────────────────────────────────────
+    //
+    // A meeting summary and an article are different documents from the same words: a summary is
+    // for the people who were there, an article is for the people who were not. This is the same
+    // pipeline `iris article draft` uses — server-side, verified — so a meeting and a file
+    // produce the same artifact, and the rendering below is literally the same function.
+    //
+    // It sits next to --export deliberately: both operate on the rendered transcript, before any
+    // of the summary/extraction machinery runs.
+    if (args.article) {
+      if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+      printKV("Session", session.id)
+      printKV("Segments", String(segments))
+
+      const sp = prompts.spinner()
+      sp.start("Writing it up…")
+      try {
+        const shared = {
+          angle: args.angle ? String(args.angle) : undefined,
+          title: args.title ? String(args.title) : undefined,
+        }
+        const drafted = args.bloq
+          ? await fileArticle(transcript, {
+              ...shared,
+              bloqId: Number(args.bloq),
+              lane: args.list && args.list !== "Meetings" ? String(args.list) : undefined,
+              publish: Boolean(args.publish),
+            })
+          : await draftArticle(transcript, shared)
+        sp.stop("Written")
+
+        renderArticleSummary(drafted)
+
+        const filed = (drafted as any).item_id ? (drafted as FiledArticle) : null
+        if (filed) {
+          console.log(`  ${dim("filed")}  item #${filed.item_id} in ${filed.lane}`)
+          if (args.publish) {
+            if (filed.published) {
+              for (const pg of filed.promotion?.promoted ?? []) {
+                console.log(`  ${success("published")}  /p/${pg.slug ?? "?"}`)
+              }
+            } else {
+              prompts.log.warn(`Not published: ${filed.promotion?.reason ?? "unknown"}`)
+            }
+          }
+          console.log()
+        } else {
+          console.log(`  ${dim("pass --bloq <id> to file it, --publish to put it live")}`)
+          console.log()
+        }
+      } catch (e) {
+        sp.stop("Failed", 1)
+        prompts.log.error(e instanceof Error ? e.message : String(e))
+        // A refusal to publish carries the findings that caused it. "Blocked" without "by what"
+        // is not actionable.
+        const lint = (e as Error & { lint?: LintFinding[] }).lint
+        if (lint?.length) { console.log(); renderFindings(lint) ; console.log() }
+        process.exitCode = 1
+      }
+
+      prompts.outro("Done")
       return
     }
 
