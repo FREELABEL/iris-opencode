@@ -745,7 +745,9 @@ export namespace Provider {
         // the Go models that speak chat/completions; Grok 4.5 and GPT 5.6 Luna
         // (/v1/responses) and the MiniMax + Qwen Max/Plus family (Anthropic
         // /v1/messages) are deliberately absent until the proxy speaks those formats.
-        "deepseek-v4-pro": makeIrisModel("deepseek-v4-pro", "DeepSeek V4 Pro"),
+        // Not DeepSeek: both Go DeepSeek models 403 with RegionError — hosted in China,
+        // needing an explicit workspace opt-in. hy3 takes the cheap-workhorse slot.
+        "hy3": makeIrisModel("hy3", "Hy3"),
         "mimo-v2.5-pro": makeIrisModel("mimo-v2.5-pro", "MiMo V2.5 Pro"),
         "kimi-k2.7-code": makeIrisModel("kimi-k2.7-code", "Kimi K2.7 Code"),
         "glm-5.2": makeIrisModel("glm-5.2", "GLM 5.2"),
