@@ -1183,7 +1183,14 @@ const UpdateCommand = cmd({
     // `bug update <id> -s high --title … --description …` applied only the description while
     // reporting success; re-running each flag alone worked. Assert against the item itself.
     const requested = Object.keys(body)
-    const serverSaid = Array.isArray(data?.data?.updated) ? (data.data.updated as string[]) : null
+    // `applied` is the REQUEST fields the server acted on. `updated` is the COLUMNS it wrote,
+    // and the two do not correspond — a note lands in `content`, severity lands in `title`,
+    // and `content` is rewritten on every call. Checking a request field against the column
+    // list meant `--note` reported "did NOT apply" on writes that had landed perfectly well:
+    // four identical notes went onto one bug, and a duplicate ticket was opened to carry the
+    // one presumed lost. Prefer `applied`; fall back to re-reading the item; never treat the
+    // column list as an answer about a field it does not name.
+    const serverSaid = Array.isArray(data?.data?.applied) ? (data.data.applied as string[]) : null
     let missed: string[] = []
 
     if (serverSaid) {
