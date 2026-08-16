@@ -1030,9 +1030,23 @@ const BloqsAddItemCommand = cmd({
       if (title) payload.title = title
       if (dueDate) payload.due_date = dueDate
 
+      // ROUTE: the list id goes in the BODY, not the path.
+      //
+      // This used to POST to /user/{u}/bloqs/{b}/lists/{l}/items, which resolved to a route
+      // defined as a CLOSURE. Closure routes are serialized into the route cache and signed with
+      // APP_KEY, so once that signature stopped verifying every call returned a bare 500 —
+      // "SerializableClosure: might have been modified or unsafe to unserialize" in fl-api's log,
+      // with nothing in the response to say so. The path is also gone from routes/api.php now and
+      // survived only in a stale cache, so it was one `route:cache` away from becoming a 404.
+      //
+      // BloqItemController@storeForBloq is a real controller method and takes list_id in the
+      // body. `type` is required by its validator; 'default' is the ordinary note.
       const res = await irisFetch(
-        `/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists/${args["list-id"]}/items`,
-        { method: "POST", body: JSON.stringify(payload) },
+        `/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items`,
+        {
+          method: "POST",
+          body: JSON.stringify({ ...payload, list_id: args["list-id"], type: "default" }),
+        },
       )
       if (!res.ok) {
         spinner?.stop("Failed", 1)
