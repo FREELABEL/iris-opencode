@@ -84,6 +84,58 @@ export namespace McpClients {
     return client.serverKey ?? SERVER_NAME
   }
 
+  // ── Gemini folder trust ───────────────────────────────────────────────
+  //
+  // Gemini disables EVERY MCP server — local and remote — in a folder it does
+  // not trust, and reports it as "Disabled" rather than as an error. Registering
+  // the server is therefore only half an install: without a trust entry the user
+  // sees a clean success from `iris mcp install` and then no IRIS tools at all,
+  // with nothing connecting the two.
+  //
+  // We write the entry ourselves rather than printing instructions. Telling a
+  // non-technical user to hand-edit JSON is how a `/Users/you/...` placeholder
+  // ends up in a real config file, trusting a folder that does not exist.
+
+  export function geminiTrustFile(): string {
+    return path.join(homeDir(), ".gemini", "trustedFolders.json")
+  }
+
+  export type TrustResult =
+    | { action: "added" | "already-trusted"; folder: string; file: string }
+    | { action: "refused-home"; folder: string; file: string }
+
+  /**
+   * Add `folder` to Gemini's trusted list, preserving every other entry.
+   *
+   * Trust is inherited by subfolders, so one entry covers a whole projects
+   * directory. We refuse to trust the home directory outright: that would trust
+   * every folder the user will ever have, which is not a decision an installer
+   * gets to make silently on someone's behalf.
+   */
+  export async function trustFolderForGemini(folder: string): Promise<TrustResult> {
+    const file = geminiTrustFile()
+    const resolved = path.resolve(folder)
+
+    if (resolved === path.resolve(homeDir())) {
+      return { action: "refused-home", folder: resolved, file }
+    }
+
+    const config = await readJson(file)
+    // Already covered? Trust is inherited, so a parent entry counts.
+    for (const [rule, level] of Object.entries(config)) {
+      if (level !== "TRUST_FOLDER" && level !== "TRUST_PARENT") continue
+      const base = path.resolve(rule)
+      if (resolved === base || resolved.startsWith(base + path.sep)) {
+        return { action: "already-trusted", folder: resolved, file }
+      }
+    }
+
+    config[resolved] = "TRUST_FOLDER"
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, JSON.stringify(config, null, 2) + "\n", "utf8")
+    return { action: "added", folder: resolved, file }
+  }
+
   /**
    * Resolve the absolute path to the running `iris` binary. Using an absolute
    * path (not the bare `iris`) is what makes GUI-launched clients — which spawn

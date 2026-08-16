@@ -160,3 +160,72 @@ describe("McpClients registration", () => {
     expect(await McpClients.isWired(client)).toBe(true)
   })
 })
+
+/**
+ * Gemini folder trust (#180123 follow-up, and the live failure on 2026-08-16).
+ *
+ * `iris mcp install --client gemini` reported success, and every IRIS tool then
+ * showed as "Disabled" because the folder was untrusted. The user pasted the
+ * docs' `/Users/you/sites/freelabel` placeholder into trustedFolders.json
+ * verbatim — trusting a path that does not exist — and nothing connected the
+ * clean install to the missing tools. The installer now writes the entry itself.
+ */
+describe("Gemini folder trust", () => {
+  let home: string
+  let prevHome: string | undefined
+
+  beforeEach(async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), "iris-trust-"))
+    prevHome = process.env.OPENCODE_TEST_HOME
+    process.env.OPENCODE_TEST_HOME = home
+  })
+
+  afterEach(async () => {
+    if (prevHome === undefined) delete process.env.OPENCODE_TEST_HOME
+    else process.env.OPENCODE_TEST_HOME = prevHome
+    await fs.rm(home, { recursive: true, force: true })
+  })
+
+  test("creates the file and trusts the folder", async () => {
+    const res = await McpClients.trustFolderForGemini(path.join(home, "sites"))
+    expect(res.action).toBe("added")
+
+    const cfg = JSON.parse(await fs.readFile(McpClients.geminiTrustFile(), "utf8"))
+    expect(cfg[path.join(home, "sites")]).toBe("TRUST_FOLDER")
+  })
+
+  test("preserves entries someone else already trusted", async () => {
+    const file = McpClients.geminiTrustFile()
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, JSON.stringify({ "/work/other": "TRUST_FOLDER", "/nope": "DO_NOT_TRUST" }))
+
+    await McpClients.trustFolderForGemini(path.join(home, "sites"))
+
+    const cfg = JSON.parse(await fs.readFile(file, "utf8"))
+    expect(cfg["/work/other"]).toBe("TRUST_FOLDER")
+    expect(cfg["/nope"]).toBe("DO_NOT_TRUST")
+    expect(cfg[path.join(home, "sites")]).toBe("TRUST_FOLDER")
+  })
+
+  test("is idempotent, and honours inherited trust from a parent", async () => {
+    const parent = path.join(home, "sites")
+    await McpClients.trustFolderForGemini(parent)
+
+    // Same folder again…
+    expect((await McpClients.trustFolderForGemini(parent)).action).toBe("already-trusted")
+    // …and a child, which Gemini already covers by subpath inheritance.
+    const child = path.join(parent, "freelabel", "deep")
+    expect((await McpClients.trustFolderForGemini(child)).action).toBe("already-trusted")
+
+    const cfg = JSON.parse(await fs.readFile(McpClients.geminiTrustFile(), "utf8"))
+    expect(Object.keys(cfg)).toEqual([parent])
+  })
+
+  test("refuses to trust the whole home directory", async () => {
+    const res = await McpClients.trustFolderForGemini(home)
+    expect(res.action).toBe("refused-home")
+
+    // And writes nothing — trusting everything is not an installer's call.
+    await expect(fs.readFile(McpClients.geminiTrustFile(), "utf8")).rejects.toThrow()
+  })
+})
