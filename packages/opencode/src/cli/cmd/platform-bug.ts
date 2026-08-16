@@ -117,6 +117,35 @@ function detectGitCommit(): { hash?: string; url?: string } {
 }
 
 // ============================================================================
+// Never lose a report
+// ============================================================================
+
+const PENDING_BUGS_DIR = join(homedir(), ".iris", "pending-bugs")
+
+/**
+ * Keep a report that could not be sent, so it can be sent later.
+ *
+ * On 2026-08-15 the bug endpoint returned 500 for every submission on the host the CLI
+ * posts to. The user experience was one line — "Failed to submit bug report (HTTP 500)" —
+ * and the report they had just written was gone. There is no worse endpoint to lose data
+ * on: this is the channel people use to tell us something is broken, so the failures it
+ * swallows are exactly the failures we most need to hear about, and we cannot even count
+ * them because the only record would have been the reports.
+ *
+ * Returns the path so the caller can tell the user where their words went.
+ */
+function queueBugReport(payload: string): string | null {
+  try {
+    mkdirSync(PENDING_BUGS_DIR, { recursive: true })
+    const file = join(PENDING_BUGS_DIR, `${Date.now()}-${randomUUID().slice(0, 8)}.json`)
+    writeFileSync(file, payload, { mode: 0o600 })
+    return file
+  } catch {
+    return null
+  }
+}
+
+// ============================================================================
 // Stable reporter identity
 // ============================================================================
 
@@ -253,6 +282,21 @@ async function submitBug(args: {
   // user who reports through Claude cannot be thanked, followed up, or paid a bounty.
   const authToken = await resolveReporterToken()
 
+  // Built once so the fallback host resends the IDENTICAL report rather than a
+  // reconstruction that might differ from whatever the primary rejected.
+  const payload = JSON.stringify({
+    title: args.title,
+    description: args.description,
+    severity: args.severity,
+    reporter,
+    machine_id: stableMachineId(),
+    reporter_lead_id: args.reporterLeadId ?? null,
+    reporter_name: args.reporterName ?? null,
+    system_info: sysInfo,
+    command: args.command ?? null,
+    error: args.error ?? null,
+  })
+
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 15000)
 
@@ -265,21 +309,9 @@ async function submitBug(args: {
         Accept: "application/json",
         ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
       },
-      body: JSON.stringify({
-        title: args.title,
-        description: args.description,
-        severity: args.severity,
-        reporter,
-        // Survives hostname churn AND container redeploys, so reports from one machine
-        // stay one machine. Not identifying on its own — it is a random persisted UUID,
-        // deliberately not derived from hardware.
-        machine_id: stableMachineId(),
-        reporter_lead_id: args.reporterLeadId ?? null,
-        reporter_name: args.reporterName ?? null,
-        system_info: sysInfo,
-        command: args.command ?? null,
-        error: args.error ?? null,
-      }),
+      // machine_id survives hostname churn AND container redeploys, so reports from one
+      // machine stay one machine. Random persisted UUID, not derived from hardware.
+      body: payload,
       signal: controller.signal,
     })
   } catch (e: any) {
@@ -292,9 +324,40 @@ async function submitBug(args: {
     clearTimeout(timeout)
   }
 
+  // FALL BACK, THEN QUEUE. This endpoint is how someone tells us the product is broken, and
+  // on 2026-08-15 it was the broken thing: fl-api returned 500 for every submission while
+  // iris-api served the same path fine. Reporters got "HTTP 500" and nothing else — no
+  // retry, no second host, no local copy. Reports were simply lost, and the only record
+  // that they had existed would have been the reports.
+  //
+  // A bug reporter with no retry path is the one endpoint that must have one.
+  if (!res.ok && res.status >= 500) {
+    try {
+      const alt = await fetch(`${IRIS_API}${BUG_REPORT_ENDPOINT}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+        body: payload,
+        signal: AbortSignal.timeout(15000),
+      })
+      if (alt.ok) res = alt
+    } catch {
+      // Fall through to the queue below — the primary already failed, so a failed
+      // fallback changes nothing about what we owe the user.
+    }
+  }
+
   if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Failed to submit bug report (HTTP ${res.status}): ${text}`)
+    const text = await res.text().catch(() => "")
+    // Never lose the report at the keyboard. Someone took the trouble to write it.
+    const queued = queueBugReport(payload)
+    throw new Error(
+      `Failed to submit bug report (HTTP ${res.status}): ${text}` +
+        (queued ? `\n\nSaved locally: ${queued}\nRetry all queued reports with: iris bug flush` : ""),
+    )
   }
 
   const data = (await res.json()) as { success?: boolean; data?: { item_id?: number; message?: string } }
@@ -1168,10 +1231,92 @@ const UpdateCommand = cmd({
 // Root command
 // ============================================================================
 
+
+/**
+ * Resend reports that could not be submitted when they were written.
+ *
+ * The queue exists because the endpoint went down (see queueBugReport). A queue nobody can
+ * drain is just a slower way of losing the report, so this is not optional furniture.
+ */
+const FlushCommand = cmd({
+  command: "flush",
+  describe: "resend bug reports that were saved locally when submission failed",
+  builder: (y) => y.option("json", { type: "boolean", default: false }),
+  async handler(args: any) {
+    const fs = await import("fs")
+    if (!existsSync(PENDING_BUGS_DIR)) {
+      console.log(dim("  No queued bug reports."))
+      return
+    }
+    const files = fs.readdirSync(PENDING_BUGS_DIR).filter((f: string) => f.endsWith(".json")).sort()
+    if (files.length === 0) {
+      console.log(dim("  No queued bug reports."))
+      return
+    }
+
+    const authToken = await resolveReporterToken()
+    let sent = 0
+    const failed: string[] = []
+
+    for (const f of files) {
+      const full = join(PENDING_BUGS_DIR, f)
+      let body: string
+      try {
+        body = readFileSync(full, "utf8")
+      } catch {
+        continue
+      }
+      // Try both hosts, same order as a live submission.
+      let ok = false
+      for (const base of [FL_API, IRIS_API]) {
+        try {
+          const r = await fetch(`${base}${BUG_REPORT_ENDPOINT}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+            },
+            body,
+            signal: AbortSignal.timeout(15000),
+          })
+          if (r.ok) {
+            ok = true
+            break
+          }
+        } catch {
+          // try the next host
+        }
+      }
+      if (ok) {
+        // Only delete once it is definitely accepted somewhere.
+        try {
+          fs.unlinkSync(full)
+        } catch {}
+        sent++
+      } else {
+        failed.push(f)
+      }
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify({ sent, failed }, null, 2))
+      return
+    }
+    console.log()
+    if (sent) console.log(`${success("✓")} sent ${sent} queued report${sent === 1 ? "" : "s"}`)
+    if (failed.length) {
+      console.log(`${highlight("!")} ${failed.length} still queued in ${dim(PENDING_BUGS_DIR)}`)
+      console.log(dim("  Both hosts refused them. They are kept, not discarded."))
+    }
+    console.log()
+  },
+})
+
 export const PlatformBugCommand = cmd({
   command: "bug",
   aliases: ["bugs", "report"],
   describe: "report bugs and view your submissions",
-  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).demandCommand(),
+  builder: (yargs) => yargs.command(ReportCommand).command(ListCommand).command(ShowCommand).command(VerifyCommand).command(CloseCommand).command(UpdateCommand).command(FlushCommand).demandCommand(),
   async handler() {},
 })
