@@ -59,6 +59,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-bun-
 
+      # macos-15-intel arrives close to full, and `bun install` is enough to take it to zero:
+      # v1.3.181 failed twice with "0.0 GB free" while the SAME runner label built the desktop
+      # app fine. The build script's disk guard was right to refuse — a build that dies part way
+      # through leaves a half-written dist that looks real — so free the space instead of
+      # weakening the guard.
+      #
+      # Xcode is deliberately NOT removed: this job codesigns the binary. Simulator runtimes and
+      # caches are several GB and nothing here touches them. Never fails the build — if cleanup
+      # breaks, the disk guard still stops us honestly.
+      - name: Free disk space (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches || true
+          sudo rm -rf ~/Library/Caches/* || true
+          echo "after:";  df -h / | tail -1
+
       - name: Install dependencies
         run: bun install
 
