@@ -109,6 +109,19 @@ function score(e: Entry, terms: string[], raw: string, rarity: Map<string, numbe
     if (e.haystack.includes(t)) s += rarity.get(t) ?? 3
   }
 
+  // NOTHING MATCHED MEANS NOTHING MATCHED (#180505).
+  //
+  // The kind bonus below is a TIE-BREAK between entries that already matched, never a reason
+  // to appear. Adding it unconditionally gave every how-to a score of 6 on ANY query, so a
+  // query with no hits still returned twelve of them — sorted alphabetically, formatted
+  // identically to real results, under the heading "12 capabilities". The handler's
+  // "nothing matched" branch was unreachable, and `iris find zzqqxx` was indistinguishable
+  // from `iris find newsroom` when the newsroom recipe genuinely did not exist.
+  //
+  // That matters more for agents than for people: an agent reads twelve confident rows and
+  // concludes the capability exists, then routes to the closest wrong one.
+  if (s === 0) return 0
+
   // A how-to or playbook is usually the better answer to an intent-shaped question than a
   // bare command: it explains the terminology and the order of operations, which is exactly
   // what someone who had to search does not yet have.
