@@ -25,6 +25,15 @@ export interface RouterSendInput {
   campaignId?: number
   origin?: string
   dryRun?: boolean
+  /**
+   * WHICH registered identity is sending — a `senders` slug. The API resolves it scoped to you,
+   * refuses it if unverified or archived, and routes on that sender's own channel order.
+   *
+   * Only valid with a lead (or a handle that resolves to one): the ad-hoc handle path bypasses
+   * the channel bindings, so a sender there would be signed by one identity and delivered from
+   * another. The API rejects that rather than ignoring the flag.
+   */
+  sender?: string
 }
 
 export interface RouterSendResult {
@@ -55,6 +64,7 @@ export async function routerSend(input: RouterSendInput): Promise<RouterSendResu
   if (input.strategyId != null) body.strategy_id = input.strategyId
   if (input.scriptId != null) body.script_id = input.scriptId
   if (input.campaignId != null) body.campaign_id = input.campaignId
+  if (input.sender) body.sender = input.sender
   if (input.dryRun) body.dry_run = true
   body.origin = input.origin ?? "cli.reachr"
 

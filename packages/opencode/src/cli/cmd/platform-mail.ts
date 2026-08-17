@@ -187,6 +187,10 @@ const MailSendCommand = cmd({
     yargs
       .positional("to", { type: "string", demandOption: true, describe: "recipient email" })
       .option("from", { type: "string", alias: "f", describe: "sender email address (must be configured in Mail.app)" })
+      .option("sender", {
+        type: "string",
+        describe: "send as a registered identity (a `iris senders` slug) — routed, verified, and logged",
+      })
       .option("subject", { type: "string", alias: "s", demandOption: true })
       .option("body", { type: "string", alias: "b", demandOption: true })
       .option("cc", { type: "string", describe: "CC email address" })
@@ -210,12 +214,31 @@ const MailSendCommand = cmd({
     // different email than the operator asked for.
     const needsDirectBridge = Boolean(args.attachment || args.cc || args.from)
 
+    // --sender and --from answer the same question in opposite directions. `--from` is a raw
+    // address nothing has checked, taking the unrouted bridge path; `--sender` is a registered
+    // identity the API verifies and routes. Accepting both would leave which one wins to
+    // whichever branch happened to run first.
+    if (args.sender && args.from) {
+      prompts.log.error("Use --sender OR --from, not both: --sender is a verified identity, --from is an unchecked address.")
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.sender && needsDirectBridge) {
+      prompts.log.error(
+        "--sender cannot be combined with --attachment/--cc: those take the direct bridge path, which does not read channel bindings.",
+      )
+      prompts.outro("Done")
+      return
+    }
+
     if (!needsDirectBridge) {
       const result = await routerSend({
         toHandle: args.to,
         channel: "apple_mail",
         subject: args.subject,
         message: args.body,
+        sender: args.sender,
         origin: "cli.reachr",
       })
 
