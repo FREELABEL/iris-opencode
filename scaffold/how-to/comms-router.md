@@ -153,12 +153,27 @@ docker exec fl-api php artisan senders:check-bindings --json   # exits non-zero 
 ```
 
 It covers both halves — strategies not yet run, and pending steps already queued that will fail on
-the next tick — and reports how many channel assertions it actually made, so an all-clear over
-nothing cannot look like an all-clear over everything.
+the next tick — plus apple_mail bindings pointing at accounts Mail.app no longer has. It reports
+how many channel assertions it actually made, so an all-clear over nothing cannot look like an
+all-clear over everything.
 
-STILL TRUE, and the reason to check a received message: if the bound Mail.app account does not
-exist, the bridge leaves the sender unset and Mail.app sends from its default SILENTLY. Binding
-makes the From header right when the account exists; it cannot prove it by itself.
+**Apple Mail bindings are checkable now.** See what this Mac can send from:
+
+```bash
+iris mail accounts
+iris senders bind <slug> --channel apple_mail --value <one of those addresses>
+```
+
+Binding an address Mail.app lacks is refused, and so is SENDING from one — the bridge resolves the
+account before composing and returns a 422 listing the addresses that work. (`force=true` exists
+for configuring a machine other than the one that will send.)
+
+This used to be documented as "an unknown account sends from the default, silently". It never did
+that: the bridge's lookup threw `-1700` and **every** Apple Mail send naming a from-address failed
+outright — the binding path had never worked. Fixed in `iris-daemon` 25ba0fd.
+
+Still true, and still the reason to check a received message: the bridge guarantees the account
+EXISTS; Mail.app applying it is a separate claim that only the received header settles.
 
 Existing strategies that predate senders can be promoted in place — dry run first, and note that
 what it creates is UNVERIFIED, because moving free text into a row does not make it trustworthy:
