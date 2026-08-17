@@ -142,6 +142,20 @@ unreachable first choice falls through to the second.
 `prefer` REJECTS a channel with no binding rather than accepting it: that setting would queue a
 send the router refuses at delivery time — a configuration mistake shaped like an outage.
 
+**Campaigns are the one place the preference does NOT apply**, and deliberately: a campaign step
+declares its own channel, and that is the step author's instruction, not something a sender
+preference may quietly override. Which means a mismatch there fails at DELIVERY — one refused step
+at a time, hours after launch. Ask before the send instead:
+
+```bash
+docker exec fl-api php artisan senders:check-bindings          # or: railway ssh -s fl-api -- …
+docker exec fl-api php artisan senders:check-bindings --json   # exits non-zero if anything would fail
+```
+
+It covers both halves — strategies not yet run, and pending steps already queued that will fail on
+the next tick — and reports how many channel assertions it actually made, so an all-clear over
+nothing cannot look like an all-clear over everything.
+
 STILL TRUE, and the reason to check a received message: if the bound Mail.app account does not
 exist, the bridge leaves the sender unset and Mail.app sends from its default SILENTLY. Binding
 makes the From header right when the account exists; it cannot prove it by itself.
