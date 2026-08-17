@@ -20,6 +20,7 @@ import {
 import { homedir } from "os"
 import { join } from "path"
 import { readFileSync, existsSync } from "fs"
+import { spill } from "./mcp-overflow"
 
 const IRIS_BIN = join(homedir(), ".iris", "bin", "iris")
 const HOWTO_DIR = join(homedir(), ".iris", "how-to")
@@ -285,9 +286,25 @@ async function execIris(args: string[]): Promise<{ stdout: string; stderr: strin
 
     clearTimeout(timer)
 
+    // Oversized output is SPILLED to disk with an outline, not sliced.
+    //
+    // Slicing a JSON payload mid-object produces something no one can parse, so the
+    // model loses the data and every route back to it. Worse, it reads as a failure:
+    // on 2026-08-17 a 68KB `bloqs get 544 --json` came back truncated and the agent
+    // told the user it could not access the platform. spill() writes the whole thing,
+    // returns a map of its shape, and says plainly that the command SUCCEEDED.
+    //
+    // Truncation remains the fallback for when the spool cannot be written — a
+    // degraded answer beats no answer.
+    const overflow = (raw: string): string => {
+      if (raw.length <= MAX_OUTPUT) return raw
+      const guidance = spill(raw, args.join(" "))
+      return guidance ?? raw.slice(0, MAX_OUTPUT) + "\n...(truncated — could not write spool file)"
+    }
+
     return {
-      stdout: stdout.length > MAX_OUTPUT ? stdout.slice(0, MAX_OUTPUT) + "\n...(truncated)" : stdout,
-      stderr: stderr.length > MAX_OUTPUT ? stderr.slice(0, MAX_OUTPUT) + "\n...(truncated)" : stderr,
+      stdout: overflow(stdout),
+      stderr: overflow(stderr),
       exitCode,
     }
   } catch (e) {
