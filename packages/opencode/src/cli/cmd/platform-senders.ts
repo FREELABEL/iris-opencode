@@ -28,6 +28,8 @@ interface SenderRow {
   usable: boolean
   unusable_reason?: string | null
   channels?: Record<string, Record<string, string>>
+  channel_preference?: string[]
+  primary_channel?: string | null
   delegated?: boolean
   allows_generated?: boolean
   authorization_note?: string | null
@@ -59,13 +61,16 @@ function printSender(s: SenderRow, full = false): void {
   if (s.authorization_note) console.log(`      ${dim("authorised:")} ${s.authorization_note}`)
 
   const channels = s.channels ?? {}
-  const bound = Object.keys(channels)
+  const order = s.channel_preference ?? []
+  const bound = order.length ? order : Object.keys(channels)
   if (bound.length) {
     console.log(`      ${dim("sends from:")}`)
-    for (const ch of bound) {
+    bound.forEach((ch, i) => {
       const v = channels[ch]?.account ?? channels[ch]?.from ?? "?"
-      console.log(`        ${ch.padEnd(12)} ${v}`)
-    }
+      // Rank is the useful thing here — which provider it actually reaches for first.
+      const rank = i === 0 ? dim("(primary)") : dim(`(${i + 1})`)
+      console.log(`        ${ch.padEnd(12)} ${v}  ${rank}`)
+    })
   } else {
     console.log(`      \x1b[33mno channel bindings\x1b[0m ${dim("— sends will be refused on email/apple_mail")}`)
   }
@@ -223,6 +228,7 @@ const BindCommand = cmd({
       .positional("slug", { type: "string", demandOption: true })
       .option("channel", { type: "string", demandOption: true, describe: "apple_mail | email | sms | imessage" })
       .option("value", { type: "string", demandOption: true, describe: "Mail.app account, from-address, or number" })
+      .option("primary", { type: "boolean", default: false, describe: "make this the channel this identity reaches for FIRST" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro(`◈  Bind — ${args.slug} → ${args.channel}`) }
@@ -230,7 +236,7 @@ const BindCommand = cmd({
 
     const res = await irisFetch(`${BASE}/${encodeURIComponent(String(args.slug))}/bind`, {
       method: "POST",
-      body: JSON.stringify({ channel: args.channel, value: args.value }),
+      body: JSON.stringify({ channel: args.channel, value: args.value, primary: args.primary }),
     })
     if (!res.ok) { await handleApiError(res, "Bind sender"); if (!args.json) prompts.outro("Done"); return }
 
@@ -242,6 +248,45 @@ const BindCommand = cmd({
     printDivider()
     // Worth stating: binding sets the transport; it does not prove the account exists.
     console.log(`  ${dim("Confirm the From header by reading a RECEIVED message — not the send response.")}`)
+    prompts.outro("Done")
+  },
+})
+
+const PreferCommand = cmd({
+  command: "prefer <slug>",
+  aliases: ["order"],
+  describe: "set which provider this identity reaches for first, second, …",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true })
+      .option("order", { type: "string", demandOption: true, describe: "comma-separated, most preferred first, e.g. email,apple_mail" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Channel order — ${args.slug}`) }
+    if (!(await requireAuth())) { if (!args.json) prompts.outro("Done"); return }
+
+    const order = String(args.order).split(",").map((x) => x.trim()).filter(Boolean)
+
+    const res = await irisFetch(`${BASE}/${encodeURIComponent(String(args.slug))}/prefer`, {
+      method: "POST",
+      body: JSON.stringify({ order }),
+    })
+
+    const payload = (await res.json().catch(() => null)) as any
+    if (!res.ok) {
+      // The common error is preferring a channel with no binding — that would queue a send the
+      // router then refuses, so the API rejects it here where it is fixable.
+      if (!args.json) prompts.log.error(payload?.error ?? `HTTP ${res.status}`)
+      else console.log(JSON.stringify(payload))
+      process.exitCode = 1
+      return
+    }
+
+    if (args.json) { console.log(JSON.stringify(payload?.data, null, 2)); return }
+
+    printDivider()
+    printSender(payload.data as SenderRow, true)
+    printDivider()
     prompts.outro("Done")
   },
 })
@@ -292,6 +337,7 @@ export const PlatformSendersCommand = cmd({
       .command(CreateCommand)
       .command(VerifyCommand)
       .command(BindCommand)
+      .command(PreferCommand)
       .command(DefaultCommand)
       .command(ArchiveCommand)
       .demandCommand(1, "Specify a subcommand"),
