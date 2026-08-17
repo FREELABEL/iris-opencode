@@ -300,8 +300,35 @@ if (process.argv.includes("--check")) {
   }
   const prev = JSON.parse(readFileSync(OUT, "utf-8"))
   const key = (e: any) => `${e.kind}:${e.name}`
-  const before = new Set<string>(((prev.entries ?? []) as any[]).map(key))
-  const after = new Set<string>(entries.map(key))
+
+  // ONLY COMPARE WHAT THIS CHECKOUT CAN SEE.
+  //
+  // Playbooks and skills live in the WORKSPACE repo, not in this package, and collectMarkdown
+  // returns [] for a directory that is not there. On a CI runner that checks out only
+  // iris-opencode, every one of them therefore reads as "indexed but gone" — 83 phantom
+  // deletions — and the check can never pass no matter what anyone commits.
+  //
+  // Nobody had noticed because the workflow was never actually executing (#180527); the first
+  // real run failed on this. The pre-push hook has always guarded it with a directory test.
+  // Now the generator does, so the answer does not depend on which harness invoked it.
+  const projectAvailable =
+    existsSync(join(PROJECT, ".iris/playbooks")) || existsSync(join(PROJECT, ".claude/skills"))
+  const comparable = (k: string) => projectAvailable || (k !== "playbook" && k !== "skill")
+
+  const before = new Set<string>(
+    ((prev.entries ?? []) as any[]).filter((e) => comparable(e.kind)).map(key),
+  )
+  const after = new Set<string>(entries.filter((e) => comparable(e.kind)).map(key))
+
+  if (!projectAvailable) {
+    // Say what was NOT checked. A narrowed check that does not announce its narrowing reads as
+    // full coverage, which is the failure this whole guard exists to avoid.
+    const skipped = ((prev.entries ?? []) as any[]).filter((e) => !comparable(e.kind)).length
+    console.warn(
+      `note: workspace content not present — ${skipped} playbook/skill entries were NOT checked.\n` +
+        `      Set IRIS_PROJECT_ROOT to include them. Commands and how-tos are checked in full.`,
+    )
+  }
   const added = [...after].filter((k) => !before.has(k))
   const removed = [...before].filter((k) => !after.has(k))
 
