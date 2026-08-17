@@ -769,14 +769,31 @@ const HuntersCommand = cmd({
     if (!rows.length) {
       prompts.log.info("No attributed hunters yet.")
     } else {
+      // held_cents is money that is verified and priced but which the payout run will refuse
+      // to release — currently an outstanding certification (fl-api #180702).
+      //
+      // It gets a column of its own rather than being folded back into `owed`, and it is only
+      // rendered when somebody actually has some, so the ordinary board stays a four-column
+      // read. Before this, the moment the certification gate shipped, two hunters with $39 and
+      // $18 held showed as "owed $0.00" here with nothing to indicate the money existed at
+      // all — which reads as "nothing pending" or "already paid". Wrong in a quieter and worse
+      // direction than the overstatement it replaced.
+      const anyHeld = rows.some((h) => Number(h.held_cents ?? 0) > 0)
       for (const [i, h] of rows.entries()) {
         const money = (c: unknown) => `$${(Number(c ?? 0) / 100).toFixed(2)}`
+        const held = Number(h.held_cents ?? 0)
         console.log(
           `  ${String(i + 1).padStart(2)}. ${bold(String(h.name ?? h.hunter ?? "unknown").padEnd(22))}` +
             ` reported ${String(h.reported ?? 0).padStart(4)}` +
             `  verified ${String(h.verified ?? 0).padStart(4)}` +
             `  owed ${money(h.owed_cents).padStart(9)}` +
-            `  paid ${money(h.paid_cents).padStart(9)}`,
+            `  paid ${money(h.paid_cents).padStart(9)}` +
+            (anyHeld ? `  held ${(held > 0 ? money(held) : "—").padStart(9)}` : ""),
+        )
+      }
+      if (anyHeld) {
+        console.log(
+          dim(`      held = verified and priced, not released — an outstanding certification.`),
         )
       }
     }
