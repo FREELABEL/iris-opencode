@@ -68,26 +68,6 @@ jobs:
       # Xcode is deliberately NOT removed: this job codesigns the binary. Simulator runtimes and
       # caches are several GB and nothing here touches them. Never fails the build — if cleanup
       # breaks, the disk guard still stops us honestly.
-      - name: Free disk space (macOS)
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        run: |
-          # Measure the volume the BUILD writes to, not "/". macos-15-intel reports 110Gi free
-          # on / while the build script's statfs of the workspace reported 0.0 GB — because the
-          # workspace lives on the Data volume and `df /` shows the read-only system volume.
-          # Printing the wrong one is how the first attempt at this step looked fine and changed
-          # nothing.
-          echo "before (workspace volume):"; df -h "$GITHUB_WORKSPACE" | tail -1
-          # Xcode is the only thing on these images big enough to matter (~15-40 GB). Safe here:
-          # this job compiles with bun and signs with /usr/bin/codesign from the Command Line
-          # Tools, which is not inside Xcode.app. The desktop app is a SEPARATE job on its own
-          # runner and is unaffected.
-          sudo rm -rf /Applications/Xcode*.app || true
-          sudo rm -rf /Library/Developer/CoreSimulator || true
-          sudo rm -rf ~/Library/Developer/Xcode/DerivedData || true
-          sudo rm -rf ~/Library/Caches/* || true
-          echo "after  (workspace volume):"; df -h "$GITHUB_WORKSPACE" | tail -1
-
       - name: Install dependencies
         run: bun install
 

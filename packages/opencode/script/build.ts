@@ -112,13 +112,38 @@ const targets = singleFlag
 const PER_TARGET_BYTES = 200 * 1024 * 1024 // measured ~175 MB; round up rather than guess low
 {
   const need = targets.length * PER_TARGET_BYTES
-  const stat = fs.statfsSync(dir)
-  const free = stat.bsize * stat.bavail
+
+  // statfs is NOT trustworthy everywhere. On GitHub's macos-15-intel runner this reported
+  // 0.0 GB free while `df -h $GITHUB_WORKSPACE` on the very same volume, seconds earlier,
+  // reported 185Gi available — and it blocked three consecutive releases (v1.3.181/182/183)
+  // with "0.0 GB free" printed directly beneath a log line saying 110Gi. It reads correctly on
+  // macOS arm64, so this is platform-specific and not something the caller can fix.
+  //
+  // A reading of zero is therefore treated as UNKNOWN, not as full. It cannot be literally true
+  // at this point in the build anyway: checkout and `bun install` have already written
+  // hundreds of megabytes, so a genuinely zero-byte volume would have failed long before here.
+  //
+  // The guard still does its job — it refuses on a PLAUSIBLE shortfall, which is the case it
+  // was written for (a developer typing `bun run build` and filling their laptop). It just no
+  // longer converts a broken measurement into a blocked release.
+  let free = 0
+  try {
+    const stat = fs.statfsSync(dir)
+    free = Number(stat.bsize) * Number(stat.bavail)
+  } catch {
+    free = 0
+  }
+
   const gb = (n: number) => `${(n / 1024 ** 3).toFixed(1)} GB`
+  const measured = Number.isFinite(free) && free > 0
 
-  console.log(`${targets.length} target(s), ~${gb(need)} needed, ${gb(free)} free`)
+  console.log(
+    measured
+      ? `${targets.length} target(s), ~${gb(need)} needed, ${gb(free)} free`
+      : `${targets.length} target(s), ~${gb(need)} needed, free space UNKNOWN (statfs unavailable here) — continuing`,
+  )
 
-  if (free < need) {
+  if (measured && free < need) {
     console.error(
       [
         ``,
