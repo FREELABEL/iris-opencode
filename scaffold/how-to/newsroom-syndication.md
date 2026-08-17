@@ -101,11 +101,27 @@ feed. Wait it out before declaring the pipeline broken.
 **Article images fall back to the generated OG image.** Newsroom-pipeline articles carry neither
 `og_image` nor `thumbnail_url`, so without the fallback every card and feed item is imageless.
 
-## Known gap
+## Autodiscovery is automatic
 
-Pages do **not** yet emit a `<link rel="alternate" type="application/rss+xml">` tag, so browsers,
-reader extensions and aggregators cannot autodiscover the feed — you have to hand someone the URL.
-The feeds are fully live and valid; only discovery from the page is missing.
+A newsroom page advertises its own feeds in the page head, so readers, browser extensions and
+aggregators find them without being handed a URL:
+
+```html
+<link rel="alternate" type="application/rss+xml"   href="https://…/p/<slug>/feed.xml">
+<link rel="alternate" type="application/feed+json" href="https://…/p/<slug>/feed.json">
+```
+
+You do not add these. They appear on exactly the pages that have a feed, because the page emits
+them on the same `configFrom()` condition the feed routes serve on — so the advertised address
+can never be a 404.
+
+Two consequences worth knowing:
+
+- **A gated page never advertises a feed.** Gated pages render from a locked shell that carries
+  no components, so there is nothing for the check to find. A locked page cannot publish a public
+  address for the very articles it is withholding.
+- **Custom domains get their own address.** The link is built from the resolved host, so a client
+  on their own domain is not handed a `heyiris.io` feed URL.
 
 ## Related
 
