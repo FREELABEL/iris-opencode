@@ -257,7 +257,12 @@ const MemoryComposeCommand = cmd({
 
 export const PlatformMemoryCommand = cmd({
   command: "memory",
-  describe: "manage knowledge bases (bloqs) — list, show, add, compose",
+  // #180717 asked for the word ALIAS specifically, and it earns its place: `memory list`
+  // returns byte-identical output to `bloqs list`, so anyone told this is "memory" reasonably
+  // infers a durable agent memory store that can be written to and queried. There isn't one —
+  // facts are stored as bloq items. Naming the relationship here is what stops an agent
+  // assuming a persistence layer exists and skipping its own.
+  describe: "manage knowledge bases — ALIAS of bloqs (list, show, add, compose); no separate memory store",
   builder: (yargs) =>
     yargs
       .command(MemoryListCommand)

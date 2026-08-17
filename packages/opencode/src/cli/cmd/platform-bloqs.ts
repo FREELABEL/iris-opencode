@@ -1907,7 +1907,25 @@ export const BloqsSearchCommand = cmd({
       // #180715: the multi-source fan-out was only reachable from `bloqs items <bloq-id>
       // --include-all`, which needs an ID you do not have when you are searching FOR something.
       // It is the same engine; it just had no front door at the top level.
-      .option("include-all", { describe: "also search Obsidian and Drive", type: "boolean", default: false })
+      //
+      // DEFAULT TRUE, which is the half of #180715 that opt-in did not deliver. This verb's
+      // stated contract is "search everything you have written", and a default that quietly
+      // omits Obsidian and Drive contradicts it in the direction nobody checks: you get
+      // results, so you believe you searched. An empty-handed user does not think to add a
+      // flag they have never heard of — that is precisely how the old `bloqs items
+      // --include-all` stayed invisible.
+      //
+      // The cost is latency on every search, and it is bounded: Obsidian is a local bridge,
+      // Drive is one API call, both run concurrently with the bloq query rather than after it,
+      // and a source that is down is REPORTED in source_outcomes rather than silently dropping
+      // to zero results. `--local-only` opts out for a fast bloqs-only lookup.
+      //
+      // The opt-out is a NAMED FLAG rather than yargs' automatic `--no-include-all`, because
+      // this CLI runs yargs in strict mode and strict rejects the negated form outright
+      // ("Unknown arguments: no-include-all"). Documenting a flag that errors would be its own
+      // small version of the bug this ticket is about.
+      .option("include-all", { describe: "also search Obsidian and Drive (on by default)", type: "boolean", default: true })
+      .option("local-only", { describe: "skip Obsidian and Drive — search bloqs only (faster)", type: "boolean", default: false })
       .option("source", { describe: "sources to search: bloq, obsidian, drive (comma-separated)", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
@@ -1970,7 +1988,9 @@ export const BloqsSearchCommand = cmd({
     // reason this engine was unreachable from the top level.
     let external: any[] = []
     let outcomes: any[] = []
-    const fanOut = Boolean(args["include-all"] || args.source)
+    // --local-only wins over everything: it is the explicit "just the boards, quickly" request,
+    // and an explicit narrowing should never be overridden by a default that is merely on.
+    const fanOut = !args["local-only"] && Boolean(args["include-all"] || args.source)
     if (fanOut) {
       const sources = resolveSources({ source: args.source as string, includeAll: Boolean(args["include-all"]) })
         .filter((s) => s !== "bloq")
@@ -2040,7 +2060,11 @@ export const BloqsSearchCommand = cmd({
       // #180715: point at THIS command, not at a different one that needs an id. The old hint
       // sent people to `bloqs items <bloq-id> --include-all` — which is unusable at exactly the
       // moment it was offered, because you are searching in order to find the id.
-      console.log(`  ${dim("Widen the net:")} iris search "${query}" --include-all  ${dim("(+ Obsidian, Drive)")}`)
+      //
+      // Only reachable via --local-only now that the fan-out is the default, so it is a
+      // genuine "you narrowed this yourself" reminder rather than a nudge toward a flag the
+      // product should have been using all along.
+      console.log(`  ${dim("Widen the net:")} iris search "${query}"  ${dim("(drop --local-only for Obsidian + Drive)")}`)
     }
     prompts.outro("Done")
   },
