@@ -6821,6 +6821,7 @@ const LeadsDiscoverCommand = cmd({
       .option("location", { alias: "loc", describe: 'geography, e.g. "Fort Worth TX"', type: "string" })
       .option("bloq-id", { alias: "bloq", describe: "CRM bloq to create leads in (omit = preview only)", type: "number" })
       .option("limit", { alias: "n", describe: "max businesses", type: "number", default: 10 })
+      .option("lead-type", { describe: "individual|business (default: business — discovery finds organisations)", type: "string" })
       .option("verify", { describe: "verify each created lead's contact info (#137535)", type: "boolean", default: false })
       .option("score", { describe: "ICP-score each created lead (#137536)", type: "boolean", default: false })
       .option("dry-run", { describe: "preview results without creating leads", type: "boolean", default: false })
@@ -6876,7 +6877,22 @@ const LeadsDiscoverCommand = cmd({
           rating: b.rating ?? null,
           website: b.website ?? b.website_url ?? null,
         }
-        const payload: Record<string, unknown> = { name, bloqId: args["bloq-id"], status: "Prospected", source: "discover", company: name, contact_info }
+        // lead_type: "business" — discover's entire job is finding ORGANISATIONS, and it never
+        // stamped the type, so every org it created was born untyped. That is why 21,216 of
+        // ~28.5k production leads have lead_type unknown and "email all the colleges" had
+        // nothing to segment on. website is promoted out of contact_info to a real column so
+        // findDuplicate can dedup organisations on DOMAIN — otherwise re-running discovery
+        // creates the same institution again under a different subdomain.
+        const payload: Record<string, unknown> = {
+          name,
+          bloqId: args["bloq-id"],
+          status: "Prospected",
+          source: "discover",
+          company: name,
+          lead_type: (args["lead-type"] as string) ?? "business",
+          contact_info,
+        }
+        if (contact_info.website) payload.website = contact_info.website
         if (b.email) payload.email = b.email
         if (b.phone) payload.phone = b.phone
         try {
