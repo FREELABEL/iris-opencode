@@ -230,6 +230,21 @@ export function validateCommand(command: string): { args: string[]; error?: stri
     }
   }
 
+  // Models write the FULL command line, binary and all: "iris bloqs list --json".
+  // The MCP spawns IRIS_BIN directly with this argv, so a leading "iris" lands as
+  // argv[0] — a command name that does not exist — and the call fails with
+  // `Unknown command "iris"`. Observed in production on 2026-08-17: the model was
+  // asked to fetch projects, wrote the command exactly as a human would type it,
+  // and was told its own CLI had no such command. It then apologised and claimed it
+  // could not access the platform, which is a lie the tool taught it to tell.
+  //
+  // Accept both forms. Expecting every model to remember that this one interface
+  // wants the binary name omitted is a convention we would have to re-teach with
+  // every model swap, and today we swapped models three times.
+  if (args.length > 1 && (args[0] === "iris" || args[0] === "iris-cli")) {
+    args.shift()
+  }
+
   // Validate first arg is a known command
   const firstArg = args[0]
   // Allow meta-commands that aren't in the registry
