@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, success, writeJson } from "./iris-api"
 
 /**
  * `iris bounty admin` — the Bounty OS ledger and reconciliation surface.
@@ -41,9 +41,9 @@ async function listVerbs(): Promise<AdminVerb[] | null> {
  * check is reported as a FAILED CHECK, never as a failed request. Flattening the two would hide
  * the exact thing being looked for.
  */
-function printResult(verb: string, payload: any, json: boolean): number {
+async function printResult(verb: string, payload: any, json: boolean): Promise<number> {
   if (json) {
-    console.log(JSON.stringify(payload, null, 2))
+    await writeJson(payload)
     return payload?.ok === false ? 1 : 0
   }
 
@@ -53,7 +53,7 @@ function printResult(verb: string, payload: any, json: boolean): number {
 
   if (payload?.data) {
     console.log()
-    console.log(JSON.stringify(payload.data, null, 2))
+    await writeJson(payload.data)
   } else if (payload?.output) {
     console.log()
     console.log(payload.output)
@@ -75,7 +75,7 @@ const AdminListCommand = cmd({
     const verbs = await listVerbs()
     if (!verbs) { if (!args.json) prompts.outro("Done"); return }
 
-    if (args.json) { console.log(JSON.stringify(verbs, null, 2)); return }
+    if (args.json) { await writeJson(verbs); return }
 
     printDivider()
     for (const v of verbs) {
@@ -141,7 +141,7 @@ const AdminRunCommand = cmd({
     }
 
     spinner?.stop("Done")
-    process.exitCode = printResult(verb, payload, Boolean(args.json))
+    process.exitCode = await printResult(verb, payload, Boolean(args.json))
     if (!args.json) prompts.outro("Done")
   },
 })

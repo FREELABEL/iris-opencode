@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, writeJson } from "./iris-api"
 
 // ============================================================================
 // iris bookings — the operator capture surface for the Charge engine (#168496)
@@ -64,7 +64,7 @@ const ListCommand = cmd({
       if (spinner) spinner.stop(`${items.length} authorization(s) awaiting action`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
       } else if (items.length === 0) {
         prompts.log.info("No HOLD authorizations awaiting capture. Nothing at risk of expiring.")
       } else {
@@ -118,7 +118,7 @@ const CaptureCommand = cmd({
       const data = json.data ?? json
       if (spinner) spinner.stop(success("Captured"))
       if (args.json) {
-        console.log(JSON.stringify(json, null, 2))
+        await writeJson(json)
       } else {
         prompts.log.success(`Charged ${formatCents(data.charged_cents)} — booking #${id} is now ${bold(String(data.charge_status ?? "captured"))}.`)
       }
@@ -160,7 +160,7 @@ const ReleaseCommand = cmd({
       const json = (await res.json()) as any
       if (spinner) spinner.stop(success("Released"))
       if (args.json) {
-        console.log(JSON.stringify(json, null, 2))
+        await writeJson(json)
       } else {
         prompts.log.success(`Authorization voided — booking #${id} released. No charge was made.`)
       }

@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, getBridgeToken } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, getBridgeToken, writeJson } from "./iris-api"
 
 // ============================================================================
 // Atlas Comms CLI — Unified cross-channel lead communications log
@@ -292,7 +292,7 @@ const CommsListCommand = cmd({
     const total = data?.data?.total ?? rows.length
     sp.stop(`${rows.length} of ${total} comms for ${bold(resolved.lead.name || `Lead #${resolved.id}`)}`)
 
-    if (args.json) { console.log(JSON.stringify(rows, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
     if (rows.length === 0) {
       prompts.log.warn("No comms logged yet")
       prompts.log.info(`Ingest: ${dim(`iris atlas:comms ingest ${resolved.id} --channel gmail`)}`)
@@ -708,7 +708,7 @@ const CommsSummaryCommand = cmd({
     const data = ((await res.json()) as any)?.data
     sp.stop(`${data?.total ?? 0} total comms`)
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     if (data?.first_contact) console.log(`  ${dim("First contact:")} ${data.first_contact}`)
     if (data?.last_contact) console.log(`  ${dim("Last contact:")}  ${data.last_contact}`)

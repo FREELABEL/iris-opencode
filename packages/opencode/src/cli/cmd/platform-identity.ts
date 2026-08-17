@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, success, printDivider, printKV } from "./iris-api"
+import { dim, bold, success, printDivider, printKV, writeJson } from "./iris-api"
 import {
   loadIdentities,
   saveIdentities,
@@ -36,7 +36,7 @@ const IdentityListCommand = cmd({
   async handler(args) {
     const map = loadIdentities()
     if (args.json) {
-      console.log(JSON.stringify({ success: true, path: IDENTITY_PATH, ...map }, null, 2))
+      await writeJson({ success: true, path: IDENTITY_PATH, ...map })
       return
     }
     UI.empty()
@@ -113,7 +113,7 @@ const IdentitySuggestCommand = cmd({
     )
 
     if (args.json) {
-      console.log(JSON.stringify({ success: true, cards: seen.size, suggestions }, null, 2))
+      await writeJson({ success: true, cards: seen.size, suggestions })
       return
     }
 
@@ -182,7 +182,7 @@ const IdentityLinkCommand = cmd({
 
     const rec = resolveIdentity(after, { handle: handles[0] })
     if (args.json) {
-      console.log(JSON.stringify({ success: true, identity: rec, count: after.identities.length }, null, 2))
+      await writeJson({ success: true, identity: rec, count: after.identities.length })
       return
     }
     UI.empty()
@@ -207,7 +207,7 @@ const IdentityShowCommand = cmd({
     const rec = resolveIdentity(map, { handle: who, name: who })
 
     if (args.json) {
-      console.log(JSON.stringify({ success: Boolean(rec), query: who, identity: rec }, null, 2))
+      await writeJson({ success: Boolean(rec), query: who, identity: rec })
       return
     }
     UI.empty()

@@ -10,8 +10,7 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 
 // No hardcoded fallback: a stale key silently 401s every Composio call (bug
@@ -251,7 +250,7 @@ const ScanCommand = cmd({
       const messages: any[] = result?.messages ?? result?.data ?? result?.emails ?? []
       spinner.stop(`${messages.length} meeting note(s) found`)
 
-      if (args.json) { console.log(JSON.stringify({ meetings: messages, count: messages.length, query, days }, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson({ meetings: messages, count: messages.length, query, days }); prompts.outro("Done"); return }
 
       if (messages.length === 0) {
         prompts.log.warn(`No meeting notes in the last ${days} days.`)
@@ -377,12 +376,12 @@ const IngestCommand = cmd({
 
       if (dryRun) {
         if (json) {
-          console.log(JSON.stringify({
+          await writeJson({
             dry_run: true,
             destination: leadId ? `lead:${leadId}` : `bloq:${bloqId}`,
             extracted_content: extracted,
             action_items: actionItems,
-          }, null, 2))
+          })
         } else {
           prompts.log.warn("DRY RUN — nothing saved")
           console.log(extracted)
@@ -424,7 +423,7 @@ const IngestCommand = cmd({
         }
 
         if (json) {
-          console.log(JSON.stringify({ lead_id: leadId, note_id: noteId, tasks_created: tasksCreated }, null, 2))
+          await writeJson({ lead_id: leadId, note_id: noteId, tasks_created: tasksCreated })
         } else {
           console.log(`  ${success("✓")} Meeting intel saved to lead #${leadId}`)
           if (noteId) console.log(`  ${dim("Note ID:")} #${noteId}`)
@@ -443,7 +442,7 @@ const IngestCommand = cmd({
         if (!ok) { prompts.outro("Done"); return }
         const data = (await res.json()) as any
         const itemId = data?.data?.id ?? data?.id
-        if (json) console.log(JSON.stringify({ bloq_id: bloqId, item_id: itemId }, null, 2))
+        if (json) await writeJson({ bloq_id: bloqId, item_id: itemId })
         else console.log(`  ${success("✓")} Saved to bloq #${bloqId}${itemId ? " (item #" + itemId + ")" : ""}`)
       }
 

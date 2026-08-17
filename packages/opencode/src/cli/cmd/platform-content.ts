@@ -13,8 +13,7 @@ import {
   printDivider,
   printKV,
   FL_API,
-  IRIS_API,
-} from "./iris-api"
+  IRIS_API, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "fs"
 import { join } from "path"
 import { spawnSync } from "child_process"
@@ -147,7 +146,7 @@ const ProfilesListCommand = cmd({
       spinner.stop(`${profiles.length} profile(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(profiles, null, 2))
+        await writeJson(profiles)
       } else {
         if (!Array.isArray(profiles) || profiles.length === 0) {
           prompts.log.info("No profiles found.")
@@ -208,7 +207,7 @@ const ProfilesGetCommand = cmd({
     spinner.stop("Done")
 
     if (args.json) {
-      console.log(JSON.stringify(p, null, 2))
+      await writeJson(p)
     } else {
       console.log()
       console.log(`  ${dim("pk:")} ${bold(String(p.pk))}`)
@@ -385,7 +384,7 @@ const UploadCommand = cmd({
       createSpinner.stop("Created")
 
       if (args.json) {
-        console.log(JSON.stringify(created, null, 2))
+        await writeJson(created)
       } else {
         console.log()
         console.log(`  ${dim("id:")} ${bold(String(created.id))}`)
@@ -483,7 +482,7 @@ const ListCommand = cmd({
       listSpinner.stop(`${total} ${args.type}(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
       } else if (!Array.isArray(items) || items.length === 0) {
         prompts.log.info(`No ${args.type}s found.`)
       } else {
@@ -530,7 +529,7 @@ const GetCommand = cmd({
     spinner.stop("Done")
 
     if (args.json) {
-      console.log(JSON.stringify(item, null, 2))
+      await writeJson(item)
     } else {
       console.log()
       console.log(`  ${dim("id:")} ${bold(String(item.id))}`)
@@ -614,7 +613,7 @@ const SearchCommand = cmd({
         }
       }
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
       } else if (results.length === 0) {
         prompts.log.info("No results.")
       } else {
@@ -627,7 +626,7 @@ const SearchCommand = cmd({
       const body = (await res.json()) as any
       spinner.stop("Done")
       if (args.json) {
-        console.log(JSON.stringify(body, null, 2))
+        await writeJson(body)
       } else {
         const items = body?.data ?? body
         if (!Array.isArray(items) || items.length === 0) {
@@ -889,7 +888,7 @@ const EventImportFromIgCommand = cmd({
       printDivider()
 
       if (args["dry-run"]) {
-        if (args.json) { console.log(JSON.stringify(scraped, null, 2)) }
+        if (args.json) { await writeJson(scraped) }
         prompts.outro(dim("Dry run -- no event created"))
         return
       }
@@ -929,7 +928,7 @@ const EventImportFromIgCommand = cmd({
       spinner2.stop(`${success("Created")}: ${bold(String(e.title ?? e.id))}`)
 
       if (args.json) {
-        console.log(JSON.stringify(e, null, 2))
+        await writeJson(e)
         prompts.outro("Done")
         return
       }
@@ -1002,7 +1001,7 @@ const EventUpdateFlyerCommand = cmd({
 
       if (args["dry-run"]) {
         if (args.json) {
-          console.log(JSON.stringify({ event_id: eventId, flyer: scraped.flyerUrl, gallery: scraped.images }, null, 2))
+          await writeJson({ event_id: eventId, flyer: scraped.flyerUrl, gallery: scraped.images })
         }
         prompts.outro(dim("Dry run -- no changes made"))
         return
@@ -1031,7 +1030,7 @@ const EventUpdateFlyerCommand = cmd({
       spinner2.stop(`${success("Updated")} event #${eventId} with flyer${galleryCount}`)
 
       if (args.json) {
-        console.log(JSON.stringify(e, null, 2))
+        await writeJson(e)
         prompts.outro("Done")
         return
       }

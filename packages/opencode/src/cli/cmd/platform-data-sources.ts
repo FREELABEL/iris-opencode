@@ -12,8 +12,7 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
 
 // ============================================================================
 // iris data-sources — unified surface over the platform "Data Sources" feature
@@ -176,7 +175,7 @@ const ListCommand = cmd({
     const data = (await res.json()) as any
     const sources: any[] = data?.data?.sources ?? data?.sources ?? []
     if (args.json) {
-      console.log(JSON.stringify(sources, null, 2))
+      await writeJson(sources)
       prompts.outro("Done")
       return
     }
@@ -267,7 +266,7 @@ const ReadCommand = cmd({
     if (!innerOk) {
       spinner.stop(`${dim("⚠")} source returned an error`, 1)
       prompts.log.warn(`The integration reported failure (not a successful empty result): ${error}`)
-      if (args.json) console.log(JSON.stringify(result, null, 2))
+      if (args.json) await writeJson(result)
       process.exitCode = 1
       prompts.outro("Done")
       return
@@ -275,7 +274,7 @@ const ReadCommand = cmd({
 
     spinner.stop(`${success("✓")} ok`)
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
     } else {
       printDivider()
       console.log(stringifySource(result, 4000))
@@ -404,7 +403,7 @@ const ArticleCommand = cmd({
 
     spinner.stop(`${success("✓")} article written`)
     if (args.json) {
-      console.log(JSON.stringify({ content: chat.content, tools_used: chat.toolsUsed, grounded: true }, null, 2))
+      await writeJson({ content: chat.content, tools_used: chat.toolsUsed, grounded: true })
     } else {
       printDivider()
       console.log(chat.content)
@@ -469,7 +468,7 @@ const SyncCommand = cmd({
     const data = (await res.json()) as any
     const job = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(job, null, 2))
+      await writeJson(job)
       prompts.outro("Done")
       return
     }
@@ -504,7 +503,7 @@ const StatusCommand = cmd({
     }
     const data = ((await res.json()) as any)?.data ?? {}
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -569,7 +568,7 @@ const TypesCommand = cmd({
     }
     const registry = ((await res.json()) as any)?.data ?? {}
     if (args.json) {
-      console.log(JSON.stringify(registry, null, 2))
+      await writeJson(registry)
       prompts.outro("Done")
       return
     }
@@ -664,7 +663,7 @@ const AddCommand = cmd({
     const integration = ((await res.json()) as any)?.data ?? {}
     spinner.stop(`${success("✓")} Connected ${bold(String(args.type))}`)
     if (args.json) {
-      console.log(JSON.stringify(integration, null, 2))
+      await writeJson(integration)
       prompts.outro("Done")
       return
     }

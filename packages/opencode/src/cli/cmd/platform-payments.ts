@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 
 // ============================================================================
 // Payments — port of PaymentsCommand.php
@@ -50,7 +50,7 @@ const PaymentsCmd = cmd({
       }
     }
 
-    if (args.json) { console.log(JSON.stringify(payments, null, 2)); return }
+    if (args.json) { await writeJson(payments); return }
 
     console.log("")
     console.log(bold(`Stripe Payment History — ${payments.lead_name ?? `Lead #${args.leadId}`}`))

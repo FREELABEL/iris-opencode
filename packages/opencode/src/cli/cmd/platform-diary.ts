@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, success, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, success, IRIS_API, writeJson } from "./iris-api"
 import { apiMakePublic, type ShareOptions } from "./bloq-item-shared"
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, chmodSync, rmSync, watch } from "fs"
 import { join, basename, resolve, dirname } from "path"
@@ -68,7 +68,7 @@ const DiaryTodayCommand = cmd({
     const ok = await handleApiError(res, "Today's diary")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     if (data.bloq_name) console.log(`  ${dim(`Bloq: ${data.bloq_name}`)}`)
     if (data.agent_name) console.log(`  ${dim(`Agent: ${data.agent_name}`)}`)
@@ -112,7 +112,7 @@ const DiaryListCommand = cmd({
     const ok = await handleApiError(res, "List diary")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     if (data.bloq_name) console.log(`  ${dim(`Bloq: ${data.bloq_name}`)}`)
     console.log()
@@ -156,7 +156,7 @@ const DiaryViewCommand = cmd({
     const ok = await handleApiError(res, "View diary")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     // Multiple session entries per day: render each with its title/slug header.
     const dayEntries: any[] = Array.isArray(data?.entries) ? data.entries : []

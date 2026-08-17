@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, getBridgeToken } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, getBridgeToken, writeJson } from "./iris-api"
 import {
   HiveScanCommandExport,
   HiveProbeCommandExport,
@@ -1338,12 +1338,12 @@ const HiveBoardCommand = cmd({
     const online = nodes.filter(n => n.connection_status === "connected" || n.connection_status === "online").length
 
     if (asJson) {
-      console.log(JSON.stringify({
+      await writeJson({
         nodes: { total: nodes.length, online },
         counts: { needs: lanes.needs.length, working: lanes.working.length, queued: lanes.queued.length, done: lanes.done.length },
         degraded,
         lanes,
-      }, null, 2))
+      })
       return
     }
 
@@ -3806,7 +3806,7 @@ const HiveDashboardCommand = cmd({
           tasks: daemonResult.queue.tasks ?? [],
         } : { status: "offline", node_name: null, active_tasks: 0, tasks: [] }
 
-        console.log(JSON.stringify({
+        await writeJson({
           daemon,
           summary: jobsByStatus,
           pending_tasks: pendingResult.length,
@@ -3822,7 +3822,7 @@ const HiveDashboardCommand = cmd({
             status: t.status,
             created_at: t.created_at,
           })),
-        }, null, 2))
+        })
         return
       }
 
@@ -4143,7 +4143,7 @@ const HiveSwarmCommand = cmd({
       spinner.stop("Swarm dispatched")
 
       if (args.json) {
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
       } else {
         prompts.log.success(`Task ID: ${(data as any).task?.id || (data as any).id || "unknown"}`)
         prompts.log.info(`Roles: ${roleNames.join(", ")} (${roleNames.length} panes)`)
@@ -4279,7 +4279,7 @@ const HivePanesCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(sessions, null, 2))
+      await writeJson(sessions)
       return
     }
 
@@ -4501,7 +4501,7 @@ const HiveLogsCommand = cmd({
         if (res.ok) {
           const data = (await res.json()) as { events: any[] }
           if (args.json) {
-            console.log(JSON.stringify(data.events, null, 2))
+            await writeJson(data.events)
             return
           }
           if (data.events.length === 0) {
@@ -4540,7 +4540,7 @@ const HiveLogsCommand = cmd({
 
       const data = (await res.json()) as { entries: any[] }
       if (args.json) {
-        console.log(JSON.stringify(data.entries, null, 2))
+        await writeJson(data.entries)
         return
       }
 

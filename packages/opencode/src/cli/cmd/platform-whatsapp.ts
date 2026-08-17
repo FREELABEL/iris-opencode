@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, dim, bold, success } from "./iris-api"
+import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import {
   isAvailable, diagnoseAccess,
   listChats, searchChats, readMessages, searchByPhone, searchByName,
@@ -35,7 +35,7 @@ const WhatsappListCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(chats, null, 2))
+      await writeJson(chats)
       return
     }
 
@@ -107,7 +107,7 @@ const WhatsappSearchCommand = cmd({
       // Fall back: show matching chats instead of messages
       const chats = searchChats(args.query, args.days as number, 10)
       if (chats.length) {
-        if (args.json) { console.log(JSON.stringify(chats, null, 2)); return }
+        if (args.json) { await writeJson(chats); return }
         prompts.log.info(`No messages, but found ${chats.length} matching chat(s):`)
         printDivider()
         for (const chat of chats) {
@@ -123,7 +123,7 @@ const WhatsappSearchCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(messages, null, 2))
+      await writeJson(messages)
       return
     }
 
@@ -208,7 +208,7 @@ const WhatsappReadCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(messages, null, 2))
+      await writeJson(messages)
       return
     }
 
@@ -253,7 +253,7 @@ const WhatsappGroupsCommand = cmd({
         ...g,
         members: getGroupMembers(g.pk),
       }))
-      console.log(JSON.stringify(enriched, null, 2))
+      await writeJson(enriched)
       return
     }
 
@@ -339,7 +339,7 @@ const WhatsappReadGroupCommand = cmd({
 
     if (args.json) {
       const group = resolveGroupChat(args.query)
-      console.log(JSON.stringify({ group, messages }, null, 2))
+      await writeJson({ group, messages })
       return
     }
 

@@ -10,8 +10,7 @@ import {
   dim,
   bold,
   success,
-  streamAgentChat,
-} from "./iris-api"
+  streamAgentChat, writeJson } from "./iris-api"
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { join } from "path"
 import { homedir, tmpdir } from "os"
@@ -172,7 +171,7 @@ export const PlatformMeetingsCommand = cmd({
     if (!args.session) {
       const sessions = listSessions(args.limit)
       if (args.json) {
-        console.log(JSON.stringify(sessions, null, 2))
+        await writeJson(sessions)
         return
       }
       if (!sessions.length) {

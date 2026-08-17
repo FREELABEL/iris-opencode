@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, printKV, dim, bold, success, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, printKV, dim, bold, success, IRIS_API, writeJson } from "./iris-api"
 
 async function callPathways(userId: number, func: string, params: Record<string, unknown> = {}): Promise<any> {
   const res = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
@@ -62,7 +62,7 @@ const PathwaysAuditCommand = cmd({
       if (args.stage) params.stage_filter = args.stage
       spinner.start("Auditing cases...")
       const data = await callPathways(userId, func, params)
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
       if (args.email) {
         if (!data.send) {
           spinner.stop(success(data.message || "All cases clean"))
@@ -137,7 +137,7 @@ const PathwaysSettleCommand = cmd({
       if (args.batch) {
         spinner.start(`Processing cases in "${args.stage}"...`)
         const data = await callPathways(userId, "batch_settle", { stage_filter: args.stage })
-        if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+        if (args.json) { await writeJson(data); return }
         spinner.stop(success(`${data.processed_count} cases settled (${data.skipped_count} skipped)`))
         for (const r of (data.results || [])) {
           console.log()
@@ -158,7 +158,7 @@ const PathwaysSettleCommand = cmd({
         if (!args.check) { prompts.log.error("--check <amount> is required"); prompts.outro("Done"); return }
         spinner.start(`Calculating settlement for ${args["case-id"]}...`)
         const data = await callPathways(userId, "calculate_settlement", { case_id: args["case-id"], check_amount: args.check })
-        if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+        if (args.json) { await writeJson(data); return }
         spinner.stop(success(`Settlement: ${data.reduction_percentage}% reduction`))
         console.log()
         printKV("Patient", data.patient_name || data.case_id)
@@ -199,7 +199,7 @@ const PathwaysPipelineCommand = cmd({
       if (args.stage) params.stage_filter = args.stage
       spinner.start("Fetching pipeline...")
       const data = await callPathways(userId, "get_pipeline_summary", params)
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
       const summary = readPipeline(data)
       spinner.stop(success(`${summary.cases} cases | ${money(summary.value)}`))
       console.log()
@@ -228,7 +228,7 @@ const PathwaysStatusCommand = cmd({
     if (!userId) return
     try {
       const data = await callPathways(userId, "get_pipeline_summary", {})
-      if (args.json) { console.log(JSON.stringify({ connected: true, ...data }, null, 2)); return }
+      if (args.json) { await writeJson({ connected: true, ...data }); return }
       const summary = readPipeline(data)
       console.log(success("  Connected"))
       printKV("Cases", `${summary.cases}`)

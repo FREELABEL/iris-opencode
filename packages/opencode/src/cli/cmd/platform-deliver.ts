@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, FL_API, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, FL_API, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { aiGenerateCarouselProps, fetchBrandTokens, resolveRemotionDir } from "./platform-remotion"
 import { Auth } from "../../auth"
 import { spawnSync } from "child_process"
@@ -80,7 +80,7 @@ export const PlatformDeliverCommand = cmd({
     spinner.stop(success("Delivered"))
     const data = body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) { await writeJson(data); return }
 
     console.log("")
     console.log(bold("Delivery Summary"))
@@ -388,7 +388,7 @@ export const DeliverCarouselCommand = cmd({
 
     if (noUpload) {
       if (jsonOutput) {
-        console.log(JSON.stringify({ output_dir: outDir, slides: 9 }, null, 2))
+        await writeJson({ output_dir: outDir, slides: 9 })
       } else {
         prompts.log.success(bold(`Carousel rendered: ${outDir}`))
         spawnSync("open", [outDir], { stdio: "ignore" })
@@ -435,7 +435,7 @@ export const DeliverCarouselCommand = cmd({
 
     // ── Output ──
     if (jsonOutput) {
-      console.log(JSON.stringify({
+      await writeJson({
         lead_id: leadId,
         brand,
         output_dir: outDir,
@@ -443,7 +443,7 @@ export const DeliverCarouselCommand = cmd({
         slides_uploaded: uploads.length,
         uploads,
         note_attached: noteOk,
-      }, null, 2))
+      })
     } else {
       console.log("")
       printDivider()

@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, isNonInteractive } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, isNonInteractive, writeJson } from "./iris-api"
 import * as fs from "fs"
 import * as path from "path"
 
@@ -44,7 +44,7 @@ const SchemaListCommand = cmd({
       const rows: any[] = body?.data ?? []
       spinner.stop(`${rows.length} schema(s)`)
 
-      if (args.json) { console.log(JSON.stringify(rows, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
       if (rows.length === 0) { prompts.log.warn("No schemas defined yet"); prompts.outro("iris atlas:datasets schemas create"); return }
 
       printDivider()
@@ -76,7 +76,7 @@ const SchemaShowCommand = cmd({
     const body = (await res.json()) as any
     const schema = body?.data?.schema ?? body?.data
 
-    if (args.json) { console.log(JSON.stringify(body?.data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(body?.data); prompts.outro("Done"); return }
 
     console.log(`  ${dim("Name:")}    ${schema?.name}`)
     console.log(`  ${dim("Version:")} ${schema?.version}`)
@@ -253,7 +253,7 @@ const SchemaDeleteCommand = cmd({
       return
     }
     const data = (((await res.json().catch(() => ({}))) as any)?.data) ?? {}
-    if (isJson) { console.log(JSON.stringify(data, null, 2)); return }
+    if (isJson) { await writeJson(data); return }
     prompts.outro(`Deleted schema '${args.slug}' (${data.deleted_versions ?? 1} version(s)${data.deleted_records ? `, ${data.deleted_records} record(s)` : ""})`)
   },
 })
@@ -304,7 +304,7 @@ const RecordsListCommand = cmd({
       const schema = body?.data?.schema
       spinner.stop(`${records.length} of ${total} record(s)`)
 
-      if (args.json) { console.log(JSON.stringify(records, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(records); prompts.outro("Done"); return }
       if (records.length === 0) { prompts.log.warn("No records"); prompts.outro("Done"); return }
 
       printDivider()
@@ -368,7 +368,7 @@ const RecordsSearchCommand = cmd({
       const total = body?.data?.records?.total ?? records.length
       const schema = body?.data?.schema
       spinner.stop(`${records.length} of ${total} match(es)`)
-      if (args.json) { console.log(JSON.stringify(records, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(records); prompts.outro("Done"); return }
       if (records.length === 0) { prompts.log.warn("No matches"); prompts.outro("Done"); return }
       printDivider()
       for (const r of records) {
@@ -404,7 +404,7 @@ const RecordsShowCommand = cmd({
     const body = (await res.json()) as any
     const record = body?.data
 
-    if (args.json) { console.log(JSON.stringify(record, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(record); prompts.outro("Done"); return }
 
     const d = record?.data ?? {}
     printDivider()
@@ -456,7 +456,7 @@ const RecordsSummaryCommand = cmd({
     const body = (await res.json()) as any
     const data = body?.data
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     printDivider()
     console.log(`  ${bold("Total Records:")} ${data?.total_records ?? 0}`)
@@ -680,7 +680,7 @@ const AuditCommand = cmd({
         }
       }
 
-      if (args.json) { console.log(JSON.stringify({ total_records: records.length, flags_count: flags.length, flags }, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson({ total_records: records.length, flags_count: flags.length, flags }); prompts.outro("Done"); return }
 
       printDivider()
       console.log(`  ${bold("Records scanned:")} ${records.length}`)
@@ -946,7 +946,7 @@ const ApiCommand = cmd({
     const curl = `curl -X POST "${url}" -H "Authorization: Bearer $IRIS_API_KEY" -H "Content-Type: application/json" -d '{"data":${exampleData},"external_id":"unique-1"}'`
 
     if (args.json) {
-      console.log(JSON.stringify({
+      await writeJson({
         dataset: args.slug,
         base_url: url,
         auth: { header: "Authorization", value: "Bearer <IRIS_API_KEY>" },
@@ -962,7 +962,7 @@ const ApiCommand = cmd({
           summary: { method: "GET", path: `/api/v1/atlas/datasets/${args.slug}/summary` },
         },
         example_curl: curl,
-      }, null, 2))
+      })
       return
     }
 
@@ -1027,7 +1027,7 @@ const FeedCreateCommand = cmd({
     const ok = await handleApiError(res, "Create feed"); if (!ok) { prompts.outro("Done"); return }
     const d = ((await res.json()) as any)?.data
 
-    if (args.json) { console.log(JSON.stringify(d, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(d); prompts.outro("Done"); return }
 
     printDivider()
     console.log(`  ${bold("Feed")}      #${d?.id}  ${d?.label ?? ""}`)
@@ -1068,7 +1068,7 @@ const FeedListCommand = cmd({
     const ok = await handleApiError(res, "List feeds"); if (!ok) { prompts.outro("Done"); return }
     const feeds: any[] = ((await res.json()) as any)?.data?.feeds ?? []
 
-    if (args.json) { console.log(JSON.stringify(feeds, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(feeds); prompts.outro("Done"); return }
     if (feeds.length === 0) {
       prompts.log.warn("No feeds yet")
       prompts.outro("iris datasets feeds create -s <slug>")
@@ -1233,7 +1233,7 @@ const ImportCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ created, updated, failed_count: failedCount, total_active: totalActive, failed: failures }, null, 2))
+      await writeJson({ created, updated, failed_count: failedCount, total_active: totalActive, failed: failures })
       prompts.outro("Done"); return
     }
 
@@ -1342,7 +1342,7 @@ const AggregateCommand = cmd({
     const ok = await handleApiError(res, "Aggregate"); if (!ok) { prompts.outro("Done"); return }
     const data = ((await res.json()) as any)?.data
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     const groups: any[] = data?.groups ?? []
     const specs: string[] = [...new Set(groups.flatMap((g: any) => Object.keys(g.metrics ?? {})))] as string[]
@@ -1418,7 +1418,7 @@ const DeriveCommand = cmd({
     const ok = await handleApiError(res, "Derive"); if (!ok) { prompts.outro("Done"); return }
     const data = ((await res.json()) as any)?.data
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     printDivider()
     const results: any[] = data?.results ?? []
@@ -1513,7 +1513,7 @@ const EconomicsShowCommand = cmd({
     const ok = await handleApiError(res, "Show economics"); if (!ok) { prompts.outro("Done"); return }
     const body = (await res.json()) as any
 
-    if (args.json) { console.log(JSON.stringify(body, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(body); prompts.outro("Done"); return }
     printEconomics(body?.economics, body?.defaults, Boolean(body?.configured))
     prompts.outro("Done")
   },
@@ -1563,7 +1563,7 @@ const EconomicsSetCommand = cmd({
     const ok = await handleApiError(res, "Set economics"); if (!ok) { prompts.outro("Done"); return }
     const body = (await res.json()) as any
 
-    if (args.json) { console.log(JSON.stringify(body, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(body); prompts.outro("Done"); return }
     console.log(`  ${bold("✓")} Saved.`)
     printEconomics(body?.economics, body?.defaults, Boolean(body?.configured))
     prompts.outro("Done")

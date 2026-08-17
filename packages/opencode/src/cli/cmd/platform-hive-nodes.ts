@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
 import { resolveLocalNode } from "./hive-local-node"
 
 // ============================================================================
@@ -101,7 +101,7 @@ const HiveNodesListCommand = cmd({
     }
 
     if (argv.json) {
-      console.log(JSON.stringify(nodes, null, 2))
+      await writeJson(nodes)
       return
     }
 
@@ -217,7 +217,7 @@ const HiveNodesShowCommand = cmd({
     }
 
     if (argv.json) {
-      console.log(JSON.stringify(node, null, 2))
+      await writeJson(node)
       return
     }
 
@@ -337,7 +337,7 @@ const HiveRunCommand = cmd({
     // Fire-and-forget mode: print task id and exit
     if (argv.queue) {
       if (argv.json) {
-        console.log(JSON.stringify({ task_id: taskId, status: created.task.status, dispatched: created.dispatched }, null, 2))
+        await writeJson({ task_id: taskId, status: created.task.status, dispatched: created.dispatched })
         return
       }
       console.log(`${success("✓")} dispatched task ${bold(taskId)}  status=${created.task.status}`)
@@ -381,7 +381,7 @@ const HiveRunCommand = cmd({
     }
 
     if (argv.json) {
-      console.log(JSON.stringify(final, null, 2))
+      await writeJson(final)
       return
     }
 

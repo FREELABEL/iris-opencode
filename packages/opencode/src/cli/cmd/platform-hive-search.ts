@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { requireAuth, requireUserId, dim, bold, success, highlight } from "./iris-api"
+import { requireAuth, requireUserId, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { hiveFetch, fetchNodes } from "./platform-hive-nodes"
 import { existsSync, readFileSync, readdirSync, mkdirSync } from "fs"
 import { join } from "path"
@@ -266,7 +266,7 @@ export const HiveSearchCommand = cmd({
     const allResults = [...localResults, ...remoteResults]
 
     if (argv.json) {
-      console.log(JSON.stringify(allResults, null, 2))
+      await writeJson(allResults)
       return
     }
 

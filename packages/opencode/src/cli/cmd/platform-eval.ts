@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { requireAuth, requireUserId, printDivider, printKV, dim, bold, success, streamAgentChat } from "./iris-api"
+import { requireAuth, requireUserId, printDivider, printKV, dim, bold, success, streamAgentChat, writeJson } from "./iris-api"
 import { writeFileSync } from "fs"
 
 // ============================================================================
@@ -114,7 +114,7 @@ const EvalRunCommand = cmd({
       results.push(r)
     }
 
-    if (args.json) console.log(JSON.stringify(results, null, 2))
+    if (args.json) await writeJson(results)
     else {
       printDivider()
       const passed = results.filter((r) => r.status === "completed").length

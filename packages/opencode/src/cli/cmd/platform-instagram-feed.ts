@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { IRIS_API, loadIrisSdkEnvSync, dim, bold, printDivider } from "./iris-api"
+import { IRIS_API, loadIrisSdkEnvSync, dim, bold, printDivider, writeJson } from "./iris-api"
 import * as fs from "fs"
 
 // ============================================================================
@@ -231,7 +231,7 @@ const FeedSeedCommand = cmd({
 
     const body: any = await res.json()
     if (args.json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       prompts.outro("Done")
       return
     }
@@ -271,7 +271,7 @@ const FeedShowCommand = cmd({
     }
 
     const body: any = await res.json()
-    if (args.json) { console.log(JSON.stringify(body, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(body); prompts.outro("Done"); return }
 
     const data = body?.instagram ?? body?.data ?? body
     const posts: any[] = data?.posts ?? []

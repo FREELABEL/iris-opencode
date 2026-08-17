@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, IRIS_API, writeJson } from "./iris-api"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 
 // ============================================================================
@@ -57,7 +57,7 @@ const IntegrationsListCommand = cmd({
       if (spinner) spinner.stop(`${integrations.length} integration(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(integrations, null, 2))
+        await writeJson(integrations)
         return
       }
 
@@ -189,7 +189,7 @@ const IntegrationsConnectCommand = cmd({
       const integration = data?.data ?? data
 
       if (args.json) {
-        console.log(JSON.stringify(integration, null, 2))
+        await writeJson(integration)
         return
       }
 
@@ -493,7 +493,7 @@ const IntegrationsExecCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
         return
       }
 
@@ -552,7 +552,7 @@ const IntegrationsExecCommand = cmd({
       } else {
         // Generic output
         console.log()
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
       }
 
       // Report bundle attachment (shown after any of the above)

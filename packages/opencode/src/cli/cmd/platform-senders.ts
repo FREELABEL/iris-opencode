@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 
 /**
  * `iris senders` — the verified identity a message goes out AS.
@@ -90,7 +90,7 @@ const ListCommand = cmd({
 
     const rows = (((await res.json()) as any)?.data ?? []) as SenderRow[]
 
-    if (args.json) { console.log(JSON.stringify(rows, null, 2)); return }
+    if (args.json) { await writeJson(rows); return }
 
     printDivider()
     if (!rows.length) {
@@ -116,7 +116,7 @@ const ShowCommand = cmd({
     if (!res.ok) { await handleApiError(res, "Show sender"); if (!args.json) prompts.outro("Done"); return }
 
     const s = ((await res.json()) as any)?.data as SenderRow
-    if (args.json) { console.log(JSON.stringify(s, null, 2)); return }
+    if (args.json) { await writeJson(s); return }
 
     printDivider()
     printSender(s, true)
@@ -164,7 +164,7 @@ const CreateCommand = cmd({
       return
     }
 
-    if (args.json) { console.log(JSON.stringify(payload?.data, null, 2)); return }
+    if (args.json) { await writeJson(payload?.data); return }
 
     printDivider()
     printSender(payload.data as SenderRow, true)
@@ -210,7 +210,7 @@ const VerifyCommand = cmd({
       return
     }
 
-    if (args.json) { console.log(JSON.stringify(payload, null, 2)); return }
+    if (args.json) { await writeJson(payload); return }
 
     printDivider()
     printSender(payload.data as SenderRow, true)
@@ -241,7 +241,7 @@ const BindCommand = cmd({
     if (!res.ok) { await handleApiError(res, "Bind sender"); if (!args.json) prompts.outro("Done"); return }
 
     const s = ((await res.json()) as any)?.data as SenderRow
-    if (args.json) { console.log(JSON.stringify(s, null, 2)); return }
+    if (args.json) { await writeJson(s); return }
 
     printDivider()
     printSender(s, true)
@@ -282,7 +282,7 @@ const PreferCommand = cmd({
       return
     }
 
-    if (args.json) { console.log(JSON.stringify(payload?.data, null, 2)); return }
+    if (args.json) { await writeJson(payload?.data); return }
 
     printDivider()
     printSender(payload.data as SenderRow, true)

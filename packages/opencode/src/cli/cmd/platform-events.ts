@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, BRIDGE_URL, bridgeFetch } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, BRIDGE_URL, bridgeFetch, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
@@ -138,7 +138,7 @@ const ListCommand = cmd({
       if (spinner) spinner.stop(`${items.length} event(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
         return
       }
 
@@ -276,7 +276,7 @@ const CreateCommand = cmd({
       spinner.stop(`${success("✓")} Created: ${bold(String(e.title ?? e.id))}`)
 
       if (args.json) {
-        console.log(JSON.stringify(e, null, 2))
+        await writeJson(e)
         prompts.outro("Done")
         return
       }
@@ -397,7 +397,7 @@ const UpdateCommand = cmd({
       spinner.stop(`${success("✓")} Updated: ${bold(String(e.title ?? e.id))}`)
 
       if (args.json) {
-        console.log(JSON.stringify(e, null, 2))
+        await writeJson(e)
         prompts.outro("Done")
         return
       }
@@ -795,7 +795,7 @@ const SetTimesListCommand = cmd({
       const data = (await res.json()) as any
       const setTimes = data.data || []
       spinner.stop(success(`${setTimes.length} artist(s) on stage`))
-      if (args.json) { console.log(JSON.stringify(setTimes, null, 2)); return }
+      if (args.json) { await writeJson(setTimes); return }
       if (setTimes.length === 0) { prompts.log.info(dim("No set times. Use: iris events add-set-time <event-id> <stage-id> --profile <pk>")); return }
       printDivider()
       for (const st of setTimes) {
@@ -842,7 +842,7 @@ const AddSetTimeCommand = cmd({
       const st = data.data || data
       const name = st.profile?.name || st.profile_name || "Artist"
       spinner.stop(success(`${name} added to lineup`))
-      if (args.json) { console.log(JSON.stringify(st, null, 2)); return }
+      if (args.json) { await writeJson(st); return }
       printDivider()
       printKV("Artist", name)
       if (st.profile?.id) printKV("Profile", `@${st.profile.id}`)
@@ -1682,7 +1682,7 @@ const LinkPageCommand = cmd({
       spinner.stop(success(existing ? "Register link updated" : "Register link created"))
 
       if (args.json) {
-        console.log(JSON.stringify({ event_id: Number(eventId), page_slug: slug, url, ticket_id: ticketId ?? null, bloq_id: bloqLinked ?? null }, null, 2))
+        await writeJson({ event_id: Number(eventId), page_slug: slug, url, ticket_id: ticketId ?? null, bloq_id: bloqLinked ?? null })
         return
       }
       printDivider()
@@ -1745,7 +1745,7 @@ const LinkVenueCommand = cmd({
       const data = (await res.json()) as any
       const deal = data.data || data
       spinner.stop(success("Venue linked to event"))
-      if (args.json) { console.log(JSON.stringify(deal, null, 2)); return }
+      if (args.json) { await writeJson(deal); return }
       printDivider()
       printKV("Event", `#${eventId}`)
       printKV("Venue ID", venueId)
@@ -1819,7 +1819,7 @@ const ListLeadsCommand = cmd({
       const data = (await res.json()) as any
       const leads = data.data || []
       spinner.stop(success(`${leads.length} lead(s) on event #${eventId}`))
-      if (args.json) { console.log(JSON.stringify(leads, null, 2)); return }
+      if (args.json) { await writeJson(leads); return }
       if (leads.length === 0) { prompts.log.info(dim("No leads attached. Use: iris events add-lead <event-id> <lead-id> --role performer")); return }
       printDivider()
       for (const el of leads) {
@@ -1874,7 +1874,7 @@ const AddLeadCommand = cmd({
       const el = data.data || data
       const lead = el.lead || {}
       spinner.stop(success(`${lead.nickname || lead.name || "Lead #" + leadId} added as ${el.role}`))
-      if (args.json) { console.log(JSON.stringify(el, null, 2)); return }
+      if (args.json) { await writeJson(el); return }
       printDivider()
       printKV("Event", `#${eventId}`)
       printKV("Lead", `#${leadId} — ${lead.nickname || lead.name || "?"}`)
@@ -2007,7 +2007,7 @@ const StaffingCommand = cmd({
       const data = (await res.json()) as any
       const d = data.data || data
       spinner.stop(success(`${d.role_count} comp'd role${d.role_count === 1 ? "" : "s"}`))
-      if (args.json) { console.log(JSON.stringify(d, null, 2)); return }
+      if (args.json) { await writeJson(d); return }
 
       const fmt = (c: number | null | undefined) => c == null ? "—" : `$${(Number(c) / 100).toFixed(2)}`
       printDivider()
@@ -2244,7 +2244,7 @@ const PreflightCommand = cmd({
 
     // ── Render ──
     if (args.json) {
-      console.log(JSON.stringify(checks, null, 2))
+      await writeJson(checks)
       prompts.outro("Done")
       return
     }
@@ -2367,7 +2367,7 @@ const AuditCommand = cmd({
 
     // ── Render ──
     if (args.json) {
-      console.log(JSON.stringify(checks, null, 2))
+      await writeJson(checks)
       prompts.outro("Done")
       return
     }
@@ -2477,7 +2477,7 @@ const ImportIgCommand = cmd({
       printDivider()
 
       if (args["dry-run"]) {
-        if (args.json) { console.log(JSON.stringify({ caption, flyerUrl, images, location }, null, 2)) }
+        if (args.json) { await writeJson({ caption, flyerUrl, images, location }) }
         prompts.outro(dim("Dry run — no event created"))
         return
       }
@@ -2514,7 +2514,7 @@ const ImportIgCommand = cmd({
       spinner2.stop(`${success("✓")} Created: ${bold(String(e.title ?? e.id))}`)
 
       if (args.json) {
-        console.log(JSON.stringify(e, null, 2))
+        await writeJson(e)
         prompts.outro("Done")
         return
       }
@@ -2759,7 +2759,7 @@ Return this exact JSON structure (use null for unknown fields):
 
       if (args["dry-run"]) {
         if (args.json) {
-          console.log(JSON.stringify({ platform, title: eventTitle, date: eventDate, time: eventTime, venue: eventVenue, city: eventCity, state: eventState, description: eventDesc, flyer: flyerUrl, ticket_url: ticketUrl, price, images, source: args.url }, null, 2))
+          await writeJson({ platform, title: eventTitle, date: eventDate, time: eventTime, venue: eventVenue, city: eventCity, state: eventState, description: eventDesc, flyer: flyerUrl, ticket_url: ticketUrl, price, images, source: args.url })
         }
         prompts.outro(dim("Dry run — no event created"))
         return
@@ -2808,7 +2808,7 @@ Return this exact JSON structure (use null for unknown fields):
       createSpinner.stop(`${success("✓")} Event #${eventId} created`)
 
       if (args.json) {
-        console.log(JSON.stringify({ event_id: eventId, platform, title: eventTitle, flyer: flyerUrl }, null, 2))
+        await writeJson({ event_id: eventId, platform, title: eventTitle, flyer: flyerUrl })
       }
 
       prompts.outro(dim(`iris events get ${eventId}`))
@@ -2915,7 +2915,7 @@ const SearchCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
         prompts.outro("Done")
         return
       }
@@ -2971,7 +2971,7 @@ const SalesCommand = cmd({
 
       spinner.stop(success(`Sales for event #${eventId}`))
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       // Header
       printDivider()
@@ -3055,7 +3055,7 @@ const ResolveCommand = cmd({
 
       spinner.stop(success(`Checked ${data.total_checked || 0} pending purchases`))
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       printDivider()
       console.log(`  Resolved (paid):   ${success(String(data.resolved || 0))}`)

@@ -18,8 +18,7 @@ import {
   PLATFORM_URLS,
   BRIDGE_URL,
   getBridgeToken,
-  resolveUserId,
-} from "./iris-api"
+  resolveUserId, writeJson } from "./iris-api"
 // #137403/#137526 — reuse the venues browser Google-Maps discovery path for leads.
 import { findOnlineHiveNode, dispatchHiveSearch } from "./platform-venues"
 import { executeIntegrationCall } from "./platform-run"
@@ -336,7 +335,7 @@ const LeadsListCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(leads, null, 2))
+        await writeJson(leads)
         return
       }
 
@@ -412,7 +411,7 @@ const LeadsRepliedCommand = cmd({
       spinner.stop(`${leads.length} responder(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(leads, null, 2))
+        await writeJson(leads)
         prompts.outro("Done")
         return
       }
@@ -565,7 +564,7 @@ const LeadsGetCommand = cmd({
       spinner.stop(String(l.name ?? l.first_name ?? `Lead #${l.id}`))
 
       if (args.json) {
-        console.log(JSON.stringify(l, null, 2))
+        await writeJson(l)
         return
       }
 
@@ -753,7 +752,7 @@ const LeadsSearchCommand = cmd({
       spinner.stop(`${total} result(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(leads, null, 2))
+        await writeJson(leads)
         return
       }
 
@@ -935,7 +934,7 @@ const LeadsCreateCommand = cmd({
       }
 
       if (isJson) {
-        console.log(JSON.stringify(l, null, 2))
+        await writeJson(l)
         return
       }
 
@@ -1052,7 +1051,7 @@ const LeadsNotesCommand = cmd({
 
       if (isJson) {
         // Include note IDs so scripts can edit/delete (#137530).
-        console.log(JSON.stringify({ lead_id: leadId, notes }, null, 2))
+        await writeJson({ lead_id: leadId, notes })
         return
       }
 
@@ -1133,7 +1132,7 @@ const LeadsOutreachCommand = cmd({
       spinner.stop(`${messages.length} messages`)
 
       if (args.json) {
-        console.log(JSON.stringify(body, null, 2))
+        await writeJson(body)
         return
       }
 
@@ -1286,7 +1285,7 @@ const LeadsNoteCommand = cmd({
 
       const data = await res.json().catch(() => ({}))
       if (isJson) {
-        console.log(JSON.stringify((data as any)?.data ?? data, null, 2))
+        await writeJson((data as any)?.data ?? data)
         return
       }
 
@@ -1446,7 +1445,7 @@ const LeadsUpdateCommand = cmd({
       const l = data?.data ?? data
 
       if (isJson) {
-        console.log(JSON.stringify(l, null, 2))
+        await writeJson(l)
         return
       }
 
@@ -5242,7 +5241,7 @@ const LeadsMeetingsCommand = cmd({
       spinner.stop(`${upcoming.length} upcoming, ${past.length} past`)
 
       if (args.json) {
-        console.log(JSON.stringify({ lead_id: leadId, upcoming, past }, null, 2))
+        await writeJson({ lead_id: leadId, upcoming, past })
         prompts.outro("Done")
         return
       }
@@ -5432,13 +5431,13 @@ const LeadsSyncCalendarCommand = cmd({
       spinner.stop(`${success("✓")} ${imported} imported${failed > 0 ? `, ${failed} failed` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           lead_id: leadId,
           events_found: allEvents.length,
           already_tracked: allEvents.length - toImport.length,
           imported,
           failed,
-        }, null, 2))
+        })
       } else {
         printDivider()
         printKV("Events found", String(allEvents.length))
@@ -5521,7 +5520,7 @@ const LeadsPaymentGateCommand = cmd({
     const data = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5586,7 +5585,7 @@ const LeadsUpdatePaymentGateCommand = cmd({
 
     const data = await res.json().catch(() => ({}))
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5640,7 +5639,7 @@ const LeadsDeletePaymentGateCommand = cmd({
 
     const data = await res.json().catch(() => ({}))
     if (isJson) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5674,7 +5673,7 @@ const LeadsDealStatusCommand = cmd({
     const status = result?.data ?? result
 
     if (args.json) {
-      console.log(JSON.stringify(status, null, 2))
+      await writeJson(status)
       return
     }
 
@@ -5738,7 +5737,7 @@ const LeadsPackagesCommand = cmd({
     const packages: any[] = result?.data?.packages ?? result?.data ?? []
 
     if (args.json) {
-      console.log(JSON.stringify(packages, null, 2))
+      await writeJson(packages)
       return
     }
 
@@ -5809,7 +5808,7 @@ const LeadsCreatePackageCommand = cmd({
     const data = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5890,7 +5889,7 @@ const LeadsUpdatePackageCommand = cmd({
     const data = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -5961,7 +5960,7 @@ const LeadsRegenCheckoutCommand = cmd({
 
       if (args.json) {
         const data = await res.json().catch(() => ({}))
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
         return
       }
 
@@ -6042,7 +6041,7 @@ const LeadsSubscriptionUpdateCommand = cmd({
 
     const data = (await res.json()) as any
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -6098,7 +6097,7 @@ const LeadsTasksListCommand = cmd({
 
       spinner.stop(`${tasks.length} task(s)`)
       if (args.json) {
-        console.log(JSON.stringify(tasks, null, 2))
+        await writeJson(tasks)
         return
       }
       if (tasks.length === 0) {
@@ -6429,7 +6428,7 @@ const LeadsEnrichCommand = cmd({
       const tags: any[] = data.generated_tags ?? []
 
       if (argv.json) {
-        console.log(JSON.stringify({ ok: true, lead_id: leadId, found_contacts: contacts, generated_tags: tags, note: data.note ?? null, iterations: data.iterations ?? 0, requires_confirmation: out?.requires_confirmation ?? true }, null, 2))
+        await writeJson({ ok: true, lead_id: leadId, found_contacts: contacts, generated_tags: tags, note: data.note ?? null, iterations: data.iterations ?? 0, requires_confirmation: out?.requires_confirmation ?? true })
         return
       }
       console.log(`${success("✓")} Enriched lead ${bold(String(leadId))} — ${contacts.length} contact(s) found, ${tags.length} tag(s) (${data.iterations ?? 0} research iterations)`)
@@ -6651,7 +6650,7 @@ const LeadsVerifyCommand = cmd({
     }
 
     if (isJson) {
-      console.log(JSON.stringify({ ok: true, lead_id: args.id ?? null, email: emailResult, phone: phoneResult, stored }, null, 2))
+      await writeJson({ ok: true, lead_id: args.id ?? null, email: emailResult, phone: phoneResult, stored })
       return
     }
 
@@ -6796,7 +6795,7 @@ const LeadsScoreCommand = cmd({
     }
 
     if (isJson) {
-      console.log(JSON.stringify({ ok: true, lead_id: args.id, score, tier, breakdown, weights, stored }, null, 2))
+      await writeJson({ ok: true, lead_id: args.id, score, tier, breakdown, weights, stored })
       return
     }
 
@@ -6922,7 +6921,7 @@ const LeadsDiscoverCommand = cmd({
     }
 
     if (isJson) {
-      console.log(JSON.stringify({ ok: true, query, found: businesses.length, businesses, created }, null, 2))
+      await writeJson({ ok: true, query, found: businesses.length, businesses, created })
       return
     }
 
@@ -7115,7 +7114,7 @@ const LeadsGateAllCommand = cmd({
       console.log(success(`  ${created}/${needsGate.length} payment gates created`))
 
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
       }
     } catch (e: any) {
       spinner.stop("Error", 1)
@@ -7203,7 +7202,7 @@ const LeadsKBCommand = cmd({
       spinner.stop(`${completeness.count}/${completeness.total} sections`)
 
       if (args.json) {
-        console.log(JSON.stringify(body, null, 2))
+        await writeJson(body)
         return
       }
 
@@ -8003,7 +8002,7 @@ const LeadsOnboardCommand = cmd({
     spinner.stop("")
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -8117,7 +8116,7 @@ const LeadsOnboardAllCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(rows, null, 2))
+        await writeJson(rows)
         return
       }
 
@@ -8365,7 +8364,7 @@ const ContentEngineCreateCommand = cmd({
 
     if (args["dry-run"]) {
       if (args.json) {
-        console.log(JSON.stringify(config, null, 2))
+        await writeJson(config)
       } else {
         console.log()
         console.log(`  ${bold("Agent Config")}`)
@@ -8528,7 +8527,7 @@ const ContentEngineCreateCommand = cmd({
 
       // Summary
       if (args.json) {
-        console.log(JSON.stringify({ agent_id: agent.id, schedule_id: scheduleId, bloq_id: bloqId, lead_id: leadId, page: publishedPage }, null, 2))
+        await writeJson({ agent_id: agent.id, schedule_id: scheduleId, bloq_id: bloqId, lead_id: leadId, page: publishedPage })
       } else {
         console.log()
         printDivider()
@@ -8648,12 +8647,12 @@ const ContentEngineStatusCommand = cmd({
       spinner.stop(`${contentAgents.length} content agent(s) found`)
 
       if (args.json) {
-        console.log(JSON.stringify(results.map((r) => ({
+        await writeJson(results.map((r) => ({
           agent_id: r.agent.id, agent_name: r.agent.name, model: r.agent.model,
           schedule_id: r.schedule?.id, schedule_status: r.schedule?.status,
           next_run: r.schedule?.next_run_at, articles_7d: r.articlesProduced,
           recent_executions: r.recentExecs.length,
-        })), null, 2))
+        })))
         prompts.outro("Done")
         return
       }
@@ -8864,12 +8863,12 @@ const ContentEngineDoctorCommand = cmd({
 
       if (args.json) {
         const passing = checks.filter((c) => c.pass).length
-        console.log(JSON.stringify({
+        await writeJson({
           agent_id: agent.id, agent_name: agent.name,
           schedule_id: activeSchedule?.id, healthy: passing === checks.length,
           checks: checks.map((c) => ({ ...c })),
           passing, total: checks.length,
-        }, null, 2))
+        })
         prompts.outro("Done")
         return
       }
@@ -9492,7 +9491,7 @@ const ContentEnginePublishCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
       } else if (results.length > 0) {
         console.log()
         for (const r of results) {
@@ -10556,7 +10555,7 @@ const LeadsStatsCommand = cmd({
     const byType = data.by_type ?? {}
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -10667,7 +10666,7 @@ const LeadsQuotaCommand = cmd({
     const data = (await res.json().catch(() => ({}))) as any
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -10834,7 +10833,7 @@ const LeadsAnalyzeCommand = cmd({
     printDivider()
 
     if ((args as any).json) {
-      console.log(JSON.stringify({ metrics: metrics.summary, quota: {}, messages: [] }, null, 2))
+      await writeJson({ metrics: metrics.summary, quota: {}, messages: [] })
     }
   },
 })
@@ -10931,7 +10930,7 @@ const DealsListCommand = cmd({
     const deals: any[] = data?.deals ?? []
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -10987,7 +10986,7 @@ const DealsStatusCommand = cmd({
     const status = result?.data ?? result
 
     if (args.json) {
-      console.log(JSON.stringify(status, null, 2))
+      await writeJson(status)
       return
     }
 
@@ -11048,7 +11047,7 @@ const DealsRemindCommand = cmd({
     const result = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -11108,7 +11107,7 @@ const DealsRecoverCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ lead_id: args.id, reminders_triggered: sent, status: status.status }, null, 2))
+      await writeJson({ lead_id: args.id, reminders_triggered: sent, status: status.status })
       return
     }
 
@@ -11176,7 +11175,7 @@ const DealsCreateCommand = cmd({
     const result = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -11224,7 +11223,7 @@ const DealsDeleteCommand = cmd({
     const result = await res.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -11309,7 +11308,7 @@ const DealsUpdateCommand = cmd({
     const result = await createRes.json().catch(() => ({}))
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -11384,7 +11383,7 @@ const LeadsCollectCommand = cmd({
     const leadData = await leadRes.json().catch(() => ({}))
     if (!leadRes.ok) {
       const detail = (leadData as any)?.error ?? (leadData as any)?.message ?? `HTTP ${leadRes.status}`
-      if (args.json) console.log(JSON.stringify({ ...results, error: "lead_fetch_failed", detail }, null, 2))
+      if (args.json) await writeJson({ ...results, error: "lead_fetch_failed", detail })
       else console.log(highlight(`  ⚠ Could not load lead #${leadId} — ${detail}`))
       process.exitCode = 1
       return
@@ -11441,7 +11440,7 @@ const LeadsCollectCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(results, null, 2))
+        await writeJson(results)
         return
       }
       printDivider()
@@ -11467,7 +11466,7 @@ const LeadsCollectCommand = cmd({
       // writes "subscription_created" into the machine-readable steps[] (#178552).
       if (!subRes.ok) {
         const detail = subBody?.error ?? subBody?.message ?? `HTTP ${subRes.status}`
-        if (args.json) console.log(JSON.stringify({ ...results, error: "subscription_creation_failed", detail }, null, 2))
+        if (args.json) await writeJson({ ...results, error: "subscription_creation_failed", detail })
         else console.log(highlight(`  ⚠ Failed to create subscription — ${detail}`))
         process.exitCode = 1
         return
@@ -11477,7 +11476,7 @@ const LeadsCollectCommand = cmd({
       // A 200 with an unrecognised body shape is still a failure — say so as a
       // subscription, not as an invoice.
       if (!invoiceId) {
-        if (args.json) console.log(JSON.stringify({ ...results, error: "subscription_creation_failed", detail: "no subscription id in response" }, null, 2))
+        if (args.json) await writeJson({ ...results, error: "subscription_creation_failed", detail: "no subscription id in response" })
         else console.log(highlight("  ⚠ Failed to create subscription — the server returned no subscription id"))
         process.exitCode = 1
         return
@@ -11493,7 +11492,7 @@ const LeadsCollectCommand = cmd({
       const createBody = await createRes.json().catch(() => ({}))
       if (!createRes.ok) {
         const detail = createBody?.error ?? createBody?.message ?? `HTTP ${createRes.status}`
-        if (args.json) console.log(JSON.stringify({ ...results, error: "invoice_creation_failed", detail }, null, 2))
+        if (args.json) await writeJson({ ...results, error: "invoice_creation_failed", detail })
         else console.log(highlight(`  ⚠ Failed to create invoice — ${detail}`))
         process.exitCode = 1
         return
@@ -11504,7 +11503,7 @@ const LeadsCollectCommand = cmd({
     }
 
     if (!invoiceId) {
-      if (args.json) console.log(JSON.stringify({ ...results, error: "invoice_creation_failed" }, null, 2))
+      if (args.json) await writeJson({ ...results, error: "invoice_creation_failed" })
       else console.log(highlight("  ⚠ Failed to create invoice"))
       return
     }
@@ -11534,7 +11533,7 @@ const LeadsCollectCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ ...results, invoice_id: invoiceId }, null, 2))
+      await writeJson({ ...results, invoice_id: invoiceId })
       return
     }
     printDivider()
@@ -11576,7 +11575,7 @@ const SegmentListCommand = cmd({
 
     const segments = await fetchSegments(args["bloq-id"] as number | undefined)
     if ((args as any).json) {
-      console.log(JSON.stringify(segments, null, 2))
+      await writeJson(segments)
       return
     }
     if (segments.length === 0) {
@@ -11657,7 +11656,7 @@ const SegmentCreateCommand = cmd({
     const seg = data?.segment
 
     if ((args as any).json) {
-      console.log(JSON.stringify(seg, null, 2))
+      await writeJson(seg)
       return
     }
     prompts.log.success(`Segment "${args.name}" created (ID: ${seg?.id})`)
@@ -11709,7 +11708,7 @@ const SegmentViewCommand = cmd({
     const seg = data?.segment
 
     if ((args as any).json) {
-      console.log(JSON.stringify({ segment: seg, leads, count: leads.length }, null, 2))
+      await writeJson({ segment: seg, leads, count: leads.length })
       return
     }
 
@@ -11987,7 +11986,7 @@ const ReqCreateCommand = cmd({
     const body = await res.json().catch(() => ({}))
 
     if ((args as any).json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       return
     }
 
@@ -12019,7 +12018,7 @@ const ReqListCommand = cmd({
     const reqs: any[] = body.data ?? []
 
     if ((args as any).json) {
-      console.log(JSON.stringify(reqs, null, 2))
+      await writeJson(reqs)
       return
     }
 
@@ -12100,7 +12099,7 @@ const ReqRunCommand = cmd({
     const body = await res.json().catch(() => ({}))
 
     if ((args as any).json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       return
     }
 
@@ -12136,7 +12135,7 @@ const ReqSummaryCommand = cmd({
     const s = await res.json().catch(() => ({}))
 
     if ((args as any).json) {
-      console.log(JSON.stringify(s, null, 2))
+      await writeJson(s)
       return
     }
 
@@ -12176,7 +12175,7 @@ const ReqDeleteCommand = cmd({
 
     const body = await res.json().catch(() => ({}))
     if ((args as any).json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       return
     }
     prompts.log.success(body.message ?? "Requirement deleted")
@@ -12214,7 +12213,7 @@ const ReqAllCommand = cmd({
 
     const body = await res.json().catch(() => ({}))
     if ((args as any).json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       return
     }
 
@@ -12308,7 +12307,7 @@ const ReqScheduleCommand = cmd({
 
     const result = await res.json().catch(() => ({}))
     if ((args as any).json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -12588,7 +12587,7 @@ export const PlatformPulseCommand = cmd({
         }
 
         if (args.json) {
-          console.log(JSON.stringify({ scope: "user", user_id: userId, score, band, signals, timestamp: new Date().toISOString() }, null, 2))
+          await writeJson({ scope: "user", user_id: userId, score, band, signals, timestamp: new Date().toISOString() })
         }
         return
       } catch (err: any) {
@@ -12869,7 +12868,7 @@ export const PlatformPulseCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ diary: lines.slice(0, 5), timestamp: new Date().toISOString() }, null, 2))
+      await writeJson({ diary: lines.slice(0, 5), timestamp: new Date().toISOString() })
     }
   },
 })

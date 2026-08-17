@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 
 // ============================================================================
 // Outreach Campaigns — port of OutreachCampaignCommand.php
@@ -71,7 +71,7 @@ const ListCmd = cmd({
     const body = await getJson(res)
     const campaigns: any[] = body.campaigns ?? body.data ?? []
 
-    if (args.json) { console.log(JSON.stringify(campaigns, null, 2)); return }
+    if (args.json) { await writeJson(campaigns); return }
 
     if (campaigns.length === 0) {
       prompts.log.info("No campaigns found.")
@@ -109,7 +109,7 @@ const ShowCmd = cmd({
     const body = await getJson(res)
     const c = body.campaign ?? body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(c, null, 2)); return }
+    if (args.json) { await writeJson(c); return }
 
     console.log("")
     console.log(bold(`Campaign: ${c.name}`))
@@ -180,7 +180,7 @@ const CreateCmd = cmd({
     const body = await getJson(res)
     const c = body.campaign ?? body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(c, null, 2)); return }
+    if (args.json) { await writeJson(c); return }
 
     prompts.log.success(`${success("✓")} Campaign #${c.id} created: ${bold(String(c.name))}`)
     prompts.log.info(dim(`iris outreach-campaign start ${c.id}`))
@@ -248,7 +248,7 @@ const AnalyticsCmd = cmd({
     const body = await getJson(res)
     const a = body.analytics ?? body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(a, null, 2)); return }
+    if (args.json) { await writeJson(a); return }
 
     console.log("")
     console.log(bold(`Analytics — Campaign #${args.id}`))
@@ -294,7 +294,7 @@ const RecipientsCmd = cmd({
     const raw = body.recipients ?? body.data ?? []
     const recipients: any[] = raw.data ?? raw
 
-    if (args.json) { console.log(JSON.stringify(raw, null, 2)); return }
+    if (args.json) { await writeJson(raw); return }
     if (recipients.length === 0) { prompts.log.info("No recipients"); return }
 
     console.log("")

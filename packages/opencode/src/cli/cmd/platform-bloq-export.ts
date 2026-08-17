@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { resolveBloqId } from "./platform-bloqs"
 import fs from "fs"
 import path from "path"
@@ -205,7 +205,7 @@ export const BloqsExportCommand = cmd({
     // Guard before the intro — otherwise a bare `bloqs export` greets you with
     // "Export bloq undefined" before telling you what it actually wants.
     if (!wantsAll && !args.id) {
-      if (args.json) console.log(JSON.stringify({ error: "Pass a bloq id/name, or --all to export everything." }, null, 2))
+      if (args.json) await writeJson({ error: "Pass a bloq id/name, or --all to export everything." })
       else {
         UI.empty()
         console.error(`  Pass a bloq id/name, or ${bold("--all")} to export every bloq.`)
@@ -283,7 +283,7 @@ export const BloqsExportCommand = cmd({
         fs.writeFileSync(path.join(baseDir, "workspace-manifest.json"), JSON.stringify(wsManifest, null, 2))
 
         if (spinner) spinner.stop(failures.length ? "Exported (with failures)" : "Exported")
-        if (args.json) { console.log(JSON.stringify(wsManifest, null, 2)); return }
+        if (args.json) { await writeJson(wsManifest); return }
 
         printDivider()
         printKV("Bloqs", `${results.length}/${bloqs.length} exported${failures.length ? ` ${dim(`· ${failures.length} failed`)}` : ""}`)
@@ -311,7 +311,7 @@ export const BloqsExportCommand = cmd({
       const manifest = await exportOneBloq(resolvedId, userId, baseDir, opts, (m) => spinner?.message(m))
       if (spinner) spinner.stop("Exported")
 
-      if (args.json) { console.log(JSON.stringify(manifest, null, 2)); return }
+      if (args.json) { await writeJson(manifest); return }
 
       printDivider()
       printKV("Bloq", `${bold(String(manifest.source?.bloq_name ?? resolvedId))} ${dim(`#${resolvedId}`)}`)
@@ -333,7 +333,7 @@ export const BloqsExportCommand = cmd({
     } catch (err: any) {
       if (spinner) spinner.stop("Failed", 1)
       if (args.json) {
-        console.log(JSON.stringify({ error: err?.message ?? String(err) }, null, 2))
+        await writeJson({ error: err?.message ?? String(err) })
       } else {
         console.error(`  Export failed: ${err?.message ?? String(err)}`)
         prompts.outro("Done")

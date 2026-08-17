@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 
 // ============================================================================
 // Invoices — port of InvoicesCommand.php
@@ -33,7 +33,7 @@ const ListCmd = cmd({
     const raw = body.data ?? body.invoices ?? body
     const invoices: any[] = Array.isArray(raw) ? raw : []
 
-    if (args.json) { console.log(JSON.stringify(invoices, null, 2)); return }
+    if (args.json) { await writeJson(invoices); return }
     if (invoices.length === 0) { prompts.log.info(`No invoices for lead #${args.leadId}`); return }
 
     console.log("")
@@ -72,7 +72,7 @@ const CreateCmd = cmd({
     const body = await getJson(res)
     const inv = body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(inv, null, 2)); return }
+    if (args.json) { await writeJson(inv); return }
 
     prompts.log.success(`${success("✓")} Invoice #${inv.id} created`)
     printKV("Title", inv.title)
@@ -127,7 +127,7 @@ const SubscribeCmd = cmd({
     if (!(await handleApiError(res, "Create subscription"))) return
     const body = await getJson(res)
 
-    if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+    if (args.json) { await writeJson(body); return }
 
     const checkoutUrl = body.checkout_url ?? body.data?.checkout_url
     const custom = body.custom_request ?? body.data?.custom_request ?? {}
@@ -158,7 +158,7 @@ const ShowCmd = cmd({
     const body = await getJson(res)
     const inv = body.request ?? body.invoice ?? body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(inv, null, 2)); return }
+    if (args.json) { await writeJson(inv); return }
     if (!inv || !inv.id) { prompts.log.info(`No invoice for lead #${args.leadId}`); return }
 
     const paid = !!inv.paid_at
@@ -190,7 +190,7 @@ const CheckoutCmd = cmd({
     if (!(await handleApiError(res, "Generate checkout"))) return
     const body = await getJson(res)
 
-    if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+    if (args.json) { await writeJson(body); return }
 
     const url = body.url ?? body.checkout_url ?? body.vendor_url ?? body.data?.url
     if (url) {
@@ -221,7 +221,7 @@ const SendCmd = cmd({
     if (!(await handleApiError(res, "Send invoice"))) return
     const body = await getJson(res)
 
-    if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+    if (args.json) { await writeJson(body); return }
 
     if (body.success === false) {
       prompts.log.error(`Failed: ${body.message ?? "Unknown error"}`)
@@ -270,7 +270,7 @@ const MarkPaidCmd = cmd({
     if (!(await handleApiError(res, "Mark paid"))) return
     const body = await getJson(res)
 
-    if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+    if (args.json) { await writeJson(body); return }
 
     if (body.success) {
       prompts.log.success(`${success("✓")} Offline payment recorded`)

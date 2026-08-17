@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 
 // ============================================================================
 // Event Production CLI — runsheet, checklist, budget, overview
@@ -287,7 +287,7 @@ const RunsheetCmd = cmd({
 
     // Display
     if (args.json) {
-      console.log(JSON.stringify(runsheet, null, 2))
+      await writeJson(runsheet)
       prompts.outro("Done")
       return
     }
@@ -397,7 +397,7 @@ const ChecklistCmd = cmd({
 
     // Display
     if (args.json) {
-      console.log(JSON.stringify(checklist, null, 2))
+      await writeJson(checklist)
       prompts.outro("Done")
       return
     }
@@ -490,7 +490,7 @@ const BudgetCmd = cmd({
     const margin = totalIncome - totalExpenses
 
     if (args.json) {
-      console.log(JSON.stringify({ income, expenses, totalIncome, totalExpenses, margin }, null, 2))
+      await writeJson({ income, expenses, totalIncome, totalExpenses, margin })
       prompts.outro("Done")
       return
     }

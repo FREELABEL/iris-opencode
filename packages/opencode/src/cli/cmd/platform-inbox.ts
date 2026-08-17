@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, isNonInteractive, bridgeFetch } from "./iris-api"
+import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, isNonInteractive, bridgeFetch, writeJson } from "./iris-api"
 
 // Shared Helpers
 
@@ -192,7 +192,7 @@ const ScanCommand: any = cmd({
       const taskId = result.task.id
 
       if (jsonOut) {
-        console.log(JSON.stringify({ task_id: taskId, platform, board: resolvedBoard, status: "dispatched" }, null, 2))
+        await writeJson({ task_id: taskId, platform, board: resolvedBoard, status: "dispatched" })
       } else {
         console.log(`  Task: ${bold(taskId)}`)
         console.log(`  ${dim("Your Hive node will scan the inbox and tag leads with replies.")}`)
@@ -318,7 +318,7 @@ const StatusCommand: any = cmd({
             replied_at: l.replied_at,
             status: l.status,
           }))
-          console.log(JSON.stringify(output, null, 2))
+          await writeJson(output)
         } else if (replied.length > 0) {
           printDivider()
           for (const l of replied.slice(0, 20)) {
@@ -716,7 +716,7 @@ async function inboxViewHandler(args: any) {
 
     // JSON output
     if (args.json) {
-      console.log(JSON.stringify({ total: entries.length, source, entries }, null, 2))
+      await writeJson({ total: entries.length, source, entries })
       prompts.outro("Done")
       return
     }

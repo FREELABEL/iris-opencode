@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, success, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -59,7 +59,7 @@ const ListCmd = cmd({
     const pkgs = await listPackages(args.platform)
     sp.stop(`${pkgs.length} package(s)`)
     if (args.json) {
-      console.log(JSON.stringify(pkgs, null, 2))
+      await writeJson(pkgs)
       prompts.outro("Done")
       return
     }
@@ -86,7 +86,7 @@ const GetCmd = cmd({
     const pkg = await getPackage(args.slug)
     if (!pkg) { console.error(`Package not found: ${args.slug}`); process.exit(1) }
     if (!args.path) {
-      console.log(JSON.stringify(pkg, null, 2))
+      await writeJson(pkg)
       return
     }
     const parts = args.path.split(".")
@@ -99,7 +99,7 @@ const GetCmd = cmd({
       }
       cur = cur[k]
     }
-    if (typeof cur === "object") console.log(JSON.stringify(cur, null, 2))
+    if (typeof cur === "object") await writeJson(cur)
     else console.log(String(cur))
   },
 })

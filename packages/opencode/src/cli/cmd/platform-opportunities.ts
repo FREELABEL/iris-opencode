@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -112,7 +112,14 @@ const ListCommand = cmd({
         }
       }
 
-      if (args.json) { console.log(JSON.stringify(items, null, 2)); return }
+      // #180735: writeJson, NOT console.log. This list is the payload that exposed the bug —
+      // past the ~64KiB pipe buffer, process.exit() at the end of index.ts discards whatever
+      // stdout has not flushed, cutting the JSON mid-value with exit 0 and nothing on stderr.
+      // console.log cannot be made safe from the outside: in bun it does NOT route through
+      // process.stdout.write, so no wrapper or exit-site drain can see the bytes (both were
+      // tried and measured). writeJson writes through the stream and awaits the callback,
+      // which is the only mechanism that actually waits for the flush.
+      if (args.json) { await writeJson(items); return }
 
       const total = pagination?.total
       spinner!.stop(
@@ -168,7 +175,7 @@ const GetCommand = cmd({
       const data = (await res.json()) as { data?: any }
       const o = data?.data ?? data
 
-      if (args.json) { console.log(JSON.stringify(o, null, 2)); return }
+      if (args.json) { await writeJson(o); return }
 
       spinner!.stop(String(o.title ?? `#${o.id}`))
 
@@ -319,7 +326,7 @@ const CreateCommand = cmd({
       const data = (await res.json()) as any
       const o = data?.data?.opportunity ?? data?.opportunity ?? data?.data ?? data
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       spinner!.stop(`${success("✓")} Created: ${bold(String(o.title ?? o.id ?? "opportunity"))}`)
 
@@ -450,7 +457,7 @@ const UpdateCommand = cmd({
       const data = (await res.json()) as any
       const o = data?.data?.opportunity ?? data?.opportunity ?? data?.data ?? data
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       spinner!.stop(`${success("✓")} Updated`)
       printDivider()

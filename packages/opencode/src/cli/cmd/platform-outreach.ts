@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { OutreachApproveGroup } from "./platform-outreach-approve"
 
 // ============================================================================
@@ -83,7 +83,7 @@ const OutreachListCommand = cmd({
     const templates = await fetchStrategies(args.bloqId, args.category as string | undefined)
 
     if (args.json) {
-      console.log(JSON.stringify(templates, null, 2))
+      await writeJson(templates)
       return
     }
 
@@ -117,7 +117,7 @@ const OutreachShowCommand = cmd({
     const strategy = await fetchStrategy(args.bloqId, args.id)
 
     if (args.json) {
-      console.log(JSON.stringify(strategy, null, 2))
+      await writeJson(strategy)
       return
     }
 
@@ -157,7 +157,7 @@ const OutreachCreateCommand = cmd({
     const created = body.data ?? body
 
     if (args.json) {
-      console.log(JSON.stringify(created, null, 2))
+      await writeJson(created)
       return
     }
 
@@ -196,7 +196,7 @@ const OutreachUpdateCommand = cmd({
     const updated = body.data ?? body
 
     if (args.json) {
-      console.log(JSON.stringify(updated, null, 2))
+      await writeJson(updated)
       return
     }
 

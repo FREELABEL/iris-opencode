@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, bold, dim } from "./iris-api"
+import { irisFetch, requireAuth, bold, dim, writeJson } from "./iris-api"
 
 // ─── iris som campaign — DB-backed registry CRUD ─────────────────────────────
 //
@@ -56,7 +56,7 @@ const ListCmd = cmd({
     const body = await res.json() as { data?: { campaigns?: Campaign[] } }
     const list = body.data?.campaigns ?? []
 
-    if (args.json) { console.log(JSON.stringify(list, null, 2)); return }
+    if (args.json) { await writeJson(list); return }
 
     console.log("")
     console.log(bold(`SOM Campaigns ${dim("(" + list.length + ")")}`))

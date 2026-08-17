@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, writeJson } from "./iris-api"
 import { homedir } from "os"
 import { join } from "path"
 
@@ -328,7 +328,7 @@ const RunCmd = cmd({
     sp2.stop(`${success("✓")} Analysis complete`)
 
     if (args.json) {
-      console.log(JSON.stringify({
+      await writeJson({
         slug: args.slug,
         title,
         word_count: wordCount,
@@ -336,7 +336,7 @@ const RunCmd = cmd({
         threshold: args.threshold,
         ...result,
         verdict: result.overall >= 8.0 ? "PUBLISH" : result.overall >= args.threshold ? "REVIEW" : "REWRITE",
-      }, null, 2))
+      })
     } else {
       printReport(title, wordCount, result, framework, args.threshold)
     }
@@ -432,12 +432,12 @@ const BatchCmd = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({
+      await writeJson({
         framework: framework.name,
         threshold: args.threshold,
         summary: { total: results.length, publish: passCount, review: reviewCount, rewrite: rewriteCount, skipped: skipCount },
         articles: results,
-      }, null, 2))
+      })
     } else {
       console.log()
       printDivider()

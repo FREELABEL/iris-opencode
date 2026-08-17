@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { FL_API, requireAuth, resolveUserId, success, dim, printKV, printDivider } from "./iris-api"
+import { FL_API, requireAuth, resolveUserId, success, dim, printKV, printDivider, writeJson } from "./iris-api"
 import { existsSync, statSync, readFileSync } from "fs"
 import { basename, extname } from "path"
 import { Auth } from "../../auth"
@@ -198,7 +198,7 @@ async function registerHandler(args: any) {
   }
 
   if (args.json) {
-    console.log(JSON.stringify({ bloq_id: Number(args.bloq), registered: results }, null, 2))
+    await writeJson({ bloq_id: Number(args.bloq), registered: results })
     if (failed > 0) process.exitCode = 1
     return
   }

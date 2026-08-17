@@ -9,8 +9,7 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
 
 // ============================================================================
 // iris teams — Teams (pods): named, mixed human+AI subsets of a board's roster.
@@ -72,7 +71,7 @@ const ListCommand = cmd({
     const payload = data?.data ?? data
     const teams: any[] = payload?.teams ?? []
     if (args.json) {
-      console.log(JSON.stringify(teams, null, 2))
+      await writeJson(teams)
       prompts.outro("Done")
       return
     }
@@ -128,7 +127,7 @@ const CreateCommand = cmd({
     if (!data) return
     const t = (data?.data ?? data)?.team
     if (args.json) {
-      console.log(JSON.stringify(t, null, 2))
+      await writeJson(t)
       prompts.outro("Done")
       return
     }
@@ -166,7 +165,7 @@ const AddCommand = cmd({
     if (!data) return
     const t = (data?.data ?? data)?.team
     if (args.json) {
-      console.log(JSON.stringify(t, null, 2))
+      await writeJson(t)
       prompts.outro("Done")
       return
     }
@@ -200,7 +199,7 @@ const RemoveCommand = cmd({
     if (!data) return
     const t = (data?.data ?? data)?.team
     if (args.json) {
-      console.log(JSON.stringify(t, null, 2))
+      await writeJson(t)
       prompts.outro("Done")
       return
     }
@@ -230,7 +229,7 @@ const DeleteCommand = cmd({
     const data = await call("Delete team", `/api/v1/teams/${args.teamId}`, { method: "DELETE" })
     if (!data) return
     if (args.json) {
-      console.log(JSON.stringify(data?.data ?? data, null, 2))
+      await writeJson(data?.data ?? data)
       prompts.outro("Done")
       return
     }

@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError } from "./iris-api"
+import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError, writeJson } from "./iris-api"
 import { Skill } from "../../skill/skill"
 import { Instance } from "../../project/instance"
 import {
@@ -59,13 +59,13 @@ const SkillListCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(plans.map((p) => ({
+        await writeJson(plans.map((p) => ({
           name: p.plan.name,
           version: p.plan.version,
           description: p.plan.description,
           steps: p.plan.steps.length,
           location: p.plan.location,
-        })), null, 2))
+        })))
         return
       }
 
@@ -115,7 +115,7 @@ const SkillShowCommand = cmd({
       const plan = await parsePlan(info)
 
       if (args.json) {
-        console.log(JSON.stringify(plan, null, 2))
+        await writeJson(plan)
         return
       }
 
@@ -230,12 +230,12 @@ const SkillRunCommand = cmd({
       // Dry run
       if (args["dry-run"]) {
         if (args.json) {
-          console.log(JSON.stringify({
+          await writeJson({
             skill: plan.name,
             version: plan.version,
             args: resolvedArgs,
             steps: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode })),
-          }, null, 2))
+          })
           return
         }
 
@@ -299,7 +299,7 @@ const SkillRunCommand = cmd({
       const result = await executeSkill(plan, resolvedArgs, opts)
 
       if (args.json) {
-        console.log(JSON.stringify(result, null, 2))
+        await writeJson(result)
         return
       }
 
@@ -343,7 +343,7 @@ const SkillTestCommand = cmd({
         plan = await parsePlan(info)
       } catch (e: any) {
         if (args.json) {
-          console.log(JSON.stringify({ valid: false, errors: [e.message] }, null, 2))
+          await writeJson({ valid: false, errors: [e.message] })
         } else {
           console.error(`Parse error: ${e.message}`)
         }
@@ -354,13 +354,13 @@ const SkillTestCommand = cmd({
       const issues = validatePlan(plan)
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           valid: !issues.some((i) => i.level === "error"),
           version: plan.version,
           steps: plan.steps.length,
           args: Object.keys(plan.args).length,
           issues,
-        }, null, 2))
+        })
         return
       }
 
@@ -436,7 +436,7 @@ const SkillHistoryCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(run, null, 2))
+        await writeJson(run)
         return
       }
 
@@ -468,7 +468,7 @@ const SkillHistoryCommand = cmd({
     const runs = listRuns(args.limit as number)
 
     if (args.json) {
-      console.log(JSON.stringify(runs, null, 2))
+      await writeJson(runs)
       return
     }
 
@@ -530,7 +530,7 @@ const RemoteListCommand = cmd({
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const skills: any[] = data?.data ?? data?.skills ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(skills, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(skills); prompts.outro("Done"); return }
     printDivider()
     if (skills.length === 0) console.log(`  ${dim("(no skills)")}`)
     else for (const s of skills) {
@@ -650,7 +650,7 @@ const ReviewListCommand = cmd({
     const ok = await handleApiError(res, "List pending drafts"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const drafts: any[] = data?.data ?? []
-    if (args.json) { console.log(JSON.stringify(drafts, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(drafts); prompts.outro("Done"); return }
     if (drafts.length === 0) {
       printDivider()
       console.log(`  ${dim("No drafts pending review.")}`)
@@ -685,7 +685,7 @@ const ReviewApproveCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/${args.id}/approve`, { method: "POST", body: JSON.stringify({}) })
     const ok = await handleApiError(res, "Approve skill"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     console.log(`  ${success("✓")} ${data?.message ?? "Approved"}`)
     if (data?.data?.installation_id) console.log(`  ${dim(`Installation ID: ${data.data.installation_id}`)}`)
@@ -711,7 +711,7 @@ const ReviewRejectCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/${args.id}/reject`, { method: "POST", body: JSON.stringify(body) })
     const ok = await handleApiError(res, "Reject skill"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     console.log(`  ${success("✓")} ${data?.message ?? "Rejected"}`)
     printDivider()

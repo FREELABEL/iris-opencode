@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson } from "./iris-api"
 
 // ============================================================================
 // Execution-verification helpers (#146511) — `run` reports "dispatched", then
@@ -225,7 +225,7 @@ const SchedulesListCommand = cmd({
       spinner.stop(`${schedules.length} schedule(s)${filterLabel ? ` (${filterLabel})` : ""}${pageLabel}`)
 
       if (args.json) {
-        console.log(JSON.stringify(schedules.map((s: any) => ({
+        await writeJson(schedules.map((s: any) => ({
           id: s.id,
           name: s.name ?? s.title ?? s.task_name,
           status: s.status,
@@ -238,7 +238,7 @@ const SchedulesListCommand = cmd({
           next_run_at: s.next_run_at,
           time_until: timeUntil(s.next_run_at),
           last_run_at: s.last_run_at,
-        })), null, 2))
+        })))
         prompts.outro("Done")
         return
       }
@@ -411,7 +411,7 @@ const SchedulesGetCommand = cmd({
       const s = raw.task_name ? raw : (raw.data ?? raw)
 
       if (args.json) {
-        console.log(JSON.stringify(s, null, 2))
+        await writeJson(s)
         return
       }
 
@@ -578,7 +578,7 @@ const SchedulesHistoryCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(runs, null, 2))
+        await writeJson(runs)
         prompts.outro("Done")
         return
       }
@@ -712,7 +712,7 @@ const SchedulesInspectCommand = cmd({
       spinner.stop(bold(schedule.task_name ?? `Schedule #${args.id}`))
 
       if (args.json) {
-        console.log(JSON.stringify({ schedule, agent }, null, 2))
+        await writeJson({ schedule, agent })
         prompts.outro("Done")
         return
       }

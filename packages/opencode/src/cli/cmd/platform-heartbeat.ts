@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, printDivider, printKV, dim, bold, success, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, printDivider, printKV, dim, bold, success, FL_API, writeJson } from "./iris-api"
 
 // ============================================================================
 // Helpers
@@ -79,7 +79,7 @@ const HeartbeatCommand = cmd({
       const data = raw?.data ?? raw
 
       if (args.json) {
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
         return
       }
 
@@ -250,7 +250,7 @@ const HeartbeatSignalsCommand = cmd({
       const registry = await res.json() as Record<string, any>
 
       if (args.json) {
-        console.log(JSON.stringify(registry, null, 2))
+        await writeJson(registry)
         return
       }
 

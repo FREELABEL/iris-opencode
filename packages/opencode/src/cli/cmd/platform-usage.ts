@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import { irisFetch, dim, bold, IRIS_API } from "./iris-api"
+import { irisFetch, dim, bold, IRIS_API, writeJson } from "./iris-api"
 import { readdirSync, readFileSync, statSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
@@ -245,11 +245,11 @@ export function parseUsageLine(
   }
 }
 
-function renderLocalUsage(days: number, json: boolean): void {
+async function renderLocalUsage(days: number, json: boolean): Promise<void> {
   const { rows, files, skipped } = readLocalUsage(days)
 
   if (json) {
-    console.log(JSON.stringify({ window_days: days, files_scanned: files, files_skipped: skipped, rows }, null, 2))
+    await writeJson({ window_days: days, files_scanned: files, files_skipped: skipped, rows })
     return
   }
 
@@ -338,7 +338,7 @@ export const PlatformUsageCommand = cmd({
     // never seen these sessions — so it gets its own view rather than being blended into
     // totals that would then mean two different things at once.
     if (args.local) {
-      return renderLocalUsage(Number(args.days ?? 30), Boolean(args.json))
+      return await renderLocalUsage(Number(args.days ?? 30), Boolean(args.json))
     }
 
     const params = new URLSearchParams({ days: String(args.days ?? 30) })
@@ -355,7 +355,7 @@ export const PlatformUsageCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -520,7 +520,7 @@ export const PlatformTracesCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       return
     }
 
@@ -643,7 +643,7 @@ async function renderToolAggregate(args: any): Promise<void> {
   }
 
   if (args.json) {
-    console.log(JSON.stringify(data, null, 2))
+    await writeJson(data)
     return
   }
 

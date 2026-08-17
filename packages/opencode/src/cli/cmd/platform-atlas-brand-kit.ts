@@ -10,8 +10,7 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 
 // No hardcoded fallback: a stale key silently 401s every Composio call (bug
@@ -135,7 +134,7 @@ const ListCommand = cmd({
     const assets = await listAssetsForSource(String(args.from), String(args.query ?? ""))
     spinner.stop(`${assets.length} asset(s)`)
 
-    if (args.json) { console.log(JSON.stringify({ source: args.from, assets, count: assets.length }, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson({ source: args.from, assets, count: assets.length }); prompts.outro("Done"); return }
 
     if (assets.length === 0) {
       prompts.log.warn(`No assets found on ${args.from}.`)
@@ -200,9 +199,9 @@ const PullCommand = cmd({
 
     if (args["dry-run"]) {
       if (args.json) {
-        console.log(JSON.stringify({ dry_run: true, source: args.from, brand_kit: brandKit, counts: {
+        await writeJson({ dry_run: true, source: args.from, brand_kit: brandKit, counts: {
           logos: brandKit.logos.length, images: brandKit.images.length, templates: brandKit.templates.length, other: brandKit.other.length,
-        } }, null, 2))
+        } })
       } else {
         prompts.log.warn("DRY RUN — nothing saved")
         console.log(`  ${dim("Logos:")} ${brandKit.logos.length}  ${dim("Images:")} ${brandKit.images.length}  ${dim("Templates:")} ${brandKit.templates.length}  ${dim("Other:")} ${brandKit.other.length}`)
@@ -283,7 +282,7 @@ const ExportCommand = cmd({
     })
     if (result?.successful || result?.successfull) {
       spinner.stop(success("Export job started"))
-      console.log(JSON.stringify(result.data?.response_data ?? result.data ?? {}, null, 2))
+      await writeJson(result.data?.response_data ?? result.data ?? {})
     } else {
       spinner.stop("Failed", 1)
       prompts.log.error(`Export failed: ${result?.error ?? "unknown"}`)

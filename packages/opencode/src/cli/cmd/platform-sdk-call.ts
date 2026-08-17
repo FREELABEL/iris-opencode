@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, FL_API, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, FL_API, IRIS_API, writeJson } from "./iris-api"
 
 // ============================================================================
 // platform-sdk-call — generic SDK proxy
@@ -332,7 +332,7 @@ export const PlatformSdkCallCommand = cmd({
     if (args.raw) { console.log(text); return }
     try {
       const data = JSON.parse(text)
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
     } catch {
       console.log(text)
     }

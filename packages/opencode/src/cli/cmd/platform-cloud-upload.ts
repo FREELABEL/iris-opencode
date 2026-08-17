@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { FL_API, requireAuth, printDivider, printKV, dim, success, highlight } from "./iris-api"
+import { FL_API, requireAuth, printDivider, printKV, dim, success, highlight, writeJson } from "./iris-api"
 import { existsSync, statSync, readFileSync } from "fs"
 import { basename } from "path"
 import { Auth } from "../../auth"
@@ -175,7 +175,7 @@ export const PlatformCloudUploadCommand = cmd({
       sp.stop(success("Uploaded"))
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           file_id: fileId,
           title,
           cdn_url: cdnUrl,
@@ -183,7 +183,7 @@ export const PlatformCloudUploadCommand = cmd({
           size: result.file_size ?? fileSize,
           expires_at: expiresAt,
           expires: expiration.label,
-        }, null, 2))
+        })
       } else {
         printDivider()
         printKV("File ID", fileId)

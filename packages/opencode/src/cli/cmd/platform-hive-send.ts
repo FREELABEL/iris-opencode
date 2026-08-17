@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { requireAuth, requireUserId, dim, bold, success, highlight, FL_API } from "./iris-api"
+import { requireAuth, requireUserId, dim, bold, success, highlight, FL_API, writeJson } from "./iris-api"
 import { hiveFetch, fetchNodes, resolveNode } from "./platform-hive-nodes"
 import { Auth } from "../../auth"
 import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from "fs"
@@ -478,7 +478,7 @@ export const HiveSendCommand = cmd({
     }
 
     if (argv.json) {
-      console.log(JSON.stringify({ sent: ok.length, failed: failed.length, results }, null, 2))
+      await writeJson({ sent: ok.length, failed: failed.length, results })
       return
     }
 
@@ -525,7 +525,7 @@ export const HiveSentCommand = cmd({
     }).filter(Boolean).reverse().slice(0, argv.limit as number)
 
     if (argv.json) {
-      console.log(JSON.stringify(items, null, 2))
+      await writeJson(items)
       return
     }
 

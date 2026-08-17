@@ -9,8 +9,7 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
 
 // ============================================================================
 // iris workspace — Workspace (team) ↔ Google Workspace identity sync, from the CLI
@@ -61,7 +60,7 @@ const ShowCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }
@@ -124,7 +123,7 @@ const BindCommand = cmd({
     if (!data) return
     const ws = (data?.data ?? data)?.workspace
     if (args.json) {
-      console.log(JSON.stringify(ws, null, 2))
+      await writeJson(ws)
       prompts.outro("Done")
       return
     }
@@ -161,7 +160,7 @@ const SyncCommand = cmd({
     if (!data) return
     const r = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(r, null, 2))
+      await writeJson(r)
       prompts.outro("Done")
       return
     }
@@ -212,7 +211,7 @@ const OrgCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }
@@ -260,7 +259,7 @@ const PlaceCommand = cmd({
     if (!data) return
     const r = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(r, null, 2))
+      await writeJson(r)
       prompts.outro("Done")
       return
     }

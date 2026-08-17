@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { existsSync, readFileSync, statSync } from "fs"
 import { basename } from "path"
 import { Glob } from "bun"
@@ -37,7 +37,7 @@ const MemoryListCommand = cmd({
       const bloqs: any[] = data?.data ?? data?.bloqs ?? (Array.isArray(data) ? data : [])
       spinner.stop(`${bloqs.length} bloq(s)`)
 
-      if (args.json) { console.log(JSON.stringify(bloqs, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(bloqs); prompts.outro("Done"); return }
       if (bloqs.length === 0) { prompts.log.warn("No knowledge bases found"); prompts.outro(dim("iris memory compose")); return }
 
       printDivider()
@@ -88,7 +88,7 @@ const MemoryShowCommand = cmd({
 
       spinner.stop(String(bloq.title ?? `#${args.id}`))
 
-      if (args.json) { console.log(JSON.stringify({ bloq, content, files }, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson({ bloq, content, files }); prompts.outro("Done"); return }
 
       if (args.files) {
         printDivider()

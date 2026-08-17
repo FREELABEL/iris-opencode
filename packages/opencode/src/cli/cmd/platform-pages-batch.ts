@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, dim, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, dim, success, writeJson } from "./iris-api"
 import { existsSync, readdirSync, readFileSync, statSync } from "fs"
 import { join, basename, isAbsolute } from "path"
 
@@ -87,7 +87,7 @@ export const PlatformPagesBatchCommand = cmd({
         }
       }
       if (args.json) {
-        console.log(JSON.stringify({ dry_run: true, pages: rows }, null, 2))
+        await writeJson({ dry_run: true, pages: rows })
       } else {
         printDivider()
         for (const r of rows) {
@@ -222,10 +222,10 @@ export const PlatformPagesBatchCommand = cmd({
     const published = results.filter((r) => r.published).length
 
     if (args.json) {
-      console.log(JSON.stringify({
+      await writeJson({
         summary: { total: results.length, created, updated, failed, published },
         pages: results,
-      }, null, 2))
+      })
     } else {
       printDivider()
       prompts.outro(`${created} created, ${updated} updated, ${failed} failed${published ? `, ${published} published` : ""}`)

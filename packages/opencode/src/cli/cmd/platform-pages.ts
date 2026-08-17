@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
@@ -286,7 +286,7 @@ async function fetchAndRenderPages(args: {
 
     if (args.json) {
       // Back-compat flat array; enumerate via --limit/--page (documented page size + cursor).
-      console.log(JSON.stringify(pages, null, 2))
+      await writeJson(pages)
       prompts.outro("Done")
       return
     }
@@ -367,7 +367,7 @@ const ViewCmd = cmd({
       sp.stop(String(page.title ?? page.slug))
 
       if (args.json) {
-        console.log(JSON.stringify(page, null, 2))
+        await writeJson(page)
         prompts.outro("Done")
         return
       }
@@ -406,7 +406,7 @@ const GetCmd = cmd({
     if (!page) return
     const json = page.json_content ?? {}
     if (!args.path) {
-      console.log(JSON.stringify(json, null, 2))
+      await writeJson(json)
       return
     }
     const value = getNestedValue(json, args.path)
@@ -414,7 +414,7 @@ const GetCmd = cmd({
       console.error(`Path '${args.path}' not found in '${args.slug}'`)
       process.exit(1)
     }
-    if (args.json || typeof value === "object") console.log(JSON.stringify(value, null, 2))
+    if (args.json || typeof value === "object") await writeJson(value)
     else console.log(String(value))
   },
 })
@@ -1632,7 +1632,7 @@ const ComposeCmd = cmd({
       printDivider()
 
       if (args.json) {
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
       }
 
       prompts.log.info(`View: ${dim(`iris pages view ${data.slug}`)}`)
@@ -1689,7 +1689,7 @@ const ComponentRegistryCmd = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(registry, null, 2))
+      await writeJson(registry)
       prompts.outro("Done")
       return
     }
@@ -1766,7 +1766,7 @@ const QrCmd = cmd({
       sp.stop(success("Ready"))
 
       if (args.json) {
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
         prompts.outro("Done")
         return
       }
@@ -2249,7 +2249,7 @@ const VisibilityCmd = cmd({
         sp.stop(`Visibility: ${current.declared ? current.mode : "public (default)"}`)
         if (args.json) {
           const r = reachFor(current.mode)
-          console.log(JSON.stringify({
+          await writeJson({
             slug: page.slug,
             id: page.id,
             visibility: current.declared ? current.mode : null,
@@ -2269,7 +2269,7 @@ const VisibilityCmd = cmd({
               active: shareLinkIsActive(l),
             })),
             share_links_readable: links !== null,
-          }, null, 2))
+          })
           prompts.outro("Done")
           return
         }
@@ -2426,7 +2426,7 @@ const ShareCmd = cmd({
       sp.stop(success("Share link created"))
 
       if (args.json) {
-        console.log(JSON.stringify({ ...link, url }, null, 2))
+        await writeJson({ ...link, url })
         prompts.outro("Done")
         return
       }
@@ -2480,7 +2480,7 @@ const ShareListCmd = cmd({
       sp.stop(`${shown.length} ${args.all ? "" : "active "}link(s)${args.all ? "" : links.length > shown.length ? ` (${links.length - shown.length} inactive hidden — use --all)` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify(shown.map((l) => ({ ...l, url: shareUrlFor(l, page), active: shareLinkIsActive(l) })), null, 2))
+        await writeJson(shown.map((l) => ({ ...l, url: shareUrlFor(l, page), active: shareLinkIsActive(l) })))
         prompts.outro("Done")
         return
       }

@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import { UI } from "../ui"
-import { dim, bold, highlight, printDivider } from "./iris-api"
+import { dim, bold, highlight, printDivider, writeJson } from "./iris-api"
 import { readFileSync, existsSync } from "fs"
 import { join } from "path"
 
@@ -156,7 +156,7 @@ export const PlatformFindCommand = cmd({
     // "what is there", and an empty prompt is a worse answer than an overview.
     if (!raw) {
       if (args.json) {
-        console.log(JSON.stringify({ counts: index.counts, terms: index.terms }, null, 2))
+        await writeJson({ counts: index.counts, terms: index.terms })
         return
       }
       UI.empty()

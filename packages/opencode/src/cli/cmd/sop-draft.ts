@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, success, highlight, printDivider, irisFetch, requireAuth, handleApiError } from "./iris-api"
+import { dim, bold, success, highlight, printDivider, irisFetch, requireAuth, handleApiError, writeJson } from "./iris-api"
 import { resolveWalkthrough, structureWalkthrough, slugify } from "../lib/walkthrough"
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import { join, resolve } from "path"
@@ -117,7 +117,7 @@ export const SopDraftCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ title: doc.title, path: target, steps: stepCount, gaps, sop_id: filedAs }, null, 2))
+      await writeJson({ title: doc.title, path: target, steps: stepCount, gaps, sop_id: filedAs })
       prompts.outro("Done")
       return
     }

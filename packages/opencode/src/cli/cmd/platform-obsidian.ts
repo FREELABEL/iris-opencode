@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, dim, bold, success, highlight, getBridgeToken, BRIDGE_URL } from "./iris-api"
+import { printDivider, dim, bold, success, highlight, getBridgeToken, BRIDGE_URL, writeJson } from "./iris-api"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { homedir } from "os"
 import { join, dirname } from "path"
@@ -131,7 +131,7 @@ export const PlatformObsidianCommand = cmd({
       // ── vaults ──
       if (args.action === "vaults") {
         const { vaults } = await bridgeFetch("/api/obsidian/vaults")
-        if (args.json) { console.log(JSON.stringify(vaults, null, 2)); return }
+        if (args.json) { await writeJson(vaults); return }
 
         const def = readConfig().defaultVault
         printDivider()
@@ -163,7 +163,7 @@ export const PlatformObsidianCommand = cmd({
         await bridgeFetch(`/api/obsidian/notes?vault=${encodeURIComponent(resolved)}&limit=1`)
         writeConfig({ ...readConfig(), defaultVault: resolved })
 
-        if (args.json) { console.log(JSON.stringify({ defaultVault: resolved }, null, 2)); return }
+        if (args.json) { await writeJson({ defaultVault: resolved }); return }
         prompts.outro(`${success("✓")} Default vault set to ${bold(resolved)}`)
         return
       }
@@ -177,7 +177,7 @@ export const PlatformObsidianCommand = cmd({
         if (args.folder) params.set("folder", String(args.folder))
         const { notes } = await bridgeFetch(`/api/obsidian/notes?${params}`)
 
-        if (args.json) { console.log(JSON.stringify(notes, null, 2)); return }
+        if (args.json) { await writeJson(notes); return }
         printDivider()
         for (const n of notes) {
           console.log(`  ${bold(n.name)}${n.folder ? dim(`  ${n.folder}/`) : ""}`)
@@ -196,7 +196,7 @@ export const PlatformObsidianCommand = cmd({
         if (args.body) params.set("body", "1")
         const { results } = await bridgeFetch(`/api/obsidian/search?${params}`)
 
-        if (args.json) { console.log(JSON.stringify(results, null, 2)); return }
+        if (args.json) { await writeJson(results); return }
         printDivider()
         if (!results.length) {
           console.log(`  ${dim(`No notes matching "${q}"`)}`)
@@ -219,7 +219,7 @@ export const PlatformObsidianCommand = cmd({
         if (!notePath) throw new Error('Provide a note path: iris obsidian read "Folder/Note.md"')
 
         const note = await bridgeFetch(`/api/obsidian/note?vault=${vq}&path=${encodeURIComponent(notePath)}`)
-        if (args.json) { console.log(JSON.stringify(note, null, 2)); return }
+        if (args.json) { await writeJson(note); return }
 
         printDivider()
         console.log(`  ${bold(note.name)}`)

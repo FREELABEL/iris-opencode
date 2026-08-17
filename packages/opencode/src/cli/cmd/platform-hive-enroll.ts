@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import { irisFetch, requireAuth, requireUserId, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { join } from "path"
 import { homedir } from "os"
@@ -329,7 +329,7 @@ const HiveDiscoverCommand = cmd({
     const d = discover(target)
 
     if (argv.json) {
-      console.log(JSON.stringify(d, null, 2))
+      await writeJson(d)
       return
     }
 

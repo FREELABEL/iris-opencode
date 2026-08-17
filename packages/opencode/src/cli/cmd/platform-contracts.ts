@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 
 // ============================================================================
 // Contracts Send — send a contract to a lead for signing
@@ -72,7 +72,7 @@ const ContractsSendCommand = cmd({
     if (!(await handleApiError(res, "Send contract"))) return
     const data = await res.json().catch(() => ({}))
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) { await writeJson(data); return }
 
     if (!data.success) {
       if (data.error === "duplicate") {
@@ -119,7 +119,7 @@ const ContractsStatusCommand = cmd({
     const result = await res.json().catch(() => ({}))
     const status = result?.data ?? result
 
-    if (args.json) { console.log(JSON.stringify(status, null, 2)); return }
+    if (args.json) { await writeJson(status); return }
 
     if (!status?.has_payment_gate) {
       prompts.log.info(`No contract for lead #${leadId}`)
@@ -163,7 +163,7 @@ const ContractsTemplatesCommand = cmd({
     const result = (await res.json().catch(() => ({}))) as any
     const templates = result?.data ?? result ?? []
 
-    if (args.json) { console.log(JSON.stringify(templates, null, 2)); return }
+    if (args.json) { await writeJson(templates); return }
 
     if (!Array.isArray(templates) || templates.length === 0) {
       prompts.log.info("No contract templates found")

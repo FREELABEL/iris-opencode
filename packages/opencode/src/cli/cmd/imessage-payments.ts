@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, success, printDivider, printKV } from "./iris-api"
+import { dim, bold, success, printDivider, printKV, writeJson } from "./iris-api"
 import {
   readPayments,
   filterPayments,
@@ -114,7 +114,7 @@ export const ImessagePaymentsCommand = cmd({
     const elapsed = Date.now() - started
 
     if (args.json) {
-      console.log(JSON.stringify({
+      await writeJson({
         success: true,
         // Stated outright so a consumer never reads a missing amount as zero.
         amount_available: false,
@@ -127,7 +127,7 @@ export const ImessagePaymentsCommand = cmd({
         summary: stats,
         issues: args.check ? issues : undefined,
         payments: page.items,
-      }, null, 2))
+      })
       return
     }
 

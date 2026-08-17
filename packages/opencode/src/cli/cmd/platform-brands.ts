@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
 import { join } from "path"
 
@@ -87,7 +87,7 @@ const BrandsListCommand = cmd({
       const data = (await res.json()) as { data?: any }
       const brands: any[] = (data?.data?.data ?? data?.data ?? []) as any[]
 
-      if (args.json) { console.log(JSON.stringify(brands, null, 2)); return }
+      if (args.json) { await writeJson(brands); return }
 
       if (spinner) spinner.stop(`${brands.length} brand(s)`)
 
@@ -767,7 +767,7 @@ const TreatmentsListCommand = cmd({
     const treatments = data?.data?.treatments ?? {}
     const ids = Object.keys(treatments)
 
-    if (args.json) { console.log(JSON.stringify(treatments, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(treatments); prompts.outro("Done"); return }
 
     printDivider()
     if (!ids.length) {
@@ -1557,7 +1557,7 @@ const ProfileGetCommand = cmd({
       if (!tokens) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const profile = (tokens.profile ?? {}) as Record<string, any>
       spinner.stop(String(args.slug))
-      if (args.json) { console.log(JSON.stringify(profile, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(profile); prompts.outro("Done"); return }
       if (Object.keys(profile).length === 0) {
         prompts.log.warn("No profile set")
         prompts.outro(`Set it: ${dim(`iris brands profile set ${args.slug} --file profile.json`)}`)

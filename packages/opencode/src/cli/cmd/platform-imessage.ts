@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, dim, bold, success } from "./iris-api"
+import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
 import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle } from "../lib/imessage"
 import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
@@ -98,7 +98,7 @@ const ImessageSearchCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(messages, null, 2))
+        await writeJson(messages)
         return
       }
 
@@ -219,7 +219,7 @@ const ImessageReadCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(messages, null, 2))
+        await writeJson(messages)
         return
       }
 
@@ -573,7 +573,7 @@ const ImessageContactsCommand = cmd({
     sp.stop(`${cards.length} contact card(s)`)
 
     if (args.json) {
-      console.log(JSON.stringify(cards, null, 2))
+      await writeJson(cards)
       return
     }
 
@@ -819,7 +819,7 @@ const MentionsDraftsCommand = cmd({
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     const rows = mrLoadQueue().filter((r) => args.all || r.status === "pending")
-    if (args.json) { console.log(JSON.stringify(rows, null, 2)); return }
+    if (args.json) { await writeJson(rows); return }
     UI.empty(); prompts.intro("◈  Mention Drafts")
     if (!rows.length) { prompts.log.info(args.all ? "Queue is empty" : "No pending drafts (use --all)"); prompts.outro("Done"); return }
     printDivider()
@@ -976,7 +976,7 @@ const ImessageMentionsCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(mentions, null, 2))
+      await writeJson(mentions)
       return
     }
 
@@ -1075,7 +1075,7 @@ const ImessageGroupsCommand = cmd({
         display_name: realName(g.display_name) ?? synthName(g.guid),
         members: memberInfo(g.guid),
       }))
-      console.log(JSON.stringify(enriched, null, 2))
+      await writeJson(enriched)
       return
     }
 
@@ -1149,7 +1149,7 @@ const ImessageReadGroupCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ group, messages }, null, 2))
+      await writeJson({ group, messages })
       return
     }
 

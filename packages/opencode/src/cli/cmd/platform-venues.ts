@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, IRIS_API, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -90,7 +90,7 @@ const ListCommand = cmd({
       if (spinner) spinner.stop(`${items.length} venue(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
         return
       }
 
@@ -740,7 +740,7 @@ const { chromium } = require('playwright');
       }
     }
 
-    console.log(JSON.stringify(venues, null, 2));
+    await writeJson(venues);
     const withEmail = venues.filter(v => v.email).length;
     log('Total: ' + venues.length + ' venue(s), ' + withEmail + ' with email');
   } catch(e) {
@@ -904,7 +904,7 @@ const SearchCommand = cmd({
         if (spinner) spinner.stop(`${places.length} venue(s) found via Serper`)
       }
 
-      if (args.json && !args.save) { console.log(JSON.stringify(places, null, 2)); return }
+      if (args.json && !args.save) { await writeJson(places); return }
 
       if (places.length === 0) {
         if (!args.json) prompts.log.warn("No venues found for that query")
@@ -1011,7 +1011,7 @@ const SearchCommand = cmd({
       saveSpinner.stop(`${success("✓")} ${summary || "No changes"}`)
 
       if (args.json) {
-        console.log(JSON.stringify({ created, touched, total: places.length, method: searchMethod, places }, null, 2))
+        await writeJson({ created, touched, total: places.length, method: searchMethod, places })
       }
 
       prompts.outro(dim("iris venues list --sort trending"))
@@ -1121,7 +1121,7 @@ const EnrichCommand = cmd({
       }
     }
 
-    if (args.json) { console.log(JSON.stringify(results, null, 2)); return }
+    if (args.json) { await writeJson(results); return }
     prompts.outro(dim("iris venues list"))
   },
 })

@@ -839,7 +839,7 @@ const ShowCommand = cmd({
 
     if (!found) {
       if (args.json) {
-        console.log(JSON.stringify({ error: "not_found", id: targetId }, null, 2))
+        await writeJson({ error: "not_found", id: targetId })
         return
       }
       console.error(`\n  Bug #${targetId} not found (searched open + closed).`)
@@ -849,7 +849,7 @@ const ShowCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(found, null, 2))
+      await writeJson(found)
       return
     }
 
@@ -1059,7 +1059,7 @@ const CloseCommand = cmd({
 
       if (args.json) {
         spinner.stop("")
-        console.log(JSON.stringify({ results, ok: okCount, failed: failCount, fix_commit: fixCommit ?? null }, null, 2))
+        await writeJson({ results, ok: okCount, failed: failCount, fix_commit: fixCommit ?? null })
         return
       }
 
@@ -1110,7 +1110,7 @@ const CloseCommand = cmd({
 
     if (args.json) {
       spinner.stop("")
-      console.log(JSON.stringify({ results, ok: okCount, failed: failCount }, null, 2))
+      await writeJson({ results, ok: okCount, failed: failCount })
       return
     }
 
@@ -1185,7 +1185,7 @@ const VerifyCommand = cmd({
 
     if (args.json) {
       spinner.stop("")
-      console.log(JSON.stringify({ results, ok: okCount, failed: failCount, console: lastConsole }, null, 2))
+      await writeJson({ results, ok: okCount, failed: failCount, console: lastConsole })
       return
     }
 
@@ -1332,7 +1332,7 @@ const UpdateCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ ...data, requested, not_applied: missed }, null, 2))
+      await writeJson({ ...data, requested, not_applied: missed })
     } else if (missed.length) {
       console.log(
         `${success("✓")} Bug #${itemId} updated` +
@@ -1439,7 +1439,7 @@ const FlushCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ sent, failed }, null, 2))
+      await writeJson({ sent, failed })
       return
     }
     console.log()

@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { requireAuth, printDivider, dim, bold, success, highlight, irisFetch, IRIS_API, resolveUserId } from "./iris-api"
+import { requireAuth, printDivider, dim, bold, success, highlight, irisFetch, IRIS_API, resolveUserId, writeJson } from "./iris-api"
 
 /**
  * Google Drive browsing, including SHARED DRIVES.
@@ -172,7 +172,7 @@ export const PlatformDriveCommand = cmd({
         const content = data?.content ?? data?.text ?? data?.body ?? ""
         const name = data?.name ?? data?.fileName ?? fileId
 
-        if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+        if (args.json) { await writeJson(data); return }
 
         if (args.out) {
           const { writeFileSync } = await import("fs")
@@ -193,7 +193,7 @@ export const PlatformDriveCommand = cmd({
         const data = await driveExec("list_shared_drives", {})
         const drives = data?.drives ?? data?.items ?? []
 
-        if (args.json) { console.log(JSON.stringify(drives, null, 2)); return }
+        if (args.json) { await writeJson(drives); return }
 
         printDivider()
         if (!drives.length) {
@@ -221,7 +221,7 @@ export const PlatformDriveCommand = cmd({
       const counts = { files: 0, folders: 0, errors: 0 }
       await walk(folderId, driveId, 0, maxDepth, pageSize, "  ", counts, Boolean(args.ids))
 
-      if (args.json) { console.log(JSON.stringify(counts, null, 2)); return }
+      if (args.json) { await writeJson(counts); return }
 
       printDivider()
       const errNote = counts.errors ? highlight(`  ·  ${counts.errors} error(s)`) : ""

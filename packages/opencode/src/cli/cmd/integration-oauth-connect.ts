@@ -9,7 +9,7 @@
 import { exec } from "child_process"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API } from "./iris-api"
+import { irisFetch, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, writeJson } from "./iris-api"
 import {
   LOCAL_OAUTH_PROVIDERS,
   LocalOAuthError,
@@ -239,7 +239,7 @@ export async function runLocalOAuthConnect(type: string, args: LocalConnectArgs)
 
   if (args.json) {
     saveSpinner.stop("Saved")
-    console.log(JSON.stringify(integration, null, 2))
+    await writeJson(integration)
     return
   }
 

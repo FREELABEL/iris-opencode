@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError } from "./iris-api"
+import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError, writeJson } from "./iris-api"
 import { Skill } from "../../skill/skill"
 import { Instance } from "../../project/instance"
 import {
@@ -73,13 +73,13 @@ const SkillListCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(plans.map((p) => ({
+        await writeJson(plans.map((p) => ({
           name: p.plan.name,
           version: p.plan.version,
           description: p.plan.description,
           steps: p.plan.steps.length,
           location: p.plan.location,
-        })), null, 2))
+        })))
         return
       }
 
@@ -129,7 +129,7 @@ const SkillShowCommand = cmd({
       const plan = await parsePlan(info)
 
       if (args.json) {
-        console.log(JSON.stringify(plan, null, 2))
+        await writeJson(plan)
         return
       }
 
@@ -256,12 +256,12 @@ const SkillRunCommand = cmd({
       // Dry run
       if (args["dry-run"]) {
         if (args.json) {
-          console.log(JSON.stringify({
+          await writeJson({
             skill: plan.name,
             version: plan.version,
             args: resolvedArgs,
             steps: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode })),
-          }, null, 2))
+          })
           return
         }
 
@@ -333,7 +333,7 @@ const SkillRunCommand = cmd({
       const result = await executeSkill(plan, resolvedArgs, opts)
 
       if (args.json) {
-        console.log(JSON.stringify(result, null, 2))
+        await writeJson(result)
         return
       }
 
@@ -414,7 +414,7 @@ const SkillTestCommand = cmd({
         plan = await parsePlan(info)
       } catch (e: any) {
         if (args.json) {
-          console.log(JSON.stringify({ valid: false, errors: [e.message] }, null, 2))
+          await writeJson({ valid: false, errors: [e.message] })
         } else {
           console.error(`Parse error: ${e.message}`)
         }
@@ -425,13 +425,13 @@ const SkillTestCommand = cmd({
       const issues = validatePlan(plan)
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           valid: !issues.some((i) => i.level === "error"),
           version: plan.version,
           steps: plan.steps.length,
           args: Object.keys(plan.args).length,
           issues,
-        }, null, 2))
+        })
         return
       }
 
@@ -507,7 +507,7 @@ const SkillHistoryCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(run, null, 2))
+        await writeJson(run)
         return
       }
 
@@ -546,7 +546,7 @@ const SkillHistoryCommand = cmd({
     const runs = listRuns(args.limit as number)
 
     if (args.json) {
-      console.log(JSON.stringify(runs, null, 2))
+      await writeJson(runs)
       return
     }
 
@@ -671,7 +671,7 @@ const SkillResumeCommand = cmd({
       const result = await executeSkill(plan, run.args, opts)
 
       if (args.json) {
-        console.log(JSON.stringify(result, null, 2))
+        await writeJson(result)
         if (result.status === "paused") process.exitCode = 2
         else if (result.status !== "completed") process.exitCode = 1
         return
@@ -749,7 +749,7 @@ const SkillE2ECommand = cmd({
     sp?.stop("  Services probed", 0)
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       if (result.failed > 0) process.exitCode = 1
       return
     }
@@ -842,7 +842,7 @@ const RemoteListCommand = cmd({
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const skills: any[] = data?.data ?? data?.skills ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(skills, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(skills); prompts.outro("Done"); return }
     printDivider()
     if (skills.length === 0) console.log(`  ${dim("(no skills)")}`)
     else for (const s of skills) {
@@ -962,7 +962,7 @@ const ReviewListCommand = cmd({
     const ok = await handleApiError(res, "List pending drafts"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const drafts: any[] = data?.data ?? []
-    if (args.json) { console.log(JSON.stringify(drafts, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(drafts); prompts.outro("Done"); return }
     if (drafts.length === 0) {
       printDivider()
       console.log(`  ${dim("No drafts pending review.")}`)
@@ -997,7 +997,7 @@ const ReviewApproveCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/${args.id}/approve`, { method: "POST", body: JSON.stringify({}) })
     const ok = await handleApiError(res, "Approve skill"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     console.log(`  ${success("✓")} ${data?.message ?? "Approved"}`)
     if (data?.data?.installation_id) console.log(`  ${dim(`Installation ID: ${data.data.installation_id}`)}`)
@@ -1023,7 +1023,7 @@ const ReviewRejectCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/${args.id}/reject`, { method: "POST", body: JSON.stringify(body) })
     const ok = await handleApiError(res, "Reject skill"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     console.log(`  ${success("✓")} ${data?.message ?? "Rejected"}`)
     printDivider()
@@ -1235,7 +1235,7 @@ const AttachedCommand = cmd({
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const attached: any[] = data?.data ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(attached, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(attached); prompts.outro("Done"); return }
     printDivider()
     if (attached.length === 0) console.log(`  ${dim("(no playbooks attached)")}`)
     else for (const p of attached) {
@@ -1408,7 +1408,7 @@ const PublishCommand = cmd({
       await handleApiError(attachRes, "Attach to bloq")
     }
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     printDivider()
     const pb = data?.playbook ?? {}
@@ -1460,7 +1460,7 @@ const PlaybookAvailableCommand = cmd({
     const data = (await res.json()) as any
     const list: any[] = data?.playbooks ?? data?.data ?? []
 
-    if (args.json) { console.log(JSON.stringify(list, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(list); prompts.outro("Done"); return }
     if (!list.length) {
       printDivider()
       console.log(`  ${dim("Nothing published that you can see.")}`)
@@ -1525,7 +1525,7 @@ const PlaybookInstallCommand = cmd({
     writeFileSync(file, content, "utf8")
 
     if (args.json) {
-      console.log(JSON.stringify({ installed: name, path: file, scope: pb.scope ?? null }, null, 2))
+      await writeJson({ installed: name, path: file, scope: pb.scope ?? null })
       prompts.outro("Done"); return
     }
 

@@ -14,8 +14,7 @@ import {
   IRIS_API,
   FL_API,
   PLATFORM_URLS,
-  getBridgeToken,
-} from "./iris-api"
+  getBridgeToken, writeJson } from "./iris-api"
 import { exec } from "child_process"
 import { detectNewConnection, extractConnections, type ConnectionRow } from "./integration-connect-state"
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
@@ -540,7 +539,7 @@ const ListToolsCommand = cmd({
         return
       }
       const data = (await res.json()) as any
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(data); prompts.outro("Done"); return }
       printDivider()
       for (const t of data?.tools ?? data?.data ?? []) {
         const healthy = t.healthy ? success("ok") : dim("?")
@@ -594,7 +593,7 @@ const ListConnectedCommand = cmd({
     } catch {}
 
     if (args.json) {
-      console.log(JSON.stringify(items, null, 2))
+      await writeJson(items)
       prompts.outro("Done")
       return
     }
@@ -1256,7 +1255,7 @@ const ExecCommand = cmd({
         }
         if (args.json) {
           const result = await executeIntegrationCall(target, fn, params, accountOpts)
-          console.log(JSON.stringify(result, null, 2))
+          await writeJson(result)
           return
         }
         const spinner = prompts.spinner()
@@ -1291,7 +1290,7 @@ const ExecCommand = cmd({
           process.exitCode = 1
           return
         }
-        console.log(JSON.stringify(await res.json(), null, 2))
+        await writeJson(await res.json())
         return
       }
       const spinner = prompts.spinner()
@@ -1626,7 +1625,7 @@ const CleanupCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ dry_run: !args.yes, plans }, null, 2))
+      await writeJson({ dry_run: !args.yes, plans })
       prompts.outro("Done")
       return
     }

@@ -9,8 +9,7 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
 
 // NDAs, BAAs and the rest — epic #179757.
 //
@@ -93,7 +92,7 @@ const ListCommand = cmd({
     spinner.stop(`${body.agreements.length} agreement(s)`)
 
     if (args.json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       prompts.outro("Done")
       return
     }
@@ -170,7 +169,7 @@ const ShowCommand = cmd({
     spinner.stop("Loaded")
 
     if (args.json) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       prompts.outro("Done")
       return
     }
@@ -345,7 +344,7 @@ const RaiseCommand = cmd({
     const body = (await res.json()) as any
     spinner.stop("Raised")
 
-    if (args.json) { console.log(JSON.stringify(body, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(body); prompts.outro("Done"); return }
 
     const a = body.agreement
     printDivider()

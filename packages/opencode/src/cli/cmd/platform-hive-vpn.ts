@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import { dim, bold, success, highlight } from "./iris-api"
+import { dim, bold, success, highlight, writeJson } from "./iris-api"
 import { spawnSync, spawn } from "child_process"
 import { existsSync, writeFileSync, readFileSync, appendFileSync } from "fs"
 import { join } from "path"
@@ -151,7 +151,7 @@ const VpnCheckCommand = cmd({
   async handler(argv) {
     const s = readStatus()
     if (argv.json) {
-      console.log(JSON.stringify(s, null, 2))
+      await writeJson(s)
       return
     }
     console.log()
@@ -263,7 +263,7 @@ const VpnStatusCommand = cmd({
   async handler(argv) {
     const s = readStatus()
     if (argv.json) {
-      console.log(JSON.stringify(s, null, 2))
+      await writeJson(s)
       return
     }
     if (!s.installed) {
@@ -334,7 +334,7 @@ const VpnHostCommand = cmd({
       process.exit(1)
     }
     if (argv.json) {
-      console.log(JSON.stringify(node, null, 2))
+      await writeJson(node)
       return
     }
     console.log()
@@ -588,7 +588,7 @@ const VpnDoctorCommand = cmd({
     }
 
     if (argv.json) {
-      console.log(JSON.stringify({ tailnet: s.tailnet, checks }, null, 2))
+      await writeJson({ tailnet: s.tailnet, checks })
       return
     }
     console.log()
@@ -866,7 +866,7 @@ const VpnSessionsCommand = cmd({
     rows = rows.slice(-Math.max(1, Number(argv.limit)))
 
     if (argv.json) {
-      console.log(JSON.stringify(rows, null, 2))
+      await writeJson(rows)
       return
     }
 

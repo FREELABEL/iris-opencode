@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, requireUserId } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, requireUserId, writeJson } from "./iris-api"
 
 // ============================================================================
 // Affiliates — manage affiliate links, signups, commissions, and payouts
@@ -76,7 +76,7 @@ const StatusCmd = cmd({
     const summary = summaryBody.data ?? summaryBody
     const connect = connectBody
 
-    if (args.json) { console.log(JSON.stringify({ link, summary, connect }, null, 2)); return }
+    if (args.json) { await writeJson({ link, summary, connect }); return }
 
     const signups = Number(link.signups ?? link.total_signups ?? 0)
     const tier = getTier(signups)
@@ -157,7 +157,7 @@ const LinkCmd = cmd({
     const body = await getJson(res)
     const link = body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(link, null, 2)); return }
+    if (args.json) { await writeJson(link); return }
 
     const url = link.url ?? link.referral_url ?? link.short_url ?? ""
 
@@ -215,7 +215,7 @@ const CreateCmd = cmd({
     const body = await getJson(res)
     const link = body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(link, null, 2)); return }
+    if (args.json) { await writeJson(link); return }
 
     prompts.log.success(`${success("✓")} Affiliate link created`)
     printKV("URL", highlight(link.short_url ?? link.default_short_url ?? link.url_key ?? ""))
@@ -245,7 +245,7 @@ const LinksCmd = cmd({
     const raw = body.data ?? body.urls ?? body
     const urls: any[] = Array.isArray(raw) ? raw : []
 
-    if (args.json) { console.log(JSON.stringify(urls, null, 2)); return }
+    if (args.json) { await writeJson(urls); return }
     if (urls.length === 0) { prompts.log.info("No tracking links yet. Create one: iris affiliate create"); return }
 
     console.log("")
@@ -283,7 +283,7 @@ const ReferralsCmd = cmd({
     const raw = body.data ?? body.signups ?? body
     const users: any[] = Array.isArray(raw) ? raw : []
 
-    if (args.json) { console.log(JSON.stringify(users, null, 2)); return }
+    if (args.json) { await writeJson(users); return }
     if (users.length === 0) { prompts.log.info("No referrals yet. Share your link: iris affiliate link --copy"); return }
 
     console.log("")
@@ -323,7 +323,7 @@ const TiersCmd = cmd({
     const signups = Array.isArray(raw) ? raw.length : Number(raw ?? 0)
     const current = getTier(signups)
 
-    if (args.json) { console.log(JSON.stringify({ current: current.name, referrals: signups, tiers: TIERS }, null, 2)); return }
+    if (args.json) { await writeJson({ current: current.name, referrals: signups, tiers: TIERS }); return }
 
     console.log("")
     console.log(bold("Commission Tiers"))
@@ -370,7 +370,7 @@ const EarningsCmd = cmd({
     const rawData = body.data ?? body
     const events: any[] = Array.isArray(rawData) ? rawData : rawData?.data ?? []
 
-    if (args.json) { console.log(JSON.stringify(events, null, 2)); return }
+    if (args.json) { await writeJson(events); return }
     if (events.length === 0) { prompts.log.info("No commission events yet. Earnings are created automatically when your referrals pay."); return }
 
     console.log("")
@@ -407,7 +407,7 @@ const PayoutCmd = cmd({
     const body = await getJson(res)
     const summary = body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(summary, null, 2)); return }
+    if (args.json) { await writeJson(summary); return }
 
     const balance = Number(summary.balance_cents ?? 0)
 
@@ -475,7 +475,7 @@ const CashoutCmd = cmd({
 
     const body = await getJson(res)
 
-    if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+    if (args.json) { await writeJson(body); return }
 
     if (body.success) {
       prompts.log.success(`${success("✓")} Cashout initiated!`)
@@ -508,7 +508,7 @@ const ConnectStripeCmd = cmd({
     if (statusRes.ok) {
       const status = await getJson(statusRes)
       if (status.connected) {
-        if (args.json) { console.log(JSON.stringify(status, null, 2)); return }
+        if (args.json) { await writeJson(status); return }
         console.log("")
         console.log(bold("Stripe Connect Status"))
         printDivider()
@@ -529,7 +529,7 @@ const ConnectStripeCmd = cmd({
     })
     const body = await getJson(res)
 
-    if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+    if (args.json) { await writeJson(body); return }
 
     if (body.success && body.onboarding_url) {
       prompts.log.success(`${success("✓")} Stripe Connect onboarding ready`)

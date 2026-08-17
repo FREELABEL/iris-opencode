@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, dim, bold, success } from "./iris-api"
+import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import { getToken, getLabels, listMessages, searchMessages, getThread, lastError } from "../lib/gmail"
 
 async function requireToken(): Promise<string | null> {
@@ -60,7 +60,7 @@ const GmailInboxCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(messages, null, 2)); return }
+      if (args.json) { await writeJson(messages); return }
 
       printDivider()
       for (const msg of messages) {
@@ -102,7 +102,7 @@ const GmailReadCommand = cmd({
           return
         }
 
-        if (args.json) { console.log(JSON.stringify(thread, null, 2)); return }
+        if (args.json) { await writeJson(thread); return }
 
         prompts.log.info(`Thread: ${thread.messages[0]?.subject || thread.snippet}`)
         printDivider()
@@ -125,7 +125,7 @@ const GmailReadCommand = cmd({
           return
         }
 
-        if (args.json) { console.log(JSON.stringify(msg, null, 2)); return }
+        if (args.json) { await writeJson(msg); return }
 
         printDivider()
         console.log(`  ${bold("From:")}    ${msg.from}`)
@@ -176,7 +176,7 @@ const GmailSearchCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(messages, null, 2)); return }
+      if (args.json) { await writeJson(messages); return }
 
       printDivider()
       for (const msg of messages) {
@@ -212,7 +212,7 @@ const GmailLabelsCommand = cmd({
     try {
       const labels = await getLabels(token)
 
-      if (args.json) { console.log(JSON.stringify(labels, null, 2)); return }
+      if (args.json) { await writeJson(labels); return }
 
       // Sort: system labels first, then user labels
       const system = labels.filter(l => l.type === "system").sort((a, b) => a.name.localeCompare(b.name))

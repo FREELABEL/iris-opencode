@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 
 // Endpoints (VoiceResource):
 //   GET  /api/v1/voice/list             ?provider=
@@ -28,7 +28,7 @@ const VoiceListCommand = cmd({
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const voices: any[] = data?.data ?? data?.voices ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(voices, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(voices); prompts.outro("Done"); return }
     printDivider()
     for (const v of voices) console.log(`  ${bold(String(v.name ?? v.voice_id ?? "?"))}  ${dim(String(v.provider ?? ""))}  ${dim(String(v.voice_id ?? ""))}`)
     printDivider()
@@ -89,7 +89,7 @@ const VoiceProvidersCommand = cmd({
     const res = await irisFetch(`/api/v1/voice/providers`)
     const ok = await handleApiError(res, "List providers")
     if (!ok) { prompts.outro("Done"); return }
-    console.log(JSON.stringify(((await res.json()) as any)?.data ?? (await res.json().catch(() => ({}))), null, 2))
+    await writeJson(((await res.json()) as any)?.data ?? (await res.json().catch(() => ({}))))
     prompts.outro("Done")
   },
 })

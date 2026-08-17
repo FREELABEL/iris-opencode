@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, writeJson } from "./iris-api"
 import { getBySlug, createPageFromJson } from "./platform-pages"
 import { profileFromBrand, rebrandJsonContent } from "./rebrand"
 
@@ -50,7 +50,7 @@ const ListCmd = cmd({
       sp.stop(`${sites.length} site(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(sites, null, 2))
+        await writeJson(sites)
         prompts.outro("Done")
         return
       }
@@ -93,7 +93,7 @@ const ShowCmd = cmd({
       sp.stop(String(site.name))
 
       if (args.json) {
-        console.log(JSON.stringify(site, null, 2))
+        await writeJson(site)
         prompts.outro("Done")
         return
       }
@@ -163,7 +163,7 @@ const ConfigCmd = cmd({
       sp.stop(success("Updated"))
 
       if (args.json) {
-        console.log(JSON.stringify(settings, null, 2))
+        await writeJson(settings)
       } else {
         printDivider()
         const ne = settings.notification_emails ?? []
@@ -179,7 +179,7 @@ const ConfigCmd = cmd({
       sp.stop("Settings")
 
       if (args.json) {
-        console.log(JSON.stringify(settings, null, 2))
+        await writeJson(settings)
       } else {
         printDivider()
         const ne = settings.notification_emails ?? []
@@ -234,7 +234,7 @@ const CreateCmd = cmd({
     const site = ((await res.json()) as any).data ?? {}
     sp.stop(success(`Created site #${site.id}`))
 
-    if (args.json) { console.log(JSON.stringify(site, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(site); prompts.outro("Done"); return }
     printDivider()
     printKV("ID", site.id)
     printKV("Name", site.name)
@@ -315,7 +315,7 @@ const NavCmd = cmd({
     const isEdit = args.set || args.add || args.remove !== undefined
     if (!isEdit) {
       sp.stop(`${navItems.length} item(s)`)
-      if (args.json) { console.log(JSON.stringify(navItems, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(navItems); prompts.outro("Done"); return }
       printDivider()
       if (!navItems.length) console.log(dim("  (none)"))
       navItems.forEach((it, i) =>
@@ -357,7 +357,7 @@ const NavCmd = cmd({
     })
     if (!(await handleApiError(putRes, "Update nav"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
     sp.stop(success(`Saved ${navItems.length} item(s) — member pages purged`))
-    if (args.json) console.log(JSON.stringify(navItems, null, 2))
+    if (args.json) await writeJson(navItems)
     prompts.outro("Done")
   },
 })
@@ -560,7 +560,7 @@ const InboxCmd = cmd({
     const total = body.meta?.total ?? rows.length
 
     if (asJson) {
-      console.log(JSON.stringify({ site: { id: site.id, name: site.name, slug: site.slug }, total, rows }, null, 2))
+      await writeJson({ site: { id: site.id, name: site.name, slug: site.slug }, total, rows })
       return
     }
 
@@ -670,7 +670,7 @@ const ReplyCmd = cmd({
     }
 
     if (asJson) {
-      console.log(JSON.stringify(body, null, 2))
+      await writeJson(body)
       return
     }
 

@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, success, writeJson } from "./iris-api"
 import { execSync } from "child_process"
 import { hostname, platform, arch, userInfo, release } from "os"
 
@@ -181,7 +181,7 @@ export const PlatformSystemAppsScanCommand = cmd({
     spinner.stop(`${apps.length} apps found`)
 
     if (args.json) {
-      console.log(JSON.stringify({ machine: meta, apps }, null, 2))
+      await writeJson({ machine: meta, apps })
     } else {
       printDivider()
       console.log(`  ${dim("machine:")} ${bold(meta.hostname)}  ${dim(`${meta.platform}/${meta.arch} · ${meta.username}`)}`)

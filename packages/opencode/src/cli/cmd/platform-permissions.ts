@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, printDivider, printKV, success } from "./iris-api"
+import { dim, bold, printDivider, printKV, success, writeJson } from "./iris-api"
 import * as Permissions from "../lib/permissions"
 
 /**
@@ -47,7 +47,7 @@ const PermissionsCheckCommand = cmd({
     const checks = Permissions.checkAll()
 
     if (args.json) {
-      console.log(JSON.stringify({ success: true, host_app: Permissions.hostApp(), permissions: checks }, null, 2))
+      await writeJson({ success: true, host_app: Permissions.hostApp(), permissions: checks })
       return
     }
 
@@ -96,11 +96,11 @@ const PermissionsGrantCommand = cmd({
     // Non-interactive (scripts, MCP): open nothing, just report what to do.
     // Opening System Settings on a machine nobody is looking at is noise.
     if (args.json) {
-      console.log(JSON.stringify({
+      await writeJson({
         success: true,
         host_app: Permissions.hostApp(),
         needed: targets.map((t) => ({ id: t.id, name: t.name, settings_url: t.settingsUrl, unlocks: t.unlocks })),
-      }, null, 2))
+      })
       return
     }
 

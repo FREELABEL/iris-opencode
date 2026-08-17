@@ -10,8 +10,7 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
 
 // ============================================================================
 // iris bloq-sync — operate the Bloq ↔ cloud-storage sync feature from the CLI
@@ -136,7 +135,7 @@ const ProvidersCommand = cmd({
     if (!data) return
     const providers: any[] = data?.data?.providers ?? data?.providers ?? []
     if (args.json) {
-      console.log(JSON.stringify(providers, null, 2))
+      await writeJson(providers)
       prompts.outro("Done")
       return
     }
@@ -175,7 +174,7 @@ const ConfigCommand = cmd({
     if (!data) return
     const cloudSync = data?.data?.cloud_sync ?? data?.cloud_sync ?? {}
     if (args.json) {
-      console.log(JSON.stringify(cloudSync, null, 2))
+      await writeJson(cloudSync)
       prompts.outro("Done")
       return
     }
@@ -222,7 +221,7 @@ const StatusCommand = cmd({
     if (!data) return
     const status = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(status, null, 2))
+      await writeJson(status)
       prompts.outro("Done")
       return
     }
@@ -282,7 +281,7 @@ const LinkCommand = cmd({
     if (!data) return
     const cloudSync = data?.data?.cloud_sync ?? data?.cloud_sync ?? {}
     if (args.json) {
-      console.log(JSON.stringify(cloudSync, null, 2))
+      await writeJson(cloudSync)
       prompts.outro("Done")
       return
     }
@@ -322,7 +321,7 @@ const UnlinkCommand = cmd({
     )
     if (!data) return
     if (args.json) {
-      console.log(JSON.stringify(data?.data ?? data, null, 2))
+      await writeJson(data?.data ?? data)
       prompts.outro("Done")
       return
     }
@@ -362,7 +361,7 @@ const BrowseCommand = cmd({
     const folders: any[] = payload?.folders ?? []
     const files: any[] = payload?.files ?? []
     if (args.json) {
-      console.log(JSON.stringify({ folders, files }, null, 2))
+      await writeJson({ folders, files })
       prompts.outro("Done")
       return
     }
@@ -415,7 +414,7 @@ const TriggerCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }
@@ -459,7 +458,7 @@ const RunNowCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }
@@ -508,7 +507,7 @@ const ExportItemCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }
@@ -551,7 +550,7 @@ const ImportCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }
@@ -581,7 +580,7 @@ const DebugCommand = cmd({
     if (!data) return
     const payload = data?.data ?? data
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       prompts.outro("Done")
       return
     }

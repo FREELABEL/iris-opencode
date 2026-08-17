@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch } from "./iris-api"
+import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch, writeJson } from "./iris-api"
 import { mailRows } from "./mail-response"
 import { routerSend, describeSend } from "./comms-send"
 
@@ -68,7 +68,7 @@ const MailSearchCommand = cmd({
     const messages: any[] = mailRows(data)
 
     if (args.json) {
-      console.log(JSON.stringify(messages, null, 2))
+      await writeJson(messages)
       prompts.outro("Done")
       return
     }
@@ -154,7 +154,7 @@ const MailReadCommand = cmd({
     const msg = messages[0]
 
     if (args.json) {
-      console.log(JSON.stringify(msg, null, 2))
+      await writeJson(msg)
       prompts.outro("Done")
       return
     }
@@ -326,7 +326,7 @@ const MailAccountsCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
       return
     }
 

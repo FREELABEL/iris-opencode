@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
 import {
   normalizeInputSchema,
   promptForInputs,
@@ -158,7 +158,7 @@ const WorkflowsListCommand = cmd({
       spinner.stop(`${workflows.length} workflow(s)${templates.length > 0 ? ` + ${templates.length} template(s)` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify(all, null, 2))
+        await writeJson(all)
         return
       }
 
@@ -1019,7 +1019,7 @@ const WorkflowsHubListCommand = cmd({
       spinner.stop(`${templates.length} template(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(raw, null, 2))
+        await writeJson(raw)
         return
       }
 
@@ -1336,7 +1336,7 @@ const WorkflowsGenerateCommand = cmd({
 
       if (args.json) {
         spinner.stop("Done")
-        console.log(JSON.stringify(workflow, null, 2))
+        await writeJson(workflow)
         prompts.outro("Done")
         return
       }
@@ -1415,7 +1415,7 @@ const WorkflowsEvalListCommand = cmd({
       spinner.stop(`${tests.length} test case(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(tests, null, 2))
+        await writeJson(tests)
         return
       }
 
@@ -1607,7 +1607,7 @@ const WorkflowsEvalRunCommand = cmd({
       evalSpinner.stop("Results loaded")
 
       if (args.json) {
-        console.log(JSON.stringify(evaluation, null, 2))
+        await writeJson(evaluation)
         if (args["exit-code"]) {
           const results: any[] = evaluation?.results ?? []
           const anyFailed = results.some((r: any) => r.passed === false || r.status === "failed")
@@ -1689,7 +1689,7 @@ const WorkflowsEvalHistoryCommand = cmd({
       spinner.stop(`${runs.length} evaluation(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(runs, null, 2))
+        await writeJson(runs)
         return
       }
 
@@ -1798,7 +1798,7 @@ const WorkflowsHubRunCommand = cmd({
     }
 
     const out = (await res.json()) as { task?: any; dispatched?: boolean; message?: string }
-    if (args.json) { console.log(JSON.stringify(out, null, 2)); return }
+    if (args.json) { await writeJson(out); return }
 
     const t = out?.task ?? {}
     console.log(success(out?.message ?? "Dispatched"))

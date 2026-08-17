@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
 
 // ============================================================================
 // Bloq Context CLI — Andrew "Esher" Usher's hierarchy:
@@ -116,7 +116,7 @@ const ContextGetCommand = cmd({
           value = value[seg]
         }
       }
-      console.log(JSON.stringify(value ?? null, null, 2))
+      await writeJson(value ?? null)
       prompts.outro(dim(`version=${ctx.version}`))
     } catch (err) {
       spinner.stop("Error", 1)

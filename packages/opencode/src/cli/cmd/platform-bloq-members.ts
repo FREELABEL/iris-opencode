@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, success, writeJson } from "./iris-api"
 
 // Endpoints (from BloqsResource):
 //   GET    /api/v1/user/bloqs/{bloqId}/shared-users
@@ -54,7 +54,7 @@ const ListMembersCommand = cmd({
     }
 
     const users: any[] = raw
-    if (args.json) { console.log(JSON.stringify(users, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(users); prompts.outro("Done"); return }
     printDivider()
     if (users.length === 0) console.log(`  ${dim("(no members)")}`)
     else for (const u of users) {

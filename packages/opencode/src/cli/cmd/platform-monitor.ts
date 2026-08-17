@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 
 // ============================================================================
 // Platform Monitor — port of MonitorCommand.php
@@ -40,7 +40,7 @@ const OverviewCmd = cmd({
     const body = await getJson(res)
     const data = body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) { await writeJson(data); return }
 
     console.log("")
     console.log(bold(`Platform Monitor (last ${args.hours}h)`))
@@ -190,7 +190,7 @@ const AgentCmd = cmd({
       .sort((a, b) => b.over - a.over)
 
     if (args.json) {
-      console.log(JSON.stringify({
+      await writeJson({
         agent: agent ? { id: agent.id, name: agent.name, model: agent.model ?? agent.settings?.model,
           heartbeat_mode: agent.heartbeat_mode, tools: agent.settings?.tools ?? agent.capabilities,
           integrations: agent.settings?.integrations } : { id: agentId },
@@ -199,7 +199,7 @@ const AgentCmd = cmd({
         totals,
         dormant: dormant.map((d) => ({ id: d.s.id, overdue: humanDur(d.over) })),
         history: allExecs.slice(0, args.limit),
-      }, null, 2))
+      })
       return
     }
 
@@ -305,7 +305,7 @@ const LoopsCmd = cmd({
     const body = await getJson(res)
     const data = body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) { await writeJson(data); return }
 
     console.log("")
     console.log(bold(`Loop Detection (last ${args.hours}h)`))
@@ -410,7 +410,7 @@ const BriefingCmd = cmd({
     const body = await getJson(res)
     const data = body.data ?? body
 
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+    if (args.json) { await writeJson(data); return }
 
     console.log("")
     console.log(bold("Morning Briefing Enabled"))

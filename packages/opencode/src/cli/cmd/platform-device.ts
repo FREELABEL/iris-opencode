@@ -12,8 +12,7 @@ import {
   bold,
   success,
   highlight,
-  isNonInteractive,
-} from "./iris-api"
+  isNonInteractive, writeJson } from "./iris-api"
 import * as device from "../lib/device"
 import { homedir, hostname, platform } from "os"
 import { join } from "path"
@@ -315,7 +314,7 @@ const ScanCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       return
     }
 
@@ -432,7 +431,7 @@ const LogCommand = cmd({
     if (!token) {
       writeLocal(reading)
       if (args.json) {
-        console.log(JSON.stringify({ success: false, persisted: "local", reading }, null, 2))
+        await writeJson({ success: false, persisted: "local", reading })
         return
       }
       prompts.log.warn("Not authenticated — reading saved locally instead.")
@@ -444,7 +443,7 @@ const LogCommand = cmd({
     const userId = await requireUserId(args["user-id"] as number | undefined)
     if (!userId) {
       writeLocal(reading)
-      if (args.json) console.log(JSON.stringify({ success: false, persisted: "local", reading }, null, 2))
+      if (args.json) await writeJson({ success: false, persisted: "local", reading })
       else prompts.log.warn(`Reading saved locally (${LOCAL_LOG}).`)
       return
     }
@@ -492,7 +491,7 @@ const LogCommand = cmd({
 
       const all = [...prior, reading].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
       if (args.json) {
-        console.log(JSON.stringify({ success: true, reading, readings: all }, null, 2))
+        await writeJson({ success: true, reading, readings: all })
         return
       }
       printTrend(all)
@@ -837,7 +836,7 @@ const CleanCommand = cmd({
     // No-op short circuit.
     if (totalItems === 0) {
       if (json) {
-        console.log(JSON.stringify({ success: true, apply, dry_run: !apply, categories, total_items: 0, total_gb: 0, plans, before }, null, 2))
+        await writeJson({ success: true, apply, dry_run: !apply, categories, total_items: 0, total_gb: 0, plans, before })
         return
       }
       renderPlan("would")

@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 
 // ============================================================================
 // Per-lead outreach — port of OutreachSendCommand.php
@@ -49,7 +49,7 @@ const ListCmd = cmd({
   async handler(args) {
     if (!(await requireAuth())) return
     const steps = await fetchSteps(args.leadId)
-    if (args.json) { console.log(JSON.stringify(steps, null, 2)); return }
+    if (args.json) { await writeJson(steps); return }
     if (steps.length === 0) { prompts.log.info("No outreach steps for this lead"); return }
     console.log("")
     console.log(bold(`Outreach Steps — Lead #${args.leadId}`))

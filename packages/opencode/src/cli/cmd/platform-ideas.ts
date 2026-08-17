@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, dim, bold, success, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, dim, bold, success, IRIS_API, writeJson } from "./iris-api"
 import { transcribeAudio } from "../lib/transcription"
 
 // ============================================================================
@@ -137,7 +137,7 @@ const IdeasCaptureCommand = cmd({
     sp2.stop(`${ideas.length} idea(s)`)
 
     if (args.json) {
-      console.log(JSON.stringify({ source, lead: args.lead, dry_run: !!args["dry-run"], ideas }, null, 2))
+      await writeJson({ source, lead: args.lead, dry_run: !!args["dry-run"], ideas })
     } else {
       console.log(dim("  " + "─".repeat(60)))
       for (const i of ideas) console.log(`  💡 ${bold(i.title)}\n     ${dim(i.body)}`)

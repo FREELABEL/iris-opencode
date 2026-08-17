@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import { BountyAdminCommand } from "./platform-bounty-admin"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, writeJson } from "./iris-api"
 
 // ============================================================================
 // Display helpers
@@ -72,7 +72,7 @@ const ListCommand = cmd({
       if (spinner) spinner.stop(`${(items as unknown[]).length} bounties found`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
         return
       }
 
@@ -123,7 +123,7 @@ const MySubmissionsCommand = cmd({
       if (spinner) spinner.stop(`${(items as unknown[]).length} submissions`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
         return
       }
 
@@ -180,7 +180,7 @@ const SubmitCommand = cmd({
       if (spinner) spinner.stop(success("Submitted!"))
 
       if (args.json) {
-        console.log(JSON.stringify(json, null, 2))
+        await writeJson(json)
       } else {
         prompts.log.success("Content submitted for review.")
         const data = (json as any).data ?? json
@@ -225,7 +225,7 @@ const StatsCommand = cmd({
       if (spinner) spinner.stop("Loaded")
 
       if (args.json) {
-        console.log(JSON.stringify(stats, null, 2))
+        await writeJson(stats)
         return
       }
 
@@ -301,7 +301,7 @@ const ApproveCommand = cmd({
       if (spinner) spinner.stop(success("Approved!"))
 
       if (args.json) {
-        console.log(JSON.stringify(json, null, 2))
+        await writeJson(json)
       } else {
         const data = (json as any).data ?? json
         prompts.log.success(`Submission approved. Initial views captured: ${data.initial_view_count ?? 0}`)
@@ -387,7 +387,7 @@ const PayoutCommand = cmd({
       if (spinner) spinner.stop(success(args["dry-run"] ? "Preview ready" : "Payouts processed"))
 
       if (args.json) {
-        console.log(JSON.stringify(result, null, 2))
+        await writeJson(result)
         return
       }
 
@@ -445,7 +445,7 @@ const SubmissionsCommand = cmd({
       if (spinner) spinner.stop(`${(items as unknown[]).length} submissions`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
         return
       }
 
@@ -595,7 +595,7 @@ const CreateCommand = cmd({
       if (spinner) spinner.stop(`${success("✓")} Created: ${bold(String(o.title ?? o.id ?? "bounty"))}`)
 
       if (args.json) {
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
       } else {
         printDivider()
         printKV("ID", o.id)
@@ -651,7 +651,7 @@ const PlaceCommand = cmd({
       const json = await res.json()
       if (spinner) spinner.stop(success(args.clear ? "Placement cleared" : `Ranked #${args.rank}`))
 
-      if (args.json) console.log(JSON.stringify((json as any).data ?? json, null, 2))
+      if (args.json) await writeJson((json as any).data ?? json)
       else prompts.outro(dim(`iris bounty payout <opportunity-id> --dry-run`))
     } catch (e: any) {
       if (spinner) spinner.stop("Error", 1)
@@ -704,7 +704,7 @@ const AddHunterCommand = cmd({
       if (spinner) spinner.stop(success("Hunter enrolled!"))
 
       if (args.json) {
-        console.log(JSON.stringify(json, null, 2))
+        await writeJson(json)
         return
       }
 
@@ -761,7 +761,7 @@ const HuntersCommand = cmd({
     const rows: any[] = data?.leaderboard ?? []
     const opp = data?.opportunity ?? {}
 
-    if (args.json) { console.log(JSON.stringify({ success: true, ...data }, null, 2)); return }
+    if (args.json) { await writeJson({ success: true, ...data }); return }
 
     UI.empty()
     prompts.intro(`◈  Bug Bounty Hunters — #${oppId}`)
@@ -804,7 +804,7 @@ const ConnectCommand = cmd({
     if (!(await handleApiError(res, "Payout status"))) return
     const st = ((await res.json().catch(() => null)) as any) ?? {}
 
-    if (args.json) { console.log(JSON.stringify(st, null, 2)); return }
+    if (args.json) { await writeJson(st); return }
 
     if (st.connected && st.payouts_enabled) {
       printDivider()
@@ -932,7 +932,7 @@ const MyBountyCommand = cmd({
       const me = (await meRes.json().catch(() => null)) as any
       if (!me) return
 
-      if (args.json) { console.log(JSON.stringify(me, null, 2)); return }
+      if (args.json) { await writeJson(me); return }
 
       printDivider()
       printKV("Owed", `${me.earnings?.unpaid ?? "$0.00"}`)
@@ -966,7 +966,7 @@ const MyBountyCommand = cmd({
     const body = (await res.json().catch(() => null)) as any
     const d = body?.data ?? body
 
-    if (args.json) { console.log(JSON.stringify({ success: true, ...d }, null, 2)); return }
+    if (args.json) { await writeJson({ success: true, ...d }); return }
 
     const money = (c: unknown) => `$${(Number(c ?? 0) / 100).toFixed(2)}`
     UI.empty()
@@ -1009,7 +1009,7 @@ const BugsCommand = cmd({
     const d = body?.data ?? body
     const rows: any[] = Array.isArray(d) ? d : (d?.bugs ?? [])
 
-    if (args.json) { console.log(JSON.stringify({ success: true, count: rows.length, bugs: rows }, null, 2)); return }
+    if (args.json) { await writeJson({ success: true, count: rows.length, bugs: rows }); return }
 
     UI.empty()
     prompts.intro(`◈  Bug Bounty Bugs — #${oppId}`)

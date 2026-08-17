@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, writeJson } from "./iris-api"
 import { resolveNode } from "./platform-hive-nodes"
 import { existsSync, writeFileSync, readFileSync } from "fs"
 
@@ -32,7 +32,7 @@ const ListCmd = cmd({
     if (!res.ok) return void (await handleApiError(res, "List scripts"))
     const json = (await res.json()) as { data?: any[] }
     const scripts = json.data ?? []
-    if (args.json) return void console.log(JSON.stringify(scripts, null, 2))
+    if (args.json) return void await writeJson(scripts)
     if (!scripts.length) {
       prompts.log.info("No scripts yet. Save one: iris scripts push <slug> <file>")
       return
@@ -176,7 +176,7 @@ const RunCmd = cmd({
       }
     }
     if (!final) return void prompts.log.error(`Timed out waiting for task ${taskId}`)
-    if (args.json) return void console.log(JSON.stringify(final, null, 2))
+    if (args.json) return void await writeJson(final)
 
     const out = final.result?.output ?? final.output ?? final.result?.stdout ?? ""
     console.log()

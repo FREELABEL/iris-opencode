@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 
 // ============================================================================
 // Helpers
@@ -49,7 +49,7 @@ const SearchCmd = cmd({
       const items = data?.data ?? []
       sp.stop(`${items.length} result(s)`)
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
         prompts.outro("Done")
         return
       }
@@ -88,7 +88,7 @@ const InfoCmd = cmd({
     if (!skill) { sp.stop("Not found", 1); prompts.outro("Done"); return }
     sp.stop(String(skill.name ?? skill.slug))
     if (args.json) {
-      console.log(JSON.stringify(skill, null, 2))
+      await writeJson(skill)
       prompts.outro("Done")
       return
     }

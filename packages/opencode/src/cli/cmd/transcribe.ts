@@ -10,8 +10,7 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { transcribeLocal } from "../lib/transcription"
@@ -253,7 +252,7 @@ async function finishTranscript(
   }
 
   if (asJson) {
-    console.log(JSON.stringify({ provider, file: abs, transcript_path: txtPath, text }, null, 2))
+    await writeJson({ provider, file: abs, transcript_path: txtPath, text })
     return true
   }
 
@@ -546,7 +545,7 @@ export const PlatformTranscribeCommand = cmd({
           spinner.stop("Done")
 
           if (args.json) {
-            console.log(JSON.stringify(data, null, 2))
+            await writeJson(data)
             prompts.outro("Done")
             return
           }
@@ -630,7 +629,7 @@ export const PlatformTranscribeCommand = cmd({
     spinner.stop("Done")
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }

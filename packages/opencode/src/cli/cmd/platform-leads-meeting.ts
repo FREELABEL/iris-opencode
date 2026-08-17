@@ -9,8 +9,7 @@ import {
   dim,
   bold,
   success,
-  streamAgentChat,
-} from "./iris-api"
+  streamAgentChat, writeJson } from "./iris-api"
 import { existsSync, readFileSync } from "fs"
 import { extname, isAbsolute, join } from "path"
 
@@ -171,12 +170,12 @@ export const PlatformLeadsMeetingCommand = cmd({
 
       if (args["dry-run"]) {
         if (args.json) {
-          console.log(JSON.stringify({
+          await writeJson({
             dry_run: true,
             lead_id: args.lead_id,
             extracted_content: extracted,
             action_items: actionItems,
-          }, null, 2))
+          })
         } else {
           prompts.log.warn("DRY RUN — nothing will be saved")
           console.log(extracted)
@@ -222,13 +221,13 @@ export const PlatformLeadsMeetingCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           lead_id: args.lead_id,
           note_id: noteId,
           extracted_content: extracted,
           tasks_created: createdTasks,
           file: filePath,
-        }, null, 2))
+        })
       } else {
         console.log(`  ${success("✓")} Meeting intel saved to lead #${args.lead_id}`)
         if (noteId) console.log(`  ${dim("Note ID:")} #${noteId}`)

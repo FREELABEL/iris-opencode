@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
 
 // ============================================================================
 // Copycat CLI — Phase 6
@@ -56,7 +56,7 @@ async function runAction(args: any, action: string, params: Record<string, unkno
     spinner.stop("Done")
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
     } else {
       const payload = data?.data ?? data
       if (typeof payload === "object" && payload !== null) {

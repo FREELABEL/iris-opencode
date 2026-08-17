@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
 import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
 import { RELATION_TYPES, isValidRelationType, formatRelationsGrouped, type RelationRow } from "./bloq-relation-format"
@@ -168,7 +168,7 @@ const BloqsListCommand = cmd({
       spinner.stop(`${bloqs.length} bloq(s)${args.search ? ` matching "${args.search}"` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify(bloqs, null, 2))
+        await writeJson(bloqs)
         return
       }
 
@@ -232,7 +232,7 @@ export async function resolveBloqId(idOrQuery: string | number, userId: number, 
   const matches = (data?.data ?? []).filter((b) => matchesSearchQuery(String(b.name ?? ""), query))
 
   if (matches.length === 0) {
-    if (json) console.log(JSON.stringify({ error: `No bloq matched "${query}"` }, null, 2))
+    if (json) await writeJson({ error: `No bloq matched "${query}"` })
     else prompts.log.warn(`No bloq matched "${query}" — try ${dim("iris bloqs list")}`)
     process.exitCode = 1
     return null
@@ -240,7 +240,7 @@ export async function resolveBloqId(idOrQuery: string | number, userId: number, 
   if (matches.length === 1) return matches[0].id
   // Ambiguous — never guess. List candidates (non-interactive) or prompt.
   if (json || isNonInteractive()) {
-    if (json) console.log(JSON.stringify({ error: "ambiguous", matches: matches.map((m) => ({ id: m.id, name: m.name })) }, null, 2))
+    if (json) await writeJson({ error: "ambiguous", matches: matches.map((m) => ({ id: m.id, name: m.name })) })
     else {
       prompts.log.warn(`${matches.length} bloqs match "${query}" — specify by ID:`)
       for (const m of matches) prompts.log.info(`  #${m.id}  ${m.name ?? "Unknown"}`)
@@ -311,7 +311,7 @@ const BloqsGetCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify({ ...b, web_url: bloqWebUrl(b.id), lists }, null, 2))
+        await writeJson({ ...b, web_url: bloqWebUrl(b.id), lists })
         return
       }
 
@@ -1679,14 +1679,14 @@ const BloqsReorderItemCommand = cmd({
       if (!args.json) {
         prompts.log.error("Specify a target: --position <n> (0 = top) or --top")
       } else {
-        console.log(JSON.stringify({ error: "Specify --position <n> or --top" }, null, 2))
+        await writeJson({ error: "Specify --position <n> or --top" })
       }
       process.exitCode = 2
       return
     }
     if (position < 0) {
       if (!args.json) prompts.log.error("--position must be 0 or greater")
-      else console.log(JSON.stringify({ error: "--position must be 0 or greater" }, null, 2))
+      else await writeJson({ error: "--position must be 0 or greater" })
       process.exitCode = 2
       return
     }
@@ -1719,7 +1719,7 @@ const BloqsReorderItemCommand = cmd({
       if (!listId) {
         if (spinner) spinner.stop("Failed", 1)
         if (!args.json) prompts.log.error("Could not determine the item's list")
-        else console.log(JSON.stringify({ error: "Could not determine the item's list" }, null, 2))
+        else await writeJson({ error: "Could not determine the item's list" })
         if (!args.json) prompts.outro("Done")
         process.exitCode = 1
         return
@@ -1737,7 +1737,7 @@ const BloqsReorderItemCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify({ id: args["item-id"], list_id: listId, position }, null, 2))
+        await writeJson({ id: args["item-id"], list_id: listId, position })
         return
       }
       spinner!.stop(`${success("✓")} Item #${args["item-id"]} ${args.top ? "pinned to top" : `moved to position ${position}`} of list #${listId}`)
@@ -1745,7 +1745,7 @@ const BloqsReorderItemCommand = cmd({
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
       if (!args.json) prompts.log.error(err instanceof Error ? err.message : String(err))
-      else console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }, null, 2))
+      else await writeJson({ error: err instanceof Error ? err.message : String(err) })
       if (!args.json) prompts.outro("Done")
     }
   },
@@ -1962,7 +1962,7 @@ export const BloqsSearchCommand = cmd({
     spinner?.stop(`${boards.length} board(s), ${items.length} item(s)`)
 
     if (args.json) {
-      console.log(JSON.stringify({ query, boards, items, counts: { boards: boards.length, items: items.length } }, null, 2))
+      await writeJson({ query, boards, items, counts: { boards: boards.length, items: items.length } })
       return
     }
 
@@ -2523,7 +2523,7 @@ const BloqsContributorsCommand = cmd({
       const data = await res.json() as Record<string, unknown>
       const leads: any[] = (data as any)?.data ?? (data as any)?.leads ?? (Array.isArray(data) ? data : [])
 
-      if (args.json) { console.log(JSON.stringify(leads, null, 2)); return }
+      if (args.json) { await writeJson(leads); return }
 
       if (spinner) spinner.stop(`${leads.length} contributor(s)`)
 
@@ -2665,7 +2665,7 @@ const BloqsItemsCommand = cmd({
       if (args.json) {
         // outcomes ride along in --json too: a machine caller must be able to tell a
         // genuinely empty result from a source that never ran.
-        console.log(JSON.stringify({ query: args.search, sources, results, outcomes }, null, 2))
+        await writeJson({ query: args.search, sources, results, outcomes })
         return
       }
 
@@ -2768,7 +2768,7 @@ const BloqsItemsCommand = cmd({
       const hasMore = currentPage < lastPage
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           items: items.map(project),
           pagination: {
             total,
@@ -2781,7 +2781,7 @@ const BloqsItemsCommand = cmd({
             // "we stopped looking after 25 pages" (#180303).
             ...(args.list !== undefined ? { list_scan_complete: !listScanIncomplete } : {}),
           },
-        }, null, 2))
+        })
         return
       }
 
@@ -3117,7 +3117,7 @@ const BloqsShareCommand = cmd({
     const url = inviteWebUrl(link.token)
 
     if (args.json) {
-      console.log(JSON.stringify({ ...link, url, board_url: bloqWebUrl(args.id) }, null, 2))
+      await writeJson({ ...link, url, board_url: bloqWebUrl(args.id) })
       return
     }
 
@@ -3186,7 +3186,7 @@ const BloqsLinksCommand = cmd({
     const links = json?.data ?? []
 
     if (args.json) {
-      console.log(JSON.stringify(links.map((l) => ({ ...l, url: inviteWebUrl(l.token) })), null, 2))
+      await writeJson(links.map((l) => ({ ...l, url: inviteWebUrl(l.token) })))
       return
     }
 

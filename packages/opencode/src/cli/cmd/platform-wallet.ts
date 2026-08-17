@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 
 // Endpoints (PaymentsResource — A2P agent wallets):
 //   POST /api/v1/a2p/wallets                              — create wallet
@@ -25,7 +25,7 @@ const WalletGetCommand = cmd({
     const ok = await handleApiError(res, "Get wallet")
     if (!ok) { prompts.outro("Done"); return }
     const data = ((await res.json()) as any)?.data ?? (await res.json().catch(() => ({})))
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     printKV("Wallet ID", data.id)
     printKV("Agent", data.agent_id)
@@ -116,7 +116,7 @@ const WalletTransactionsCommand = cmd({
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const txns: any[] = data?.data ?? data?.transactions ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(txns, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(txns); prompts.outro("Done"); return }
     printDivider()
     if (txns.length === 0) console.log(`  ${dim("(no transactions)")}`)
     else for (const t of txns) {
@@ -184,7 +184,7 @@ const WalletCashoutCommand = cmd({
     if (!ok) { if (!args.json) prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const r = data?.data ?? data
-    if (args.json) { console.log(JSON.stringify(r, null, 2)); return }
+    if (args.json) { await writeJson(r); return }
     const cashable = `$${((r.cashable_cents ?? 0) / 100).toFixed(2)}`
     printDivider()
     printKV("Cashable", cashable)

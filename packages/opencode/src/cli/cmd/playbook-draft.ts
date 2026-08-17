@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, success, highlight, printDivider, requireAuth } from "./iris-api"
+import { dim, bold, success, highlight, printDivider, requireAuth, writeJson } from "./iris-api"
 import { resolveWalkthrough, structureWalkthrough, slugify } from "../lib/walkthrough"
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import { join, resolve } from "path"
@@ -101,7 +101,7 @@ export const PlaybookDraftCommand = cmd({
     writeFileSync(target, doc.markdown)
 
     if (args.json) {
-      console.log(JSON.stringify({ name, path: target, steps: steps.length, notes: doc.structured?.notes ?? [] }, null, 2))
+      await writeJson({ name, path: target, steps: steps.length, notes: doc.structured?.notes ?? [] })
       prompts.outro("Done")
       return
     }

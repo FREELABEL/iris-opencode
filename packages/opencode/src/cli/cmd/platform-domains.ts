@@ -2,7 +2,7 @@ import { promises as dnsPromises } from "node:dns"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
 
 // ============================================================================
 // Domains CLI — connect, verify, list, and remove custom client domains
@@ -115,7 +115,7 @@ const DomainsListCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(domains, null, 2))
+        await writeJson(domains)
         prompts.outro("Done")
         return
       }
@@ -698,7 +698,7 @@ const DomainsDetectCommand = cmd({
     const domain = String(args.domain).toLowerCase().trim()
 
     if (args.json) {
-      console.log(JSON.stringify(await detectDnsProvider(domain), null, 2))
+      await writeJson(await detectDnsProvider(domain))
       return
     }
 

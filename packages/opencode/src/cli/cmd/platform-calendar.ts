@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, printDivider, printKV, dim, bold, success, resolveUserId } from "./iris-api"
+import { irisFetch, requireAuth, printDivider, printKV, dim, bold, success, resolveUserId, writeJson } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
 
 // Google Calendar integration via iris-api execute-direct endpoint
@@ -208,7 +208,7 @@ const CalendarListCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       prompts.outro("Done")
       return
     }
@@ -282,7 +282,7 @@ const CalendarTodayCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       prompts.outro("Done")
       return
     }
@@ -338,7 +338,7 @@ const CalendarTomorrowCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       prompts.outro("Done")
       return
     }
@@ -404,7 +404,7 @@ const CalendarAddCommand = cmd({
       result = await calExec("create_event", params, getAccountOpts(args))
     } catch (err: any) {
       if (args.json) {
-        console.log(JSON.stringify({ success: false, error: err?.message ?? String(err) }, null, 2))
+        await writeJson({ success: false, error: err?.message ?? String(err) })
         process.exitCode = 1
         return
       }
@@ -413,7 +413,7 @@ const CalendarAddCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       if (!result?.success) process.exitCode = 1 // don't let automation read a failed create as success (#155323)
       prompts.outro("Done")
       return
@@ -471,7 +471,7 @@ const CalendarUpdateCommand = cmd({
       result = await calExec("update_event", params, getAccountOpts(args))
     } catch (err: any) {
       if (args.json) {
-        console.log(JSON.stringify({ success: false, error: err?.message ?? String(err) }, null, 2))
+        await writeJson({ success: false, error: err?.message ?? String(err) })
         process.exitCode = 1
         return
       }
@@ -480,7 +480,7 @@ const CalendarUpdateCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       if (!result?.success) process.exitCode = 1 // (#155323)
       prompts.outro("Done")
       return
@@ -523,7 +523,7 @@ const CalendarDeleteCommand = cmd({
       result = await calExec("delete_event", params, getAccountOpts(args))
     } catch (err: any) {
       if (args.json) {
-        console.log(JSON.stringify({ success: false, error: err?.message ?? String(err) }, null, 2))
+        await writeJson({ success: false, error: err?.message ?? String(err) })
         process.exitCode = 1
         return
       }
@@ -532,7 +532,7 @@ const CalendarDeleteCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       if (!result?.success) process.exitCode = 1 // (#155323)
       prompts.outro("Done")
       return
@@ -606,7 +606,7 @@ const CalendarCalendarsCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(cals, null, 2))
+      await writeJson(cals)
       prompts.outro("Done")
       return
     }
@@ -661,7 +661,7 @@ const CalendarFreeCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       if (!result?.success) process.exitCode = 1 // (#155323)
       prompts.outro("Done")
       return
@@ -726,7 +726,7 @@ const CalendarDefaultGetCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -770,7 +770,7 @@ const CalendarDefaultSetCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -833,7 +833,7 @@ const CalendarScheduleCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -917,7 +917,7 @@ const CalendarPrefsShowCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -1000,7 +1000,7 @@ const CalendarPrefsSetCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -1048,7 +1048,7 @@ const CalendarHabitsListCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -1124,7 +1124,7 @@ const CalendarHabitsAddCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }
@@ -1197,7 +1197,7 @@ const CalendarAnalyticsCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
       prompts.outro("Done")
       return
     }

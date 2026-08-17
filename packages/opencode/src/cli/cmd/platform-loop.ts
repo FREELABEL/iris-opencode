@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, requireUserId, handleApiError } from "./iris-api"
+import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, requireUserId, handleApiError, writeJson } from "./iris-api"
 import { Skill } from "../../skill/skill"
 import { Instance } from "../../project/instance"
 import {
@@ -151,7 +151,7 @@ const LoopRunCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify({ playbook: plan.name, until, max_cycles: maxCycles, met, cycles }, null, 2))
+        await writeJson({ playbook: plan.name, until, max_cycles: maxCycles, met, cycles })
         return
       }
 
@@ -239,7 +239,7 @@ const LoopScheduleCommand = cmd({
       const data = (await res.json()) as any
       const job = data?.data ?? data
 
-      if (args.json) { console.log(JSON.stringify(job, null, 2)); return }
+      if (args.json) { await writeJson(job); return }
       spinner?.stop(success("Scheduled"))
       printDivider()
       printKV("Loop", args.name)

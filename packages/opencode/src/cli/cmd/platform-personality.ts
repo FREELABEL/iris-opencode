@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, success, writeJson } from "./iris-api"
 
 // Personality presets — list available preset library and apply to an agent.
 // Backed by config/personalities.php (fl-api).
@@ -24,7 +24,7 @@ const PersonalityListCommand = cmd({
     const ok = await handleApiError(res, "List personalities"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const presets: any[] = data?.data ?? []
-    if (args.json) { console.log(JSON.stringify(presets, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(presets); prompts.outro("Done"); return }
     printDivider()
     for (const p of presets) {
       console.log(`  ${bold(p.key.padEnd(12))} ${p.name}`)
@@ -52,7 +52,7 @@ const PersonalityShowCommand = cmd({
     const data = (await res.json()) as any
     const preset = data?.data
     if (!preset) { prompts.outro("Not found"); return }
-    if (args.json) { console.log(JSON.stringify(preset, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(preset); prompts.outro("Done"); return }
     printDivider()
     console.log(`  ${bold("Name:")}        ${preset.name}`)
     console.log(`  ${bold("Description:")} ${preset.description}`)
@@ -93,7 +93,7 @@ const PersonalityApplyCommand = cmd({
     })
     const ok = await handleApiError(res, "Apply personality"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     console.log(`  ${success("✓")} ${data?.message ?? "Applied"}`)
     if (data?.data?.applied_from) console.log(`  ${dim("From:")} ${data.data.applied_from}`)

@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson } from "./iris-api"
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
@@ -161,7 +161,7 @@ const AgentsListCommand = cmd({
       if (spinner) spinner.stop(`${agents.length} agent(s)${total > agents.length ? ` (${total} total — page ${currentPage}/${lastPage})` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify({ agents, page: currentPage, total, last_page: lastPage }, null, 2))
+        await writeJson({ agents, page: currentPage, total, last_page: lastPage })
         return
       }
 
@@ -247,14 +247,14 @@ async function resolveAgentId(idOrQuery: string | number, userId: number, json: 
   const matches = (raw?.data ?? []).filter((a) => matchesSearchQuery(String(a.name ?? ""), query))
 
   if (matches.length === 0) {
-    if (json) console.log(JSON.stringify({ error: `No agent matched "${query}"` }, null, 2))
+    if (json) await writeJson({ error: `No agent matched "${query}"` })
     else prompts.log.warn(`No agent matched "${query}" — try ${dim("iris agents list")}`)
     process.exitCode = 1
     return null
   }
   if (matches.length === 1) return matches[0].id
   if (json || isNonInteractive()) {
-    if (json) console.log(JSON.stringify({ error: "ambiguous", matches: matches.map((m) => ({ id: m.id, name: m.name })) }, null, 2))
+    if (json) await writeJson({ error: "ambiguous", matches: matches.map((m) => ({ id: m.id, name: m.name })) })
     else {
       prompts.log.warn(`${matches.length} agents match "${query}" — specify by ID:`)
       for (const m of matches) prompts.log.info(`  #${m.id}  ${m.name ?? "Unknown"}`)
@@ -306,7 +306,7 @@ const AgentsGetCommand = cmd({
       if (!a || !a.id) { if (spinner) spinner.stop("Agent not found", 1); process.exitCode = 1; return }
 
       if (args.json) {
-        console.log(JSON.stringify(a, null, 2))
+        await writeJson(a)
         return
       }
 
@@ -464,7 +464,7 @@ const AgentsCreateCommand = cmd({
       const a = data?.data ?? data
 
       if (args.json) {
-        console.log(JSON.stringify(a, null, 2))
+        await writeJson(a)
         return
       }
 
@@ -1389,7 +1389,7 @@ const AgentsMessageCommand = cmd({
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
     if (!args.thread && !args.to) {
-      if (args.json) console.log(JSON.stringify({ error: "Pass --thread <id> or --to <agent>" }, null, 2))
+      if (args.json) await writeJson({ error: "Pass --thread <id> or --to <agent>" })
       else prompts.log.error(`Pass ${dim("--thread <id>")} to post into a room, or ${dim("--to <agent>")} to open a new one`)
       process.exitCode = 1
       if (!args.json) prompts.outro("Done")
@@ -1455,7 +1455,7 @@ const AgentsMessageCommand = cmd({
         response_count?: number
       }
 
-      if (args.json) { console.log(JSON.stringify({ thread_id: threadId, ...data }, null, 2)); return }
+      if (args.json) { await writeJson({ thread_id: threadId, ...data }); return }
 
       spinner!.stop(success(`Sent to thread ${dim(String(threadId))}`))
       printDivider()
@@ -1499,7 +1499,7 @@ const AgentsThreadCommand = cmd({
         if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
         const paginator = (await res.json()) as { data?: ThreadRow[] }
         const threads = paginator?.data ?? []
-        if (args.json) { console.log(JSON.stringify(threads, null, 2)); return }
+        if (args.json) { await writeJson(threads); return }
         spinner!.stop(`${threads.length} thread${threads.length === 1 ? "" : "s"}`)
         printDivider()
         if (threads.length === 0) console.log(`  ${dim("No threads yet — open one with")} ${dim("iris agents message <from> <content> --to <agent>")}`)
@@ -1516,7 +1516,7 @@ const AgentsThreadCommand = cmd({
         thread?: { name?: string | null; status?: string | null; agents?: Array<Record<string, unknown>> }
         messages?: Array<{ sender_name?: string; sender_type?: string; content?: string }>
       }
-      if (args.json) { console.log(JSON.stringify(body, null, 2)); return }
+      if (args.json) { await writeJson(body); return }
 
       const msgs = (body.messages ?? []).slice(-Number(args.limit))
       spinner!.stop(String(body.thread?.name ?? `Thread ${args.id}`))
@@ -1568,7 +1568,7 @@ const AgentsInboxCommand = cmd({
       const paginator = (await res.json()) as { data?: ThreadRow[] }
       const mine = (paginator?.data ?? []).filter((t) => isParticipant(t.participants, agentId))
 
-      if (args.json) { console.log(JSON.stringify(mine, null, 2)); return }
+      if (args.json) { await writeJson(mine); return }
       spinner!.stop(`${mine.length} thread${mine.length === 1 ? "" : "s"} for #${agentId}`)
       printDivider()
       if (mine.length === 0) console.log(`  ${dim("This agent is in no threads yet")}`)

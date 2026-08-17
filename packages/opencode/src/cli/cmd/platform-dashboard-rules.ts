@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, IRIS_API, writeJson } from "./iris-api"
 
 // ============================================================================
 // Dashboard Rules — the Atlas rule surface, one command for all of them
@@ -139,7 +139,7 @@ const RulesListCommand = cmd({
       const rules: any[] = body?.rules ?? []
       spinner.stop(`${rules.length} available`)
 
-      if (args.json) { console.log(JSON.stringify(body, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(body); prompts.outro("Done"); return }
 
       printDivider()
       if (!rules.length) {
@@ -220,7 +220,7 @@ const RuleGetCommand = cmd({
       }
 
       spinner.stop(success("ok"))
-      if (args.json) { console.log(JSON.stringify(body, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(body); prompts.outro("Done"); return }
 
       printDivider()
       for (const panel of (body.data ?? []) as any[]) {

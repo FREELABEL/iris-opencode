@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 
 // ============================================================================
 // iris commons — community / membership management (the flywheel surface).
@@ -94,11 +94,11 @@ const MembersCmd = cmd({
       sp.stop(`${rows.length} of ${total} member(s)${inactiveNote}${lastPage > 1 ? ` — page ${currentPage}/${lastPage}` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify(rows.map((r: any) => ({
+        await writeJson(rows.map((r: any) => ({
           enrollment_id: r.id, user_id: r.user_id, email: r.email ?? r.user?.email,
           name: r.user?.user_name ?? r.user?.name, role: r.role ?? "member", status: r.status,
           enrolled_at: r.created_at,
-        })), null, 2))
+        })))
         prompts.outro("Done")
         return
       }
@@ -153,7 +153,7 @@ const AccessCmd = cmd({
     const json = (await res.json()) as any
     const d = json?.data ?? json
 
-    if (args.json) { console.log(JSON.stringify(d, null, 2)); return }
+    if (args.json) { await writeJson(d); return }
 
     console.log("")
     const has = d?.hasAccess
@@ -201,7 +201,7 @@ const ChatCmd = cmd({
 
       sp.stop(`${messages.length} message(s)${total > messages.length ? ` of ${total}` : ""}`)
 
-      if (args.json) { console.log(JSON.stringify(messages, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(messages); prompts.outro("Done"); return }
 
       if (messages.length === 0) {
         prompts.log.warn(args.channel ? `No messages in #${args.channel}` : "No messages yet in this community")
@@ -251,7 +251,7 @@ const AddCmd = cmd({
     })
     if (!(await handleApiError(res, "Enroll member"))) return
     const json = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    if (args.json) { await writeJson(json?.data ?? json); return }
     const e = json?.data ?? json?.enrollment ?? json
     console.log("")
     console.log(`${success("✓")} Enrolled ${bold(email)} in program #${pid}`)
@@ -307,7 +307,7 @@ const RemoveCmd = cmd({
     })
     if (!(await handleApiError(res, "Remove member"))) return
     const json = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    if (args.json) { await writeJson(json?.data ?? json); return }
     console.log(`${success("✓")} Removed ${bold(resolved.who)} (enrollment #${resolved.id}) from program #${pid}`)
   },
 })
@@ -334,7 +334,7 @@ const AnnounceCmd = cmd({
       const res = await irisFetch(`/api/v1/programs/${pid}/announcements/preview`, { method: "POST", body: payload })
       if (!(await handleApiError(res, "Preview announcement"))) return
       const json = (await res.json()) as any
-      if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+      if (args.json) { await writeJson(json?.data ?? json); return }
       const d = json?.data ?? json
       console.log("")
       console.log(`${dim("PREVIEW (not sent)")}  program #${pid}`)
@@ -351,7 +351,7 @@ const AnnounceCmd = cmd({
     const res = await irisFetch(`/api/v1/programs/${pid}/announcements`, { method: "POST", body: payload })
     if (!(await handleApiError(res, "Send announcement"))) return
     const json = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    if (args.json) { await writeJson(json?.data ?? json); return }
     const d = json?.data ?? json
     console.log(`${success("✓")} Announcement sent to program #${pid}` + (d?.recipients ? ` (${d.recipients} recipients)` : ""))
   },
@@ -385,7 +385,7 @@ const RoleCmd = cmd({
     })
     if (!(await handleApiError(res, "Set role"))) return
     const json = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    if (args.json) { await writeJson(json?.data ?? json); return }
     const d = json?.data ?? json
     console.log(`${success("✓")} ${bold(resolved.who)} → ${roleBadge(d?.role ?? role)}` + (d?.previous_role ? dim(` (was ${d.previous_role})`) : ""))
   },
@@ -428,12 +428,12 @@ const RevenueCmd = cmd({
       const totalRev = Number(stats.total_revenue ?? 0)
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           mrr, total_revenue: totalRev,
           total_members: stats.total_members ?? memberships.length,
           active_members: stats.active_members ?? null,
           trialing_members: stats.trialing_members ?? null,
-        }, null, 2))
+        })
         prompts.outro("Done")
         return
       }
@@ -511,7 +511,7 @@ const HealthCmd = cmd({
         joined_last_30d: enrollOk ? joined30 : null,
         hub_messages: chatOk ? messageTotal : null,
       }
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       printDivider()
       printKV("Active members", enrollOk ? String(active) : dim("unknown"))
@@ -560,7 +560,7 @@ const SendCmd = cmd({
     const res = await irisFetch(`/api/v1/programs/${pid}/chat/messages`, { method: "POST", body: JSON.stringify(body) })
     if (!(await handleApiError(res, "Send message"))) return
     const json = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    if (args.json) { await writeJson(json?.data ?? json); return }
     const m = json?.data ?? json?.message ?? json
     console.log(`${success("✓")} Posted to program #${pid}${m?.channel ? ` ${dim(`#${m.channel}`)}` : ""}` + (m?.id ? dim(`  (message #${m.id})`) : ""))
   },
@@ -591,7 +591,7 @@ const PinCmd = cmd({
     })
     if (!(await handleApiError(res, "Pin message"))) return
     const json = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(json?.data ?? json, null, 2)); return }
+    if (args.json) { await writeJson(json?.data ?? json); return }
     const pinned = json?.data?.is_pinned ?? json?.is_pinned ?? json?.message?.is_pinned
     console.log(`${success("✓")} Message #${mid} ${pinned ? `${UI.Style.TEXT_WARNING}📌 pinned${UI.Style.TEXT_NORMAL}` : "unpinned"}`)
   },
