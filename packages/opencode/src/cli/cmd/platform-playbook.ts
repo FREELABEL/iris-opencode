@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { PlaybookContentsCommands } from "./platform-playbook-contents"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError, writeJson } from "./iris-api"
@@ -1570,6 +1571,11 @@ export const PlatformPlaybookCommand = cmd({
       .command(AttachCommand)
       .command(DetachCommand)
       .command(AttachedCommand)
+      // A playbook CONTAINS procedures, skills and an org chart (#180756), so they live under
+      // it rather than beside it. `iris sop` keeps working for plain document SOPs.
+      .command(PlaybookContentsCommands.items)
+      .command(PlaybookContentsCommands.roles)
+      .command(PlaybookContentsCommands.require)
       .demandCommand(1, ""),
   handler() {},
 })
