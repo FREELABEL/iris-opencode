@@ -237,6 +237,12 @@
       "purpose": "RSS, JSON Feed and Google News for a Genesis newsroom page. The three feed URLs already exist on any newsroom page \u2014 this is how to find and use them."
     },
     {
+      "src": "how-to/storage-backends.md",
+      "dest": "how-to/storage-backends.md",
+      "managed": true,
+      "purpose": "Put a client's Atlas data on their own PostgreSQL or S3 bucket (Provider Proxy) - bind the workspace, then migrate the objects. Covers data residency, the refusals, and why a bad binding stays silent."
+    },
+    {
       "src": "how-to/comms-router.md",
       "dest": "how-to/comms-router.md",
       "managed": true,
