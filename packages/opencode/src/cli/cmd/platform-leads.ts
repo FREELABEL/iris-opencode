@@ -2568,6 +2568,13 @@ const LeadsSyncCommsCommand = cmd({
                 from_identifier: msg.from_me ? "me" : phone || email,
                 body: msg.text ?? "",
                 sent_at: msg.ts ?? msg.date ?? null,
+                // MUST match the id `atlas:comms ingest` uses for the same message (CR-13).
+                // Omitting it sent LeadComm::contentHash down its fallback branch —
+                // sha256(channel:from:body:sent_at) — while the other sweep took the id branch,
+                // sha256(channel:"imessage_<rowid>"). Two hash inputs for one physical message,
+                // so external_id could never match and every run added a row: 582 duplicate
+                // groups on production, all of them differing by external_id.
+                external_message_id: msg.id != null ? `imessage_${msg.id}` : undefined,
                 metadata: { source: "comms_sync_task" },
               }
             } else if (ch.name === "WhatsApp") {
@@ -2576,6 +2583,7 @@ const LeadsSyncCommsCommand = cmd({
                 from_identifier: msg.from_me ? "me" : phone || email,
                 body: msg.text ?? "",
                 sent_at: msg.ts ?? msg.date ?? null,
+                external_message_id: msg.id != null ? `whatsapp_${msg.id}` : undefined,
                 metadata: { source: "comms_sync_task", platform: "whatsapp" },
               }
             } else if (ch.name === "Gmail") {
@@ -2585,6 +2593,7 @@ const LeadsSyncCommsCommand = cmd({
                 subject: msg.subject ?? "",
                 body: msg.snippet ?? msg.subject ?? "",
                 sent_at: msg.date ?? null,
+                external_message_id: msg.id != null ? `gmail_${msg.id}` : undefined,
                 metadata: { gmail_thread_id: msg.thread_id, source: "comms_sync_task" },
               }
             } else {
