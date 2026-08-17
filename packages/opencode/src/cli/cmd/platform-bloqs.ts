@@ -1904,6 +1904,11 @@ export const BloqsSearchCommand = cmd({
       .option("boards-only", { describe: "only match board names/descriptions (the old behaviour)", type: "boolean", default: false })
       .option("items-only", { describe: "only match item titles/content", type: "boolean", default: false })
       .option("bloq", { describe: "restrict item matches to one board ID", type: "number" })
+      // #180715: the multi-source fan-out was only reachable from `bloqs items <bloq-id>
+      // --include-all`, which needs an ID you do not have when you are searching FOR something.
+      // It is the same engine; it just had no front door at the top level.
+      .option("include-all", { describe: "also search Obsidian and Drive", type: "boolean", default: false })
+      .option("source", { describe: "sources to search: bloq, obsidian, drive (comma-separated)", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
@@ -1959,10 +1964,38 @@ export const BloqsSearchCommand = cmd({
       } catch { /* same */ }
     }
 
-    spinner?.stop(`${boards.length} board(s), ${items.length} item(s)`)
+    // ── external sources (Obsidian, Drive) ──
+    // Only when asked. `bloq` is excluded from the fan-out here because the cross-board item
+    // search above already covers it WITHOUT a board id — that requirement was the whole
+    // reason this engine was unreachable from the top level.
+    let external: any[] = []
+    let outcomes: any[] = []
+    const fanOut = Boolean(args["include-all"] || args.source)
+    if (fanOut) {
+      const sources = resolveSources({ source: args.source as string, includeAll: Boolean(args["include-all"]) })
+        .filter((s) => s !== "bloq")
+      if (sources.length) {
+        const r = await federatedSearch(query, { sources, userId, limit })
+        external = r.results
+        outcomes = r.outcomes
+      }
+    }
+
+    spinner?.stop(
+      `${boards.length} board(s), ${items.length} item(s)` + (fanOut ? `, ${external.length} external` : ""),
+    )
 
     if (args.json) {
-      await writeJson({ query, boards, items, counts: { boards: boards.length, items: items.length } })
+      await writeJson({
+        query,
+        boards,
+        items,
+        external,
+        // Report every source's outcome, including failures — a source that errored must not
+        // be indistinguishable from a source that found nothing.
+        source_outcomes: outcomes,
+        counts: { boards: boards.length, items: items.length, external: external.length },
+      })
       return
     }
 
@@ -1989,9 +2022,26 @@ export const BloqsSearchCommand = cmd({
       }
     }
 
+    if (fanOut) {
+      printDivider()
+      console.log(`  ${bold("Obsidian & Drive")} ${dim(`(${external.length})`)}`)
+      if (!external.length) console.log(`  ${dim(`No external matches for "${query}"`)}`)
+      for (const r of external.slice(0, limit)) {
+        console.log(`  ${dim(`[${r.source}]`)} ${bold(String(r.title ?? "(untitled)"))}`)
+        if (r.snippet) console.log(`      ${dim(String(r.snippet).replace(/\s+/g, " ").slice(0, 110))}`)
+      }
+      // Per-source health, always — a skipped or failed source is information.
+      if (outcomes.length) console.log(`  ${dim(formatOutcomes(outcomes))}`)
+    }
+
     printDivider()
     console.log(`  ${dim("Open an item:")}  iris bloqs get <bloq-id>`)
-    console.log(`  ${dim("Widen the net:")} iris bloqs items <bloq-id> --search "${query}" --include-all  ${dim("(+ Obsidian, Drive)")}`)
+    if (!fanOut) {
+      // #180715: point at THIS command, not at a different one that needs an id. The old hint
+      // sent people to `bloqs items <bloq-id> --include-all` — which is unusable at exactly the
+      // moment it was offered, because you are searching in order to find the id.
+      console.log(`  ${dim("Widen the net:")} iris search "${query}" --include-all  ${dim("(+ Obsidian, Drive)")}`)
+    }
     prompts.outro("Done")
   },
 })
