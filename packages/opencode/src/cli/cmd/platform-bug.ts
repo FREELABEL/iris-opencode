@@ -424,7 +424,7 @@ const ReportCommand = cmd({
   describe: "submit a bug report to the IRIS team",
   builder: (yargs) =>
     yargs
-      .positional("title", { describe: "short bug title", type: "string", array: true })
+      .positional("title", { describe: "short bug title — quote it, or pass --title \"...\"", type: "string", array: true })
       .option("description", {
         alias: "d",
         describe: "detailed description",
@@ -469,7 +469,7 @@ const ReportCommand = cmd({
       // routinely) every loose token is silently joined into the title. `--title` takes exactly
       // one value and cannot absorb anything. The pre-existing non-interactive error already
       // told people "--title is required" while no such flag existed.
-      .option("title", { describe: "bug title (unambiguous alternative to the positional)", type: "string" })
+      .option("title", { describe: "short bug title — quote it, or pass --title \"...\"", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     // Combine positional title words + any passthrough args (after --)
