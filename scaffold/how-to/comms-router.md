@@ -15,9 +15,18 @@ fresh as the last time somebody remembered to run an ingest sweep.
 iris imessage send 4821 "running late, be there at 3"
 iris mail send them@example.com --subject "Following up" --body "..."
 
+# As a registered identity — verified, routed on ITS channel order, logged against it
+iris mail send them@example.com --sender alex-mayo-iris --subject "..." --body "..."
+
 # See which channel would be used, and why, without sending
 # (imessage → apple_mail → email → sms, first one that canSend())
 ```
+
+`--sender` names an identity from `iris senders`. An unverified or archived one is REFUSED rather
+than quietly downgraded to the fallback signature — naming a sender asserts the message comes from
+it. It needs a lead (or a handle that resolves to one): the genuinely ad-hoc handle path bypasses
+the channel bindings, so a sender there would be signed by one identity and delivered from
+another. Do not combine it with `--from`, which is an unchecked address on the unrouted path.
 
 Messages are delivered **VERBATIM**. The channel drivers otherwise treat text as an *AI prompt*,
 so without this a message like "running late, be there at 3" would be handed to a model and
