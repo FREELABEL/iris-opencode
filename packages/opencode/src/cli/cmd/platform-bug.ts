@@ -910,13 +910,43 @@ const CloseCommand = cmd({
           prompts.outro("Done")
           return
         }
+        // A SINGLE close auto-stamped cwd HEAD, announcing it in dim text. Naming the
+        // repo was not enough: closing an iris-opencode bug from the freelabel monorepo
+        // recorded a8a9cc45 (fl-eco-docker) as the fix, and a wrong hash is indistinguishable
+        // from a right one to everyone who reads it later. cwd is where you are STANDING,
+        // which is not evidence about where the fix LANDED.
+        //
+        // So stamp only on an explicit yes. A human gets one keypress; a non-interactive
+        // caller (agent, CI, `iris` over MCP) must say which commit, because guessing on
+        // its behalf is how five bugs got stamped with an unrelated fl-api commit (#177912).
         const git = detectGitCommit()
-        fixCommit = git.hash
-        fixCommitUrl = git.url
-        // Say WHICH repo the stamp came from. Silence is what let a wrong-repo hash through.
-        if (fixCommit) {
+        if (git.hash) {
           const repo = detectGitRepo()
-          prompts.log.info(dim(`Stamping ${fixCommit}${repo ? ` from ${repo}` : ""} (cwd HEAD) — use --commit to override.`))
+          const from = `${git.hash}${repo ? ` from ${repo}` : ""}`
+          const interactive = Boolean(process.stdin.isTTY) && !args.json
+
+          if (!interactive) {
+            prompts.log.error(`Refusing to guess the fix commit. cwd HEAD is ${from}.`)
+            prompts.log.info(dim(`Pass --commit ${git.hash} if that IS the fix, --commit <hash> if it is not,`))
+            prompts.log.info(dim("or --no-commit to close without one."))
+            prompts.outro("Done")
+            return
+          }
+
+          // Default NO. The failure mode is a confident wrong reference, so a bare
+          // Enter must record nothing rather than record a guess.
+          const useHead = await prompts.confirm({
+            message: `Record ${from} as the fix commit?`,
+            initialValue: false,
+          })
+          if (prompts.isCancel(useHead)) {
+            prompts.outro("Cancelled")
+            return
+          }
+          if (useHead) {
+            fixCommit = git.hash
+            fixCommitUrl = git.url
+          }
         }
       }
 
