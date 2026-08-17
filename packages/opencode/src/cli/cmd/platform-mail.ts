@@ -282,6 +282,65 @@ const MailSendCommand = cmd({
   },
 })
 
+/**
+ * Which addresses can this Mac actually send from — the answer an apple_mail binding asserts.
+ *
+ * Until the bridge could enumerate accounts, binding a sender to a Mail.app account was an
+ * assertion nothing could contradict: verification confirmed only that the bridge answered. This
+ * is the list to bind against.
+ */
+const MailAccountsCommand = cmd({
+  command: "accounts",
+  aliases: ["from", "identities"],
+  describe: "list the Mail.app accounts this Mac can send from (what a sender can bind to)",
+  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) {
+      UI.empty()
+      prompts.intro("◈  Apple Mail — accounts on this Mac")
+    }
+
+    if (!(await checkBridge())) {
+      const msg = "IRIS Bridge not running on localhost:3200. Start with: iris bridge start"
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else {
+        prompts.log.error(msg)
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
+      return
+    }
+
+    const res = await bridgeFetch("/api/mail/accounts")
+    const payload = (await res.json().catch(() => null)) as any
+
+    if (!res.ok) {
+      const msg = payload?.error ?? `HTTP ${res.status}`
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+      else {
+        prompts.log.error(msg)
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(payload, null, 2))
+      return
+    }
+
+    printDivider()
+    for (const acct of payload?.accounts ?? []) {
+      console.log(`  ${bold(acct.name)}`)
+      for (const addr of acct.addresses ?? []) console.log(`      ${addr}`)
+    }
+    printDivider()
+    console.log(`  ${dim("bind one to a sender:")} iris senders bind <slug> --channel apple_mail --value <address>`)
+    prompts.outro("Done")
+  },
+})
+
 export const PlatformMailCommand = cmd({
   command: "mail",
   describe: "Apple Mail — search/read, and send via the comms router so it lands in the log",
@@ -290,6 +349,7 @@ export const PlatformMailCommand = cmd({
       .command(MailSearchCommand)
       .command(MailReadCommand)
       .command(MailSendCommand)
+      .command(MailAccountsCommand)
       .demandCommand(),
   async handler() {},
 })
