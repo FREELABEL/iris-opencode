@@ -57,6 +57,21 @@ Or visit the Hive dashboard in the platform UI: `https://app.heyiris.io/hive`. Y
 
 ## Step 3: Dispatch a task
 
+> **Not available over the hosted MCP connector.** `hive run`, `hive exec`, `hive script`,
+> `hive push`, `hive deploy`, `hive swarm` and `hive demo` execute code on a real machine,
+> so they are refused when the caller is the hosted connector at `heyiris.io/api/mcp`
+> (Claude web/desktop/mobile). Run them from a terminal, or from a locally-registered
+> `iris mcp serve`, where the intent is yours.
+>
+> The reason is trust, not capability: a model driving the hosted connector also reads
+> untrusted content — mail, web pages, lead notes — so injected text there becomes code
+> execution on your fleet, and those machines hold a live `IRIS_API_KEY`. A human typing
+> `iris hive run` has intent; a model that just read an email does not.
+>
+> Read-only Hive commands still work over the connector: `hive nodes list` / `show`,
+> `hive tasks`, `status`, `logs`, `peers`, `connections`, `queue`, `doctor`.
+
+
 The daemon supports these task types out of the box:
 
 | Type | What it does |
