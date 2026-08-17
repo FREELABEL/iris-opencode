@@ -300,14 +300,26 @@ export async function fetchWithRetry(
 export async function requireAuth(): Promise<string | null> {
   const token = await resolveToken()
   if (!token) {
-    prompts.log.warn("Not authenticated. No token found in any of:")
-    prompts.log.info("  1. iris auth store (run: iris auth login)")
-    prompts.log.info("  2. IRIS_API_KEY env var")
-    prompts.log.info("  3. ~/.iris/sdk/.env")
-    prompts.log.info("  4. ~/.iris/config.json (node_api_key)")
-    prompts.log.info(
-      `\nFix:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login${UI.Style.TEXT_NORMAL}  or set IRIS_API_KEY`,
-    )
+    // #180540, same shape as handleApiError: the near-universal `if (!token) return` at every
+    // call site exits 0 with empty stdout, so an unauthenticated `--json` run is byte-identical
+    // to a successful run that found nothing. Say so in JSON, and exit non-zero either way.
+    if (isJsonMode()) {
+      emitJsonError("Not authenticated — no IRIS token found.", {
+        action: "auth",
+        checked: ["iris auth store", "IRIS_API_KEY", "~/.iris/sdk/.env", "~/.iris/config.json"],
+        fix: "iris auth login",
+      })
+    } else {
+      prompts.log.warn("Not authenticated. No token found in any of:")
+      prompts.log.info("  1. iris auth store (run: iris auth login)")
+      prompts.log.info("  2. IRIS_API_KEY env var")
+      prompts.log.info("  3. ~/.iris/sdk/.env")
+      prompts.log.info("  4. ~/.iris/config.json (node_api_key)")
+      prompts.log.info(
+        `\nFix:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login${UI.Style.TEXT_NORMAL}  or set IRIS_API_KEY`,
+      )
+    }
+    process.exitCode = 1
     return null
   }
   return token
@@ -375,12 +387,52 @@ export function formatPaymentRequired(body: unknown): { message: string; details
   return { message, details }
 }
 
+/**
+ * Is this invocation in --json mode? (#180540)
+ *
+ * Read from argv rather than threaded through a parameter on purpose. handleApiError has ~760
+ * call sites across ~104 files, every one of them `handleApiError(res, action)`; an opt-in third
+ * argument would fix only the sites someone remembered to update, and the whole complaint in
+ * #180540 is that the failure path is unreachable in the mode a SCRIPT uses. A defect that
+ * general deserves one fix, not 760 chances to miss one.
+ *
+ * yargs accepts `--json`, `--json=true` and `--json true`; the first two are what anyone writes.
+ * A false positive costs a JSON error object printed to a human, which is legible. A false
+ * negative costs a script empty stdout, which is what we are fixing.
+ */
+export function isJsonMode(): boolean {
+  return process.argv.some((a) => a === "--json" || a === "--json=true")
+}
+
+/**
+ * The machine-readable half of a failure. One line, one object, on STDOUT — where the success
+ * payload goes, because a consumer reading stdout and branching on `success` is the entire point.
+ *
+ * Deliberately NOT pretty-printed: writeJson's multi-line form is for humans eyeballing a
+ * success payload; an error is one object a script parses.
+ */
+function emitJsonError(message: string, extra?: Record<string, unknown>): void {
+  process.stdout.write(JSON.stringify({ success: false, error: message, ...(extra ?? {}) }) + "\n")
+}
+
 export async function handleApiError(res: Response, action: string): Promise<boolean> {
+  // #180540: in --json mode every branch below must still answer with JSON on stdout. Before
+  // this, a failing call under --json printed clack prose to STDERR and left stdout completely
+  // empty — so `iris ... --json | jq` got nothing to parse, and the reporter read an unfamiliar
+  // response shape as success and went looking for a bounty that was never created. Silence is
+  // the worst possible error message for a script: it is indistinguishable from "no results".
+  const json = isJsonMode()
+
   if (res.status === 401) {
-    prompts.log.warn("Authentication failed — your token may be expired or invalid.")
-    prompts.log.info(
-      `Re-authenticate:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login --force${UI.Style.TEXT_NORMAL}`,
-    )
+    const msg = "Authentication failed — your token may be expired or invalid."
+    if (json) {
+      emitJsonError(msg, { status: 401, action, fix: "iris auth login --force" })
+    } else {
+      prompts.log.warn(msg)
+      prompts.log.info(
+        `Re-authenticate:  ${UI.Style.TEXT_HIGHLIGHT}iris auth login --force${UI.Style.TEXT_NORMAL}`,
+      )
+    }
     process.exitCode = 1
     return false
   }
@@ -390,7 +442,8 @@ export async function handleApiError(res: Response, action: string): Promise<boo
       const body = (await res.json()) as { error?: string; message?: string }
       msg = body.error || body.message || msg
     } catch {}
-    prompts.log.warn(msg)
+    if (json) emitJsonError(msg, { status: 403, action })
+    else prompts.log.warn(msg)
     process.exitCode = 1
     return false
   }
@@ -401,13 +454,20 @@ export async function handleApiError(res: Response, action: string): Promise<boo
       body = await res.json()
     } catch {}
     const { message, details } = formatPaymentRequired(body)
-    prompts.log.warn(message)
-    for (const d of details) prompts.log.info(d)
+    if (json) {
+      // Forward the whole remediation payload: checkout_url and cli_command are what an
+      // automated caller would act on, and re-flattening them into prose would lose them.
+      emitJsonError(message, { status: 402, action, payment_required: body })
+    } else {
+      prompts.log.warn(message)
+      for (const d of details) prompts.log.info(d)
+    }
     process.exitCode = 1
     return false
   }
   if (!res.ok) {
     let msg = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`
+    let fieldErrors: Record<string, string[]> | undefined
     try {
       const body = (await res.json()) as { error?: string; message?: string; errors?: Record<string, string[]> }
       // Bug #57643/#57647: use || not ?? — API returns {"message":""} which ?? doesn't fall through
@@ -426,15 +486,22 @@ export async function handleApiError(res: Response, action: string): Promise<boo
       }
       // Laravel validation returns { errors: { field: ["msg", ...] } }
       if (body.errors && typeof body.errors === "object") {
+        fieldErrors = body.errors
         const details = Object.entries(body.errors)
           .map(([field, msgs]) => `  ${field}: ${(msgs as string[]).join(", ")}`)
           .join("\n")
         if (details) msg += "\n" + details
       }
     } catch {}
-    prompts.log.error(`${action} failed: ${msg}`)
-    // Ensure error is visible even when clack rendering swallows output
-    console.error(`  Error: ${msg}`)
+    if (json) {
+      // `errors` stays structured rather than folded into the message string: a script that
+      // wants to know WHICH field failed should not have to parse prose back apart.
+      emitJsonError(msg, { status: res.status, action, ...(fieldErrors ? { errors: fieldErrors } : {}) })
+    } else {
+      prompts.log.error(`${action} failed: ${msg}`)
+      // Ensure error is visible even when clack rendering swallows output
+      console.error(`  Error: ${msg}`)
+    }
     process.exitCode = 1
     return false
   }
