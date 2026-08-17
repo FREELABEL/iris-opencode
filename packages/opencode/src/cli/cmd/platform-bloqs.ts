@@ -1452,6 +1452,149 @@ const BloqsCreateListCommand = cmd({
   },
 })
 
+/**
+ * Rename a list (#180584).
+ *
+ * There was create-list and nothing else, so a typo or a duplicate was permanent from the CLI —
+ * while ITEMS had delete-item and restore-item. The endpoints existed the whole time; only the
+ * surface was missing.
+ */
+const BloqsRenameListCommand = cmd({
+  command: "rename-list <list-id> <name>",
+  aliases: ["update-list"],
+  describe: "rename a list on a bloq",
+  builder: (yargs) =>
+    yargs
+      .positional("list-id", { describe: "list ID", type: "number", demandOption: true })
+      .positional("name", { describe: "new list name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Rename List #${args["list-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Renaming…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/${args["list-id"]}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: args.name, title: args.name }),
+      })
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Rename list")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["list-id"], name: args.name })); return }
+      spinner?.stop(`${success("✓")} Renamed to ${bold(args.name)}`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+/**
+ * Delete a list (#180584).
+ *
+ * Deliberately more careful than create-list, because the two are not mirror images: creating a
+ * list costs nothing, and deleting one takes ITS ITEMS WITH IT. So this refuses a non-empty list
+ * unless --force, and says how many items it would take — a count is the one thing that turns
+ * "delete list 1964" from a guess into a decision.
+ */
+const BloqsDeleteListCommand = cmd({
+  command: "delete-list <list-id>",
+  aliases: ["rm-list", "remove-list"],
+  describe: "delete a list from a bloq (refuses a non-empty list without --force)",
+  builder: (yargs) =>
+    yargs
+      .positional("list-id", { describe: "list ID", type: "number", demandOption: true })
+      .option("bloq-id", { describe: "bloq ID — enables the item-count safety check", type: "number" })
+      .option("force", { describe: "delete even if the list has items", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Delete List #${args["list-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Count first, when we can. Without a bloq id there is no cheap way to enumerate the list,
+    // so say that rather than implying the check passed — a silent skip of a safety check reads
+    // exactly like the check succeeding.
+    let itemCount: number | null = null
+    if (args["bloq-id"]) {
+      try {
+        const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists`)
+        if (listsRes.ok) {
+          const body = (await listsRes.json()) as any
+          const lists = body?.data?.data ?? body?.data ?? body ?? []
+          const match = (Array.isArray(lists) ? lists : []).find(
+            (l: any) => Number(l.id) === Number(args["list-id"]),
+          )
+          if (match) itemCount = (match.items?.length ?? match.items_count ?? 0) as number
+        }
+      } catch {
+        // Leave itemCount null — reported as unknown below, never as zero.
+      }
+    }
+
+    if (itemCount !== null && itemCount > 0 && !args.force) {
+      const msg = `List #${args["list-id"]} has ${itemCount} item(s). Re-run with --force to delete it and them.`
+      if (args.json) { console.log(JSON.stringify({ success: false, error: msg, items: itemCount })); return }
+      prompts.log.error(msg)
+      prompts.outro("Done")
+      return
+    }
+
+    if (!args.json && itemCount === null) {
+      prompts.log.warn(
+        args["bloq-id"]
+          ? "Could not read the item count — deleting without that check."
+          : "No --bloq-id given, so the item count was NOT checked. Items in this list go with it.",
+      )
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Deleting…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/bloqs/list/${args["list-id"]}`, { method: "DELETE" })
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Delete list")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["list-id"], items_removed: itemCount })); return }
+      spinner?.stop(`${success("✓")} List #${args["list-id"]} deleted`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const BloqsMoveItemCommand = cmd({
   command: "move-item <item-id> <target-list-id>",
   describe: "move an item to a different list",
@@ -3198,6 +3341,8 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsMakePublicCommand)
       .command(BloqsMakePrivateCommand)
       .command(BloqsCreateListCommand)
+      .command(BloqsRenameListCommand)
+      .command(BloqsDeleteListCommand)
       .command(BloqsMoveItemCommand)
       .command(BloqsReorderItemCommand)
       .command(BloqsComposeCommand)
