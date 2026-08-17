@@ -17,7 +17,17 @@ on:
 
 jobs:
   typecheck:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # GitHub-hosted, NOT blacksmith-4vcpu-ubuntu-2404 (#180527). Those runners are not being
+    # picked up: 11 typecheck runs sat "queued" for up to 12 hours and the last five that
+    # reached "completed" all concluded CANCELLED — never success, never failure. So this gate,
+    # added specifically because typecheck never ran on released code, still never ran on
+    # released code. A queued job and a passing job look identical on a branch nobody is
+    # watching, and "cancelled" reads as somebody's decision rather than missing infrastructure.
+    #
+    # release.yml is the only part of CI that has been working, and the only reason is that it
+    # uses GitHub-hosted runners. A workflow whose entire purpose is to return a verdict must
+    # not sit on a runner class that may not exist.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -8,7 +8,16 @@ on:
   workflow_dispatch:
 jobs:
   test:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # GitHub-hosted, NOT blacksmith (#180527). Every recent run of this workflow was cancelled
+    # after exactly 24h0m1s — the GitHub maximum job duration, which is the signature of a job
+    # that never got a runner at all. It burned a day of wall-clock per attempt and returned no
+    # verdict either way.
+    #
+    # Triggers deliberately left alone. This suite is 1446 pass / 214 fail, and pointing it at
+    # `main` would make the default branch permanently red — which is exactly how boot-check in
+    # fl-iris-api sat broken for four days with nobody reading it. A real red on a PR is useful;
+    # a standing red on main is furniture. See typecheck.yml, which is the gate.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
