@@ -147,8 +147,8 @@ iris leads list --search "acme" --json
 # Add a note to a lead
 iris leads note 12345 "Spoke with CEO, interested in Q3"
 
-# Draft an outreach email
-iris outreach send --lead 12345 --channel email --json
+# Apply an outreach strategy to a lead (per-lead steps live under \`outreach-send\`)
+iris outreach apply 38 17 12345 --json
 
 # List bloqs (knowledge bases)
 iris bloqs list --json
@@ -389,23 +389,23 @@ export const McpServeCommand = cmd({
           description: `Execute any IRIS CLI command. Add --json for structured output on list/get commands. Omit --json for action commands (create, update, close). Use iris_help to discover subcommands for any domain.
 
 Common commands and their subcommands:
-- leads: list, get, create, update, delete, note, pulse, gate, gate-all, pulse-all, subscription-update
-- bug: report (aliases: submit, new), list (aliases: ls), close (aliases: done, resolve, complete) — NO delete command, use close
-- bloqs: list, get, create, update, search, items
-- pages: list, get, create, update, push, pull, sync, diff, publish, history, rollback
-- agents: list, get, create, update, chat
-- outreach: send, campaigns, templates, status
-- brands: list, get, create, update, design-tokens (alias: dt)
-- invoices: list, get, create, send
-- schedules: list, get, create, delete, inspect
-- integrations: list, connect, exec, status, test
-- workflows: list, get, cancel
-- memory: store, search, query, entities
-- mail: inbox, read, send, search
+- leads: list, get, create, update, delete, search, note, notes, pulse, pulse-all, payment-gate, gate-all, update-gate, replied, merge, enrich, stats
+- bug: report (aliases: submit, new), list (alias: ls), show, close (aliases: done, resolve, complete), update, verify — NO delete command, use close
+- bloqs: list, get, create, update, search, items, add-item, update-item, create-list, rename-list, delete-list, invite, contributors
+- pages: list, get, create, set, push, pull, diff, publish, unpublish, versions, rollback, visibility, share, preview
+- agents: list, get, create, update, delete, chat, message, thread, inbox, assign
+- outreach: list <bloq-id>, show <bloq-id> <id>, create, update, delete, apply, approve  (campaigns live under outreach-campaign; per-lead steps under outreach-send)
+- brands: list, show, create, update, delete, personas, design-tokens (alias: dt), glossary, treatments
+- invoices: list, show, create, send, checkout, mark-paid, subscribe
+- schedules: list, get, create, update, delete, run, inspect, diagnose, toggle, history, approvals
+- integrations: list-connected, list-available, list-integrations, list-tools, connect, exec, setup
+- workflows: list, get, create, update, delete, run, status, runs, pull, push, diff
+- memory: ALIAS for bloqs (list, show, add, compose, search, items) — there is no separate memory store; store facts as bloq items
+- mail: accounts, read, send, search
 - imessage: read, send, search
-- partials: list, get, create, update, push, pull
+- partials: list, get, create, set, push, pull, usage, view
 - hive: nodes (list|show), tasks (list|show), campaigns, run <node> "<cmd>"
-- n8n: list, pull, push, diff, activate, deactivate, dispatch
+- n8n: list, pull, push, patch, diff, activate, deactivate, dispatch, validate, restore
 
 Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-page --json'`,
           inputSchema: {
