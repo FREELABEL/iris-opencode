@@ -118,6 +118,15 @@ const BloqsListCommand = cmd({
       .option("limit", { describe: "max results", type: "number", default: 20 })
       .option("search", { alias: "s", describe: "search bloqs by name", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      // #180633: the default listing excludes system bloqs — agent workspaces and `app:*`
+      // client dashboards. That default is fine; being unable to see them at all was not.
+      // On this account thirteen were withheld with nothing in the output to say so.
+      .option("all", {
+        describe: "include system bloqs (agent workspaces, app: dashboards)",
+        type: "boolean",
+        default: false,
+      })
+      .option("type", { describe: "filter by type: user or system", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     cli.empty()
@@ -135,6 +144,8 @@ const BloqsListCommand = cmd({
     try {
       const params = new URLSearchParams({ per_page: String(args.limit), simplified: "1" })
       if (args.search) params.set("search", args.search)
+      if (args.all) params.set("include_system", "1")
+      if (args.type) params.set("type", String(args.type))
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs?${params}`)
       if (!res.ok) {
         spinner.stop("Failed", 1)
@@ -159,6 +170,15 @@ const BloqsListCommand = cmd({
       if (args.json) {
         console.log(JSON.stringify(bloqs, null, 2))
         return
+      }
+
+      // #180633: say that the list is filtered. Previously a board you could open by ID was
+      // simply absent here, which is indistinguishable from not having access to it — that is
+      // how a working grant on bloq #600 read as a failed one. The hint is unconditional rather
+      // than a count: the index endpoint does not report how many it withheld, and inventing a
+      // number the server did not send would be worse than naming the flag.
+      if (!args.all && !args.type) {
+        cli.log.info(dim("system bloqs hidden (agent workspaces, app: dashboards) — see --all"))
       }
 
       if (bloqs.length === 0) {
