@@ -401,6 +401,14 @@ async function submitBug(args: {
   console.log(success("✓ Bug report submitted"))
   console.log(`  ${dim("Bloq:")} IRIS CLI Bug Reports (#${BUG_BLOQ_ID})`)
   if (itemId) console.log(`  ${dim("Item ID:")} #${itemId}`)
+  // #180713: echo the TITLE THAT WAS STORED. Collapsed shell quoting cannot be detected
+  // reliably from argv — by the time yargs sees it, `--json` has been eaten as a flag and the
+  // leftovers look like an ordinary title. What CAN be fixed is the silence: four corrupted
+  // reports were filed in a row without anyone noticing, because the confirmation said only
+  // "submitted" and an item id. Printing the stored title turns a corrupted report from
+  // something that looks complete into something visibly wrong, at the one moment the reporter
+  // is still watching.
+  console.log(`  ${dim("Title:")} ${args.title}`)
   console.log(`  ${dim("Severity:")} ${args.severity}`)
   console.log("")
   console.log(dim("The IRIS team will review and respond. Thanks for helping improve IRIS!"))
@@ -456,6 +464,12 @@ const ReportCommand = cmd({
         describe: "display name of the reporter (optional, used with --reporter-lead)",
         type: "string",
       })
+      // #180713: the unambiguous way to pass a title. The positional is `[title..]` — a GREEDY
+      // array — so when a caller's quoting collapses (agents building shell strings do this
+      // routinely) every loose token is silently joined into the title. `--title` takes exactly
+      // one value and cannot absorb anything. The pre-existing non-interactive error already
+      // told people "--title is required" while no such flag existed.
+      .option("title", { describe: "bug title (unambiguous alternative to the positional)", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     // Combine positional title words + any passthrough args (after --)
@@ -465,6 +479,60 @@ const ReportCommand = cmd({
     if (Array.isArray(args.title)) titleParts.push(...args.title.map(String))
     if (Array.isArray(args["--"])) titleParts.push(...args["--"].map(String))
     let title = titleParts.join(" ").trim() || undefined
+
+    // NOTE: yargs folds `--title "x"` into the SAME array as the positional, so there is no
+    // separate string branch to read here — verified, `--title x` yields ["x"]. The flag is
+    // still worth having: it is the form that cannot silently absorb neighbouring tokens, and
+    // the non-interactive error below has been telling people to use it for some time.
+
+    // #180713: REFUSE a title that shows signs of collapsed quoting, instead of filing it.
+    //
+    // Verified mechanism (yargs, same builder shape):
+    //   ["report","search returns 0","daycare","Hutto","--json","TX","78634"]
+    //     -> title "search returns 0 daycare Hutto TX 78634", json=true
+    // which is exactly the shape stored on #180697. Nothing errored; the report simply arrived
+    // wrong and LOOKED complete, which is worse than not arriving — an engineer reading it has
+    // no way to know the repro command was truncated or the title is half description.
+    //
+    // NOT fixable here (and wrongly attributed to this tool in #180713): apostrophe loss and
+    // repro commands cut at the first quote. Those happen in the CALLER's shell before argv
+    // exists. Confirmed by counter-example: #180691 was filed by this same command and stores
+    // "person's push" with the apostrophe intact. So this guard aims at what argv can still
+    // see — flag-shaped tokens that landed in a title, and titles too long to be titles.
+    if (title) {
+      const flagLike = titleParts.find((p) => /^--?[A-Za-z]/.test(p))
+      const absorbed = ["--description", "--severity", "--command", "--error", "--json", "--bounty"].find((f) =>
+        title!.includes(f),
+      )
+
+      if (flagLike || absorbed) {
+        console.error(`\n  ${bold("Refusing to file: the title absorbed a flag.")}`)
+        console.error(`  Saw: ${dim(flagLike ?? absorbed!)}`)
+        console.error(`  Assembled title: ${dim(title)}`)
+        console.error("")
+        console.error(`  This almost always means the shell quoting collapsed and description`)
+        console.error(`  text slid into the title. Filing it would store a corrupted report`)
+        console.error(`  that still looks complete.`)
+        console.error("")
+        console.error(`  Fix: ${dim(`iris bug report --title "short title" --description "$(cat body.txt)"`)}`)
+        console.error("")
+        process.exitCode = 1
+        return
+      }
+
+      // A title is a headline. Past a couple hundred characters it is body text that leaked in.
+      const MAX_TITLE = 220
+      if (title.length > MAX_TITLE) {
+        console.error(`\n  ${bold("Refusing to file: title is " + title.length + " characters.")}`)
+        console.error(`  A title is a headline; this is body text that leaked into it.`)
+        console.error(`  Starts: ${dim(title.slice(0, 90) + "…")}`)
+        console.error("")
+        console.error(`  Fix: ${dim(`iris bug report --title "short title" --description "$(cat body.txt)"`)}`)
+        console.error("")
+        process.exitCode = 1
+        return
+      }
+    }
     let description = args.description
     let severity = args.severity as string
 
