@@ -98,8 +98,10 @@ iris senders list                       # ✓ can send · ○ draft only
 iris senders create --name "Jordan Mayo" --email jordan@example.com --role "Prospective Student"
 iris senders verify jordan-mayo         # REQUIRED — created unverified, always
 iris senders bind jordan-mayo --channel apple_mail --value jordan@icloud.com
-iris senders show jordan-mayo
-iris senders default jordan-mayo
+iris senders bind jordan-mayo --channel email --value jordan@heyiris.io --primary
+iris senders prefer jordan-mayo --order email,apple_mail   # which provider it reaches for FIRST
+iris senders show jordan-mayo           # prints the rank: (primary), (2), …
+iris senders default jordan-mayo        # which IDENTITY is default — a different question
 ```
 
 Then point a strategy at it — the sender wins over the six `sender_*_override` columns:
@@ -120,11 +122,28 @@ under a delegated identity is refused unless `metadata.allow_generated` is set d
 **A sender with no binding for the channel REFUSES rather than falling back** to the default
 mailbox — a message signed by one identity and delivered from another reads as spoofing.
 
+**Each sender picks its own provider order.** `outreach.channel_preference` is platform-wide, and
+the platform cannot know that one identity is a personal mailbox that should leave via Apple Mail
+while another is a company address that must always leave via Resend. With no explicit order a
+sender uses the channels it is BOUND to, ranked by the global list — so a sender bound only to
+`email` is never routed onto `apple_mail` and then refused for a missing binding. An explicit
+`--channel` on a send still outranks everything; a preference is an order, not a mandate, so an
+unreachable first choice falls through to the second.
+
+`prefer` REJECTS a channel with no binding rather than accepting it: that setting would queue a
+send the router refuses at delivery time — a configuration mistake shaped like an outage.
+
 STILL TRUE, and the reason to check a received message: if the bound Mail.app account does not
 exist, the bridge leaves the sender unset and Mail.app sends from its default SILENTLY. Binding
 makes the From header right when the account exists; it cannot prove it by itself.
 
-Not yet built: SN-2 (backfilling existing strategy overrides into senders).
+Existing strategies that predate senders can be promoted in place — dry run first, and note that
+what it creates is UNVERIFIED, because moving free text into a row does not make it trustworthy:
+
+```bash
+php artisan senders:backfill            # DRY RUN
+php artisan senders:backfill --apply
+```
 
 ## Verify it end to end
 
