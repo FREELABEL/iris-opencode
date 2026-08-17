@@ -36,6 +36,24 @@ export function fixBadge(status: unknown, hasResolution: boolean, fixCommit?: st
   return done ? success(`✓ FIXED${commit}`) : dim(`was marked fixed${commit} — REOPENED`)
 }
 
+/**
+ * The CURRENT fix commit for a bug — the LAST one recorded, not the first.
+ *
+ * `resolve` APPENDS a resolution block, so a bug closed more than once carries every
+ * stamp it has ever had. Reading with `String.match()` (no /g) returns the FIRST, which
+ * is the OLDEST — so re-closing with a corrected hash changed nothing anyone could see.
+ *
+ * That is the remediation path for a wrong stamp. #180525 was mis-stamped a8a9cc45
+ * (fl-eco-docker, an unrelated repo), corrected twice to ebbf1f7c8, and still displayed
+ * a8a9cc45 — the correction was invisible and the wrong hash was what everyone read.
+ * A record you cannot correct is worse than one that was never written.
+ */
+export function latestFixCommit(content: string): string | undefined {
+  const all = [...content.matchAll(/Fix commit:\*?\*?\s*`?([0-9a-f]{6,40})`?/gi)]
+
+  return all.length ? all[all.length - 1][1] : undefined
+}
+
 /** Repo identity for the cwd, so a fix stamp can say WHICH repo it came from (#177912). */
 function detectGitRepo(): string | undefined {
   try {
@@ -669,7 +687,7 @@ const ListCommand = cmd({
         const sevTag = severity ? `  [${severity.toUpperCase()}]` : ""
         const status = item.status ? `  ${dim(item.status)}` : ""
         // Surface the recorded fix (if any) so other machines can see what resolved it
-        const fixCommit = contentStr.match(/Fix commit:\*?\*?\s*`?([0-9a-f]{6,40})`?/i)?.[1]
+        const fixCommit = latestFixCommit(contentStr)
         const hasResolution = /###\s*✅?\s*Resolution/i.test(contentStr)
         const badge = fixBadge(item.status, hasResolution, fixCommit)
         const fixTag = badge ? `  ${badge}` : ""
@@ -770,7 +788,7 @@ const ShowCommand = cmd({
     const contentStr = found.content ?? found.description ?? ""
     const severity = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1] ?? ""
     const hasResolution = /###\s*✅?\s*Resolution/i.test(contentStr)
-    const fixCommit = contentStr.match(/Fix commit:\*?\*?\s*`?([0-9a-f]{6,40})`?/i)?.[1]
+    const fixCommit = latestFixCommit(contentStr)
 
     console.log("")
     console.log(`  ${bold(String(found.title))}  ${dim(`#${found.id}`)}`)

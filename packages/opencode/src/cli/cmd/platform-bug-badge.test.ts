@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { fixBadge } from "./platform-bug"
+import { fixBadge, latestFixCommit } from "./platform-bug"
 
 /**
  * #177916 — a reopened bug kept its green "✓ FIXED <commit>" stamp because the badge keyed
@@ -33,5 +33,37 @@ describe("fixBadge", () => {
     expect(strip(fixBadge("DONE", true, "abc1234"))).toBe("✓ FIXED abc1234")
     expect(strip(fixBadge(undefined, true, "abc1234"))).toContain("REOPENED")
     expect(strip(fixBadge("in_progress", true, "abc1234"))).toContain("REOPENED")
+  })
+})
+
+/**
+ * #180528 follow-on — `resolve` APPENDS a resolution block, so a bug closed more than once
+ * carries every stamp it has ever had. Reading with `String.match()` returned the FIRST,
+ * i.e. the oldest, which made correcting a wrong stamp impossible: #180525 was mis-stamped
+ * a8a9cc45 (an unrelated repo), corrected twice to ebbf1f7c8, and still displayed a8a9cc45.
+ */
+describe("latestFixCommit", () => {
+  test("returns the LAST stamp when a bug was closed more than once", () => {
+    const content = [
+      "### Resolution",
+      "**Fix commit:** `a8a9cc45` (https://github.com/FREELABEL/fl-eco-docker/commit/a8a9cc45)",
+      "### Resolution",
+      "**Fix commit:** `ebbf1f7c8` (https://github.com/FREELABEL/iris-opencode/commit/ebbf1f7c8)",
+    ].join("\n")
+
+    expect(latestFixCommit(content)).toBe("ebbf1f7c8")
+  })
+
+  test("returns the only stamp when closed once", () => {
+    expect(latestFixCommit("**Fix commit:** `fe89dafb4`")).toBe("fe89dafb4")
+  })
+
+  test("is undefined when nothing was ever stamped", () => {
+    expect(latestFixCommit("### Resolution\nno commit recorded")).toBeUndefined()
+  })
+
+  /** Prose in the report body must not be mistaken for a stamp's hash. */
+  test("ignores a bare hash that is not a Fix commit line", () => {
+    expect(latestFixCommit("we thought a8a9cc45 was the fix\n**Fix commit:** `deadbeef`")).toBe("deadbeef")
   })
 })
