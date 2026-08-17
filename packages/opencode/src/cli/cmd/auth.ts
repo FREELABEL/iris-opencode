@@ -164,8 +164,72 @@ export const AuthCommand = cmd({
   command: "auth",
   describe: "manage credentials",
   builder: (yargs) =>
-    yargs.command(AuthLoginCommand).command(AuthLogoutCommand).command(AuthListCommand).demandCommand(),
+    yargs
+      .command(AuthLoginCommand)
+      .command(AuthLogoutCommand)
+      .command(AuthListCommand)
+      .command(AuthWhoamiCommand)
+      .demandCommand(),
   async handler() {},
+})
+
+/**
+ * Which account is this credential?
+ *
+ * Login only ever said "Authenticated (user 193)". A bare id is not an answer when
+ * someone legitimately holds two accounts — here the laptop CLI runs as one and the
+ * MCP connector as another, and a board owned by the other is not reported as locked,
+ * it is reported as "Bloq not found". You cannot notice an account mismatch you were
+ * never shown, so this prints the email, and WHERE the credential came from: a stale
+ * IRIS_API_KEY in the environment silently outranks `iris auth login`.
+ *
+ * The id/email pair is resolved server-side from the bearer in hand, not read back from
+ * local config, so it reports the account the API will actually act as.
+ */
+export const AuthWhoamiCommand = cmd({
+  command: "whoami",
+  aliases: ["me"],
+  describe: "show which account this credential authenticates as (id + email)",
+  builder: (yargs) => yargs.option("json", { type: "boolean", default: false, describe: "JSON output" }),
+  async handler(args) {
+    const { irisFetch, FL_API, IRIS_API, dim, bold } = await import("./iris-api")
+
+    // Say which source won, not just what it resolved to.
+    const credentialSource = process.env.IRIS_API_KEY
+      ? "IRIS_API_KEY (environment)"
+      : process.env.FL_API_TOKEN
+        ? "FL_API_TOKEN (environment)"
+        : fs.existsSync(path.join(os.homedir(), ".iris", "sdk", ".env"))
+          ? "~/.iris/sdk/.env (iris auth login)"
+          : "unknown"
+
+    let me: any = null
+    try {
+      const res = await irisFetch("/api/v1/auth/whoami")
+      if (res.ok) me = ((await res.json()) as any)?.data ?? null
+    } catch {}
+
+    if (args.json) {
+      console.log(JSON.stringify({ ...(me ?? {}), credential_source: credentialSource, fl_api: FL_API, iris_api: IRIS_API }, null, 2))
+      return
+    }
+
+    UI.empty()
+    prompts.intro("◈  Who am I")
+    if (me) {
+      prompts.log.info(`${bold(String(me.email ?? "(no email)"))}  ${dim(`user #${me.id}`)}${me.is_admin ? dim("  admin") : ""}`)
+      if (me.name) prompts.log.info(dim(`name: ${me.name}`))
+    } else {
+      // Do not fall back to the locally-stored id — that is the value that lies when a
+      // stale env var is in play, and a confident wrong account is the whole problem.
+      prompts.log.error("Could not resolve this credential with the API.")
+      prompts.log.info(dim("The key may be expired or for another environment. Try: iris auth login"))
+    }
+    prompts.log.info(dim(`credential: ${credentialSource}`))
+    prompts.log.info(dim(`fl-api: ${FL_API}`))
+    prompts.log.info(dim(`iris-api: ${IRIS_API}`))
+    prompts.outro("Done")
+  },
 })
 
 export const AuthListCommand = cmd({
