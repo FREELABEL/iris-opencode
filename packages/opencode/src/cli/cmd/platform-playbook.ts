@@ -1576,6 +1576,7 @@ export const PlatformPlaybookCommand = cmd({
       .command(PlaybookContentsCommands.items)
       .command(PlaybookContentsCommands.roles)
       .command(PlaybookContentsCommands.require)
+      .command(PlaybookContentsCommands.ack)
       .demandCommand(1, ""),
   handler() {},
 })

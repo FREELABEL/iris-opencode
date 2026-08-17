@@ -406,8 +406,90 @@ const PlaybookAttachBountyCommand = cmd({
   },
 })
 
+// ---------------------------------------------------------------------------
+// Acknowledging a requirement — FL_API
+// ---------------------------------------------------------------------------
+
+const PlaybookAckCommand = cmd({
+  command: "ack <opportunityId> [sopItemId]",
+  describe: "list what a bounty requires you to read, or mark one as read",
+  builder: (yargs) =>
+    yargs
+      .positional("opportunityId", { type: "number", demandOption: true })
+      .positional("sopItemId", { type: "number", describe: "omit to just list what is outstanding" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Requirements — bounty #${args.opportunityId}`)
+    const token = await requireAuth()
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
+
+    // Listing before acting is the default on purpose: `ack <id>` with no item is safe and
+    // shows what is outstanding, so nobody has to guess an id to find out what they owe.
+    if (!args.sopItemId) {
+      const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.opportunityId}`)
+      if (!(await handleApiError(res, "Load bounty"))) {
+        prompts.outro("Done")
+        return
+      }
+
+      const sops: any[] = ((await res.json()) as any)?.data?.sops ?? []
+      if (args.json) {
+        await writeJson(sops)
+        prompts.outro("Done")
+        return
+      }
+
+      printDivider()
+      if (sops.length === 0) console.log(`  ${dim("(this bounty requires nothing)")}`)
+      for (const s of sops) {
+        // acknowledged is null when the API could not identify the caller — which is a
+        // different state from "not read" and must not be printed as one.
+        const mark =
+          s.acknowledged === true ? success("✓") : s.acknowledged === null ? dim("?") : dim("○")
+        const req = s.is_required ? "" : dim(" (optional)")
+        const label = s.playbook?.item_label ?? s.label ?? s.playbook?.name ?? "Untitled"
+        console.log(`  ${mark} ${bold(String(label))}  ${dim(`#${s.id}`)}${req}`)
+        if (s.playbook) {
+          const scope = s.playbook.scoped ? `from ${s.playbook.name}` : `${s.playbook.name} (whole)`
+          console.log(`      ${dim(`${scope} · v${s.playbook.version}`)}`)
+        }
+        if (s.resolves === false) console.log(`      ${dim("⚠ no content attached — the owner needs to fix this")}`)
+      }
+      printDivider()
+      console.log(`  ${dim(`iris playbook ack ${args.opportunityId} <id>  to mark one as read`)}`)
+      prompts.outro("Done")
+      return
+    }
+
+    const res = await irisFetch(
+      `/api/v1/marketplace/opportunities/${args.opportunityId}/sops/${args.sopItemId}/acknowledge`,
+      { method: "POST" },
+    )
+    const ok = await handleApiError(res, "Acknowledge")
+    if (!ok) {
+      prompts.outro("Done")
+      return
+    }
+
+    const data = ((await res.json()) as any)?.data ?? {}
+    // Say what this actually claims. A container acknowledgement is not evidence the contents
+    // were read, and the person doing it should know which one they just made.
+    const note =
+      data.claim_strength === "container"
+        ? " (covers the playbook as a whole, not each procedure in it)"
+        : ""
+    const version = data.acknowledged_version ? ` at version ${data.acknowledged_version}` : ""
+    prompts.outro(`${success("✓")} Marked as read${version}.${note}`)
+  },
+})
+
 export const PlaybookContentsCommands = {
   items: PlaybookItemsCommand,
   roles: PlaybookRolesCommand,
   require: PlaybookAttachBountyCommand,
+  ack: PlaybookAckCommand,
 }
