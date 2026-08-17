@@ -10,7 +10,10 @@ import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bol
 
 function formatCents(cents: number | null): string {
   if (cents === null || cents === undefined) return "-"
-  return `$${(cents / 100).toFixed(2)}`
+  // Grouped thousands (#180537). "$10000.00" and "$100000.00" differ by one glyph in the middle
+  // of a run of zeros, which is exactly the misreading the pre-create money preview exists to
+  // prevent — an order of magnitude is the error worth catching, and it is the hardest to see.
+  return `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function formatRate(ratePerMille: number | null): string {
@@ -495,9 +498,17 @@ const CreateCommand = cmd({
       .option("reward-tiers", { describe: "placement prizes in dollars, best-first (e.g. \"250,100,50\" = 1st/2nd/3rd)", type: "string" })
       .option("budget", { describe: "total campaign budget in dollars (e.g. 10000)", type: "number" })
       .option("per-creator-cap", { describe: "max payout per creator in dollars (e.g. 500)", type: "number" })
+      // #180539: engagement types (gig/fde/task) are priced by FixedAmountCalculator, which had
+      // no CLI-settable source at all — every one of them was created worth nothing and had to
+      // be repriced by hand afterwards. Dollars, matching --budget and --reward-tiers.
+      .option("amount", { describe: "fixed payout in dollars for gig/fde/task (e.g. 750)", type: "number" })
       .option("deadline", { describe: "deadline (YYYY-MM-DD)", type: "string" })
       .option("profile-id", { describe: "attach to a profile (PK)", type: "number" })
       .option("profile", { describe: "attach to a profile (slug — resolves to PK)", type: "string" })
+      // #180537: creating used to BE publishing. Default false so the irreversible half of the
+      // act is opt-in; --dry-run is the step before that, printing the money without an API call.
+      .option("publish", { describe: "make it live to creators immediately (default: create as draft)", type: "boolean", default: false })
+      .option("dry-run", { describe: "print what would be created, in dollars, and exit", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     const token = await requireAuth()
@@ -569,14 +580,19 @@ const CreateCommand = cmd({
     }
 
     const spinner = args.json ? null : prompts.spinner()
-    if (spinner) spinner.start("Creating…")
+    // Don't say "Creating…" on a --dry-run; nothing is being created, and the whole value of the
+    // flag is that you can trust what it tells you.
+    if (spinner) spinner.start(args["dry-run"] ? "Composing…" : "Creating…")
 
     try {
       const payload: Record<string, unknown> = {
         title,
         description,
         bounty_type: args.type,
-        is_public: true,
+        // #180537: DRAFT unless --publish. Creating and going live used to be one act, so a rate
+        // you meant to check first was already standing in front of creators — #698 carried
+        // $11,998 that way. Publishing is now the thing you have to ask for.
+        is_public: Boolean(args.publish),
       }
       if (profilePk) payload.profile_id = profilePk
       if (rewardTiers) payload.reward_tiers = rewardTiers
@@ -584,6 +600,42 @@ const CreateCommand = cmd({
       if (args.budget) payload.budget_pool_cents = Math.round(Number(args.budget) * 100)
       if (args["per-creator-cap"]) payload.per_creator_cap_cents = Math.round(Number(args["per-creator-cap"]) * 100)
       if (args.deadline) payload.application_deadline = args.deadline
+      // #180539: FixedAmountCalculator resolves proposal_metadata.amount.fixed_cents (step 3 of
+      // its four-source chain) — the only one of the four that exists at creation time. The
+      // other three are role/proposal records that this POST has not created yet.
+      if (args.amount) {
+        payload.proposal_metadata = { amount: { fixed_cents: Math.round(Number(args.amount) * 100) } }
+      }
+
+      // #180537: restate the money in DOLLARS before anything is created. The flags MIX UNITS —
+      // --rate-per-mille is CENTS while --budget, --amount and --reward-tiers are DOLLARS — so
+      // the only reliable check is seeing every amount converted the same way. Printed on a real
+      // create too, not just --dry-run: a number you first see after publishing is not a check,
+      // it is a receipt.
+      const money: string[] = []
+      if (payload.rate_per_mille_cents) money.push(`rate            ${formatCents(payload.rate_per_mille_cents as number)} per 1,000 views`)
+      if (payload.proposal_metadata) money.push(`fixed amount    ${formatCents(Math.round(Number(args.amount) * 100))}`)
+      if (rewardTiers) money.push(`prizes          ${rewardTiers.map((t) => `#${t.rank} ${formatCents(t.amount_cents)}`).join("  ")}`)
+      if (payload.budget_pool_cents) money.push(`budget pool     ${formatCents(payload.budget_pool_cents as number)}`)
+      if (payload.per_creator_cap_cents) money.push(`per-creator cap ${formatCents(payload.per_creator_cap_cents as number)}`)
+
+      if (args["dry-run"]) {
+        if (spinner) spinner.stop("Nothing created")
+        if (args.json) {
+          await writeJson({ success: true, dry_run: true, would_create: payload })
+        } else {
+          printDivider()
+          printKV("Title", title)
+          printKV("Type", String(args.type))
+          printKV("Visibility", args.publish ? "PUBLIC — live to creators on create" : "draft")
+          if (money.length) { printDivider(); money.forEach((m) => console.log(`  ${m}`)) }
+          printDivider()
+          prompts.outro(dim(money.length
+            ? "Re-run without --dry-run to create it."
+            : "No payout terms set — re-run with --rate-per-mille, --amount or --reward-tiers."))
+        }
+        return
+      }
 
       const res = await irisFetch("/api/v1/marketplace/opportunities", { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create bounty")
@@ -601,8 +653,14 @@ const CreateCommand = cmd({
         printKV("ID", o.id)
         printKV("Title", o.title)
         printKV("Type", o.bounty_type)
+        // Say plainly whether creators can see it. A draft the operator believes is live is a
+        // campaign that quietly receives nothing — the mirror image of #180537's original bug.
+        printKV("Visibility", args.publish ? "PUBLIC — live to creators now" : "draft — not visible to creators")
+        if (money.length) { printDivider(); money.forEach((m) => console.log(`  ${m}`)) }
         printDivider()
-        prompts.outro(dim(`iris bounty stats ${o.id}`))
+        prompts.outro(dim(args.publish
+          ? `iris bounty stats ${o.id}`
+          : `Draft created. Publish it when the terms are right.   iris bounty stats ${o.id}`))
       }
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
