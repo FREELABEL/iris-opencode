@@ -101,7 +101,14 @@ read -r -p "Cut v${NEXT}? [y/N] " reply
 sed -i '' "s/\"version\": \"${CURRENT}\"/\"version\": \"${NEXT}\"/" "$PKG" 2>/dev/null \
   || sed -i "s/\"version\": \"${CURRENT}\"/\"version\": \"${NEXT}\"/" "$PKG"
 
-git add "$PKG"
+# bun.lock records the workspace package's version too, and this script used to bump only
+# package.json — so every release left the lockfile one version further behind. By v1.3.180 it
+# still said 1.3.162: eighteen releases of drift, silent because nothing reads it until some
+# unrelated `bun install` rewrites it and shows up as a mystery diff in an unrelated commit.
+# --lockfile-only resyncs without touching node_modules.
+bun install --lockfile-only >/dev/null
+
+git add "$PKG" bun.lock
 git commit -q -m "chore(release): v${NEXT}"
 git push origin main
 

@@ -94,6 +94,51 @@ const targets = singleFlag
     })
   : allTargets
 
+/**
+ * Refuse to start a build that cannot finish.
+ *
+ * Each target writes ~175 MB (a ~115 MB compiled binary plus ~36 MB of external source maps),
+ * so the default all-targets build is ~1.9 GB — and `bun run build` is what a developer
+ * naturally types when they only wanted to test one change locally.
+ *
+ * Running out of disk PART WAY THROUGH is much worse than not starting: it leaves a half-written
+ * dist that looks like a build, and it takes the whole machine to zero free bytes, so the next
+ * unrelated file write anywhere fails with ENOSPC. That happened here — an editor save died
+ * mid-session with `ENOSPC: no space left on device` and the cause was this script, several
+ * minutes earlier and in a different directory.
+ *
+ * So: measure first, say the number, and point at --single, which almost always what was wanted.
+ */
+const PER_TARGET_BYTES = 200 * 1024 * 1024 // measured ~175 MB; round up rather than guess low
+{
+  const need = targets.length * PER_TARGET_BYTES
+  const stat = fs.statfsSync(dir)
+  const free = stat.bsize * stat.bavail
+  const gb = (n: number) => `${(n / 1024 ** 3).toFixed(1)} GB`
+
+  console.log(`${targets.length} target(s), ~${gb(need)} needed, ${gb(free)} free`)
+
+  if (free < need) {
+    console.error(
+      [
+        ``,
+        `Not enough disk to build ${targets.length} target(s).`,
+        `  needed  ~${gb(need)}`,
+        `  free     ${gb(free)}`,
+        ``,
+        singleFlag
+          ? `Free up space and retry.`
+          : `For local work build only this machine's target:`,
+        singleFlag ? `` : `  bun run build:local      # --single --install, ~${gb(PER_TARGET_BYTES)}`,
+        ``,
+      ]
+        .filter((l) => l !== undefined)
+        .join("\n"),
+    )
+    process.exit(1)
+  }
+}
+
 await $`rm -rf dist`
 
 const binaries: Record<string, string> = {}
@@ -182,6 +227,20 @@ if (installFlag && process.platform === "darwin") {
   const arch = process.arch === "arm64" ? "arm64" : "x64"
   const source = `dist/opencode-darwin-${arch}/bin/iris`
   if (fs.existsSync(source)) {
+    // The install is a SECOND ~115 MB copy, written after the build has already reported success
+    // — so a disk that survived the build can still die here, at the point everything upstream
+    // says "done". Check against the real size of what we are about to copy.
+    const size = fs.statSync(source).size
+    const st = fs.statfsSync(home)
+    const avail = st.bsize * st.bavail
+    if (avail < size * 1.2) {
+      console.error(
+        `\nBuilt, but NOT installed: ${(size / 1024 ** 2).toFixed(0)} MB to copy, ` +
+          `${(avail / 1024 ** 2).toFixed(0)} MB free on ${home}.\n` +
+          `The binary is at ${source} — free space and copy it yourself.\n`,
+      )
+      process.exit(1)
+    }
     await $`mkdir -p ${home}/.iris/bin`
     await $`cp -f ${source} ${target}`
     await $`xattr -cr ${target}`.quiet()
