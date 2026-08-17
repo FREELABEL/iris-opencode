@@ -25,6 +25,7 @@
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from "fs"
 import { join, dirname, basename } from "path"
 import { homedir } from "os"
+import { execSync } from "child_process"
 
 const ROOT = join(import.meta.dir, "..")
 const OUT = join(ROOT, "capabilities.json")
@@ -304,13 +305,56 @@ if (process.argv.includes("--check")) {
   const added = [...after].filter((k) => !before.has(k))
   const removed = [...before].filter((k) => !after.has(k))
 
-  if (added.length || removed.length) {
+  // IS THE TREE DIRTY? It changes what the drift means (#180517).
+  //
+  // This script derives the index from the WORKING TREE, but the thing being pushed is HEAD.
+  // In a shared checkout those differ: agent A pushing a CLI fix was blocked because agent B
+  // had an uncommitted command sitting in the tree, and the only way through was to commit an
+  // index entry for a command that exists in nobody's HEAD — the index asserting a capability
+  // that is not in the repository, which is the exact fault the guard exists to prevent.
+  let dirty = false
+  try {
+    const status = execSync("git status --porcelain", {
+      cwd: ROOT,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    // Only sources this script actually reads can explain index drift. A dirty README cannot,
+    // and treating it as an excuse would blunt the guard for no reason.
+    dirty = status
+      .split("\n")
+      .some((l) => /\s(packages\/|scaffold\/)/.test(l) && !/capabilities\.json\s*$/.test(l))
+  } catch {
+    // Not a git checkout, or git unavailable — fall back to the strict behaviour.
+  }
+
+  // REMOVED is unambiguous either way: the index names something that no longer exists, and no
+  // amount of uncommitted work explains that. ADDED on a dirty tree is ambiguous — it may be
+  // your own unregenerated work, or it may be someone else's file you must not commit.
+  if (removed.length || (added.length && !dirty)) {
     console.error("capabilities.json is STALE — agents cannot discover what is not indexed.\n")
     if (added.length) console.error(`  missing from the index (${added.length}):\n    ${added.slice(0, 20).join("\n    ")}`)
     if (removed.length) console.error(`  indexed but gone (${removed.length}):\n    ${removed.slice(0, 20).join("\n    ")}`)
     console.error("\n  fix: bun run capabilities")
     process.exit(1)
   }
+
+  if (added.length && dirty) {
+    console.warn(
+      `capabilities.json is missing ${added.length} entr${added.length === 1 ? "y" : "ies"}, ` +
+        `but the working tree is dirty — NOT blocking the push.\n` +
+        `    ${added.slice(0, 10).join("\n    ")}\n` +
+        `  If these are yours, commit the source and run: bun run capabilities\n` +
+        `  If they belong to another agent, leave them — regenerating would commit an index\n` +
+        `  entry for source that is not in the repository.`,
+    )
+    // NOT "current". The index really is missing entries; the push is allowed through because
+    // the CAUSE is ambiguous, not because the drift is imaginary. Printing the success line here
+    // would be a third contradictory signal in one output, which is the failure mode this whole
+    // guard is meant to be an example of not doing.
+    process.exit(0)
+  }
+
   console.log(`capabilities.json is current — ${entries.length} capabilities indexed.`)
   process.exit(0)
 }

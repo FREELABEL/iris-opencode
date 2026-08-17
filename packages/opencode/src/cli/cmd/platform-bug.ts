@@ -1222,9 +1222,25 @@ const UpdateCommand = cmd({
         `${success("✓")} Bug #${itemId} updated` +
           dim(` (${requested.filter((k) => !missed.includes(k)).join(", ") || "nothing"})`),
       )
+      // The remediation has to know which fields are IDEMPOTENT. Re-running `--severity` or
+      // `--status` converges; re-running `--note`/`--description` APPENDS, so "re-run them one
+      // at a time" quietly duplicates the note every attempt. That advice already put four
+      // identical notes on one bug, and it is worse for an agent, which retries until it sees
+      // success and grows the record on each pass.
+      const APPEND_ONLY = ["description", "note"]
+      const appendOnly: string[] = missed.filter((k) => APPEND_ONLY.includes(k))
+      const rerunnable: string[] = missed.filter((k) => !APPEND_ONLY.includes(k))
+
       prompts.log.error(
-        `These did NOT apply: ${missed.join(", ")}.\n` +
-          `Re-run them one at a time — a multi-field update can silently drop fields.`,
+        `These did NOT apply: ${missed.join(", ")}.` +
+          (rerunnable.length
+            ? `\nSafe to re-run individually: ${rerunnable.join(", ")}.`
+            : "") +
+          (appendOnly.length
+            ? `\nDo NOT blindly re-run ${appendOnly.join(", ")} — notes APPEND, so a retry adds a` +
+              `\nsecond copy rather than replacing the first. Read the bug back before retrying:` +
+              `\n  iris bug show ${itemId}`
+            : ""),
       )
       process.exitCode = 1
     } else {
