@@ -24,6 +24,7 @@ and that is deliberate: every extra page was somewhere people stopped.
 | Get the paperwork | `ApplicantAgreementIssuer` on acceptance | logs, never blocks the hiring decision |
 | Sign it | `/p/sign?t=…` from the email or the dashboard | link is a bearer credential |
 | Be assigned | `OpportunityAccessGate` | withholds assignment, fails closed |
+| Get certified | `GET/POST /v1/bounty/training/chapters/{id}` → `CourseService` | 401 unproven · 409 no account |
 | Get paid | `GatedEarningsController` → `EarningsController` | 401 unproven · 409 no account |
 
 ## Two entry modes, and do not confuse them
@@ -78,6 +79,32 @@ implementation of "who is being paid".
 A proven address with no account gets **409 with a reason**, not a 401. Someone who just
 answered a code is as signed in as the page can make them; "sign in" would loop forever.
 
+## The certification, and what it is NOT
+
+The course is four modules — scope, severity, report quality, and what to do when you see
+patient data. It is real: `Course` / `CourseChapter` / `CourseProgress` / `CourseCertificate`
+have existed for months, the quiz is scored server-side by `CourseService::submitQuiz`, and the
+badge is verifiable by anyone at `/p/verify-certificate?id=<uuid>` without an account.
+
+Seed or revise it with `php artisan bounty:seed-training`. It is idempotent, matches on program
+slug then chapter `display_order`, and **never deletes a chapter** — progress and issued
+certificates hang off chapter ids, so replacing them would silently orphan every hunter's
+record. Edit the copy in `SeedBountyTraining::chapters()` and re-run.
+
+**It is not a gate.** Certification does not currently block reporting, applying, assignment or
+payout, and `nextStep` deliberately ranks it BELOW an unclaimed balance — telling somebody to go
+and sit a quiz while their money sits unmentioned is how a dashboard loses trust. If it should
+become a gate, that is a decision to make in `OpportunityAccessGate`, not a side effect.
+
+**It is also not an agreement.** Same shape — an obligation before access — but a different
+thing: a document you sign has a ledger, an audit trail and revocation semantics that a quiz
+does not. They meet on the dashboard, not in `AgreementService::REQUIREMENTS`.
+
+**The answer key never leaves the server.** Questions are served through
+`HunterTraining::publicQuestions()`, which strips `correct`. If you add a question path, go
+through that method — a quiz that ships its own answers is a form, and this one gates a
+certificate saying somebody knows what to do with PHI.
+
 ## When a step does not happen
 
 **"Your bounties could not be loaded"** — a real fetch failure. Not the same as the sign-in
@@ -88,6 +115,14 @@ Bearer token to `/bounty/me`.
 **Signed in but the dashboard is empty** — read the identity line. It names the address the
 page was answered for. `$0.00` under the wrong address looks identical to `$0.00` under the
 right one, which is why the line exists.
+
+**The modules render but none of them open** — the iris-api proxy is per-path, not a
+wildcard. `/v1/bounty/training/chapters/{id}` and its `/quiz` twin each need a route in
+`fl-iris-api/routes/api.php`, or the fetch 404s same-origin while the upstream is fine.
+
+**No training section at all** — `bounty:seed-training` has not been run in that
+environment. `training` comes back `null` and the section is omitted rather than emptied,
+which is deliberate: an empty course is worse than no course.
 
 **Accepted but never assigned** — by design. Acceptance is a hiring decision and proceeds;
 ASSIGNMENT is what the agreement gate withholds. `iris agreements list --subject
