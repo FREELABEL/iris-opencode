@@ -833,7 +833,7 @@ exit $EXIT_CODE`
 
 const SearchCommand = cmd({
   command: "search <query>",
-  describe: "search for venues via Hive browser (Google Maps). Falls back to Serper API if no nodes online.",
+  describe: "search YOUR venues. Use --web to search the open web instead (Hive browser / Serper).",
   aliases: ["find", "scrape"],
   builder: (yargs) =>
     yargs
@@ -841,13 +841,61 @@ const SearchCommand = cmd({
       .option("limit", { describe: "max results", type: "number", default: 10 })
       .option("save", { describe: "auto-create venues from results", type: "boolean", default: false })
       .option("type", { describe: "venue type to assign on save", type: "string", default: "venue" })
-      .option("serper", { describe: "force Serper API instead of Hive browser", type: "boolean", default: false })
+      .option("web", { describe: "search the open web (Google Maps via Hive, Serper fallback) instead of your venues", type: "boolean", default: false })
+      .option("serper", { describe: "force Serper API instead of Hive browser (implies --web)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro("◈  Venue Search") }
 
     const token = await requireAuth()
     if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    // #180716: `search` means "search MY data" on every other command in this CLI. Here it
+    // meant "scrape Google Maps", so `venues search "day care"` answered with Care.com, a Yelp
+    // page for Honolulu and a Baltimore directory — none of them the caller's venues, and
+    // nothing in the output saying the source was the open web.
+    //
+    // The web lookup is a real capability and is NOT removed — it moves behind --web (and the
+    // existing `scrape` alias). Default is now the venue list you actually own.
+    const wantsWeb = Boolean(args.web) || String(args.$0 ?? "").endsWith("scrape")
+    if (!wantsWeb) {
+      const spinner0 = args.json ? null : prompts.spinner()
+      spinner0?.start("Searching your venues…")
+      try {
+        // The venues index reads `query`, NOT `search` — `venues list` proves it. Sending the
+        // wrong name here would have returned every venue and looked like a working search.
+        const params = new URLSearchParams({ query: String(args.query), limit: String(args.limit) })
+        const res = await irisFetch(`/api/v1/venues?${params}`)
+        const ok = await handleApiError(res, "Search venues")
+        if (!ok) { spinner0?.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+        const raw = (await res.json()) as any
+        const rows: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
+        spinner0?.stop(`${rows.length} of your venue(s)`)
+
+        if (args.json) { await writeJson({ query: args.query, source: "your-venues", venues: rows }); return }
+
+        printDivider()
+        if (!rows.length) {
+          console.log(`  ${dim(`No venue of yours matches "${args.query}"`)}`)
+        } else {
+          for (const v of rows) {
+            console.log(`  ${dim(`#${v.id}`)} ${bold(String(v.name ?? "(unnamed)"))}`)
+            const where = [v.city, v.state].filter(Boolean).join(", ")
+            if (where) console.log(`      ${dim(where)}`)
+          }
+        }
+        printDivider()
+        // Name the other capability rather than silently owning the noun.
+        console.log(`  ${dim("Search the open web instead:")} iris venues search "${args.query}" --web`)
+        prompts.outro("Done")
+        return
+      } catch (err) {
+        spinner0?.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+    }
 
     const spinner = args.json ? null : prompts.spinner()
     let places: any[] = []
