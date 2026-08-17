@@ -7,8 +7,10 @@ are [bug-bounty](bug-bounty.md). This is the surface the hunter actually touches
 
 ## The one URL
 
-**https://heyiris.io/p/bounty** — the gate, the dashboard, the open bounties and the Apply
-buttons are all this page. There is no separate signup page, apply page, or payout page,
+**https://heyiris.io/p/bounty-dashboard** — the gate, the dashboard, the open bounties and
+the Apply buttons are all this page. (`/p/bounty` is a legacy alias serving the same page:
+pages have no slug-redirect mechanism and that URL is already in sent emails, so it is kept
+rather than retired.) There is no separate signup page, apply page, or payout page,
 and that is deliberate: every extra page was somewhere people stopped.
 
 ## The chain, and which piece owns each step
@@ -27,7 +29,7 @@ and that is deliberate: every extra page was somewhere people stopped.
 ## Two entry modes, and do not confuse them
 
 A **bug bounty** is entered by REPORTING. There is no application and no NDA gate — you
-file a bug, it gets verified, it pays from the pool. `/p/bounty` deliberately renders **no
+file a bug, it gets verified, it pays from the pool. The dashboard deliberately renders **no
 Apply button** on those cards, because applying is not how you get in.
 
 A **gig / FDE / task** is entered by APPLYING. That is the chain with acceptance,
