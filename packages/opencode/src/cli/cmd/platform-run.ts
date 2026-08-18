@@ -41,6 +41,11 @@ const INTEGRATION_TYPES = [
   "stripe",
   // Secrets
   "1password",
+  // Advertising
+  // #180716-adjacent: the 16 Meta Ads actions were mapped in fl-iris-api's ComposioClient
+  // all along, but this list is what `iris integrations connect` offers — so the toolkit was
+  // built and unreachable. Adding the string is the whole fix.
+  "meta-ads",
   // Legal practice management
   "clio",
   // Infrastructure
@@ -53,6 +58,27 @@ const INTEGRATION_TYPES = [
 
 // Known functions per integration — shown when user runs `exec <type>` without a function
 const INTEGRATION_FUNCTIONS: Record<string, { name: string; description: string }[]> = {
+  // Verified against GET /v3/tools?toolkit_slug=metaads — the toolkit publishes 16 tools.
+  // NOTE: it has NO ad-account, business or page discovery, so every create needs an
+  // ad_account_id the caller already has.
+  "meta-ads": [
+    { name: "create_campaign", description: "Create a campaign (objective, budget, status)" },
+    { name: "update_campaign", description: "Update a campaign" },
+    { name: "pause_campaign", description: "Pause a campaign — stops spend" },
+    { name: "resume_campaign", description: "Resume a paused campaign" },
+    { name: "delete_campaign", description: "Delete a campaign" },
+    { name: "create_ad_set", description: "Create an ad set (targeting, schedule, budget)" },
+    { name: "read_adsets", description: "Read ad sets for a campaign" },
+    { name: "create_ad", description: "Create an ad inside an ad set" },
+    { name: "create_ad_creative", description: "Create the creative (copy + image)" },
+    { name: "get_ad_creative", description: "Fetch one creative" },
+    { name: "update_ad_creative", description: "Update a creative" },
+    { name: "delete_ad_creative", description: "Delete a creative" },
+    { name: "upload_ad_image", description: "Upload the graphic and get an image hash" },
+    { name: "preview_ad_creative", description: "Render the ad before it goes live (approval step)" },
+    { name: "create_custom_audience", description: "Create a custom audience" },
+    { name: "get_insights", description: "Performance data for a campaign/ad set/ad" },
+  ],
   "gmail": [
     { name: "read_emails", description: "Read emails from inbox (limit, unread_only, query)" },
     { name: "search_emails", description: "Search emails with Gmail query syntax" },
@@ -120,6 +146,9 @@ const OAUTH_TYPES = [
   "1password",
   "twitch",
   "whatsapp",
+  // Meta Marketing API — OAuth2, needs an app with ads_management. Composio carries the
+  // app registration, which is why this works where a direct integration does not.
+  "meta-ads",
 ]
 const APIKEY_TYPES = ["vapi", "servis-ai", "smtp-email", "mailjet", "google-gemini", "savelife-ai", "mercury"]
 
