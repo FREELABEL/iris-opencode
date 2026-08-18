@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { buildListEnvelope } from "./list-envelope"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -154,8 +155,11 @@ const BloqsListCommand = cmd({
         return
       }
 
-      const data = (await res.json()) as { data?: any[] }
+      const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
       let bloqs: any[] = data?.data ?? []
+      // The index endpoint reports how many exist. Capture it — dropping it is what
+      // made `bloqs list` look complete while withholding 117 of 137 boards.
+      const serverTotal = data?.total ?? data?.meta?.total
       // Client-side filter (the API index endpoint returns all bloqs and ignores
       // the search param). Tokenize + AND the terms so a natural name like
       // "Mayo Life Atlas" matches a stored "MAYO — Life Atlas" — a raw substring
@@ -168,7 +172,17 @@ const BloqsListCommand = cmd({
       spinner.stop(`${bloqs.length} bloq(s)${args.search ? ` matching "${args.search}"` : ""}`)
 
       if (args.json) {
-        await writeJson(bloqs)
+        // Envelope, not a bare array: an agent must be able to see that it is
+        // holding a page rather than an inventory. Client-side search filtering
+        // above changes the count, so a filtered result reports its own size and
+        // is never labelled truncated against the server total.
+        await writeJson(
+          buildListEnvelope(bloqs, {
+            total: args.search ? bloqs.length : serverTotal,
+            limit: args.search ? undefined : Number(args.limit),
+            resource: "bloqs",
+          }),
+        )
         return
       }
 

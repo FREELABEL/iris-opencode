@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
+import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson } from "./iris-api"
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
@@ -161,7 +162,17 @@ const AgentsListCommand = cmd({
       if (spinner) spinner.stop(`${agents.length} agent(s)${total > agents.length ? ` (${total} total — page ${currentPage}/${lastPage})` : ""}`)
 
       if (args.json) {
-        await writeJson({ agents, page: currentPage, total, last_page: lastPage })
+        // Identity, not everything. This listing was 30 records x 72 fields =
+        // 145,395 bytes, which overflowed the MCP every time and forced a
+        // spill -> jq -> narrow round-trip to answer "what agents do I have".
+        // `agents get <id>` still returns the full record.
+        await writeJson(
+          buildListEnvelope(projectFields(agents, LIST_FIELDS.agents), {
+            total,
+            limit: agents.length,
+            resource: "agents",
+          }),
+        )
         return
       }
 
