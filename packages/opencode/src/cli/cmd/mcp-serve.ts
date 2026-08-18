@@ -388,6 +388,34 @@ export const McpServeCommand = cmd({
           name: "iris_run",
           description: `Execute any IRIS CLI command. Add --json for structured output on list/get commands. Omit --json for action commands (create, update, close). Use iris_help to discover subcommands for any domain.
 
+FINDING THINGS — READ THIS BEFORE ANSWERING ANY "what/which ... do I have" QUESTION.
+
+'bloqs list' is RECENCY-ORDERED AND TRUNCATED. It is not an inventory. Answering a
+question about WHICH things the user has by reading names out of 'bloqs list' will
+silently miss anything older than the first page, and you will not be able to tell
+that you missed it — the list looks complete.
+
+Measured example: asked for "family projects", inferring from 'bloqs list' returns
+"Mia Mayo — Life Atlas" and stops. 'bloqs search family' returns bloq #200 "Family
+Businesses" and bloq #137 "Family Health and Finance Management Workflow" — neither
+of which appears anywhere in 'bloqs list'. The list-only answer is not partial, it is
+wrong.
+
+So:
+- To find things BY TOPIC, CATEGORY OR KEYWORD: use 'bloqs search <term> --json'.
+  Search covers board names, item titles AND item content across every board.
+- Use 'bloqs list' only to enumerate the most recent boards, or when the user has
+  already named the one they mean.
+- To answer "are there others?": run a SEARCH or re-read the full list. Do not fetch
+  the contents of a board you already found — 'bloqs get <id>' returns what is INSIDE
+  that board, which cannot tell you about other boards.
+- Never answer a "which do I have" question from memory of an earlier tool result in
+  the same conversation. Run the query.
+
+If a result is too large it is saved to a file and you are given an outline — that is
+a SUCCESS, not a failure. Prefer re-running something narrower (a specific id, or
+--limit) over reading the whole file.
+
 Common commands and their subcommands:
 - leads: list, get, create, update, delete, search, note, notes, pulse, pulse-all, payment-gate, gate-all, update-gate, replied, merge, enrich, stats
 - bug: report (aliases: submit, new), list (alias: ls), show, close (aliases: done, resolve, complete), update, verify — NO delete command, use close
