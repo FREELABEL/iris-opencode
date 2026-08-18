@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
@@ -158,7 +159,14 @@ const WorkflowsListCommand = cmd({
       spinner.stop(`${workflows.length} workflow(s)${templates.length > 0 ? ` + ${templates.length} template(s)` : ""}`)
 
       if (args.json) {
-        await writeJson(all)
+        // `all` concatenates workflows + templates and is not paginated, so it IS
+        // the complete set — total equals what we hold, and truncated is false.
+        await writeJson(
+          buildListEnvelope(projectFields(all, LIST_FIELDS.workflows), {
+            total: all.length,
+            resource: "workflows",
+          }),
+        )
         return
       }
 

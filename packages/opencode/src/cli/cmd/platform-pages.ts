@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
@@ -285,8 +286,16 @@ async function fetchAndRenderPages(args: {
     sp.stop(`${pages.length} of ${total} page(s)${lastPage > 1 ? ` — page ${currentPage}/${lastPage}` : ""}`)
 
     if (args.json) {
-      // Back-compat flat array; enumerate via --limit/--page (documented page size + cursor).
-      await writeJson(pages)
+      // Was a back-compat flat array. That back-compat is what hid truncation: a
+      // page of results that looks like the whole set produces confident wrong
+      // answers. The envelope names what is withheld and how to get the rest.
+      await writeJson(
+        buildListEnvelope(projectFields(pages, LIST_FIELDS.pages), {
+          total,
+          limit: pages.length,
+          resource: "pages",
+        }),
+      )
       prompts.outro("Done")
       return
     }

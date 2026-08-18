@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
@@ -335,7 +336,13 @@ const LeadsListCommand = cmd({
       }
 
       if (args.json) {
-        await writeJson(leads)
+        await writeJson(
+          buildListEnvelope(projectFields(leads, LIST_FIELDS.leads), {
+            total: totalFromApi,
+            limit: Number(args.limit) || undefined,
+            resource: "leads",
+          }),
+        )
         return
       }
 

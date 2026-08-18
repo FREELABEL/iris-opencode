@@ -91,7 +91,9 @@ export const LIST_FIELDS: Record<string, string[]> = {
   agents: ["id", "name", "type", "active", "description", "last_active_at"],
   leads: ["id", "name", "email", "company", "status", "updated_at"],
   pages: ["id", "title", "slug", "status", "updated_at"],
-  workflows: ["id", "name", "type", "active", "updated_at"],
+  // No status/active field exists on a workflow record — verified against a live
+  // payload rather than assumed. `category` is the useful discriminator instead.
+  workflows: ["id", "name", "type", "category", "updated_at"],
 }
 
 /**

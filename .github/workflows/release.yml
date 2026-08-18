@@ -264,19 +264,58 @@ jobs:
       - name: List artifacts
         run: ls -la artifacts/
 
+      # PUBLISH WHAT BUILT, FLAG WHAT DID NOT.
+      #
+      # This step used to `exit 1` on any missing asset, which meant ONE flaky
+      # runner discarded an otherwise-complete release for every platform. On
+      # 2026-08-17 the macos-latest/darwin-arm64 job was cancelled by the runner;
+      # linux-x64, linux-arm64, windows-x64, darwin-x64 and both desktop builds
+      # all succeeded, and none of them shipped. v1.3.186 had to be re-run by hand.
+      #
+      # The arithmetic is one-sided: a platform whose binary did not build gets
+      # nothing either way, so blocking the others buys that platform NOTHING and
+      # costs everyone else the release. What it must not do is ship silently —
+      # hence the annotation, the step summary, and the banner in the release notes.
+      #
+      # A build that produced NO required assets is still a hard failure. That is
+      # not a partial release, it is a broken one.
       - name: Verify required assets exist
+        id: assets
         run: |
           MISSING=""
+          PRESENT=""
           for required in iris-darwin-arm64.zip iris-darwin-x64.zip iris-linux-x64.tar.gz iris-linux-arm64.tar.gz; do
             if [ ! -f "artifacts/$required" ]; then
               MISSING="$MISSING $required"
+            else
+              PRESENT="$PRESENT $required"
             fi
           done
-          if [ -n "$MISSING" ]; then
-            echo "::error::Missing required release assets:$MISSING"
+
+          if [ -z "$PRESENT" ]; then
+            echo "::error::No required assets built at all — refusing to publish an empty release."
             exit 1
           fi
-          echo "All required assets present"
+
+          if [ -n "$MISSING" ]; then
+            echo "::warning::PARTIAL RELEASE — these platforms did not build:$MISSING"
+            echo "### :warning: Partial release" >> $GITHUB_STEP_SUMMARY
+            echo "Missing platform builds:\`$MISSING\`" >> $GITHUB_STEP_SUMMARY
+            echo "Published anyway so the platforms that DID build are not blocked. Re-run this workflow to complete it." >> $GITHUB_STEP_SUMMARY
+            {
+              echo "missing<<EOF"
+              echo "> [!WARNING]"
+              echo "> **Partial release.** These platform builds did not complete and are NOT attached:"
+              echo ">"
+              for m in $MISSING; do echo "> - \`$m\`"; done
+              echo ">"
+              echo "> Users on those platforms should stay on the previous release until this is re-run."
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+          else
+            echo "All required assets present"
+            echo "missing=" >> $GITHUB_OUTPUT
+          fi
           # Desktop app artifacts are optional
           for optional in IRIS-app-darwin-arm64.zip IRIS-app-darwin-x64.zip; do
             if [ -f "artifacts/$optional" ]; then
@@ -294,6 +333,8 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          # Empty when everything built, so a complete release looks untouched.
+          body: ${{ steps.assets.outputs.missing }}
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
