@@ -1825,8 +1825,34 @@ const ScreenshotCmd = cmd({
       const page = await browser.newPage({ viewport: { width: args.width, height: 900 } })
 
       sp.message(`Navigating to ${url}…`)
-      await page.goto(url, { waitUntil: "networkidle" })
+      const resp = await page.goto(url, { waitUntil: "networkidle" })
       await page.waitForTimeout(2000)
+
+      // REFUSE TO SCREENSHOT THE 404. This command is the evidence for check 10 of the
+      // design standard ("render verified in a browser"), and it used to capture whatever
+      // /p/ returned and report "Captured · Saved · Done" with exit 0 — including a
+      // picture of the not-found page for any UNPUBLISHED slug. A verification tool that
+      // cannot tell "renders correctly" from "there is no page" produces the same green
+      // for both, which is the precise failure the standard exists to prevent. See #180796.
+      //
+      // Status alone is not enough: the not-found view can be served with 200 by the SPA
+      // route, so the title is checked too.
+      const status = resp?.status() ?? 0
+      const title = (await page.title().catch(() => "")) || ""
+
+      if (status >= 400 || /page not found/i.test(title)) {
+        await browser.close()
+        sp.stop("Not captured")
+        prompts.log.error(
+          status >= 400
+            ? `${url} returned HTTP ${status} — nothing was captured.`
+            : `${url} served the not-found page — nothing was captured.`,
+        )
+        prompts.log.info(`/p/ serves PUBLISHED pages only. If this is a draft: iris pages publish ${slug}`)
+        prompts.outro("Done")
+        process.exitCode = 1
+        return
+      }
 
       sp.message("Capturing…")
       await page.screenshot({ path: outPath, fullPage: true })
@@ -1835,6 +1861,8 @@ const ScreenshotCmd = cmd({
       sp.stop("Captured")
       prompts.log.success(`Saved: ${outPath}`)
       prompts.log.info(`URL: ${url}`)
+      // Printed so a wrong capture is visible in the output without opening the file.
+      if (title) prompts.log.info(`Title: ${title}`)
 
       if (args.open) {
         const { exec } = await import("child_process")
