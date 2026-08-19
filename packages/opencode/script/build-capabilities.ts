@@ -66,7 +66,7 @@ type Entry = {
 // strings, and a generator that can crash on an unrelated import is a generator nobody runs.
 
 /** The source text of one `cmd({ ... })` block, brace-matched. */
-type Block = { command: string; describe: string; aliases: string[]; body: string }
+type Block = { command: string; describe: string; aliases: string[]; body: string; file: string }
 
 /**
  * Extract the block starting at the `{` of `cmd({`. Brace-matched rather than
@@ -88,6 +88,9 @@ function readBlock(src: string, openIdx: number): string | null {
 }
 
 /** Every `const X = cmd({...})` in the tree, keyed by const name. */
+/** qualified entry key -> absolute path of the file that defines it. */
+const COMMAND_SOURCE = new Map<string, string>()
+
 function collectBlocks(dir: string): Map<string, Block> {
   const blocks = new Map<string, Block>()
   for (const file of readdirSync(dir)) {
@@ -105,6 +108,7 @@ function collectBlocks(dir: string): Map<string, Block> {
         describe: body.match(/describe:\s*"([^"]*)"/)?.[1] ?? "",
         aliases: [...aliasRaw.matchAll(/"([^"]+)"/g)].map((a) => a[1]),
         body,
+        file: join(dir, file),
       })
     }
   }
@@ -153,6 +157,12 @@ function collectCommands(): Entry[] {
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1))
     }
+
+    // Where this command is DEFINED. The check uses it to tell a command that is missing
+    // from the index because someone has not regenerated (its file is committed — real
+    // drift) from one that is missing because it does not exist outside a colleague's
+    // uncommitted working tree (its file is dirty — not yours to index).
+    COMMAND_SOURCE.set(`command:${path.join(" ")}`, b.file)
 
     out.push({
       kind: "command",
@@ -358,15 +368,46 @@ if (process.argv.includes("--check")) {
   // REMOVED is unambiguous either way: the index names something that no longer exists, and no
   // amount of uncommitted work explains that. ADDED on a dirty tree is ambiguous — it may be
   // your own unregenerated work, or it may be someone else's file you must not commit.
-  if (removed.length || (added.length && !dirty)) {
+  // WHICH additions does a dirty tree actually excuse?
+  //
+  // Only the ones whose SOURCE is itself uncommitted. `iris atlas use` shipped unindexed
+  // precisely because this exemption was all-or-nothing: its command was committed, but
+  // some unrelated file in packages/ was dirty — and in a shared checkout something always
+  // is — so the guard waved through drift that a COMMIT had introduced. The index then
+  // decayed with the guard reporting success.
+  //
+  // A command whose defining file is clean exists in HEAD. Its absence from the index is
+  // real, is yours to fix, and blocks.
+  const dirtyFiles = new Set<string>()
+  try {
+    const status = execSync("git status --porcelain", { cwd: ROOT, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] })
+    for (const line of status.split("\n")) {
+      const rel = line.slice(3).trim()
+      if (rel) dirtyFiles.add(join(ROOT, "..", "..", rel))
+    }
+  } catch {
+    // No git — treat every addition as ambiguous rather than inventing certainty.
+  }
+  const committedAdds = added.filter((k) => {
+    const src = COMMAND_SOURCE.get(k)
+    return !!src && !dirtyFiles.has(src)
+  })
+
+  if (removed.length || (added.length && !dirty) || committedAdds.length) {
     console.error("capabilities.json is STALE — agents cannot discover what is not indexed.\n")
     if (added.length) console.error(`  missing from the index (${added.length}):\n    ${added.slice(0, 20).join("\n    ")}`)
+    if (committedAdds.length && dirty) {
+      console.error(
+        `\n  ${committedAdds.length} of these are COMMITTED — a dirty tree does not excuse them:\n    ` +
+          committedAdds.slice(0, 20).join("\n    "),
+      )
+    }
     if (removed.length) console.error(`  indexed but gone (${removed.length}):\n    ${removed.slice(0, 20).join("\n    ")}`)
     console.error("\n  fix: bun run capabilities")
     process.exit(1)
   }
 
-  if (added.length && dirty) {
+  if (added.length && dirty && !committedAdds.length) {
     console.warn(
       `capabilities.json is missing ${added.length} entr${added.length === 1 ? "y" : "ies"}, ` +
         `but the working tree is dirty — NOT blocking the push.\n` +
