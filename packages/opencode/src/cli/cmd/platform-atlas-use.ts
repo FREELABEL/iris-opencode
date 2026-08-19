@@ -93,7 +93,17 @@ function buildMarkdown(item: any, url: string): string {
   }
 
   if (body.trim()) {
-    out.push(body.trim())
+    // An HTML artifact is markup, not prose. Now that `content_format` is declared
+    // rather than guessed, fence it: an agent reading this can tell the difference
+    // between a document it should follow and a rendered artifact it should treat as
+    // data. Unfenced, a <style> block reads as instructions.
+    if (String(item?.content_format).toLowerCase() === "html") {
+      out.push("```html")
+      out.push(body.trim())
+      out.push("```")
+    } else {
+      out.push(body.trim())
+    }
     out.push("")
   }
 

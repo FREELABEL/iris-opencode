@@ -23,6 +23,7 @@ const AtlasItemPublishCommand = cmd({
       .option("expires", { describe: "expiring link — ISO date/time, e.g. 2026-12-31 (implies --public)", type: "string" })
       .option("private", { describe: "force private (override; default is already private)", type: "boolean", default: false })
       .option("force", { describe: "overwrite even if the item was edited in the UI after the last publish", type: "boolean", default: false })
+      .option("format", { describe: "content format: html or markdown (default: from the file extension)", type: "string", choices: ["html", "markdown"] })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),

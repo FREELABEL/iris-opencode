@@ -121,9 +121,13 @@ async function createItem(
   listId: number,
   title: string,
   content: string,
+  contentFormat?: ContentFormat,
 ): Promise<any | null> {
   const payload: Record<string, unknown> = { content }
   if (title) payload.title = title
+  // Only ever SENT for html. Omitting it leaves the column NULL, which the backend
+  // reads as "infer as before" — so markdown keeps its existing behaviour exactly.
+  if (contentFormat === "html") payload.content_format = "html"
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists/${listId}/items`, {
     method: "POST",
     body: JSON.stringify(payload),
@@ -141,9 +145,10 @@ async function createItem(
 
 // Returns the updated item, the sentinel "NOT_FOUND" if the item was deleted
 // upstream (so the caller can recreate), or null on any other failure.
-async function updateItem(itemId: number, title: string, content: string): Promise<any | "NOT_FOUND" | null> {
+async function updateItem(itemId: number, title: string, content: string, contentFormat?: ContentFormat): Promise<any | "NOT_FOUND" | null> {
   const payload: Record<string, unknown> = { content }
   if (title) payload.title = title
+  if (contentFormat === "html") payload.content_format = "html"
   const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}`, {
     method: "PUT",
     body: JSON.stringify(payload),
@@ -308,6 +313,70 @@ function deriveTitle(explicit: unknown, fmTitle: unknown, body: string, file: st
   return path.basename(file, path.extname(file))
 }
 
+// ── Content format ──────────────────────────────────────────────────────────
+//
+// An Atlas item's body is an untyped LONGTEXT, and every reader used to re-derive
+// its type by guessing (`json_decode` succeeded → data, otherwise → prose). HTML
+// loses that guess: it is not JSON, so it was treated as markdown, which meant its
+// first line became the title and the renderer stripped the <style> and <svg> the
+// artifact is mostly made of. `content_format` is the declaration that ends the
+// guessing, and this is the only client that can set it.
+//
+// NULL still means "infer exactly as before", so markdown publishes are unchanged
+// and nothing has to be backfilled.
+
+type ContentFormat = "html" | "markdown"
+
+function detectFormat(file: string, explicit?: string): ContentFormat {
+  if (explicit) {
+    const f = String(explicit).toLowerCase()
+    if (f === "html" || f === "htm") return "html"
+    return "markdown"
+  }
+  return /\.html?$/i.test(file) ? "html" : "markdown"
+}
+
+/**
+ * Sync markers for an HTML artifact.
+ *
+ * The markdown path stores them in YAML frontmatter, which gray-matter would happily
+ * prepend to an .html file too — and that would put a bare `---` block above the
+ * doctype, so opening the artifact in a browser renders the bookkeeping as text. An
+ * HTML comment is the equivalent affordance in this format: invisible to a browser,
+ * and still round-trips through a re-publish.
+ */
+const HTML_MARKER = /^\s*<!--\s*iris:(\{[\s\S]*?\})\s*-->\s*/
+
+function readHtmlMarkers(raw: string): { data: Record<string, any>; content: string } {
+  const m = raw.match(HTML_MARKER)
+  if (!m) return { data: {}, content: raw }
+  try {
+    return { data: JSON.parse(m[1]) as Record<string, any>, content: raw.slice(m[0].length) }
+  } catch {
+    // A corrupted marker must not cost the user their artifact — treat it as absent
+    // and let the publish recreate it rather than aborting.
+    return { data: {}, content: raw }
+  }
+}
+
+function writeHtmlMarkers(file: string, content: string, data: Record<string, any>): void {
+  writeFileSync(file, `<!-- iris:${JSON.stringify(data)} -->\n${content.replace(HTML_MARKER, "")}`)
+}
+
+/** Title for an artifact: <title>, then the first heading, then the filename. */
+function deriveHtmlTitle(explicit: unknown, fmTitle: unknown, body: string, file: string): string {
+  if (explicit) return String(explicit)
+  if (fmTitle) return String(fmTitle)
+  const t = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
+  if (t && t[1].trim()) return t[1].trim()
+  const h = body.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)
+  if (h) {
+    const text = h[1].replace(/<[^>]+>/g, "").trim()
+    if (text) return text
+  }
+  return path.basename(file, path.extname(file))
+}
+
 // ── Public command handlers ─────────────────────────────────────────────────
 
 export interface PublishArgs {
@@ -321,6 +390,7 @@ export interface PublishArgs {
   expires?: string
   private?: boolean // explicit private (back-compat / override)
   force?: boolean // overwrite even if the item was edited in the UI after last publish (#154763)
+  format?: string // "html" | "markdown"; inferred from the file extension when omitted
   "no-frontmatter"?: boolean
   json?: boolean
   "user-id"?: number
@@ -355,10 +425,15 @@ export async function executePublish(args: PublishArgs): Promise<void> {
   }
 
   const raw = readFileSync(args.file, "utf8")
-  const parsed = matter(raw)
-  const fm: Record<string, any> = parsed.data || {}
-  const body = parsed.content.trim()
-  const title = deriveTitle(args.title, fm.title, body, args.file)
+  // An .html file is an ARTIFACT, not prose: its markers live in an HTML comment and
+  // its title comes from <title>/<h1>. Everything downstream is shared with markdown.
+  const format = detectFormat(args.file, (args as any).format)
+  const parsed = format === "html" ? readHtmlMarkers(raw) : matter(raw)
+  const fm: Record<string, any> = (parsed as any).data || {}
+  const body = (parsed as any).content.trim()
+  const title = format === "html"
+    ? deriveHtmlTitle(args.title, fm.title, body, args.file)
+    : deriveTitle(args.title, fm.title, body, args.file)
   const existingItemId = fm.iris_item_id ? Number(fm.iris_item_id) : null
 
   if (!body) {
@@ -411,7 +486,7 @@ export async function executePublish(args: PublishArgs): Promise<void> {
         }
       }
 
-      const updated = await updateItem(existingItemId, title, content)
+      const updated = await updateItem(existingItemId, title, content, format)
       if (updated === "NOT_FOUND") {
         // Item was deleted upstream — fall through and recreate it.
         spinner?.message?.(`Item #${existingItemId} was deleted — recreating…`)
@@ -440,7 +515,7 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       }
       bloqId = dest.bloqId
       listId = dest.listId
-      const created = await createItem(userId, bloqId, listId, title, content)
+      const created = await createItem(userId, bloqId, listId, title, content, format)
       if (!created?.id) {
         spinner?.stop("Failed to create item", 1)
         if (json) console.log(JSON.stringify({ success: false, error: "Create item failed" }))
@@ -479,7 +554,8 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       // #154763: stamp the server's updated_at so the NEXT publish can detect UI edits
       // made in the meantime and refuse to clobber them without --force.
       newData.atlas_published_at = serverUpdatedAt ?? new Date().toISOString()
-      writeFileSync(args.file, matter.stringify(content, newData))
+      if (format === "html") writeHtmlMarkers(args.file, content, newData)
+      else writeFileSync(args.file, matter.stringify(content, newData))
     }
 
     if (json) {
@@ -615,10 +691,19 @@ export async function executeUnpublish(args: UnpublishArgs): Promise<void> {
     return
   }
 
-  const fm: Record<string, any> = matter(readFileSync(args.file, "utf8")).data || {}
+  // Read the markers from wherever THIS format keeps them. Parsing an artifact as
+  // markdown finds no frontmatter and would report "it hasn't been published" about a
+  // file that plainly has been — a false statement about the user's own file.
+  const unpubFormat = detectFormat(args.file, (args as any).format)
+  const fm: Record<string, any> =
+    (unpubFormat === "html"
+      ? readHtmlMarkers(readFileSync(args.file, "utf8")).data
+      : matter(readFileSync(args.file, "utf8")).data) || {}
   const itemId = fm.iris_item_id ? Number(fm.iris_item_id) : null
   if (!itemId) {
-    const msg = "No iris_item_id in this file's frontmatter — it hasn't been published."
+    const msg = unpubFormat === "html"
+      ? "No iris marker comment in this file — it hasn't been published."
+      : "No iris_item_id in this file's frontmatter — it hasn't been published."
     if (json) console.log(JSON.stringify({ success: false, error: msg }))
     else { prompts.log.error(msg); prompts.outro("Done") }
     return
@@ -634,9 +719,14 @@ export async function executeUnpublish(args: UnpublishArgs): Promise<void> {
 
   // Drop the public-url marker from the file (it's no longer reachable).
   if (!args.delete) {
-    const body = matter(readFileSync(args.file, "utf8")).content
     const { iris_public_url, ...rest } = fm
-    writeFileSync(args.file, matter.stringify(body, rest))
+    if (unpubFormat === "html") {
+      const body = readHtmlMarkers(readFileSync(args.file, "utf8")).content
+      writeHtmlMarkers(args.file, body, rest)
+    } else {
+      const body = matter(readFileSync(args.file, "utf8")).content
+      writeFileSync(args.file, matter.stringify(body, rest))
+    }
   }
 
   if (json) { console.log(JSON.stringify({ success: true, item_id: itemId, is_public: false, deleted })); return }

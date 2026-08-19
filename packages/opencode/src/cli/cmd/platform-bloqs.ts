@@ -1343,7 +1343,7 @@ const BloqsDeleteCommand = cmd({
 const BloqsPublishCommand = cmd({
   command: "publish <file>",
   aliases: ["publish-md"],
-  describe: "publish a markdown file as a public bloq item (returns a shareable URL; re-run to sync)",
+  describe: "publish a markdown file or HTML artifact as a public bloq item (returns a shareable URL; re-run to sync)",
   builder: (yargs) =>
     yargs
       .positional("file", { describe: "path to a markdown (.md) file", type: "string", demandOption: true })
@@ -1352,6 +1352,7 @@ const BloqsPublishCommand = cmd({
       .option("title", { describe: "override the item title", type: "string" })
       .option("private", { describe: "create/update without making it public", type: "boolean", default: false })
       .option("force", { describe: "overwrite even if the item was edited in the UI after the last publish", type: "boolean", default: false })
+      .option("format", { describe: "content format: html or markdown (default: from the file extension)", type: "string", choices: ["html", "markdown"] })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
