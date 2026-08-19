@@ -325,8 +325,32 @@ const BloqsGetCommand = cmd({
         lists = listsData?.data ?? []
       }
 
+      // #181260 — a board's RELATIONS belong in `get`, not behind a command nobody runs.
+      //
+      // relate/relations already worked and the data was real: #571 carried six edges (a parent
+      // company, a feeds_into, and three client projects hanging off it) and NOT ONE of them
+      // appeared here. The graph was visible only to someone who already knew it existed, which
+      // defeats the point of building it — you discover a board's neighbours by looking at the
+      // board. Same shape as the capability index and the scaffold manifest: a thing that is
+      // correct, present, and reaches nobody.
+      //
+      // Non-fatal by design. A board with no relations, or an endpoint that 404s, must not turn
+      // `bloqs get` into an error — this is a decoration on the answer, not the answer.
+      let relations: RelationRow[] = []
+      try {
+        const relRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/relations`)
+        if (relRes.ok) {
+          const relBody = (await relRes.json().catch(() => ({}))) as { data?: RelationRow[] }
+          relations = relBody.data ?? []
+        }
+      } catch {
+        // leave empty — see above
+      }
+
       if (args.json) {
-        await writeJson({ ...b, web_url: bloqWebUrl(b.id), lists })
+        // Included so an agent reading a board gets its neighbours in the SAME call. Having to
+        // know to make a second request is the machine-readable version of the same bug.
+        await writeJson({ ...b, web_url: bloqWebUrl(b.id), lists, relations })
         return
       }
 
@@ -479,6 +503,15 @@ const BloqsGetCommand = cmd({
           console.log(`    ${dim("•")} ${l.name ?? l.nickname ?? "Unknown"} ${dim(`#${l.id}`)} ${status}`)
         }
         if (leads.length > 3) console.log(`    ${dim(`+ ${leads.length - 3} more`)}`)
+        console.log()
+      }
+
+      // Printed AFTER lists/agents/contacts and before the divider: the board's own contents
+      // come first, then what it connects to. Reuses the exact grouping `bloqs relations` uses,
+      // so the two commands can never drift into describing the same edges differently.
+      if (relations.length > 0) {
+        console.log(`  ${dim("Related projects:")} ${dim(`(${relations.length})`)}`)
+        console.log(formatRelationsGrouped(relations))
         console.log()
       }
 
