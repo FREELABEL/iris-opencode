@@ -156,7 +156,7 @@ const CampaignCreateCommand = cmd({
     // 1. Create Board (Bloq)
     spinner.start("Creating board...")
     try {
-      const bloqRes = await irisFetch(`/api/v1/users/${userId}/bloqs`, {
+      const bloqRes = await irisFetch(`/api/v1/user/${userId}/bloqs`, {
         method: "POST",
         body: JSON.stringify({
           name: campaignName,

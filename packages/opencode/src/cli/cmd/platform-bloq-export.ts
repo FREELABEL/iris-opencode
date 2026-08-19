@@ -105,7 +105,7 @@ async function exportOneBloq(
   progress?.("Fetching attachments…")
   let files: any[] = []
   try {
-    const filesRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/files`)
+    const filesRes = await irisFetch(`/api/v1/user/${userId}/bloqs/files?bloq_id=${bloqId}`)
     if (filesRes.ok) {
       const filesData = (await filesRes.json()) as { data?: any[] }
       files = filesData?.data ?? []

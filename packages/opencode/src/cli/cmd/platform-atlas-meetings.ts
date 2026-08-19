@@ -430,7 +430,7 @@ const IngestCommand = cmd({
           if (tasksCreated) console.log(`  ${dim("Tasks created:")} ${tasksCreated}`)
         }
       } else if (bloqId) {
-        const res = await irisFetch(`/api/v1/bloqs/${bloqId}/items`, {
+        const res = await irisFetch(`/api/v1/bloq/${bloqId}/items`, {
           method: "POST",
           body: JSON.stringify({
             title: `Meeting Intel — ${new Date().toLocaleDateString()}`,

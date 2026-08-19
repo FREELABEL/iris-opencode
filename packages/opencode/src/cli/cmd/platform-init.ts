@@ -399,7 +399,7 @@ const STEPS: StepDef[] = [
       const sp = prompts.spinner()
       sp.start("Fetching billing info...")
 
-      const res = await irisFetch(`/api/v1/users/${userId}/subscription`)
+      const res = await irisFetch(`/api/v1/user/${userId}/subscriptions`)
       if (res.ok) {
         const data = await res.json().catch(() => ({}))
         const sub = data?.data ?? data

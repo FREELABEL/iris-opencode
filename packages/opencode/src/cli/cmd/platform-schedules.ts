@@ -200,7 +200,7 @@ const SchedulesListCommand = cmd({
       const bloqNames: Record<number, string> = {}
       if (bloqIds.length > 0) {
         try {
-          const bloqRes = await irisFetch(`/api/v1/users/${userId}/bloqs?ids=${bloqIds.join(",")}`)
+          const bloqRes = await irisFetch(`/api/v1/user/${userId}/bloqs?ids=${bloqIds.join(",")}`)
           if (bloqRes.ok) {
             const bloqData = (await bloqRes.json()) as any
             for (const b of (bloqData?.data ?? bloqData ?? [])) {
