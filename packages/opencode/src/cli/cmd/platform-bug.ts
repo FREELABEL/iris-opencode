@@ -14,6 +14,71 @@ import { execSync } from "child_process"
 const BUG_REPORT_ENDPOINT = "/api/v1/public/bug-report"
 const BUG_BLOQ_ID = 297
 
+/**
+ * Per-repo bug routing, read from `.iris/config.json` walking up from the cwd.
+ *
+ * The point is that nobody has to remember a flag. Run `iris bug report` inside a client's
+ * repo and it already knows which board its bugs belong on; run it anywhere else and it goes
+ * to the IRIS board exactly as before.
+ *
+ * A TOKEN DOES NOT BELONG IN A COMMITTED FILE. `.iris/` is version-controlled, so a token
+ * found there is read but warned about — the intended home is `bugIntakeToken` in the user's
+ * own `~/.iris/config.json`, which is not shared. An open intake needs no token at all.
+ *
+ * Never throws: unreadable or malformed config means "no project", i.e. the default board.
+ * Losing a bug report to a syntax error in a config file would be a poor trade.
+ */
+function readProjectConfig(): { project?: string; projectToken?: string } {
+  const out: { project?: string; projectToken?: string } = {}
+
+  const read = (file: string): Record<string, unknown> | null => {
+    try {
+      if (!existsSync(file)) return null
+      return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+
+  // Walk up for the repo-level config: the slug is not a secret and belongs with the project.
+  let dir = process.cwd()
+  for (let i = 0; i < 12; i++) {
+    const cfg = read(join(dir, ".iris", "config.json"))
+    if (cfg) {
+      if (typeof cfg.bugProject === "string") out.project = cfg.bugProject
+      if (typeof cfg.bugIntakeToken === "string" && cfg.bugIntakeToken) {
+        out.projectToken = cfg.bugIntakeToken
+        console.error(
+          "warning: a bug intake token was read from a committed .iris/config.json — " +
+            "move it to ~/.iris/config.json so it is not shared in version control",
+        )
+      }
+      break
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+
+  // The user-level config supplies the secret, and only fills gaps the repo left.
+  const home = process.env.HOME || process.env.USERPROFILE
+  if (home) {
+    const user = read(join(home, ".iris", "config.json"))
+    if (user) {
+      if (!out.project && typeof user.bugProject === "string") out.project = user.bugProject
+      if (typeof user.bugIntakeToken === "string" && user.bugIntakeToken) out.projectToken = user.bugIntakeToken
+      // Per-project tokens, so one machine can report into several clients' boards.
+      const byProject = user.bugIntakeTokens
+      if (out.project && byProject && typeof byProject === "object") {
+        const t = (byProject as Record<string, unknown>)[out.project]
+        if (typeof t === "string" && t) out.projectToken = t
+      }
+    }
+  }
+
+  return out
+}
+
 // Resolve a bug (record the fix/solution + commit) via PUBLIC endpoint — no auth required
 const bugResolveEndpoint = (itemId: number) => `/api/v1/public/bug-report/${itemId}/resolve`
 // Amend a bug after the fact (reporter attribution / severity / status / title / note) — no auth
@@ -279,6 +344,9 @@ async function submitBug(args: {
   error?: string
   reporterLeadId?: number
   reporterName?: string
+  /** Registered client intake slug; falls back to .iris/config.json, then the IRIS board. */
+  project?: string
+  projectToken?: string
   json?: boolean
 }): Promise<void> {
   const sysInfo = collectSystemInfo()
@@ -302,8 +370,16 @@ async function submitBug(args: {
 
   // Built once so the fallback host resends the IDENTICAL report rather than a
   // reconstruction that might differ from whatever the primary rejected.
+  // A flag you have to remember is a flag people forget, and a bug filed onto the wrong
+  // client's board is worse than one you have to go looking for. So the repo answers first.
+  const projectCfg = readProjectConfig()
+  const project = args.project ?? projectCfg.project
+  const projectToken = args.projectToken ?? projectCfg.projectToken
+
   const payload = JSON.stringify({
     title: args.title,
+    project: project ?? null,
+    project_token: projectToken ?? null,
     description: args.description,
     severity: args.severity,
     reporter,
@@ -378,8 +454,16 @@ async function submitBug(args: {
     )
   }
 
-  const data = (await res.json()) as { success?: boolean; data?: { item_id?: number; message?: string } }
+  const data = (await res.json()) as {
+    success?: boolean
+    data?: { item_id?: number; message?: string; bloq_id?: number; project?: string; project_label?: string }
+  }
   const itemId = data?.data?.item_id
+  // Where it ACTUALLY landed. This used to print BUG_BLOQ_ID unconditionally, which was
+  // merely redundant when there was one board and becomes a lie the moment there is more
+  // than one — sending the reporter to look on a board their report is not on.
+  const landedBloqId = data?.data?.bloq_id ?? BUG_BLOQ_ID
+  const landedLabel = data?.data?.project_label ?? "IRIS CLI Bug Reports"
 
   if (args.json) {
     console.log(
@@ -387,7 +471,8 @@ async function submitBug(args: {
         {
           success: true,
           item_id: itemId,
-          bloq_id: BUG_BLOQ_ID,
+          bloq_id: landedBloqId,
+          project: data?.data?.project ?? null,
           title: args.title,
         },
         null,
@@ -399,7 +484,7 @@ async function submitBug(args: {
 
   console.log("")
   console.log(success("✓ Bug report submitted"))
-  console.log(`  ${dim("Bloq:")} IRIS CLI Bug Reports (#${BUG_BLOQ_ID})`)
+  console.log(`  ${dim("Bloq:")} ${landedLabel} (#${landedBloqId})`)
   if (itemId) console.log(`  ${dim("Item ID:")} #${itemId}`)
   // #180713: echo the TITLE THAT WAS STORED. Collapsed shell quoting cannot be detected
   // reliably from argv — by the time yargs sees it, `--json` has been eaten as a flag and the
@@ -462,6 +547,14 @@ const ReportCommand = cmd({
       })
       .option("reporter-name", {
         describe: "display name of the reporter (optional, used with --reporter-lead)",
+        type: "string",
+      })
+      .option("project", {
+        describe: "file into a registered client bug list instead of the IRIS board (slug)",
+        type: "string",
+      })
+      .option("project-token", {
+        describe: "token for a private client intake (only if that intake requires one)",
         type: "string",
       })
       // #180713: the unambiguous way to pass a title. The positional is `[title..]` — a GREEDY
@@ -612,6 +705,8 @@ const ReportCommand = cmd({
         error: args.error,
         reporterLeadId: args["reporter-lead"] as number | undefined,
         reporterName: args["reporter-name"] as string | undefined,
+        project: args["project"] as string | undefined,
+        projectToken: args["project-token"] as string | undefined,
         json: args.json,
       })
     } catch (e: any) {
