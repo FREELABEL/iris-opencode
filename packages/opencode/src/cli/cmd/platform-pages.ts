@@ -74,7 +74,9 @@ function parseValue(raw: string): unknown {
 }
 
 function getNestedValue(obj: any, path: string): unknown {
-  const parts = path.split(".")
+  // Same normalisation as setNestedValue — otherwise `get` walks the dead string key a
+  // broken `set` created and cheerfully confirms it (#181119).
+  const parts = normalizePathIndexes(path).split(".")
   let cur: any = obj
   for (const p of parts) {
     if (cur == null) return undefined
@@ -109,12 +111,36 @@ export function extractVersions(raw: unknown): Record<string, any>[] {
 /** Append tokens: `foo.-1`, `foo.+` and `foo.[]` all mean "push onto this array". */
 const APPEND_TOKENS = new Set(["-1", "+", "[]"])
 
+/**
+ * Normalise bracket indexing into dot segments: `components[4].props.x` -> `components.4.props.x`.
+ *
+ * Without this, `components[4]` was a STRING KEY. `iris pages set <slug>
+ * "components[4].props.leadBloqId" 359` wrote a dead `json_content["components[4]"]` that
+ * nothing renders, printed "Updated", and `pages get` walked the same dead path so it read
+ * 359 straight back and agreed with itself (#181119). 51 green ticks, 17 client pages, zero
+ * writes.
+ *
+ * Append tokens survive: `foo[]` -> `foo.[]`, `foo[-1]` -> `foo.-1`.
+ */
+export function normalizePathIndexes(path: string): string {
+  return path.replace(/(?<!\.)\[([^\]]*)\]/g, (_m, inner: string) => (inner === "" ? ".[]" : `.${inner}`))
+}
+
 export function setNestedValue(obj: any, path: string, value: unknown): void {
-  const parts = path.split(".")
+  const parts = normalizePathIndexes(path).split(".")
   let cur: any = obj
   for (let i = 0; i < parts.length - 1; i++) {
     const p = parts[i]
     const key = /^\d+$/.test(p) ? Number(p) : p
+    // An intermediate index past the end of an array would extend it with holes and
+    // invent an element nobody asked for. The last-segment branch below already refuses
+    // this; the traversal did not, which is how `components[9]` on a 9-component page
+    // (max index 8) reported success.
+    if (Array.isArray(cur) && typeof key === "number" && key > cur.length) {
+      throw new Error(
+        `Index ${key} is out of range at "${path}" — the array has ${cur.length} item(s) (max index ${cur.length - 1}). Use -1 to append.`,
+      )
+    }
     if (cur[key as any] == null || typeof cur[key as any] !== "object") {
       const nextIsIndex = /^\d+$/.test(parts[i + 1])
       cur[key as any] = nextIsIndex ? [] : {}
@@ -534,8 +560,35 @@ const SetCmd = cmd({
         body: JSON.stringify({ json_content: json }),
       })
       if (!(await handleApiError(res, "Update path"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+
+      // VERIFY THE WRITE LANDED (#181119). This printed "Updated" 51 times across 17 client
+      // pages while writing nothing — the path resolved to a dead key, so the PUT succeeded
+      // and changed no rendered content. Re-read and compare rather than trusting the 200.
+      let landed: unknown = undefined
+      let readBack = false
+      try {
+        const fresh = await getBySlug(args.slug, true)
+        if (fresh) {
+          landed = getNestedValue(fresh.json_content ?? {}, args.path)
+          readBack = true
+        }
+      } catch { /* unreadable — fall through to the honest warning below */ }
+
+      if (readBack && JSON.stringify(landed) !== JSON.stringify(parsed)) {
+        sp.stop("Not applied", 1)
+        prompts.log.error(
+          `The API accepted the request but ${args.path} reads back as ${JSON.stringify(landed)}, not ${JSON.stringify(parsed)}.`,
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
       sp.stop(success(`Updated ${args.path}`))
-      prompts.outro(dim(`iris pages get ${args.slug} ${args.path}`))
+      if (!readBack) {
+        prompts.log.warn(`Could not read the page back to confirm. Check: iris pages get ${args.slug} ${args.path}`)
+      }
+      prompts.outro(dim(`iris pages cache-clear ${args.slug}   # purge the rendered cache so the change takes effect`))
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))

@@ -119,3 +119,49 @@ describe("extractVersions", () => {
     expect(extractVersions({ current_page: 1, next_page_url: null })).toEqual([])
   })
 })
+
+/**
+ * Bracket indexing (#181119).
+ *
+ * `iris pages set <slug> "components[4].props.leadBloqId" 359` printed "Updated", and
+ * `iris pages get <slug> "components[4].props.leadBloqId"` read 359 straight back — while
+ * the rendered page never changed. setNestedValue splits on "." and only treats a part as
+ * an index when it is PURELY digits, so "components[4]" was a string key: the write landed
+ * in a dead `json_content["components[4]"]` that nothing renders, and the getter walked the
+ * same dead path so it agreed with itself.
+ *
+ * It cost 51 "Updated" messages across 17 client pages, none of which were wired.
+ * Same family as the `-1` append above: a write path that reports success having changed
+ * nothing is worse than one that errors, because the natural next move is to trust it.
+ */
+describe("setNestedValue — bracket indexing", () => {
+  test("components[0] addresses the array element, not a string key", () => {
+    const o: any = { components: [{ type: "Hero", props: {} }] }
+    setNestedValue(o, "components[0].props.leadBloqId", 367)
+    expect(o.components[0].props.leadBloqId).toBe(367)
+    expect(o["components[0]"]).toBeUndefined()
+  })
+
+  test("a deeper bracket path still resolves", () => {
+    const o: any = { components: [{ props: { links: [{ label: "a" }, { label: "b" }] } }] }
+    setNestedValue(o, "components[0].props.links[1].label", "changed")
+    expect(o.components[0].props.links[1].label).toBe("changed")
+  })
+
+  test("bracket and dot index are equivalent", () => {
+    const a: any = { components: [{ props: {} }] }
+    const b: any = { components: [{ props: {} }] }
+    setNestedValue(a, "components[0].props.x", 1)
+    setNestedValue(b, "components.0.props.x", 1)
+    expect(a).toEqual(b)
+  })
+
+  test("an index past the end throws instead of inventing a key", () => {
+    // ncma-fort-worth has 9 components (max index 8); components[9] reported "Updated".
+    // Index === length stays legal (that is the documented append), so this asserts the
+    // genuinely-out-of-range case that used to be silently accepted.
+    const o: any = { components: [{ props: {} }] }
+    expect(() => setNestedValue(o, "components[9].props.createLead", true)).toThrow(/out of range/)
+    expect(o["components[9]"]).toBeUndefined()
+  })
+})
