@@ -472,8 +472,10 @@ const ListCommand = cmd({
     const listSpinner = prompts.spinner()
     listSpinner.start("Loading...")
     try {
-      const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-      const res = await irisFetch(`/api/v1/${typeSlug}?${params}`)
+      // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+      const res = await irisFetch(`${base}?${params}`)
       const ok = await handleApiError(res, "list content")
       if (!ok) { listSpinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
@@ -520,8 +522,10 @@ const GetCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Loading...")
-    const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-    const res = await irisFetch(`/api/v1/${typeSlug}/${args.id}`)
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`)
     const ok = await handleApiError(res, "get content")
     if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
     const body = (await res.json()) as any
@@ -575,8 +579,10 @@ const DeleteCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Deleting...")
-    const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-    const res = await irisFetch(`/api/v1/${typeSlug}/${args.id}`, { method: "DELETE" })
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`, { method: "DELETE" })
     const ok = await handleApiError(res, "delete")
     spinner.stop(ok ? "Deleted" : "Failed", ok ? 0 : 1)
     prompts.outro("Done")
@@ -602,13 +608,17 @@ const SearchCommand = cmd({
       // Fall back to individual type searches
       spinner.stop("Searching per type...")
       const results: any[] = []
-      for (const type of ["videos", "articles", "tracks"]) {
-        const r = await irisFetch(`/api/v1/${type}?search=${encodeURIComponent(args.query)}&per_page=5`)
+      // Same fix as everywhere else in this file: the per-type fallback used a pluralised
+      // path that fl-api does not serve, so this fallback ALWAYS returned nothing — which
+      // is why `content search` reported "No results." for a title that was demonstrably
+      // live on a profile. A silent empty is the worst failure mode for a search.
+      for (const type of ["video", "article", "track"]) {
+        const r = await irisFetch(`/api/v1/content/${type}?search=${encodeURIComponent(args.query)}&per_page=5`)
         if (r.ok) {
           const b = (await r.json()) as any
           const items = b?.data?.data ?? b?.data ?? []
           if (Array.isArray(items)) {
-            for (const item of items) results.push({ ...item, _type: type.slice(0, -1) })
+            for (const item of items) results.push({ ...item, _type: type })
           }
         }
       }
@@ -662,8 +672,10 @@ const PullCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Fetching...")
-    const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-    const res = await irisFetch(`/api/v1/${typeSlug}/${args.id}`)
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`)
     const ok = await handleApiError(res, "pull")
     if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
     const body = (await res.json()) as any
@@ -704,8 +716,10 @@ const PushCommand = cmd({
     const local = JSON.parse(readFileSync(filepath, "utf8"))
     const spinner = prompts.spinner()
     spinner.start("Pushing...")
-    const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-    const res = await irisFetch(`/api/v1/${typeSlug}/${args.id}`, {
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`, {
       method: "PUT",
       body: JSON.stringify({
         title: local.title,
@@ -747,8 +761,10 @@ const DiffCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Fetching remote...")
-    const typeSlug = args.type === "video" ? "videos" : args.type === "track" ? "tracks" : "articles"
-    const res = await irisFetch(`/api/v1/${typeSlug}/${args.id}`)
+    // fl-api serves content at /api/v1/content/{type}/{id} — SINGULAR type as a path
+    // segment. There is no /api/v1/{type}s resource; only POST /v1/{type}s to create.
+    const base = `/api/v1/content/${args.type}`
+    const res = await irisFetch(`${base}/${args.id}`)
     const ok = await handleApiError(res, "diff")
     if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
     const body = (await res.json()) as any
