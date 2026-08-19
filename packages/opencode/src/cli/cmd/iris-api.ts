@@ -3,6 +3,11 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { homedir } from "os"
 import { join } from "path"
+// ESM imports, not require(). The CLI bundle has no `require` — every inline
+// require("fs") in this file threw ReferenceError and was swallowed by a bare
+// catch, so each one silently returned "no such file". See the note on
+// getBridgeToken below.
+import { existsSync, readFileSync } from "fs"
 
 // Quiet mode is handled by ./clack.ts — it exports noops for non-TTY contexts.
 const _quiet = !process.stdout.isTTY
@@ -29,8 +34,8 @@ export const cli = {
 // TODO: Once loadIrisSdkEnvSync is defined below, refactor this to use it
 {
   try {
-    const _fs = require("fs"), _path = require("path")
-    const _envPath = _path.join(require("os").homedir(), ".iris", "sdk", ".env")
+    const _fs = { existsSync, readFileSync }, _path = { join }
+    const _envPath = join(homedir(), ".iris", "sdk", ".env")
     if (_fs.existsSync(_envPath)) {
       let _raw = _fs.readFileSync(_envPath, "utf-8")
       if (_raw.charCodeAt(0) === 0xFEFF) _raw = _raw.slice(1) // strip BOM
@@ -106,9 +111,9 @@ function stripEnvQuotes(value: string): string {
 export function loadIrisSdkEnvSync(): Record<string, string> {
   const result: Record<string, string> = {}
   try {
-    const fs = require("fs")
+    const fs = { existsSync, readFileSync }
     const path = require("path")
-    const envPath = path.join(require("os").homedir(), ".iris", "sdk", ".env")
+    const envPath = join(homedir(), ".iris", "sdk", ".env")
     if (fs.existsSync(envPath)) {
       let raw = fs.readFileSync(envPath, "utf-8")
       // Strip BOM if present
@@ -187,8 +192,8 @@ async function resolveTokenUncached(): Promise<string> {
   }
   // 4. Read node_api_key from ~/.iris/config.json as last resort (used by hive commands)
   try {
-    const fs = require("fs"), path = require("path")
-    const configPath = path.join(require("os").homedir(), ".iris", "config.json")
+    const fs = { existsSync, readFileSync }, path = { join }
+    const configPath = join(homedir(), ".iris", "config.json")
     if (fs.existsSync(configPath)) {
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
       if (config.node_api_key) {
@@ -879,7 +884,7 @@ export const BRIDGE_URL = process.env.BRIDGE_URL ?? `http://localhost:${process.
 /** Read the auto-generated bridge auth token from ~/.iris/bridge-token */
 export function getBridgeToken(): string | null {
   try {
-    const fs = require("fs")
+    const fs = { existsSync, readFileSync }
     if (fs.existsSync(BRIDGE_TOKEN_PATH)) {
       return fs.readFileSync(BRIDGE_TOKEN_PATH, "utf-8").trim() || null
     }
