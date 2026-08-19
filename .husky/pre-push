@@ -8,6 +8,36 @@ if [ "$CURRENT_VERSION" != "$EXPECTED_VERSION" ]; then
 fi
 bun typecheck
 
+# package.json and bun.lock must agree on the workspace version.
+#
+# bun.lock records packages/opencode's version too. `script/release` now resyncs it, but that
+# only helps when the release goes THROUGH the script — v1.3.188 was a hand bump that touched
+# package.json alone, and by then the lockfile had been stranded at 1.3.162 for eighteen
+# releases. It surfaces later as a mystery one-line diff inside somebody else's commit, which is
+# how it was found: an unrelated `bun install` rewrote it mid-session.
+#
+# Guarding the INVARIANT rather than the process is the point. A rule that only holds when
+# someone remembers to use the right script is not a rule, and this repo already learned that
+# with the capability index and the scaffold manifest below.
+VERSION_PKG=$(node -p "require('./packages/opencode/package.json').version" 2>/dev/null)
+VERSION_LOCK=$(node -e '
+const fs = require("fs");
+const s = fs.readFileSync("bun.lock", "utf8");
+// bun.lock is JSONC (trailing commas), so match the workspace block rather than JSON.parse it.
+const m = s.match(/"packages\/opencode":\s*\{\s*"name":\s*"opencode",\s*"version":\s*"([^"]+)"/);
+process.stdout.write(m ? m[1] : "");
+' 2>/dev/null)
+
+if [ -n "$VERSION_PKG" ] && [ -n "$VERSION_LOCK" ] && [ "$VERSION_PKG" != "$VERSION_LOCK" ]; then
+  echo ""
+  echo "  bun.lock is stale: package.json says $VERSION_PKG, bun.lock says $VERSION_LOCK."
+  echo ""
+  echo "  Fix:  bun install --lockfile-only && git add bun.lock"
+  echo ""
+  exit 1
+fi
+
+
 # Capability index must cover every command.
 #
 # The index is what `iris find` and the MCP discovery tools read. A command that is not in
