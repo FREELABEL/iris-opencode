@@ -515,7 +515,7 @@ const BloqsCreateCommand = cmd({
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
     let name = args.name
-    if (!name) {
+    if (!name && !args.slug) {
       try {
         name = (await promptOrFail("name", () =>
           prompts.text({
@@ -602,11 +602,15 @@ const BloqsCreateCommand = cmd({
 const BloqsUpdateCommand = cmd({
   command: "update <id>",
   aliases: ["rename"],
-  describe: "rename a bloq",
+  describe: "rename a bloq, or set its slug",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
       .option("name", { describe: "new bloq name", type: "string" })
+      .option("slug", {
+        describe: "URL slug — required for a booking page (lowercase-with-hyphens)",
+        type: "string",
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -643,9 +647,15 @@ const BloqsUpdateCommand = cmd({
     spinner?.start("Updating bloq…")
 
     try {
+      // Send only what was asked for. `slug` is what gives a bloq a booking page —
+      // PublicBookingController resolves it with Bloq::where('slug', $slug), and until
+      // fl-api validated the field this endpoint accepted it and silently dropped it (#181099).
+      const payload: Record<string, unknown> = {}
+      if (name) payload.name = name
+      if (args.slug !== undefined) payload.slug = args.slug
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`, {
         method: "PUT",
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) {
         spinner?.stop("Failed", 1)
@@ -657,12 +667,25 @@ const BloqsUpdateCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const b = data?.data?.bloq ?? data?.data ?? data
-      if (args.json) { console.log(JSON.stringify({ success: true, id: b?.id ?? args.id, name: b?.name ?? name })); return }
-      spinner?.stop(`${success("✓")} Renamed to: ${bold(String(b?.name ?? name))}`)
+      // Confirm against the RETURNED record, not the request. This endpoint used to answer
+      // 200 with the full bloq while having written nothing.
+      if (args.slug !== undefined && b && b.slug !== args.slug) {
+        spinner?.stop("Not applied", 1)
+        const msg = `The API accepted the request but the slug reads back as ${JSON.stringify(b.slug)}, not ${JSON.stringify(args.slug)}.`
+        if (args.json) { console.log(JSON.stringify({ success: false, error: msg })); process.exitCode = 1; return }
+        prompts.log.error(msg)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: b?.id ?? args.id, name: b?.name ?? name, slug: b?.slug ?? args.slug })); return }
+      spinner?.stop(`${success("✓")} Updated: ${bold(String(b?.name ?? name ?? b?.slug ?? args.slug))}`)
 
       printDivider()
       printKV("ID", b?.id ?? args.id)
-      printKV("Name", b?.name ?? name)
+      if (b?.name ?? name) printKV("Name", b?.name ?? name)
+      if (b?.slug ?? args.slug) printKV("Slug", b?.slug ?? args.slug)
       printDivider()
 
       prompts.outro(`${dim("iris bloqs get " + (b?.id ?? args.id))}  View it`)
