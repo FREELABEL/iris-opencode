@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { assessScheduler, printDegradations } from "./subsystem-health"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson } from "./iris-api"
@@ -167,7 +168,15 @@ const SchedulesListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as Record<string, any>
-      let schedules: any[] = data?.data ?? []
+      const allSchedules: any[] = data?.data ?? []
+      let schedules: any[] = allSchedules
+
+      // Assess the scheduler against the UNFILTERED set (#180927). Doing it
+      // after --active/--overdue would let the filters hide the outage: running
+      // `schedules list --overdue` during a scheduler failure is exactly when
+      // you most need to be told the scheduler is the cause, and that filter
+      // would otherwise leave a suspiciously tidy list with no explanation.
+      const schedulerHealth = assessScheduler(allSchedules)
 
       // --active: filter to scheduled/running/paused only (skip completed/cancelled one-offs)
       if (args.active) {
@@ -225,6 +234,20 @@ const SchedulesListCommand = cmd({
       spinner.stop(`${schedules.length} schedule(s)${filterLabel ? ` (${filterLabel})` : ""}${pageLabel}`)
 
       if (args.json) {
+        // Machine consumers need the degradation too — a monitoring script that
+        // only reads the rows would have missed the June outage exactly as the
+        // humans did.
+        if (schedulerHealth) {
+          await writeJson({ degraded: [schedulerHealth], schedules: schedules.map((s: any) => ({
+            id: s.id,
+            name: s.name ?? s.title ?? s.task_name,
+            status: s.status,
+            next_run_at: s.next_run_at,
+            last_run_at: s.last_run_at,
+          })) })
+          prompts.outro("Done")
+          return
+        }
         await writeJson(schedules.map((s: any) => ({
           id: s.id,
           name: s.name ?? s.title ?? s.task_name,
@@ -242,6 +265,8 @@ const SchedulesListCommand = cmd({
         prompts.outro("Done")
         return
       }
+
+      printDegradations([schedulerHealth])
 
       if (schedules.length === 0) {
         prompts.log.warn(args.active ? "No active schedules. Use without --active to see all." : "No schedules found")
