@@ -19,7 +19,9 @@
     "docs": "echo 'Generating documentation...' && find src -name '*.ts' -exec echo 'Processing: {}' \\;",
     "deploy": "echo 'Deploying application...' && bun run build && echo 'Deployment completed successfully'",
     "capabilities": "bun run script/build-capabilities.ts",
-    "capabilities:check": "bun run script/build-capabilities.ts --check"
+    "capabilities:check": "bun run script/build-capabilities.ts --check",
+    "routes:check": "bun run script/check-routes.ts",
+    "routes:refresh": "sh script/refresh-routes.sh"
   },
   "bin": {
     "iris": "./bin/iris"

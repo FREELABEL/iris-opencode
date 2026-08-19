@@ -230,7 +230,8 @@ const PullCommand = cmd({
         const noteId = data?.data?.id ?? data?.id
         console.log(`  ${success("✓")} Brand kit saved to lead #${leadId}${noteId ? " (note #" + noteId + ")" : ""}`)
       } else if (bloqId) {
-        const res = await irisFetch(`/api/v1/bloq/${bloqId}/items`, {
+        const userId = (await requireUserId()) ?? 193
+        const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items`, {
           method: "POST",
           body: JSON.stringify({
             title: `Brand Kit — ${args.from} — ${new Date().toLocaleDateString()}`,

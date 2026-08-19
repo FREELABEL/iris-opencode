@@ -26,6 +26,28 @@ if [ -d "$HOME/sites/freelabel" ] || [ -n "$IRIS_PROJECT_ROOT" ]; then
   }
 fi
 
+# Every endpoint the CLI calls must exist.
+#
+# `iris content delete` called DELETE /api/v1/tracks/{id} for months. fl-api has never
+# served that path. Six commands were broken for all three content types and nobody
+# reported it, because a 404 reads as "that content does not exist" rather than "this
+# command is wrong". A census found 27 more across 22 files (#181136) — and 15 of those
+# fail SILENTLY: the 404 is swallowed by a try/catch and the user is shown advice about
+# their own account ("Could not detect your default board").
+#
+# Runtime tests cannot catch that class; a swallowed 404 produces no error. Static matching
+# against the real route tables can, and it needs no auth, no fixtures and no network.
+#
+# Fails only on NEW dead endpoints — the 29 that predate it are baselined so the hook could
+# land at all. Same reasoning as the capability index above: the check has to be cheap
+# enough to survive, or it gets disabled and the decay resumes.
+(cd packages/opencode && bun run routes:check) || {
+  echo ""
+  echo "  The CLI calls an endpoint that does not exist."
+  echo "  Fix the path, or if the snapshot is stale: cd packages/opencode && bun run routes:refresh"
+  exit 1
+}
+
 # Every how-to in scaffold/ must be in scaffold/manifest.json.
 #
 # The installer fetches the MANIFEST and downloads what it lists — adding a recipe file
