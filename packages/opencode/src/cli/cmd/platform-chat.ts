@@ -5,6 +5,7 @@ import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API
 import { captureMic, speak, listMics } from "../lib/voice"
 import { transcribeLocal, which } from "../lib/transcription"
 import { createInterface } from "readline"
+import { ChatTracer, toTraceLevel, type TraceStep } from "./chat-trace"
 
 // ============================================================================
 // Polling helper
@@ -67,8 +68,11 @@ export async function executeChat(args: {
   continue?: string
   model?: string
   "max-iterations"?: number
+  // -V / -VV. 0 = today's behaviour, 1 = the run's shape, 2 = the payloads too.
+  verbose?: number
 }): Promise<void> {
   const isJson = args.json === true
+  const traceLevel = toTraceLevel(args.verbose)
 
   if (!isJson) {
     UI.empty()
@@ -162,9 +166,24 @@ export async function executeChat(args: {
     )
   }
 
-  const spinner = isJson ? null : prompts.spinner()
+  // A clack spinner owns the last terminal line and repaints it every tick, so it
+  // erases trace lines as fast as they are written. Verbose mode replaces it: the
+  // timeline IS the progress indicator, and a better one — it says what is slow.
+  const spinner = isJson || traceLevel > 0 ? null : prompts.spinner()
   spinner?.start("Thinking…")
   const startTime = Date.now()
+
+  // Trace goes to stderr so `iris chat -V ... > answer.txt` still yields a clean
+  // answer on stdout. (#181195 tracks the inverse problem elsewhere in the CLI.)
+  const tracer = new ChatTracer(
+    traceLevel,
+    (line) => process.stderr.write(line + "\n"),
+    { dim: (t) => `${UI.Style.TEXT_DIM}${t}${UI.Style.TEXT_NORMAL}`, bold: (t) => bold(t) },
+  )
+  if (tracer.enabled && !isJson) {
+    console.log()
+    console.log(`  ${dim(traceLevel >= 2 ? "trace (heavy) — payloads included" : "trace — use -VV for tool arguments and results")}`)
+  }
 
   // Elapsed heartbeat so a slow run never looks stuck (#137419). The latest tool
   // event wins the label; otherwise we show "Thinking… (Ns)" ticking every second.
@@ -187,6 +206,8 @@ export async function executeChat(args: {
       timeoutSecs: args.timeout,
       enableRag: !args["no-rag"],
       onEvent: (evt) => {
+        // Collected even under --json: the trace is the payload's `trace` key there.
+        tracer.handle(evt)
         if (isJson) return
         if (evt.type === "tool_call" && evt.tool) lastActivity = `Using ${evt.tool}…`
         else if (evt.type === "tool_result" && evt.tool) lastActivity = `${evt.tool} ✓`
@@ -223,7 +244,7 @@ export async function executeChat(args: {
     }
 
     // No server-side workflow id in the sync stream path → pass "" (suppresses --continue).
-    outputResult(run, "", agentId, isJson, result.toolsUsed)
+    outputResult(run, "", agentId, isJson, result.toolsUsed, tracer.enabled ? tracer.steps : undefined)
   } catch (err) {
     if (heartbeat) clearInterval(heartbeat)
     process.stderr.write("\r" + " ".repeat(40) + "\r")
@@ -384,7 +405,7 @@ export async function runVoiceChat(args: {
   prompts.outro("Call ended 👋")
 }
 
-function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean, toolsUsed: string[] = []): void {
+function outputResult(run: WorkflowRun, workflowId: string, agentId: number | undefined, isJson: boolean, toolsUsed: string[] = [], trace?: TraceStep[]): void {
   const response = run.summary ?? run.response ?? run.output ?? "(no response)"
 
   if (isJson) {
@@ -398,6 +419,9 @@ function outputResult(run: WorkflowRun, workflowId: string, agentId: number | un
       tools_used: toolsUsed,
       elapsed_ms: run.elapsed_ms,
       requires_approval: run.requires_approval ?? false,
+      // Present only under -V. Absent (not empty) otherwise, so a consumer can tell
+      // "not traced" from "traced and nothing happened".
+      trace,
     }))
     return
   }
@@ -580,6 +604,11 @@ export const PlatformChatCommand = cmd({
         describe: "cap ReactLoop iterations",
         type: "number",
       })
+      .option("verbose", {
+        alias: "V",
+        describe: "trace the run: -V shows iterations, tool calls and results; -VV adds the payloads",
+        type: "count",
+      })
       .option("voice", {
         describe: "voice mode — talk to the agent via mic + local speech (free, on-device)",
         type: "boolean",
@@ -656,6 +685,7 @@ export const PlatformChatCommand = cmd({
       continue: args.continue,
       model: args.model,
       "max-iterations": args["max-iterations"],
+      verbose: args.verbose as number | undefined,
     })
   },
 })

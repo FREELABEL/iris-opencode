@@ -517,6 +517,11 @@ const AgentsChatCommand = cmd({
       .option("max-iterations", { describe: "cap ReactLoop iterations", type: "number" })
       .option("timeout", { describe: "max seconds to wait for response", type: "number", default: 300 })
       .option("no-rag", { describe: "disable RAG/knowledge base lookup", type: "boolean", default: false })
+      .option("verbose", {
+        alias: "V",
+        describe: "trace the run: -V shows iterations, tool calls and results; -VV adds the payloads",
+        type: "count",
+      })
       .option("json", { describe: "output response as JSON", type: "boolean", default: false }),
   async handler(args) {
     await executeChat({
@@ -528,6 +533,7 @@ const AgentsChatCommand = cmd({
       json: args.json,
       model: args.model,
       "max-iterations": args["max-iterations"],
+      verbose: args.verbose as number | undefined,
     })
   },
 })
@@ -541,7 +547,11 @@ const AgentsUpdateCommand = cmd({
       .option("name", { describe: "new name", type: "string" })
       .option("description", { describe: "new description", type: "string" })
       .option("bloq", { alias: "b", describe: "repoint the agent's persistent knowledge-base bloq (#146918)", type: "number" })
-      .option("model", { describe: "new model", type: "string" })
+      // -m matches `agents create`, which has had the alias since day one. Without
+      // it here, `agents update <id> -m <model>` is rejected by yargs and prints
+      // the help block — which reads as a silent no-op if the caller is piping
+      // output, and cost a debugging cycle exactly that way.
+      .option("model", { alias: "m", describe: "new model", type: "string" })
       .option("system-prompt", { describe: "the agent's IDENTITY — who it is (settings.system_prompt; used as the LLM system message)", type: "string" })
       .option("initial-prompt", { alias: "mission", describe: "the agent's MISSION — what it does every heartbeat (initial_prompt). Accepts a string or @path/to/file", type: "string" })
       .option("heartbeat-tools", { describe: "comma-separated heartbeat tool names (settings.heartbeat_tools)", type: "string" })
