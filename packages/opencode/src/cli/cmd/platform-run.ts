@@ -637,46 +637,138 @@ const ListConnectedCommand = cmd({
     const verifySpinner = prompts.spinner()
     verifySpinner.start("Verifying tokens…")
 
-    const verifyFns: Record<string, () => Promise<"verified" | "expired" | "error">> = {
+    // A probe reports WHY, not just that it failed. "unverified — could not probe"
+    // is unactionable: it collapses "the local bridge isn't running", "the API
+    // returned a 500" and "the network is down" into one useless string. Each
+    // probe now returns the cause and, where one exists, the command that fixes it.
+    // "unknown" is a real answer and a separate one from "broken". If the probe
+    // ENDPOINT is missing (404) we cannot tell whether the integration works, and
+    // saying either "verified" or "unverified" would be a claim we cannot support.
+    // The previous code returned "verified" for any non-401/403 response, so a 404
+    // on the probe path rendered as a green [verified] — a false positive that hid
+    // the fact that these probe endpoints do not currently resolve.
+    type ProbeState = "verified" | "expired" | "error" | "unknown"
+    type Probe = { state: ProbeState; reason?: string; fix?: string }
+
+    // fetch() rejects for DNS/connection-refused/timeout. Turn that into a cause
+    // the reader can act on rather than a generic failure.
+    const netReason = (e: unknown, target: string): string => {
+      const msg = String((e as any)?.message ?? e ?? "")
+      if (/abort|timeout|timed out/i.test(msg)) return `${target} timed out`
+      if (/ECONNREFUSED|refused/i.test(msg)) return `nothing is listening on ${target}`
+      if (/ENOTFOUND|EAI_AGAIN|dns/i.test(msg)) return `${target} did not resolve`
+      return msg ? `${target} unreachable — ${msg}` : `${target} unreachable`
+    }
+
+    const verifyFns: Record<string, (row: any) => Promise<Probe>> = {
       gmail: async () => {
-        const r = await irisFetch(`/api/v1/leads/0/gmail-threads`).catch(() => null)
-        if (!r) return "error"
-        return (r.status === 401 || r.status === 403) ? "expired" : "verified"
+        let r: Response | null = null
+        try {
+          r = await irisFetch(`/api/v1/leads/0/gmail-threads`)
+        } catch (e) {
+          return { state: "error", reason: netReason(e, "iris-api") }
+        }
+        if (!r) return { state: "error", reason: "iris-api unreachable" }
+        if (r.status === 401 || r.status === 403)
+          return { state: "expired", reason: "Google OAuth token rejected" }
+        if (r.status === 404)
+          return { state: "unknown", reason: "probe endpoint /leads/0/gmail-threads returned 404" }
+        if (!r.ok) return { state: "error", reason: `iris-api returned HTTP ${r.status}` }
+        return { state: "verified", reason: "Gmail API reachable" }
       },
       "google-calendar": async () => {
+        // Calendar reads go through the LOCAL bridge, not iris-api. The usual
+        // cause of failure is that the bridge daemon isn't running at all, which
+        // the old "could not probe" text never said.
         const _bh: Record<string, string> = { Accept: "application/json" }
-        const _bt = getBridgeToken(); if (_bt) _bh["X-Bridge-Key"] = _bt
-        const r = await fetch(`http://localhost:3200/api/calendar/events?days=1&limit=1`, { signal: AbortSignal.timeout(3000), headers: _bh }).catch(() => null)
-        return r?.ok ? "verified" : "error"
+        const _bt = getBridgeToken()
+        if (_bt) _bh["X-Bridge-Key"] = _bt
+        let r: Response | null = null
+        try {
+          r = await fetch(`http://localhost:3200/api/calendar/events?days=1&limit=1`, {
+            signal: AbortSignal.timeout(3000),
+            headers: _bh,
+          })
+        } catch (e) {
+          return {
+            state: "error",
+            reason: netReason(e, "local bridge on :3200"),
+            fix: "iris hive doctor",
+          }
+        }
+        if (!r.ok) {
+          if (r.status === 401 || r.status === 403)
+            return {
+              state: "error",
+              reason: _bt ? "bridge rejected the bridge key" : "no bridge key configured",
+              fix: "iris hive doctor",
+            }
+          return { state: "error", reason: `local bridge returned HTTP ${r.status}`, fix: "iris hive doctor" }
+        }
+        return { state: "verified", reason: "via local bridge" }
       },
-      "google-drive": async () => {
-        const r = await irisFetch("/api/v1/integrations/exec", { method: "POST", body: JSON.stringify({ type: "google-drive", function: "list_files", params: { maxResults: 1 } }) }).catch(() => null)
-        if (!r) return "error"
-        return (r.status === 401 || r.status === 403) ? "expired" : r.ok ? "verified" : "error"
+      "google-drive": async (row: any) => {
+        // Probe THIS row's account. Without integration_id every Drive account
+        // gets whichever connection the API picks by default, so three accounts
+        // all report one shared result.
+        const body: Record<string, unknown> = {
+          type: "google-drive",
+          function: "list_files",
+          params: { maxResults: 1 },
+        }
+        if (row?.id) body.integration_id = row.id
+        let r: Response | null = null
+        try {
+          r = await irisFetch("/api/v1/integrations/exec", { method: "POST", body: JSON.stringify(body) })
+        } catch (e) {
+          return { state: "error", reason: netReason(e, "iris-api") }
+        }
+        if (!r) return { state: "error", reason: "iris-api unreachable" }
+        if (r.status === 401 || r.status === 403)
+          return { state: "expired", reason: "Google OAuth token rejected" }
+        if (r.status === 404)
+          return { state: "unknown", reason: "probe endpoint /integrations/exec returned 404" }
+        if (!r.ok) return { state: "error", reason: `iris-api returned HTTP ${r.status}` }
+        return { state: "verified", reason: "Drive API reachable" }
       },
     }
 
-    const verified = new Map<string, "verified" | "expired" | "error">()
+    // Key by integration id, not type. Keying by type made every account of the
+    // same provider share one result — the opposite of the multi-account
+    // visibility this command exists to give.
+    const probeKey = (i: any) => String(i?.id ?? `type:${i?.type}`)
+    const verified = new Map<string, Probe>()
     await Promise.allSettled(
       items.map(async (i) => {
         const fn = verifyFns[i.type]
-        if (fn) {
-          verified.set(i.type, await fn().catch(() => "error" as const))
-        }
-      })
+        if (!fn) return
+        const result = await fn(i).catch((e) => ({
+          state: "error" as const,
+          reason: netReason(e, "probe"),
+        }))
+        verified.set(probeKey(i), result)
+      }),
     )
     verifySpinner.stop("Done")
 
     printDivider()
     for (const i of items) {
-      const v = verified.get(i.type)
+      const v = verified.get(probeKey(i))
       let statusLabel: string
-      if (v === "verified") {
-        statusLabel = success("[verified]")
-      } else if (v === "expired") {
-        statusLabel = `${UI.Style.TEXT_DANGER}[expired]${UI.Style.TEXT_NORMAL} ${dim(`— reconnect: iris connect ${i.type}`)}`
-      } else if (v === "error") {
-        statusLabel = `${UI.Style.TEXT_WARNING}[unverified]${UI.Style.TEXT_NORMAL} ${dim("— could not probe")}`
+      if (v?.state === "verified") {
+        statusLabel = `${success("[verified]")}${v.reason ? ` ${dim(`— ${v.reason}`)}` : ""}`
+      } else if (v?.state === "expired") {
+        const why = v.reason ? `${v.reason} — ` : ""
+        statusLabel = `${UI.Style.TEXT_DANGER}[expired]${UI.Style.TEXT_NORMAL} ${dim(`— ${why}reconnect: iris connect ${i.type}`)}`
+      } else if (v?.state === "unknown") {
+        // Do not colour this like a failure. The integration may be fine; it is
+        // the probe that cannot answer, and the fix is ours, not the user's.
+        statusLabel = `${dim("[unknown]")} ${dim(`— ${v.reason ?? "probe unavailable"}; integration status not determined`)}`
+      } else if (v?.state === "error") {
+        // Always say what failed. Append the fix only when one exists.
+        const why = v.reason ?? "probe failed for an unknown reason"
+        const fix = v.fix ? ` ${dim(`→ ${v.fix}`)}` : ""
+        statusLabel = `${UI.Style.TEXT_WARNING}[unverified]${UI.Style.TEXT_NORMAL} ${dim(`— ${why}`)}${fix}`
       } else {
         statusLabel = i.status === "active" ? dim("[active]") : dim(`[${i.status}]`)
       }
