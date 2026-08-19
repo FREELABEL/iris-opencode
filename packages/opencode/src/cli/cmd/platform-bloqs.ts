@@ -3172,6 +3172,209 @@ const BloqsOpenCommand = cmd({
   },
 })
 
+// ============================================================================
+// Board MEMBERSHIP (#180537-era gap, found the hard way on 2026-08-19)
+//
+// `bloqs invite` mints a tokenized LINK. `attach-lead` attaches a CRM contact. Neither one
+// adds a MEMBER — a row in fl-api's `user_bloq_users` with a permission, which is what
+// `is_owner` in `bloqs list` reads back and what actually grants a real account access to a
+// board. That verb simply did not exist, so granting five people-facing boards to one address
+// meant reading the endpoint out of the Laravel controller and curling it with a credential
+// pulled from ~/.iris/sdk/.env. These three close it.
+//
+// The endpoint takes a user_id, never an email, so the email→id resolution lives here rather
+// than in the caller's head.
+// ============================================================================
+
+/** Resolve --email to a user id, or pass --user-id straight through. */
+async function resolveMemberId(
+  args: { email?: unknown; "user-id"?: unknown },
+): Promise<{ id: number; email?: string } | { error: string }> {
+  const explicit = args["user-id"]
+  if (explicit) return { id: Number(explicit) }
+
+  const email = String(args.email ?? "").trim()
+  if (!email) return { error: "Pass --email <address> or --user-id <id>." }
+
+  const res = await irisFetch(`/api/v1/users/search?${new URLSearchParams({ q: email })}`, {}, FL_API)
+  if (!res.ok) return { error: `User lookup failed (HTTP ${res.status}).` }
+
+  const body = (await res.json().catch(() => null)) as any
+  const rows: any[] = Array.isArray(body) ? body : (body?.data ?? [])
+
+  // Exact address only. A substring match here would grant board access to the wrong person,
+  // which is not the kind of thing to be approximately right about.
+  const hit = rows.find((r) => String(r?.email ?? "").toLowerCase() === email.toLowerCase())
+  if (!hit) {
+    return {
+      error: rows.length
+        ? `No account with the exact address ${email} (search returned ${rows.length} near match(es)).`
+        : `No account found for ${email}.`,
+    }
+  }
+  return { id: Number(hit.id), email: String(hit.email) }
+}
+
+const BloqsMembersCommand = cmd({
+  command: "members <bloq-id>",
+  aliases: ["shared-users", "who"],
+  describe: "list the accounts a bloq board is shared with (membership, not invite links)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Members of Bloq #${args["bloq-id"]}`) }
+
+    try {
+      const res = await irisFetch(`/api/v1/user/bloqs/${args["bloq-id"]}/shared-users`)
+      if (!(await handleApiError(res, "List members"))) { if (!args.json) prompts.outro("Done"); return }
+
+      const body = (await res.json().catch(() => ({}))) as any
+      const members: any[] = body?.data?.shared_users ?? body?.shared_users ?? []
+
+      if (args.json) { await writeJson(members); return }
+
+      if (!members.length) {
+        prompts.log.info("Not shared with anyone. Add someone with: iris bloqs add-member <id> --email <address>")
+      } else {
+        printDivider()
+        for (const m of members) {
+          console.log(`  ${bold(String(m.email ?? m.name ?? m.id))}  ${dim(`#${m.id}`)}  [${String(m.permission ?? "?")}]`)
+        }
+        printDivider()
+      }
+      prompts.outro(dim(`iris bloqs add-member ${args["bloq-id"]} --email <address>`))
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsAddMemberCommand = cmd({
+  command: "add-member <bloq-id>",
+  aliases: ["grant", "share-with"],
+  describe: "give an account access to a bloq board (by email or user id)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("email", { describe: "the account's email address (resolved to a user id)", type: "string" })
+      .option("user-id", { describe: "the account's user id, if you already know it", type: "number" })
+      .option("permission", {
+        describe: "access level",
+        type: "string",
+        default: "editor",
+        choices: ["viewer", "editor", "owner"],
+      })
+      // fl-api's send_notification_email defaults to TRUE — sharing a board emails the person
+      // unless you say otherwise. Inverted here so the CLI never sends mail you did not ask for.
+      // It is also ONE-SHOT upstream: the mail fires only on a NEW share, so re-running later to
+      // "notify after the fact" silently does nothing but update the permission.
+      .option("notify", { describe: "email the person that they were added (default: no email)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const who = await resolveMemberId(args as any)
+    if ("error" in who) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: who.error })) }
+      else { UI.empty(); prompts.log.error(who.error) }
+      process.exitCode = 2
+      return
+    }
+
+    const label = who.email ?? `user #${who.id}`
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Add ${label} → Bloq #${args["bloq-id"]}`) }
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Granting…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/bloqs/${args["bloq-id"]}/share`, {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: who.id,
+          permission: args.permission,
+          send_notification_email: Boolean(args.notify),
+        }),
+      })
+      if (!(await handleApiError(res, "Add member"))) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const body = (await res.json().catch(() => ({}))) as any
+      // fl-api distinguishes a first grant from a permission change; pass that through rather
+      // than reporting both as "shared", because only the first one can have sent mail.
+      const message = String(body?.data?.message ?? body?.message ?? "Shared")
+
+      if (args.json) {
+        await writeJson({ success: true, bloq_id: Number(args["bloq-id"]), user_id: who.id, email: who.email, permission: args.permission, notified: Boolean(args.notify), message })
+        return
+      }
+
+      if (spinner) spinner.stop(`${success("✓")} ${message}`)
+      printDivider()
+      printKV("Board", `#${args["bloq-id"]}`)
+      printKV("Account", `${label}  (#${who.id})`)
+      printKV("Permission", String(args.permission))
+      printKV("Emailed", args.notify ? "yes" : "no")
+      printDivider()
+      prompts.outro(dim(`iris bloqs members ${args["bloq-id"]}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsRemoveMemberCommand = cmd({
+  command: "remove-member <bloq-id>",
+  aliases: ["revoke-member", "ungrant"],
+  describe: "remove an account's access to a bloq board",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("email", { describe: "the account's email address", type: "string" })
+      .option("user-id", { describe: "the account's user id", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const who = await resolveMemberId(args as any)
+    if ("error" in who) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: who.error })) }
+      else { UI.empty(); prompts.log.error(who.error) }
+      process.exitCode = 2
+      return
+    }
+
+    const label = who.email ?? `user #${who.id}`
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Remove ${label} from Bloq #${args["bloq-id"]}`) }
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Revoking…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/bloqs/${args["bloq-id"]}/share/${who.id}`, { method: "DELETE" })
+      if (!(await handleApiError(res, "Remove member"))) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      if (args.json) { await writeJson({ success: true, bloq_id: Number(args["bloq-id"]), user_id: who.id, email: who.email, removed: true }); return }
+
+      if (spinner) spinner.stop(`${success("✓")} ${label} removed from Bloq #${args["bloq-id"]}`)
+      prompts.outro(dim(`iris bloqs members ${args["bloq-id"]}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const BloqsShareCommand = cmd({
   // NB: `share` is already an alias of `make-public` (item-level). Board-level
   // passwordless links live under `invite` / `share-link` to avoid collision.
@@ -3460,6 +3663,9 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsExportCommand)
       .command(BloqsOpenCommand)
       .command(BloqsShareCommand)
+      .command(BloqsMembersCommand)
+      .command(BloqsAddMemberCommand)
+      .command(BloqsRemoveMemberCommand)
       .command(BloqsLinksCommand)
       .command(BloqsRevokeLinkCommand)
       .command(BloqsCreateCommand)
