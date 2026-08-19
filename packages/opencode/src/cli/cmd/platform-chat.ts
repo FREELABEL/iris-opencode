@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API, resolveUserId, streamAgentChat } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API, resolveUserId, streamAgentChat, requireUserId} from "./iris-api"
 import { captureMic, speak, listMics } from "../lib/voice"
 import { transcribeLocal, which } from "../lib/transcription"
 import { createInterface } from "readline"
@@ -108,7 +108,11 @@ export async function executeChat(args: {
     const spinner = prompts.spinner()
     spinner.start("Loading agents…")
     try {
-      const res = await irisFetch("/api/v1/bloqs/agents?per_page=20")
+      // /api/v1/bloqs/agents has never existed. The 404 fell into the `res.ok` branch below
+      // and the picker reported "0 agent(s) found" — an account with 363 agents looked empty.
+      // This is the path `iris agents list` uses and it works. (#181136)
+      const userId = await requireUserId()
+      const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=20`)
       if (res.ok) {
         const data = (await res.json()) as { data?: any[] }
         const agents: any[] = data?.data ?? []

@@ -48,11 +48,6 @@
    "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified \u2014 a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
   },
   {
-   "method": "GET",
-   "path": "/api/v1/bloqs/agents",
-   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified \u2014 a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-  },
-  {
    "method": "POST",
    "path": "/api/v1/leads/{}/deliverables/workflow",
    "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified \u2014 a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
@@ -60,11 +55,6 @@
   {
    "method": "POST",
    "path": "/api/v6/integrations/execute",
-   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified \u2014 a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-  },
-  {
-   "method": "GET",
-   "path": "/api/v1/me",
    "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified \u2014 a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
   },
   {

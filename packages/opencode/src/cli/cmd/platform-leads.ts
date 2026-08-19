@@ -1,5 +1,4 @@
 import { cmd } from "./cmd"
-import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
@@ -336,13 +335,7 @@ const LeadsListCommand = cmd({
       }
 
       if (args.json) {
-        await writeJson(
-          buildListEnvelope(projectFields(leads, LIST_FIELDS.leads), {
-            total: totalFromApi,
-            limit: Number(args.limit) || undefined,
-            resource: "leads",
-          }),
-        )
+        await writeJson(leads)
         return
       }
 
@@ -12611,8 +12604,9 @@ export const PlatformPulseCommand = cmd({
         fallbackSpinner.start("Computing from your leads...")
 
         try {
-          const meRes = await irisFetch("/api/v1/me")
-          const me = meRes.ok ? await meRes.json().catch(() => ({})) : {}
+          // Dropped a call to /api/v1/me here: the endpoint has never existed, and its
+          // result was assigned to `me` and then never read. A round trip to a 404 whose
+          // answer was discarded. (#181136)
           const leadsRes = await irisFetch(`/api/v1/leads?user_id=${userId}&per_page=50`)
           const leadsBody = leadsRes.ok ? await leadsRes.json().catch(() => ({})) : {}
           const myLeads: any[] = (leadsBody?.data ?? []).slice(0, 20)
