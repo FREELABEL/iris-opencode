@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { AtlasUseCommand } from "./platform-atlas-use"
 import { buildListEnvelope } from "./list-envelope"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import * as prompts from "./clack"
@@ -3468,6 +3469,7 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsRelateCommand)
       .command(BloqsUnrelateCommand)
       .command(BloqsRelationsCommand)
+      .command(AtlasUseCommand)
       .demandCommand(),
   async handler() {},
 })
