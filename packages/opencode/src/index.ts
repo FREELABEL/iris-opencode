@@ -141,6 +141,7 @@ import { PlatformDiaryCommand } from "./cli/cmd/platform-diary"
 // Keep the old "skills" command as an alias that points to "skill remote"
 import { PlatformSkillsCommand } from "./cli/cmd/platform-skills"
 import { PlatformSopCommand } from "./cli/cmd/platform-sop"
+import { PlatformCourseCommand } from "./cli/cmd/platform-course"
 import { PlatformToolsCommand } from "./cli/cmd/platform-tools"
 import { PlatformUsersCommand } from "./cli/cmd/platform-users"
 import { PlatformPhoneCommand } from "./cli/cmd/platform-phone"
@@ -404,6 +405,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformDiaryCommand))
   .command(reg(PlatformSkillsCommand))
   .command(reg(PlatformSopCommand))
+  .command(reg(PlatformCourseCommand))
   .command(reg(PlatformToolsCommand))
   .command(reg(PlatformUsersCommand))
   .command(reg(PlatformPhoneCommand))
