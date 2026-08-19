@@ -105,6 +105,12 @@
       "purpose": "Daily diary \u2014 read/write your account-scoped diary and publish local daily-diary/*.md into it with `iris diary sync` (idempotent, date-deduped, frontmatter writeback). Scopes (user/agent/bloq), opt-in --public sharing, and the auth/owner-scoping security model."
     },
     {
+      "src": "how-to/debug-an-agent-run.md",
+      "dest": "how-to/debug-an-agent-run.md",
+      "managed": true,
+      "purpose": "Reading a -V / -VV chat trace: iterations, tool calls with their arguments, tool results with status AND size, and the model behind each decision. Carries what --help cannot \u2014 the three failures a trace separates (tool never offered / tool ran and returned nothing / model ignored the result), only the last of which is a model problem."
+    },
+    {
       "src": "how-to/meetings.md",
       "dest": "how-to/meetings.md",
       "managed": true,
