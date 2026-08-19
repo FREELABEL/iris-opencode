@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, getBridgeToken, writeJson } from "./iris-api"
@@ -294,6 +295,10 @@ const CommsListCommand = cmd({
 
     if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
     if (rows.length === 0) {
+      // An empty log is ambiguous: it means "nothing here" OR "the reader that
+      // fills this is dead". Only probe on the empty path — when there are rows
+      // the distinction does not arise and the latency would be wasted.
+      printDegradations([assessBridge(await probeBridge())])
       prompts.log.warn("No comms logged yet")
       prompts.log.info(`Ingest: ${dim(`iris atlas:comms ingest ${resolved.id} --channel gmail`)}`)
       prompts.log.info(`Log:    ${dim(`iris atlas:comms log ${resolved.id} --channel phone --message "Called, discussed pricing"`)}`)
@@ -539,6 +544,15 @@ const CommsIngestCommand = cmd({
     UI.empty()
     prompts.intro("◈  Ingest Comms")
     if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    // Ingest is the command a dead bridge hurts most: every bridge-backed
+    // reader below catches its own failure and returns an empty array, so the
+    // run reports "0 new" and exits 0. That is indistinguishable from a lead
+    // who genuinely has no messages. Say it up front, before the work.
+    const bridgeBacked = ["imessage", "apple_mail", "gmail", "discord", "slack", "whatsapp", "all"]
+    if (bridgeBacked.includes(String(args.channel).toLowerCase())) {
+      printDegradations([assessBridge(await probeBridge())])
+    }
 
     if (args.all) {
       await ingestAllLeads(String(args.channel).toLowerCase(), Number(args.days), Number(args.limit), Boolean(args["dry-run"]))

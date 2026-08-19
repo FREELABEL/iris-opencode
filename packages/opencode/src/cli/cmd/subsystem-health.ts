@@ -124,6 +124,12 @@ export interface BridgeProbe {
   status?: number
   /** Set when fetch() itself rejected — connection refused, DNS, timeout. */
   networkError?: string
+  /**
+   * The endpoint actually probed. Reported rather than assumed: IRIS_BRIDGE_URL
+   * can move the bridge, and a banner that names a port nobody contacted sends
+   * the reader to check the wrong thing.
+   */
+  endpoint?: string
 }
 
 /**
@@ -142,11 +148,13 @@ export function assessBridge(probe: BridgeProbe): Degradation | null {
     { label: "Start it", command: "iris daemon start" },
   ]
 
+  const where = probe.endpoint ?? "the bridge address"
+
   if (probe.networkError) {
     return {
       component: "Local bridge",
       severity: "down",
-      what: `nothing is answering on localhost:3200 (${probe.networkError})`,
+      what: `nothing is answering on ${where} (${probe.networkError})`,
       consequence:
         "Calendar, Apple Mail, iMessage and Hive dispatch cannot be read — they will look empty rather than disconnected.",
       actions,
@@ -156,10 +164,35 @@ export function assessBridge(probe: BridgeProbe): Degradation | null {
   return {
     component: "Local bridge",
     severity: "degraded",
-    what: `the bridge answered with HTTP ${probe.status ?? "an error"}`,
+    what: `${where} answered with HTTP ${probe.status ?? "an error"}`,
     consequence:
       "It is running but not serving requests, so local channel reads may return nothing rather than failing.",
     actions,
+  }
+}
+
+/**
+ * Probe the local bridge. Cheap, short timeout, never throws.
+ *
+ * Kept here rather than in each caller so every surface reports the bridge the
+ * same way. The failure this exists to catch is precisely that each command
+ * swallowed it differently — one returning an empty array, another catching
+ * and moving on — so the same outage looked like four unrelated non-events.
+ */
+export async function probeBridge(timeoutMs = 1500): Promise<BridgeProbe> {
+  const url = process.env.IRIS_BRIDGE_URL ?? "http://localhost:3200"
+  const endpoint = url.replace(/^https?:\/\//, "")
+  try {
+    const r = await fetch(`${url}/health`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (r.ok) return { reachable: true, endpoint }
+    return { reachable: false, status: r.status, endpoint }
+  } catch (e) {
+    const msg = String((e as any)?.message ?? e ?? "")
+    let reason = "unreachable"
+    if (/abort|timeout|timed out/i.test(msg)) reason = "timed out"
+    else if (/ECONNREFUSED|refused/i.test(msg)) reason = "connection refused"
+    else if (/ENOTFOUND|EAI_AGAIN|dns/i.test(msg)) reason = "did not resolve"
+    return { reachable: false, networkError: reason, endpoint }
   }
 }
 

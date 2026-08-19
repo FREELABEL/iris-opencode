@@ -111,15 +111,23 @@ describe("assessBridge", () => {
     expect(assessBridge({ reachable: true })).toBeNull()
   })
 
-  test("connection refused reads as down, and names the port", () => {
-    const d = assessBridge({ reachable: false, networkError: "connection refused" })
+  test("connection refused reads as down, and names the endpoint ACTUALLY probed", () => {
+    const d = assessBridge({ reachable: false, networkError: "connection refused", endpoint: "localhost:3200" })
     expect(d!.severity).toBe("down")
     expect(d!.what).toContain("localhost:3200")
     expect(d!.consequence).toContain("look empty rather than disconnected")
   })
 
+  test("a moved bridge is named by its real endpoint, never a hardcoded port", () => {
+    // IRIS_BRIDGE_URL can move the bridge. Naming :3200 regardless would send
+    // the reader to check a port nobody contacted.
+    const d = assessBridge({ reachable: false, networkError: "unreachable", endpoint: "localhost:59999" })
+    expect(d!.what).toContain("localhost:59999")
+    expect(d!.what).not.toContain("3200")
+  })
+
   test("an HTTP error reads as degraded, not down — it is running, just not serving", () => {
-    const d = assessBridge({ reachable: false, status: 503 })
+    const d = assessBridge({ reachable: false, status: 503, endpoint: "localhost:3200" })
     expect(d!.severity).toBe("degraded")
     expect(d!.what).toContain("503")
   })
