@@ -19,6 +19,22 @@ function fmtCents(c?: number | null): string {
 
 function printDivider() { console.log(dim("  " + "─".repeat(72))) }
 
+// A schema's `settings` blob is not decoration — an ONBOARDING FLOW lives entirely
+// in it (`flow_type: "onboarding"` plus steps/branding/completion). Both the create
+// and update endpoints have always accepted it; the CLI just never passed it, which
+// is why flows could only be made by hand against the API and why the whole
+// Onboarding SDK stayed invisible. See `iris onboarding` for the friendly surface.
+function readJsonArg(v: string | undefined, label: string): { ok: boolean; value?: any } {
+  if (!v) return { ok: true, value: undefined }
+  try {
+    if (v.endsWith(".json") && fs.existsSync(v)) return { ok: true, value: JSON.parse(fs.readFileSync(v, "utf8")) }
+    return { ok: true, value: JSON.parse(v) }
+  } catch {
+    prompts.log.error(`Invalid JSON for --${label}`)
+    return { ok: false }
+  }
+}
+
 // ── SCHEMAS ──────────────────────────────────────────────────────────────────
 
 const SchemaListCommand = cmd({
@@ -104,7 +120,8 @@ const SchemaCreateCommand = cmd({
       .option("name", { type: "string", demandOption: true, describe: "schema name" })
       .option("slug", { type: "string", describe: "url-safe slug (auto from name if omitted)" })
       .option("bloq", { type: "number", describe: "bloq ID to scope to" })
-      .option("fields", { type: "string", describe: "JSON fields definition or path to .json file" }),
+      .option("fields", { type: "string", describe: "JSON fields definition or path to .json file" })
+      .option("settings", { type: "string", describe: "JSON settings blob or path to .json file — an onboarding flow lives here" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Schema")
@@ -140,9 +157,13 @@ const SchemaCreateCommand = cmd({
 
     // Normalize: wrap bare arrays so API receives { fields: [...] }
     const normalizedFields = Array.isArray(fields) ? { fields } : fields
+    const settingsArg = readJsonArg(args.settings as string | undefined, "settings")
+    if (!settingsArg.ok) { prompts.outro("Done"); return }
+
     const body: Record<string, any> = { name: args.name, fields: normalizedFields }
     if (args.slug) body.slug = args.slug
     if (args.bloq != null) body.bloq_id = args.bloq
+    if (settingsArg.value !== undefined) body.settings = settingsArg.value
 
     const spinner = prompts.spinner()
     spinner.start("Creating…")
@@ -151,7 +172,10 @@ const SchemaCreateCommand = cmd({
       const ok = await handleApiError(res, "Create schema"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const data = ((await res.json()) as any)?.data
       spinner.stop(`Created: ${bold(data?.slug ?? args.name)}`)
-      prompts.outro(`iris atlas:datasets records list --schema=${data?.slug ?? args.name}`)
+      const madeAFlow = settingsArg.value?.flow_type === "onboarding"
+      prompts.outro(madeAFlow
+        ? `iris onboarding flows show ${data?.slug ?? args.slug ?? args.name}`
+        : `iris atlas:datasets records list --schema=${data?.slug ?? args.name}`)
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -170,7 +194,8 @@ const SchemaUpdateCommand = cmd({
     y
       .positional("slug", { type: "string", demandOption: true })
       .option("name", { type: "string", describe: "rename the schema" })
-      .option("fields", { type: "string", describe: "JSON fields definition or path to .json file (full new field set)" }),
+      .option("fields", { type: "string", describe: "JSON fields definition or path to .json file (full new field set)" })
+      .option("settings", { type: "string", describe: "JSON settings blob or path to .json file — replaces settings wholesale" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Evolve Schema: ${args.slug}`)
@@ -187,11 +212,15 @@ const SchemaUpdateCommand = cmd({
       } catch { prompts.log.error("Invalid JSON for --fields"); prompts.outro("Done"); return }
     }
 
+    const settingsArg = readJsonArg(args.settings as string | undefined, "settings")
+    if (!settingsArg.ok) { prompts.outro("Done"); return }
+
     const body: Record<string, any> = {}
     if (args.name) body.name = args.name
     if (fields) body.fields = Array.isArray(fields) ? { fields } : fields
-    if (body.name === undefined && body.fields === undefined) {
-      prompts.log.warn("Nothing to update. Pass --fields <json|file> (full new field set) and/or --name")
+    if (settingsArg.value !== undefined) body.settings = settingsArg.value
+    if (body.name === undefined && body.fields === undefined && body.settings === undefined) {
+      prompts.log.warn("Nothing to update. Pass --fields <json|file> (full new field set), --settings <json|file>, and/or --name")
       prompts.outro("Done"); return
     }
 
