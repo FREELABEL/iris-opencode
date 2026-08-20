@@ -7,6 +7,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
 import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
+import { detectKind, parseDelimited, parseXlsx, parseDocx, parsePlain, titleFromHtml, inferSchema, type TableData, type ColumnSchema } from "./ingest-formats"
 import { RELATION_TYPES, isValidRelationType, formatRelationsGrouped, type RelationRow } from "./bloq-relation-format"
 import { createPageFromJson } from "./platform-pages"
 import { BloqsExportCommand } from "./platform-bloq-export"
@@ -790,9 +791,58 @@ function parseCsv(text: string): { headers: string[]; rows: Record<string, strin
   return { headers, rows }
 }
 
+
+function truncate(v: string, n: number): string {
+  return v.length > n ? v.slice(0, n - 1) + "…" : v
+}
+
+/**
+ * The list an ingested item lands in.
+ *
+ * ASKING FOR A LIST AND SILENTLY GETTING A DIFFERENT ONE IS THE WORST OUTCOME HERE. The
+ * previous resolution fell back to `lists[0]` whenever the name did not match, so
+ * `--list "Ingest test"` quietly dropped a dataset into "Generated Content" and reported
+ * success — measured, not hypothetical: item #181317 landed there during this command's
+ * own test run. The data is not lost, but it is somewhere nobody will look for it, and the
+ * output said it worked.
+ *
+ * So: a list you NAMED must exist, or this fails and tells you what does exist. The
+ * first-list default applies only when you named nothing at all.
+ */
+async function resolveIngestList(
+  userId: number,
+  bloqId: number,
+  want?: string,
+): Promise<{ id: number } | { error: string }> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists`)
+  if (!res.ok) return { error: `Could not read the lists on bloq ${bloqId} (HTTP ${res.status}).` }
+  const data = (await res.json()) as { data?: any[] }
+  const lists: any[] = data?.data ?? []
+  if (!lists.length) return { error: `Bloq ${bloqId} has no lists to ingest into.` }
+
+  if (want !== undefined && String(want).trim() !== "") {
+    const w = String(want).trim()
+    // An id is unambiguous; a name is matched exactly, then case-insensitively.
+    const byId = /^\d+$/.test(w) ? lists.find((l: any) => String(l.id) === w) : null
+    const exact = lists.find((l: any) => String(l.name ?? "") === w)
+    const loose = lists.find((l: any) => String(l.name ?? "").toLowerCase() === w.toLowerCase())
+    const hit = byId ?? exact ?? loose
+    if (!hit) {
+      return {
+        error:
+          `No list "${w}" on bloq ${bloqId}. Nothing was written.\n  Lists here: ` +
+          lists.slice(0, 12).map((l: any) => `${l.name} (${l.id})`).join(", ") +
+          (lists.length > 12 ? `, …${lists.length - 12} more` : ""),
+      }
+    }
+    return { id: hit.id }
+  }
+  return { id: lists[0].id }
+}
+
 const BloqsIngestCommand = cmd({
   command: "ingest <id> <file>",
-  describe: "upload a file into a bloq (CSV files are parsed into a dataset item)",
+  describe: "ingest a file into a bloq — CSV/Excel become datasets, MD/TXT/DOCX become documents, HTML becomes an artifact",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
@@ -801,6 +851,10 @@ const BloqsIngestCommand = cmd({
       .option("as", { describe: "CSV mode: dataset (single item, default) or items (one item per row)", type: "string", choices: ["dataset", "items"], default: "dataset" })
       .option("key", { describe: "column name for upsert dedup on re-import (--as items only)", type: "string" })
       .option("title-column", { describe: "column to use as item title (auto-detected if omitted)", type: "string" })
+      .option("title", { describe: "item title for a document/artifact (derived from the file if omitted)", type: "string" })
+      .option("sheet", { describe: "which worksheet to read (.xlsx; default: the first)", type: "string" })
+      .option("schema-only", { describe: "print the inferred schema and write nothing", type: "boolean", default: false })
+      .option("yes", { describe: "accept the inferred schema without prompting", type: "boolean", default: false, alias: "y" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -826,45 +880,107 @@ const BloqsIngestCommand = cmd({
         return
       }
 
-      // CSV files: parse rows into a structured dataset bloq item
-      if (ext === ".csv") {
-        spinner.start(`Parsing ${dim(filename)}…`)
-        const text = await file.text()
-        const { headers, rows } = parseCsv(text)
+      const kind = detectKind(args.file)
+
+      // TABULAR — csv/tsv/xlsx all become the same {headers, rows}, so everything
+      // downstream (dataset item, --as items, --key upsert) is shared rather than
+      // reimplemented per format.
+      if (kind === "table") {
+        spinner.start(`Reading ${dim(filename)}…`)
+        let table: TableData
+        try {
+          if (ext === ".xlsx" || ext === ".xlsm" || ext === ".xls") {
+            table = await parseXlsx(args.file, args.sheet)
+          } else {
+            table = parseDelimited(await file.text(), ext === ".tsv" ? "\t" : ",")
+          }
+        } catch (e) {
+          spinner.stop("Could not read the file", 1)
+          prompts.log.error(e instanceof Error ? e.message : String(e))
+          prompts.outro("Done")
+          return
+        }
+        const { headers, rows } = table
 
         if (rows.length === 0) {
-          spinner.stop("Empty CSV", 1)
-          prompts.log.error("No data rows found in CSV")
+          spinner.stop("No rows", 1)
+          prompts.log.error(`No data rows found in ${filename}. A header row alone is not a dataset.`)
           prompts.outro("Done")
           return
         }
 
-        spinner.stop(`${success("✓")} Parsed ${rows.length} rows × ${headers.length} columns`)
+        spinner.stop(`${success("✓")} Read ${rows.length} rows × ${headers.length} columns`)
 
-        // Preview first 3 rows
-        for (const row of rows.slice(0, 3)) {
-          const preview = headers.slice(0, 4).map((h) => `${dim(h)}=${row[h] ?? ""}`).join("  ")
-          console.log(`    ${preview}`)
+        // A workbook with several sheets: say which one was read. Importing sheet 1 and
+        // reporting success would let the other sheets disappear without a word.
+        if (table.sheets && table.sheets.length > 1) {
+          console.log(`    ${dim(`sheet "${table.sheetUsed}" of ${table.sheets.length}: ${table.sheets.join(", ")}`)}`)
+          console.log(`    ${dim(`only this sheet was read — re-run with --sheet "<name>" for another`)}`)
         }
-        if (rows.length > 3) console.log(`    ${dim(`…and ${rows.length - 3} more`)}`)
         console.log()
 
-        // Resolve target list
-        let listId: number | null = null
-        const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
-        if (listsRes.ok) {
-          const listsData = (await listsRes.json()) as { data?: any[] }
-          const lists: any[] = listsData?.data ?? []
-          if (args.list) {
-            const match = lists.find((l: any) => (l.name ?? "").toLowerCase() === args.list!.toLowerCase())
-            if (match) listId = match.id
-          }
-          if (!listId && lists.length > 0) listId = lists[0].id
+        // ── STEP ONE: the schema, before anything is written ──────────────────
+        // The old preview printed three rows, which shows the DATA and hides the SHAPE.
+        // A column that is 80% blank, or a date column Excel handed over as a number,
+        // is invisible in three rows and obvious in a schema.
+        const schema: ColumnSchema[] = inferSchema(headers, rows)
+        console.log(`  ${bold("Schema")} ${dim(`— inferred from ${Math.min(rows.length, 500)} rows`)}`)
+        console.log(`  ${dim("─".repeat(58))}`)
+        for (const c of schema) {
+          const flags: string[] = []
+          if (c.blank) flags.push(`${Math.round((c.blank / Math.min(rows.length, 500)) * 100)}% blank`)
+          if (c.type !== "empty" && c.distinct <= 12 && rows.length > 20) flags.push(`${c.distinct} values`)
+          const name = c.name.length > 24 ? c.name.slice(0, 23) + "…" : c.name
+          // Pad on the PLAIN strings; padEnd counts ANSI escape bytes as width and the
+          // columns drift apart by however many colour codes each row happens to carry.
+          const flagText = flags.join(", ")
+          console.log(
+            `  ${name.padEnd(24)} ${c.type.padEnd(9)}${" ".repeat(Math.max(1, 22 - flagText.length))}` +
+            `${dim(flagText)}  ${dim(c.sample ? "e.g. " + truncate(c.sample, 22) : "")}`,
+          )
+        }
+        console.log(`  ${dim("─".repeat(58))}`)
+        const emptyCols = schema.filter((c) => c.type === "empty")
+        if (emptyCols.length) {
+          console.log(`  ${dim(`${emptyCols.length} column(s) are entirely empty: ${emptyCols.map((c) => c.name).join(", ")}`)}`)
+        }
+        console.log()
+
+        // --schema-only stops here: read the shape, fix the file, run it again. Nothing
+        // was written, so there is nothing to undo.
+        if (args["schema-only"]) {
+          prompts.log.info("Schema only — nothing was written.")
+          prompts.outro(dim(`ingest for real: iris atlas ingest ${args.id} ${JSON.stringify(args.file)}`))
+          return
         }
 
+        // ── STEP TWO: confirm, then write ────────────────────────────────────
+        if (!args.yes) {
+          if (isNonInteractive()) {
+            prompts.log.error("Refusing to import unconfirmed in a non-interactive shell.")
+            prompts.log.info("Re-run with --yes to accept this schema, or --schema-only to inspect it.")
+            prompts.outro("Done")
+            process.exitCode = 1
+            return
+          }
+          const ok = await prompts.confirm({ message: `Import ${rows.length} rows with this schema?` })
+          if (!ok || typeof ok === "symbol") {
+            prompts.log.info("Nothing was written.")
+            prompts.outro("Done")
+            return
+          }
+        }
+
+        // Resolve target list
+        // Same resolution the document path uses — a named list that does not exist is an
+        // error here too, not a quiet redirect into whichever list happens to be first.
+        const resolvedList = await resolveIngestList(userId, args.id, args.list)
+        const listId: number | null = "error" in resolvedList ? null : resolvedList.id
+
         if (!listId) {
-          spinner.stop("No list found", 1)
-          prompts.log.error("Bloq has no lists. Create one first.")
+          spinner.stop("No list", 1)
+          prompts.log.error("error" in resolvedList ? resolvedList.error : "Bloq has no lists. Create one first.")
+          process.exitCode = 1
           prompts.outro("Done")
           return
         }
@@ -973,13 +1089,19 @@ const BloqsIngestCommand = cmd({
           rows,
         }
 
-        const itemRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items`, {
+        // POSTED TO THE LIST, not to the bloq with the list in the body.
+        //
+        // `/bloqs/{id}/items` with `bloq_list_id` in the payload does not honour it: the
+        // dataset lands in whatever list the server picks (observed: "Generated Content")
+        // while the CLI reports the list you asked for. The list-scoped route puts the item
+        // where the path says, and is the same one the document/artifact path uses — one
+        // create route for every kind of ingest, so this cannot drift again.
+        const itemRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists/${listId}/items`, {
           method: "POST",
           body: JSON.stringify({
-            title: filename.replace(/\.csv$/i, ""),
+            title: (args.title as string) || filename.replace(/\.(csv|tsv|xlsx|xlsm|xls)$/i, ""),
             content: JSON.stringify(dataset),
             type: "default",
-            bloq_list_id: listId,
           }),
         })
 
@@ -1005,7 +1127,89 @@ const BloqsIngestCommand = cmd({
         return
       }
 
-      // Non-CSV files: upload as cloud file attachment (existing behavior)
+      // DOCUMENT / ARTIFACT — becomes a real Atlas item with a body, not a blob.
+      //
+      // Previously a .md, .docx or .html file uploaded as an attachment: it existed in the
+      // bloq, and was unsearchable, unreadable by an agent, and impossible to share as a
+      // page. The content is right there in the file; storing it as an opaque upload was a
+      // decision not to read it.
+      if (kind === "document" || kind === "artifact") {
+        spinner.start(`Reading ${dim(filename)}…`)
+        let content = ""
+        let derivedTitle: string | null = null
+        let contentFormat: "html" | undefined
+
+        try {
+          if (kind === "artifact") {
+            content = await file.text()
+            derivedTitle = titleFromHtml(content, args.file)
+            contentFormat = "html"
+          } else if (ext === ".docx") {
+            const d = await parseDocx(args.file)
+            content = d.markdown
+            derivedTitle = d.title
+          } else {
+            const d = parsePlain(args.file)
+            content = d.markdown
+            derivedTitle = d.title
+          }
+        } catch (e) {
+          spinner.stop("Could not read the file", 1)
+          prompts.log.error(e instanceof Error ? e.message : String(e))
+          prompts.log.info("If this is not really that format, ingest it as an attachment by renaming it.")
+          prompts.outro("Done")
+          return
+        }
+
+        if (!content.trim()) {
+          spinner.stop("Nothing to store", 1)
+          prompts.log.error(`${filename} has no readable text content.`)
+          prompts.outro("Done")
+          return
+        }
+
+        const title = (args.title as string) || derivedTitle || path.basename(args.file, ext)
+        spinner.stop(`${success("✓")} Read ${content.length.toLocaleString()} characters`)
+        console.log(`    ${dim("title:")} ${title}`)
+        console.log(`    ${dim("stored as:")} ${contentFormat === "html" ? "HTML artifact" : "document (markdown)"}`)
+        console.log()
+
+        const resolved = await resolveIngestList(userId, args.id, args.list)
+        if ("error" in resolved) {
+          prompts.log.error(resolved.error)
+          prompts.outro("Done")
+          process.exitCode = 1
+          return
+        }
+        const listId = resolved.id
+
+        spinner.start("Creating item…")
+        const payload: Record<string, unknown> = { title, content }
+        if (contentFormat) payload.content_format = contentFormat
+        const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists/${listId}/items`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        })
+        if (!res.ok) {
+          spinner.stop("Failed", 1)
+          await handleApiError(res, "Create item")
+          prompts.outro("Done")
+          return
+        }
+        const body = (await res.json()) as { data?: any }
+        const item = body?.data?.data ?? body?.data ?? body
+        spinner.stop(`${success("✓")} ${filename} ingested`)
+
+        printDivider()
+        printKV("Item ID", item?.id ?? "(unknown)")
+        printKV("Type", contentFormat === "html" ? "artifact (html)" : "document")
+        printKV("Characters", content.length.toLocaleString())
+        printDivider()
+        prompts.outro(dim(item?.id ? `iris atlas make-public ${item.id}` : `iris bloqs get ${args.id}`))
+        return
+      }
+
+      // Anything else: upload as a cloud file attachment (existing behaviour).
       spinner.start(`Uploading ${dim(filename)}…`)
 
       const blob = await file.arrayBuffer()
