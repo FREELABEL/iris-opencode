@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, resolveUserId } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -64,13 +64,18 @@ function readLocalProgram(filepath: string): any {
 // cannot read as healthy afterwards.
 async function bloqExists(bloqId: number | string): Promise<boolean> {
   try {
-    const res = await irisFetch(`/api/v1/bloqs/${bloqId}`)
+    // Bloqs are USER-SCOPED. An earlier version of this guard called
+    // /api/v1/bloqs/{id}, which does not exist — it 404s for every bloq, so the
+    // guard refused writes for bloqs that were perfectly real. Caught on #314.
+    const userId = await resolveUserId()
+    if (!userId) return true // cannot verify → do not block the write
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}`)
     if (!res.ok) return false
     const json = (await res.json()) as any
     const b = json?.data ?? json
-    return Boolean((b?.bloq ?? b)?.id)
+    return Boolean(b?.id ?? b?.name)
   } catch {
-    return false
+    return true // network/parse failure is not evidence of absence
   }
 }
 
@@ -685,10 +690,14 @@ const PackageCreateCommand = cmd({
 
     try {
       const payload: Record<string, unknown> = { name, billing_interval: args.interval, is_active: true }
-      if (args.price) payload.price = args.price
+      // `if (args.price)` dropped a deliberate 0, so the API's `required` rule
+      // rejected the call and a FREE tier was impossible to create. Same for
+      // trial-days. max_members stays falsy-dropped on purpose: the API rule is
+      // `nullable|integer|min:1`, so 0 ("unlimited") must be omitted, not sent.
+      if (args.price !== undefined) payload.price = args.price
       if (args.description) payload.description = args.description
       if (args["max-members"]) payload.max_members = args["max-members"]
-      if (args["trial-days"]) payload.trial_days = args["trial-days"]
+      if (args["trial-days"] !== undefined) payload.trial_days = args["trial-days"]
 
       const res = await irisFetch(`/api/v1/programs/${args["program-id"]}/packages`, { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create package")
