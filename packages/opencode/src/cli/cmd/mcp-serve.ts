@@ -22,6 +22,14 @@ import { join } from "path"
 import { readFileSync, existsSync } from "fs"
 import { spill } from "./mcp-overflow"
 
+// A bare "{" string literal silently breaks `script/build-capabilities.ts`: its block
+// reader brace-MATCHES `cmd({ ... })` without skipping string literals, so one unmatched
+// brace leaves the block unterminated, readBlock returns null, and the whole command drops
+// out of the capability index. That is exactly how `mcp serve` went missing — the index
+// still listed it, the scan no longer produced it, and the pre-push gate caught it.
+// Writing the brace as a slice of a BALANCED pair keeps the counter honest.
+const JSON_OPEN = "{}".slice(0, 1)
+
 const IRIS_BIN = join(homedir(), ".iris", "bin", "iris")
 const HOWTO_DIR = join(homedir(), ".iris", "how-to")
 const MAX_OUTPUT = 100 * 1024 // 100KB
@@ -787,7 +795,7 @@ parts you did not mean to touch.`,
             // and the caller sees an empty result instead of "the agent timed out".
             const result = await execIris(askArgs, (secs + 15) * 1000)
             const raw = (result.stdout || "").trim()
-            if (result.exitCode !== 0 && !raw.startsWith("{")) {
+            if (result.exitCode !== 0 && !raw.startsWith(JSON_OPEN)) {
               const errMsg = result.stderr || raw || "agent call failed with no output"
               return { content: [{ type: "text" as const, text: errMsg }], isError: true }
             }
@@ -800,7 +808,7 @@ parts you did not mean to touch.`,
             const objs: Record<string, any>[] = []
             for (const line of raw.split("\n")) {
               const t = line.trim()
-              if (!t.startsWith("{")) continue
+              if (!t.startsWith(JSON_OPEN)) continue
               try { objs.push(JSON.parse(t)) } catch {}
             }
             const env: Record<string, any> | undefined =
