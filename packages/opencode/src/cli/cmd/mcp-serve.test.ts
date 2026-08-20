@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { validateCommand } from "./mcp-serve"
+import { validateCommand, extractCitedIds } from "./mcp-serve"
 
 describe("validateCommand", () => {
   // --- Should PASS: safe characters in quoted args ---
@@ -142,5 +142,37 @@ describe("validateCommand", () => {
     expect(result.error).toBeUndefined()
     // Inner single quotes inside double-quoted string are literal chars, not delimiters
     expect(result.args[3]).toBe("double 'inner' quotes")
+  })
+})
+
+describe("extractCitedIds", () => {
+  test("plain hash citation", () => {
+    expect(extractCitedIds("documented in item #181392.")).toEqual(["181392"])
+  })
+
+  test("RAG document-handle form", () => {
+    expect(extractCitedIds("From Document #App\\Models\\User\\Bloq\\BloqItem_164650.")).toEqual(["164650"])
+  })
+
+  test("deduplicates repeats", () => {
+    expect(extractCitedIds("see #181392 and again #181392")).toEqual(["181392"])
+  })
+
+  test("multiple distinct ids keep order", () => {
+    expect(extractCitedIds("#181392 supersedes #164650")).toEqual(["181392", "164650"])
+  })
+
+  // Agent and bloq IDs are 3 digits. Reporting them as cited ITEMS would send a
+  // caller to `bloqs items` for something that is not an item.
+  test("ignores 3-digit agent/bloq ids", () => {
+    expect(extractCitedIds("agent #642 in bloq #532 says no")).toEqual([])
+  })
+
+  test("ignores money and years", () => {
+    expect(extractCitedIds("$2,000,000 per month as of 2026 — up from 1525/mo")).toEqual([])
+  })
+
+  test("no citation returns empty, never null", () => {
+    expect(extractCitedIds("I could not retrieve that figure.")).toEqual([])
   })
 })

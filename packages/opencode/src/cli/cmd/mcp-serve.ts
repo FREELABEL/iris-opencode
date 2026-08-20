@@ -184,6 +184,20 @@ async function loadRecipes(): Promise<string> {
   return sections.join("\n")
 }
 
+// Pull board-item IDs out of an agent's PROSE. This is a heuristic over free text,
+// not structural provenance — it reports what the agent SAID it used, which is not
+// the same as what it retrieved. The tool description and the response banner both
+// say so; do not let a caller mistake this for a verified source list.
+//
+// 4-digit floor is deliberate: agent IDs (#642) and bloq IDs (#532) are 3 digits and
+// would otherwise be reported as cited items. It also keeps years and small figures out.
+export function extractCitedIds(response: string): string[] {
+  const matches = response.match(/(?:BloqItem[_#]?|#|item\s+#?)(\d{4,})/gi) ?? []
+  return Array.from(
+    new Set(matches.map((m) => (m.match(/(\d{4,})/) ?? [])[1]).filter(Boolean) as string[]),
+  )
+}
+
 export function validateCommand(command: string): { args: string[]; error?: string } {
   const trimmed = command.trim()
   if (!trimmed) return { args: [], error: "Empty command" }
@@ -265,7 +279,7 @@ export function validateCommand(command: string): { args: string[]; error?: stri
   return { args }
 }
 
-async function execIris(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+async function execIris(args: string[], timeoutMs: number = TIMEOUT_MS): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   // Don't auto-append --json — not all commands support it, and yargs strict
   // mode rejects unknown flags (e.g. `leads delete 123 --json` shows help text).
   // The tool description tells agents to use --json when they want structured output.
@@ -275,7 +289,7 @@ async function execIris(args: string[]): Promise<{ stdout: string; stderr: strin
     stderr: "pipe",
   })
 
-  const timer = setTimeout(() => proc.kill(), TIMEOUT_MS)
+  const timer = setTimeout(() => proc.kill(), timeoutMs)
 
   try {
     const [stdout, stderr] = await Promise.all([
@@ -488,6 +502,148 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
             required: ["session", "pane", "text"],
           },
         },
+        {
+          name: "iris_agent",
+          description: `Consult a standing IRIS agent. Use this BEFORE answering any question about
+THIS USER'S own business, money, clients, projects or history from inference.
+
+WHY THIS EXISTS. You are a general coding copilot: you can reason, but you do not know
+what is true about this user's company. IRIS agents do. Each one is a persistent identity
+with retrieval over the user's own boards (revenue records, client history, case files,
+governance decisions). They are not better at reasoning than you — they are grounded, and
+you are not. Delegate the question "what is actually true here", never "write this code".
+
+Measured example (2026-08-20). Agent #642 "TOBI" was asked a deliberately false-premise
+question: "Remind me, our goal is 2 million dollars a year, right?" It answered "No, our
+goal is actually $2 million per month, not per year", and cited the board item it came
+from. A copilot answering that from the conversation would have agreed with the premise
+and been wrong about the user's single most important number.
+
+So:
+- action:"list" FIRST to see who exists and what each one owns. Pass \`query\` to filter
+  by name/description (e.g. "finance", "pathways"). Agent IDs are stable — reuse them.
+- action:"ask" to put a question to one agent. Returns the agent's answer plus the run
+  envelope (iterations, tools the agent invoked, elapsed_ms).
+
+READING THE RESULT — this matters:
+- \`response\` is prose written by a model. Treat it as a sourced claim, not as a fact.
+- \`cited_ids\` is EXTRACTED FROM THAT PROSE by pattern match. It tells you what the agent
+  SAID it used. It is NOT structural provenance and does not prove retrieval happened.
+  To verify any figure, read the item: iris_run "bloqs items <bloq> --fields id,title,content --json".
+- \`tools_used\` is the real signal. If it is empty, the answer came from the agent's
+  retrieval context or from the model's priors — it did not query anything live.
+- An agent that says it cannot retrieve something is CORRECT behaviour, not a failure.
+  Do not re-ask the question in a way that pressures it into inventing a number.
+
+COST + LATENCY: each ask is a real model turn (seconds, and it bills). Ask one good
+question rather than iterating. Default timeout 120s; raise it with \`timeout\` for
+agents that do multi-step retrieval.
+
+WRITES: agents can take real actions. Anything outward or irreversible comes back with
+requires_approval=true rather than executing — surface that to the user, do not retry
+around it.
+
+═══ CONFIGURING AGENTS (get / create / update / delete) ═══
+
+action:"get" returns a COMPACT config summary — model, tool allowlist, RAG bloq scope,
+heartbeat, and prompt sizes. Pass full:true for the raw record (large: the system prompt is
+stored twice, so expect 10KB+). Read the compact form first; it holds every lever.
+
+THE TOOL ALLOWLIST IS THE MAIN LEVER, NOT THE PROMPT. This is measured, not theory:
+- An agent with an EMPTY allowlist gets the FULL tool set (backward compatibility). That is
+  not "unrestricted but fine" — on 2026-07-05 an unscoped finance agent reached into a
+  HEALTHCARE CLIENT's integration tools and reported $2.9M of medical case data as "our
+  revenue." Scoping it to a finance keep-set fixed that instantly and permanently.
+- The same session tried to fix two other behaviours with charter prose and few-shot
+  examples. Both were IGNORED run after run. Only the structural allowlist change held.
+So when an agent misbehaves, reach for update{add_tools|remove_tools} BEFORE you edit a
+prompt. Fewer, RIGHT tools beats more tools.
+
+action:"update" is a PATCH — omitted fields are left alone. add_tools/remove_tools are
+additive/subtractive against the existing allowlist; they do not replace it.
+
+action:"delete" is destructive and requires confirm:true. Do not call it to tidy up agents
+you did not create — prefer update{} to re-scope or quiet one.`,
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              action: { type: "string", enum: ["list", "ask", "get", "create", "update", "delete"], description: "list=discover · ask=consult · get=read config · create/update/delete=manage config" },
+              query: { type: "string", description: "list: filter agents by name/description, e.g. 'finance'" },
+              agent: { type: "number", description: "ask/get/update/delete: the agent ID from action:'list'" },
+              message: { type: "string", description: "ask: the question. Be specific and self-contained — the agent does not see this conversation." },
+              model: { type: "string", description: "ask: model override for this turn. create/update: the agent's stored model. Keep to nano/mini tiers." },
+              timeout: { type: "number", description: "ask: seconds to wait (default 120, max 600)" },
+              full: { type: "boolean", description: "get: return the raw record instead of the compact summary (large)" },
+              name: { type: "string", description: "create/update: agent name" },
+              description: { type: "string", description: "create/update: what this agent OWNS. Callers pick agents by this — one without a description is unchoosable." },
+              prompt: { type: "string", description: "create/update: system prompt — the agent's IDENTITY" },
+              mission: { type: "string", description: "create/update: initial_prompt — what it does every heartbeat" },
+              type: { type: "string", enum: ["content", "chat", "assistant", "support"], description: "create: agent type (default content)" },
+              bloq: { type: "number", description: "create/update: knowledge-base bloq ID it retrieves from (its RAG scope)" },
+              heartbeat_mode: { type: "string", enum: ["off", "passive", "reactive", "autonomous", "briefing"], description: "create/update: heartbeat mode" },
+              heartbeat_tools: { type: "string", description: "create/update: comma-separated heartbeat tool names" },
+              add_tools: { type: "string", description: "update: comma-separated tools to ADD to the allowlist (additive)" },
+              remove_tools: { type: "string", description: "update: comma-separated tools to REMOVE from the allowlist" },
+              reset_health: { type: "boolean", description: "update: clear health_status/consecutive_failures" },
+              confirm: { type: "boolean", description: "delete: must be true. Destructive." },
+            },
+            required: ["action"],
+          },
+        },
+        {
+          name: "iris_memory",
+          description: `Read and write the user's Atlas — their persistent memory. Boards ("bloqs") hold
+lists, lists hold items, items hold the actual text. This is the same store the IRIS agents
+retrieve from, so what you write here is what they will later cite.
+
+"memory", "atlas", "knowledge", "projects" and "bloqs" are ALL THE SAME STORE — the CLI
+registers them as aliases of one another. There is no separate memory database.
+
+USE action:"search" TO FIND ANYTHING. This is not a preference, it is a correctness rule:
+action:"boards" is RECENCY-ORDERED AND TRUNCATED. It is not an inventory. Answering "which
+X do I have" by reading names out of it will silently miss anything older than the first
+page and you cannot tell that you missed it — the list looks complete.
+
+Measured: asked for "family projects", the board list returns "Mia Mayo — Life Atlas" and
+stops. A search returns board #200 "Family Businesses" and #137 "Family Health and Finance
+Management Workflow" — neither appears in the list at all. The list-only answer is not
+partial, it is WRONG.
+
+So:
+- BY TOPIC / KEYWORD / "do I have a ..." → action:"search". It covers board names, item
+  titles AND item bodies across every board.
+- action:"boards" only to show the most recent boards, or when the user already named one.
+- action:"get" shows one board's lists and their item counts — the map before you read.
+- action:"items" reads items. Content is fetched by DEFAULT here; the underlying CLI omits
+  item bodies unless asked, and on 2026-08-20 that silently fed a meal planner an EMPTY
+  pantry while every step reported success. Empty content in a result means the item is
+  genuinely empty, not that you forgot a flag.
+- action:"add" appends an item to a list. action:"update" edits one in place.
+
+WRITING WELL: an item's text is what an agent will retrieve and quote months from now, to a
+caller who cannot see this conversation. Write it self-contained — state the fact, when it
+was decided, and what it supersedes. If you are correcting something, say so in the text
+rather than silently overwriting, and link the item it replaces.
+
+action:"update" replaces content WHOLESALE. Read the item first or you will destroy the
+parts you did not mean to touch.`,
+          inputSchema: {
+            type: "object" as const,
+            properties: {
+              action: { type: "string", enum: ["search", "boards", "get", "items", "add", "update"], description: "search=find anything (START HERE) · boards=recent boards · get=one board's lists · items=read items · add/update=write" },
+              query: { type: "string", description: "search/items: the search term" },
+              bloq: { type: "number", description: "get/items/add: board ID. On search, restricts item matches to one board." },
+              list: { type: "number", description: "items: filter to one list. add: the target list ID (required)." },
+              item: { type: "number", description: "update: the item ID to edit" },
+              content: { type: "string", description: "add/update: the item body. On update this REPLACES the whole body." },
+              title: { type: "string", description: "update: new title" },
+              status: { type: "string", description: "items: filter by status. update: set status (active|pending|approved|rejected|todo|in-progress|done)" },
+              limit: { type: "number", description: "search/items: max results (default 25)" },
+              local_only: { type: "boolean", description: "search: skip Obsidian and Drive, search boards only (faster)" },
+            },
+            required: ["action"],
+          },
+        },
         // One properly-typed tool per executable playbook. `iris_run` could
         // already run these as a command string; the difference is that a model
         // can now see the arguments, their types, and their enums.
@@ -538,6 +694,368 @@ Examples: 'leads list --search acme --json', 'bug close 12345', 'pages get my-pa
             }
           }
           return { content: [{ type: "text" as const, text: `Execution error: ${msg}` }], isError: true }
+        }
+      }
+
+      if (name === "iris_agent") {
+        const action = (args?.action as string) ?? ""
+
+        if (action === "list") {
+          const query = (args?.query as string ?? "").trim()
+          const listArgs = ["agents", "list", "--json", "--limit", "50"]
+          if (query) {
+            if (/[;&|`$\\<>!\n\r]/.test(query)) {
+              return { content: [{ type: "text" as const, text: "Error: invalid characters in query" }], isError: true }
+            }
+            listArgs.push("-s", query)
+          }
+          try {
+            const result = await execIris(listArgs)
+            if (result.exitCode !== 0) {
+              return { content: [{ type: "text" as const, text: result.stderr || result.stdout || "agents list failed" }], isError: true }
+            }
+            let roster: Array<Record<string, unknown>> = []
+            try {
+              const parsed = JSON.parse(result.stdout)
+              roster = Array.isArray(parsed?.data) ? parsed.data : []
+            } catch {
+              return { content: [{ type: "text" as const, text: result.stdout }] }
+            }
+            // Agents with no description cannot be chosen on purpose — a caller
+            // picking from names alone is guessing. Say so rather than padding
+            // the roster with rows that carry no signal about what they know.
+            const described = roster.filter((a) => typeof a.description === "string" && (a.description as string).trim())
+            const compact = described.map((a) => ({ id: a.id, name: a.name, description: a.description }))
+            const note = roster.length === 0
+              ? (query ? `No agents matched "${query}". Try a broader term, or action:"list" with no query.` : "No agents found.")
+              : `${compact.length} of ${roster.length} agent(s) carry a description and are listed. ` +
+                `${roster.length - compact.length} were omitted as unidentifiable — an agent with no description cannot be chosen deliberately. ` +
+                `Pick by what an agent OWNS, then action:"ask" with its id.`
+            return { content: [{ type: "text" as const, text: `${note}\n\n${JSON.stringify(compact, null, 2)}` }] }
+          } catch (e) {
+            return { content: [{ type: "text" as const, text: `Execution error: ${e instanceof Error ? e.message : e}` }], isError: true }
+          }
+        }
+
+        if (action === "ask") {
+          const agentId = args?.agent
+          const message = (args?.message as string ?? "").trim()
+          if (typeof agentId !== "number" || !Number.isInteger(agentId) || agentId <= 0) {
+            return { content: [{ type: "text" as const, text: `Error: 'agent' must be a positive integer agent ID. Run action:"list" first.` }], isError: true }
+          }
+          if (!message) {
+            return { content: [{ type: "text" as const, text: "Error: 'message' is required for action:'ask'." }], isError: true }
+          }
+          const secs = Math.min(Math.max(Number(args?.timeout) || 120, 10), 600)
+          const askArgs = ["chat", "-a", String(agentId), "--json", "--timeout", String(secs)]
+          const model = (args?.model as string ?? "").trim()
+          if (model) {
+            if (/[;&|`$\\<>!\n\r\s]/.test(model)) {
+              return { content: [{ type: "text" as const, text: "Error: invalid characters in model" }], isError: true }
+            }
+            askArgs.push("-m", model)
+          }
+          askArgs.push(message)
+
+          try {
+            // +15s of headroom so the CLI's own --timeout is what fires, not the
+            // spawn killer. If the killer wins we lose the CLI's structured error
+            // and the caller sees an empty result instead of "the agent timed out".
+            const result = await execIris(askArgs, (secs + 15) * 1000)
+            const raw = (result.stdout || "").trim()
+            if (result.exitCode !== 0 && !raw.startsWith("{")) {
+              const errMsg = result.stderr || raw || "agent call failed with no output"
+              return { content: [{ type: "text" as const, text: errMsg }], isError: true }
+            }
+            // The CLI can emit SEVERAL JSON objects on stdout — an error object per failed
+            // API call, then a final status envelope. A single JSON.parse over the whole
+            // buffer throws, and returning the raw text on that path reported a FAILED
+            // agent call as a success: asking a nonexistent agent came back isError:false
+            // with `{"status":"failed"}` buried in the text. Parse line-wise and let the
+            // envelope decide.
+            const objs: Record<string, any>[] = []
+            for (const line of raw.split("\n")) {
+              const t = line.trim()
+              if (!t.startsWith("{")) continue
+              try { objs.push(JSON.parse(t)) } catch {}
+            }
+            const env: Record<string, any> | undefined =
+              objs.find((o) => typeof o.status === "string" || typeof o.response === "string") ?? objs[objs.length - 1]
+            if (!env) {
+              return { content: [{ type: "text" as const, text: raw || result.stderr || "(no output)" }], isError: true }
+            }
+            // Anything that is not an explicitly completed turn is a failure, including
+            // the CLI's own {status:"failed"}. Surface the upstream reason with it.
+            if (env.status !== "completed" || env.success === false) {
+              const reasons = objs
+                .map((o) => (typeof o.error === "string" ? `${o.error}${o.status && typeof o.status === "number" ? ` (${o.status})` : ""}${o.action ? ` [${o.action}]` : ""}` : null))
+                .filter(Boolean)
+              const why = reasons.length ? reasons.join("; ") : (typeof env.error === "string" ? env.error : `status=${JSON.stringify(env.status)}`)
+              // The hint has to match the failure. Telling a caller "check the ID" after a
+              // TIMEOUT sends it to re-look-up an agent that was fine, and it may then
+              // report the agent as missing. Route the advice off the actual reason.
+              const hint = /timed out|timeout/i.test(why)
+                ? `The agent was reachable but did not finish in time. Retry with a larger \`timeout\` (max 600), or ask a narrower question — this one may need multi-step retrieval.`
+                : /not found|404/i.test(why)
+                  ? `Agent #${agentId} does not exist or is not visible to this account. Run action:"list" to get valid IDs.`
+                  : `Do not retry blindly — read the reason above first.`
+              return {
+                content: [{ type: "text" as const, text: `Agent #${agentId} did not answer: ${why}\n\n${hint}\nThis is a FAILURE, not an empty answer. Do not report it as the agent having nothing to say.` }],
+                isError: true,
+              }
+            }
+            const response = typeof env.response === "string" ? env.response : ""
+            // Pattern-matched from the prose, NOT structural provenance. Named
+            // cited_ids (not sources) so a caller cannot mistake "the agent said
+            // this" for "this was retrieved". The description says to verify.
+            const cited = extractCitedIds(response)
+            const toolsUsed = Array.isArray(env.tools_used) ? env.tools_used : []
+            const out = {
+              agent: agentId,
+              status: env.status ?? "unknown",
+              response,
+              tools_used: toolsUsed,
+              cited_ids: cited,
+              iterations: env.iterations ?? null,
+              elapsed_ms: env.elapsed_ms ?? null,
+              requires_approval: env.requires_approval === true,
+            }
+            const flags: string[] = []
+            if (out.requires_approval) {
+              flags.push("REQUIRES APPROVAL — this agent is holding an action it will not take unsupervised. Surface it to the user; do not retry around it.")
+            }
+            if (toolsUsed.length === 0) {
+              flags.push("tools_used is empty: nothing was queried live this turn. The answer is from retrieval context or model priors — verify any figure before relying on it.")
+            }
+            if (cited.length > 0) {
+              flags.push(`cited_ids ${cited.join(", ")} were parsed out of the agent's prose and are UNVERIFIED. Read the item to confirm.`)
+            }
+            const banner = flags.length ? flags.map((f) => `[!] ${f}`).join("\n") + "\n\n" : ""
+            return { content: [{ type: "text" as const, text: `${banner}${JSON.stringify(out, null, 2)}` }] }
+          } catch (e) {
+            return { content: [{ type: "text" as const, text: `Execution error: ${e instanceof Error ? e.message : e}` }], isError: true }
+          }
+        }
+
+        if (action === "get") {
+          const agentId = args?.agent
+          if (typeof agentId !== "number" || !Number.isInteger(agentId) || agentId <= 0) {
+            return { content: [{ type: "text" as const, text: `Error: 'agent' must be a positive integer agent ID.` }], isError: true }
+          }
+          try {
+            const result = await execIris(["agents", "get", String(agentId), "--json"])
+            if (result.exitCode !== 0) {
+              return { content: [{ type: "text" as const, text: result.stderr || result.stdout || "agents get failed" }], isError: true }
+            }
+            if (args?.full === true) {
+              return { content: [{ type: "text" as const, text: result.stdout }] }
+            }
+            let a: Record<string, any>
+            try { a = JSON.parse(result.stdout) } catch { return { content: [{ type: "text" as const, text: result.stdout }] } }
+            // Compact by design. The raw record stores the system prompt TWICE
+            // (settings.system_prompt and initial_prompt), so a full dump is 10KB+
+            // of mostly duplicate text and buries the fields you actually change.
+            const settings = (a.settings ?? {}) as Record<string, any>
+            const tools = Array.isArray(a.config?.tools) ? a.config.tools : []
+            const summary = {
+              id: a.id, name: a.name, type: a.type, active: a.active === 1 || a.active === true,
+              description: a.description ?? null,
+              model: settings.model ?? null,
+              rag_bloq_ids: settings.bloq_ids ?? [], workspace_bloq_id: a.bloq_id ?? null,
+              tool_allowlist: tools, tool_count: tools.length,
+              heartbeat_mode: a.heartbeat_mode ?? null,
+              health: a.health?.status ?? a.health_status ?? null,
+              system_prompt_chars: typeof settings.system_prompt === "string" ? settings.system_prompt.length : 0,
+              mission_chars: typeof a.initial_prompt === "string" ? a.initial_prompt.length : 0,
+              system_prompt_head: typeof settings.system_prompt === "string" ? settings.system_prompt.slice(0, 240) : null,
+            }
+            const notes: string[] = []
+            if (tools.length === 0) {
+              notes.push("[!] EMPTY ALLOWLIST = FULL TOOL SET, not 'no tools'. This is the configuration that made an unscoped agent report a healthcare client's $2.9M as company revenue. Scope it before trusting its answers.")
+            }
+            if (!summary.description) {
+              notes.push("[!] No description: this agent cannot be chosen deliberately from action:'list' and will be omitted from the roster.")
+            }
+            notes.push("Compact summary — pass full:true for the raw record.")
+            return { content: [{ type: "text" as const, text: `${notes.join("\n")}\n\n${JSON.stringify(summary, null, 2)}` }] }
+          } catch (e) {
+            return { content: [{ type: "text" as const, text: `Execution error: ${e instanceof Error ? e.message : e}` }], isError: true }
+          }
+        }
+
+        if (action === "create" || action === "update") {
+          const str = (k: string) => (typeof args?.[k] === "string" ? (args[k] as string).trim() : "")
+          const num = (k: string) => (typeof args?.[k] === "number" ? (args[k] as number) : undefined)
+          const cmdArgs: string[] = ["agents", action]
+
+          if (action === "update") {
+            const agentId = args?.agent
+            if (typeof agentId !== "number" || !Number.isInteger(agentId) || agentId <= 0) {
+              return { content: [{ type: "text" as const, text: `Error: 'agent' (id) is required for action:"update".` }], isError: true }
+            }
+            cmdArgs.push(String(agentId))
+          } else if (!str("name")) {
+            return { content: [{ type: "text" as const, text: `Error: 'name' is required for action:"create".` }], isError: true }
+          }
+
+          const push = (flag: string, val: string) => { if (val) cmdArgs.push(flag, val) }
+          push("--name", str("name"))
+          push("--description", str("description"))
+          if (action === "create") {
+            push("--prompt", str("prompt"))
+            push("--type", str("type"))
+            const b = num("bloq"); if (b !== undefined) cmdArgs.push("--bloq-id", String(b))
+          } else {
+            push("--system-prompt", str("prompt"))
+            const b = num("bloq"); if (b !== undefined) cmdArgs.push("--bloq", String(b))
+            push("--add-tools", str("add_tools"))
+            push("--remove-tools", str("remove_tools"))
+            if (args?.reset_health === true) cmdArgs.push("--reset-health")
+          }
+          push("--mission", str("mission"))
+          push("--model", str("model"))
+          push("--heartbeat-mode", str("heartbeat_mode"))
+          push("--heartbeat-tools", str("heartbeat_tools"))
+          // `agents create` and `agents delete` accept --json; `agents update` does NOT,
+          // and yargs strict mode REJECTS the unknown flag ("Unknown argument: json"), so
+          // adding it unconditionally made every update fail while looking like a normal
+          // CLI error. Caught by end-to-end testing, not by reading the help text.
+          if (action === "create") cmdArgs.push("--json")
+
+          // An update with no fields is a no-op the CLI reports as success — which
+          // reads to a caller as "the change landed". Refuse it instead.
+          const changed = cmdArgs.filter((x) => x.startsWith("--") && x !== "--json")
+          if (changed.length === 0) {
+            return { content: [{ type: "text" as const, text: `Error: nothing to ${action} — no fields given. This would have reported success while changing nothing.` }], isError: true }
+          }
+
+          try {
+            const result = await execIris(cmdArgs, 60_000)
+            if (result.exitCode !== 0) {
+              return { content: [{ type: "text" as const, text: result.stderr || result.stdout || `agents ${action} failed` }], isError: true }
+            }
+            const changedFlags = changed.map((f) => f.replace(/^--/, "")).join(", ")
+            // A freshly created agent is SAFE BUT USELESS and both halves surprise people.
+            // Measured on a bare agent (2026-08-20): asked "what is our revenue goal?" it
+            // correctly answered "I don't have access to that" — it declines rather than
+            // fabricating, which is right. But it also has an EMPTY allowlist, which means
+            // the FULL tool set, not none. So: harmless on questions, over-privileged on
+            // actions, until someone sets a bloq scope and scopes the tools.
+            const post: string[] = []
+            if (action === "create") {
+              if (num("bloq") === undefined) post.push("[!] No bloq scope set: this agent retrieves NOTHING and will decline domain questions (it declines rather than fabricating — that part is correct). Set bloq:<id> to ground it.")
+              post.push("[!] New agents start with an EMPTY tool allowlist, which grants the FULL tool set, not none. Scope it with update{add_tools|remove_tools} before pointing it at anything real.")
+            }
+            const tail = post.length ? `\n\n${post.join("\n")}` : ""
+            return { content: [{ type: "text" as const, text: `${action} OK — fields set: ${changedFlags}\n\n${result.stdout.trim() || "(no output)"}${tail}\n\nVerify with action:"get".` }] }
+          } catch (e) {
+            return { content: [{ type: "text" as const, text: `Execution error: ${e instanceof Error ? e.message : e}` }], isError: true }
+          }
+        }
+
+        if (action === "delete") {
+          const agentId = args?.agent
+          if (typeof agentId !== "number" || !Number.isInteger(agentId) || agentId <= 0) {
+            return { content: [{ type: "text" as const, text: `Error: 'agent' (id) is required for action:"delete".` }], isError: true }
+          }
+          if (args?.confirm !== true) {
+            return {
+              content: [{ type: "text" as const, text: `Refused: deleting agent #${agentId} is destructive and needs confirm:true.\n\nRun action:"get" with agent:${agentId} first and show the user what they are about to lose. If the goal is to quiet or re-scope the agent rather than destroy it, use action:"update" instead.` }],
+              isError: true,
+            }
+          }
+          try {
+            const result = await execIris(["agents", "delete", String(agentId), "--force", "--json"], 60_000)
+            if (result.exitCode !== 0) {
+              return { content: [{ type: "text" as const, text: result.stderr || result.stdout || "agents delete failed" }], isError: true }
+            }
+            return { content: [{ type: "text" as const, text: `Deleted agent #${agentId}.\n\n${result.stdout.trim() || "(no output)"}` }] }
+          } catch (e) {
+            return { content: [{ type: "text" as const, text: `Execution error: ${e instanceof Error ? e.message : e}` }], isError: true }
+          }
+        }
+
+        return { content: [{ type: "text" as const, text: `Error: action must be one of list|ask|get|create|update|delete (got ${JSON.stringify(action)})` }], isError: true }
+      }
+
+      if (name === "iris_memory") {
+        const action = (args?.action as string) ?? ""
+        const str = (k: string) => (typeof args?.[k] === "string" ? (args[k] as string).trim() : "")
+        const num = (k: string) => (typeof args?.[k] === "number" ? (args[k] as number) : undefined)
+        const limit = Math.min(Math.max(num("limit") ?? 25, 1), 200)
+        const run = async (a: string[]) => {
+          const r = await execIris(a, 60_000)
+          if (r.exitCode !== 0) throw new Error(r.stderr || r.stdout || `iris ${a[0]} failed`)
+          return r.stdout
+        }
+
+        try {
+          if (action === "search") {
+            const q = str("query")
+            if (!q) return { content: [{ type: "text" as const, text: "Error: 'query' is required for action:'search'." }], isError: true }
+            const a = ["bloqs", "search", q, "--limit", String(limit), "--json"]
+            const b = num("bloq"); if (b !== undefined) a.push("--bloq", String(b))
+            if (args?.local_only === true) a.push("--local-only")
+            return { content: [{ type: "text" as const, text: await run(a) }] }
+          }
+
+          if (action === "boards") {
+            const out = await run(["bloqs", "list", "--json"])
+            // Structural, not advisory: this list is recency-ordered and truncated, and
+            // a caller cannot tell a short list from a complete one. The warning rides
+            // along with every result so it cannot be read as an inventory by accident.
+            const warn = "[!] RECENCY-ORDERED AND TRUNCATED — this is NOT an inventory. Anything older than the first page is missing and nothing here indicates that. To answer 'which boards do I have about X', use action:'search'."
+            return { content: [{ type: "text" as const, text: `${warn}\n\n${out}` }] }
+          }
+
+          if (action === "get") {
+            const b = num("bloq")
+            if (b === undefined) return { content: [{ type: "text" as const, text: "Error: 'bloq' (board ID) is required for action:'get'." }], isError: true }
+            return { content: [{ type: "text" as const, text: await run(["bloqs", "get", String(b)]) }] }
+          }
+
+          if (action === "items") {
+            const b = num("bloq")
+            if (b === undefined) return { content: [{ type: "text" as const, text: "Error: 'bloq' (board ID) is required for action:'items'." }], isError: true }
+            // content is requested ALWAYS. The CLI omits item bodies unless --fields
+            // names them, and the failure is silent: the key exists with an empty
+            // string, so a `.get(key, fallback)` never fires its fallback and the
+            // caller is handed nothing while every step reports success (2026-08-20).
+            const a = ["bloqs", "items", String(b), "--fields", "id,title,status,list_name,content", "--limit", String(limit), "--json"]
+            const l = num("list"); if (l !== undefined) a.push("--list", String(l))
+            const q = str("query"); if (q) a.push("--search", q)
+            const st = str("status"); if (st) a.push("--status", st)
+            return { content: [{ type: "text" as const, text: await run(a) }] }
+          }
+
+          if (action === "add") {
+            const b = num("bloq"), l = num("list"), c = str("content")
+            if (b === undefined || l === undefined) return { content: [{ type: "text" as const, text: "Error: 'bloq' and 'list' are both required for action:'add'. Use action:'get' to see a board's list IDs." }], isError: true }
+            if (!c) return { content: [{ type: "text" as const, text: "Error: 'content' is required for action:'add'." }], isError: true }
+            const out = await run(["bloqs", "add-item", String(b), String(l), c, "--json"])
+            return { content: [{ type: "text" as const, text: `Added to board ${b} / list ${l}.\n\n${out.trim()}` }] }
+          }
+
+          if (action === "update") {
+            const it = num("item")
+            if (it === undefined) return { content: [{ type: "text" as const, text: "Error: 'item' (item ID) is required for action:'update'." }], isError: true }
+            const a = ["bloqs", "update-item", String(it)]
+            const c = str("content"); if (c) a.push("--content", c)
+            const t = str("title"); if (t) a.push("--title", t)
+            const st = str("status"); if (st) a.push("--status", st)
+            if (a.length === 3) return { content: [{ type: "text" as const, text: "Error: nothing to update — give content, title or status. This would have reported success while changing nothing." }], isError: true }
+            a.push("--json")
+            const out = await run(a)
+            const note = c ? "Content was REPLACED wholesale, not merged.\n\n" : ""
+            return { content: [{ type: "text" as const, text: `Updated item ${it}. ${note}${out.slice(0, 4000)}` }] }
+          }
+
+          return { content: [{ type: "text" as const, text: `Error: action must be one of search|boards|get|items|add|update (got ${JSON.stringify(action)})` }], isError: true }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          let hint = ""
+          if (/401|Unauthorized|unauthenticated/i.test(msg)) hint = "\n\nHint: run `iris auth login`, or set IRIS_API_KEY."
+          return { content: [{ type: "text" as const, text: `${msg}${hint}` }], isError: true }
         }
       }
 
