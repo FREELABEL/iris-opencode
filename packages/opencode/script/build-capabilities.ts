@@ -279,6 +279,47 @@ const entries: Entry[] = [
   ...collectMarkdown(join(PROJECT, ".claude/skills"), "skill", (n) => `iris playbook run ${n}`),
 ]
 
+/**
+ * WORKSPACE-SOURCED ENTRIES ARE ADDITIVE. A missing playbook means "not on THIS machine".
+ *
+ * Commands and how-tos live in this repo, so their absence is a deletion and pruning them is
+ * correct. Playbooks and skills live in the WORKSPACE repo, and every machine has a different
+ * slice of it — so regenerating here compares a partial view against a complete index and
+ * writes the difference as removals.
+ *
+ * That is not hypothetical. Regenerating on a checkout without the legal-*, xart-exhibit-deck,
+ * client-host-doctor and v6-workflows content dropped SEVENTEEN real capabilities out of the
+ * index on main, silently, inside an ordinary `bun run capabilities`. They are real on another
+ * machine; they were unindexed for everyone.
+ *
+ * So the generator can now ADD workspace entries and never silently REMOVE them. Deleting one
+ * for real is `--prune`, which is the moment you assert your workspace is complete — an
+ * explicit claim rather than an accident of which laptop ran the script.
+ */
+const PRUNE = process.argv.includes("--prune")
+
+if (!PRUNE && !process.argv.includes("--check") && existsSync(OUT)) {
+  try {
+    const prev = JSON.parse(readFileSync(OUT, "utf-8"))
+    const key = (e: any) => `${e.kind}:${e.name}`
+    const found = new Set(entries.map(key))
+    const kept = ((prev.entries ?? []) as any[]).filter(
+      (e) => (e.kind === "playbook" || e.kind === "skill") && !found.has(key(e)),
+    )
+    if (kept.length) {
+      entries.push(...kept)
+      console.warn(
+        `note: kept ${kept.length} playbook/skill entr${kept.length === 1 ? "y" : "ies"} whose source is not in this ` +
+          `workspace — they belong to a machine that has it.\n` +
+          `      ${kept.map(key).slice(0, 8).join(", ")}${kept.length > 8 ? `, …${kept.length - 8} more` : ""}\n` +
+          `      Run with --prune only if this workspace is COMPLETE and you mean to delete them.`,
+      )
+    }
+  } catch {
+    // An unreadable previous index must not stop a regeneration; it just cannot be preserved.
+  }
+}
+
 // Fold the terminology into each entry's haystack so an intent search reaches it.
 for (const e of entries) {
   const syn = TERMS[e.name]
@@ -340,7 +381,24 @@ if (process.argv.includes("--check")) {
     )
   }
   const added = [...after].filter((k) => !before.has(k))
-  const removed = [...before].filter((k) => !after.has(k))
+  const allRemoved = [...before].filter((k) => !after.has(k))
+
+  // The SAME reasoning the generator applies, or the two disagree about the same file: a
+  // playbook/skill that is absent here is absent from THIS WORKSPACE, not deleted. Blocking on
+  // it makes the check unpassable on any machine holding a partial slice — which is every
+  // machine — and an unpassable check is one people route around.
+  //
+  // Repo-sourced kinds are different: commands and how-tos live in this checkout, so their
+  // absence IS a deletion and still blocks.
+  const removed = allRemoved.filter((k) => !k.startsWith("playbook:") && !k.startsWith("skill:"))
+  const workspaceMissing = allRemoved.filter((k) => k.startsWith("playbook:") || k.startsWith("skill:"))
+  if (workspaceMissing.length) {
+    console.warn(
+      `note: ${workspaceMissing.length} indexed playbook/skill entr${workspaceMissing.length === 1 ? "y is" : "ies are"} ` +
+        `not in this workspace — kept, because absence here is not deletion.\n` +
+        `      ${workspaceMissing.slice(0, 6).join(", ")}${workspaceMissing.length > 6 ? `, …${workspaceMissing.length - 6} more` : ""}`,
+    )
+  }
 
   // IS THE TREE DIRTY? It changes what the drift means (#180517).
   //
