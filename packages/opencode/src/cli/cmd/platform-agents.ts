@@ -5,6 +5,7 @@ import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson } from "./iris-api"
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
+import { AgentsBenchCommand } from "./platform-agents-bench"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -1624,6 +1625,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsMessageCommand)
       .command(AgentsInboxCommand)
       .command(AgentsThreadCommand)
+      .command(AgentsBenchCommand)
       .demandCommand(),
   async handler() {},
 })

@@ -47,11 +47,6 @@
 "service": "iris-api"
 },
 {
-"method": "POST",
-"uri": "/_boost/browser-logs",
-"service": "iris-api"
-},
-{
 "method": "GET",
 "uri": "/about",
 "service": "iris-api"
@@ -4108,6 +4103,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/discover/promoted",
+"service": "fl-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/discover/recent-articles",
 "service": "fl-api"
 },
@@ -4764,6 +4764,16 @@
 {
 "method": "POST",
 "uri": "/api/v1/generate-thumbnail",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/genesis/heartbeat/{}",
+"service": "fl-api"
+},
+{
+"method": "PUT",
+"uri": "/api/v1/genesis/heartbeat/{}",
 "service": "fl-api"
 },
 {
@@ -6814,6 +6824,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/marketplace/ugc/influencers/{}",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/marketplace/ugc/listing-status",
 "service": "fl-api"
 },
 {
@@ -12704,6 +12719,21 @@
 {
 "method": "GET",
 "uri": "/api/v6/agents/heartbeat-status",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v6/agents/{}/benchmarks",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v6/agents/{}/benchmarks/compare",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v6/agents/{}/benchmarks/{}",
 "service": "iris-api"
 },
 {
