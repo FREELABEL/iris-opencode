@@ -12673,6 +12673,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/workspace/access-matrix",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/workspace/connections",
 "service": "fl-api"
 },
@@ -12727,6 +12732,11 @@
 "service": "iris-api"
 },
 {
+"method": "POST",
+"uri": "/api/v6/agents/{}/benchmarks",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/api/v6/agents/{}/benchmarks/compare",
 "service": "iris-api"
@@ -12734,6 +12744,11 @@
 {
 "method": "GET",
 "uri": "/api/v6/agents/{}/benchmarks/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/agents/{}/benchmarks/{}/notes",
 "service": "iris-api"
 },
 {

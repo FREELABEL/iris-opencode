@@ -3,6 +3,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, IRIS_API, writeJson } from "./iris-api"
+import { readFileSync } from "fs"
 
 /**
  * `iris agents bench` — an agent's benchmark history.
@@ -236,11 +237,136 @@ const BenchCompareCommand = cmd({
   },
 })
 
+
+const BenchRecordCommand = cmd({
+  command: "record <agentId>",
+  aliases: ["add"],
+  describe: "record a benchmark run against an agent (from a JSON file, or - for stdin)",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("agentId", { describe: "agent ID", type: "number", demandOption: true })
+      .option("file", {
+        alias: "f",
+        describe: "JSON payload: one run, or an array of runs. '-' reads stdin",
+        type: "string",
+        demandOption: true,
+      })
+      .option("suite", { describe: "override the suite name on every run in the file", type: "string" })
+      .option("note", { describe: "attach a note to every run recorded", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+
+    const raw =
+      args.file === "-"
+        ? await new Response(Bun.stdin.stream()).text()
+        : readFileSync(args.file, "utf-8")
+
+    let parsed: any
+    try {
+      parsed = JSON.parse(raw)
+    } catch (e) {
+      UI.error(`Not valid JSON: ${e instanceof Error ? e.message : String(e)}`)
+      process.exitCode = 1
+      return
+    }
+
+    // One run or many — a harness that produced five model comparisons should not have
+    // to be invoked five times, and a harness that produced one should not have to wrap
+    // it in an array.
+    const runs: any[] = Array.isArray(parsed) ? parsed : [parsed]
+    const recorded: any[] = []
+    const failed: Array<{ index: number; error: string }> = []
+
+    for (const [i, run] of runs.entries()) {
+      const payload = { ...run }
+      if (args.suite) payload.suite = args.suite
+      if (args.note && !payload.notes) payload.notes = args.note
+
+      const res = await irisFetch(
+        `/api/v6/agents/${args.agentId}/benchmarks`,
+        { method: "POST", body: JSON.stringify(payload) },
+        IRIS_API,
+      )
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`
+        try {
+          const b: any = await res.json()
+          msg = b?.error?.message ?? b?.message ?? JSON.stringify(b).slice(0, 200)
+        } catch {}
+        failed.push({ index: i, error: msg })
+        continue
+      }
+      const { data } = (await res.json()) as { data: BenchRow }
+      recorded.push(data)
+    }
+
+    if (args.json) {
+      writeJson({ recorded, failed })
+      if (failed.length) process.exitCode = 1
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  Record benchmarks — Agent #${args.agentId}`)
+    for (const r of recorded) {
+      console.log(`  ${bold("#" + r.id)}  ${pad(r.suite, 26)}${pad(r.model ?? "—", 22)}` +
+        `score ${Math.round(r.average_score)}  pass ${Math.round(r.pass_rate)}%`)
+    }
+    // Partial success is reported as partial, and exits non-zero. Printing "recorded 3"
+    // when 5 were sent is how a gap in the history goes unnoticed.
+    for (const f of failed) {
+      console.log(`  ${bold("✗")} run ${f.index}: ${dim(f.error)}`)
+    }
+    printDivider()
+    console.log(`  ${dim(`recorded ${recorded.length}/${runs.length}`)}`)
+    console.log(`  ${dim(`iris agents bench list ${args.agentId}`)}`)
+    prompts.outro(failed.length ? "Done with errors" : "Done")
+    if (failed.length) process.exitCode = 1
+  },
+})
+
+const BenchNoteCommand = cmd({
+  command: "note <agentId> <runId> <text>",
+  describe: "annotate a recorded run — what you concluded, which no score contains",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("agentId", { describe: "agent ID", type: "number", demandOption: true })
+      .positional("runId", { describe: "benchmark run ID", type: "number", demandOption: true })
+      .positional("text", { describe: "the note", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!(await requireAuth())) return
+    const res = await irisFetch(
+      `/api/v6/agents/${args.agentId}/benchmarks/${args.runId}/notes`,
+      { method: "POST", body: JSON.stringify({ text: args.text }) },
+      IRIS_API,
+    )
+    if (!(await handleApiError(res, "Note"))) return
+    const { data } = (await res.json()) as { data: { id: number; notes: any[] } }
+
+    if (args.json) return writeJson(data)
+
+    UI.empty()
+    prompts.intro(`◈  Note on benchmark #${data.id}`)
+    for (const n of data.notes) {
+      console.log(`  ${dim(when(n.at))}  ${n.text}`)
+    }
+    prompts.outro("Done")
+  },
+})
+
 export const AgentsBenchCommand = cmd({
   command: "bench",
   aliases: ["benchmarks"],
   describe: "benchmark history for an agent — list, show, compare models",
   builder: (yargs: Argv) =>
-    yargs.command(BenchListCommand).command(BenchShowCommand).command(BenchCompareCommand).demandCommand(),
+    yargs
+      .command(BenchListCommand)
+      .command(BenchShowCommand)
+      .command(BenchCompareCommand)
+      .command(BenchRecordCommand)
+      .command(BenchNoteCommand)
+      .demandCommand(),
   async handler() {},
 })
