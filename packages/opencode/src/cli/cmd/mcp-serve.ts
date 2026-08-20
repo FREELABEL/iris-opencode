@@ -297,6 +297,82 @@ export function validateAgainstSchema(value: unknown, schema: any, path = "$"): 
   return errs
 }
 
+export type Provenance = {
+  retrieved_item_ids: string[]
+  retrieval_bloq_id: number | null
+  document_count: number | null
+  tool_calls: { tool: string; status?: string }[]
+  thread_id: string | null
+  history_messages: number | null
+}
+
+/**
+ * Derive REAL provenance from the run trace (`iris chat -V`).
+ *
+ * This is the structural counterpart to `cited_ids`. `cited_ids` is pattern-matched out of
+ * the model's prose and proves only that it SAID something; this reads what the ReAct loop
+ * actually injected and called:
+ *   memory_injection "context: rag_context"          -> data.sources (the documents retrieved)
+ *   memory_injection "context: conversation_history" -> thread id + message count
+ *   tool_call / tool_result                          -> what actually ran
+ *
+ * Trace shape is treated as untrusted: every field is probed, never assumed, so a change
+ * upstream degrades to an empty provenance rather than throwing inside a tool call.
+ */
+export function extractProvenance(trace: unknown): Provenance {
+  const out: Provenance = {
+    retrieved_item_ids: [],
+    retrieval_bloq_id: null,
+    document_count: null,
+    tool_calls: [],
+    thread_id: null,
+    history_messages: null,
+  }
+  if (!Array.isArray(trace)) return out
+
+  const ids = new Set<string>()
+  const statusByTool = new Map<string, string>()
+
+  for (const ev of trace) {
+    if (!ev || typeof ev !== "object") continue
+    const e = ev as Record<string, any>
+    const data = (e.data ?? {}) as Record<string, any>
+    const label = typeof e.label === "string" ? e.label : ""
+
+    if (e.type === "memory_injection" && label.includes("rag_context")) {
+      if (typeof data.bloq_id === "number") out.retrieval_bloq_id = data.bloq_id
+      if (typeof data.document_count === "number") out.document_count = data.document_count
+      for (const src of Array.isArray(data.sources) ? data.sources : []) {
+        const m = String(src).match(/BloqItem[_#]?(\d+)/)
+        if (m) ids.add(m[1])
+      }
+    }
+
+    if (e.type === "memory_injection" && label.includes("conversation_history")) {
+      if (typeof data.thread_id === "string") out.thread_id = data.thread_id
+      if (typeof data.message_count === "number") out.history_messages = data.message_count
+    }
+
+    // Labels are decorated with arrows ("→ ToolName" / "← ToolName"); strip them so a call
+    // and its result collapse onto one entry instead of appearing as two different tools.
+    if (e.type === "tool_call") {
+      const tool = label.replace(/^[^A-Za-z0-9_]*/, "").trim()
+      if (tool) out.tool_calls.push({ tool })
+    }
+    if (e.type === "tool_result") {
+      const tool = label.replace(/^[^A-Za-z0-9_]*/, "").trim()
+      if (tool && typeof data.status === "string") statusByTool.set(tool, data.status)
+    }
+  }
+
+  for (const c of out.tool_calls) {
+    const st = statusByTool.get(c.tool)
+    if (st) c.status = st
+  }
+  out.retrieved_item_ids = [...ids]
+  return out
+}
+
 export function validateCommand(command: string): { args: string[]; error?: string } {
   const trimmed = command.trim()
   if (!trimmed) return { args: [], error: "Empty command" }
@@ -656,11 +732,24 @@ So:
 
 READING THE RESULT — this matters:
 - \`response\` is prose written by a model. Treat it as a sourced claim, not as a fact.
-- \`cited_ids\` is EXTRACTED FROM THAT PROSE by pattern match. It tells you what the agent
-  SAID it used. It is NOT structural provenance and does not prove retrieval happened.
-  To verify any figure, read the item: iris_run "bloqs items <bloq> --fields id,title,content --json".
-- \`tools_used\` is the real signal. If it is empty, the answer came from the agent's
-  retrieval context or from the model's priors — it did not query anything live.
+- \`provenance\` is STRUCTURAL — read from the run's own trace, not from the prose:
+    retrieved_item_ids  the records actually pulled into context this turn
+    retrieval_bloq_id   which board they came from
+    tool_calls          what actually ran, with each call's status
+    thread_id / history_messages   the conversation this turn was appended to
+  This is the trustworthy half. If a figure matters, check it appears in retrieved_item_ids.
+- \`cited_ids\` is pattern-matched from the prose. It tells you what the agent SAID it used,
+  which is not the same thing and never has been.
+- \`cited_not_retrieved\` is the cross-check between them: IDs the agent named that it did
+  NOT read this turn. Not automatically fabrication — conversation history is also loaded,
+  so it may be a real recall from earlier — but it is the line between "it read this" and
+  "it said this". Verify with iris_memory {action:"items", bloq:<id>} before relying on it.
+- \`tools_used\` empty means nothing was queried live; the answer came from retrieval context
+  or model priors.
+- ⚠️ ASK IS NOT A CLEAN ROOM. Each agent has ONE ongoing thread per user, and prior messages
+  are loaded into every turn — including calls made by other sessions and by the user
+  directly. An answer can be shaped by context you cannot see. For a decision that must not
+  inherit anything, put the full premise in \`message\` rather than assuming a blank slate.
 - An agent that says it cannot retrieve something is CORRECT behaviour, not a failure.
   Do not re-ask the question in a way that pressures it into inventing a number.
 
@@ -915,7 +1004,10 @@ parts you did not mean to touch.`,
               `Instead return exactly: {"_unavailable": "<short reason>"}. Returning _unavailable is a correct answer, not a failure.` +
               `\n\nSCHEMA:\n${JSON.stringify(schema)}`
             : ""
-          const askArgs = ["chat", "-a", String(agentId), "--json", "--timeout", String(secs)]
+          // -V emits the run trace, which is where REAL provenance lives. Single -V is
+          // enough (-VV only adds full payloads and bloats tool-heavy runs); the derived
+          // provenance is returned instead of the raw trace so results stay small.
+          const askArgs = ["chat", "-a", String(agentId), "--json", "-V", "--timeout", String(secs)]
           const model = (args?.model as string ?? "").trim()
           if (model) {
             if (/[;&|`$\\<>!\n\r\s]/.test(model)) {
@@ -978,12 +1070,22 @@ parts you did not mean to touch.`,
             // this" for "this was retrieved". The description says to verify.
             const cited = extractCitedIds(response)
             const toolsUsed = Array.isArray(env.tools_used) ? env.tools_used : []
+            const provenance = extractProvenance(env.trace)
+            // The cross-check is the point of all this: an ID the model CITED that was never
+            // retrieved this turn. Not proof of fabrication — conversation history is also
+            // loaded, so it may be a genuine recall from earlier in the thread — but it is
+            // the difference between "it read this" and "it said this", which is exactly what
+            // cited_ids alone cannot tell you.
+            const retrievedSet = new Set(provenance.retrieved_item_ids)
+            const citedNotRetrieved = cited.filter((id) => !retrievedSet.has(id))
             const out = {
               agent: agentId,
               status: env.status ?? "unknown",
               response,
               tools_used: toolsUsed,
               cited_ids: cited,
+              provenance,
+              cited_not_retrieved: citedNotRetrieved,
               iterations: env.iterations ?? null,
               elapsed_ms: env.elapsed_ms ?? null,
               requires_approval: env.requires_approval === true,
@@ -1049,8 +1151,14 @@ parts you did not mean to touch.`,
             if (toolsUsed.length === 0) {
               flags.push("tools_used is empty: nothing was queried live this turn. The answer is from retrieval context or model priors — verify any figure before relying on it.")
             }
-            if (cited.length > 0) {
-              flags.push(`cited_ids ${cited.join(", ")} were parsed out of the agent's prose and are UNVERIFIED. Read the item to confirm.`)
+            if (provenance.retrieved_item_ids.length > 0) {
+              flags.push(`RETRIEVED this turn (structural, from the run trace — not parsed from prose): ${provenance.retrieved_item_ids.join(", ")}${provenance.retrieval_bloq_id ? ` from bloq ${provenance.retrieval_bloq_id}` : ""}. These are the records the agent actually read.`)
+            }
+            if (citedNotRetrieved.length > 0) {
+              flags.push(`CITED BUT NOT RETRIEVED this turn: ${citedNotRetrieved.join(", ")}. The agent named these without reading them now. It may be recalling them from conversation history${provenance.history_messages ? ` (${provenance.history_messages} messages loaded)` : ""}, or inventing them. VERIFY before using: iris_memory {action:"items", bloq:<id>}.`)
+            }
+            if (provenance.history_messages && provenance.history_messages > 0) {
+              flags.push(`NOT A CLEAN ROOM: ${provenance.history_messages} messages of prior conversation were loaded from thread ${provenance.thread_id}. This agent remembers earlier calls — yours and anyone else's — so an answer can be shaped by context you cannot see here.`)
             }
             const banner = flags.length ? flags.map((f) => `[!] ${f}`).join("\n") + "\n\n" : ""
             const payload = structured ? { ...out, structured } : out

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { validateCommand, extractCitedIds, extractJson, validateAgainstSchema } from "./mcp-serve"
+import { validateCommand, extractCitedIds, extractJson, validateAgainstSchema, extractProvenance } from "./mcp-serve"
 
 describe("validateCommand", () => {
   // --- Should PASS: safe characters in quoted args ---
@@ -277,5 +277,84 @@ describe("validateAgainstSchema", () => {
 
   test("collects multiple errors rather than stopping at the first", () => {
     expect(validateAgainstSchema({}, S).length).toBe(2)
+  })
+})
+
+describe("extractProvenance", () => {
+  const RAG = {
+    type: "memory_injection",
+    label: "context: rag_context",
+    data: {
+      bloq_id: 532,
+      document_count: 3,
+      sources: [
+        "Document #App\\Models\\User\\Bloq\\BloqItem_164650",
+        "Document #App\\Models\\User\\Bloq\\BloqItem_181392",
+      ],
+    },
+  }
+  const HIST = {
+    type: "memory_injection",
+    label: "context: conversation_history",
+    data: { thread_id: "user_193_agent_642", message_count: 20 },
+  }
+
+  test("pulls retrieved item ids out of RAG sources", () => {
+    expect(extractProvenance([RAG]).retrieved_item_ids).toEqual(["164650", "181392"])
+  })
+
+  test("captures the retrieval bloq and document count", () => {
+    const p = extractProvenance([RAG])
+    expect(p.retrieval_bloq_id).toBe(532)
+    expect(p.document_count).toBe(3)
+  })
+
+  test("captures the conversation thread — ask is NOT stateless", () => {
+    const p = extractProvenance([HIST])
+    expect(p.thread_id).toBe("user_193_agent_642")
+    expect(p.history_messages).toBe(20)
+  })
+
+  // Arrow-decorated labels must collapse to ONE tool, not two.
+  test("pairs tool_call with tool_result status", () => {
+    const p = extractProvenance([
+      { type: "tool_call", label: "→ SearchKnowledgeBaseTool", data: { query: "x" } },
+      { type: "tool_result", label: "← SearchKnowledgeBaseTool", data: { status: "success" } },
+    ])
+    expect(p.tool_calls).toEqual([{ tool: "SearchKnowledgeBaseTool", status: "success" }])
+  })
+
+  test("a call with no result keeps the tool without a status", () => {
+    const p = extractProvenance([{ type: "tool_call", label: "→ getRevenue" }])
+    expect(p.tool_calls).toEqual([{ tool: "getRevenue" }])
+  })
+
+  test("deduplicates repeated source documents", () => {
+    const dup = { ...RAG, data: { ...RAG.data, sources: [RAG.data.sources[0], RAG.data.sources[0]] } }
+    expect(extractProvenance([dup]).retrieved_item_ids).toEqual(["164650"])
+  })
+
+  // Upstream trace changes must degrade to empty, never throw inside a tool call.
+  test("non-array input returns an empty provenance", () => {
+    expect(extractProvenance(undefined).retrieved_item_ids).toEqual([])
+    expect(extractProvenance(null).tool_calls).toEqual([])
+    expect(extractProvenance("nope").thread_id).toBeNull()
+  })
+
+  test("malformed events are skipped, not fatal", () => {
+    const p = extractProvenance([null, 42, { type: "memory_injection" }, RAG])
+    expect(p.retrieved_item_ids).toEqual(["164650", "181392"])
+  })
+
+  test("unrelated trace events contribute nothing", () => {
+    const p = extractProvenance([{ type: "thinking", label: "thinking", data: "..." }])
+    expect(p).toEqual({
+      retrieved_item_ids: [],
+      retrieval_bloq_id: null,
+      document_count: null,
+      tool_calls: [],
+      thread_id: null,
+      history_messages: null,
+    })
   })
 })
