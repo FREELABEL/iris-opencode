@@ -30,6 +30,50 @@ function entityFilename(e: Record<string, unknown>): string {
   return `${e.id}-${slugify(String(e.name ?? e.slug ?? "program"))}.json`
 }
 
+// ── Response normalisers — ONE seam ────────────────────────────────────────
+// The API is not uniform. GET /programs/{id} answers { program: {...} } while
+// GET /programs/{id}/packages answers { success, data: { packages: [...] } }.
+// Pull/Push/Diff/PackagesList each unwrapped this by hand and each got it wrong:
+// diff compared undefined to undefined and printed "No differences" for a
+// completely divergent file, push PUT an empty body, and pull wrote every
+// program to "undefined-program.json". Normalise in one place instead.
+
+function unwrapProgram(json: any): any {
+  const raw = json?.data ?? json
+  return raw?.program ?? raw
+}
+
+function unwrapPackages(json: any): any[] {
+  if (Array.isArray(json)) return json
+  const raw = json?.data ?? json
+  if (Array.isArray(raw)) return raw
+  if (Array.isArray(raw?.packages)) return raw.packages
+  return []
+}
+
+// Local files written before the pull fix still carry the { program: {...} }
+// envelope. Accept both so an old checkout does not silently compare wrong.
+function readLocalProgram(filepath: string): any {
+  const parsed = JSON.parse(readFileSync(filepath, "utf-8"))
+  return parsed?.program ?? parsed
+}
+
+// A program's bloq_id was never validated on write, so #83 shipped pointing at
+// bloq 609 which does not exist — and `programs get` printed it as though it
+// resolved. Check it, so a dangling reference cannot be created silently and
+// cannot read as healthy afterwards.
+async function bloqExists(bloqId: number | string): Promise<boolean> {
+  try {
+    const res = await irisFetch(`/api/v1/bloqs/${bloqId}`)
+    if (!res.ok) return false
+    const json = (await res.json()) as any
+    const b = json?.data ?? json
+    return Boolean((b?.bloq ?? b)?.id)
+  } catch {
+    return false
+  }
+}
+
 function findLocalFile(dir: string, id: number | string): string | undefined {
   if (!existsSync(dir)) return undefined
   const prefix = `${id}-`
@@ -129,8 +173,7 @@ const GetCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const raw = data?.data ?? data
-      const p = raw?.program ?? raw
+      const p = unwrapProgram(data)
       if (!p || !p.id) { spinner.stop("Program not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
       spinner.stop(String(p.name ?? `#${p.id}`))
 
@@ -140,7 +183,10 @@ const GetCommand = cmd({
       printKV("Slug", p.slug)
       printKV("Active", p.active)
       printKV("Tier", p.tier)
-      printKV("Bloq ID", p.bloq_id)
+      if (p.bloq_id) {
+        const linked = await bloqExists(p.bloq_id)
+        printKV("Bloq ID", linked ? p.bloq_id : `${p.bloq_id}  ⚠ bloq not found — dangling reference`)
+      }
       printKV("Base Price", p.base_price ? `$${p.base_price}` : undefined)
       printKV("Has Paid", p.has_paid_membership)
       printKV("Allow Free", p.allow_free_enrollment)
@@ -189,7 +235,16 @@ const CreateCommand = cmd({
       const payload: Record<string, unknown> = { name, active: true }
       if (args.slug) payload.slug = args.slug
       if (args.description) payload.description = args.description
-      if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
+      if (args["bloq-id"]) {
+        if (!(await bloqExists(args["bloq-id"]))) {
+          spinner.stop("Failed", 1)
+          prompts.log.error(`Bloq #${args["bloq-id"]} does not exist — refusing to create a dangling reference.`)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+        payload.bloq_id = args["bloq-id"]
+      }
       if (args.tier) payload.tier = args.tier
 
       const res = await irisFetch("/api/v1/programs", { method: "POST", body: JSON.stringify(payload) })
@@ -224,6 +279,12 @@ const UpdateCommand = cmd({
       .option("name", { describe: "new name", type: "string" })
       .option("description", { describe: "new description", type: "string" })
       .option("tier", { describe: "new tier", type: "string" })
+      .option("type", { describe: "program type (membership/learning/...)", type: "string" })
+      .option("slug", { describe: "new slug", type: "string" })
+      .option("base-price", { describe: "base price", type: "number" })
+      .option("has-paid-membership", { describe: "can this program take money", type: "boolean" })
+      .option("bloq-id", { describe: "link to a bloq (validated; use --clear-bloq to unlink)", type: "number" })
+      .option("clear-bloq", { describe: "remove the bloq link", type: "boolean" })
       .option("active", { describe: "active (true/false)", type: "boolean" }),
   async handler(args) {
     UI.empty()
@@ -236,6 +297,20 @@ const UpdateCommand = cmd({
     if (args.name) payload.name = args.name
     if (args.description) payload.description = args.description
     if (args.tier) payload.tier = args.tier
+    if (args.type) payload.type = args.type
+    if (args.slug) payload.slug = args.slug
+    if (args["base-price"] !== undefined) payload.base_price = args["base-price"]
+    if (args["has-paid-membership"] !== undefined) payload.has_paid_membership = args["has-paid-membership"]
+    if (args["clear-bloq"]) payload.bloq_id = null
+    if (args["bloq-id"] !== undefined) {
+      if (!(await bloqExists(args["bloq-id"]))) {
+        prompts.log.error(`Bloq #${args["bloq-id"]} does not exist — refusing to write a dangling reference.`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      payload.bloq_id = args["bloq-id"]
+    }
     if (args.active !== undefined) payload.active = args.active
 
     if (Object.keys(payload).length === 0) {
@@ -294,13 +369,19 @@ const PullCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const entity = data?.data ?? data
+      const entity = unwrapProgram(data)
+      if (!entity || !entity.id) {
+        spinner.stop("Failed", 1)
+        prompts.log.error("Program response had no id — refusing to write a file that push and diff cannot read.")
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
 
       // Also fetch packages
       const pkgRes = await irisFetch(`/api/v1/programs/${entity.id}/packages`)
       if (pkgRes.ok) {
-        const pkgData = (await pkgRes.json()) as any
-        entity._packages = pkgData?.data ?? (Array.isArray(pkgData) ? pkgData : [])
+        entity._packages = unwrapPackages((await pkgRes.json()) as any)
       }
 
       const dir = resolveSyncDir()
@@ -362,7 +443,7 @@ const PushCommand = cmd({
 
       spinner.start(`Pushing ${basename(filepath)}…`)
 
-      const entity = JSON.parse(readFileSync(filepath, "utf-8"))
+      const entity = readLocalProgram(filepath)
       const payload: Record<string, unknown> = {
         name: entity.name, slug: entity.slug, description: entity.description,
         active: entity.active, tier: entity.tier, bloq_id: entity.bloq_id,
@@ -373,6 +454,14 @@ const PushCommand = cmd({
         enrollment_form_config: entity.enrollment_form_config,
       }
       for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
+
+      if (payload.bloq_id && !(await bloqExists(payload.bloq_id as number))) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`Local file links bloq #${payload.bloq_id}, which does not exist. Fix it or run: ${highlight(`iris programs update ${args.id} --clear-bloq`)}`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
 
       const res = await irisFetch(`/api/v1/programs/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Push program")
@@ -417,7 +506,7 @@ const DiffCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const live = data?.data ?? data
+      const live = unwrapProgram(data)
 
       const dir = resolveSyncDir()
       let filepath = args.file
@@ -430,7 +519,7 @@ const DiffCommand = cmd({
         return
       }
 
-      const local = JSON.parse(readFileSync(filepath, "utf-8"))
+      const local = readLocalProgram(filepath)
 
       const fields = ["name", "slug", "description", "active", "tier", "bloq_id", "base_price", "has_paid_membership", "allow_free_enrollment"]
       const changes: { field: string; live: unknown; local: unknown }[] = []
@@ -544,10 +633,14 @@ const PackagesListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      const items: any[] = unwrapPackages(data)
       spinner.stop(`${items.length} package(s)`)
 
-      if (items.length === 0) { prompts.log.warn("No packages found"); prompts.outro("Done"); return }
+      if (items.length === 0) {
+        prompts.log.warn("No packages yet")
+        prompts.outro(dim(`Add one:  iris programs package-create ${args["program-id"]}`))
+        return
+      }
 
       printDivider()
       for (const pkg of items) { printPackage(pkg); console.log() }
