@@ -11,7 +11,7 @@ import { executePublish, executePublishMany, executeMakePublic, executeMakePriva
 const AtlasItemPublishCommand = cmd({
   command: "publish <files..>",
   aliases: ["sync"],
-  describe: "publish markdown file(s) as public Atlas items (globs ok; re-run to sync)",
+  describe: "publish markdown file(s) as Atlas items (private by default — add --public for a shareable URL; globs ok; re-run to sync)",
   builder: (yargs) =>
     yargs
       .positional("files", { describe: "one or more markdown (.md) files (e.g. ./docs/*.md)", type: "string", demandOption: true })
@@ -22,6 +22,8 @@ const AtlasItemPublishCommand = cmd({
       .option("password", { describe: "share behind a password (implies --public)", type: "string" })
       .option("expires", { describe: "expiring link — ISO date/time, e.g. 2026-12-31 (implies --public)", type: "string" })
       .option("private", { describe: "force private (override; default is already private)", type: "boolean", default: false })
+      .option("new", { describe: "publish a SECOND item even though one with this title already exists in the list", type: "boolean", default: false })
+      .option("update", { describe: "sync into this existing item ID instead of creating a new one (single file only)", type: "number" })
       .option("force", { describe: "overwrite even if the item was edited in the UI after the last publish", type: "boolean", default: false })
       .option("format", { describe: "content format: html or markdown (default: from the file extension)", type: "string", choices: ["html", "markdown"] })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })

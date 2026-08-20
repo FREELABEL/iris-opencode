@@ -1547,14 +1547,19 @@ const BloqsDeleteCommand = cmd({
 const BloqsPublishCommand = cmd({
   command: "publish <file>",
   aliases: ["publish-md"],
-  describe: "publish a markdown file or HTML artifact as a public bloq item (returns a shareable URL; re-run to sync)",
+  describe: "publish a markdown file or HTML artifact as a bloq item (private by default — add --public for a shareable URL; re-run to sync)",
   builder: (yargs) =>
     yargs
       .positional("file", { describe: "path to a markdown (.md) file", type: "string", demandOption: true })
       .option("bloq", { describe: "target bloq ID (default: prompt, or auto 'Published Docs')", type: "number" })
       .option("list", { describe: "target list (ID or name; created if missing)", type: "string" })
       .option("title", { describe: "override the item title", type: "string" })
+      .option("public", { describe: "make the item publicly shareable (private by default)", type: "boolean", default: false })
+      .option("password", { describe: "share behind a password (implies --public)", type: "string" })
+      .option("expires", { describe: "expiring link — ISO date/time, e.g. 2026-12-31 (implies --public)", type: "string" })
       .option("private", { describe: "create/update without making it public", type: "boolean", default: false })
+      .option("new", { describe: "publish a SECOND item even though one with this title already exists in the list", type: "boolean", default: false })
+      .option("update", { describe: "sync into this existing item ID instead of creating a new one", type: "number" })
       .option("force", { describe: "overwrite even if the item was edited in the UI after the last publish", type: "boolean", default: false })
       .option("format", { describe: "content format: html or markdown (default: from the file extension)", type: "string", choices: ["html", "markdown"] })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })

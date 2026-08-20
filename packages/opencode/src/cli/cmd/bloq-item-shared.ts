@@ -389,6 +389,8 @@ export interface PublishArgs {
   password?: string
   expires?: string
   private?: boolean // explicit private (back-compat / override)
+  new?: boolean // publish a SECOND item even though one with this title already exists in the list (#181502)
+  update?: number // sync into this existing item id instead of creating a new one (#181502)
   force?: boolean // overwrite even if the item was edited in the UI after last publish (#154763)
   format?: string // "html" | "markdown"; inferred from the file extension when omitted
   "no-frontmatter"?: boolean
@@ -434,7 +436,10 @@ export async function executePublish(args: PublishArgs): Promise<void> {
   const title = format === "html"
     ? deriveHtmlTitle(args.title, fm.title, body, args.file)
     : deriveTitle(args.title, fm.title, body, args.file)
-  const existingItemId = fm.iris_item_id ? Number(fm.iris_item_id) : null
+  // --update <id> is the escape hatch the #181502 duplicate-guard error message points
+  // people at: it anchors this publish to a specific item even though the file's own
+  // frontmatter has no (or a stale) iris_item_id.
+  const existingItemId = args.update ? Number(args.update) : (fm.iris_item_id ? Number(fm.iris_item_id) : null)
 
   if (!body) {
     const msg = "File has no content to publish (empty body)."
@@ -515,6 +520,30 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       }
       bloqId = dest.bloqId
       listId = dest.listId
+
+      // #181502: the frontmatter anchor (iris_item_id) is how "re-run to sync" works, and any
+      // workflow that REWRITES the file rather than appending to it silently drops that anchor.
+      // We then land here and cheerfully create a SECOND item with the same title in the same
+      // list, leaving the already-shared URL serving stale content. Refuse instead, and name the
+      // item we would have updated so the fix is one flag away.
+      if (!args.new) {
+        const siblings = await fetchItems(userId, Number(bloqId))
+        const clash = siblings.find(
+          (it: any) => String(it?.title ?? "").trim() === title.trim() && Number(it?.bloq_list_id ?? it?.list_id) === Number(listId),
+        )
+        if (clash?.id) {
+          const msg =
+            `An item titled "${title}" already exists in this list (#${clash.id}). ` +
+            `This file has no iris_item_id, so publishing would create a duplicate rather than update it. ` +
+            `Re-run with --update ${clash.id} to sync into it, or --new to publish a separate copy.`
+          spinner?.stop("Refusing to create a duplicate", 1)
+          if (json) console.log(JSON.stringify({ success: false, error: msg, duplicate_of: clash.id, title }))
+          else { prompts.log.error(msg); prompts.outro("Done") }
+          process.exitCode = 2
+          return
+        }
+      }
+
       const created = await createItem(userId, bloqId, listId, title, content, format)
       if (!created?.id) {
         spinner?.stop("Failed to create item", 1)
@@ -541,6 +570,15 @@ export async function executePublish(args: PublishArgs): Promise<void> {
     if (share) {
       const pub = await apiMakePublic(userId, itemId!, opts)
       if (pub) { publicUrl = pub.public_url; publicUuid = pub.public_uuid; accessLevel = pub.access_level }
+    } else if (existingItemId && itemId === existingItemId && !(args.private || args.public || args.password || args.expires)) {
+      // #181502 (defect 4): a plain resync with no sharing flag doesn't touch the
+      // item's share state server-side — it must not be reported/written back as
+      // "private" when the item is still public. Trust the frontmatter's last-known
+      // state instead of nulling it out. (Only when this call actually re-synced
+      // the SAME item; a fallback recreate below starts private like any new item.)
+      publicUrl = fm.iris_public_url ?? null
+      publicUuid = fm.iris_public_uuid ?? null
+      accessLevel = fm.iris_access_level ?? undefined
     }
 
     if (!args["no-frontmatter"]) {
@@ -561,7 +599,8 @@ export async function executePublish(args: PublishArgs): Promise<void> {
     if (json) {
       console.log(JSON.stringify({
         success: true, item_id: itemId, bloq_id: bloqId, list_id: listId,
-        public_url: publicUrl, public_uuid: publicUuid, is_public: share, access_level: accessLevel ?? "private",
+        public_url: publicUrl, public_uuid: publicUuid, is_public: !!publicUrl, access_level: accessLevel ?? "private",
+        ...(publicUrl ? {} : { hint: `Item is private. Re-run with --public, or: iris bloqs make-public ${itemId}` }),
       }))
       return
     }
