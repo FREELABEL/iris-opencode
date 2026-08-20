@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { validateCommand, extractCitedIds } from "./mcp-serve"
+import { validateCommand, extractCitedIds, extractJson, validateAgainstSchema } from "./mcp-serve"
 
 describe("validateCommand", () => {
   // --- Should PASS: safe characters in quoted args ---
@@ -174,5 +174,108 @@ describe("extractCitedIds", () => {
 
   test("no citation returns empty, never null", () => {
     expect(extractCitedIds("I could not retrieve that figure.")).toEqual([])
+  })
+})
+
+describe("extractJson", () => {
+  test("bare object", () => {
+    expect(extractJson('{"a":1}')).toEqual({ a: 1 })
+  })
+
+  // Models wrap JSON in fences no matter how firmly you ask them not to.
+  test("fenced json", () => {
+    expect(extractJson('```json\n{"a":1}\n```')).toEqual({ a: 1 })
+  })
+
+  test("prose before and after", () => {
+    expect(extractJson('Sure! Here you go:\n{"a":1}\nHope that helps.')).toEqual({ a: 1 })
+  })
+
+  // indexOf/lastIndexOf would swallow the trailing prose and fail to parse.
+  test("nested object followed by prose", () => {
+    expect(extractJson('{"a":{"b":2}} — let me know if you need more.')).toEqual({ a: { b: 2 } })
+  })
+
+  test("braces inside strings do not confuse the matcher", () => {
+    expect(extractJson('{"note":"use {curly} braces"}')).toEqual({ note: "use {curly} braces" })
+  })
+
+  test("escaped quote inside string", () => {
+    expect(extractJson('{"q":"she said \\"hi\\""}')).toEqual({ q: 'she said "hi"' })
+  })
+
+  test("top-level array", () => {
+    expect(extractJson("[1,2,3]")).toEqual([1, 2, 3])
+  })
+
+  test("no json returns undefined, not a throw", () => {
+    expect(extractJson("I don't have access to that figure.")).toBeUndefined()
+  })
+
+  test("malformed json returns undefined", () => {
+    expect(extractJson('{"a":}')).toBeUndefined()
+  })
+})
+
+describe("validateAgainstSchema", () => {
+  const S = {
+    type: "object",
+    required: ["mrr", "source"],
+    properties: { mrr: { type: "number" }, source: { type: "string" } },
+  }
+
+  test("valid object has no errors", () => {
+    expect(validateAgainstSchema({ mrr: 1525, source: "#158048" }, S)).toEqual([])
+  })
+
+  test("missing required field is path-qualified", () => {
+    expect(validateAgainstSchema({ mrr: 1525 }, S)).toEqual(["$.source: required field missing"])
+  })
+
+  test("wrong type names both expected and actual", () => {
+    expect(validateAgainstSchema({ mrr: "1525", source: "x" }, S)).toEqual([
+      "$.mrr: expected number, got string",
+    ])
+  })
+
+  // A model returning a bare string for an object schema must not pass.
+  test("scalar against object schema fails", () => {
+    expect(validateAgainstSchema("nope", S)).toEqual(["$: expected object, got string"])
+  })
+
+  test("null is null, not object", () => {
+    expect(validateAgainstSchema(null, { type: "object" })).toEqual(["$: expected object, got null"])
+  })
+
+  test("array is array, not object", () => {
+    expect(validateAgainstSchema([], { type: "object" })).toEqual(["$: expected object, got array"])
+  })
+
+  test("integer accepts whole numbers only", () => {
+    expect(validateAgainstSchema(3, { type: "integer" })).toEqual([])
+    expect(validateAgainstSchema(3.5, { type: "integer" })).toEqual(["$: expected integer, got number"])
+  })
+
+  test("enum violation reports the allowed set", () => {
+    expect(validateAgainstSchema("maybe", { enum: ["yes", "no"] })).toEqual([
+      '$: "maybe" is not one of ["yes","no"]',
+    ])
+  })
+
+  test("array items are validated per index", () => {
+    const arr = { type: "array", items: { type: "object", required: ["id"], properties: { id: { type: "number" } } } }
+    expect(validateAgainstSchema([{ id: 1 }, { id: "2" }, {}], arr)).toEqual([
+      "$[1].id: expected number, got string",
+      "$[2].id: required field missing",
+    ])
+  })
+
+  test("nested objects report a full path", () => {
+    const nested = { type: "object", properties: { a: { type: "object", properties: { b: { type: "number" } } } } }
+    expect(validateAgainstSchema({ a: { b: "x" } }, nested)).toEqual(["$.a.b: expected number, got string"])
+  })
+
+  test("collects multiple errors rather than stopping at the first", () => {
+    expect(validateAgainstSchema({}, S).length).toBe(2)
   })
 })

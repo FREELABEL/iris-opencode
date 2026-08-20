@@ -206,6 +206,97 @@ export function extractCitedIds(response: string): string[] {
   )
 }
 
+/**
+ * Pull the first JSON value out of a model's reply.
+ *
+ * Models wrap JSON in prose and code fences no matter how firmly you ask them not to, so
+ * the caller gets a parse error for an answer that was actually correct. Strip fences,
+ * then brace-match from the first { or [ — a plain indexOf/lastIndexOf pair breaks the
+ * moment the payload contains a nested object followed by trailing prose.
+ */
+export function extractJson(text: string): unknown | undefined {
+  if (!text) return undefined
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const body = fenced ? fenced[1] : text
+  const start = body.search(/[[{]/)
+  if (start < 0) return undefined
+  const open = body[start]
+  const close = open === "{" ? "}" : "]"
+  let depth = 0
+  let inStr = false
+  let esc = false
+  for (let i = start; i < body.length; i++) {
+    const c = body[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (c === "\\") esc = true
+      else if (c === '"') inStr = false
+      continue
+    }
+    if (c === '"') inStr = true
+    else if (c === open) depth++
+    else if (c === close) {
+      depth--
+      if (depth === 0) {
+        try {
+          return JSON.parse(body.slice(start, i + 1))
+        } catch {
+          return undefined
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Structural check against the useful subset of JSON Schema: type, properties, required,
+ * items, enum. Returns PATH-QUALIFIED errors rather than a boolean, because "invalid" is
+ * useless to a model being asked to try again — it needs to know which field and why.
+ *
+ * Deliberately NOT a full JSON Schema implementation. It is honest about that: unknown
+ * keywords are ignored rather than silently treated as satisfied-by-default in a way that
+ * would let a wrong shape through while claiming validation happened.
+ */
+export function validateAgainstSchema(value: unknown, schema: any, path = "$"): string[] {
+  if (!schema || typeof schema !== "object") return []
+  const errs: string[] = []
+  const t = schema.type as string | undefined
+
+  const typeOf = (v: unknown): string =>
+    v === null ? "null" : Array.isArray(v) ? "array" : typeof v
+
+  if (t) {
+    const actual = typeOf(value)
+    const ok =
+      t === actual ||
+      (t === "integer" && actual === "number" && Number.isInteger(value as number))
+    if (!ok) return [`${path}: expected ${t}, got ${actual}`]
+  }
+
+  if (Array.isArray(schema.enum) && !schema.enum.includes(value as never)) {
+    errs.push(`${path}: ${JSON.stringify(value)} is not one of ${JSON.stringify(schema.enum)}`)
+  }
+
+  if (t === "object" || (!t && value && typeof value === "object" && !Array.isArray(value))) {
+    const obj = (value ?? {}) as Record<string, unknown>
+    for (const req of (schema.required as string[] | undefined) ?? []) {
+      if (!(req in obj)) errs.push(`${path}.${req}: required field missing`)
+    }
+    for (const [k, sub] of Object.entries((schema.properties as Record<string, any>) ?? {})) {
+      if (k in obj) errs.push(...validateAgainstSchema(obj[k], sub, `${path}.${k}`))
+    }
+  }
+
+  if (t === "array" && schema.items) {
+    ;(value as unknown[]).forEach((el, i) =>
+      errs.push(...validateAgainstSchema(el, schema.items, `${path}[${i}]`)),
+    )
+  }
+
+  return errs
+}
+
 export function validateCommand(command: string): { args: string[]; error?: string } {
   const trimmed = command.trim()
   if (!trimmed) return { args: [], error: "Empty command" }
@@ -349,12 +440,18 @@ export const McpServeCommand = cmd({
           "  iris_help     per-command flags and subcommands",
           "  iris_agent    consult or configure a standing IRIS agent",
           "                list | ask | get | create | update | delete",
+          "                ask takes an optional JSON `schema` -> a validated object, not prose",
           "  iris_memory   read/write the Atlas — boards, lists, items",
           "                search | boards | get | items | add | update",
           "  hive_*        inspect and drive Hive tmux sessions (needs the local daemon)",
           "  playbook_*    one typed tool per executable playbook (--no-playbooks to omit)",
           "",
           "RESOURCES:  iris://guide  iris://commands  iris://recipes",
+          "",
+          "A schema is prompt-enforced, not API-enforced, and an agent given a required shape",
+          "will INVENT values to fill it — measured: a required enum produced a confident answer",
+          "about a term sheet that does not exist. So a schema'd ask also offers the agent",
+          "{\"_unavailable\":\"reason\"}, and a decline is reported as a decline, not a failure.",
           "",
           "Prefer iris_agent over `iris_run chat ...` and iris_memory over `iris_run bloqs ...`:",
           "both carry guard rails that a raw command string does not — an agent that answered",
@@ -567,6 +664,27 @@ READING THE RESULT — this matters:
 - An agent that says it cannot retrieve something is CORRECT behaviour, not a failure.
   Do not re-ask the question in a way that pressures it into inventing a number.
 
+STRUCTURED OUTPUT — pass \`schema\` on action:"ask" to get a validated object instead of prose:
+
+  iris_agent {action:"ask", agent:642, message:"...", schema:{
+    type:"object", required:["mrr","source"],
+    properties:{ mrr:{type:"number"}, source:{type:"string"} }}}
+
+The result gains \`structured: {valid, data, errors, attempts}\`, and \`isError\` is true when
+the schema is not satisfied. A malformed first reply is retried ONCE with the specific
+validation errors fed back; \`attempts:2\` on a valid result means the first try was malformed,
+which is worth knowing if you are measuring an agent's reliability.
+
+⚠️ This is PROMPT-ENFORCED, not API-enforced. \`iris chat\` has no schema flag, so the shape is
+requested in the message and checked here. \`valid:true\` means what came back satisfied the
+schema — NOT that the model was constrained to produce it. Validation covers the useful subset
+of JSON Schema (type, properties, required, items, enum); unknown keywords are ignored rather
+than treated as satisfied. Do not read it as a guarantee.
+
+Ask for a schema when you need a NUMBER OR A DECISION you will branch on. Do not wrap a
+narrative answer in one — you will get a model padding fields to satisfy a shape, which is a
+worse answer wearing better clothes.
+
 COST + LATENCY: each ask is a real model turn (seconds, and it bills). Ask one good
 question rather than iterating. Default timeout 120s; raise it with \`timeout\` for
 agents that do multi-step retrieval.
@@ -605,6 +723,7 @@ you did not create — prefer update{} to re-scope or quiet one.`,
               message: { type: "string", description: "ask: the question. Be specific and self-contained — the agent does not see this conversation." },
               model: { type: "string", description: "ask: model override for this turn. create/update: the agent's stored model. Keep to nano/mini tiers." },
               timeout: { type: "number", description: "ask: seconds to wait (default 120, max 600)" },
+              schema: { type: "object", description: "ask: JSON Schema the answer must satisfy. Returns a validated object instead of prose. Prompt-enforced, not API-enforced — see the description." },
               full: { type: "boolean", description: "get: return the raw record instead of the compact summary (large)" },
               name: { type: "string", description: "create/update: agent name" },
               description: { type: "string", description: "create/update: what this agent OWNS. Callers pick agents by this — one without a description is unchoosable." },
@@ -779,6 +898,23 @@ parts you did not mean to touch.`,
             return { content: [{ type: "text" as const, text: "Error: 'message' is required for action:'ask'." }], isError: true }
           }
           const secs = Math.min(Math.max(Number(args?.timeout) || 120, 10), 600)
+          const schema = args?.schema && typeof args.schema === "object" ? (args.schema as any) : null
+          // Prompt-enforced, NOT API-enforced: `iris chat` has no schema flag, so the shape is
+          // requested in the message and checked here. That distinction is stated in the tool
+          // description and in the result — a caller must not read "valid: true" as a guarantee
+          // the model was constrained, only that what came back satisfied the schema.
+          // The escape hatch is NOT optional politeness. Measured 2026-08-20: asked "what colour
+          // is our Series A term sheet?" under a required enum of [red, blue], the agent
+          // returned {"colour":"blue","confidence":90} — for a term sheet that does not exist.
+          // A required schema REMOVES a model's ability to decline, so it fabricates to satisfy
+          // the shape, and the fabrication passes validation. Giving it a legal way to say
+          // "I don't know" is what keeps a schema from manufacturing answers.
+          const schemaInstruction = schema
+            ? `\n\nRespond with RAW JSON ONLY that satisfies this JSON Schema. No prose, no code fence, no explanation before or after.` +
+              `\n\nIf you cannot answer truthfully from what you actually know or can retrieve, DO NOT guess and DO NOT invent values to fill the shape. ` +
+              `Instead return exactly: {"_unavailable": "<short reason>"}. Returning _unavailable is a correct answer, not a failure.` +
+              `\n\nSCHEMA:\n${JSON.stringify(schema)}`
+            : ""
           const askArgs = ["chat", "-a", String(agentId), "--json", "--timeout", String(secs)]
           const model = (args?.model as string ?? "").trim()
           if (model) {
@@ -787,7 +923,7 @@ parts you did not mean to touch.`,
             }
             askArgs.push("-m", model)
           }
-          askArgs.push(message)
+          askArgs.push(message + schemaInstruction)
 
           try {
             // +15s of headroom so the CLI's own --timeout is what fires, not the
@@ -852,7 +988,61 @@ parts you did not mean to touch.`,
               elapsed_ms: env.elapsed_ms ?? null,
               requires_approval: env.requires_approval === true,
             }
+            let structured: { valid: boolean; data?: unknown; errors?: string[]; unavailable?: string; attempts?: number } | null = null
+            if (schema) {
+              type Checked = { valid: boolean; data?: unknown; errors?: string[]; unavailable?: string }
+              const check = (text: string): Checked => {
+                const parsed = extractJson(text)
+                if (parsed === undefined) return { valid: false, errors: ["response contained no parseable JSON"] }
+                // A declared non-answer short-circuits BEFORE validation. It is neither a
+                // schema pass nor a schema failure — it is the agent correctly refusing, and
+                // collapsing it into either one would hide the most useful signal here.
+                const un = (parsed as any)?._unavailable
+                if (typeof un === "string") return { valid: false, unavailable: un, data: parsed }
+                const errs = validateAgainstSchema(parsed, schema)
+                return errs.length ? { valid: false, errors: errs, data: parsed } : { valid: true, data: parsed }
+              }
+              let r: Checked = check(response)
+              let attempts = 1
+              // Exactly ONE retry, and it must carry the SPECIFIC errors — "that was invalid,
+              // try again" makes a model guess. Looping further would burn real money on a
+              // model that has already shown it cannot hit the shape.
+              if (!r.valid && !r.unavailable) {
+                const repair =
+                  `${message}\n\nYour previous reply did not satisfy the schema:\n` +
+                  (r.errors ?? []).map((e) => `- ${e}`).join("\n") +
+                  `\n\nReturn ONLY corrected raw JSON matching the schema. No prose, no code fence.` +
+                  `\n\nSCHEMA:\n${JSON.stringify(schema)}`
+                const retryArgs = askArgs.slice(0, -1).concat(repair)
+                const rr = await execIris(retryArgs, (secs + 15) * 1000)
+                attempts = 2
+                let retryText = ""
+                for (const line of (rr.stdout || "").split("\n")) {
+                  const t2 = line.trim()
+                  if (!t2.startsWith(JSON_OPEN)) continue
+                  try {
+                    const o = JSON.parse(t2)
+                    if (typeof o.response === "string") retryText = o.response
+                  } catch {}
+                }
+                if (retryText) {
+                  const r2 = check(retryText)
+                  if (r2.valid) { r = r2; out.response = retryText }
+                  else r = { valid: false, errors: r2.errors, data: r2.data }
+                }
+              }
+              structured = { ...r, attempts }
+            }
+
             const flags: string[] = []
+            if (structured?.unavailable) {
+              flags.push(`The agent DECLINED rather than guess: "${structured.unavailable}". This is a correct outcome, not a malfunction — it had no truthful value for the shape you asked for. Do not re-ask with a looser schema to force an answer out of it.`)
+            } else if (structured && !structured.valid) {
+              flags.push(`SCHEMA NOT SATISFIED after ${structured.attempts} attempt(s): ${(structured.errors ?? []).join("; ")}. Treat this as a FAILED call — do not use partial data as if it validated.`)
+            }
+            if (structured?.valid && structured.attempts === 2) {
+              flags.push("Schema satisfied only on the RETRY — the first reply was malformed. Worth noting if you are measuring this agent's reliability.")
+            }
             if (out.requires_approval) {
               flags.push("REQUIRES APPROVAL — this agent is holding an action it will not take unsupervised. Surface it to the user; do not retry around it.")
             }
@@ -863,7 +1053,11 @@ parts you did not mean to touch.`,
               flags.push(`cited_ids ${cited.join(", ")} were parsed out of the agent's prose and are UNVERIFIED. Read the item to confirm.`)
             }
             const banner = flags.length ? flags.map((f) => `[!] ${f}`).join("\n") + "\n\n" : ""
-            return { content: [{ type: "text" as const, text: `${banner}${JSON.stringify(out, null, 2)}` }] }
+            const payload = structured ? { ...out, structured } : out
+            return {
+              content: [{ type: "text" as const, text: `${banner}${JSON.stringify(payload, null, 2)}` }],
+              isError: structured ? !structured.valid : false,
+            }
           } catch (e) {
             return { content: [{ type: "text" as const, text: `Execution error: ${e instanceof Error ? e.message : e}` }], isError: true }
           }
