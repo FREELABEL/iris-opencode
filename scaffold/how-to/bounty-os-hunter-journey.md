@@ -8,7 +8,13 @@ are [bug-bounty](bug-bounty.md). This is the surface the hunter actually touches
 ## The one URL
 
 **https://heyiris.io/p/bounty-dashboard** — the gate, the dashboard, the open bounties and
-the Apply buttons are all this page. (`/p/bounty` is a legacy alias serving the same page:
+the Apply buttons are all this page.
+
+The page is now **tabbed**: *Your work* / *Find work* / *Certification*, and the tab is in the
+URL hash. That is not decoration — **link a held payout straight at
+`/p/bounty-dashboard#certification`**. Certification gates payment, so the difference between
+somebody clearing it in half an hour and asking where their money went is usually whether the
+notification pointed at the tab or at the page. (`/p/bounty` is a legacy alias serving the same page:
 pages have no slug-redirect mechanism and that URL is already in sent emails, so it is kept
 rather than retired.) There is no separate signup page, apply page, or payout page,
 and that is deliberate: every extra page was somewhere people stopped.
@@ -25,6 +31,8 @@ and that is deliberate: every extra page was somewhere people stopped.
 | Sign it | `/p/sign?t=…` from the email or the dashboard | link is a bearer credential |
 | Be assigned | `OpportunityAccessGate` | withholds assignment, fails closed |
 | Get certified | `GET/POST /v1/bounty/training/chapters/{id}` → `CourseService` | 401 unproven · 409 no account |
+| Read what the listing requires | `sops[]` on the opportunity → acknowledge | 422 if it points at no content |
+| Be paid | `CertificationGate` in `AwardService` | **holds** the money until certified — never voids it |
 | Get paid | `GatedEarningsController` → `EarningsController` | 401 unproven · 409 no account |
 
 ## Two entry modes, and do not confuse them
@@ -91,10 +99,28 @@ slug then chapter `display_order`, and **never deletes a chapter** — progress 
 certificates hang off chapter ids, so replacing them would silently orphan every hunter's
 record. Edit the copy in `SeedBountyTraining::chapters()` and re-run.
 
-**It is not a gate.** Certification does not currently block reporting, applying, assignment or
-payout, and `nextStep` deliberately ranks it BELOW an unclaimed balance — telling somebody to go
-and sit a quiz while their money sits unmentioned is how a dashboard loses trust. If it should
-become a gate, that is a decision to make in `OpportunityAccessGate`, not a side effect.
+Courses can also be built through the platform now, rather than only from a shell:
+`iris course create`, `iris course chapters add`, `iris course get`. See
+[certification-courses](certification-courses.md).
+
+**IT IS A GATE — this changed, and an earlier version of this page said the opposite.**
+Certification now blocks PAYOUT. It is enforced by `CertificationGate` inside
+`AwardService`, and separately in `BountyRewardService::processPayouts` for the creator/UGC
+rail, which does not route through AwardService. Money already accrued is **held**, not voided:
+the moment somebody certifies, the next run pays them for work already accepted.
+
+Three things about the gate that are deliberate and worth not re-litigating by accident:
+
+- **It never gates REPORTING or applying on a bug bounty.** Making it harder to tell us about a
+  live vulnerability in order to enforce training is a net security loss and is unenforceable
+  anyway — a hunter who cannot file simply emails it, or does not. Held at payout instead:
+  costs us nothing, costs them about 35 self-serve minutes.
+- **It is default-ON for bug bounties**, per an explicit operator decision. A listing that names
+  no course is still gated by the platform hunter certification. A gig-style listing gates only
+  when it names one, via `opportunities.required_certification_course_id`.
+- **`nextStep` still ranks certification BELOW an unclaimed balance.** Telling somebody to go
+  and sit a quiz while their money sits unmentioned is how a dashboard loses trust — and that
+  reasoning survives the gate rather than being overturned by it.
 
 **It is also not an agreement.** Same shape — an obligation before access — but a different
 thing: a document you sign has a ledger, an audit trail and revocation semantics that a quiz

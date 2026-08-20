@@ -23,6 +23,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "meeting", "call notes", "transcript", "wispr", "what did we agree", "action items from the call", "file this meeting" | `meetings.md` |
 | "share a bloq", "invite someone to a board", "give the client access", "scoped invite", "who can see this board", "revoke access", "what did I share", "keep this internal", "permissions" | `bloq-access-control.md` |
 | "staff", "contractors", "team", "contracts", "signing" | `manage-staff-and-contracts.md` |
+| "certification", "course", "training", "quiz", "certify", "chapters", "slide deck for a course", "examinable", "who can be paid" | `certification-courses.md` |
 | "events", "venue", "stages", "set times", "vendors", "tickets" | `event-production.md` |
 | "discover page", "curate the discover page", "feature on discover", "what controls the homepage", "discover sections" | `discover.md` |
 | "investor interest", "invest in opportunity", "fund a gig", "shark tank", "dual-sided opportunity" | `discover-investments.md` |

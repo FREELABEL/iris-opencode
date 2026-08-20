@@ -316,7 +316,7 @@ const RolesRemoveCommand = cmd({
 
 const PlaybookRolesCommand = cmd({
   command: "roles <subcommand>",
-  describe: "the org chart — who does what, and who they report to",
+  describe: "the org chart — roles, who reports to whom, and which procedures each owns",
   builder: (yargs) =>
     yargs.command(RolesListCommand).command(RolesAddCommand).command(RolesRemoveCommand).demandCommand(1, ""),
   handler() {},
@@ -328,7 +328,7 @@ const PlaybookRolesCommand = cmd({
 
 const PlaybookAttachBountyCommand = cmd({
   command: "require <name> <opportunityId>",
-  describe: "require this playbook (or one procedure in it) on a bounty",
+  describe: "require this playbook on a bounty — pins the version, so a revision expires it",
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", demandOption: true })
@@ -412,7 +412,7 @@ const PlaybookAttachBountyCommand = cmd({
 
 const PlaybookAckCommand = cmd({
   command: "ack <opportunityId> [sopItemId]",
-  describe: "list what a bounty requires you to read, or mark one as read",
+  describe: "what a bounty requires you to read — run with no item id to just see what is outstanding",
   builder: (yargs) =>
     yargs
       .positional("opportunityId", { type: "number", demandOption: true })

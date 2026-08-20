@@ -47,7 +47,7 @@ const CourseListCommand = cmd({
 
 const CourseGetCommand = cmd({
   command: "get <id>",
-  describe: "show a course, its chapters and what each is examined on",
+  describe: "show a course and flag any chapter that assesses nothing",
   builder: (yargs) =>
     yargs.positional("id", { type: "number", demandOption: true })
       .option("json", { type: "boolean", default: false }),
@@ -84,7 +84,7 @@ const CourseGetCommand = cmd({
 
 const CourseCreateCommand = cmd({
   command: "create",
-  describe: "create a course (you become its instructor)",
+  describe: "create a course — you become its instructor and only you can change it",
   builder: (yargs) =>
     yargs
       .option("title", { type: "string", demandOption: true })
@@ -163,7 +163,7 @@ const CourseChaptersCommand = cmd({
 export const PlatformCourseCommand = cmd({
   command: "course <subcommand>",
   aliases: ["courses"],
-  describe: "courses, chapters and certifications",
+  describe: "courses, chapters and certifications — what a worker must pass to be paid",
   builder: (yargs) =>
     yargs
       .command(CourseListCommand)

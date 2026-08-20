@@ -64,13 +64,13 @@ const SopListCommand = cmd({
 
 const SopCreateCommand = cmd({
   command: "create <requestId>",
-  describe: "create a new SOP",
+  describe: "attach a written procedure to an opportunity (creates the document too)",
   builder: (yargs) =>
     yargs
-      .positional("requestId", { type: "number", demandOption: true })
-      .option("title", { type: "string", demandOption: true })
-      .option("description", { type: "string" })
-      .option("content", { type: "string" }),
+      .positional("requestId", { type: "number", demandOption: true, describe: "opportunity / service request id" })
+      .option("title", { type: "string", demandOption: true, describe: "what a worker sees in the requirements list" })
+      .option("description", { type: "string", describe: "one line under the title" })
+      .option("content", { type: "string", describe: "the procedure itself — this is what they read" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create SOP")
