@@ -167,6 +167,10 @@ const BoardsGetCommand = cmd({
       printKV("Status", item.status)
       printKV("List ID", item.bloq_list_id)
       printKV("Created", item.created_at)
+      // #158272: the public URL used to be printed once by `make-public` and then
+      // unrecoverable from the CLI — `get` already fetched the field, it just never
+      // showed it.
+      printKV("Public", item.is_public ? (item.public_url ?? "yes") : "no")
 
       if (item.description) {
         console.log()

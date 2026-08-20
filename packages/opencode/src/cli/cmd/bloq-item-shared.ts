@@ -468,6 +468,10 @@ export async function executePublish(args: PublishArgs): Promise<void> {
     // Tracks the server's updated_at right after our write, so the NEXT publish can
     // detect UI edits made in the meantime (#154763).
     let serverUpdatedAt: string | null = null
+    // The item as the server sees it right after this write — carries the REAL
+    // is_public/public_url/access_level so a plain resync can report actual state
+    // instead of guessing from stale frontmatter (#181502, #176517).
+    let updatedItem: any = null
 
     // Re-sync path: try to update the item the file already points at.
     if (existingItemId) {
@@ -503,6 +507,7 @@ export async function executePublish(args: PublishArgs): Promise<void> {
       } else {
         itemId = existingItemId
         serverUpdatedAt = updated?.updated_at ?? null
+        updatedItem = updated
       }
     }
 
@@ -570,15 +575,34 @@ export async function executePublish(args: PublishArgs): Promise<void> {
     if (share) {
       const pub = await apiMakePublic(userId, itemId!, opts)
       if (pub) { publicUrl = pub.public_url; publicUuid = pub.public_uuid; accessLevel = pub.access_level }
+      else {
+        // #181343: sharing was explicitly requested (--public/--password/--expires) and
+        // the make-public call failed. apiMakePublic() already reported the underlying
+        // error (via handleApiError, which is json-mode-aware itself — do not print a
+        // second one here). The item's content did save; reporting blanket success:true
+        // for the whole command would still hide that the one thing actually asked for
+        // (a public URL) did not happen, so stop here instead of falling through.
+        if (!json) {
+          spinner?.stop(`Item #${itemId} was ${existingItemId ? "updated" : "published"}, but making it public failed. Content is saved — re-run: iris bloqs make-public ${itemId}`, 1)
+          prompts.outro("Done")
+        }
+        process.exitCode = 1
+        return
+      }
     } else if (existingItemId && itemId === existingItemId && !(args.private || args.public || args.password || args.expires)) {
-      // #181502 (defect 4): a plain resync with no sharing flag doesn't touch the
-      // item's share state server-side — it must not be reported/written back as
-      // "private" when the item is still public. Trust the frontmatter's last-known
-      // state instead of nulling it out. (Only when this call actually re-synced
-      // the SAME item; a fallback recreate below starts private like any new item.)
-      publicUrl = fm.iris_public_url ?? null
-      publicUuid = fm.iris_public_uuid ?? null
-      accessLevel = fm.iris_access_level ?? undefined
+      // #181502 (defect 4) / #176517: a plain resync with no sharing flag doesn't touch
+      // the item's share state server-side — it must not be reported/written back as
+      // "private" when the item is still public (e.g. shared separately via
+      // `make-public`, which never touched this file's frontmatter). Trust what the
+      // update response says the item actually is right now, not a guess from
+      // frontmatter that may never have been written. (Only when this call actually
+      // re-synced the SAME item; a fallback recreate below starts private like any
+      // new item — updatedItem stays null in that path.)
+      if (updatedItem?.is_public) {
+        publicUrl = updatedItem.public_url ?? fm.iris_public_url ?? null
+        publicUuid = updatedItem.public_uuid ?? fm.iris_public_uuid ?? null
+        accessLevel = updatedItem.access_level ?? fm.iris_access_level ?? undefined
+      }
     }
 
     if (!args["no-frontmatter"]) {
