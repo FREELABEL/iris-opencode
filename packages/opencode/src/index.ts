@@ -48,6 +48,7 @@ import { PlatformGoodDealsCommand } from "./cli/cmd/platform-good-deals"
 import { PlatformLinkedInCommand } from "./cli/cmd/platform-linkedin"
 import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
 import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
+import { PlatformMintCommand } from "./cli/cmd/platform-mint"
 import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
 import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventory"
 import { PlatformAtlasDatasetsCommand } from "./cli/cmd/platform-atlas-datasets"
@@ -105,6 +106,7 @@ import { PlatformChannelsCommand } from "./cli/cmd/platform-channels"
 import { PlatformObsCommand } from "./cli/cmd/platform-obs"
 import { PlatformDoctorCommand } from "./cli/cmd/platform-doctor"
 import { PlatformSessionsCommand } from "./cli/cmd/platform-sessions"
+import { PlatformProdCommand } from "./cli/cmd/platform-prod"
 import { PlatformPermissionsCommand } from "./cli/cmd/platform-permissions"
 import { PlatformIdentityCommand } from "./cli/cmd/platform-identity"
 import { PlatformSystemAppsScanCommand } from "./cli/cmd/platform-system-apps-scan"
@@ -301,6 +303,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformLinkedInCommand))
   .command(reg(PlatformBloqContextCommand))
   .command(reg(PlatformAtlasLedgerCommand))
+  .command(reg(PlatformMintCommand))
   .command(reg(PlatformAtlasStaffCommand))
   .command(reg(PlatformAtlasInventoryCommand))
   .command(reg(PlatformAtlasDatasetsCommand))
@@ -371,6 +374,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformInstagramFeedCommand))
   .command(reg(PlatformDoctorCommand))
   .command(reg(PlatformSessionsCommand))
+  .command(reg(PlatformProdCommand))
   .command(reg(PlatformPermissionsCommand))
   .command(reg(PlatformIdentityCommand))
   .command(reg(PlatformSystemAppsScanCommand))
