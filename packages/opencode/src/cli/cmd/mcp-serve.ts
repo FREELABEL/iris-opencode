@@ -1011,7 +1011,7 @@ parts you did not mean to touch.`,
           if (action === "get") {
             const b = num("bloq")
             if (b === undefined) return { content: [{ type: "text" as const, text: "Error: 'bloq' (board ID) is required for action:'get'." }], isError: true }
-            return { content: [{ type: "text" as const, text: await run(["bloqs", "get", String(b)]) }] }
+            return { content: [{ type: "text" as const, text: await run(["bloqs", "get", String(b), "--json"]) }] }
           }
 
           if (action === "items") {
