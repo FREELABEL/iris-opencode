@@ -22,8 +22,10 @@ out = {"generated_note": "Snapshot of the fl-api + fl-iris-api route tables. Ref
 seen = set()
 for path, svc in (("/tmp/routes-fl.raw", "fl-api"), ("/tmp/routes-iris.raw", "iris-api")):
     raw = open(path).read()
-    # railway ssh prepends its own noise; the table starts at the first [
-    data = json.loads(raw[raw.index("["):])
+    # railway ssh prepends its own noise (including log lines with bracketed
+    # timestamps like "[2026-08-20 ...]", which broke a plain first-"[" search) —
+    # anchor on the actual start of the route array instead.
+    data = json.loads(raw[raw.index('[{"domain"'):])
     for r in data:
         uri = "/" + re.sub(r"\{[^}]+\}", "{}", r["uri"].lstrip("/"))
         for m in r["method"].split("|"):

@@ -4777,6 +4777,21 @@
 "service": "fl-api"
 },
 {
+"method": "GET",
+"uri": "/api/v1/genesis/heartbeat/{}/channels",
+"service": "fl-api"
+},
+{
+"method": "PUT",
+"uri": "/api/v1/genesis/heartbeat/{}/channels",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/genesis/heartbeat/{}/runs",
+"service": "fl-api"
+},
+{
 "method": "POST",
 "uri": "/api/v1/genesis/transcribe",
 "service": "iris-api"
@@ -5114,6 +5129,16 @@
 {
 "method": "GET",
 "uri": "/api/v1/internal/pathways/demand-package/{}",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/internal/social/accounts",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/internal/social/publish",
 "service": "fl-api"
 },
 {
@@ -9598,7 +9623,22 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/social-media/accounts",
+"service": "fl-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/social-media/accounts/{}",
+"service": "fl-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/social-media/analytics",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/social-media/connect",
 "service": "fl-api"
 },
 {
@@ -9614,6 +9654,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/social-media/status/{}",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/social-media/sync",
 "service": "fl-api"
 },
 {
