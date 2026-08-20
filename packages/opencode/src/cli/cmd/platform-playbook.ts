@@ -227,6 +227,7 @@ const SkillRunCommand = cmd({
       const positionalArgs = (args.skillArgs as string[] ?? [])
       const flagArgs: Record<string, unknown> = {}
       const cleanPositional: string[] = []
+      const declared = new Set(Object.keys(plan.args ?? {}))
       for (const a of positionalArgs) {
         if (a.startsWith("--")) {
           const eqIdx = a.indexOf("=")
@@ -235,9 +236,27 @@ const SkillRunCommand = cmd({
           } else {
             flagArgs[a.slice(2)] = true
           }
-        } else {
-          cleanPositional.push(a)
+          continue
         }
+
+        // Accept a bare `key=value` when `key` is a declared arg.
+        //
+        // Only `--key=value` used to bind, so `iris playbook run ads topic="..."`
+        // put the WHOLE string — prefix included — into the first positional. The
+        // run then proceeded with topic="topic=..." and brand="brand=freelabel",
+        // which is wrong in a way nothing reports: the steps still execute, the
+        // model shrugs off the prefix, and only a value used for an exact lookup
+        // (a brand slug) fails, several steps later and far from the cause.
+        //
+        // Guarded on the declared name so a positional that legitimately contains
+        // "=" is still a positional.
+        const eq = a.indexOf("=")
+        if (eq > 0 && declared.has(a.slice(0, eq))) {
+          flagArgs[a.slice(0, eq)] = a.slice(eq + 1)
+          continue
+        }
+
+        cleanPositional.push(a)
       }
 
       let resolvedArgs: Record<string, unknown>
