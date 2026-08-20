@@ -332,6 +332,30 @@ export const McpServeCommand = cmd({
   describe: "start IRIS MCP gateway server (stdio, or streamable HTTP with --http)",
   builder: (yargs) =>
     yargs
+      .epilogue(
+        [
+          "Exposes IRIS to an external orchestrator (Claude Code, Codex, Cursor, ...) as MCP tools.",
+          "",
+          "TOOLS:",
+          "  iris_run      run any IRIS CLI command; add --json for structured output",
+          "  iris_help     per-command flags and subcommands",
+          "  iris_agent    consult or configure a standing IRIS agent",
+          "                list | ask | get | create | update | delete",
+          "  iris_memory   read/write the Atlas — boards, lists, items",
+          "                search | boards | get | items | add | update",
+          "  hive_*        inspect and drive Hive tmux sessions (needs the local daemon)",
+          "  playbook_*    one typed tool per executable playbook (--no-playbooks to omit)",
+          "",
+          "RESOURCES:  iris://guide  iris://commands  iris://recipes",
+          "",
+          "Prefer iris_agent over `iris_run chat ...` and iris_memory over `iris_run bloqs ...`:",
+          "both carry guard rails that a raw command string does not — an agent that answered",
+          "without querying anything is flagged, cited item IDs are marked unverified, and a",
+          "write that would change nothing is refused rather than reported as success.",
+          "",
+          "Register it with:  iris mcp install",
+        ].join("\n"),
+      )
       .option("playbooks", {
         type: "boolean",
         default: true,
