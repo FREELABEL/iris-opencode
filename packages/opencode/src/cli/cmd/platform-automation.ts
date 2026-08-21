@@ -768,3 +768,14 @@ export const PlatformAutomationCommand = cmd({
       .demandCommand(1),
   async handler() {},
 })
+
+// The top-level `iris automation` verb, kept working and marked for what it is.
+//
+// P0b: `automation` and `workflows` were two trees over the same /v1/workflows family,
+// and a user had no way to tell which to reach for. The tree now lives under `workflows`;
+// this stays so nobody's script breaks, with a describe that says where it went. Renaming
+// a user-facing verb is hard to walk back — deprecate in help first, remove on evidence.
+export const PlatformAutomationAliasCommand = cmd({
+  ...PlatformAutomationCommand,
+  describe: "deprecated — use `iris workflows automation`",
+})

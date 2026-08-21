@@ -170,7 +170,7 @@ import { PlatformDocsCommand } from "./cli/cmd/platform-docs"
 import { PlatformWalletCommand } from "./cli/cmd/platform-wallet"
 import { PlatformConfigCommand } from "./cli/cmd/platform-config"
 import { PlatformAppCommand } from "./cli/cmd/platform-app"
-import { PlatformAutomationCommand } from "./cli/cmd/platform-automation"
+import { PlatformAutomationAliasCommand } from "./cli/cmd/platform-automation"
 import { PlatformAutomationTestCommand } from "./cli/cmd/platform-automation-test"
 import { HowToCommand } from "./cli/cmd/platform-howto"
 import { PlatformClaudeCommand } from "./cli/cmd/platform-claude"
@@ -434,7 +434,7 @@ const cli = yargs(rawArgs)
   // (integrations is owned by PlatformRunCommand in platform-run.ts)
   .command(reg(PlatformConfigCommand))
   .command(reg(PlatformAppCommand))
-  .command(reg(PlatformAutomationCommand))
+  .command(reg(PlatformAutomationAliasCommand))
   .command(reg(PlatformAutomationTestCommand))
   .command(reg(HowToCommand))
   .command(reg(PlatformClaudeCommand))

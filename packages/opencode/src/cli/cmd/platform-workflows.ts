@@ -12,6 +12,7 @@ import {
 } from "./input-form"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { PlatformAutomationCommand } from "./platform-automation"
 
 // ============================================================================
 // Sync helpers
@@ -1860,6 +1861,13 @@ export const PlatformWorkflowsCommand = cmd({
       .command(WorkflowsRunsCommand)
       .command(WorkflowsEvalCommand)
       .command(WorkflowsHubCommand)
+      // `automation` lives HERE now, not beside `workflows` (P0b). Both verbs already
+      // called the same /v1/workflows family — /runs, /templates, /{id} — so a user had
+      // two trees and no way to tell which one to reach for. Nested rather than flattened
+      // because the two subcommand sets collide on create/list/delete/runs/status, and a
+      // merge that silently changes what `create` means is worse than two trees.
+      // `iris automation …` still works.
+      .command(PlatformAutomationCommand)
       .demandCommand(),
   async handler() {},
 })

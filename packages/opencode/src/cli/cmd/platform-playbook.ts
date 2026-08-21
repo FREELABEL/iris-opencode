@@ -24,6 +24,7 @@ import { existsSync, readdirSync } from "fs"
 import { join as pathJoin } from "path"
 import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCoverage } from "../../skill/e2e/runner"
 import { PlaybookDraftCommand } from "./playbook-draft"
+import { PlaybookSopDraftCommand } from "./sop-draft"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
 async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
@@ -1544,6 +1545,9 @@ export const PlatformPlaybookCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(PlaybookDraftCommand)
+      // One walkthrough, three readers: `draft` for an agent, `sop` for a person,
+      // `sync` for Claude. #P0b — moved off the `sop` verb, which owns service requests.
+      .command(PlaybookSopDraftCommand)
       .command(SkillListCommand)
       .command(SkillShowCommand)
       .command(SkillRunCommand)
@@ -1578,6 +1582,7 @@ export const PlatformSkillCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(PlaybookDraftCommand)
+      .command(PlaybookSopDraftCommand)
       .command(SkillListCommand)
       .command(SkillShowCommand)
       .command(SkillRunCommand)

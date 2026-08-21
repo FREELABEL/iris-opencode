@@ -152,3 +152,22 @@ export const SopDraftCommand = cmd({
   },
 })
 
+// ============================================================================
+// iris playbook sop — the same command, parented where the choice is legible
+//
+// One recording produces three artifacts, one per reader: a PLAYBOOK.md for an agent
+// (`iris playbook draft`), an SOP for a person (this), and a skill for Claude
+// (`iris playbook sync`). Registering the person's rendering under `sop` — a verb that
+// otherwise owns service requests and the worker-facing requirements list, a genuinely
+// different domain — made the reader look like a resource. Under `playbook`, the reader
+// you are rendering for is the subcommand, which is the actual choice being made.
+//
+// `iris sop draft` still works. Renaming a user-facing verb is hard to walk back, so the
+// old path stays until something proves nobody is on it.
+// ============================================================================
+
+export const PlaybookSopDraftCommand = cmd({
+  ...SopDraftCommand,
+  command: "sop <input>",
+  describe: "draft the same walkthrough as an SOP a person can follow",
+})
