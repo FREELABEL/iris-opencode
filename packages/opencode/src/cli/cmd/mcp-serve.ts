@@ -337,7 +337,11 @@ export function extractProvenance(trace: unknown): Provenance {
     if (!ev || typeof ev !== "object") continue
     const e = ev as Record<string, any>
     const data = (e.data ?? {}) as Record<string, any>
-    const label = typeof e.label === "string" ? e.label : ""
+    // The same run is observable in two shapes: the NORMALISED trace `iris chat -V` prints
+    // (label: "context: rag_context") and the RAW event an onEvent callback receives
+    // (memory_type: "rag_context"). Reading only the label made `agents prove` report
+    // "read: nothing" for an agent that had just retrieved three documents. Accept both.
+    const label = typeof e.label === "string" ? e.label : typeof e.memory_type === "string" ? e.memory_type : ""
 
     if (e.type === "memory_injection" && label.includes("rag_context")) {
       if (typeof data.bloq_id === "number") out.retrieval_bloq_id = data.bloq_id
@@ -355,12 +359,19 @@ export function extractProvenance(trace: unknown): Provenance {
 
     // Labels are decorated with arrows ("→ ToolName" / "← ToolName"); strip them so a call
     // and its result collapse onto one entry instead of appearing as two different tools.
+    // Raw events name the tool in `tool`; the trace decorates it into the label as
+    // "→ Tool" / "← Tool". Prefer the explicit field, fall back to stripping the arrow.
+    const toolName = (): string =>
+      typeof e.tool === "string" && e.tool.trim()
+        ? e.tool.trim()
+        : label.replace(/^[^A-Za-z0-9_]*/, "").trim()
+
     if (e.type === "tool_call") {
-      const tool = label.replace(/^[^A-Za-z0-9_]*/, "").trim()
+      const tool = toolName()
       if (tool) out.tool_calls.push({ tool })
     }
     if (e.type === "tool_result") {
-      const tool = label.replace(/^[^A-Za-z0-9_]*/, "").trim()
+      const tool = toolName()
       if (tool && typeof data.status === "string") statusByTool.set(tool, data.status)
     }
   }

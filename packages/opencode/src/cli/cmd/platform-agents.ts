@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { AgentsProveCommand } from "./agent-prove"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
@@ -1633,6 +1634,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsDeleteCommand)
       .command(AgentsBulkDeleteCommand)
       .command(AgentsChatCommand)
+      .command(AgentsProveCommand)
       .command(AgentsAssignCommand)
       .command(AgentsMessageCommand)
       .command(AgentsInboxCommand)

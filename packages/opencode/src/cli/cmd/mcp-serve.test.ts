@@ -346,6 +346,32 @@ describe("extractProvenance", () => {
     expect(p.retrieved_item_ids).toEqual(["164650", "181392"])
   })
 
+
+  // The SAME data arrives in two shapes: the normalised TRACE (label: "context: rag_context")
+  // that `iris chat -V` prints, and the RAW event stream (memory_type: "rag_context") that an
+  // onEvent callback receives. Reading only one made `agents prove` report "read: nothing" for
+  // an agent that had retrieved three documents — a false negative that makes a working
+  // product look broken.
+  test("accepts the RAW event shape too (memory_type, not label)", () => {
+    const raw = [
+      { type: "memory_injection", memory_type: "rag_context", data: { bloq_id: 532, document_count: 2, sources: ["Document #App\\Models\\User\\Bloq\\BloqItem_181392"] } },
+      { type: "memory_injection", memory_type: "conversation_history", data: { thread_id: "t1", message_count: 4 } },
+    ]
+    const p = extractProvenance(raw)
+    expect(p.retrieved_item_ids).toEqual(["181392"])
+    expect(p.retrieval_bloq_id).toBe(532)
+    expect(p.thread_id).toBe("t1")
+    expect(p.history_messages).toBe(4)
+  })
+
+  test("accepts a raw tool event carrying `tool` instead of an arrow label", () => {
+    const p = extractProvenance([
+      { type: "tool_call", tool: "getRevenue" },
+      { type: "tool_result", tool: "getRevenue", data: { status: "success" } },
+    ])
+    expect(p.tool_calls).toEqual([{ tool: "getRevenue", status: "success" }])
+  })
+
   test("unrelated trace events contribute nothing", () => {
     const p = extractProvenance([{ type: "thinking", label: "thinking", data: "..." }])
     expect(p).toEqual({
