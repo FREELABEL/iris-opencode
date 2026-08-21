@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, dim, bold, writeJson } from "./iris-api"
-import { rollup, scoreScenario, type ScenarioLine, type ActualLine } from "./mint-scenarios"
+import { rollup, scoreScenario, ledgerToActuals, applyCategoryMapping, type ScenarioLine, type ActualLine } from "./mint-scenarios"
 
 // Lives in its own file rather than inside platform-mint.ts, which is mid-refactor into
 // mint-core.ts. Registration is a single line there so the two do not collide.
@@ -39,13 +39,22 @@ async function rows(slug: string, filters: Record<string, string> = {}): Promise
  * become a blended percentage downstream. This is the storage-side half of the same rule the
  * arithmetic enforces.
  */
-function toScenarioLines(raw: any[]): ScenarioLine[] {
+function toScenarioLines(raw: any[]): Array<ScenarioLine & { ledger_category?: string | null }> {
   return raw.map((r) => ({
     label: String(r.label ?? ""),
     unit_price: Number(r.unit_price ?? 0),
     units: Number(r.units ?? 0),
     margin_pct: r.margin_measured === false || r.margin_pct == null ? null : Number(r.margin_pct),
+    ledger_category: r.ledger_category ?? null,
   }))
+}
+
+/** Every ledger transaction in range. The ledger is small; one page is plenty today. */
+async function fetchLedger(): Promise<any[]> {
+  const res = await irisFetch(`/api/v1/atlas/transactions?per_page=500`)
+  if (!res.ok) return []
+  const body = (await res.json().catch(() => null)) as any
+  return body?.data?.data ?? body?.data ?? []
 }
 
 const ListCommand = cmd({
@@ -114,7 +123,10 @@ const ScoreCommand = cmd({
   builder: (y) =>
     y
       .positional("name", { type: "string" })
-      .option("actuals", { type: "string", describe: "JSON file of [{label, monthly}] — omit to read the ledger" })
+      .option("actuals", { type: "string", describe: "JSON file of [{label, monthly}] — omit to read the Mint ledger" })
+      .option("from", { type: "string", describe: "period start YYYY-MM-DD" })
+      .option("to", { type: "string", describe: "period end YYYY-MM-DD" })
+      .option("scope", { type: "string", describe: "ledger scope to score against, e.g. business" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty(); prompts.intro(`◈  Scenario score — ${args.name}`)
@@ -122,13 +134,40 @@ const ScoreCommand = cmd({
 
     const planned = toScenarioLines(await rows(LINES, { scenario: String(args.name) }))
     let actual: ActualLine[] = []
+    let sourceLabel = ""
+
     if (args.actuals) {
       const fs = await import("fs")
       actual = JSON.parse(fs.readFileSync(String(args.actuals), "utf-8"))
+      sourceLabel = `file ${args.actuals}`
+    } else {
+      const txs = await fetchLedger()
+      const raw = ledgerToActuals(txs, {
+        from: args.from as string | undefined,
+        to: args.to as string | undefined,
+        scope: args.scope as string | undefined,
+      })
+      // Explicit mapping only — a line says which ledger category backs it. Guessing is how
+      // a scenario quietly scores against the wrong money.
+      actual = applyCategoryMapping(raw, planned)
+      const window = args.from || args.to ? `${args.from ?? "…"} → ${args.to ?? "…"}` : "all time"
+      sourceLabel = `Mint ledger · ${txs.length} txns · ${window}${args.scope ? ` · scope=${args.scope}` : ""}`
     }
 
     const s = scoreScenario(planned, actual)
     if (args.json) { await writeJson(s); prompts.outro("Done"); return }
+
+    prompts.log.info(dim(`actuals: ${sourceLabel}`))
+    // An unmapped line cannot be scored, and saying so beats reporting a variance that is
+    // really just a missing mapping.
+    const unmapped = planned.filter((p) => !p.ledger_category).map((p) => p.label)
+    if (!args.actuals && unmapped.length) {
+      prompts.log.warn(
+        `${unmapped.length} line(s) have no ledger_category and were matched by NAME only ` +
+          `(${unmapped.join(", ")}). If a line shows no actuals, check the mapping before ` +
+          `concluding the revenue is not there.`,
+      )
+    }
 
     for (const l of s.lines) {
       const v = l.variance === null ? dim("no actuals recorded") : `${l.variance >= 0 ? "+" : ""}${usd(l.variance)}`

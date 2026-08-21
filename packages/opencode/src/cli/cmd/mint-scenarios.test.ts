@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { computeLine, rollup, scoreScenario } from "./mint-scenarios"
+import { computeLine, rollup, scoreScenario, ledgerToActuals, applyCategoryMapping } from "./mint-scenarios"
 
 /**
  * GOLDEN FIXTURE — §24 of /p/iris-labs-pricing-model, "Simulation — the path to $2M MRR".
@@ -154,5 +154,96 @@ describe("scoreScenario — the part that justifies building this", () => {
     expect(s.totals.lines_without_actuals).toBe(0)
     expect(s.totals.actual).toBe(0)
     expect(s.lines).toEqual([])
+  })
+})
+
+describe("ledgerToActuals — turning the ledger into scoreable revenue", () => {
+  const TX = [
+    { type: "revenue", amount_cents: 375000, category: "Membership Revenue", transaction_date: "2026-04-04T00:00:00Z", metadata: { scope: "business" } },
+    { type: "revenue", amount_cents: 245000, category: "Membership Revenue", transaction_date: "2026-04-04T00:00:00Z", metadata: { scope: "business" } },
+    { type: "expense", amount_cents: 1200000, category: "contracts", transaction_date: "2026-04-15T00:00:00Z", metadata: { scope: "business" } },
+    { type: "revenue", amount_cents: 100000, category: "Client Services", transaction_date: "2026-07-01T00:00:00Z", metadata: { scope: "business" } },
+    { type: "revenue", amount_cents: 50000, category: "Side gig", transaction_date: "2026-04-10T00:00:00Z", metadata: { scope: "personal" } },
+  ]
+
+  // An expense counted as revenue would invent income. This is the single most important
+  // assertion in the file.
+  test("EXPENSES ARE NEVER COUNTED AS REVENUE", () => {
+    const a = ledgerToActuals(TX, {})
+    expect(a.find((x) => x.label === "contracts")).toBeUndefined()
+  })
+
+  test("groups revenue by category and sums it", () => {
+    const a = ledgerToActuals(TX, {})
+    expect(a.find((x) => x.label === "Membership Revenue")!.monthly).toBe(6200)
+  })
+
+  test("cents are summed as integers, converted once", () => {
+    const a = ledgerToActuals(
+      [
+        { type: "revenue", amount_cents: 1, category: "x", transaction_date: "2026-04-01T00:00:00Z" },
+        { type: "revenue", amount_cents: 2, category: "x", transaction_date: "2026-04-01T00:00:00Z" },
+      ],
+      {},
+    )
+    expect(a[0].monthly).toBe(0.03)
+  })
+
+  test("date window is inclusive of both ends", () => {
+    const a = ledgerToActuals(TX, { from: "2026-04-04", to: "2026-04-04" })
+    expect(a).toHaveLength(1)
+    expect(a[0].monthly).toBe(6200)
+  })
+
+  test("a window that excludes everything yields NO lines, not zeroed ones", () => {
+    expect(ledgerToActuals(TX, { from: "2027-01-01", to: "2027-12-31" })).toEqual([])
+  })
+
+  test("scope filters, and business excludes personal", () => {
+    const a = ledgerToActuals(TX, { scope: "business" })
+    expect(a.find((x) => x.label === "Side gig")).toBeUndefined()
+  })
+
+  // Silently dropping uncategorised money would hide revenue entirely; it must surface so
+  // scoreScenario can report it as unmatched.
+  test("uncategorised revenue is surfaced, not dropped", () => {
+    const a = ledgerToActuals([{ type: "revenue", amount_cents: 500, transaction_date: "2026-04-01T00:00:00Z" }], {})
+    expect(a).toEqual([{ label: "(uncategorised)", monthly: 5 }])
+  })
+
+  test("an empty ledger yields no lines", () => {
+    expect(ledgerToActuals([], {})).toEqual([])
+  })
+})
+
+describe("applyCategoryMapping — explicit line to ledger-category wiring", () => {
+  const actuals = [
+    { label: "Membership Revenue", monthly: 6200 },
+    { label: "Consulting", monthly: 900 },
+  ]
+
+  test("relabels a mapped category to its scenario line", () => {
+    const m = applyCategoryMapping(actuals, [{ label: "OS · Solo", ledger_category: "Membership Revenue" }])
+    expect(m.find((a) => a.label === "OS · Solo")!.monthly).toBe(6200)
+  })
+
+  test("an unmapped category keeps its own name so it surfaces as unmatched", () => {
+    const m = applyCategoryMapping(actuals, [{ label: "OS · Solo", ledger_category: "Membership Revenue" }])
+    expect(m.find((a) => a.label === "Consulting")).toBeTruthy()
+  })
+
+  // A line with no mapping must NOT silently absorb a same-named category by accident, but
+  // an exact label match is a legitimate mapping.
+  test("a line with no ledger_category still matches an identically named category", () => {
+    const m = applyCategoryMapping([{ label: "Consulting", monthly: 900 }], [{ label: "Consulting" }])
+    expect(m).toEqual([{ label: "Consulting", monthly: 900 }])
+  })
+
+  test("two lines mapped to the same category both receive it", () => {
+    const m = applyCategoryMapping(actuals, [
+      { label: "A", ledger_category: "Membership Revenue" },
+      { label: "B", ledger_category: "Membership Revenue" },
+    ])
+    expect(m.filter((a) => a.monthly === 6200).map((a) => a.label).sort()).toEqual(["A", "B"])
   })
 })

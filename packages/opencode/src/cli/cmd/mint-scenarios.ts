@@ -158,3 +158,74 @@ export function scoreScenario(planned: ScenarioLine[], actual: ActualLine[]): Sc
     },
   }
 }
+
+// ── ledger → actuals ─────────────────────────────────────────────────────────
+
+export type LedgerTx = {
+  type?: string | null
+  amount_cents?: number | null
+  category?: string | null
+  transaction_date?: string | null
+  metadata?: { scope?: string | null } | null
+}
+
+/** Revenue that arrived with no category still has to be visible. */
+export const UNCATEGORISED = "(uncategorised)"
+
+/**
+ * Collapse ledger transactions into per-category revenue for a period.
+ *
+ * ONLY `type === "revenue"` counts. The ledger is overwhelmingly expenses (20 of 22 rows at
+ * the time of writing), so a filter that let them through would not fail loudly — it would
+ * report a business as wildly profitable. That is the assertion the tests lead with.
+ *
+ * A window that matches nothing returns NO lines rather than zeroed ones, so scoring reports
+ * those scenario lines as `no_actuals` (unknown) instead of asserting they earned nothing.
+ */
+export function ledgerToActuals(
+  txs: LedgerTx[],
+  opts: { from?: string; to?: string; scope?: string },
+): ActualLine[] {
+  const byCategory = new Map<string, number>()
+  for (const tx of txs) {
+    if (String(tx?.type ?? "").toLowerCase() !== "revenue") continue
+
+    const day = String(tx?.transaction_date ?? "").slice(0, 10)
+    if (opts.from && day < opts.from) continue
+    if (opts.to && day > opts.to) continue
+    if (opts.scope && String(tx?.metadata?.scope ?? "") !== opts.scope) continue
+
+    const cat = (tx?.category ?? "").toString().trim() || UNCATEGORISED
+    byCategory.set(cat, (byCategory.get(cat) ?? 0) + (Number(tx?.amount_cents) || 0))
+  }
+  return [...byCategory.entries()].map(([label, cents]) => ({ label, monthly: cents / 100 }))
+}
+
+/**
+ * Rename ledger categories to the scenario lines that claim them.
+ *
+ * The mapping is EXPLICIT (`ledger_category` on the line) because guessing which category
+ * backs which line is how a scenario quietly scores against the wrong money. A category no
+ * line claims keeps its own name, so scoreScenario reports it as unmatched — "the model is
+ * missing a line" — rather than dropping it.
+ */
+export function applyCategoryMapping(
+  actuals: ActualLine[],
+  lines: Array<{ label: string; ledger_category?: string | null }>,
+): ActualLine[] {
+  const out: ActualLine[] = []
+  const claimed = new Set<string>()
+  const k = (s: string) => s.trim().toLowerCase()
+
+  for (const line of lines) {
+    const want = k(line.ledger_category?.trim() || line.label)
+    for (const a of actuals) {
+      if (k(a.label) === want) {
+        out.push({ label: line.label, monthly: a.monthly })
+        claimed.add(k(a.label))
+      }
+    }
+  }
+  for (const a of actuals) if (!claimed.has(k(a.label))) out.push(a)
+  return out
+}
