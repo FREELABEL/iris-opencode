@@ -1765,6 +1765,202 @@ const ComposeCmd = cmd({
   },
 })
 
+// ============================================================================
+// add-table — scaffold a DataTable onto a page from an Atlas dataset schema (SDR-06)
+// ============================================================================
+
+/**
+ * The bridge that was missing between a dataset and a page.
+ *
+ * Everything else in the schema-driven-rendering epic (SDR-01..05) is plumbing: the feed
+ * carries the schema's labels and types, DataTable consumes them, and an Atlas field can
+ * declare how it wants to be drawn. None of it is reachable without hand-editing page JSON
+ * — which is the authoring step this replaces.
+ *
+ * NOTE ON WHAT THIS DELIBERATELY DOES NOT DO
+ * ------------------------------------------
+ * It does not map Atlas storage types to Genesis render types. That map lives in exactly one
+ * place (iris-api `utils/atlasFieldTypes.ts`, SDR-04) and a copy here would be a third — the
+ * precise disease this epic exists to cure (#178186). So the emitted component carries NO
+ * column types: either the feed ships `fields` and the renderer derives everything, or it
+ * does not and the columns fall back to text, which is the documented honest fallback.
+ */
+const AddTableCmd = cmd({
+  command: "add-table <slug>",
+  aliases: ["add-datatable"],
+  describe: "scaffold a DataTable onto a page from an Atlas dataset schema (SDR-06)",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "target page slug", type: "string", demandOption: true })
+      .option("from-dataset", { type: "string", demandOption: true, describe: "Atlas schema slug (see: iris atlas:datasets schemas list)" })
+      .option("data-source", { type: "string", demandOption: true, describe: "feed URL the table fetches at render time" })
+      .option("title", { type: "string", describe: "table title (defaults to the schema name)" })
+      .option("fields", { type: "string", describe: "comma-separated field keys to include, in order (default: all)" })
+      .option("component-id", { type: "string", describe: "component id (default: derived from the schema slug)" })
+      .option("position", { type: "number", describe: "index to insert at (default: before SiteFooter, else appended)" })
+      .option("dry-run", { type: "boolean", default: false, describe: "print the component JSON without writing" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Add table to ${args.slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Reading schema…")
+
+    // ── 1. the schema ────────────────────────────────────────────────────────
+    const schemaRes = await irisFetch(`/api/v1/atlas/schemas/${args["from-dataset"]}`)
+    if (!(await handleApiError(schemaRes, "Read schema"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+    const schemaBody = (await schemaRes.json()) as any
+    const schema = schemaBody?.data?.schema ?? schemaBody?.data
+    const allFields: any[] = schema?.fields?.fields ?? []
+
+    if (allFields.length === 0) {
+      sp.stop("Refused", 1)
+      prompts.log.error(`Schema '${args["from-dataset"]}' declares no fields — there is nothing to build a table from.`)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    // Optional subset/order. An unknown key is refused rather than skipped: silently
+    // dropping it produces a table missing a column the author explicitly asked for.
+    let fields = allFields
+    if (args.fields) {
+      const want = args.fields.split(",").map((f) => f.trim()).filter(Boolean)
+      const known = new Set(allFields.map((f) => f.key))
+      const missing = want.filter((w) => !known.has(w))
+      if (missing.length) {
+        sp.stop("Refused", 1)
+        prompts.log.error(
+          `Not in schema '${args["from-dataset"]}': ${missing.join(", ")}\n\n` +
+            `  Available: ${allFields.map((f) => f.key).join(", ")}`,
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      fields = want.map((w) => allFields.find((f) => f.key === w))
+    }
+
+    // ── 2. does the feed carry field metadata? (SDR-01) ──────────────────────
+    // This decides whether the page needs columns written into it at all, so it is
+    // probed rather than assumed — the answer differs by deploy, not by configuration.
+    sp.message("Probing the feed…")
+    let feedHasFields = false
+    let feedNote = ""
+    try {
+      const probe = await fetch(args["data-source"], { headers: { Accept: "application/json" } })
+      if (!probe.ok) {
+        feedNote = `the feed returned HTTP ${probe.status}`
+      } else {
+        const payload = (await probe.json()) as any
+        feedHasFields = Array.isArray(payload?.fields) && payload.fields.length > 0
+        if (!feedHasFields) feedNote = "the feed responded but sends no `fields` block"
+      }
+    } catch (e: any) {
+      feedNote = `the feed could not be reached (${e?.message ?? "unknown error"})`
+    }
+
+    // ── 3. build the component ───────────────────────────────────────────────
+    const componentId = args["component-id"] ?? `table-${args["from-dataset"]}`
+    const props: Record<string, unknown> = {
+      title: args.title ?? schema?.name ?? args["from-dataset"],
+      dataSource: args["data-source"],
+    }
+
+    // Columns are written ONLY when the feed cannot describe itself. Note they carry key
+    // and label but no `type` — deriving a render type needs the Atlas→Genesis map, which
+    // lives in iris-api and must not be duplicated here. Untyped columns render as text.
+    if (!feedHasFields) {
+      props.columns = fields.map((f) => ({ key: f.key, label: f.label ?? f.key }))
+    }
+
+    const component = { type: "DataTable", id: componentId, props }
+
+    if (args["dry-run"]) {
+      sp.stop("Dry run — nothing written")
+      if (args.json) { await writeJson(component); prompts.outro("Done"); return }
+      console.log(JSON.stringify(component, null, 2))
+      UI.empty()
+      console.log(
+        feedHasFields
+          ? dim("  Feed ships `fields` — columns are derived at render time from the schema.")
+          : dim(`  Columns written explicitly (untyped) because ${feedNote}.`),
+      )
+      prompts.outro("Done")
+      return
+    }
+
+    // ── 4. insert into the page ──────────────────────────────────────────────
+    sp.message("Reading page…")
+    const page = await getBySlug(args.slug, true)
+    if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+
+    const json = page.json_content ?? {}
+    const components: any[] = Array.isArray(json.components) ? [...json.components] : []
+
+    if (components.some((c) => c?.id === componentId)) {
+      sp.stop("Refused", 1)
+      prompts.log.error(
+        `Page '${args.slug}' already has a component with id '${componentId}'.\n` +
+          `Pass --component-id to add a second table from the same dataset.`,
+      )
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    // Default position lands the table above the footer rather than below it, which is
+    // where an appended component would otherwise go.
+    const footerIdx = components.findIndex((c) => c?.type === "SiteFooter")
+    const at =
+      args.position !== undefined
+        ? Math.max(0, Math.min(args.position, components.length))
+        : footerIdx >= 0
+          ? footerIdx
+          : components.length
+    components.splice(at, 0, component)
+
+    sp.message("Writing…")
+    const res = await pagesFetch(`/api/v1/pages/${page.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ json_content: { ...json, components } }),
+    })
+    if (!(await handleApiError(res, "Add table"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+
+    // Re-read and confirm, rather than trusting the 200 (#179802 — `set` reported success
+    // on a page whose slug did not even resolve).
+    const fresh = await getBySlug(args.slug, true)
+    const landed = (fresh?.json_content?.components ?? []).some((c: any) => c?.id === componentId)
+    if (!landed) {
+      sp.stop("Not applied", 1)
+      prompts.log.error(`The API accepted the write but '${componentId}' is not on the page.`)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    sp.stop("Added")
+    printKV("Page", args.slug)
+    printKV("Component", `${componentId} (position ${at})`)
+    printKV("Dataset", args["from-dataset"])
+    printKV("Columns", feedHasFields ? "derived from the feed's schema at render time" : `${fields.length} written explicitly, untyped`)
+    if (!feedHasFields) {
+      UI.empty()
+      prompts.log.warn(
+        `Wrote explicit columns because ${feedNote}.\n` +
+          `They carry labels but no types, so every column renders as text.\n` +
+          `Once the feed ships a \`fields\` block (SDR-01), remove the columns prop and the\n` +
+          `renderer will take dates, links, enums and display hints straight from the schema.`,
+      )
+    }
+    UI.empty()
+    console.log(dim(`  ${publicUrl(page)}`))
+    prompts.outro("Done")
+  },
+})
+
 const ComponentRegistryCmd = cmd({
   command: "component-registry",
   aliases: ["registry", "available-components"],
@@ -2734,6 +2930,7 @@ export const PlatformPagesCommand = cmd({
       .command(ComponentsCmd)
       .command(ComposeCmd)
       .command(ComponentRegistryCmd)
+      .command(AddTableCmd)
       .command(VersionsCmd)
       .command(RollbackCmd)
       .command(QrCmd)
