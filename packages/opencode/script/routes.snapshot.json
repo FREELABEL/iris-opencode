@@ -2047,6 +2047,16 @@
 "service": "fl-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/bloq/item/{}/gate/request",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/bloq/item/{}/gate/verify",
+"service": "fl-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/bloq/share-link/{}",
 "service": "fl-api"
@@ -4815,6 +4825,21 @@
 "method": "POST",
 "uri": "/api/v1/hive/register-node",
 "service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/how-tos",
+"service": "iris-api"
+},
+{
+"method": "PUT",
+"uri": "/api/v1/how-tos-sync",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/how-tos/{}",
+"service": "iris-api"
 },
 {
 "method": "GET",
@@ -14218,6 +14243,16 @@
 },
 {
 "method": "GET",
+"uri": "/how-to",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/how-to/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/install-code",
 "service": "iris-api"
 },
@@ -14464,6 +14499,16 @@
 {
 "method": "POST",
 "uri": "/n/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/n/{}/gate/request",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/n/{}/gate/verify",
 "service": "iris-api"
 },
 {
