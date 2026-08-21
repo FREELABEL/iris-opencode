@@ -585,6 +585,9 @@ export namespace Config {
       variant_cycle: z.string().optional().default("ctrl+t").describe("Cycle model variants"),
       input_clear: z.string().optional().default("ctrl+c").describe("Clear input field"),
       input_paste: z.string().optional().default("ctrl+v").describe("Paste from clipboard"),
+      // <leader> is ctrl+x, so this is Ctrl+X then V. `v` was the only unused letter that
+      // means anything here — voice.
+      input_dictate: z.string().optional().default("<leader>v").describe("Dictate: record voice into the prompt"),
       input_submit: z.string().optional().default("return").describe("Submit input"),
       input_newline: z
         .string()

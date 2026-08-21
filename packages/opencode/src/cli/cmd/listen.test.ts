@@ -1,5 +1,7 @@
 import { describe, test, expect } from "bun:test"
-import { resolveDevice, levelToUnit, renderMeter, silenceWarning } from "./listen"
+import { renderMeter } from "./listen"
+import { formatDictationClock, dictationBar } from "./tui/component/prompt/dictate"
+import { resolveDevice, levelToUnit, silenceWarning } from "../lib/mic"
 
 /**
  * Guards for `iris listen`.
@@ -122,5 +124,29 @@ describe("the silence guard", () => {
 
   test("does not warn about normal speech", () => {
     expect(silenceWarning(0.45, "MacBook Pro Microphone")).toBeNull()
+  })
+})
+
+describe("the dictation indicator (TUI)", () => {
+  test("clock is mm:ss and rolls past a minute", () => {
+    expect(formatDictationClock(0)).toBe("00:00")
+    expect(formatDictationClock(7_000)).toBe("00:07")
+    expect(formatDictationClock(61_000)).toBe("01:01")
+    expect(formatDictationClock(3_599_000)).toBe("59:59")
+  })
+
+  test("bar is fixed width so the footer never reflows mid-recording", () => {
+    // It shares a row with the agent and model names. A meter that grows pushes those off a
+    // narrow terminal, which costs more than the meter gives.
+    for (const u of [0, 0.3, 0.77, 1]) expect(dictationBar(u).length).toBe(12)
+  })
+
+  test("bar fills monotonically and clamps outside 0..1", () => {
+    const filled = (s: string) => (s.match(/█/g) ?? []).length
+    expect(filled(dictationBar(0))).toBe(0)
+    expect(filled(dictationBar(1))).toBe(12)
+    expect(filled(dictationBar(0.5))).toBeGreaterThan(filled(dictationBar(0.25)))
+    expect(filled(dictationBar(-1))).toBe(0)
+    expect(filled(dictationBar(5))).toBe(12)
   })
 })
