@@ -331,7 +331,20 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: IRIS Code v${{ steps.version.outputs.version }}
           draft: false
-          prerelease: false
+          # A PARTIAL release must never become GitHub's "latest".
+          #
+          # The verify step above deliberately publishes when only some platforms built, so the
+          # ones that did are not blocked. That is the right call — but "latest" is what
+          # `iris update` resolves, so a partial release silently broke updates on the missing
+          # platform. v1.3.193 shipped Linux + Windows with both macOS builds cancelled, became
+          # latest, and every mac running `iris update` quietly stayed on 1.3.192. No error, no
+          # signal — the release notes said "stay on the previous release" and nothing enforced it.
+          #
+          # Marking it a prerelease enforces it mechanically: GitHub skips prereleases when
+          # resolving "latest", so macs keep updating to the last COMPLETE release while the
+          # partial one stays fetchable by tag. Re-run the workflow to complete it and it is
+          # promoted automatically on the next full build.
+          prerelease: ${{ steps.assets.outputs.missing != '' }}
           generate_release_notes: true
           # Empty when everything built, so a complete release looks untouched.
           body: ${{ steps.assets.outputs.missing }}
