@@ -37,7 +37,17 @@ function readJsonArg(v: string | undefined, label: string): { ok: boolean; value
 async function loadFlowSchema(slug: string): Promise<any | null> {
   const res = await irisFetch(`/api/v1/atlas/schemas/${slug}`)
   if (!res.ok) return null
-  return ((await res.json()) as any)?.data ?? null
+  const data = ((await res.json()) as any)?.data ?? null
+  if (!data) return null
+  // GET  /atlas/schemas/{slug} responds { schema, record_count }.
+  // PATCH the same path responds with the schema DIRECTLY.
+  // Reading `.settings` off the GET shape therefore yielded undefined, and
+  // patchSettings then PATCHed a settings blob with no `steps` — and updateSchema
+  // does `settings => $request->input('settings', $current->settings)`, i.e. a
+  // wholesale REPLACE. So `flows publish` silently wiped every step (#181824),
+  // and `flows steps` wiped branding, completion and the published status.
+  // Unwrap both shapes rather than trusting either.
+  return data.schema ?? data
 }
 
 // ── FLOWS ────────────────────────────────────────────────────────────────────
@@ -216,7 +226,18 @@ async function patchSettings(slug: string, mutate: (s: any) => any, label: strin
   // The backend versions a schema on every PATCH and defaults `settings` to the
   // current value — so send the WHOLE blob back, mutated. Sending a fragment would
   // silently drop steps.
-  const next = mutate({ ...(current.settings ?? {}) })
+  const before = { ...(current.settings ?? {}) }
+  const next = mutate(before)
+  // Guard: a published flow with no steps renders an empty page and the CLI used to
+  // print success anyway. If steps existed and the mutation lost them, that is the
+  // bug above regressing — refuse rather than destroy.
+  const hadSteps = Array.isArray(before.steps) ? before.steps.length : 0
+  const willHave = Array.isArray(next.steps) ? next.steps.length : 0
+  if (hadSteps > 0 && willHave === 0) {
+    spinner.stop(`Refusing: this would drop all ${hadSteps} step(s)`, 1)
+    prompts.outro("Done")
+    return
+  }
   spinner.message(label)
   const res = await irisFetch(`/api/v1/atlas/schemas/${slug}`, { method: "PATCH", body: JSON.stringify({ settings: next }) })
   const ok = await handleApiError(res, label); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
