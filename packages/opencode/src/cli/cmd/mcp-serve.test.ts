@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { validateCommand, extractCitedIds, extractJson, validateAgainstSchema, extractProvenance } from "./mcp-serve"
+import { validateCommand, extractCitedIds, extractJson, validateAgainstSchema, extractProvenance, MCP_CHILD_ENV } from "./mcp-serve"
 
 describe("validateCommand", () => {
   // --- Should PASS: safe characters in quoted args ---
@@ -356,5 +356,19 @@ describe("extractProvenance", () => {
       thread_id: null,
       history_messages: null,
     })
+  })
+})
+
+describe("MCP surface attribution", () => {
+  // Regression: Beacon.source() returns "mcp" only when IRIS_MCP === "1", and
+  // nothing set it. Every command run through an MCP tool therefore reported
+  // source:"cli", so `iris usage` showed 1 mcp run against 55 MCP tool calls.
+  // The child process is where the run is opened, so the parent alone is not enough.
+  test("children spawned for MCP tools are marked as MCP-surface work", () => {
+    expect(MCP_CHILD_ENV.IRIS_MCP).toBe("1")
+  })
+
+  test("children stay non-interactive", () => {
+    expect(MCP_CHILD_ENV.IRIS_NON_INTERACTIVE).toBe("1")
   })
 })

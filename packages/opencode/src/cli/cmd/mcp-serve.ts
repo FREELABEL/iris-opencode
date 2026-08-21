@@ -454,12 +454,25 @@ export function validateCommand(command: string): { args: string[]; error?: stri
   return { args }
 }
 
+/**
+ * Environment every child spawned on behalf of an MCP tool must carry.
+ *
+ * IRIS_MCP is what Beacon.source() reads to stamp a run `mcp` instead of `cli`.
+ * The child is where the run is actually opened, so setting it on the server
+ * process alone is not enough — without it, work invoked through an MCP tool
+ * reports itself as CLI work. That is how 55 MCP tool calls landed as a single
+ * mcp-sourced run in 30 days and left P1a unconfirmable.
+ *
+ * Exported so the invariant is held by a test rather than by memory.
+ */
+export const MCP_CHILD_ENV = { IRIS_NON_INTERACTIVE: "1", IRIS_MCP: "1" } as const
+
 async function execIris(args: string[], timeoutMs: number = TIMEOUT_MS): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   // Don't auto-append --json — not all commands support it, and yargs strict
   // mode rejects unknown flags (e.g. `leads delete 123 --json` shows help text).
   // The tool description tells agents to use --json when they want structured output.
   const proc = Bun.spawn([IRIS_BIN, ...args], {
-    env: { ...process.env, IRIS_NON_INTERACTIVE: "1" },
+    env: { ...process.env, ...MCP_CHILD_ENV },
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -558,6 +571,11 @@ export const McpServeCommand = cmd({
         describe: "keep MCP session state (blocks serverless/edge and horizontal scaling)",
       }),
   async handler(argv) {
+    // This process IS the MCP surface. Set before anything can emit telemetry so
+    // the server's own spans are stamped mcp rather than cli. See execIris() for
+    // the child half — both are required.
+    process.env.IRIS_MCP = "1"
+
     // Build registry so knownCommands is populated
     buildCommandCatalog()
 
