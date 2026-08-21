@@ -6,6 +6,7 @@ import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, pr
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { AgentsBenchCommand } from "./platform-agents-bench"
+import { AgentsExportCommand } from "./platform-agents-export"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -1636,6 +1637,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsMessageCommand)
       .command(AgentsInboxCommand)
       .command(AgentsThreadCommand)
+      .command(AgentsExportCommand)
       .command(AgentsBenchCommand)
       .demandCommand(),
   async handler() {},
