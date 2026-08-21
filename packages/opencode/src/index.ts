@@ -91,6 +91,7 @@ import { PlatformPaymentsCommand } from "./cli/cmd/platform-payments"
 import { PlatformRevenueCommand } from "./cli/cmd/platform-revenue"
 import { PlatformDeliverCommand, DeliverCarouselCommand } from "./cli/cmd/platform-deliver"
 import { PlatformRunCommand, PlatformConnectCommand, PlatformListConnectedCommand, PlatformListAvailableCommand, PlatformExecCommand, PlatformListToolsCommand, PlatformListIntegrationsCommand } from "./cli/cmd/platform-run"
+import { PlatformListenCommand } from "./cli/cmd/listen"
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
@@ -355,6 +356,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformListToolsCommand))
   .command(reg(PlatformListIntegrationsCommand))
   .command(reg(PlatformTranscribeCommand))
+  .command(reg(PlatformListenCommand))
   .command(reg(PlatformDownloadCommand))
   .command(reg(PlatformConnectCommand))
   .command(reg(PlatformListConnectedCommand))

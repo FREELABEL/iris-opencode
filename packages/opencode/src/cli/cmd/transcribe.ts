@@ -124,7 +124,12 @@ async function transcribeViaServer(absPath: string, language?: string, brandId?:
   }
 }
 
-async function runLocalWhisper(
+/**
+ * Exported for `iris listen`, which records the audio this then transcribes. Sharing the
+ * function rather than the logic keeps the device default, the brand glossary, treatments,
+ * the save location and the knowledge-base sync in one place.
+ */
+export async function runLocalWhisper(
   filePath: string,
   language: string | undefined,
   asJson: boolean,
