@@ -3,7 +3,10 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, highlight, printDivider } from "./iris-api"
 import { homedir } from "os"
-import { join } from "path"
+import { join, resolve } from "path"
+import { existsSync, readdirSync, readFileSync } from "fs"
+import { createHash } from "crypto"
+import { irisFetch, IRIS_API } from "./iris-api"
 
 const HOWTO_DIR = join(homedir(), ".iris", "how-to")
 
@@ -170,6 +173,126 @@ const HowToSearchCommand = cmd({
 
 // ── Add / Update ─────────────────────────────────────────────────────────────
 
+/**
+ * The repository is the source of truth, so `publish` reads the REPO, never ~/.iris/how-to.
+ *
+ * Those two directories look identical and are not: ~/.iris/how-to is what the installer
+ * copied in, plus anything written locally by `iris how-to add`. Publishing from there would
+ * push unreviewed files nobody merged — which is exactly how the genesis-sdk recipe came to
+ * exist on one laptop and nowhere else. Reading scaffold/how-to makes "published" mean "in the
+ * repository", and that is the only definition worth having.
+ */
+function resolveSourceDir(explicit?: string): string | null {
+  const candidates = [
+    explicit,
+    "scaffold/how-to",
+    join(process.cwd(), "scaffold", "how-to"),
+    process.env.IRIS_CODE_ROOT ? join(process.env.IRIS_CODE_ROOT, "scaffold", "how-to") : undefined,
+  ].filter(Boolean) as string[]
+
+  for (const c of candidates) {
+    const abs = resolve(c)
+    if (existsSync(abs) && existsSync(join(abs, "README.md"))) return abs
+  }
+  return null
+}
+
+function readRecipes(dir: string) {
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".md") && f !== "README.md")
+    .sort()
+    .map((f) => {
+      const slug = f.replace(/\.md$/, "")
+      const raw = readFileSync(join(dir, f), "utf8")
+      const lines = raw.split("\n")
+      const title = (lines[0] || "").replace(/^#\s*/, "").trim() || slug
+      // First non-empty, non-heading line becomes the card summary.
+      const summary =
+        lines.slice(1).find((l) => l.trim() && !l.trim().startsWith("#") && !l.trim().startsWith("```"))?.trim() ?? null
+      const body_md = lines.slice(1).join("\n").trim()
+      return { slug, title, summary, body_md, hash: createHash("sha256").update(body_md).digest("hex") }
+    })
+}
+
+const HowToPublishCommand = cmd({
+  command: "publish",
+  aliases: ["sync"],
+  describe: "mirror the repository's recipes to the web at /how-to (reads scaffold/how-to)",
+  builder: (y) =>
+    y
+      .option("dir", { type: "string", describe: "path to scaffold/how-to (default: found from cwd)" })
+      .option("dry-run", { type: "boolean", default: false, describe: "show what would change, publish nothing" })
+      .option("cli-version", { type: "string", describe: "CLI version to stamp on the published rows" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Publish How-Tos")
+
+    const dir = resolveSourceDir(args.dir as string | undefined)
+    if (!dir) {
+      prompts.log.error("Could not find scaffold/how-to.")
+      console.log(dim("  Run from the iris-code repo, or pass ") + highlight("--dir <path>"))
+      console.log(dim("  Publishing from ~/.iris/how-to is refused: it may hold unreviewed local recipes."))
+      prompts.outro("")
+      return
+    }
+
+    const recipes = readRecipes(dir)
+    console.log(dim(`  source  ${dir}`))
+    console.log(dim(`  recipes ${recipes.length}`))
+
+    if (args["dry-run"]) {
+      // Compare against what is live, so a dry run answers "what is stale?" rather than
+      // just restating the file list.
+      let live: Record<string, string> = {}
+      try {
+        const res = await irisFetch("/api/v1/how-tos", {}, IRIS_API)
+        if (res.ok) {
+          const body: any = await res.json()
+          for (const r of body?.data ?? []) live[r.slug] = r.updated_at ?? ""
+        }
+      } catch { /* offline is not an error for a dry run */ }
+      const fresh = recipes.filter((r) => !(r.slug in live))
+      printDivider()
+      console.log(`  ${bold(String(recipes.length))} would publish · ${bold(String(fresh.length))} not yet live`)
+      for (const r of fresh.slice(0, 12)) console.log(dim("    + ") + r.slug)
+      printDivider()
+      prompts.outro(dim("Dry run — nothing was published."))
+      return
+    }
+
+    const res = await irisFetch(
+      "/api/v1/how-tos-sync",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          version: args["cli-version"],
+          recipes: recipes.map(({ slug, title, summary, body_md }) => ({ slug, title, summary, body_md })),
+        }),
+      },
+      IRIS_API,
+    )
+
+    if (!res.ok) {
+      prompts.log.error(`Publish failed — HTTP ${res.status}`)
+      console.log(dim("  " + (await res.text()).slice(0, 240)))
+      prompts.outro("")
+      return
+    }
+
+    const out: any = await res.json()
+    printDivider()
+    console.log(
+      `  ${bold(String(out.created))} created · ${bold(String(out.updated))} updated · ` +
+        `${dim(String(out.unchanged) + " unchanged")}` +
+        (out.unpublished ? ` · ${bold(String(out.unpublished))} unpublished` : ""),
+    )
+    console.log(dim(`  ${out.total_published} live at `) + highlight("https://heyiris.io/how-to"))
+    printDivider()
+    prompts.outro("")
+  },
+})
+
 const HowToAddCommand = cmd({
   command: "add <name>",
   aliases: ["create", "write", "save"],
@@ -328,6 +451,7 @@ export const HowToCommand = cmd({
       .command(HowToViewCommand)
       .command(HowToSearchCommand)
       .command(HowToAddCommand)
+      .command(HowToPublishCommand)
       .command(HowToRemoveCommand)
       // #178285/#178286: previously .demandCommand(), so a bare `iris how-to`
       // died with "Not enough non-option arguments: got 0, need at least 1" —
