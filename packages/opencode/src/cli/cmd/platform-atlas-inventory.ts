@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson, failNoOp} from "./iris-api"
 
 // ============================================================================
 // Atlas Inventory CLI (Track 7)
@@ -146,7 +146,6 @@ const UpdateCommand = cmd({
       .option("description", { type: "string" })
       .option("photo", { type: "string" }),
   async handler(args) {
-    const token = await requireAuth(); if (!token) return
     const body: Record<string, any> = {}
     if (args.name) body.name = args.name
     if (args.cost != null) body.unit_cost_cents = Math.round(Number(args.cost) * 100)
@@ -158,7 +157,8 @@ const UpdateCommand = cmd({
     if (args.retail != null) body.retail_price_cents = Math.round(Number(args.retail) * 100)
     if (args.description) body.description = args.description
     if (args.photo) body.photo = args.photo
-    if (Object.keys(body).length === 0) { console.log("Nothing to update"); return }
+    if (Object.keys(body).length === 0) { failNoOp("update", "pass at least one field flag") }
+    const token = await requireAuth(); if (!token) return
 
     const res = await irisFetch(`/api/v1/atlas/inventory/${args.id}`, { method: "PATCH", body: JSON.stringify(body) })
     await handleApiError(res, "Update")

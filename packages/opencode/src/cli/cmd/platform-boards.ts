@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, writeJson, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -319,9 +319,7 @@ const BoardsUpdateCommand = cmd({
     if (args.type) payload.type = args.type
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --content, --content-file, --status, or --type")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --title, --content, --content-file, --status, or --type")
     }
 
     const spinner = prompts.spinner()

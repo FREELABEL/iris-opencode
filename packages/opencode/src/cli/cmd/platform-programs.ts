@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, resolveUserId } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, resolveUserId, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -295,8 +295,6 @@ const UpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Program #${args.id}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const payload: Record<string, unknown> = {}
     if (args.name) payload.name = args.name
@@ -319,10 +317,10 @@ const UpdateCommand = cmd({
     if (args.active !== undefined) payload.active = args.active
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --name, --description, --tier, or --active")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --name, --description, --tier, or --active")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")
@@ -737,8 +735,6 @@ const PackageUpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Package #${args["package-id"]}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const payload: Record<string, unknown> = {}
     if (args.name) payload.name = args.name
@@ -747,10 +743,10 @@ const PackageUpdateCommand = cmd({
     if (args.active !== undefined) payload.is_active = args.active
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --name, --price, --description, or --active")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --name, --price, --description, or --active")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")

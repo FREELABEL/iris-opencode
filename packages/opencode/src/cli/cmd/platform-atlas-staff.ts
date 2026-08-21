@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson, failNoOp} from "./iris-api"
 
 // ============================================================================
 // Atlas Staff CLI (Track 7)
@@ -132,7 +132,6 @@ const UpdateCommand = cmd({
       .option("rate", { type: "number" }),
   async handler(args) {
     UI.empty()
-    const token = await requireAuth(); if (!token) return
     const body: Record<string, any> = {}
     if (args.name) body.name = args.name
     if (args.role) body.role = args.role
@@ -141,7 +140,8 @@ const UpdateCommand = cmd({
     if (args.department) body.department = args.department
     if (args.type) body.staff_type = args.type
     if (args.rate != null) body.hourly_rate_cents = Math.round(Number(args.rate) * 100)
-    if (Object.keys(body).length === 0) { console.log("Nothing to update"); return }
+    if (Object.keys(body).length === 0) { failNoOp("update", "pass at least one field flag") }
+    const token = await requireAuth(); if (!token) return
 
     const res = await irisFetch(`/api/v1/atlas/staff/${args.id}`, { method: "PATCH", body: JSON.stringify(body) })
     await handleApiError(res, "Update")

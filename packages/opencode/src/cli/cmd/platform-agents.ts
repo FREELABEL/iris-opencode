@@ -3,7 +3,7 @@ import { AgentsProveCommand } from "./agent-prove"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
 import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
 import { AgentsBenchCommand } from "./platform-agents-bench"
@@ -580,8 +580,6 @@ const AgentsUpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Agent #${args.id}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
@@ -612,10 +610,10 @@ const AgentsUpdateCommand = cmd({
     const needsCurrent = wantsSettings || wantsIntegration || wantsTools
 
     if (Object.keys(payload).length === 0 && !needsCurrent) {
-      prompts.log.warn("Nothing to update. Use --name, --description, --bloq, --model, --system-prompt, --initial-prompt/--mission, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, or --reset-health")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --name, --description, --bloq, --model, --system-prompt, --initial-prompt/--mission, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, or --reset-health")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")

@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, IRIS_API, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, IRIS_API, writeJson, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -250,8 +250,6 @@ const UpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Venue #${args.id}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const payload: Record<string, unknown> = {}
     if (args.name) payload.name = args.name
@@ -262,10 +260,10 @@ const UpdateCommand = cmd({
     if (args["hourly-rate"]) payload.hourly_rate = args["hourly-rate"]
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --name, --type, --city, etc.")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --name, --type, --city, etc.")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")

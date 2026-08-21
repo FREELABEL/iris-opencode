@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, BRIDGE_URL, bridgeFetch, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, BRIDGE_URL, bridgeFetch, writeJson, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
@@ -379,9 +379,7 @@ const UpdateCommand = cmd({
     if (Object.keys(meta).length > 0) payload.metadata = meta
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --description, --date, --time, --venue, --city, --state, --type, --photo, --meta key=value, etc.")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --title, --description, --date, --time, --venue, --city, --state, --type, --photo, --meta key=value, etc.")
     }
 
     const spinner = prompts.spinner()

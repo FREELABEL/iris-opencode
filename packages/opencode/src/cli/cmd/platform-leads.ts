@@ -18,7 +18,7 @@ import {
   PLATFORM_URLS,
   BRIDGE_URL,
   getBridgeToken,
-  resolveUserId, writeJson } from "./iris-api"
+  resolveUserId, writeJson, failNoOp} from "./iris-api"
 // #137403/#137526 — reuse the venues browser Google-Maps discovery path for leads.
 import { findOnlineHiveNode, dispatchHiveSearch } from "./platform-venues"
 import { executeIntegrationCall } from "./platform-run"
@@ -1419,9 +1419,7 @@ const LeadsUpdateCommand = cmd({
         process.exitCode = 1
         return
       }
-      prompts.log.warn("Nothing to update. Use --name, --email, --status, --bloq-id, etc.")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --name, --email, --status, --bloq-id, etc.")
     }
 
     const spinner = isJson ? null : prompts.spinner()
@@ -5865,7 +5863,6 @@ const LeadsUpdatePackageCommand = cmd({
       .option("active", { describe: "set active/inactive", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean" }),
   async handler(args) {
-    if (!(await requireAuth())) return
 
     const body: Record<string, unknown> = {}
     if (args.name) body.name = args.name
@@ -5877,9 +5874,9 @@ const LeadsUpdatePackageCommand = cmd({
     if (args.features) body.features = args.features.split(/,(?!\d{3}(?!\d))/).map((f: string) => f.trim())
 
     if (Object.keys(body).length === 0) {
-      prompts.log.error("Nothing to update — provide at least one flag (--name, --price, --billing, etc.)")
-      return
+      failNoOp("update", "provide at least one flag (--name, --price, --billing, etc.)")
     }
+    if (!(await requireAuth())) return
 
     const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/packages/${args.packageId}`, {
       method: "PATCH",

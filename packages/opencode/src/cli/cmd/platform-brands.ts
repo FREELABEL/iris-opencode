@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson, failNoOp} from "./iris-api"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
 import { join } from "path"
 
@@ -262,7 +262,6 @@ const BrandsUpdateCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Brand #${args.id}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const body: Record<string, unknown> = {}
     if (args.name) body.name = args.name
@@ -270,9 +269,9 @@ const BrandsUpdateCommand = cmd({
     if (args.description) body.description = args.description
     if (args["entity-type"]) body.entity_type = args["entity-type"]
     if (Object.keys(body).length === 0) {
-      prompts.log.warn("Nothing to update — pass --name, --status, --description, or --entity-type")
-      prompts.outro("Done"); return
+      failNoOp("update", "pass --name, --status, --description, or --entity-type")
     }
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")
@@ -490,7 +489,6 @@ const PersonasUpdateCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update persona #${args.personaId}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const body: Record<string, unknown> = {}
     if (args.name) body.name = args.name
@@ -499,7 +497,8 @@ const PersonasUpdateCommand = cmd({
     if (args["system-prompt"]) body.system_prompt = args["system-prompt"]
     if (args["voice-sample-id"] != null) body.voice_sample_id = args["voice-sample-id"]
     if (args.default != null) body.is_default = args.default
-    if (Object.keys(body).length === 0) { prompts.log.warn("Nothing to update"); prompts.outro("Done"); return }
+    if (Object.keys(body).length === 0) { failNoOp("update", "pass at least one field flag") }
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")

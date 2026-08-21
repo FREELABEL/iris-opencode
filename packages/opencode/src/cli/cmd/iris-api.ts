@@ -405,6 +405,36 @@ export function formatPaymentRequired(body: unknown): { message: string; details
  * A false positive costs a JSON error object printed to a human, which is legible. A false
  * negative costs a script empty stdout, which is what we are fixing.
  */
+/**
+ * A write that would change nothing is an ERROR, not a warning. (#181577 family, tracker 11.)
+ *
+ * 23 commands already detected this case. TWENTY-ONE of them warned and returned — exit code
+ * ZERO. So `iris brands update 5` with no flags printed "Nothing to update" and told every
+ * script, CI job and agent that the write SUCCEEDED. A human sees the warning; automation sees
+ * success, and the difference never shows up until something downstream reads a value that was
+ * never written.
+ *
+ * clig.dev states the rule plainly: non-zero exit on failure. A write the caller asked for and
+ * did not get is a failure. This helper is the single place that decides what that looks like,
+ * so the 23 sites cannot drift into 23 slightly different opinions again.
+ *
+ * Returns `never`, so a caller cannot accidentally continue past it — the previous shape
+ * depended on remembering to `return` afterwards.
+ *
+ * CALL IT BEFORE requireAuth(). "You passed no fields" needs no network, and checking first
+ * means the failure is deterministic offline — which is what lets it be tested at all.
+ */
+export function failNoOp(what: string, hint: string): never {
+  if (isJsonMode()) {
+    // JSON mode must stay parseable: a caller piping to jq gets an object, not prose.
+    console.log(JSON.stringify({ error: `Nothing to ${what}`, hint }))
+  } else {
+    prompts.log.error(`Nothing to ${what} — ${hint}`)
+  }
+
+  process.exit(1)
+}
+
 export function isJsonMode(): boolean {
   return process.argv.some((a) => a === "--json" || a === "--json=true")
 }

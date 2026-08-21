@@ -3,7 +3,7 @@ import { WorkflowsExportCommand } from "./platform-workflows-export"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson, failNoOp} from "./iris-api"
 import {
   normalizeInputSchema,
   promptForInputs,
@@ -658,8 +658,6 @@ const WorkflowsUpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Workflow #${args.id}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
@@ -670,10 +668,10 @@ const WorkflowsUpdateCommand = cmd({
     if (args.type) payload.type = args.type
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --name, --description, or --type")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --name, --description, or --type")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")

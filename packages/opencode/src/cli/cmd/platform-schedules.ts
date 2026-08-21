@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import { assessScheduler, printDegradations } from "./subsystem-health"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
 
 // ============================================================================
 // Execution-verification helpers (#146511) — `run` reports "dispatched", then
@@ -1353,8 +1353,6 @@ const SchedulesUpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update schedule #${args.id}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const userId = await requireUserId()
     if (!userId) { prompts.outro("Done"); return }
@@ -1363,10 +1361,10 @@ const SchedulesUpdateCommand = cmd({
     if (args.frequency) payload.frequency = args.frequency
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --frequency to set a new frequency.")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --frequency to set a new frequency.")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")

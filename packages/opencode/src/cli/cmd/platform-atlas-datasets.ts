@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, isNonInteractive, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, isNonInteractive, writeJson, failNoOp} from "./iris-api"
 import * as fs from "fs"
 import * as path from "path"
 
@@ -199,7 +199,6 @@ const SchemaUpdateCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Evolve Schema: ${args.slug}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     let fields: any = null
     if (args.fields) {
@@ -220,9 +219,9 @@ const SchemaUpdateCommand = cmd({
     if (fields) body.fields = Array.isArray(fields) ? { fields } : fields
     if (settingsArg.value !== undefined) body.settings = settingsArg.value
     if (body.name === undefined && body.fields === undefined && body.settings === undefined) {
-      prompts.log.warn("Nothing to update. Pass --fields <json|file> (full new field set), --settings <json|file>, and/or --name")
-      prompts.outro("Done"); return
+      failNoOp("update", "Pass --fields <json|file> (full new field set), --settings <json|file>, and/or --name")
     }
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     // #181628: this used to print "(existing records preserved)" unconditionally, without
     // ever looking. It is not a generic success string — it is a specific factual claim about
@@ -1602,7 +1601,6 @@ const EconomicsSetCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Economics: ${args.slug}`)
-    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const economics: Record<string, unknown> = {}
     if (args["group-by"]) economics.groupBy = args["group-by"]
@@ -1616,10 +1614,9 @@ const EconomicsSetCommand = cmd({
     if (Object.keys(economics).length === 0) {
       // Sending {} would clear the config, which `reset` already does explicitly. Saying
       // nothing should never silently wipe a client's setup.
-      console.log(`  ${bold("!")} Nothing to set. Pass at least one option, or use ${bold("economics reset")} to clear.`)
-      prompts.outro("Done")
-      return
+      failNoOp("set", "Pass at least one option, or use `economics reset` to clear.")
     }
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const res = await irisFetch(`/api/v1/atlas/datasets/${args.slug}/economics`, {
       method: "PATCH",
