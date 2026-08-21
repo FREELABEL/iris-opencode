@@ -224,13 +224,49 @@ const SchemaUpdateCommand = cmd({
       prompts.outro("Done"); return
     }
 
+    // #181628: this used to print "(existing records preserved)" unconditionally, without
+    // ever looking. It is not a generic success string — it is a specific factual claim about
+    // the one thing that just went wrong, which is exactly why a careful operator would not
+    // re-check. Evolving a schema makes every existing record UNREADABLE (they stay in the
+    // table but keep the previous version's schema_id, and the read path scopes to the newest
+    // version), so the dataset reads as empty. Count before and after and report the truth.
+    const countRecords = async (): Promise<number | null> => {
+      try {
+        const r = await irisFetch(`/api/v1/atlas/datasets/${args.slug}?per_page=1`)
+        if (!r.ok) return null
+        const b = (await r.json()) as any
+        const t = b?.data?.records?.total
+        return typeof t === "number" ? t : null
+      } catch {
+        return null
+      }
+    }
+
     const spinner = prompts.spinner()
     spinner.start("Evolving schema…")
     try {
+      const before = await countRecords()
       const res = await irisFetch(`/api/v1/atlas/schemas/${args.slug}`, { method: "PATCH", body: JSON.stringify(body) })
       const ok = await handleApiError(res, "Update schema"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const data = ((await res.json()) as any)?.data
-      spinner.stop(`Evolved ${bold(args.slug)} → v${data?.version ?? "?"}  ${dim("(existing records preserved)")}`)
+      const after = await countRecords()
+
+      const verdict =
+        before === null || after === null
+          ? dim("(could not verify record count)")
+          : after < before
+            ? `${dim("—")} ${before} record(s) are NO LONGER READABLE`
+            : dim(`(${after} record(s) still readable)`)
+      spinner.stop(`Evolved ${bold(args.slug)} → v${data?.version ?? "?"}  ${verdict}`)
+
+      if (before !== null && after !== null && after < before) {
+        prompts.log.error(`${before - after} record(s) became unreadable when this schema evolved.`)
+        prompts.log.info(`They are NOT deleted — they keep the previous version's schema_id and the`)
+        prompts.log.info(`read path only looks at the newest version. This is #181628.`)
+        prompts.log.info(dim(`Confirm they still exist:  iris atlas:datasets schemas delete ${args.slug} --force`))
+        prompts.log.info(dim(`(without --cascade that REFUSES and reports the true cross-version count)`))
+        prompts.log.info(dim(`Do NOT run --cascade to "clean up" — that deletes them for real.`))
+      }
       prompts.outro(`iris atlas:datasets records list --schema=${args.slug}`)
     } catch (err) {
       spinner.stop("Error", 1)
