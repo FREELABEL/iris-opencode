@@ -741,8 +741,32 @@ const PushCmd = cmd({
       prompts.log.info(dim(`from ${resolve(filePath)}`))
       sp.start("Pushing…")
       const local = JSON.parse(readFileSync(filePath, "utf-8"))
-      const page = await getBySlug(slug, false)
-      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+      let page = await getBySlug(slug, false)
+
+      // A slug with no page yet is a CREATE, not an error. `push` used to stop at
+      // "Page not found", so shipping a new page meant discovering that `pages create`
+      // exists, running it, and pushing again — for a file that already carried
+      // everything create needs. The file is the intent; honour it.
+      if (!page) {
+        sp.message("No page for that slug yet — creating…")
+        const created = await createPageFromJson({
+          slug,
+          title: local.title || slug,
+          seo_title: local.seo_title,
+          seo_description: local.seo_description,
+          og_image: local.og_image,
+          // `owner_type` is required upstream; `pages create` defaults it the same way, and a
+          // hand-written page file rarely carries one.
+          owner_type: local.owner_type ?? "user",
+          owner_id: local.owner_id ?? (await resolveUserId()),
+          json_content: local.json_content ?? local,
+          publish: !!args.publish,
+          requires_auth: local.requires_auth,
+        })
+        if (!created) { sp.stop("Failed", 1); prompts.log.error(`Could not create "${slug}".`); process.exitCode = 1; prompts.outro("Done"); return }
+        prompts.log.info(dim(`created page #${created.id}`))
+        page = created
+      }
 
       let jsonContent: any
       if (local.json_content) jsonContent = local.json_content
@@ -1397,30 +1421,55 @@ const VersionsCmd = cmd({
 })
 
 const RollbackCmd = cmd({
-  command: "rollback <slug>",
-  describe: "rollback page to a previous version",
+  // Version is a POSITIONAL, not `--version`.
+  //
+  // It used to be `.option("version")`, which collides with yargs' own global `--version`
+  // (print the CLI version). yargs resolved the collision in its own favour, so the value
+  // arrived as the boolean `false` and every invocation died on "Version false not found" —
+  // making rollback impossible from the CLI at exactly the moment someone needs it, which is
+  // after they have broken a page. `--to` stays as an alias for anyone with it in a script.
+  command: "rollback <slug> [rev]",
+  describe: "rollback page to a previous version (iris pages rollback <slug> <version>)",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
-      .option("version", { describe: "version number", type: "number", demandOption: true }),
+      // NOT named `version`: yargs owns `--version` globally (print the CLI version) and wins
+      // the collision even for a POSITIONAL, so the value arrived as undefined/false and every
+      // rollback died on "Version false not found" — at exactly the moment someone needs it,
+      // which is after they have broken a page.
+      .positional("rev", { describe: "version number (see: iris pages versions <slug>)", type: "number" })
+      .option("to", { describe: "version number (alias for the positional)", type: "number" })
+      .example("$0 pages rollback atlas-console 4", "restore version 4"),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Rollback ${args.slug} → v${args.version}`)
+    const version = (args.rev ?? args.to) as number | undefined
+    if (typeof version !== "number" || Number.isNaN(version)) {
+      prompts.intro(`◈  Rollback ${args.slug}`)
+      prompts.log.error(
+        `Which version? Pass it as a positional:\n\n` +
+          `  iris pages rollback ${args.slug} <version>\n\n` +
+          `List them with:  iris pages versions ${args.slug}`,
+      )
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+    prompts.intro(`◈  Rollback ${args.slug} → v${version}`)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     const sp = prompts.spinner()
     sp.start("Rolling back…")
     try {
       const page = await getBySlug(args.slug, false)
       if (!page) { sp.stop("Page not found", 1); process.exitCode = 1; prompts.outro("Done"); return }
-      const res = await pagesFetch(`/api/v1/pages/${page.id}/rollback/${args.version}`, { method: "POST" })
+      const res = await pagesFetch(`/api/v1/pages/${page.id}/rollback/${version}`, { method: "POST" })
       if (!(await handleApiError(res, "Rollback"))) {
         sp.stop("Failed", 1)
         process.exitCode = 1
-        prompts.log.error(`Version ${args.version} not found for page "${args.slug}". Run: iris pages versions ${args.slug}`)
+        prompts.log.error(`Version ${version} not found for page "${args.slug}". Run: iris pages versions ${args.slug}`)
         prompts.outro("Done")
         return
       }
-      sp.stop(success(`Rolled back to v${args.version}`))
+      sp.stop(success(`Rolled back to v${version}`))
       prompts.outro("Done")
     } catch (err) {
       sp.stop("Error", 1)
