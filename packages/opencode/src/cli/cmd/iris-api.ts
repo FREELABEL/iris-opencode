@@ -585,6 +585,13 @@ export async function streamAgentChat(opts: {
   // Defaults to true. Set false (via `--no-rag`) to suppress knowledge-base/bloq
   // context injection so the model answers from its own weights only (#146915).
   enableRag?: boolean
+  // Server-side conversation thread. The V6 loop resolves it as
+  //   explicit threadId > freshThread > default "user_{id}_agent_{id}"
+  // and the DEFAULT means every call inherits that agent's whole history — including
+  // calls made by other sessions. Pass a unique id to get an isolated run.
+  // (The server also has a `freshThread` flag, but ChatStreamController's validator does
+  // not accept `fresh_thread`, so a caller-generated unique id is the only route today.)
+  threadId?: string | null
   onEvent?: (event: AgentChatEvent) => void
 }): Promise<AgentChatResult> {
   const body: Record<string, unknown> = {
@@ -608,6 +615,7 @@ export async function streamAgentChat(opts: {
   if (opts.conversationHistory && opts.conversationHistory.length > 0) {
     body.conversation_history = opts.conversationHistory
   }
+  if (opts.threadId) body.thread_id = opts.threadId
   if (opts.maxIterations) body.max_iterations = opts.maxIterations
   // Endpoint validator only accepts nano/flash models — keeps test runs cheap.
   if (opts.overrideModel) body.override_model = opts.overrideModel

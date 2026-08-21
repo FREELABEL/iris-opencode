@@ -7,6 +7,24 @@ import { transcribeLocal, which } from "../lib/transcription"
 import { createInterface } from "readline"
 import { ChatTracer, toTraceLevel, type TraceStep } from "./chat-trace"
 
+/**
+ * Which conversation this turn joins.
+ *
+ * --thread <id>  pin an explicit conversation (resume it, or keep a workstream separate)
+ * --fresh        isolate: a thread id nothing has ever written to, so the agent starts blank
+ * neither        the agent's DEFAULT shared thread — inherits every prior message to it
+ *
+ * `--fresh` is done client-side because ChatStreamController's validator accepts `thread_id`
+ * but not `fresh_thread`, even though ReactLoopService supports a freshThread flag. A novel
+ * id reaches the same branch: the loop uses it verbatim and finds no history under it.
+ */
+export function resolveThreadId(args: { thread?: string; fresh?: boolean }): string | undefined {
+  if (args.thread) return args.thread
+  if (args.fresh) return `fresh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+  return undefined
+}
+
+
 // ============================================================================
 // Polling helper
 // ============================================================================
@@ -64,6 +82,8 @@ export async function executeChat(args: {
   "user-id"?: number
   timeout: number
   "no-rag": boolean
+  thread?: string
+  fresh?: boolean
   json?: boolean
   continue?: string
   model?: string
@@ -195,8 +215,13 @@ export async function executeChat(args: {
 
   try {
     // Faithful V6 ReactLoop path — same engine + toolset as the Slack channel (#137387).
-    // Stateless per call: no resumed server session → no cross-turn poisoning.
+    // NOT stateless — this comment used to claim it was. The CLI resumes no client session,
+    // but the V6 loop loads the agent-scoped thread "user_{id}_agent_{id}" on EVERY call, so
+    // a turn inherits every earlier message to that agent, from any session. Verified in the
+    // run trace: `context: conversation_history` reporting 20 messages loaded.
+    // --thread pins a specific conversation; --fresh isolates this one turn.
     const result = await streamAgentChat({
+      threadId: resolveThreadId(args),
       agentId,
       message: args.message,
       userId,
@@ -581,6 +606,17 @@ export const PlatformChatCommand = cmd({
         type: "number",
         default: 300,
       })
+      .option("thread", {
+        describe:
+          "conversation thread id — pin a specific conversation instead of the agent's default shared one",
+        type: "string",
+      })
+      .option("fresh", {
+        describe:
+          "isolate this turn in a brand-new thread — the agent starts with no prior conversation",
+        type: "boolean",
+        default: false,
+      })
       .option("no-rag", {
         describe: "disable RAG/knowledge base lookup",
         type: "boolean",
@@ -681,6 +717,11 @@ export const PlatformChatCommand = cmd({
       "user-id": args["user-id"],
       timeout: args.timeout,
       "no-rag": args["no-rag"],
+      // Forwarded explicitly. This handler maps argv field by field, so a new option is
+      // registered, shows up in --help, and is silently DROPPED unless it is added here —
+      // which is exactly how --thread/--fresh first shipped doing nothing.
+      thread: args.thread as string | undefined,
+      fresh: args.fresh as boolean | undefined,
       json: args.json,
       continue: args.continue,
       model: args.model,

@@ -518,6 +518,15 @@ const AgentsChatCommand = cmd({
       .option("max-iterations", { describe: "cap ReactLoop iterations", type: "number" })
       .option("timeout", { describe: "max seconds to wait for response", type: "number", default: 300 })
       .option("no-rag", { describe: "disable RAG/knowledge base lookup", type: "boolean", default: false })
+      .option("thread", {
+        describe: "conversation thread id — pin a specific conversation instead of the agent's default shared one",
+        type: "string",
+      })
+      .option("fresh", {
+        describe: "isolate this turn in a brand-new thread — the agent starts with no prior conversation",
+        type: "boolean",
+        default: false,
+      })
       .option("verbose", {
         alias: "V",
         describe: "trace the run: -V shows iterations, tool calls and results; -VV adds the payloads",
@@ -531,6 +540,8 @@ const AgentsChatCommand = cmd({
       bloq: args.bloq,
       timeout: args.timeout,
       "no-rag": args["no-rag"],
+      thread: args.thread as string | undefined,
+      fresh: args.fresh as boolean | undefined,
       json: args.json,
       model: args.model,
       "max-iterations": args["max-iterations"],

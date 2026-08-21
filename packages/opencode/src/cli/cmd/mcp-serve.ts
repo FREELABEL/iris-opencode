@@ -813,6 +813,8 @@ you did not create — prefer update{} to re-scope or quiet one.`,
               model: { type: "string", description: "ask: model override for this turn. create/update: the agent's stored model. Keep to nano/mini tiers." },
               timeout: { type: "number", description: "ask: seconds to wait (default 120, max 600)" },
               schema: { type: "object", description: "ask: JSON Schema the answer must satisfy. Returns a validated object instead of prose. Prompt-enforced, not API-enforced — see the description." },
+              thread: { type: "string", description: "ask: pin this turn to a named conversation thread instead of the agent's default shared one. Reuse the same value to continue that conversation." },
+              fresh: { type: "boolean", description: "ask: isolate this turn in a brand-new thread so the agent starts with no prior conversation. Ignored if `thread` is given." },
               full: { type: "boolean", description: "get: return the raw record instead of the compact summary (large)" },
               name: { type: "string", description: "create/update: agent name" },
               description: { type: "string", description: "create/update: what this agent OWNS. Callers pick agents by this — one without a description is unchoosable." },
@@ -1007,7 +1009,14 @@ parts you did not mean to touch.`,
           // -V emits the run trace, which is where REAL provenance lives. Single -V is
           // enough (-VV only adds full payloads and bloats tool-heavy runs); the derived
           // provenance is returned instead of the raw trace so results stay small.
+          const wantThread =
+            typeof args?.thread === "string" && args.thread.trim()
+              ? args.thread.trim()
+              : args?.fresh === true
+                ? `fresh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+                : null
           const askArgs = ["chat", "-a", String(agentId), "--json", "-V", "--timeout", String(secs)]
+          if (wantThread) askArgs.push("--thread", wantThread)
           const model = (args?.model as string ?? "").trim()
           if (model) {
             if (/[;&|`$\\<>!\n\r\s]/.test(model)) {
@@ -1156,6 +1165,16 @@ parts you did not mean to touch.`,
             }
             if (citedNotRetrieved.length > 0) {
               flags.push(`CITED BUT NOT RETRIEVED this turn: ${citedNotRetrieved.join(", ")}. The agent named these without reading them now. It may be recalling them from conversation history${provenance.history_messages ? ` (${provenance.history_messages} messages loaded)` : ""}, or inventing them. VERIFY before using: iris_memory {action:"items", bloq:<id>}.`)
+            }
+            // Do not advertise a control without checking it worked. The server currently
+            // VALIDATES thread_id and then drops it on the streaming path (#181597), so a
+            // caller asking for isolation would otherwise get the shared thread and never
+            // know. Provenance already reports the thread the run actually used, so the tool
+            // can catch the platform lying to it.
+            if (wantThread && provenance.thread_id && provenance.thread_id !== wantThread) {
+              flags.push(`THREAD CONTROL DID NOT TAKE EFFECT — you asked for "${wantThread}", the run used "${provenance.thread_id}"${provenance.history_messages ? ` with ${provenance.history_messages} prior messages` : ""}. This is server-side bug #181597: /api/v6/chat/stream validates thread_id then drops it. This turn was NOT isolated. Do not rely on it being a clean room.`)
+            } else if (wantThread && provenance.thread_id === wantThread) {
+              flags.push(`Thread control confirmed: this turn ran in "${wantThread}"${provenance.history_messages ? ` with ${provenance.history_messages} prior messages from it` : " with no prior history"}.`)
             }
             if (provenance.history_messages && provenance.history_messages > 0) {
               flags.push(`NOT A CLEAN ROOM: ${provenance.history_messages} messages of prior conversation were loaded from thread ${provenance.thread_id}. This agent remembers earlier calls — yours and anyone else's — so an answer can be shaped by context you cannot see here.`)
