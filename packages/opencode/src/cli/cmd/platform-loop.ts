@@ -8,6 +8,7 @@ import {
   parsePlan,
   executeSkill,
   resolveArgs,
+  splitPlaybookArgv,
   type ExecuteOptions,
   type SkillResult,
 } from "../../skill/executor"
@@ -80,17 +81,11 @@ const LoopRunCommand = cmd({
 
       // Resolve args once (same shape as `playbook run`); reused every cycle.
       const positionalArgs = (args.skillArgs as string[] ?? [])
-      const flagArgs: Record<string, unknown> = {}
-      const cleanPositional: string[] = []
-      for (const a of positionalArgs) {
-        if (a.startsWith("--")) {
-          const eqIdx = a.indexOf("=")
-          if (eqIdx > 2) flagArgs[a.slice(2, eqIdx)] = a.slice(eqIdx + 1)
-          else flagArgs[a.slice(2)] = true
-        } else {
-          cleanPositional.push(a)
-        }
-      }
+      // #181577: this had its OWN copy of the parser, under a comment claiming it was the
+      // "same shape as `playbook run`". It was not — playbook run learned to bind a bare
+      // key=value and this never did, so `iris loop ads topic="..."` still passed
+      // topic="topic=..." into every cycle. Same parser now, by construction.
+      const { flagArgs, positional: cleanPositional } = splitPlaybookArgv(positionalArgs, plan.args)
 
       let resolvedArgs: Record<string, unknown>
       try {

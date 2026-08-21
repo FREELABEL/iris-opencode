@@ -414,6 +414,60 @@ function evaluateCondition(
 // Argument Validation + Resolution
 // ============================================================================
 
+/**
+ * Split raw CLI argv into flag args and positionals for a playbook run (#181577).
+ *
+ * Lives here, beside resolveArgs, because it was ORIGINALLY inlined at each call site and
+ * only one of them got fixed. `iris playbook run` learned to bind a bare `key=value`;
+ * `iris loop` kept its own copy — under a comment reading "same shape as `playbook run`" —
+ * and kept the defect. Two copies of a parsing rule drift, and this one drifted silently.
+ *
+ * THE DEFECT: only `--key=value` bound to a named arg. A bare `key=value` fell through to
+ * the positional list, and resolveArgs assigned the WHOLE string, prefix included, to the
+ * first declared arg:
+ *
+ *   iris playbook run freelabel-ads topic="AI agents" brand=freelabel
+ *   -> { topic: "topic=AI agents", brand: "brand=freelabel" }
+ *
+ * Nothing reports it. The steps still run and an AI step shrugs off a stray "topic=" prefix,
+ * so it only surfaces where a value is used for an EXACT lookup — a brand slug — failing
+ * several steps from the cause, after two AI steps have already spent tokens on a wrong
+ * prompt.
+ *
+ * `declared` is what makes it safe: binding is guarded on the declared arg name, so a
+ * positional that legitimately contains "=" stays a positional.
+ */
+export function splitPlaybookArgv(
+  argv: string[],
+  declaredArgs: Record<string, unknown> | undefined,
+): { flagArgs: Record<string, unknown>; positional: string[] } {
+  const flagArgs: Record<string, unknown> = {}
+  const positional: string[] = []
+  const declared = new Set(Object.keys(declaredArgs ?? {}))
+
+  for (const a of argv) {
+    if (a.startsWith("--")) {
+      const eqIdx = a.indexOf("=")
+      if (eqIdx > 2) {
+        flagArgs[a.slice(2, eqIdx)] = a.slice(eqIdx + 1)
+      } else {
+        flagArgs[a.slice(2)] = true
+      }
+      continue
+    }
+
+    const eq = a.indexOf("=")
+    if (eq > 0 && declared.has(a.slice(0, eq))) {
+      flagArgs[a.slice(0, eq)] = a.slice(eq + 1)
+      continue
+    }
+
+    positional.push(a)
+  }
+
+  return { flagArgs, positional }
+}
+
 export function resolveArgs(
   schema: Record<string, ArgDef>,
   positionalArgs: string[],
