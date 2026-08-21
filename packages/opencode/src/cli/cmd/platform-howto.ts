@@ -207,10 +207,39 @@ function readRecipes(dir: string) {
       const raw = readFileSync(join(dir, f), "utf8")
       const lines = raw.split("\n")
       const title = (lines[0] || "").replace(/^#\s*/, "").trim() || slug
-      // First non-empty, non-heading line becomes the card summary.
-      const summary =
-        lines.slice(1).find((l) => l.trim() && !l.trim().startsWith("#") && !l.trim().startsWith("```"))?.trim() ?? null
-      const body_md = lines.slice(1).join("\n").trim()
+      // First real PARAGRAPH becomes the card summary, not the first physical line.
+      //
+      // Two bugs lived here. Taking one line shipped `> **STOP — read the design standard
+      // first:**` onto the index as literal asterisks; and because these files are soft-wrapped,
+      // one line is usually half a sentence, so cards read "…how to check what" and stopped.
+      // Join the paragraph, strip the inline markup, then cut on a sentence boundary.
+      const rest = lines.slice(1)
+      const startIdx = rest.findIndex((l) => {
+        const t = l.trim()
+        if (!t) return false
+        return !t.startsWith("#") && !t.startsWith("```") && !t.startsWith(">") && !t.startsWith("|") && !t.startsWith("---")
+      })
+      let summary: string | null = null
+      if (startIdx !== -1) {
+        const para: string[] = []
+        for (const l of rest.slice(startIdx)) {
+          if (!l.trim()) break
+          para.push(l.trim())
+        }
+        const flat = para
+          .join(" ")
+          .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")   // [text](url) -> text
+          .replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, "$1") // **bold** / _em_ -> text
+          .replace(/`([^`]+)`/g, "$1")                  // `code` -> code
+          .replace(/[*_]{2,}/g, "")                     // a bold that opens and never closes
+          .replace(/\s+/g, " ")
+          .trim()
+        // Cut on a sentence end if there is one in range, so a card never stops mid-clause.
+        const cut = flat.slice(0, 240)
+        const lastStop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "))
+        summary = flat.length > 240 && lastStop > 80 ? cut.slice(0, lastStop + 1) : cut.trim()
+      }
+      const body_md = rest.join("\n").trim()
       return { slug, title, summary, body_md, hash: createHash("sha256").update(body_md).digest("hex") }
     })
 }
