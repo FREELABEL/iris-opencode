@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { ScenarioCommand } from "./mint-scenario-cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson, IRIS_API } from "./iris-api"
@@ -1209,6 +1210,6 @@ const TrendCommand = cmd({
 export const PlatformMintCommand = cmd({
   command: "mint",
   describe: "IRIS Mint — budgets vs actuals for personal and business money",
-  builder: (y) => y.command(SpendCommand).command(BudgetsCommand).command(StatusCommand).command(ScopeCommand).command(ImportCommand).command(ScanCommand).command(MerchantsCommand).command(SnapshotCommand).command(TrendCommand).demandCommand(),
+  builder: (y) => y.command(SpendCommand).command(BudgetsCommand).command(StatusCommand).command(ScopeCommand).command(ImportCommand).command(ScanCommand).command(MerchantsCommand).command(SnapshotCommand).command(TrendCommand).command(ScenarioCommand).demandCommand(),
   async handler() {},
 })
