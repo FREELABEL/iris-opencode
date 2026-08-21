@@ -24,19 +24,71 @@ async function ensureDir() {
   }
 }
 
-async function listRecipes(): Promise<Array<{ name: string; title: string; path: string }>> {
+type LocalRecipe = { name: string; title: string; path: string; meta: RecipeMeta; body: string }
+
+async function listRecipes(): Promise<LocalRecipe[]> {
   const fs = await import("fs")
   await ensureDir()
   if (!fs.existsSync(HOWTO_DIR)) return []
 
-  const files = fs.readdirSync(HOWTO_DIR).filter((f: string) => f.endsWith(".md")).sort()
+  // README is documentation ABOUT the recipes, not a recipe — readRecipes() has always excluded
+  // it and this path never did, so it has been showing up as a listable how-to.
+  const files = fs
+    .readdirSync(HOWTO_DIR)
+    .filter((f: string) => f.endsWith(".md") && f !== "README.md")
+    .sort()
   return files.map((f: string) => {
     const fullPath = join(HOWTO_DIR, f)
-    const content = fs.readFileSync(fullPath, "utf-8")
-    const firstLine = content.split("\n").find((l: string) => l.startsWith("# "))
-    const title = firstLine ? firstLine.replace(/^#\s+/, "").replace(/^How to:\s*/i, "") : f.replace(".md", "")
-    return { name: f.replace(".md", ""), title, path: fullPath }
+    // Front-matter is stripped here too, or every title would read "---".
+    const { meta, body } = parseFrontMatter(fs.readFileSync(fullPath, "utf-8"))
+    const firstLine = body.split("\n").find((l: string) => l.startsWith("# "))
+    const title =
+      meta.title ??
+      (firstLine ? firstLine.replace(/^#\s+/, "").replace(/^How to:\s*/i, "") : f.replace(".md", ""))
+    return { name: f.replace(".md", ""), title, path: fullPath, meta, body }
   })
+}
+
+/**
+ * The SAME weights the API uses (HowToController::index).
+ *
+ * Two implementations of "search" that rank differently is a disagreement a user discovers, not
+ * a detail — asking the terminal and the website the same question has to give the same answer.
+ * The CLI reads local files rather than the API so it keeps working with no network; identical
+ * scoring is what keeps that from becoming a divergence.
+ */
+function scoreRecipe(r: LocalRecipe, needle: string): number {
+  let s = 0
+  if (r.title.toLowerCase().includes(needle)) s += 100
+  if (r.name.toLowerCase().includes(needle)) s += 60
+  if ((r.meta.tags ?? []).some((t) => t.toLowerCase().includes(needle))) s += 40
+  if (r.body.toLowerCase().includes(needle)) s += 5
+  return s
+}
+
+const LEVEL_RANK: Record<string, number> = { beginner: 0, intermediate: 1, advanced: 2 }
+
+/** Shared by `list` and the bare `iris how-to`. */
+function applyFilters(
+  recipes: LocalRecipe[],
+  opts: { category?: string; level?: string; tags?: string[] },
+): LocalRecipe[] {
+  let out = recipes
+  if (opts.category) {
+    const c = opts.category.toLowerCase()
+    out = out.filter((r) => (r.meta.category ?? "").toLowerCase().includes(c))
+  }
+  if (opts.level) out = out.filter((r) => r.meta.level === opts.level)
+  // AND, matching the web and the API — a second tag has to narrow.
+  for (const t of opts.tags ?? []) {
+    out = out.filter((r) => (r.meta.tags ?? []).includes(t))
+  }
+  return out
+}
+
+function levelTag(level?: string): string {
+  if (!level) return ""
+  return dim(` [${level}]`)
 }
 
 // ── List ─────────────────────────────────────────────────────────────────────
@@ -45,11 +97,12 @@ async function listRecipes(): Promise<Array<{ name: string; title: string; path:
  * Body of `how-to list`, extracted so the bare `iris how-to` can reuse it
  * instead of duplicating the rendering (#178285).
  */
-export async function runList(): Promise<void> {
+export async function runList(opts: { category?: string; level?: string; tags?: string[]; sort?: string } = {}): Promise<void> {
   UI.empty()
   prompts.intro("◈  IRIS How-To Recipes")
 
-  const recipes = await listRecipes()
+  const all = await listRecipes()
+  const recipes = applyFilters(all, opts)
 
   if (recipes.length === 0) {
     console.log()
@@ -59,14 +112,43 @@ export async function runList(): Promise<void> {
   } else {
     const repoDir = resolveSourceDir()
     const stranded = new Set(strandedRecipes(repoDir))
+    const filtering = Boolean(opts.category || opts.level || opts.tags?.length)
+
+    const render = (r: LocalRecipe) => {
+      const mark = stranded.has(r.name) ? warning(" ⚠ local-only") : ""
+      const dur = r.meta.duration_min ? dim(` ${r.meta.duration_min}m`) : ""
+      console.log(`  ${bold(r.name)}  ${dim("—")}  ${r.title}${levelTag(r.meta.level)}${dur}${mark}`)
+    }
+
     printDivider()
     console.log()
-    for (const r of recipes) {
-      const mark = stranded.has(r.name) ? warning(" ⚠ local-only") : ""
-      console.log(`  ${bold(r.name)}  ${dim("—")}  ${r.title}${mark}`)
+
+    // Grouped by default. 46 undifferentiated lines in a terminal is the same failure as 46 on a
+    // page, and grouping costs nothing. An explicit --sort means the reader picked an axis.
+    if (!opts.sort && !filtering) {
+      const byCat = new Map<string, LocalRecipe[]>()
+      for (const r of recipes) {
+        const key = r.meta.category ?? "Uncategorised"
+        if (!byCat.has(key)) byCat.set(key, [])
+        byCat.get(key)!.push(r)
+      }
+      const groups = [...byCat.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+      for (const [name, rs] of groups) {
+        console.log(`  ${highlight(name)} ${dim(String(rs.length))}`)
+        for (const r of rs) render(r)
+        console.log()
+      }
+    } else {
+      const sorted = recipes.slice()
+      if (opts.sort === "level") sorted.sort((a, b) => (LEVEL_RANK[a.meta.level ?? ""] ?? 99) - (LEVEL_RANK[b.meta.level ?? ""] ?? 99))
+      else if (opts.sort === "duration") sorted.sort((a, b) => (a.meta.duration_min ?? 9999) - (b.meta.duration_min ?? 9999))
+      else sorted.sort((a, b) => a.title.localeCompare(b.title))
+      for (const r of sorted) render(r)
+      console.log()
     }
-    console.log()
-    console.log(dim(`  ${recipes.length} recipe(s) in ~/.iris/how-to/`))
+
+    const scope = filtering ? `${recipes.length} of ${all.length}` : String(recipes.length)
+    console.log(dim(`  ${scope} recipe(s) in ~/.iris/how-to/`))
     console.log(dim("  View one with: ") + highlight("iris how-to view <name>"))
     warnStranded(repoDir)
     console.log()
@@ -77,10 +159,28 @@ export async function runList(): Promise<void> {
 const HowToListCommand = cmd({
   command: "list",
   aliases: ["ls"],
-  describe: "list all available how-to recipes",
-  builder: (y) => y,
-  async handler() {
-    await runList()
+  describe: "list recipes — grouped by category, or filtered by --category/--level/--tag",
+  builder: (y) =>
+    y
+      .option("category", { type: "string", describe: "filter by category (substring match)" })
+      .option("level", {
+        type: "string",
+        choices: ["beginner", "intermediate", "advanced"],
+        describe: "filter by level",
+      })
+      .option("tag", { type: "array", describe: "filter by tag (repeatable, AND)" })
+      .option("sort", {
+        type: "string",
+        choices: ["title", "level", "duration"],
+        describe: "flat list in this order instead of grouping by category",
+      }),
+  async handler(args) {
+    await runList({
+      category: args.category as string | undefined,
+      level: args.level as string | undefined,
+      tags: ((args.tag as string[] | undefined) ?? []).map(String),
+      sort: args.sort as string | undefined,
+    })
   },
 })
 
@@ -129,26 +229,34 @@ export async function runSearch(rawQuery: string): Promise<void> {
 
     const query = String(rawQuery).toLowerCase()
     const recipes = await listRecipes()
-    const fs = await import("fs")
 
-    const matches: Array<{ name: string; title: string; line: string; lineNum: number }> = []
-
-    for (const r of recipes) {
-      const content = fs.readFileSync(r.path, "utf-8")
-      // Match in filename or title
-      if (r.name.toLowerCase().includes(query) || r.title.toLowerCase().includes(query)) {
-        matches.push({ name: r.name, title: r.title, line: r.title, lineNum: 0 })
-        continue
-      }
-      // Match in content
-      const lines = content.split("\n")
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i].toLowerCase().includes(query)) {
-          matches.push({ name: r.name, title: r.title, line: lines[i].trim(), lineNum: i + 1 })
-          break // one match per file is enough
+    // RANKED, not first-match-wins. The previous version pushed results in directory order, so a
+    // recipe that mentions the term once in passing could print above the one it names.
+    const matches = recipes
+      .map((r) => {
+        const score = scoreRecipe(r, query)
+        if (score === 0) return null
+        let line = r.title
+        let lineNum = 0
+        if (!r.title.toLowerCase().includes(query) && !r.name.toLowerCase().includes(query)) {
+          const lines = r.body.split("\n")
+          const i = lines.findIndex((l) => l.toLowerCase().includes(query))
+          if (i !== -1) {
+            line = lines[i].trim()
+            lineNum = i + 1
+          }
         }
-      }
-    }
+        return { name: r.name, title: r.title, line, lineNum, score, meta: r.meta }
+      })
+      .filter(Boolean)
+      .sort((a, b) => b!.score - a!.score) as Array<{
+      name: string
+      title: string
+      line: string
+      lineNum: number
+      score: number
+      meta: RecipeMeta
+    }>
 
     printDivider()
     if (matches.length === 0) {
@@ -158,7 +266,7 @@ export async function runSearch(rawQuery: string): Promise<void> {
     } else {
       console.log()
       for (const m of matches) {
-        console.log(`  ${bold(m.name)}  ${dim("—")}  ${m.title}`)
+        console.log(`  ${bold(m.name)}  ${dim("—")}  ${m.title}${levelTag(m.meta.level)}`)
         if (m.lineNum > 0) {
           console.log(`    ${dim(`L${m.lineNum}:`)} ${m.line.slice(0, 100)}`)
         }
