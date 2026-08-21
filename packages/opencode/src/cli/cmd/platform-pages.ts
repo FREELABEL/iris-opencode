@@ -728,8 +728,12 @@ const PushCmd = cmd({
         prompts.log.info(dim(`This is #181601: a persisted cd into fl-iris-api shipped an Aug-17`))
         prompts.log.info(dim(`shadow of /p/docs over the live page and printed Done.`))
         prompts.log.info(dim(`Run from the workspace root, or pass --dir to aim on purpose, or --force.`))
-        prompts.outro("Done")
-        return
+        // Non-zero, because a REFUSAL that exits 0 is the same defect this guard exists to
+        // stop. Caught verifying the v1.3.192 release: the guard correctly refused to clobber
+        // /p/docs from the shadow dir and then exited 0, so a script would have read the
+        // refusal as a successful push — exactly what item 11 fixed across 21 other commands,
+        // reproduced inside the fix for #181601 hours after shipping it.
+        process.exit(1)
       }
 
       // Always name the file. The push used to report only the slug, so a push from the
