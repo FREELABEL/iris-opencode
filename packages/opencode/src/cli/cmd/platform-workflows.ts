@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { WorkflowsExportCommand } from "./platform-workflows-export"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -1849,6 +1850,7 @@ export const PlatformWorkflowsCommand = cmd({
       .command(WorkflowsCreateCommand)
       .command(WorkflowsGenerateCommand)
       .command(WorkflowsUpdateCommand)
+      .command(WorkflowsExportCommand)
       .command(WorkflowsPullCommand)
       .command(WorkflowsPushCommand)
       .command(WorkflowsDiffCommand)
