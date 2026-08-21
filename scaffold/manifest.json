@@ -207,6 +207,12 @@
       "purpose": "How to: Create Schema-Driven Onboarding Flows"
     },
     {
+      "src": "how-to/genesis-sdk.md",
+      "dest": "how-to/genesis-sdk.md",
+      "managed": true,
+      "purpose": "How to: give a bespoke render_mode:html page data and behaviour with the Genesis SDK"
+    },
+    {
       "src": "how-to/pathways-cfo-workflow.md",
       "dest": "how-to/pathways-cfo-workflow.md",
       "managed": true,
