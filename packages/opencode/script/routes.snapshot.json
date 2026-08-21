@@ -10162,6 +10162,11 @@
 "service": "fl-api"
 },
 {
+"method": "PATCH",
+"uri": "/api/v1/user/bloqs/list/item/{}",
+"service": "fl-api"
+},
+{
 "method": "PUT",
 "uri": "/api/v1/user/bloqs/list/item/{}",
 "service": "fl-api"
