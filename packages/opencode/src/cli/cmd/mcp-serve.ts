@@ -476,6 +476,62 @@ export function validateCommand(command: string): { args: string[]; error?: stri
  *
  * Exported so the invariant is held by a test rather than by memory.
  */
+/**
+ * Build the `iris chat` argv for iris_agent action:"ask" — the MCP→CLI ARGV MAPPING.
+ *
+ * Extracted so it can be tested. This mapping is where `--thread` and `--fresh` were lost:
+ * both were declared in the tool's inputSchema, both appeared in the docs, and neither was
+ * ever forwarded. They shipped INERT — accepted, described, and silently discarded, which is
+ * indistinguishable from working for anyone who is not reading the child process's argv.
+ *
+ * A declared input that never reaches argv cannot be caught by types (it is `unknown` in a
+ * JSON blob), by --help (which reads the schema, not the mapping), or by running the tool
+ * (which succeeds either way — it just ignores you). The only thing that catches it is
+ * asserting on the argv, and the only way to assert on the argv is for it to be a value some
+ * function returns. Hence this function.
+ *
+ * Pure and I/O-free on purpose. `threadSuffix` is injectable because the fresh-thread name
+ * would otherwise come from Date.now()/Math.random(), and a mapping test that cannot predict
+ * its own output tests nothing.
+ */
+export function buildAgentAskArgs(input: {
+  agentId: number
+  message: string
+  timeoutSecs: number
+  thread?: unknown
+  fresh?: unknown
+  model?: unknown
+  threadSuffix?: string
+}): { ok: true; args: string[]; thread: string | null } | { ok: false; error: string } {
+  const wantThread =
+    typeof input.thread === "string" && input.thread.trim()
+      ? input.thread.trim()
+      : input.fresh === true
+        ? `fresh_${input.threadSuffix ?? `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`}`
+        : null
+
+  const args = ["chat", "-a", String(input.agentId), "--json", "-V", "--timeout", String(input.timeoutSecs)]
+
+  if (wantThread) args.push("--thread", wantThread)
+
+  const model = (typeof input.model === "string" ? input.model : "").trim()
+  if (model) {
+    // Shell metacharacters in a value that becomes argv. Rejected rather than escaped: this
+    // is an allowlist-shaped decision and quoting rules differ per shell.
+    if (/[;&|`$\\<>!\n\r\s]/.test(model)) {
+      return { ok: false, error: "Error: invalid characters in model" }
+    }
+    args.push("-m", model)
+  }
+
+  args.push(input.message)
+
+  // `thread` is returned, not just embedded in argv, because the caller has to compare what it
+  // ASKED for against what the run reports using — that comparison is what surfaces #181597,
+  // where the server validates thread_id and then drops it.
+  return { ok: true, args, thread: wantThread }
+}
+
 export const MCP_CHILD_ENV = { IRIS_NON_INTERACTIVE: "1", IRIS_MCP: "1" } as const
 
 async function execIris(args: string[], timeoutMs: number = TIMEOUT_MS): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -1038,22 +1094,19 @@ parts you did not mean to touch.`,
           // -V emits the run trace, which is where REAL provenance lives. Single -V is
           // enough (-VV only adds full payloads and bloats tool-heavy runs); the derived
           // provenance is returned instead of the raw trace so results stay small.
-          const wantThread =
-            typeof args?.thread === "string" && args.thread.trim()
-              ? args.thread.trim()
-              : args?.fresh === true
-                ? `fresh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
-                : null
-          const askArgs = ["chat", "-a", String(agentId), "--json", "-V", "--timeout", String(secs)]
-          if (wantThread) askArgs.push("--thread", wantThread)
-          const model = (args?.model as string ?? "").trim()
-          if (model) {
-            if (/[;&|`$\\<>!\n\r\s]/.test(model)) {
-              return { content: [{ type: "text" as const, text: "Error: invalid characters in model" }], isError: true }
-            }
-            askArgs.push("-m", model)
+          const built = buildAgentAskArgs({
+            agentId,
+            message: message + schemaInstruction,
+            timeoutSecs: secs,
+            thread: args?.thread,
+            fresh: args?.fresh,
+            model: args?.model,
+          })
+          if (! built.ok) {
+            return { content: [{ type: "text" as const, text: built.error }], isError: true }
           }
-          askArgs.push(message + schemaInstruction)
+          const askArgs = built.args
+          const wantThread = built.thread
 
           try {
             // +15s of headroom so the CLI's own --timeout is what fires, not the
