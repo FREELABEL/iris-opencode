@@ -4,7 +4,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, isNonInteractive, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
-import { join } from "path"
+import { join, resolve, dirname } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
 
 // ============================================================================
@@ -187,6 +187,36 @@ export function setNestedValue(obj: any, path: string, value: unknown): void {
 
 function pagesDir(custom?: string): string {
   return custom ?? join(process.cwd(), "pages")
+}
+
+/**
+ * #181601 — the directory you happen to be standing in decides what ships.
+ *
+ * `pagesDir` resolves ./pages from the CWD. fl-iris-api contains its own stale six-file
+ * `pages/` next to the workspace's canonical 190, so a persisted `cd` into that repo made
+ * `iris pages push docs` ship an Aug-17 shadow copy over the live page — and print "Done".
+ * Nothing in the output named a path, so there was no way to see which of the two it had
+ * read. That is the whole defect: not that it picked wrong, but that picking wrong and
+ * picking right looked identical.
+ *
+ * The workspace root is the directory holding BOTH `pages/` and `daily-diary/`. If that
+ * exists and is not the directory we are about to read, the local file is almost certainly
+ * a shadow. Return both so the caller can show them and refuse.
+ */
+export function detectShadowPagesDir(usedDir: string, from: string = process.cwd()): { canonical: string } | null {
+  let d = from
+
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(d, "pages")) && existsSync(join(d, "daily-diary"))) {
+      const canonical = join(d, "pages")
+      return resolve(canonical) === resolve(usedDir) ? null : { canonical }
+    }
+    const parent = dirname(d)
+    if (parent === d) break
+    d = parent
+  }
+
+  return null
 }
 
 /**
@@ -667,7 +697,8 @@ const PushCmd = cmd({
       .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
       .option("dir", { describe: "input directory", type: "string", default: "./pages" })
       .option("live", { describe: "skip draft — push directly to live (dangerous)", type: "boolean", default: false })
-      .option("publish", { describe: "publish right after push — use this on any page that is already live, or it 404s until you publish", type: "boolean", default: false }),
+      .option("publish", { describe: "publish right after push — use this on any page that is already live, or it 404s until you publish", type: "boolean", default: false })
+      .option("force", { describe: "push even if the local file looks like a stale shadow copy (#181601)", type: "boolean", default: false }),
   async handler(args) {
     const { slug, corrected } = normalizeSlugArg(args.slug)
     UI.empty()
@@ -676,13 +707,34 @@ const PushCmd = cmd({
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     const sp = prompts.spinner()
     try {
-      const filePath = join(pagesDir(args.dir), `${slug}.json`)
+      const dirUsed = pagesDir(args.dir)
+      const filePath = join(dirUsed, `${slug}.json`)
       if (!existsSync(filePath)) {
         prompts.log.error(`Local file not found: ${filePath}`)
         prompts.log.info(dim(`Pull first: iris pages pull ${slug}`))
         prompts.outro("Done")
         return
       }
+
+      // #181601. Refuse a shadow ./pages unless the caller aimed there deliberately.
+      // `--dir` is an explicit aim; the yargs default is not, so check argv rather than
+      // args.dir, which is always populated.
+      const aimedDeliberately = process.argv.includes("--dir")
+      const shadow = args.force || aimedDeliberately ? null : detectShadowPagesDir(dirUsed)
+      if (shadow) {
+        prompts.log.error(`Refusing to push from what looks like a stale shadow copy.`)
+        prompts.log.info(`  reading:   ${resolve(filePath)}`)
+        prompts.log.info(`  canonical: ${resolve(join(shadow.canonical, `${slug}.json`))}`)
+        prompts.log.info(dim(`This is #181601: a persisted cd into fl-iris-api shipped an Aug-17`))
+        prompts.log.info(dim(`shadow of /p/docs over the live page and printed Done.`))
+        prompts.log.info(dim(`Run from the workspace root, or pass --dir to aim on purpose, or --force.`))
+        prompts.outro("Done")
+        return
+      }
+
+      // Always name the file. The push used to report only the slug, so a push from the
+      // right directory and a push from the wrong one produced identical output.
+      prompts.log.info(dim(`from ${resolve(filePath)}`))
       sp.start("Pushing…")
       const local = JSON.parse(readFileSync(filePath, "utf-8"))
       const page = await getBySlug(slug, false)
