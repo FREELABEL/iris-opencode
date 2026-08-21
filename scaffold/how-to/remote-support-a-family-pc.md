@@ -1,3 +1,10 @@
+---
+category: Infrastructure
+level: intermediate
+tags: [tailscale, windows, remote-access, rdp]
+duration_min: 10
+prerequisites: [hive-tailscale]
+---
 # How to: Remotely support a family member's Windows PC
 
 ## The one-paragraph version

@@ -1,3 +1,9 @@
+---
+category: CRM & Sales
+level: beginner
+tags: [staff, contracts, client-work]
+duration_min: 8
+---
 # How to: Manage staff, contractors, and contracts
 
 ## What this does

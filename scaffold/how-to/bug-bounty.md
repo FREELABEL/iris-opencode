@@ -1,3 +1,9 @@
+---
+category: Bounty & Community
+level: beginner
+tags: [bounty, payments, community]
+duration_min: 10
+---
 # Bug Bounty — Source of Truth (READ BEFORE REPORTING ANY $)
 
 The bug-bounty payout state (opp **#581**) had drifted — internal wallet **accruals** were being

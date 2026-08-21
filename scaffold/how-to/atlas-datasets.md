@@ -1,3 +1,9 @@
+---
+category: Data & Atlas
+level: intermediate
+tags: [atlas, datasets, schema]
+duration_min: 12
+---
 # How to: Use Atlas Datasets (schema-driven data)
 
 ## What this does

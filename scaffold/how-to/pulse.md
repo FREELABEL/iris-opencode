@@ -1,3 +1,9 @@
+---
+category: CRM & Sales
+level: beginner
+tags: [crm, pulse, reporting]
+duration_min: 10
+---
 # How to: use Pulse — the readiness engine that proves IRIS is delivering
 
 ## What this does

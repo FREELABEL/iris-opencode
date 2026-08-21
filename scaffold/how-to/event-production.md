@@ -1,3 +1,9 @@
+---
+category: Content & Media
+level: intermediate
+tags: [events, production, operations]
+duration_min: 15
+---
 # Event Production — How-To
 
 Set up a live event with ticket sales, QR check-in, door payments, and production management — all from the CLI.

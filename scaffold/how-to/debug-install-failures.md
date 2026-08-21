@@ -1,3 +1,9 @@
+---
+category: Getting Started
+level: beginner
+tags: [cli, troubleshooting, setup]
+duration_min: 10
+---
 # How to: Debug IRIS CLI install failures
 
 ## What this does

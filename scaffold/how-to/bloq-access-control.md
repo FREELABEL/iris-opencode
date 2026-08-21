@@ -1,3 +1,9 @@
+---
+category: Data & Atlas
+level: intermediate
+tags: [bloqs, security, sharing]
+duration_min: 12
+---
 # How to: Share a bloq without leaking the parts you didn't mean to share
 
 ## What this does

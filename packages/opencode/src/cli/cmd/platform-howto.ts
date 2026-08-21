@@ -8,6 +8,7 @@ import { join, resolve } from "path"
 import { existsSync, readdirSync, readFileSync } from "fs"
 import { createHash } from "crypto"
 import { irisFetch, IRIS_API } from "./iris-api"
+import { Installation } from "../../installation"
 
 const HOWTO_DIR = join(homedir(), ".iris", "how-to")
 
@@ -234,15 +235,91 @@ function warnStranded(repoDir: string | null): void {
   console.log(dim("  Move one into the repo with: ") + highlight("iris how-to promote <name>"))
 }
 
+/** The closed set. An extensible category list stops being navigation within a month. */
+const CATEGORIES = [
+  "Getting Started",
+  "Agents & Automation",
+  "Pages & Design",
+  "Data & Atlas",
+  "CRM & Sales",
+  "Content & Media",
+  "Infrastructure",
+  "Finance",
+  "Bounty & Community",
+] as const
+
+const LEVELS = ["beginner", "intermediate", "advanced"] as const
+
+export type RecipeMeta = {
+  category?: string
+  level?: string
+  tags?: string[]
+  duration_min?: number
+  prerequisites?: string[]
+  title?: string
+}
+
+/**
+ * Minimal YAML front-matter reader — deliberately not a YAML dependency.
+ *
+ * Only five keys are supported and they are all scalars or flat string lists, so a real parser
+ * would buy nothing and cost a dependency in a CLI that ships as a single binary.
+ *
+ * ABSENCE IS UNTAGGED, NEVER INVALID. The 46 recipes migrate one at a time and both states have to
+ * publish cleanly in between — a stricter reader would have forced a flag-day migration.
+ */
+function parseFrontMatter(raw: string): { meta: RecipeMeta; body: string } {
+  if (!raw.startsWith("---\n")) return { meta: {}, body: raw }
+  const end = raw.indexOf("\n---", 4)
+  if (end === -1) return { meta: {}, body: raw }
+  const block = raw.slice(4, end)
+  const body = raw.slice(raw.indexOf("\n", end + 1) + 1)
+
+  const meta: RecipeMeta = {}
+  for (const line of block.split("\n")) {
+    const m = line.match(/^([a-z_]+):\s*(.*)$/)
+    if (!m) continue
+    const [, key, rawVal] = m
+    const val = rawVal.trim()
+    if (!val) continue
+    if (key === "tags" || key === "prerequisites") {
+      const list = val
+        .replace(/^\[|\]$/g, "")
+        .split(",")
+        .map((t) => t.trim().replace(/^["']|["']$/g, ""))
+        .filter(Boolean)
+      if (list.length) (meta as any)[key] = list
+    } else if (key === "duration_min") {
+      const n = parseInt(val, 10)
+      if (!Number.isNaN(n)) meta.duration_min = n
+    } else if (key === "category" || key === "level" || key === "title") {
+      ;(meta as any)[key] = val.replace(/^["']|["']$/g, "")
+    }
+  }
+  return { meta, body }
+}
+
+/** Typos in a closed set are an open set with extra steps — refuse at publish, name the options. */
+export function validateRecipeMeta(slug: string, meta: RecipeMeta): string[] {
+  const errs: string[] = []
+  if (meta.category && !(CATEGORIES as readonly string[]).includes(meta.category))
+    errs.push(`${slug}: unknown category '${meta.category}' — expected one of ${CATEGORIES.join(" · ")}`)
+  if (meta.level && !(LEVELS as readonly string[]).includes(meta.level))
+    errs.push(`${slug}: unknown level '${meta.level}' — expected ${LEVELS.join(" | ")}`)
+  return errs
+}
+
 function readRecipes(dir: string) {
   return readdirSync(dir)
     .filter((f) => f.endsWith(".md") && f !== "README.md")
     .sort()
     .map((f) => {
       const slug = f.replace(/\.md$/, "")
-      const raw = readFileSync(join(dir, f), "utf8")
+      const rawFile = readFileSync(join(dir, f), "utf8")
+      // Strip front-matter FIRST so every rule below sees exactly what it saw before this existed.
+      const { meta, body: raw } = parseFrontMatter(rawFile)
       const lines = raw.split("\n")
-      const title = (lines[0] || "").replace(/^#\s*/, "").trim() || slug
+      const title = meta.title || (lines[0] || "").replace(/^#\s*/, "").trim() || slug
       // First real PARAGRAPH becomes the card summary, not the first physical line.
       //
       // Two bugs lived here. Taking one line shipped `> **STOP — read the design standard
@@ -276,7 +353,18 @@ function readRecipes(dir: string) {
         summary = flat.length > 240 && lastStop > 80 ? cut.slice(0, lastStop + 1) : cut.trim()
       }
       const body_md = rest.join("\n").trim()
-      return { slug, title, summary, body_md, hash: createHash("sha256").update(body_md).digest("hex") }
+      return {
+        slug,
+        title,
+        summary,
+        body_md,
+        category: meta.category ?? null,
+        level: meta.level ?? null,
+        tags: meta.tags ?? [],
+        duration_min: meta.duration_min ?? null,
+        prerequisites: meta.prerequisites ?? [],
+        hash: createHash("sha256").update(body_md).digest("hex"),
+      }
     })
 }
 
@@ -306,6 +394,23 @@ const HowToPublishCommand = cmd({
     console.log(dim(`  source  ${dir}`))
     console.log(dim(`  recipes ${recipes.length}`))
 
+    const metaErrors = recipes.flatMap((r) =>
+      validateRecipeMeta(r.slug, { category: r.category ?? undefined, level: r.level ?? undefined }),
+    )
+    if (metaErrors.length) {
+      prompts.log.error(`${metaErrors.length} recipe(s) have invalid front-matter — nothing published.`)
+      for (const e of metaErrors.slice(0, 10)) console.log(dim("    ") + e)
+      prompts.outro("")
+      return
+    }
+
+    const tagged = recipes.filter((r) => r.category).length
+    if (tagged < recipes.length) {
+      console.log(dim(`  tagged  ${tagged}/${recipes.length}`) + warning(`  (${recipes.length - tagged} untagged)`))
+    } else {
+      console.log(dim(`  tagged  ${tagged}/${recipes.length}`))
+    }
+
     if (args["dry-run"]) {
       // Compare against what is live, so a dry run answers "what is stale?" rather than
       // just restating the file list.
@@ -333,8 +438,24 @@ const HowToPublishCommand = cmd({
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          version: args["cli-version"],
-          recipes: recipes.map(({ slug, title, summary, body_md }) => ({ slug, title, summary, body_md })),
+          // Default to the running CLI version. `source_version` has been a column since the
+          // table was created and was NULL on all 46 rows because nothing ever passed
+          // --cli-version — which makes the whole staleness/re-shoot primitive (HOWTO-04) free
+          // the moment it is actually stamped.
+          version: args["cli-version"] ?? Installation.VERSION,
+          recipes: recipes.map(
+            ({ slug, title, summary, body_md, category, level, tags, duration_min, prerequisites }) => ({
+              slug,
+              title,
+              summary,
+              body_md,
+              category,
+              level,
+              tags,
+              duration_min,
+              prerequisites,
+            }),
+          ),
         }),
       },
       IRIS_API,

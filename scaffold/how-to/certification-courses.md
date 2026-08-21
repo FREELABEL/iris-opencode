@@ -1,3 +1,9 @@
+---
+category: Bounty & Community
+level: intermediate
+tags: [courses, training, certification]
+duration_min: 15
+---
 # How to: build a certification — course, chapters, study material, quiz
 
 How to create a course people are examined on, what makes a chapter examinable, and how the

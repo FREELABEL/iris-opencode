@@ -1,3 +1,9 @@
+---
+category: Infrastructure
+level: advanced
+tags: [railway, deploy, troubleshooting]
+duration_min: 12
+---
 # Recover the Elon frontend from a Railway build-lock race
 
 **When to use:** a `fl-elon-web-ui` deploy shows `Deploy failed` and the build log

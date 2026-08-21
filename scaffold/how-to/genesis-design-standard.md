@@ -1,3 +1,10 @@
+---
+category: Pages & Design
+level: intermediate
+tags: [genesis, design, standards]
+duration_min: 15
+prerequisites: [pages]
+---
 # Genesis Design Standard — READ BEFORE BUILDING ANY PAGE
 
 The house design standard for every Genesis `/p/` page, bespoke page and artifact.

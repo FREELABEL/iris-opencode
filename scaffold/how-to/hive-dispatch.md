@@ -1,3 +1,9 @@
+---
+category: Infrastructure
+level: intermediate
+tags: [hive, daemon, remote-access]
+duration_min: 15
+---
 # How to: Connect a machine to the Hive and dispatch a task
 
 ## What this does

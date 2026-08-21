@@ -1,3 +1,9 @@
+---
+category: Data & Atlas
+level: advanced
+tags: [storage, client-work, security, architecture]
+duration_min: 18
+---
 # How to: Put a client's data on their own database or bucket (Provider Proxy)
 
 ## What this does

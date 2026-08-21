@@ -1,3 +1,9 @@
+---
+category: Content & Media
+level: intermediate
+tags: [brands, personas, content]
+duration_min: 10
+---
 # How to: Set up a brand with personas for multi-voice content
 
 ## What this does

@@ -1,3 +1,9 @@
+---
+category: Content & Media
+level: advanced
+tags: [content, rss, seo, syndication]
+duration_min: 15
+---
 # How to: Syndicate a newsroom — RSS, JSON Feed and Google News
 
 ## What this does

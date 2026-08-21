@@ -1,3 +1,10 @@
+---
+category: Content & Media
+level: advanced
+tags: [content, brands, social, automation]
+duration_min: 18
+prerequisites: [setup-brand-with-personas]
+---
 # How to: Run the multi-persona content engine (6-IG-account model)
 
 ## What this does

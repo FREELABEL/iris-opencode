@@ -1,3 +1,9 @@
+---
+category: Content & Media
+level: beginner
+tags: [meetings, transcription, intel]
+duration_min: 8
+---
 # How to: Turn a recorded meeting into filed intel
 
 ## What this does

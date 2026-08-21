@@ -1,3 +1,9 @@
+---
+category: Agents & Automation
+level: intermediate
+tags: [agents, troubleshooting, cli]
+duration_min: 8
+---
 # How to: See what an agent actually did (`-V` / `-VV`)
 
 ## What this does

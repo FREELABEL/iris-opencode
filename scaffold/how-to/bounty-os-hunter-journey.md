@@ -1,3 +1,10 @@
+---
+category: Bounty & Community
+level: beginner
+tags: [bounty, hunters, payments, community]
+duration_min: 12
+prerequisites: [bug-bounty]
+---
 # How to: the hunter's path — find work, apply, sign, get paid
 
 Everything a person does between *seeing* a bounty and *being paid* for it, and what to

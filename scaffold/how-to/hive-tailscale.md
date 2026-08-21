@@ -1,3 +1,9 @@
+---
+category: Infrastructure
+level: intermediate
+tags: [hive, tailscale, vpn, remote-access, security]
+duration_min: 15
+---
 # How to: Reach a machine that isn't on your network (Hive + Tailscale)
 
 ## The one-paragraph version

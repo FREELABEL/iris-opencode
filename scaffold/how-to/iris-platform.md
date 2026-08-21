@@ -1,3 +1,9 @@
+---
+category: Getting Started
+level: advanced
+tags: [api, integration, architecture]
+duration_min: 15
+---
 # IRIS Platform — Connect Any Frontend to IRIS as Its Backend
 
 Use IRIS as a complete backend-as-a-service for any React, Vue, or mobile app. Zero server code. Your client's frontend calls IRIS APIs on a staging subdomain — same domain, no CORS.

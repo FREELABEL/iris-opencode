@@ -1,3 +1,9 @@
+---
+category: Data & Atlas
+level: intermediate
+tags: [bloqs, relations, graph]
+duration_min: 10
+---
 # Link bloqs together — relations, filtering, and the graph view
 
 IRIS lets you connect bloqs (projects/knowledge bases) to each other with **typed

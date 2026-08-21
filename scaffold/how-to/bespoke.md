@@ -1,3 +1,10 @@
+---
+category: Pages & Design
+level: advanced
+tags: [genesis, pages, html, design]
+duration_min: 18
+prerequisites: [pages, genesis-design-standard]
+---
 # Bespoke Genesis Pages — How-To
 
 > **STOP — read the design standard first:** `iris how-to view genesis-design-standard`

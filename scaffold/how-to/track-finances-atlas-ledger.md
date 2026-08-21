@@ -1,3 +1,9 @@
+---
+category: Finance
+level: beginner
+tags: [finance, ledger, atlas]
+duration_min: 10
+---
 # How to: Track finances with Atlas Ledger
 
 ## What this does

@@ -1,3 +1,9 @@
+---
+category: CRM & Sales
+level: intermediate
+tags: [crm, email, messaging, integration]
+duration_min: 12
+---
 # How to: send and log communications (the Comms Router / reachr)
 
 Every outbound message — iMessage, Apple Mail, platform email, SMS, Instagram DM, LinkedIn —

@@ -1,3 +1,9 @@
+---
+category: CRM & Sales
+level: beginner
+tags: [crm, deals, payments]
+duration_min: 10
+---
 # How to: Manage deals — track, remind, and recover payment pipeline
 
 ## What this does

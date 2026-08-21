@@ -1,3 +1,9 @@
+---
+category: CRM & Sales
+level: intermediate
+tags: [contracts, legal, security, client-work]
+duration_min: 12
+---
 # How to: Raise, send and sign an NDA or BAA — and gate access on it
 
 ## What this does

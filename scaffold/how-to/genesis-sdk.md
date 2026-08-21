@@ -1,3 +1,10 @@
+---
+category: Pages & Design
+level: advanced
+tags: [genesis, sdk, javascript]
+duration_min: 15
+prerequisites: [pages]
+---
 # Genesis SDK — giving a hand-authored page data and behaviour
 
 A bespoke `render_mode: html` page is beautiful and inert. The SDK is the spine:

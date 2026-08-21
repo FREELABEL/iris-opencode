@@ -1,3 +1,9 @@
+---
+category: Finance
+level: intermediate
+tags: [crowdfunding, opportunities, fundraising]
+duration_min: 15
+---
 # How to: Turn an opportunity into a crowdfunded pitch
 
 ## What this does

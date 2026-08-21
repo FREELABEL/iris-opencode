@@ -1,3 +1,9 @@
+---
+category: Agents & Automation
+level: advanced
+tags: [agents, loops, architecture]
+duration_min: 20
+---
 # How to: Build an agentic loop on IRIS (loop engineering)
 
 ## What this does

@@ -1,3 +1,9 @@
+---
+category: Agents & Automation
+level: intermediate
+tags: [agents, workflows, export]
+duration_min: 8
+---
 # How to: Export an agent or workflow as a folder you can fork
 
 ## What this does
