@@ -508,6 +508,11 @@ export const PlatformTracesCommand = cmd({
     if (!args.trace_id) {
       params.set("hours", String(args.hours ?? 24))
       if (args.failed) params.set("only_failed", "1")
+      // --source was declared as an option and then never forwarded, so every value
+      // returned the same unfiltered rows. A filter that silently declines to filter
+      // reads as "there is nothing else here" — which is exactly wrong when you are
+      // using it to ask why one surface looks empty.
+      if (args.source) params.set("source", String(args.source))
     }
 
     let data: any
