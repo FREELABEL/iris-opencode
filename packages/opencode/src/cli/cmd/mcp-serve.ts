@@ -1174,10 +1174,23 @@ parts you did not mean to touch.`,
             if (wantThread && provenance.thread_id && provenance.thread_id !== wantThread) {
               flags.push(`THREAD CONTROL DID NOT TAKE EFFECT — you asked for "${wantThread}", the run used "${provenance.thread_id}"${provenance.history_messages ? ` with ${provenance.history_messages} prior messages` : ""}. This is server-side bug #181597: /api/v6/chat/stream validates thread_id then drops it. This turn was NOT isolated. Do not rely on it being a clean room.`)
             } else if (wantThread && provenance.thread_id === wantThread) {
-              flags.push(`Thread control confirmed: this turn ran in "${wantThread}"${provenance.history_messages ? ` with ${provenance.history_messages} prior messages from it` : " with no prior history"}.`)
+              // A brand-new thread reports 1 because the loop counts this turn's own message.
+              const carried = (provenance.history_messages ?? 0) > 1 ? provenance.history_messages : 0
+              flags.push(
+                `Thread control confirmed: this turn ran in "${wantThread}"` +
+                  (carried
+                    ? `, carrying ${carried} prior messages from that conversation.`
+                    : ` with no inherited history — this was an isolated turn.`),
+              )
             }
-            if (provenance.history_messages && provenance.history_messages > 0) {
-              flags.push(`NOT A CLEAN ROOM: ${provenance.history_messages} messages of prior conversation were loaded from thread ${provenance.thread_id}. This agent remembers earlier calls — yours and anyone else's — so an answer can be shaped by context you cannot see here.`)
+            // Only warn about inherited context when the caller did NOT choose the thread.
+            // Once thread control is confirmed the banner above already states the history
+            // count, and firing both produced a flat contradiction on a fresh thread:
+            // "Thread control confirmed ... 1 prior message" immediately followed by
+            // "NOT A CLEAN ROOM: 1 messages". Asking for isolation and getting it is not a
+            // warning condition.
+            if (!wantThread && provenance.history_messages && provenance.history_messages > 0) {
+              flags.push(`NOT A CLEAN ROOM: ${provenance.history_messages} messages of prior conversation were loaded from thread ${provenance.thread_id}. This agent remembers earlier calls — yours and anyone else's — so an answer can be shaped by context you cannot see here. Pass fresh:true to isolate a turn, or thread:"<name>" to keep a workstream separate.`)
             }
             const banner = flags.length ? flags.map((f) => `[!] ${f}`).join("\n") + "\n\n" : ""
             const payload = structured ? { ...out, structured } : out
