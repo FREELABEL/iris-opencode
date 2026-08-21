@@ -87,15 +87,49 @@ function readBlock(src: string, openIdx: number): string | null {
   return null
 }
 
-/** Every `const X = cmd({...})` in the tree, keyed by const name. */
 /** qualified entry key -> absolute path of the file that defines it. */
 const COMMAND_SOURCE = new Map<string, string>()
 
-function collectBlocks(dir: string): Map<string, Block> {
-  const blocks = new Map<string, Block>()
+/**
+ * Every `const X = cmd({...})` in the tree, keyed by const name — and there are
+ * DUPLICATES, which is why this is a list rather than one block per name.
+ *
+ * 49 const names are defined in more than one file: `ListCommand` in 25 of them,
+ * `CreateCommand` in 11, `StatusCommand` in 7. Keyed by bare name, the last file the
+ * directory scan happened to reach won, and the index then described somebody else's
+ * command: `automation create` was published as "create a new event" (platform-events.ts)
+ * and `automation status` as "show the status of a sync/ingestion job" with the wrong
+ * positional, `<jobId>` instead of `<runId>`. Agents discover commands through this file,
+ * so a wrong describe is not cosmetic — it is a confident wrong answer.
+ *
+ * The same collision fed the staleness check: it asked which file defines `mint audit`,
+ * was told platform-events.ts, found that file clean, and blocked a push over work that
+ * only exists in an uncommitted platform-mint.ts.
+ */
+type BlockIndex = { byName: Map<string, Block[]>; imports: Map<string, Map<string, string>> }
+
+function collectBlocks(dir: string): BlockIndex {
+  const byName = new Map<string, Block[]>()
+  // file -> (imported const name -> file that exports it). Resolving a child through the
+  // parent's own import statement is the only answer that is right by construction; a
+  // child genuinely does live in another file (PlaybookDraftCommand does).
+  const imports = new Map<string, Map<string, string>>()
+
   for (const file of readdirSync(dir)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue
-    const src = readFileSync(join(dir, file), "utf-8")
+    const abs = join(dir, file)
+    const src = readFileSync(abs, "utf-8")
+
+    const fileImports = new Map<string, string>()
+    for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*"\.\/([A-Za-z0-9._-]+)"/g)) {
+      const target = join(dir, m[2].endsWith(".ts") ? m[2] : `${m[2]}.ts`)
+      for (const raw of m[1].split(",")) {
+        const name = raw.trim().split(/\s+as\s+/).pop()?.trim()
+        if (name) fileImports.set(name, target)
+      }
+    }
+    imports.set(abs, fileImports)
+
     for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group))\s*=\s*cmd\(\s*\{/g)) {
       const openIdx = m.index! + m[0].length - 1
       const body = readBlock(src, openIdx)
@@ -103,16 +137,46 @@ function collectBlocks(dir: string): Map<string, Block> {
       const command = body.match(/command:\s*"([^"]+)"/)?.[1]
       if (!command) continue
       const aliasRaw = body.match(/aliases:\s*\[([^\]]*)\]/)?.[1] ?? ""
-      blocks.set(m[1], {
+      const block: Block = {
         command,
         describe: body.match(/describe:\s*"([^"]*)"/)?.[1] ?? "",
         aliases: [...aliasRaw.matchAll(/"([^"]+)"/g)].map((a) => a[1]),
         body,
-        file: join(dir, file),
-      })
+        file: abs,
+      }
+      const list = byName.get(m[1]) ?? []
+      list.push(block)
+      byName.set(m[1], list)
     }
   }
-  return blocks
+
+  return { byName, imports }
+}
+
+/**
+ * Which of the same-named blocks did THIS parent mean?
+ *
+ * Same file, then the file the parent imports it from, then a globally unique match.
+ * Anything left is genuinely ambiguous and returns nothing rather than a coin flip —
+ * an unindexed command is a gap, an misindexed one is a lie.
+ */
+function resolveBlock(index: BlockIndex, constName: string, fromFile: string | null): Block | undefined {
+  const candidates = index.byName.get(constName)
+  if (!candidates || candidates.length === 0) return undefined
+  if (candidates.length === 1) return candidates[0]
+
+  if (fromFile) {
+    const here = candidates.find((c) => c.file === fromFile)
+    if (here) return here
+
+    const imported = index.imports.get(fromFile)?.get(constName)
+    if (imported) {
+      const viaImport = candidates.find((c) => c.file === imported)
+      if (viaImport) return viaImport
+    }
+  }
+
+  return undefined
 }
 
 function collectCommands(): Entry[] {
@@ -125,8 +189,21 @@ function collectCommands(): Entry[] {
   // separate entries called `list`, because every group has one. `iris list` is not a thing,
   // so an index full of them is worse than no index: it answers with commands that do not
   // exist.
-  const indexSrc = readFileSync(join(ROOT, "src/index.ts"), "utf-8")
+  const indexFile = join(ROOT, "src/index.ts")
+  const indexSrc = readFileSync(indexFile, "utf-8")
   const registered = [...indexSrc.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+Command)/g)].map((m) => m[1])
+
+  // index.ts lives outside src/cli/cmd, so its imports are not in the map yet — and it is
+  // the parent of every top-level verb, i.e. the one file whose resolution matters most.
+  const indexImports = new Map<string, string>()
+  for (const m of indexSrc.matchAll(/import\s*\{([^}]*)\}\s*from\s*"\.\/cli\/cmd\/([A-Za-z0-9._-]+)"/g)) {
+    const target = join(dir, m[2].endsWith(".ts") ? m[2] : `${m[2]}.ts`)
+    for (const raw of m[1].split(",")) {
+      const name = raw.trim().split(/\s+as\s+/).pop()?.trim()
+      if (name) indexImports.set(name, target)
+    }
+  }
+  blocks.imports.set(indexFile, indexImports)
 
   /**
    * Walk the REAL builder tree — each group declares its children as `.command(XCommand)`.
@@ -140,22 +217,22 @@ function collectCommands(): Entry[] {
    * `seen` is per-path, so a command reachable from two groups is indexed under both, while
    * a cycle still terminates.
    */
-  function walk(constName: string, prefix: string[], seen: Set<string>, depth: number): string[] {
-    const b = blocks.get(constName)
-    if (!b || depth > 4 || seen.has(constName)) return []
+  function walk(constName: string, prefix: string[], seen: Set<string>, depth: number, fromFile: string | null): string[] {
+    const b = resolveBlock(blocks, constName, fromFile)
+    if (!b || depth > 4 || seen.has(`${b.file}::${constName}`)) return []
 
     const token = b.command.split(/\s+/)[0]
     if (token === "*" || token === "$0") return [] // yargs internals, not capabilities
 
     const path = [...prefix, token]
     const rest = b.command.slice(token.length).trim()
-    const nextSeen = new Set(seen).add(constName)
+    const nextSeen = new Set(seen).add(`${b.file}::${constName}`)
 
     // Direct children only — those named in THIS block's builder.
     const childNames = [...b.body.matchAll(/\.command\((?:reg\()?([A-Za-z0-9_]+(?:Command|Group))/g)].map((m) => m[1])
     const childTokens: string[] = []
     for (const child of childNames) {
-      childTokens.push(...walk(child, path, nextSeen, depth + 1))
+      childTokens.push(...walk(child, path, nextSeen, depth + 1, b.file))
     }
 
     // Where this command is DEFINED. The check uses it to tell a command that is missing
@@ -179,7 +256,7 @@ function collectCommands(): Entry[] {
     return [token, ...childTokens]
   }
 
-  for (const constName of registered) walk(constName, [], new Set(), 0)
+  for (const constName of registered) walk(constName, [], new Set(), 0, indexFile)
 
   // A command reachable by two routes can still yield the same qualified name twice; keep
   // the richest description rather than emitting a visibly duplicated row.
