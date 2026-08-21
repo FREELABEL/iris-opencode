@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import { HowToBackupCommands } from "./howto-backup"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, highlight, printDivider } from "./iris-api"
+import { dim, bold, highlight, printDivider, success } from "./iris-api"
 import { homedir } from "os"
 import { join, resolve } from "path"
 import { existsSync, readdirSync, readFileSync } from "fs"
@@ -10,6 +10,11 @@ import { createHash } from "crypto"
 import { irisFetch, IRIS_API } from "./iris-api"
 
 const HOWTO_DIR = join(homedir(), ".iris", "how-to")
+
+/** iris-api exports dim/bold/success/highlight but no warning; stranding needs to be loud. */
+function warning(s: string): string {
+  return `${UI.Style.TEXT_WARNING}${s}${UI.Style.TEXT_NORMAL}`
+}
 
 async function ensureDir() {
   const fs = await import("fs")
@@ -51,14 +56,18 @@ export async function runList(): Promise<void> {
     console.log(dim("  Create one with: ") + highlight("iris how-to add <name>"))
     console.log()
   } else {
+    const repoDir = resolveSourceDir()
+    const stranded = new Set(strandedRecipes(repoDir))
     printDivider()
     console.log()
     for (const r of recipes) {
-      console.log(`  ${bold(r.name)}  ${dim("—")}  ${r.title}`)
+      const mark = stranded.has(r.name) ? warning(" ⚠ local-only") : ""
+      console.log(`  ${bold(r.name)}  ${dim("—")}  ${r.title}${mark}`)
     }
     console.log()
     console.log(dim(`  ${recipes.length} recipe(s) in ~/.iris/how-to/`))
     console.log(dim("  View one with: ") + highlight("iris how-to view <name>"))
+    warnStranded(repoDir)
     console.log()
   }
   prompts.outro("Done")
@@ -198,6 +207,33 @@ function resolveSourceDir(explicit?: string): string | null {
   return null
 }
 
+/**
+ * Recipes that exist ONLY in ~/.iris/how-to and are therefore unpublishable.
+ *
+ * `publish` reading the repo is correct (see above) — but nothing used to SAY so, so a recipe
+ * written with `how-to add` sat on one laptop forever and every surface reported success.
+ * That is the same shape as a deploy check that cannot tell "deployed" from "not measured":
+ * the absence was never rendered anywhere. Now `list` marks them and `publish` names them.
+ */
+function strandedRecipes(repoDir: string | null): string[] {
+  if (!repoDir || !existsSync(HOWTO_DIR)) return []
+  const inRepo = new Set(readdirSync(repoDir).filter((f: string) => f.endsWith(".md")))
+  return readdirSync(HOWTO_DIR)
+    .filter((f: string) => f.endsWith(".md") && f !== "README.md" && !inRepo.has(f))
+    .map((f: string) => f.replace(/\.md$/, ""))
+    .sort()
+}
+
+function warnStranded(repoDir: string | null): void {
+  const stranded = strandedRecipes(repoDir)
+  if (stranded.length === 0) return
+  console.log()
+  console.log(warning(`  ⚠ ${stranded.length} recipe(s) exist only in ~/.iris/how-to and will NEVER publish:`))
+  for (const n of stranded.slice(0, 12)) console.log(dim("      ") + n)
+  if (stranded.length > 12) console.log(dim(`      … and ${stranded.length - 12} more`))
+  console.log(dim("  Move one into the repo with: ") + highlight("iris how-to promote <name>"))
+}
+
 function readRecipes(dir: string) {
   return readdirSync(dir)
     .filter((f) => f.endsWith(".md") && f !== "README.md")
@@ -285,6 +321,7 @@ const HowToPublishCommand = cmd({
       printDivider()
       console.log(`  ${bold(String(recipes.length))} would publish · ${bold(String(fresh.length))} not yet live`)
       for (const r of fresh.slice(0, 12)) console.log(dim("    + ") + r.slug)
+      warnStranded(dir)
       printDivider()
       prompts.outro(dim("Dry run — nothing was published."))
       return
@@ -318,6 +355,7 @@ const HowToPublishCommand = cmd({
         (out.unpublished ? ` · ${bold(String(out.unpublished))} unpublished` : ""),
     )
     console.log(dim(`  ${out.total_published} live at `) + highlight("https://heyiris.io/how-to"))
+    warnStranded(dir)
     printDivider()
     prompts.outro("")
   },
@@ -332,15 +370,25 @@ const HowToAddCommand = cmd({
       .positional("name", { type: "string", demandOption: true, describe: "recipe name (becomes <name>.md)" })
       .option("file", { type: "string", describe: "read recipe content from this file path" })
       .option("content", { type: "string", describe: "recipe content as a string (for short recipes)" })
-      .option("title", { type: "string", describe: "recipe title (auto-prepended as # heading if missing)" }),
+      .option("title", { type: "string", describe: "recipe title (auto-prepended as # heading if missing)" })
+      .option("local", {
+        type: "boolean",
+        default: false,
+        describe: "write ONLY to ~/.iris/how-to — the recipe will not be publishable",
+      }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Add How-To")
 
     const fs = await import("fs")
     const name = String(args.name).replace(/\.md$/, "").replace(/\s+/g, "-").toLowerCase()
-    const filePath = join(HOWTO_DIR, `${name}.md`)
     await ensureDir()
+
+    // The repo is the source of truth for anything publishable, so author THERE by default and
+    // mirror to ~/.iris/how-to so `view` works immediately. Writing only to the home dir is now
+    // an explicit --local choice rather than the silent default that stranded six recipes.
+    const repoDir = args.local ? null : resolveSourceDir()
+    const filePath = join(repoDir ?? HOWTO_DIR, `${name}.md`)
 
     let content = ""
 
@@ -389,17 +437,112 @@ const HowToAddCommand = cmd({
 
     const exists = fs.existsSync(filePath)
     fs.writeFileSync(filePath, content, "utf-8")
+    // Mirror into the home dir so `view`/`search` and the MCP resource see it without a reinstall.
+    if (repoDir) fs.writeFileSync(join(HOWTO_DIR, `${name}.md`), content, "utf-8")
 
     const action = exists ? "Updated" : "Created"
-    prompts.log.info(`${action}: ~/.iris/how-to/${name}.md (${content.split("\n").length} lines)`)
+    prompts.log.info(`${action}: ${filePath} (${content.split("\n").length} lines)`)
 
     printDivider()
     console.log()
-    console.log(dim("  Other agents can now read this recipe with:"))
-    console.log(`    ${highlight(`iris how-to view ${name}`)}`)
+    console.log(dim("  Read it with: ") + highlight(`iris how-to view ${name}`))
     console.log()
-    console.log(dim("  Or the agent will find it automatically when users ask related questions"))
-    console.log(dim("  (the IRIS CLI system prompt checks ~/.iris/how-to/ first)."))
+    if (repoDir) {
+      console.log(dim("  Written to the repo, so it is version controlled and publishable."))
+      console.log(dim("  Commit it, then: ") + highlight("iris how-to publish"))
+    } else {
+      console.log(warning("  ⚠ LOCAL ONLY — this recipe cannot be published."))
+      console.log(dim("  `publish` reads scaffold/how-to in the iris-code repo, not ~/.iris/how-to,"))
+      console.log(dim("  so nothing written here reaches ") + highlight("heyiris.io/how-to") + dim("."))
+      console.log(dim("  To publish it: ") + highlight(`iris how-to promote ${name}`) + dim(" (from the repo)"))
+    }
+    console.log()
+    prompts.outro("Done")
+  },
+})
+
+// ── Promote ──────────────────────────────────────────────────────────────────
+
+/**
+ * Move a local-only recipe into the repo so it becomes publishable.
+ *
+ * This is the escape hatch for everything written before `add` defaulted to the repo. It copies
+ * rather than moves: ~/.iris/how-to stays populated so `view`, `search` and the MCP resource keep
+ * working with no reinstall.
+ */
+const HowToPromoteCommand = cmd({
+  command: "promote [name]",
+  aliases: ["publishable"],
+  describe: "copy a local-only recipe into the repo so it can be published (--all for every one)",
+  builder: (y) =>
+    y
+      .positional("name", { type: "string", describe: "recipe name (omit with --all)" })
+      .option("all", { type: "boolean", default: false, describe: "promote every local-only recipe" })
+      .option("dir", { type: "string", describe: "path to scaffold/how-to (default: found from cwd)" })
+      .option("dry-run", { type: "boolean", default: false, describe: "show what would move, copy nothing" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Promote How-To")
+
+    const fs = await import("fs")
+    const dir = resolveSourceDir(args.dir as string | undefined)
+    if (!dir) {
+      prompts.log.error("Could not find scaffold/how-to.")
+      console.log(dim("  Run from the iris-code repo, or pass ") + highlight("--dir <path>"))
+      prompts.outro("")
+      return
+    }
+
+    const stranded = strandedRecipes(dir)
+    if (stranded.length === 0) {
+      prompts.log.info("Nothing to promote — every local recipe is already in the repo.")
+      prompts.outro("Done")
+      return
+    }
+
+    let targets: string[]
+    if (args.all) {
+      targets = stranded
+    } else if (args.name) {
+      const n = String(args.name).replace(/\.md$/, "")
+      if (!stranded.includes(n)) {
+        prompts.log.error(`'${n}' is not a local-only recipe.`)
+        console.log(dim("  Local-only right now: ") + stranded.join(", "))
+        prompts.outro("")
+        return
+      }
+      targets = [n]
+    } else {
+      console.log()
+      console.log(dim(`  ${stranded.length} local-only recipe(s):`))
+      for (const n of stranded) console.log("    " + bold(n))
+      console.log()
+      console.log(dim("  Promote one with: ") + highlight("iris how-to promote <name>"))
+      console.log(dim("  Or all of them:   ") + highlight("iris how-to promote --all"))
+      console.log()
+      prompts.outro("Done")
+      return
+    }
+
+    console.log(dim(`  target  ${dir}`))
+    for (const n of targets) {
+      const dest = join(dir, `${n}.md`)
+      if (args["dry-run"]) {
+        console.log(dim("    + ") + n)
+        continue
+      }
+      fs.copyFileSync(join(HOWTO_DIR, `${n}.md`), dest)
+      console.log(success("    ✓ ") + n)
+    }
+
+    printDivider()
+    if (args["dry-run"]) {
+      prompts.outro(dim("Dry run — nothing was copied."))
+      return
+    }
+    console.log()
+    console.log(dim("  Now version controlled. Review, commit, then: ") + highlight("iris how-to publish"))
+    console.log(warning("  ⚠ /how-to is PUBLIC — read each one for client names or pricing first."))
     console.log()
     prompts.outro("Done")
   },
@@ -482,6 +625,7 @@ export const HowToCommand = cmd({
       .command(HowToSearchCommand)
       .command(HowToAddCommand)
       .command(HowToPublishCommand)
+      .command(HowToPromoteCommand)
       .command(HowToRemoveCommand)
       .command(HowToBackupCommands[0])
       // #178285/#178286: previously .demandCommand(), so a bare `iris how-to`
