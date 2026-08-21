@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { HowToBackupCommands } from "./howto-backup"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { dim, bold, highlight, printDivider } from "./iris-api"
@@ -453,6 +454,7 @@ export const HowToCommand = cmd({
       .command(HowToAddCommand)
       .command(HowToPublishCommand)
       .command(HowToRemoveCommand)
+      .command(HowToBackupCommands[0])
       // #178285/#178286: previously .demandCommand(), so a bare `iris how-to`
       // died with "Not enough non-option arguments: got 0, need at least 1" —
       // a parent command that refuses to do the obvious thing. Now:
