@@ -143,6 +143,7 @@ import { PlatformWisprCommand } from "./cli/cmd/platform-wispr"
 import { PlatformEvalCommand } from "./cli/cmd/platform-eval"
 import { PlatformSdkCallCommand } from "./cli/cmd/platform-sdk-call"
 import { PlatformDiaryCommand } from "./cli/cmd/platform-diary"
+import { TimelineCommands } from "./cli/cmd/platform-timeline"
 // PlatformSkillsCommand (plural) is now merged into PlatformSkillCommand (singular)
 // Keep the old "skills" command as an alias that points to "skill remote"
 import { PlatformSkillsCommand } from "./cli/cmd/platform-skills"
@@ -415,6 +416,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformEvalCommand))
   .command(reg(PlatformSdkCallCommand))
   .command(reg(PlatformDiaryCommand))
+  .command(reg(TimelineCommands[0]))
   .command(reg(PlatformSkillsCommand))
   .command(reg(PlatformSopCommand))
   .command(reg(PlatformCourseCommand))
