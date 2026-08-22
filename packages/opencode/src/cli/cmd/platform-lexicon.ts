@@ -57,10 +57,13 @@ const DemandCmd = cmd({
       .positional("lead", { describe: "lead / matter id", type: "number", demandOption: true })
       .option("demand", { describe: 'amount and its basis, decided by the attorney (e.g. "185000 — specials 62k, 3x")', type: "string" })
       .option("recipient", { describe: "carrier / adverse counsel the letter is addressed to", type: "string" })
+      .option("bloq", { describe: "matter bloq id to file the result into", type: "number" })
+      .option("list", { describe: "list id within that bloq (required to actually FILE — without it the playbook prints instead)", type: "number" })
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
     await runPlaybook("legal-demand-letter", {
-      lead: args.lead, demand: args.demand, recipient: args.recipient, yes: args.yes,
+      lead: args.lead, demand: args.demand, recipient: args.recipient,
+      bloq: args.bloq, list: args.list, yes: args.yes,
     })
   },
 })
@@ -73,10 +76,11 @@ const ChronologyCmd = cmd({
     yargs
       .positional("lead", { describe: "lead / matter id", type: "number", demandOption: true })
       .option("rate", { describe: "hourly rate — adds estimated time and value to the work summary", type: "number" })
-      .option("bloq", { describe: "matter bloq id", type: "number" })
+      .option("bloq", { describe: "matter bloq id to file the chronology into", type: "number" })
+      .option("list", { describe: "list id within that bloq (required to actually FILE — without it the playbook prints instead)", type: "number" })
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
-    await runPlaybook("legal-matter-chronology", { lead: args.lead, rate: args.rate, bloq: args.bloq, yes: args.yes })
+    await runPlaybook("legal-matter-chronology", { lead: args.lead, rate: args.rate, bloq: args.bloq, list: args.list, yes: args.yes })
   },
 })
 
@@ -89,9 +93,15 @@ const EngagementCmd = cmd({
       .positional("lead", { describe: "lead / matter id", type: "number", demandOption: true })
       .option("mode", { describe: "draft a letter, or review one you paste in", choices: ["draft", "review"] as const, default: "draft" })
       .option("letter", { describe: "existing letter text (with --mode review)", type: "string" })
+      .option("fee", { describe: 'fee arrangement in plain words (e.g. "contingency 33.3% pre-suit, 40% post-filing")', type: "string" })
+      .option("bloq", { describe: "matter bloq id to file the result into", type: "number" })
+      .option("list", { describe: "list id within that bloq (required to actually FILE — without it the playbook prints instead)", type: "number" })
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
-    await runPlaybook("legal-engagement-letter", { lead: args.lead, mode: args.mode, letter: args.letter, yes: args.yes })
+    await runPlaybook("legal-engagement-letter", {
+      lead: args.lead, mode: args.mode, letter: args.letter, fee: args.fee,
+      bloq: args.bloq, list: args.list, yes: args.yes,
+    })
   },
 })
 
@@ -103,10 +113,11 @@ const ConflictsCmd = cmd({
     yargs
       .positional("party", { describe: "prospective client or adverse party name", type: "string", demandOption: true })
       .option("also", { describe: "comma-separated related names (spouse, employer, carrier, entities)", type: "string" })
-      .option("bloq", { describe: "matter bloq id", type: "number" })
+      .option("bloq", { describe: "matter bloq id to file the candidate sheet into", type: "number" })
+      .option("list", { describe: "list id within that bloq (required to actually FILE — without it the playbook prints instead)", type: "number" })
       .option("yes", { describe: "skip confirmation prompts", type: "boolean", default: false, alias: "y" }),
   async handler(args) {
-    await runPlaybook("legal-conflict-check", { party: args.party, also: args.also, bloq: args.bloq, yes: args.yes })
+    await runPlaybook("legal-conflict-check", { party: args.party, also: args.also, bloq: args.bloq, list: args.list, yes: args.yes })
   },
 })
 
