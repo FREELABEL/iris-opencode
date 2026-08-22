@@ -631,40 +631,115 @@ async function executeShell(code: string, timeoutMs: number): Promise<{ output: 
   }
 }
 
+/**
+ * Normalise a playbook's model name for the platform proxy.
+ *
+ * The proxy namespaces everything under `iris/` and 404s a bare vendor name —
+ * `gpt-4o-mini` is not found, `iris/gpt-4o-mini` is. Every playbook in the tree
+ * declares the bare form (11 steps on gpt-4o-mini, 6 on gpt-4.1-nano), so
+ * normalising here is what lets them run unchanged.
+ */
+function platformModelName(model: string): string {
+  return model.includes("/") ? model : `iris/${model}`
+}
+
+/** Ask the platform proxy. Returns null when the proxy itself is unusable. */
+async function generateViaPlatform(
+  model: string,
+  prompt: string,
+): Promise<{ text: string } | { error: string } | null> {
+  try {
+    const { irisFetch, IRIS_API } = await import("../cli/cmd/iris-api")
+    const res = await irisFetch(
+      `/api/v6/openai/chat/completions`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          model: platformModelName(model),
+          max_tokens: 2000,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      },
+      IRIS_API,
+    )
+    if (!res.ok) {
+      const body = (await res.text().catch(() => "")).slice(0, 200)
+      // 401/403 means "not signed in here", which the direct rail may still cover.
+      if (res.status === 401 || res.status === 403) return null
+      return { error: `platform model proxy HTTP ${res.status}: ${body}` }
+    }
+    const j = (await res.json()) as any
+    const text = j?.choices?.[0]?.message?.content
+    if (typeof text !== "string" || !text.trim()) return { error: "platform model proxy returned an empty reply" }
+    return { text }
+  } catch (e: any) {
+    return null
+  }
+}
+
+/**
+ * Run a playbook's `mode: prompt` step.
+ *
+ * THE PLATFORM PROXY IS THE DEFAULT RAIL (#181926). This used to go straight to
+ * @ai-sdk/openai, which reads OPENAI_API_KEY from the local environment — so every
+ * AI step in every playbook only ran on a machine that already had a vendor key.
+ * That is fine for the person who wrote the playbooks and fatal for the products
+ * built on them: a firm could install the CLI, authenticate, run `iris lexicon
+ * demand 123`, and be told to set OPENAI_API_KEY — a credential the product never
+ * said they needed and should not need, since their IRIS auth already pays for
+ * model access. `iris mint scan` was already using the proxy; playbooks were not.
+ *
+ * The direct rail is kept as a FALLBACK rather than deleted, so nobody who relies
+ * on their own key today loses anything, and IRIS_AI_DIRECT=1 forces it. When both
+ * are unavailable the error names both, because "OpenAI API key is missing" sent
+ * people looking for the wrong fix.
+ */
 async function executeAi(
   prompt: string,
   model: string,
   context: string,
 ): Promise<{ output: string; exit_code: number }> {
-  try {
-    // Use the AI SDK's generateText for simple prompts
-    const { generateText } = await import("ai")
+  const fullPrompt = context ? `Context from previous steps:\n${context}\n\n${prompt}` : prompt
+  const forceDirect = process.env.IRIS_AI_DIRECT === "1"
+  let platformNote = "not attempted (IRIS_AI_DIRECT=1)"
 
-    // Resolve provider based on model name
-    let provider: any
-    if (model.startsWith("gpt-")) {
-      const { openai } = await import("@ai-sdk/openai")
-      provider = openai(model)
-    } else if (model.startsWith("claude-")) {
-      const { anthropic } = await import("@ai-sdk/anthropic")
-      provider = anthropic(model)
-    } else {
-      // Default to openai for nano models
-      const { openai } = await import("@ai-sdk/openai")
-      provider = openai(model)
+  if (!forceDirect) {
+    const viaPlatform = await generateViaPlatform(model, fullPrompt)
+    if (viaPlatform && "text" in viaPlatform) return { output: viaPlatform.text, exit_code: 0 }
+    platformNote = viaPlatform ? viaPlatform.error : "unreachable or not signed in"
+  }
+
+  // Direct vendor SDK — only worth trying if a key actually exists, otherwise the
+  // SDK's own "API key is missing" buries the platform reason above.
+  const hasOpenAi = Boolean(process.env.OPENAI_API_KEY)
+  const hasAnthropic = Boolean(process.env.ANTHROPIC_API_KEY)
+  const wantsAnthropic = model.startsWith("claude-")
+  if ((wantsAnthropic && hasAnthropic) || (!wantsAnthropic && hasOpenAi)) {
+    try {
+      const { generateText } = await import("ai")
+      let provider: any
+      if (wantsAnthropic) {
+        const { anthropic } = await import("@ai-sdk/anthropic")
+        provider = anthropic(model)
+      } else {
+        const { openai } = await import("@ai-sdk/openai")
+        // Strip the proxy namespace — the vendor SDK has never heard of `iris/`.
+        provider = openai(model.replace(/^iris\//, ""))
+      }
+      const result = await generateText({ model: provider, prompt: fullPrompt, maxOutputTokens: 2000 })
+      return { output: result.text, exit_code: 0 }
+    } catch (e: any) {
+      return { output: `AI error: platform proxy — ${platformNote}; local key — ${e.message}`, exit_code: 1 }
     }
+  }
 
-    const fullPrompt = context ? `Context from previous steps:\n${context}\n\n${prompt}` : prompt
-
-    const result = await generateText({
-      model: provider,
-      prompt: fullPrompt,
-      maxOutputTokens: 2000,
-    })
-
-    return { output: result.text, exit_code: 0 }
-  } catch (e: any) {
-    return { output: `AI error: ${e.message}`, exit_code: 1 }
+  return {
+    output:
+      `AI error: no model rail available for "${model}".\n` +
+      `  platform proxy: ${platformNote}\n` +
+      `  local key: ${wantsAnthropic ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"} not set\n` +
+      `  Fix: run \`iris auth login\` so the platform proxy can be used, or set a vendor key for the direct rail.`,
+    exit_code: 1,
   }
 }
 
