@@ -114,6 +114,7 @@ function collectBlocks(dir: string): BlockIndex {
   // parent's own import statement is the only answer that is right by construction; a
   // child genuinely does live in another file (PlaybookDraftCommand does).
   const imports = new Map<string, Map<string, string>>()
+  const aliasPairs: Array<[string, string]> = []
 
   for (const file of readdirSync(dir)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue
@@ -153,6 +154,20 @@ function collectBlocks(dir: string): BlockIndex {
       list.push(block)
       byName.set(m[1], list)
     }
+
+    // Re-export aliases: `export const PlatformHeartbeatCommand = HeartbeatCommand`.
+    // index.ts registers the EXPORTED name, while the cmd({...}) block is keyed by the
+    // original — so the walker looked up a name it had never collected and silently
+    // skipped the command. `iris heartbeat` is a top-level product and was missing from
+    // the index entirely because of this one line, with nothing anywhere reporting a gap.
+    aliasPairs.push(...[...src.matchAll(/export\s+const\s+([A-Za-z0-9_]+(?:Command|Group))\s*=\s*([A-Za-z0-9_]+(?:Command|Group))\s*$/gm)].map((m) => [m[1], m[2]] as [string, string]))
+  }
+
+  // Resolve after every file is scanned — an alias may point at a block defined later.
+  for (const [alias, target] of aliasPairs) {
+    if (byName.has(alias)) continue
+    const blocks = byName.get(target)
+    if (blocks) byName.set(alias, blocks)
   }
 
   return { byName, imports }

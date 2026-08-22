@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, resolveUserId, IRIS_API, bold, dim, success, highlight, writeJson } from "./iris-api"
@@ -1025,9 +1026,13 @@ const SomPullSessionsCommand = cmd({
 
 // ── Parent command ──
 
-export const PlatformSomCommand = cmd({
-  command: "som",
-  describe: "SOM outreach dashboard — view and edit all campaigns at a glance",
+export const PlatformSomCommand = productCommand({
+  name: "som",
+  purpose:
+    "SOM — the outreach dashboard: every campaign at a glance, editable in place",
+  keywords: ["som", "outreach", "campaign", "dashboard", "pipeline", "sequence", "prospect"],
+  howtos: ["outreach-campaign"],
+  playbooks: ["som-outreach"],
   builder: (yargs) =>
     yargs
       .command(SomOverviewCommand)

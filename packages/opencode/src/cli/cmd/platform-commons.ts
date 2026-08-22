@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
@@ -597,10 +598,13 @@ const PinCmd = cmd({
   },
 })
 
-export const PlatformCommonsCommand = cmd({
-  command: "commons",
+export const PlatformCommonsCommand = productCommand({
+  name: "commons",
   aliases: ["community", "membership"],
-  describe: "community & membership management — members, access, community hub",
+  purpose:
+    "Commons — community and membership: members, access and the community hub",
+  keywords: ["commons", "community", "membership", "member", "access", "hub", "program", "certification"],
+  howtos: ["certification-courses", "community-curation"],
   builder: (yargs) =>
     yargs
       .command(MembersCmd)
@@ -615,5 +619,4 @@ export const PlatformCommonsCommand = cmd({
       .command(RevenueCmd)
       .command(AnnounceCmd)
       .demandCommand(),
-  async handler() {},
 })

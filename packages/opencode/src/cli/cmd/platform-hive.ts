@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, getBridgeToken, writeJson } from "./iris-api"
@@ -4613,10 +4614,14 @@ const HiveClioCommand = cmd({
 // Root command
 // ============================================================================
 
-export const PlatformHiveCommand = cmd({
-  command: "hive",
+export const PlatformHiveCommand = productCommand({
+  name: "hive",
   aliases: ["compute"],
-  describe: "manage Hive nodes, tasks, projects & peer connections",
+  purpose:
+    "Hive — distributed compute: nodes, tasks, projects and peer connections",
+  keywords: ["hive", "compute", "node", "task", "mesh", "tailscale", "dispatch", "remote", "peer"],
+  howtos: ["hive-dispatch", "hive-tailscale", "remote-support-a-family-pc"],
+  playbooks: ["iris-hive"],
   builder: (yargs) =>
     yargs
       // LAN discovery (local utility — no API)
@@ -4697,5 +4702,4 @@ export const PlatformHiveCommand = cmd({
       .command(HiveLogsCommand)
       .command(HiveClioCommand)
       .demandCommand(),
-  async handler() {},
 })

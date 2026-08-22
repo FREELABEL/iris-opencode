@@ -44,6 +44,13 @@ export interface ProductSpec {
    * is how a cosmetic rename turns into a behaviour change.
    */
   builder?: (yargs: any) => any
+  /**
+   * A real handler, for a product that DOES something when invoked bare —
+   * `iris pulse`, `iris som` and `iris heartbeat` all render a dashboard with no
+   * subcommand. Defaulting these to the empty handler would have made the product's
+   * headline behaviour a no-op while every other signal said the conversion worked.
+   */
+  handler?: (args: any) => Promise<void> | void
 }
 
 /** Registry of every declared product, so Gate 22 and `iris help` can enumerate them. */
@@ -79,6 +86,8 @@ export function productCommand(spec: ProductSpec) {
       for (const sub of spec.subcommands ?? []) y = y.command(sub)
       return y.epilogue(productEpilogue(spec)).demandCommand()
     },
-    async handler() {},
+    async handler(args: any) {
+      if (spec.handler) await spec.handler(args)
+    },
   })
 }

@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
@@ -12444,10 +12445,14 @@ const PulseAlertsCommand = cmd({
   handler() {},
 })
 
-export const PlatformPulseCommand = cmd({
-  command: "pulse",
+export const PlatformPulseCommand = productCommand({
+  name: "pulse",
   aliases: ["daily"],
-  describe: "account health (default: your account) — use --admin for agency view",
+  purpose:
+    "Pulse — account and deal health, with an agency-wide view behind --admin",
+  keywords: ["pulse", "health", "readiness", "account", "deal", "agency", "daily", "score"],
+  howtos: ["pulse"],
+  playbooks: ["lead-health-sweep"],
   builder: (yargs) =>
     yargs
       .command(PulseAlertsCommand)

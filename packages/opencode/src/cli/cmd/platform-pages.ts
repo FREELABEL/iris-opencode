@@ -2961,7 +2961,8 @@ export const PlatformPagesCommand = productCommand({
   purpose:
     "Genesis — composable pages and sites: list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot",
   keywords: ["genesis", "page", "site", "component", "publish", "artifact", "landing", "screenshot"],
-  howtos: ["genesis-design-standard"],
+  howtos: ["genesis-design-standard", "bespoke", "genesis-sdk", "pages"],
+  playbooks: ["pages", "seed-pages"],
   builder: (y) =>
     y
       .command(ListCmd)

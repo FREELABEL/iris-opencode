@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, writeJson } from "./iris-api"
@@ -2188,9 +2189,13 @@ const PromosCommand = cmd({
 // Root discover command
 // ============================================================================
 
-export const PlatformDiscoverCommand = cmd({
-  command: "discover",
-  describe: "manage the Discover page — status, curate, review/taste, promos, stats, brands, artists, sponsors, streamers, producers, instrumentals, learning, sections",
+export const PlatformDiscoverCommand = productCommand({
+  name: "discover",
+  purpose:
+    "Discover — curate the public page: artists, promos, learning, sponsors and sections",
+  keywords: ["discover", "curate", "promo", "artist", "sponsor", "learning", "taste", "section", "playlist"],
+  howtos: ["discover", "learning-tutorials", "community-curation"],
+  playbooks: ["discover-publish"],
   builder: (yargs) =>
     yargs
       .command(StatusCommand)
@@ -2212,5 +2217,4 @@ export const PlatformDiscoverCommand = cmd({
       .command(SectionsCommand)
       .command(PlaylistCommand)
       .demandCommand(),
-  async handler() {},
 })

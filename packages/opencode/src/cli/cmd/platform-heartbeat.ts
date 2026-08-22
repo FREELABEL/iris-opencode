@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, printDivider, printKV, dim, bold, success, FL_API, writeJson } from "./iris-api"
@@ -42,10 +43,14 @@ function bandLabel(band: string): string {
 // Main command — `iris heartbeat`
 // ============================================================================
 
-const HeartbeatCommand = cmd({
-  command: "heartbeat",
+const HeartbeatCommand = productCommand({
+  name: "heartbeat",
   aliases: ["hb", "health"],
-  describe: "your platform health dashboard — see how your IRIS setup is performing",
+  purpose:
+    "Heartbeat — platform health: whether your IRIS setup is actually performing",
+  keywords: ["heartbeat", "health", "signal", "monitor", "uptime", "diagnostics", "dashboard"],
+  howtos: ["debug-an-agent-run"],
+  playbooks: ["heartbeat-debug", "health-check"],
   builder: (yargs) =>
     yargs
       .option("json", { type: "boolean", default: false, describe: "JSON output" })

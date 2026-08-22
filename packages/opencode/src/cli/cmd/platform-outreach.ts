@@ -274,6 +274,8 @@ export const PlatformOutreachCommand = productCommand({
   aliases: ["outreach", "outreach-strategy", "reachr-strategy"],
   purpose: "Reachr — outreach strategies: list, show, create, update, apply, delete",
   keywords: ["reachr", "outreach", "strategy", "campaign", "sequence", "prospect", "send"],
+  howtos: ["comms-router", "outreach-campaign"],
+  playbooks: ["som-outreach"],
   builder: (yargs) =>
     yargs
       .command(OutreachListCommand)
