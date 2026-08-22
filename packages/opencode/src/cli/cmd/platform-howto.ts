@@ -809,6 +809,14 @@ function extractLede(body: string): string | null {
   return flat || null
 }
 
+/** Trim to a length on a WORD boundary, for text too short to have a sentence end. */
+function wordCut(text: string, max: number): string {
+  if (text.length <= max) return text
+  const cut = text.slice(0, max)
+  const sp = cut.lastIndexOf(" ")
+  return `${(sp > max * 0.5 ? cut.slice(0, sp) : cut).trim()}…`
+}
+
 /** Trim to a length, backing up to the last sentence end so the card never stops mid-clause. */
 function sentenceCut(text: string | undefined, max: number): string | undefined {
   if (!text) return undefined
@@ -816,6 +824,30 @@ function sentenceCut(text: string | undefined, max: number): string | undefined 
   const cut = text.slice(0, max)
   const stop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "))
   return stop > max * 0.4 ? cut.slice(0, stop + 1).trim() : cut.trim()
+}
+
+/**
+ * The first run of >=2 consecutive indented lines, returned in the same shape as a regex match so
+ * the caller does not care which form it found.
+ *
+ * Requires two lines so a single indented continuation inside a list or table is not mistaken for
+ * code — one indented line is far more often prose wrapping than a command.
+ */
+function indentedBlock(body: string): RegExpMatchArray | null {
+  const lines = body.split("\n")
+  let run: string[] = []
+  for (const l of lines) {
+    if (/^(?: {4}|\t)\S/.test(l)) {
+      run.push(l.replace(/^(?: {4}|\t)/, ""))
+      continue
+    }
+    // A blank line inside an indented block is part of it; anything else ends the run.
+    if (!l.trim() && run.length) continue
+    if (run.length >= 2) break
+    run = []
+  }
+  if (run.length < 2) return null
+  return ["", run.join("\n")] as unknown as RegExpMatchArray
 }
 
 function extractSections(body: string): Array<{ heading: string; text: string }> {
@@ -851,9 +883,16 @@ function extractSections(body: string): Array<{ heading: string; text: string }>
   return out
 }
 
-/** First fenced block that looks like commands, not prose. */
+/**
+ * First code block that looks like commands, not prose.
+ *
+ * Handles BOTH markdown code forms. Fenced is the common one, but an INDENTED block (four spaces
+ * or a tab) is equally valid and three of the 46 recipes use it — they were silently losing their
+ * terminal card while every other slide rendered, which reads as "this recipe has no commands"
+ * rather than "the extractor only knows one syntax".
+ */
 function firstCodeBlock(body: string): string | undefined {
-  const m = body.match(/```[a-z]*\n([\s\S]*?)```/)
+  const m = body.match(/```[a-z]*\n([\s\S]*?)```/) ?? indentedBlock(body)
   if (!m) return undefined
   // The card is ~52 monospace columns at this size. Longer lines wrap mid-word and read as
   // broken rather than dense, so they are cut rather than allowed to spill.
@@ -918,7 +957,10 @@ const HowToSocialCommand = cmd({
       subtitle: sentenceCut(lede ?? sections[0]?.text, 200),
       checklistTitle: "What you'll do",
       checklistTags: meta.tags ?? [],
-      checklistItems: sections.slice(0, 6).map((s) => s.heading),
+      // Headings become checklist lines, and a heading is written for a document, not a card. Six
+      // recipes carry ones past 60 characters, which overflow the pill rather than wrapping —
+      // cut on a word boundary so it reads as an excerpt.
+      checklistItems: sections.slice(0, 6).map((s) => wordCut(s.heading, 56)),
       bulletPoints: sections.slice(0, 3).map((s) => ({ title: s.heading, body: s.text.slice(0, 180) })),
       codeSnippet: firstCodeBlock(body),
       stats,
