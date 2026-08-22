@@ -86,6 +86,7 @@ import { PlatformSomCommand } from "./cli/cmd/platform-som"
 import { PlatformEventCommand } from "./cli/cmd/platform-event"
 import { PlatformMonitorCommand } from "./cli/cmd/platform-monitor"
 import { PlatformCommonsCommand } from "./cli/cmd/platform-commons"
+import { PlatformLexiconCommand } from "./cli/cmd/platform-lexicon"
 import { PlatformInvoicesCommand } from "./cli/cmd/platform-invoices"
 import { PlatformPaymentsCommand } from "./cli/cmd/platform-payments"
 import { PlatformRevenueCommand } from "./cli/cmd/platform-revenue"
@@ -345,6 +346,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformEventCommand))
   .command(reg(PlatformMonitorCommand))
   .command(reg(PlatformCommonsCommand))
+  .command(reg(PlatformLexiconCommand))
   .command(reg(PlatformInboxCommand))
 
   .command(reg(PlatformInvoicesCommand))

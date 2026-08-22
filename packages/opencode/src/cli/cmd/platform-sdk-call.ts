@@ -63,6 +63,13 @@ const ROUTES: Record<string, RouteDescriptor> = {
   "bloqs.items.create": { method: "POST", path: "/api/v1/user/bloqs/lists/{listId}/items" },
   "bloqs.items.update": { method: "PUT", path: "/api/v1/user/bloqs/list/item/{itemId}" },
   "bloqs.items.delete": { method: "DELETE", path: "/api/v1/user/bloqs/list/item/{itemId}" },
+  // Bloq ITEM tasks (#181892). The API has had full CRUD + reorder since Feb 2026
+  // (bloq_item_tasks: status, nested parent_id, agent assignment, due dates) and the
+  // CLI could not reach any of it, so every epic was modelled as sibling items instead.
+  "bloqs.items.tasks.all": { method: "GET", path: "/api/v1/user/bloqs/list/item/{itemId}/tasks" },
+  "bloqs.items.tasks.create": { method: "POST", path: "/api/v1/user/bloqs/list/item/{itemId}/tasks" },
+  "bloqs.items.tasks.update": { method: "PUT", path: "/api/v1/user/bloqs/list/item/{itemId}/tasks/{taskId}" },
+  "bloqs.items.tasks.delete": { method: "DELETE", path: "/api/v1/user/bloqs/list/item/{itemId}/tasks/{taskId}" },
   "bloqs.content.list": { method: "GET", path: "/api/v1/user/bloqs/{bloqId}/content" },
   "bloqs.content.create": { method: "POST", path: "/api/v1/user/bloqs/{bloqId}/content" },
 
