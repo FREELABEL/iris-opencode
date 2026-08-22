@@ -24,6 +24,51 @@ async function ensureDir() {
   }
 }
 
+/**
+ * Remote fallback for recipes this machine does not have.
+ *
+ * `how-to` reads ~/.iris/how-to and nothing else, and the CLI ships NO recipes — a
+ * fresh install has an empty directory (#181785). That was survivable while people
+ * typed recipe names they already knew. It stopped being survivable when every
+ * product's front door started advertising `iris how-to view <slug>` (#181888):
+ * thirteen products now promise 2-4 recipes each, and on any machine but the one
+ * that authored them all of it printed "not found".
+ *
+ * The recipes are already published and public at /api/v1/how-tos, so the promise
+ * can simply be kept. Local still wins — this is a fallback, not a replacement, and
+ * offline behaviour for recipes you DO have is unchanged.
+ */
+async function fetchRemoteRecipe(slug: string): Promise<string | null> {
+  try {
+    const res = await irisFetch(`/api/v1/how-tos/${encodeURIComponent(slug)}`, {}, IRIS_API)
+    if (!res.ok) return null
+    const body = (await res.json()) as any
+    const rec = body?.data ?? body
+    return typeof rec?.body_md === "string" && rec.body_md.trim() ? rec.body_md : null
+  } catch {
+    return null
+  }
+}
+
+async function fetchRemoteRecipeList(): Promise<Array<{ name: string; title: string; meta: RecipeMeta; body: string }>> {
+  try {
+    const res = await irisFetch("/api/v1/how-tos?per_page=200", {}, IRIS_API)
+    if (!res.ok) return []
+    const body = (await res.json()) as any
+    const rows: any[] = body?.data ?? []
+    return rows.map((r) => ({
+      name: String(r.slug ?? ""),
+      title: String(r.title ?? r.slug ?? "").replace(/^How to:\s*/i, ""),
+      meta: { category: r.category, level: r.level, tags: r.tags, duration_min: r.duration_min } as RecipeMeta,
+      // Summary only — the list endpoint does not carry body_md, and pretending it
+      // does would make search score against an empty string.
+      body: String(r.summary ?? ""),
+    }))
+  } catch {
+    return []
+  }
+}
+
 type LocalRecipe = { name: string; title: string; path: string; meta: RecipeMeta; body: string }
 
 async function listRecipes(): Promise<LocalRecipe[]> {
@@ -47,6 +92,22 @@ async function listRecipes(): Promise<LocalRecipe[]> {
       (firstLine ? firstLine.replace(/^#\s+/, "").replace(/^How to:\s*/i, "") : f.replace(".md", ""))
     return { name: f.replace(".md", ""), title, path: fullPath, meta, body }
   })
+}
+
+/**
+ * Local recipes, or the published set when this machine has none.
+ *
+ * Local ALWAYS wins when it has anything at all — this is a fallback for the empty
+ * fresh-install case (#181785), not a merge, so a recipe you edited locally is never
+ * shadowed by the published copy. Remote entries carry summary text rather than a
+ * full body, so search still ranks them, just less sharply; `view` fetches the real
+ * body when one is opened.
+ */
+async function listRecipesOrRemote(): Promise<LocalRecipe[]> {
+  const local = await listRecipes()
+  if (local.length) return local
+  const remote = await fetchRemoteRecipeList()
+  return remote.map((r) => ({ ...r, path: "" }))
 }
 
 /**
@@ -101,12 +162,12 @@ export async function runList(opts: { category?: string; level?: string; tags?: 
   UI.empty()
   prompts.intro("◈  IRIS How-To Recipes")
 
-  const all = await listRecipes()
+  const all = await listRecipesOrRemote()
   const recipes = applyFilters(all, opts)
 
   if (recipes.length === 0) {
     console.log()
-    console.log(dim("  No recipes found in ~/.iris/how-to/"))
+    console.log(dim("  No recipes found in ~/.iris/how-to/ and none published."))
     console.log(dim("  Create one with: ") + highlight("iris how-to add <name>"))
     console.log()
   } else {
@@ -198,6 +259,17 @@ const HowToViewCommand = cmd({
     const filePath = join(HOWTO_DIR, `${name}.md`)
 
     if (!fs.existsSync(filePath)) {
+      // Not here — but it may still exist, published, for everyone. See
+      // fetchRemoteRecipe: the CLI ships no recipes, so on any machine that did not
+      // author them this is the ONLY path that resolves.
+      const remote = await fetchRemoteRecipe(name)
+      if (remote) {
+        console.log()
+        console.log(remote)
+        console.log(dim(`  (from ${IRIS_API}/api/v1/how-tos/${name} — not stored on this machine)`))
+        return
+      }
+
       // Try fuzzy match
       const recipes = await listRecipes()
       const match = recipes.find((r) => r.name.includes(name) || name.includes(r.name))
@@ -228,7 +300,7 @@ export async function runSearch(rawQuery: string): Promise<void> {
     prompts.intro("◈  Search How-Tos")
 
     const query = String(rawQuery).toLowerCase()
-    const recipes = await listRecipes()
+    const recipes = await listRecipesOrRemote()
 
     // RANKED, not first-match-wins. The previous version pushed results in directory order, so a
     // recipe that mentions the term once in passing could print above the one it names.
@@ -703,6 +775,49 @@ const HowToAddCommand = cmd({
  * Emits props for `iris remotion carousel` rather than rendering directly: rendering, uploading
  * and publishing already exist and should not be re-implemented behind a second door.
  */
+/**
+ * The paragraph between the H1 and the first `##` — the recipe's actual opening line.
+ *
+ * extractSections() starts at the first `##`, so a recipe whose lede sits above it lost its best
+ * sentence and the subtitle fell through to whatever the first section happened to open with. On
+ * `bounty-os-hunter-journey` that was a bare URL, truncated mid-word. The lede is written to be
+ * read first; use it when there is one.
+ */
+function extractLede(body: string): string | null {
+  const lines = body.split("\n")
+  const h1 = lines.findIndex((l) => l.startsWith("# "))
+  if (h1 === -1) return null
+  const buf: string[] = []
+  for (const l of lines.slice(h1 + 1)) {
+    const t = l.trim()
+    if (t.startsWith("##")) break
+    if (!t) {
+      if (buf.length) break // first paragraph only
+      continue
+    }
+    if (t.startsWith("|") || t.startsWith("```") || t.startsWith(">")) continue
+    buf.push(t)
+  }
+  if (!buf.length) return null
+  const flat = buf
+    .join(" ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+  return flat || null
+}
+
+/** Trim to a length, backing up to the last sentence end so the card never stops mid-clause. */
+function sentenceCut(text: string | undefined, max: number): string | undefined {
+  if (!text) return undefined
+  if (text.length <= max) return text
+  const cut = text.slice(0, max)
+  const stop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "))
+  return stop > max * 0.4 ? cut.slice(0, stop + 1).trim() : cut.trim()
+}
+
 function extractSections(body: string): Array<{ heading: string; text: string }> {
   const out: Array<{ heading: string; text: string }> = []
   const lines = body.split("\n")
@@ -782,6 +897,7 @@ const HowToSocialCommand = cmd({
     const fullTitle = titleLine.replace(/^#\s+/, "").trim() || name
     const headline = fullTitle.replace(/^How to:\s*/i, "").trim()
     const sections = extractSections(body)
+    const lede = extractLede(body)
     const url = `heyiris.io/how-to/${name}`
 
     const stats = [
@@ -796,7 +912,10 @@ const HowToSocialCommand = cmd({
       totalSlides: 9,
       category: meta.category ?? "How-To",
       headline,
-      subtitle: sections[0]?.text?.slice(0, 200) || undefined,
+      // Lede first — it is the sentence the author wrote to be read first — and cut on a SENTENCE
+      // boundary, so a card never ends "…the money ledger and". A hard slice reads as a rendering
+      // fault rather than an excerpt.
+      subtitle: sentenceCut(lede ?? sections[0]?.text, 200),
       checklistTitle: "What you'll do",
       checklistTags: meta.tags ?? [],
       checklistItems: sections.slice(0, 6).map((s) => s.heading),
@@ -812,7 +931,7 @@ const HowToSocialCommand = cmd({
 
     // X caption. Kept under 280 including the link, and assembled from the recipe's own words.
     const tagStr = (meta.tags ?? []).slice(0, 3).map((t) => `#${t.replace(/-/g, "")}`).join(" ")
-    const lead = sections[0]?.text?.split(/(?<=\.)\s/)[0] ?? ""
+    const lead = (lede ?? sections[0]?.text)?.split(/(?<=\.)\s/)[0] ?? ""
     let xPost = `${headline}\n\n${lead}\n\n${url}`
     if (tagStr) xPost += `\n${tagStr}`
     if (xPost.length > 280) xPost = `${headline}\n\n${url}${tagStr ? `\n${tagStr}` : ""}`
