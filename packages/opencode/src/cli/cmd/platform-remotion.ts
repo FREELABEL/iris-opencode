@@ -4,7 +4,12 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, FL_API, IRIS_API } from "./iris-api"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
-import { join, basename } from "path"
+
+/** iris-api exports dim/bold/success but no warning; a partial render has to be loud. */
+function warning(t: string): string {
+  return `${UI.Style.TEXT_WARNING}${t}${UI.Style.TEXT_NORMAL}`
+}
+import { join, basename, resolve } from "path"
 import { homedir } from "os"
 
 // ============================================================================
@@ -147,9 +152,52 @@ const CarouselCommand = cmd({
         describe: "Output directory (default: ./carousel-<timestamp>)",
       }),
   async handler(args) {
-    const cmdArgs = ["carousel", args.props as string]
-    if (args.output) cmdArgs.push(args.output as string)
-    runIrisRemotion(cmdArgs)
+    /*
+     * Rendered here rather than through the `iris-remotion` shell wrapper, which had TWO bugs
+     * that combined into a silent wrong answer:
+     *
+     *  1. It passed props as an INLINE STRING (`--props "$JSON"`). Remotion did not parse it and
+     *     fell back to the composition's demo content, so every slide rendered "5 Ways to Grow
+     *     Your Brand on Social Media" while reporting success. Passing a FILE binds correctly —
+     *     verified against the same props.
+     *  2. A relative output dir was resolved against the remotion package, not the caller's cwd,
+     *     so the files landed somewhere nobody was told about.
+     *
+     * Both paths are absolute here, props go via a temp file per slide, and the count is taken
+     * from disk instead of from the child's exit code.
+     */
+    const propsPath = resolve(args.props as string)
+    if (!existsSync(propsPath)) {
+      UI.error(`No such props file: ${propsPath}`)
+      process.exit(1)
+    }
+    const outDir = resolve((args.output as string) || join(process.cwd(), `carousel-${Date.now()}`))
+    mkdirSync(outDir, { recursive: true })
+
+    const base = JSON.parse(readFileSync(propsPath, "utf-8"))
+    const rDir = resolveRemotionDir()
+
+    for (let i = 0; i < 9; i++) {
+      const slideProps = { ...base, slideIndex: i }
+      const tmp = join(outDir, `_props-${i}.json`)
+      writeFileSync(tmp, JSON.stringify(slideProps))
+      const r = spawnSync(
+        "npx",
+        ["remotion", "still", `CarouselSlide${i}`, join(outDir, `slide-${i}.png`), `--props=${tmp}`],
+        { stdio: "pipe", env: process.env, cwd: rDir },
+      )
+      if (r.status !== 0) {
+        UI.error(`Slide ${i}: ${(r.stderr?.toString() ?? "").slice(0, 240)}`)
+        break
+      }
+    }
+    for (let i = 0; i < 9; i++) {
+      try { require("fs").unlinkSync(join(outDir, `_props-${i}.json`)) } catch {}
+    }
+
+    const written = Array.from({ length: 9 }, (_, i) => join(outDir, `slide-${i}.png`)).filter(existsSync)
+    if (written.length === 9) console.log(success(`  ✓ 9 slides in ${outDir}`))
+    else console.log(`  ${warning(`⚠ ${written.length}/9 slides written`)} ${dim(outDir)}`)
   },
 })
 
@@ -478,7 +526,11 @@ const AutoCarouselCommand = cmd({
 
     // ── Step 4: Write props and render ──
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)
-    const outDir = (args.output as string) || join(process.cwd(), `carousel-${timestamp}`)
+    // MUST be absolute. The renderer is spawned with `cwd: remotionDir`, so a relative -o is
+    // resolved against THAT directory, not the user's — the files land somewhere nobody is told
+    // about while the command still prints "9 slides saved". Rendering was never broken; the path
+    // was. `resolve()` on an already-absolute path is a no-op, so this is safe either way.
+    const outDir = resolve((args.output as string) || join(process.cwd(), `carousel-${timestamp}`))
     mkdirSync(outDir, { recursive: true })
 
     const propsPath = join(outDir, "props.json")
@@ -522,7 +574,16 @@ const AutoCarouselCommand = cmd({
         break
       }
     }
-    if (!failed) spinner.stop(success("9 slides rendered"))
+    if (!failed) {
+      // Count the files, do not trust the loop. A renderer that exits 0 having written nothing
+      // is exactly how this shipped a "9 slides saved" message over an empty directory.
+      const written = Array.from({ length: 9 }, (_, i) => join(outDir, `slide-${i}.png`)).filter(existsSync).length
+      if (written === 9) spinner.stop(success("9 slides rendered"))
+      else {
+        spinner.stop(`${written}/9 slides written to ${outDir}`, 1)
+        failed = true
+      }
+    }
     // Cleanup temp props files
     for (let i = 0; i < 9; i++) { try { require("fs").unlinkSync(join(outDir, `_props-${i}.json`)) } catch {} }
 

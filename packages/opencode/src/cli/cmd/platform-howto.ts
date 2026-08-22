@@ -690,6 +690,164 @@ const HowToAddCommand = cmd({
   },
 })
 
+// ── Social ───────────────────────────────────────────────────────────────────
+
+/**
+ * Turn a published recipe into carousel props + an X post.
+ *
+ * NO MODEL. A how-to is already structured content — title, summary, category, level, duration,
+ * tags, section headings, a code block — and the CarouselSlide schema wants exactly those fields.
+ * `remotion auto-carousel` exists for when you have only a topic; here we have the article, so
+ * generating from it is a mapping, not an inference, and it cannot drift from what the recipe says.
+ *
+ * Emits props for `iris remotion carousel` rather than rendering directly: rendering, uploading
+ * and publishing already exist and should not be re-implemented behind a second door.
+ */
+function extractSections(body: string): Array<{ heading: string; text: string }> {
+  const out: Array<{ heading: string; text: string }> = []
+  const lines = body.split("\n")
+  let heading: string | null = null
+  let buf: string[] = []
+  const flush = () => {
+    if (!heading) return
+    const text = buf
+      .join(" ")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, "$1")
+      .replace(/\s+/g, " ")
+      .trim()
+    out.push({ heading, text })
+  }
+  for (const l of lines) {
+    const m = l.match(/^##\s+(.*)$/)
+    if (m) {
+      flush()
+      heading = m[1].replace(/[*_`]/g, "").trim()
+      buf = []
+      continue
+    }
+    if (!heading) continue
+    const t = l.trim()
+    if (!t || t.startsWith("#") || t.startsWith("|") || t.startsWith("```")) continue
+    if (buf.join(" ").length < 260) buf.push(t)
+  }
+  flush()
+  return out
+}
+
+/** First fenced block that looks like commands, not prose. */
+function firstCodeBlock(body: string): string | undefined {
+  const m = body.match(/```[a-z]*\n([\s\S]*?)```/)
+  if (!m) return undefined
+  // The card is ~52 monospace columns at this size. Longer lines wrap mid-word and read as
+  // broken rather than dense, so they are cut rather than allowed to spill.
+  const lines = m[1]
+    .split("\n")
+    .map((l) => l.trimEnd().replace(/\s{2,}/g, "  "))
+    .filter((l) => l.trim() && !l.trim().startsWith("#"))
+    .map((l) => (l.length > 52 ? `${l.slice(0, 49)}...` : l))
+    .slice(0, 6)
+  return lines.length ? lines.join("\n") : undefined
+}
+
+const HowToSocialCommand = cmd({
+  command: "social <name>",
+  aliases: ["carousel-props"],
+  describe: "turn a recipe into carousel props + an X post (no AI — it maps the recipe)",
+  builder: (y) =>
+    y
+      .positional("name", { type: "string", demandOption: true, describe: "recipe slug" })
+      .option("brand", { type: "string", default: "heyiris", describe: "brand slug for design tokens" })
+      .option("out", { type: "string", describe: "write props JSON here (default: ./<slug>-carousel.json)" })
+      .option("json", { type: "boolean", default: false, describe: "print props to stdout instead" }),
+  async handler(args) {
+    const fs = await import("fs")
+    const name = String(args.name).replace(/\.md$/, "")
+
+    const repoDir = resolveSourceDir()
+    const candidates = [repoDir ? join(repoDir, `${name}.md`) : "", join(HOWTO_DIR, `${name}.md`)].filter(Boolean)
+    const path = candidates.find((p) => existsSync(p))
+    if (!path) {
+      UI.empty()
+      prompts.intro("◈  How-To → Social")
+      prompts.log.error(`No recipe named '${name}'.`)
+      console.log(dim("  List them with: ") + highlight("iris how-to list"))
+      prompts.outro("")
+      return
+    }
+
+    const { meta, body } = parseFrontMatter(fs.readFileSync(path, "utf-8"))
+    const titleLine = body.split("\n").find((l: string) => l.startsWith("# ")) ?? ""
+    const fullTitle = titleLine.replace(/^#\s+/, "").trim() || name
+    const headline = fullTitle.replace(/^How to:\s*/i, "").trim()
+    const sections = extractSections(body)
+    const url = `heyiris.io/how-to/${name}`
+
+    const stats = [
+      meta.duration_min ? { value: `${meta.duration_min}`, label: "min read" } : null,
+      meta.level ? { value: meta.level, label: "level" } : null,
+      { value: String(sections.length), label: "steps" },
+    ].filter(Boolean)
+
+    const props: Record<string, unknown> = {
+      brand: String(args.brand),
+      variant: "editorial",
+      totalSlides: 9,
+      category: meta.category ?? "How-To",
+      headline,
+      subtitle: sections[0]?.text?.slice(0, 200) || undefined,
+      checklistTitle: "What you'll do",
+      checklistTags: meta.tags ?? [],
+      checklistItems: sections.slice(0, 6).map((s) => s.heading),
+      bulletPoints: sections.slice(0, 3).map((s) => ({ title: s.heading, body: s.text.slice(0, 180) })),
+      codeSnippet: firstCodeBlock(body),
+      stats,
+      statsHeadline: "At a glance",
+      ctaHeadline: "Read the full recipe",
+      ctaBody: `Every recipe ships inside the IRIS CLI. ${headline}.`,
+      ctaButtonText: url,
+      ctaSubtext: `iris how-to view ${name}`,
+    }
+
+    // X caption. Kept under 280 including the link, and assembled from the recipe's own words.
+    const tagStr = (meta.tags ?? []).slice(0, 3).map((t) => `#${t.replace(/-/g, "")}`).join(" ")
+    const lead = sections[0]?.text?.split(/(?<=\.)\s/)[0] ?? ""
+    let xPost = `${headline}\n\n${lead}\n\n${url}`
+    if (tagStr) xPost += `\n${tagStr}`
+    if (xPost.length > 280) xPost = `${headline}\n\n${url}${tagStr ? `\n${tagStr}` : ""}`
+
+    if (args.json) {
+      console.log(JSON.stringify({ props, xPost }, null, 2))
+      return
+    }
+
+    const outPath = String(args.out || `${name}-carousel.json`)
+    fs.writeFileSync(outPath, JSON.stringify(props, null, 2))
+
+    UI.empty()
+    prompts.intro("◈  How-To → Social")
+    console.log(dim(`  recipe   ${name}`) + (meta.category ? dim(`  ·  ${meta.category}`) : ""))
+    console.log(dim(`  sections ${sections.length}`) + dim(`  ·  tags ${(meta.tags ?? []).length}`))
+    if (!sections.length) {
+      console.log(warning("  ⚠ no ## sections found — the slides will be thin"))
+    }
+    console.log(dim(`  props    ${outPath}`))
+    printDivider()
+    console.log()
+    console.log(dim("  X POST") + dim(`  (${xPost.length}/280)`))
+    for (const l of xPost.split("\n")) console.log(`    ${l}`)
+    console.log()
+    printDivider()
+    console.log()
+    console.log(dim("  Render 9 slides:  ") + highlight(`iris remotion carousel ${outPath}`))
+    console.log(dim("  Post to X:        ") + highlight(`iris x post`))
+    console.log(dim("  Review + publish: ") + highlight("iris remotion register <files..>"))
+    console.log()
+    prompts.outro("Done")
+  },
+})
+
 // ── Promote ──────────────────────────────────────────────────────────────────
 
 /**
@@ -855,6 +1013,7 @@ export const HowToCommand = cmd({
       .command(HowToAddCommand)
       .command(HowToPublishCommand)
       .command(HowToPromoteCommand)
+      .command(HowToSocialCommand)
       .command(HowToRemoveCommand)
       .command(HowToBackupCommands[0])
       // #178285/#178286: previously .demandCommand(), so a bare `iris how-to`
