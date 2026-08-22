@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { dim, bold, highlight, printDivider, irisFetch, requireAuth, IRIS_API } from "./iris-api"
+import { dim, bold, highlight, printDivider, irisFetch, requireAuth, requireUserId, IRIS_API } from "./iris-api"
 import { homedir } from "os"
 import { join } from "path"
 import { existsSync, readdirSync, readFileSync, statSync } from "fs"
@@ -31,7 +31,22 @@ import { execFileSync } from "child_process"
 
 type Episode = { date: string; source: string; title: string; ref?: string }
 
-const SOURCES = ["diary", "git", "opencode", "claude"] as const
+/**
+ * First candidate that is genuinely an ARRAY.
+ *
+ * `a ?? b ?? []` picks the first non-nullish value, which for `{data:{items:[…]}}` is the `data`
+ * OBJECT — and iterating an object yields nothing. The command then reports "0 episodes" against
+ * a 200 OK, which is the same confident-omission this tool exists to expose. Check the type.
+ */
+function firstArray(...cands: any[]): any[] {
+  for (const c of cands) if (Array.isArray(c)) return c
+  return []
+}
+
+const SOURCES = ["diary", "git", "opencode", "claude", "comms", "bloq"] as const
+
+/** Sources that cannot run without a scope, and what supplies it. */
+const NEEDS_SCOPE: Record<string, string> = { comms: "--lead", bloq: "--bloq" }
 
 /** Field separator for git's pretty-format. Unit Separator cannot occur in a commit subject. */
 const SEP = "\x1f"
@@ -89,6 +104,89 @@ async function fromDiary(since: Date): Promise<Episode[]> {
       } else if (r.summary) {
         out.push({ date, source: "diary", title: String(r.summary) })
       }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+// -- comms (CRM) --------------------------------------------------------------
+/**
+ * Lead communications — iMessage, WhatsApp, email — already unified per lead by atlas:comms.
+ *
+ * This DOES carry message text, unlike the session sources, and the distinction is deliberate:
+ * these are business records the operator owns and already reads via `iris atlas:comms list`.
+ * Session transcripts are different in kind — they incidentally contain credentials and client
+ * data that nobody chose to put there.
+ */
+async function resolveLead(idOrQuery: string): Promise<{ id: number; name: string } | null> {
+  if (/^\d+$/.test(idOrQuery)) {
+    try {
+      const res = await irisFetch(`/api/v1/leads/${idOrQuery}`)
+      if (!res.ok) return null
+      const d: any = await res.json()
+      const lead = d?.data ?? d
+      return { id: Number(idOrQuery), name: String(lead?.name ?? `Lead #${idOrQuery}`) }
+    } catch {
+      return null
+    }
+  }
+  try {
+    const res = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(idOrQuery)}&per_page=1`)
+    if (!res.ok) return null
+    const d: any = await res.json()
+    const rows: any[] = d?.data?.data ?? d?.data ?? []
+    if (!rows.length) return null
+    return { id: Number(rows[0].id), name: String(rows[0].name ?? idOrQuery) }
+  } catch {
+    return null
+  }
+}
+
+async function fromComms(leadId: number, since: Date): Promise<Episode[]> {
+  try {
+    const p = new URLSearchParams({ lead_id: String(leadId), per_page: "500" })
+    const res = await irisFetch(`/api/v1/atlas/comms?${p}`)
+    if (!res.ok) return []
+    const d: any = await res.json()
+    const rows: any[] = firstArray(d?.data?.data, d?.data?.items, d?.data, d?.items)
+    const out: Episode[] = []
+    for (const r of rows) {
+      const date = String(r?.sent_at ?? r?.created_at ?? "").slice(0, 10)
+      if (!date || new Date(date) < since) continue
+      const arrow = r.direction === "inbound" ? "<-" : "->"
+      const text = String(r.subject || r.body || "").replace(/\s+/g, " ").trim()
+      if (!text) continue
+      out.push({ date, source: "comms", title: `${arrow} ${r.channel}: ${text}`, ref: String(r.id) })
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+// -- bloq items ---------------------------------------------------------------
+/** Decisions, epics and postmortems. `created_at` is when the thinking happened. */
+async function fromBloq(bloqId: string, since: Date): Promise<Episode[]> {
+  // requireUserId is the canonical resolver; the hand-rolled .env read used for the diary is a
+  // narrower path and returned nothing here.
+  const uid = await requireUserId()
+  if (!uid) return []
+  try {
+    const res = await irisFetch(`/api/v1/user/${uid}/bloqs/${bloqId}/items?per_page=500`)
+    if (!res.ok) return []
+    const d: any = await res.json()
+    // {data:{items:[...]}}. A `?? d?.data` fallback lands on an OBJECT, which iterates to
+    // nothing and reports 0 with a 200 — so every candidate is array-checked, not truthy-checked.
+    const rows: any[] = firstArray(d?.data?.items, d?.items, d?.data?.data, d?.data)
+    const out: Episode[] = []
+    for (const r of rows) {
+      const date = String(r?.created_at ?? "").slice(0, 10)
+      if (!date || new Date(date) < since) continue
+      const title = String(r.title || r.content || "").replace(/\s+/g, " ").trim()
+      if (!title) continue
+      out.push({ date, source: "bloq", title, ref: String(r.id) })
     }
     return out
   } catch {
@@ -245,7 +343,7 @@ function fromClaude(since: Date): Episode[] {
   return out
 }
 
-const MARK: Record<string, string> = { diary: "D", git: "G", opencode: "O", claude: "C" }
+const MARK: Record<string, string> = { diary: "D", git: "G", opencode: "O", claude: "C", comms: "M", bloq: "B" }
 
 function warn(s: string): string {
   return `${UI.Style.TEXT_WARNING}${s}${UI.Style.TEXT_NORMAL}`
@@ -260,6 +358,8 @@ const TimelineCommand = cmd({
       .option("since", { type: "string", default: "4mo", describe: "window, e.g. 30d / 6w / 4mo / 1y" })
       .option("source", { type: "string", describe: `comma-separated: ${SOURCES.join(",")}` })
       .option("grep", { type: "string", describe: "only episodes whose title matches" })
+      .option("lead", { type: "string", describe: "lead id or name — adds their CRM comms" })
+      .option("bloq", { type: "string", describe: "bloq id — adds its items as episodes" })
       .option("limit", { type: "number", default: 8, describe: "max lines per source per week" })
       .option("json", { type: "boolean", default: false, describe: "JSON output" }),
   async handler(args) {
@@ -275,11 +375,21 @@ const TimelineCommand = cmd({
       console.log(dim(`  since   ${sinceIso}`))
     }
 
+    let lead: { id: number; name: string } | null = null
+    if (args.lead) {
+      lead = await resolveLead(String(args.lead))
+      if (!lead && !args.json) console.log(warn(`  lead '${args.lead}' not found — comms skipped`))
+    }
+
     const perSource: Record<string, Episode[]> = {}
     if (want.has("diary")) perSource.diary = await fromDiary(since)
     if (want.has("git")) perSource.git = fromGit(process.cwd(), since)
     if (want.has("opencode")) perSource.opencode = fromOpencode(since)
     if (want.has("claude")) perSource.claude = fromClaude(since)
+    if (want.has("comms") && lead) perSource.comms = await fromComms(lead.id, since)
+    if (want.has("bloq") && args.bloq) perSource.bloq = await fromBloq(String(args.bloq), since)
+
+    if (lead && !args.json) console.log(dim(`  lead    ${lead.name} (#${lead.id})`))
 
     let episodes = Object.values(perSource).flat().filter((e) => e.date >= sinceIso)
     if (args.grep) {
@@ -303,7 +413,14 @@ const TimelineCommand = cmd({
       if (!want.has(s)) continue
       const eps = perSource[s] ?? []
       if (!eps.length) {
-        console.log(`    ${MARK[s]}  ${bold(s.padEnd(9))} ${warn("0 episodes   (no data in window)")}`)
+        // "not asked for" and "asked for and empty" are different answers, and collapsing them
+        // is how a tool tells you nothing happened when it simply never looked.
+        const scoped = NEEDS_SCOPE[s]
+        const why =
+          scoped && !(s === "comms" ? lead : args.bloq)
+            ? dim(`    — not queried (pass ${scoped})`)
+            : warn("0 episodes   (no data in window)")
+        console.log(`    ${MARK[s]}  ${bold(s.padEnd(9))} ${why}`)
         continue
       }
       const ds = eps.map((e) => e.date).sort()
@@ -313,6 +430,15 @@ const TimelineCommand = cmd({
       )
     }
     console.log()
+
+    if (lead && want.size > 1) {
+      console.log(
+        dim("  note    only comms are lead-scoped; add ") +
+          highlight(`--grep "${lead.name.split(" ")[0]}"`) +
+          dim(" to narrow the rest"),
+      )
+      console.log()
+    }
 
     if (!episodes.length) {
       console.log(dim("  Nothing in that window."))
