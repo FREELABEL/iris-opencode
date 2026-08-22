@@ -3,9 +3,9 @@
   "counts": {
     "command": 1284,
     "how-to": 46,
-    "playbook": 58,
-    "skill": 56,
-    "total": 1444
+    "playbook": 59,
+    "skill": 58,
+    "total": 1447
   },
   "terms": {
     "bespoke": [
@@ -428,6 +428,348 @@
       "aliases": [],
       "run": "iris app list",
       "haystack": "app list ls list your iris apps"
+    },
+    {
+      "kind": "command",
+      "name": "atlas",
+      "describe": "Atlas — your records: knowledge bases, boards, items, and the context agents read",
+      "aliases": [
+        "bloqs",
+        "kb",
+        "knowledge",
+        "memory",
+        "projects"
+      ],
+      "run": "iris atlas",
+      "haystack": "atlas bloqs kb knowledge memory projects atlas — your records: knowledge bases, boards, items, and the context agents read list get export open invite members add-member remove-member links revoke-link create update ingest add-item delete-item restore-item delete publish make-public make-private create-list rename-list delete-list move-item reorder-item compose rename search attach-lead detach-lead attach-playbook detach-playbook playbooks update-item contributors items publish-pages relate unrelate relations use"
+    },
+    {
+      "kind": "command",
+      "name": "atlas add-item",
+      "describe": "add a text item to a bloq list",
+      "aliases": [],
+      "run": "iris atlas add-item <bloq-id> <list-id> [content]",
+      "haystack": "atlas add-item add a text item to a bloq list"
+    },
+    {
+      "kind": "command",
+      "name": "atlas add-member",
+      "describe": "give an account access to a bloq board (by email or user id)",
+      "aliases": [],
+      "run": "iris atlas add-member <bloq-id>",
+      "haystack": "atlas add-member grant share-with give an account access to a bloq board (by email or user id)"
+    },
+    {
+      "kind": "command",
+      "name": "atlas attach-lead",
+      "describe": "attach a lead to this bloq project",
+      "aliases": [],
+      "run": "iris atlas attach-lead <bloq-id> <lead-id>",
+      "haystack": "atlas attach-lead add-lead attach a lead to this bloq project"
+    },
+    {
+      "kind": "command",
+      "name": "atlas attach-playbook",
+      "describe": "link a playbook to this bloq project",
+      "aliases": [],
+      "run": "iris atlas attach-playbook <bloq-id> <playbook-name>",
+      "haystack": "atlas attach-playbook add-playbook link-playbook link a playbook to this bloq project"
+    },
+    {
+      "kind": "command",
+      "name": "atlas compose",
+      "describe": "create a knowledge base with AI-assisted structure",
+      "aliases": [],
+      "run": "iris atlas compose",
+      "haystack": "atlas compose create a knowledge base with ai-assisted structure"
+    },
+    {
+      "kind": "command",
+      "name": "atlas contributors",
+      "describe": "list leads/contacts attached to this bloq project",
+      "aliases": [],
+      "run": "iris atlas contributors <bloq-id>",
+      "haystack": "atlas contributors contacts leads list leads/contacts attached to this bloq project"
+    },
+    {
+      "kind": "command",
+      "name": "atlas create",
+      "describe": "create a new knowledge base",
+      "aliases": [],
+      "run": "iris atlas create",
+      "haystack": "atlas create create a new knowledge base"
+    },
+    {
+      "kind": "command",
+      "name": "atlas create-list",
+      "describe": "create a new list on a bloq",
+      "aliases": [],
+      "run": "iris atlas create-list <bloq-id> <name>",
+      "haystack": "atlas create-list add-list new-list create a new list on a bloq"
+    },
+    {
+      "kind": "command",
+      "name": "atlas delete",
+      "describe": "delete a bloq/board (soft delete — data preserved server-side)",
+      "aliases": [],
+      "run": "iris atlas delete <bloq-id>",
+      "haystack": "atlas delete rm delete-bloq delete a bloq/board (soft delete — data preserved server-side)"
+    },
+    {
+      "kind": "command",
+      "name": "atlas delete-item",
+      "describe": "delete an item from a bloq list (soft delete — restore with: iris bloqs restore-item <id>)",
+      "aliases": [],
+      "run": "iris atlas delete-item <item-id>",
+      "haystack": "atlas delete-item rm-item remove-item delete an item from a bloq list (soft delete — restore with: iris bloqs restore-item <id>)"
+    },
+    {
+      "kind": "command",
+      "name": "atlas delete-list",
+      "describe": "delete a list from a bloq (refuses a non-empty list without --force)",
+      "aliases": [],
+      "run": "iris atlas delete-list <list-id>",
+      "haystack": "atlas delete-list rm-list remove-list delete a list from a bloq (refuses a non-empty list without --force)"
+    },
+    {
+      "kind": "command",
+      "name": "atlas detach-lead",
+      "describe": "detach a lead from this bloq project",
+      "aliases": [],
+      "run": "iris atlas detach-lead <bloq-id> <lead-id>",
+      "haystack": "atlas detach-lead remove-lead detach a lead from this bloq project"
+    },
+    {
+      "kind": "command",
+      "name": "atlas detach-playbook",
+      "describe": "unlink a playbook from this bloq project",
+      "aliases": [],
+      "run": "iris atlas detach-playbook <bloq-id> <playbook-name>",
+      "haystack": "atlas detach-playbook remove-playbook unlink-playbook unlink a playbook from this bloq project"
+    },
+    {
+      "kind": "command",
+      "name": "atlas export",
+      "describe": "export a bloq (lists, items, attachments) to a local folder — your data, off our servers",
+      "aliases": [],
+      "run": "iris atlas export [id]",
+      "haystack": "atlas export export a bloq (lists, items, attachments) to a local folder — your data, off our servers"
+    },
+    {
+      "kind": "command",
+      "name": "atlas get",
+      "describe": "show bloq details and lists (accepts a bloq ID or name)",
+      "aliases": [],
+      "run": "iris atlas get <id>",
+      "haystack": "atlas get show bloq details and lists (accepts a bloq id or name)"
+    },
+    {
+      "kind": "command",
+      "name": "atlas ingest",
+      "describe": "ingest a file into a bloq — CSV/Excel become datasets, MD/TXT/DOCX become documents, HTML becomes an artifact",
+      "aliases": [],
+      "run": "iris atlas ingest <id> <file>",
+      "haystack": "atlas ingest ingest a file into a bloq — csv/excel become datasets, md/txt/docx become documents, html becomes an artifact"
+    },
+    {
+      "kind": "command",
+      "name": "atlas invite",
+      "describe": "mint a passwordless invite link (tokenized auth) for a bloq board",
+      "aliases": [],
+      "run": "iris atlas invite <id>",
+      "haystack": "atlas invite share-link link mint a passwordless invite link (tokenized auth) for a bloq board"
+    },
+    {
+      "kind": "command",
+      "name": "atlas items",
+      "describe": "list AND read items in a bloq — this is the read path; there is no separate get-item",
+      "aliases": [],
+      "run": "iris atlas items <bloq-id>",
+      "haystack": "atlas items list and read items in a bloq — this is the read path; there is no separate get-item"
+    },
+    {
+      "kind": "command",
+      "name": "atlas links",
+      "describe": "list passwordless invite links for a bloq board",
+      "aliases": [],
+      "run": "iris atlas links <id>",
+      "haystack": "atlas links invites share-links list passwordless invite links for a bloq board"
+    },
+    {
+      "kind": "command",
+      "name": "atlas list",
+      "describe": "list your knowledge bases",
+      "aliases": [],
+      "run": "iris atlas list",
+      "haystack": "atlas list ls list your knowledge bases"
+    },
+    {
+      "kind": "command",
+      "name": "atlas make-private",
+      "describe": "revoke public sharing for a bloq item",
+      "aliases": [],
+      "run": "iris atlas make-private <item-id>",
+      "haystack": "atlas make-private unshare revoke public sharing for a bloq item"
+    },
+    {
+      "kind": "command",
+      "name": "atlas make-public",
+      "describe": "make a bloq item publicly shareable and print its public URL",
+      "aliases": [],
+      "run": "iris atlas make-public <item-id>",
+      "haystack": "atlas make-public share publish-item make a bloq item publicly shareable and print its public url"
+    },
+    {
+      "kind": "command",
+      "name": "atlas members",
+      "describe": "list the accounts a bloq board is shared with (membership, not invite links)",
+      "aliases": [],
+      "run": "iris atlas members <bloq-id>",
+      "haystack": "atlas members shared-users who list the accounts a bloq board is shared with (membership, not invite links)"
+    },
+    {
+      "kind": "command",
+      "name": "atlas move-item",
+      "describe": "move an item to a different list",
+      "aliases": [],
+      "run": "iris atlas move-item <item-id> <target-list-id>",
+      "haystack": "atlas move-item move an item to a different list"
+    },
+    {
+      "kind": "command",
+      "name": "atlas open",
+      "describe": "print (and open) the web URL for a bloq board",
+      "aliases": [],
+      "run": "iris atlas open <id>",
+      "haystack": "atlas open url print (and open) the web url for a bloq board"
+    },
+    {
+      "kind": "command",
+      "name": "atlas playbooks",
+      "describe": "list playbooks linked to this bloq project",
+      "aliases": [],
+      "run": "iris atlas playbooks <bloq-id>",
+      "haystack": "atlas playbooks list-playbooks list playbooks linked to this bloq project"
+    },
+    {
+      "kind": "command",
+      "name": "atlas publish",
+      "describe": "publish a markdown file or HTML artifact as a bloq item (private by default — add --public for a shareable URL; re-run to sync)",
+      "aliases": [],
+      "run": "iris atlas publish <file>",
+      "haystack": "atlas publish publish-md publish a markdown file or html artifact as a bloq item (private by default — add --public for a shareable url; re-run to sync)"
+    },
+    {
+      "kind": "command",
+      "name": "atlas publish-pages",
+      "describe": "publish a bloq's items as individual auth-gated pages (doc library → pages)",
+      "aliases": [],
+      "run": "iris atlas publish-pages <bloq-id>",
+      "haystack": "atlas publish-pages items-to-pages publish a bloq's items as individual auth-gated pages (doc library → pages)"
+    },
+    {
+      "kind": "command",
+      "name": "atlas relate",
+      "describe": "link two bloqs with a typed relation",
+      "aliases": [],
+      "run": "iris atlas relate <from-id> <to-id>",
+      "haystack": "atlas relate link two bloqs with a typed relation"
+    },
+    {
+      "kind": "command",
+      "name": "atlas relations",
+      "describe": "list a bloq's relations to other bloqs",
+      "aliases": [],
+      "run": "iris atlas relations <id>",
+      "haystack": "atlas relations list a bloq's relations to other bloqs"
+    },
+    {
+      "kind": "command",
+      "name": "atlas remove-member",
+      "describe": "remove an account's access to a bloq board",
+      "aliases": [],
+      "run": "iris atlas remove-member <bloq-id>",
+      "haystack": "atlas remove-member revoke-member ungrant remove an account's access to a bloq board"
+    },
+    {
+      "kind": "command",
+      "name": "atlas rename",
+      "describe": "rename a bloq, list, or item",
+      "aliases": [],
+      "run": "iris atlas rename <type> <id> [name]",
+      "haystack": "atlas rename mv rename a bloq, list, or item"
+    },
+    {
+      "kind": "command",
+      "name": "atlas rename-list",
+      "describe": "rename a list on a bloq",
+      "aliases": [],
+      "run": "iris atlas rename-list <list-id> <name>",
+      "haystack": "atlas rename-list update-list rename a list on a bloq"
+    },
+    {
+      "kind": "command",
+      "name": "atlas reorder-item",
+      "describe": "reorder an item within its list (0 = top). Use --top to pin it first.",
+      "aliases": [],
+      "run": "iris atlas reorder-item <item-id>",
+      "haystack": "atlas reorder-item pin-item reorder an item within its list (0 = top). use --top to pin it first."
+    },
+    {
+      "kind": "command",
+      "name": "atlas restore-item",
+      "describe": "restore a soft-deleted bloq item",
+      "aliases": [],
+      "run": "iris atlas restore-item <item-id>",
+      "haystack": "atlas restore-item undelete-item restore a soft-deleted bloq item"
+    },
+    {
+      "kind": "command",
+      "name": "atlas revoke-link",
+      "describe": "revoke (deactivate) a bloq invite link",
+      "aliases": [],
+      "run": "iris atlas revoke-link <id> <linkId>",
+      "haystack": "atlas revoke-link revoke-invite revoke (deactivate) a bloq invite link"
+    },
+    {
+      "kind": "command",
+      "name": "atlas search",
+      "describe": "search across every board — item titles, item content, and board names",
+      "aliases": [],
+      "run": "iris atlas search <query>",
+      "haystack": "atlas search find q search across every board — item titles, item content, and board names"
+    },
+    {
+      "kind": "command",
+      "name": "atlas unrelate",
+      "describe": "remove a typed relation between two bloqs",
+      "aliases": [],
+      "run": "iris atlas unrelate <from-id> <to-id>",
+      "haystack": "atlas unrelate remove a typed relation between two bloqs"
+    },
+    {
+      "kind": "command",
+      "name": "atlas update",
+      "describe": "rename a bloq, or set its slug",
+      "aliases": [],
+      "run": "iris atlas update <id>",
+      "haystack": "atlas update rename rename a bloq, or set its slug"
+    },
+    {
+      "kind": "command",
+      "name": "atlas update-item",
+      "describe": "update a bloq item (status, title, or content)",
+      "aliases": [],
+      "run": "iris atlas update-item <item-id>",
+      "haystack": "atlas update-item edit-item update a bloq item (status, title, or content)"
+    },
+    {
+      "kind": "command",
+      "name": "atlas use",
+      "describe": "pull a shared Atlas item's context to stdout (pipe it into any agent)",
+      "aliases": [],
+      "run": "iris atlas use <ref>",
+      "haystack": "atlas use context pull pull a shared atlas item's context to stdout (pipe it into any agent)"
     },
     {
       "kind": "command",
@@ -1467,348 +1809,6 @@
       "aliases": [],
       "run": "iris bloq-sync unlink <bloqId> <provider>",
       "haystack": "bloq-sync unlink unlink a cloud provider from a bloq"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs",
-      "describe": "manage knowledge bases (bloqs) — start with: iris search <query>",
-      "aliases": [
-        "kb",
-        "knowledge",
-        "memory",
-        "projects",
-        "atlas"
-      ],
-      "run": "iris bloqs",
-      "haystack": "bloqs kb knowledge memory projects atlas manage knowledge bases (bloqs) — start with: iris search <query> list get export open invite members add-member remove-member links revoke-link create update ingest add-item delete-item restore-item delete publish make-public make-private create-list rename-list delete-list move-item reorder-item compose rename search attach-lead detach-lead attach-playbook detach-playbook playbooks update-item contributors items publish-pages relate unrelate relations use board kanban list project workspace notes"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs add-item",
-      "describe": "add a text item to a bloq list",
-      "aliases": [],
-      "run": "iris bloqs add-item <bloq-id> <list-id> [content]",
-      "haystack": "bloqs add-item add a text item to a bloq list"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs add-member",
-      "describe": "give an account access to a bloq board (by email or user id)",
-      "aliases": [],
-      "run": "iris bloqs add-member <bloq-id>",
-      "haystack": "bloqs add-member grant share-with give an account access to a bloq board (by email or user id)"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs attach-lead",
-      "describe": "attach a lead to this bloq project",
-      "aliases": [],
-      "run": "iris bloqs attach-lead <bloq-id> <lead-id>",
-      "haystack": "bloqs attach-lead add-lead attach a lead to this bloq project"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs attach-playbook",
-      "describe": "link a playbook to this bloq project",
-      "aliases": [],
-      "run": "iris bloqs attach-playbook <bloq-id> <playbook-name>",
-      "haystack": "bloqs attach-playbook add-playbook link-playbook link a playbook to this bloq project"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs compose",
-      "describe": "create a knowledge base with AI-assisted structure",
-      "aliases": [],
-      "run": "iris bloqs compose",
-      "haystack": "bloqs compose create a knowledge base with ai-assisted structure"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs contributors",
-      "describe": "list leads/contacts attached to this bloq project",
-      "aliases": [],
-      "run": "iris bloqs contributors <bloq-id>",
-      "haystack": "bloqs contributors contacts leads list leads/contacts attached to this bloq project"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs create",
-      "describe": "create a new knowledge base",
-      "aliases": [],
-      "run": "iris bloqs create",
-      "haystack": "bloqs create create a new knowledge base"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs create-list",
-      "describe": "create a new list on a bloq",
-      "aliases": [],
-      "run": "iris bloqs create-list <bloq-id> <name>",
-      "haystack": "bloqs create-list add-list new-list create a new list on a bloq"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs delete",
-      "describe": "delete a bloq/board (soft delete — data preserved server-side)",
-      "aliases": [],
-      "run": "iris bloqs delete <bloq-id>",
-      "haystack": "bloqs delete rm delete-bloq delete a bloq/board (soft delete — data preserved server-side)"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs delete-item",
-      "describe": "delete an item from a bloq list (soft delete — restore with: iris bloqs restore-item <id>)",
-      "aliases": [],
-      "run": "iris bloqs delete-item <item-id>",
-      "haystack": "bloqs delete-item rm-item remove-item delete an item from a bloq list (soft delete — restore with: iris bloqs restore-item <id>)"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs delete-list",
-      "describe": "delete a list from a bloq (refuses a non-empty list without --force)",
-      "aliases": [],
-      "run": "iris bloqs delete-list <list-id>",
-      "haystack": "bloqs delete-list rm-list remove-list delete a list from a bloq (refuses a non-empty list without --force)"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs detach-lead",
-      "describe": "detach a lead from this bloq project",
-      "aliases": [],
-      "run": "iris bloqs detach-lead <bloq-id> <lead-id>",
-      "haystack": "bloqs detach-lead remove-lead detach a lead from this bloq project"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs detach-playbook",
-      "describe": "unlink a playbook from this bloq project",
-      "aliases": [],
-      "run": "iris bloqs detach-playbook <bloq-id> <playbook-name>",
-      "haystack": "bloqs detach-playbook remove-playbook unlink-playbook unlink a playbook from this bloq project"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs export",
-      "describe": "export a bloq (lists, items, attachments) to a local folder — your data, off our servers",
-      "aliases": [],
-      "run": "iris bloqs export [id]",
-      "haystack": "bloqs export export a bloq (lists, items, attachments) to a local folder — your data, off our servers"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs get",
-      "describe": "show bloq details and lists (accepts a bloq ID or name)",
-      "aliases": [],
-      "run": "iris bloqs get <id>",
-      "haystack": "bloqs get show bloq details and lists (accepts a bloq id or name)"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs ingest",
-      "describe": "ingest a file into a bloq — CSV/Excel become datasets, MD/TXT/DOCX become documents, HTML becomes an artifact",
-      "aliases": [],
-      "run": "iris bloqs ingest <id> <file>",
-      "haystack": "bloqs ingest ingest a file into a bloq — csv/excel become datasets, md/txt/docx become documents, html becomes an artifact"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs invite",
-      "describe": "mint a passwordless invite link (tokenized auth) for a bloq board",
-      "aliases": [],
-      "run": "iris bloqs invite <id>",
-      "haystack": "bloqs invite share-link link mint a passwordless invite link (tokenized auth) for a bloq board"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs items",
-      "describe": "list AND read items in a bloq — this is the read path; there is no separate get-item",
-      "aliases": [],
-      "run": "iris bloqs items <bloq-id>",
-      "haystack": "bloqs items list and read items in a bloq — this is the read path; there is no separate get-item"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs links",
-      "describe": "list passwordless invite links for a bloq board",
-      "aliases": [],
-      "run": "iris bloqs links <id>",
-      "haystack": "bloqs links invites share-links list passwordless invite links for a bloq board"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs list",
-      "describe": "list your knowledge bases",
-      "aliases": [],
-      "run": "iris bloqs list",
-      "haystack": "bloqs list ls list your knowledge bases"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs make-private",
-      "describe": "revoke public sharing for a bloq item",
-      "aliases": [],
-      "run": "iris bloqs make-private <item-id>",
-      "haystack": "bloqs make-private unshare revoke public sharing for a bloq item"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs make-public",
-      "describe": "make a bloq item publicly shareable and print its public URL",
-      "aliases": [],
-      "run": "iris bloqs make-public <item-id>",
-      "haystack": "bloqs make-public share publish-item make a bloq item publicly shareable and print its public url"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs members",
-      "describe": "list the accounts a bloq board is shared with (membership, not invite links)",
-      "aliases": [],
-      "run": "iris bloqs members <bloq-id>",
-      "haystack": "bloqs members shared-users who list the accounts a bloq board is shared with (membership, not invite links)"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs move-item",
-      "describe": "move an item to a different list",
-      "aliases": [],
-      "run": "iris bloqs move-item <item-id> <target-list-id>",
-      "haystack": "bloqs move-item move an item to a different list"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs open",
-      "describe": "print (and open) the web URL for a bloq board",
-      "aliases": [],
-      "run": "iris bloqs open <id>",
-      "haystack": "bloqs open url print (and open) the web url for a bloq board"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs playbooks",
-      "describe": "list playbooks linked to this bloq project",
-      "aliases": [],
-      "run": "iris bloqs playbooks <bloq-id>",
-      "haystack": "bloqs playbooks list-playbooks list playbooks linked to this bloq project"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs publish",
-      "describe": "publish a markdown file or HTML artifact as a bloq item (private by default — add --public for a shareable URL; re-run to sync)",
-      "aliases": [],
-      "run": "iris bloqs publish <file>",
-      "haystack": "bloqs publish publish-md publish a markdown file or html artifact as a bloq item (private by default — add --public for a shareable url; re-run to sync)"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs publish-pages",
-      "describe": "publish a bloq's items as individual auth-gated pages (doc library → pages)",
-      "aliases": [],
-      "run": "iris bloqs publish-pages <bloq-id>",
-      "haystack": "bloqs publish-pages items-to-pages publish a bloq's items as individual auth-gated pages (doc library → pages)"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs relate",
-      "describe": "link two bloqs with a typed relation",
-      "aliases": [],
-      "run": "iris bloqs relate <from-id> <to-id>",
-      "haystack": "bloqs relate link two bloqs with a typed relation"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs relations",
-      "describe": "list a bloq's relations to other bloqs",
-      "aliases": [],
-      "run": "iris bloqs relations <id>",
-      "haystack": "bloqs relations list a bloq's relations to other bloqs"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs remove-member",
-      "describe": "remove an account's access to a bloq board",
-      "aliases": [],
-      "run": "iris bloqs remove-member <bloq-id>",
-      "haystack": "bloqs remove-member revoke-member ungrant remove an account's access to a bloq board"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs rename",
-      "describe": "rename a bloq, list, or item",
-      "aliases": [],
-      "run": "iris bloqs rename <type> <id> [name]",
-      "haystack": "bloqs rename mv rename a bloq, list, or item"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs rename-list",
-      "describe": "rename a list on a bloq",
-      "aliases": [],
-      "run": "iris bloqs rename-list <list-id> <name>",
-      "haystack": "bloqs rename-list update-list rename a list on a bloq"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs reorder-item",
-      "describe": "reorder an item within its list (0 = top). Use --top to pin it first.",
-      "aliases": [],
-      "run": "iris bloqs reorder-item <item-id>",
-      "haystack": "bloqs reorder-item pin-item reorder an item within its list (0 = top). use --top to pin it first."
-    },
-    {
-      "kind": "command",
-      "name": "bloqs restore-item",
-      "describe": "restore a soft-deleted bloq item",
-      "aliases": [],
-      "run": "iris bloqs restore-item <item-id>",
-      "haystack": "bloqs restore-item undelete-item restore a soft-deleted bloq item"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs revoke-link",
-      "describe": "revoke (deactivate) a bloq invite link",
-      "aliases": [],
-      "run": "iris bloqs revoke-link <id> <linkId>",
-      "haystack": "bloqs revoke-link revoke-invite revoke (deactivate) a bloq invite link"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs search",
-      "describe": "search across every board — item titles, item content, and board names",
-      "aliases": [],
-      "run": "iris bloqs search <query>",
-      "haystack": "bloqs search find q search across every board — item titles, item content, and board names"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs unrelate",
-      "describe": "remove a typed relation between two bloqs",
-      "aliases": [],
-      "run": "iris bloqs unrelate <from-id> <to-id>",
-      "haystack": "bloqs unrelate remove a typed relation between two bloqs"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs update",
-      "describe": "rename a bloq, or set its slug",
-      "aliases": [],
-      "run": "iris bloqs update <id>",
-      "haystack": "bloqs update rename rename a bloq, or set its slug"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs update-item",
-      "describe": "update a bloq item (status, title, or content)",
-      "aliases": [],
-      "run": "iris bloqs update-item <item-id>",
-      "haystack": "bloqs update-item edit-item update a bloq item (status, title, or content)"
-    },
-    {
-      "kind": "command",
-      "name": "bloqs use",
-      "describe": "pull a shared Atlas item's context to stdout (pipe it into any agent)",
-      "aliases": [],
-      "run": "iris bloqs use <ref>",
-      "haystack": "bloqs use context pull pull a shared atlas item's context to stdout (pipe it into any agent)"
     },
     {
       "kind": "command",
@@ -4552,6 +4552,16 @@
       ],
       "run": "iris find [query..]",
       "haystack": "find search-commands capabilities what-can-i find any iris capability by intent — searches commands, how-tos, playbooks and skills"
+    },
+    {
+      "kind": "command",
+      "name": "genesis",
+      "describe": "Genesis — composable pages and sites: list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot",
+      "aliases": [
+        "pages"
+      ],
+      "run": "iris genesis",
+      "haystack": "genesis pages genesis — composable pages and sites: list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot"
     },
     {
       "kind": "command",
@@ -7700,98 +7710,6 @@
     },
     {
       "kind": "command",
-      "name": "outreach",
-      "describe": "manage outreach strategies — list, show, create, update, apply, delete",
-      "aliases": [
-        "reachr",
-        "outreach-strategy",
-        "reachr-strategy"
-      ],
-      "run": "iris outreach",
-      "haystack": "outreach reachr outreach-strategy reachr-strategy manage outreach strategies — list, show, create, update, apply, delete list show create update delete apply approve list approve decline"
-    },
-    {
-      "kind": "command",
-      "name": "outreach apply",
-      "describe": "apply strategy to a lead",
-      "aliases": [],
-      "run": "iris outreach apply <bloq-id> <id> <lead-id>",
-      "haystack": "outreach apply apply strategy to a lead"
-    },
-    {
-      "kind": "command",
-      "name": "outreach approve",
-      "describe": "review and approve pending outreach messages",
-      "aliases": [],
-      "run": "iris outreach approve",
-      "haystack": "outreach approve review review and approve pending outreach messages list approve decline"
-    },
-    {
-      "kind": "command",
-      "name": "outreach approve approve",
-      "describe": "approve a pending outreach message (or --all)",
-      "aliases": [],
-      "run": "iris outreach approve approve [id]",
-      "haystack": "outreach approve approve approve a pending outreach message (or --all)"
-    },
-    {
-      "kind": "command",
-      "name": "outreach approve decline",
-      "describe": "decline a pending outreach message",
-      "aliases": [],
-      "run": "iris outreach approve decline <id>",
-      "haystack": "outreach approve decline decline a pending outreach message"
-    },
-    {
-      "kind": "command",
-      "name": "outreach approve list",
-      "describe": "list pending outreach messages awaiting approval",
-      "aliases": [],
-      "run": "iris outreach approve list",
-      "haystack": "outreach approve list ls pending list pending outreach messages awaiting approval"
-    },
-    {
-      "kind": "command",
-      "name": "outreach create",
-      "describe": "create strategy from JSON file",
-      "aliases": [],
-      "run": "iris outreach create <bloq-id>",
-      "haystack": "outreach create create strategy from json file"
-    },
-    {
-      "kind": "command",
-      "name": "outreach delete",
-      "describe": "delete a strategy",
-      "aliases": [],
-      "run": "iris outreach delete <bloq-id> <id>",
-      "haystack": "outreach delete delete a strategy"
-    },
-    {
-      "kind": "command",
-      "name": "outreach list",
-      "describe": "list outreach strategies for a board",
-      "aliases": [],
-      "run": "iris outreach list <bloq-id>",
-      "haystack": "outreach list list outreach strategies for a board"
-    },
-    {
-      "kind": "command",
-      "name": "outreach show",
-      "describe": "show strategy details + steps",
-      "aliases": [],
-      "run": "iris outreach show <bloq-id> <id>",
-      "haystack": "outreach show show strategy details + steps"
-    },
-    {
-      "kind": "command",
-      "name": "outreach update",
-      "describe": "update strategy from JSON file",
-      "aliases": [],
-      "run": "iris outreach update <bloq-id> <id>",
-      "haystack": "outreach update update strategy from json file"
-    },
-    {
-      "kind": "command",
       "name": "outreach-campaign",
       "describe": "manage outreach campaigns (Reachr)",
       "aliases": [
@@ -7817,16 +7735,6 @@
       "aliases": [],
       "run": "iris packages",
       "haystack": "packages manage platform pricing packages — list, get/set, pull/push, features"
-    },
-    {
-      "kind": "command",
-      "name": "pages",
-      "describe": "manage composable pages — list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot. Design standard: `iris how-to view genesis-design-standard`",
-      "aliases": [
-        "genesis"
-      ],
-      "run": "iris pages",
-      "haystack": "pages genesis manage composable pages — list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot. design standard: `iris how-to view genesis-design-standard` genesis page builder composable page publish a page web page site"
     },
     {
       "kind": "command",
@@ -8684,6 +8592,98 @@
       "aliases": [],
       "run": "iris pulse alerts remove <id>",
       "haystack": "pulse alerts remove remove a pulse alert rule"
+    },
+    {
+      "kind": "command",
+      "name": "reachr",
+      "describe": "Reachr — outreach strategies: list, show, create, update, apply, delete",
+      "aliases": [
+        "outreach",
+        "outreach-strategy",
+        "reachr-strategy"
+      ],
+      "run": "iris reachr",
+      "haystack": "reachr outreach outreach-strategy reachr-strategy reachr — outreach strategies: list, show, create, update, apply, delete list show create update delete apply approve list approve decline"
+    },
+    {
+      "kind": "command",
+      "name": "reachr apply",
+      "describe": "apply strategy to a lead",
+      "aliases": [],
+      "run": "iris reachr apply <bloq-id> <id> <lead-id>",
+      "haystack": "reachr apply apply strategy to a lead"
+    },
+    {
+      "kind": "command",
+      "name": "reachr approve",
+      "describe": "review and approve pending outreach messages",
+      "aliases": [],
+      "run": "iris reachr approve",
+      "haystack": "reachr approve review review and approve pending outreach messages list approve decline"
+    },
+    {
+      "kind": "command",
+      "name": "reachr approve approve",
+      "describe": "approve a pending outreach message (or --all)",
+      "aliases": [],
+      "run": "iris reachr approve approve [id]",
+      "haystack": "reachr approve approve approve a pending outreach message (or --all)"
+    },
+    {
+      "kind": "command",
+      "name": "reachr approve decline",
+      "describe": "decline a pending outreach message",
+      "aliases": [],
+      "run": "iris reachr approve decline <id>",
+      "haystack": "reachr approve decline decline a pending outreach message"
+    },
+    {
+      "kind": "command",
+      "name": "reachr approve list",
+      "describe": "list pending outreach messages awaiting approval",
+      "aliases": [],
+      "run": "iris reachr approve list",
+      "haystack": "reachr approve list ls pending list pending outreach messages awaiting approval"
+    },
+    {
+      "kind": "command",
+      "name": "reachr create",
+      "describe": "create strategy from JSON file",
+      "aliases": [],
+      "run": "iris reachr create <bloq-id>",
+      "haystack": "reachr create create strategy from json file"
+    },
+    {
+      "kind": "command",
+      "name": "reachr delete",
+      "describe": "delete a strategy",
+      "aliases": [],
+      "run": "iris reachr delete <bloq-id> <id>",
+      "haystack": "reachr delete delete a strategy"
+    },
+    {
+      "kind": "command",
+      "name": "reachr list",
+      "describe": "list outreach strategies for a board",
+      "aliases": [],
+      "run": "iris reachr list <bloq-id>",
+      "haystack": "reachr list list outreach strategies for a board"
+    },
+    {
+      "kind": "command",
+      "name": "reachr show",
+      "describe": "show strategy details + steps",
+      "aliases": [],
+      "run": "iris reachr show <bloq-id> <id>",
+      "haystack": "reachr show show strategy details + steps"
+    },
+    {
+      "kind": "command",
+      "name": "reachr update",
+      "describe": "update strategy from JSON file",
+      "aliases": [],
+      "run": "iris reachr update <bloq-id> <id>",
+      "haystack": "reachr update update strategy from json file"
     },
     {
       "kind": "command",
@@ -10991,7 +10991,7 @@
       "describe": "Ship a bespoke (custom-HTML) Genesis /p/ page — a hand-designed HTML+CSS document published through the composable page builder. Two lanes — the CustomHtml component (raw HTML inside a composable page) and the standalone html template (full document via public-html blade). Handles the whole pipeline — write scoped HTML, build the page JSON, batch-publish, and verify the live /p/ render. Pass a subject brief or a slug as argument.",
       "aliases": [],
       "run": "iris playbook run bespoke",
-      "haystack": "bespoke ship a bespoke (custom-html) genesis /p/ page — a hand-designed html+css document published through the composable page builder. two lanes — the customhtml component (raw html inside a composable page) and the standalone html template (full document via public-html blade). handles the whole pipeline — write scoped html, build the page json, batch-publish, and verify the live /p/ render. pass a subject brief or a slug as argument. ---\nname: bespoke\ndescription: ship a bespoke (custom-html) genesis /p/ page — a hand-designed html+css document published through the composable page builder. two lanes — the customhtml component (raw html inside a composable page) and the standalone html template (full document via public-html blade). handles the whole pipeline — write scoped html, build the page json, batch-publish, and verify the live /p/ render. pass a subject brief or a slug as argument.\nallowed-tools:\n  - read\n  - edit\n  - write\n  - grep\n  - glob\n  - bash\n---\n\n# bespoke — custom-html genesis pages\n\n> ## stop — read the design standard before writing any html\n> `iris how-to view genesis-design-standard` · https://heyiris.io/p/design-philosophy-and-page-audit\n>\n> score the page against the **10-point audit** before publishing (9–10 ship · 6–8 revise · 0–5 redesign).\n> **check 01 predicts the rest:** could this design be moved onto a different subject unchanged?\n> if yes it is a template — restart from the subject, local fixes will not save it.\n>\n> three that silently break a genesis page:\n> 1. switch themes on **`html.dark`**, never `@media (prefers-color-scheme)` — the host owns the\n>    theme, and a block that follows the os renders dark inside a light page.\n> 2. a customhtml block must **not paint its own `background`** — it becomes a floating slab.\n> 3. **namespace every selector** — `v-html` gives no isolation; bare `body`/`section`/`table` leak.\n>\n> and point 10: **render-verify in a browser.** grepping the served html is not verification.\n\n\npublish a hand-designed html page (audit report, one-pager, animated landing, spec sheet) as a live\ngenesis page at `https://heyiris.io/p/<slug>`. use this when the composable component catalog can't\nexpress the design and you want full html+css freedom.\n\n## arguments\n\n`$arguments` — a subject/brief (`\"bug-bounty payout audit\"`) or an existing slug to update.\n\n## two lanes — pick one\n\n| lane | what | when | how it renders |\n|------|------|------|----------------|\n| **customhtml component** | a raw-html block *inside* an otherwise-composable page (`components:[{type:customhtml,props:{html}}]`) | you want one bespoke section, or a full doc, but keep it in the normal page pipeline (tailwind loaded, theme toggle works) | iris-api renders the page; `customhtml.vue` injects your html via `v-html` **inline, no isolation** |\n| **standalone `html` template** | a *full* html document (`render_mode=html`, `iris pages create --template=html`) served by `public-html.blade.php` | a truly standalone page — arbitrary `<head>`, no framework, your own everything | the blade outputs your html with only a minimal baseline reset injected before your css |\n\ndefault to the **customhtml component** lane — it's what `pages:batch` supports cleanly and it inherits\nthe page shell + theme. reach for the standalone lane only when you need a bare document.\n\n## the recipe (customhtml lane) — proven\n\n### 1. write the html — scope every selector under a wrapper class\n\n`customhtml` injects via `v-html` **with no shadow dom / iframe**, so unscoped rules collide with the\ngenesis page shell in *both* directions. common class names (`.card`, `.tag`, `.status`, `.step`,\n`.meta`) and bare element selectors (`body`, `*`, `h1`, `table`) will clash.\n\n- wrap all content in one class: `<div class=\"xx\">…</div>`.\n- prefix **every** selector: `.xx .card{…}`, `.xx h2{…}`, `.xx *{box-sizing:border-box}`.\n- put css variables + base font/color on the wrapper: `.xx{--bg:…;background:var(--bg);…}` — **not** `:root`/`body`.\n- theme both modes at the wrapper: `@media (prefers-color-scheme:dark){.xx{--bg:…}}` **plus**\n  `:root[data-theme=\"dark\"] .xx{…}` / `:root[data-theme=\"light\"] .xx{…}` (the viewer toggle stamps\n  `data-theme` on the root).\n- fonts: **csp blocks font cdns** — use system stacks (`ui-monospace,…` / `-apple-system,…`), never a\n  webfont `<link>`. use `font-variant-numeric:tabular-nums` for any column of figures.\n- design both light + dark; give heading custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css"
+      "haystack": "bespoke ship a bespoke (custom-html) genesis /p/ page — a hand-designed html+css document published through the composable page builder. two lanes — the customhtml component (raw html inside a composable page) and the standalone html template (full document via public-html blade). handles the whole pipeline — write scoped html, build the page json, batch-publish, and verify the live /p/ render. pass a subject brief or a slug as argument. ---\nname: bespoke\ndescription: ship a bespoke (custom-html) genesis /p/ page — a hand-designed html+css document published through the composable page builder. two lanes — the customhtml component (raw html inside a composable page) and the standalone html template (full document via public-html blade). handles the whole pipeline — write scoped html, build the page json, batch-publish, and verify the live /p/ render. pass a subject brief or a slug as argument.\nallowed-tools:\n  - read\n  - edit\n  - write\n  - grep\n  - glob\n  - bash\n---\n\n# bespoke — custom-html genesis pages\n\n> ## stop — read the design standard before writing any html\n> `iris how-to view genesis-design-standard` · https://heyiris.io/p/design-philosophy-and-page-audit\n>\n> score the page against the **10-point audit** before publishing (9–10 ship · 6–8 revise · 0–5 redesign).\n> **check 01 predicts the rest:** could this design be moved onto a different subject unchanged?\n> if yes it is a template — restart from the subject, local fixes will not save it.\n>\n> three that silently break a genesis page:\n> 1. switch themes on **`html.dark`**, never `@media (prefers-color-scheme)` — the host owns the\n>    theme, and a block that follows the os renders dark inside a light page.\n> 2. a customhtml block must **not paint its own `background`** — it becomes a floating slab.\n> 3. **namespace every selector** — `v-html` gives no isolation; bare `body`/`section`/`table` leak.\n>\n> and point 10: **render-verify in a browser.** grepping the served html is not verification.\n\n\npublish a hand-designed html page (audit report, one-pager, animated landing, spec sheet) as a live\ngenesis page at `https://heyiris.io/p/<slug>`. use this when the composable component catalog can't\nexpress the design and you want full html+css freedom.\n\n## arguments\n\n`$arguments` — a subject/brief (`\"bug-bounty payout audit\"`) or an existing slug to update.\n\n## two lanes — pick one\n\n| lane | what | when | how it renders |\n|------|------|------|----------------|\n| **customhtml component** | a raw-html block *inside* an otherwise-composable page (`components:[{type:customhtml,props:{html}}]`) | you want one bespoke section, or a full doc, but keep it in the normal page pipeline (tailwind loaded, theme toggle works) | iris-api renders the page; `customhtml.vue` injects your html via `v-html` **inline, no isolation** |\n| **standalone `html` template** | a *full* html document (`render_mode=html`, `iris pages create --template=html`) served by `public-html.blade.php` | a truly standalone page — arbitrary `<head>`, no framework, your own everything | the blade outputs your html with only a minimal baseline reset injected before your css |\n\ndefault to the **customhtml component** lane — it's what `pages:batch` supports cleanly and it inherits\nthe page shell + theme. reach for the standalone lane only when you need a bare document.\n\n## the recipe (customhtml lane) — proven\n\n### 1. write the html — scope every selector under a wrapper class\n\n`customhtml` injects via `v-html` **with no shadow dom / iframe**, so unscoped rules collide with the\ngenesis page shell in *both* directions. common class names (`.card`, `.tag`, `.status`, `.step`,\n`.meta`) and bare element selectors (`body`, `*`, `h1`, `table`) will clash.\n\n- wrap all content in one class: `<div class=\"xx\">…</div>`.\n- prefix **every** selector: `.xx .card{…}`, `.xx h2{…}`, `.xx *{box-sizing:border-box}`.\n- put css variables + base font/color on the wrapper: `.xx{--bg:…;background:var(--bg);…}` — **not** `:root`/`body`.\n- theme both modes at the wrapper: `@media (prefers-color-scheme:dark){.xx{--bg:…}}` **plus**\n  `:root[data-theme=\"dark\"] .xx{…}` / `:root[data-theme=\"light\"] .xx{…}` (the viewer toggle stamps\n  `data-theme` on the root).\n- fonts: **csp blocks font cdns** — use system stacks (`ui-monospace,…` / `-apple-system,…`), never a\n  webfont `<link>`. use `font-variant-numeric:tabular-nums` for any column of figures.\n- design both light + dark; give heading custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css custom html hand-designed page artifact branded page one-pager landing page report page custom css"
     },
     {
       "kind": "playbook",
@@ -11112,6 +11112,14 @@
       "aliases": [],
       "run": "iris playbook run freelabel-bounty-ads",
       "haystack": "freelabel-bounty-ads render a branded bounty/promo ad (remotion socialpost) and post it to instagram + x. turns a preset into a live social post in two commands. built to drive creators into live ugc bounties, but works for any promo. pass an action (e.g. \"render\", \"post\", \"render-and-post\", \"dry-run\", \"list\"). ---\nname: freelabel-bounty-ads\ndescription: render a branded bounty/promo ad (remotion socialpost) and post it to instagram + x. turns a preset into a live social post in two commands. built to drive creators into live ugc bounties, but works for any promo. pass an action (e.g. \"render\", \"post\", \"render-and-post\", \"dry-run\", \"list\").\nallowed-tools:\n  - read\n  - edit\n  - write\n  - bash\n---\n\n> run this playbook: `iris playbook run freelabel-bounty-ads`\n\n# bounty ad — render + post to instagram/x\n\ncreate a branded ad (video + story + still) with remotion and publish it to instagram + x through the existing upload-post integration. built for driving creators/tastemakers into live bounties (ugc rewards), but works for any promo.\n\nthe whole loop is two steps: **render a preset → post the file.** both are one command.\n\n## arguments\n\n`$arguments` — action and parameters. examples:\n\n- `/freelabel-bounty-ads render <preset>` — render square video + 9:16 story + still from a preset\n- `/freelabel-bounty-ads post <file|url> --caption=\"...\"` — host on r2 + post to ig + x\n- `/freelabel-bounty-ads render-and-post <preset> --caption=\"...\"` — do both\n- `/freelabel-bounty-ads dry-run <file>` — host on r2, print the cdn url, do not post\n- `/freelabel-bounty-ads list` — list presets + the live bounties worth advertising\n\n---\n\n## 1. render the ad (remotion)\n\nad content is a preset json in `remotion/presets/*.json`:\n`{ brand, headline, roles[], eventinfo, ctatext, contacthandle }`. copy an existing\n`bounty-*.json`, change the values.\n\n**important — render via the minimal entry.** the main `remotion/src/root.tsx` has\nmissing carousel imports that break the whole bundle. always render through\n`src/bounty-index.ts` (registers only the socialpost compositions):\n\n```bash\ncd remotion\n# square (x / ig feed)\nnpx remotion render src/bounty-index.ts socialpost out/<name>.mp4 --props presets/<name>.json\n# 9:16 (reels / tiktok / stories)\nnpx remotion render src/bounty-index.ts socialpoststory out/<name>-story.mp4 --props presets/<name>.json\n# static image\nnpx remotion still src/bounty-index.ts socialpoststill out/<name>.png --props presets/<name>.json\n```\n\nrequires `remotion/public/social-post-audio.mp3` (drop a licensed music bed; a silent\nplaceholder renders fine — generate with `ffmpeg -f lavfi -i anullsrc -t 15 public/social-post-audio.mp3`).\nrun `npm install` in `remotion/` first if `node_modules` is missing.\n\n## 2. post to instagram + x (`social:post-video`)\n\nthe `social:post-video` artisan command hosts a local file on cloudflare r2\n(`cdn.heyiris.io`) then posts via `uploadpostservice` (per-platform isolation +\nretries reused). r2 + upload-post keys are **prod-only**, so run with `railway run`\nto inject them into the local command (which has the rendered file):\n\n```bash\nrailway run --service fl-api php artisan social:post-video \\\n  ./remotion/out/<name>.mp4 --platforms=instagram,x --user=freelabelnet --caption=\"...\" \\\n  --board=545 --user-id=193\n```\n\n**always pass `--board=545 --user-id=193`** (the \"freelabel creative\" board). this\nauto-registers the creative in review studio as a tracked, reviewable item (pending\non host, → approved on successful post) so nothing generated is ever untracked. add\n`--campaign=<id>` to group it. use `--dry-run --board=545 --user-id=193` to host +\nregister for review without posting.\n\n- `--dry-run` hosts + prints the url without posting (always do this first).\n- route x through **`freelabelnet`** (has x connected). ig-only handles (`@thediscoverpage_`) skip x gracefully.\n- accepts a public url directly (skips hosting): `social:post-video https://cdn.heyiris.io/ads/... --user=freelabelnet`.\n- confirm final status (async worker): `get https://api.upload-post.com/api/uploadposts/status?request_id=<id>` with header `authorization: apikey $upload_post_api_key`.\n\n---\n\n## live bounties to advertise\n\n| bounty | rate | apply link |\n|--------|------|-----------|\n| #532 summer vibes clip campaign | $5 / 1k views ($1000 pool) | freelab"
+    },
+    {
+      "kind": "playbook",
+      "name": "freelabel-social",
+      "describe": "Turn a live bounty, opportunity, event or program into FREELABEL-branded social content for X and Instagram. The creator-audience counterpart to howto-social — same render and publish rails, different source and different voice. Money numbers are MAPPED from the record, never written by a model. Pass an opportunity/bounty id, or \"list\" to see what is live.",
+      "aliases": [],
+      "run": "iris playbook run freelabel-social",
+      "haystack": "freelabel-social turn a live bounty, opportunity, event or program into freelabel-branded social content for x and instagram. the creator-audience counterpart to howto-social — same render and publish rails, different source and different voice. money numbers are mapped from the record, never written by a model. pass an opportunity/bounty id, or \"list\" to see what is live. ---\nname: freelabel-social\ndescription: turn a live bounty, opportunity, event or program into freelabel-branded social content for x and instagram. the creator-audience counterpart to howto-social — same render and publish rails, different source and different voice. money numbers are mapped from the record, never written by a model. pass an opportunity/bounty id, or \"list\" to see what is live.\nallowed-tools:\n  - read\n  - edit\n  - write\n  - grep\n  - glob\n  - bash\n---\n\n# freelabel → social\n\n`howto-social` posts iris developer recipes to a developer audience. this is the other half:\n**freelabel content for creators** — bounties they can earn from, events they can play, programs\nthey can join.\n\nsame render and publish rails. different source, different voice, and one extra rule that does not\napply on the iris side: **the numbers are real money, so they get mapped, never generated.**\n\n## arguments\n\n`$arguments` — an opportunity/bounty id, or `list`.\n\n- `/freelabel-social 519` — artists wanted — song wars live 2\n- `/freelabel-social list` — what is live right now\n- `/freelabel-social event 41` — event promo\n\n## the rails already exist. audited 2026-08-21.\n\nnothing here needs building. know what is already there before adding anything:\n\n| rail | command | state |\n|---|---|---|\n| brand tokens | `remotion/src/brands.ts` | 9 brands: freelabel, discover, beatbox, emc_radio, capital_collective, noys, creative_gs, vanguard, heyiris |\n| bounties | `iris bounty list` | live — real budgets and spend |\n| opportunities | `iris opportunities list/get/pull` | live |\n| events | `iris events list/get/pull` | live |\n| programs | `iris programs list/get/pull` | live |\n| carousel from a record | `iris deliver:carousel --from opportunity:<id>` | exists, **ai-written** |\n| single promo image | `iris remotion still socialpost…` | exists |\n| ad with an approval gate | `iris playbook run freelabel-ads` | v2, multi-platform, ownership-enforced |\n| bounty promo, two commands | `iris playbook run freelabel-bounty-ads` | exists |\n| publish | `iris x post --brand freelabel --also instagram` | @freelabelnet **connected** |\n| asset hosting | `iris cloud:upload <file>` | returns a cdn url |\n\n`freelabel` and `discover` both post as **@freelabelnet** and both are connected. `heyiris` and\n`capital_collective` are **disabled**.\n\n## 🔴 the money rule\n\nan opportunity record carries `budget_pool_cents`, `budget_remaining_cents`, `budget_spent_cents`,\n`days_until_deadline`, `application_deadline`, `bounty_type`, `compensation_model` and\n`applicant_count`.\n\n**read those fields. do not let a model phrase them.**\n\n`iris deliver:carousel --from opportunity:<id>` and `remotion auto-carousel` write copy with a\nmodel. that is fine for a headline and fatal for a rate. a hallucinated `$0.50/1k views` on a post\npromising creators money is a commitment you did not make, to an audience that will screenshot it.\n\n```bash\n# pull the record and read the actual numbers first.\niris opportunities get 519 --json | jq '{title, bounty_type, budget_pool_cents,\n  budget_remaining_cents, days_until_deadline, application_deadline}'\n```\n\nput them on the stats slide verbatim, converted from cents. if a number is missing, **leave the\nslide off** — an empty stat is better than a confident wrong one. this is the same principle\n`howto-social` uses for recipe copy, and it matters more here because the downside is financial.\n\n## voice — freelabel is not iris\n\n| | iris | freelabel |\n|---|---|---|\n| audience | operators, developers | creators, artists, producers |\n| proof | \"here is the command\" | \"here is what it pays\" |\n| cta | read the recipe | apply / submit / pull up |\n| tone | precise, technical, no fluff | direct, warm, concrete |\n| handle | @heyiris.io *(disabled)* | @freelabelnet |\n\nlead with the offer, not the mechanism. a creator does not care that the payout is computed from a\nviews ledger; they care that 1,000 views pays them something and the deadline is friday.\n\nnever post an iris recipe fr"
     },
     {
       "kind": "playbook",
@@ -11487,7 +11495,7 @@
       "describe": "Carousel Announce — Branded Instagram Carousels",
       "aliases": [],
       "run": "iris playbook run carousel-announce",
-      "haystack": "carousel-announce carousel announce — branded instagram carousels <!-- auto-generated by iris playbook sync — do not edit -->\n---\nname: carousel-announce\ndescription: create branded instagram carousel announcements from daily diary entries and ship notes. three template types — feature (code-heavy, editorial), event (clean, infographic-style), and imessage mockups. renders 9 slides at 1080x1440 (3:4 instagram native). pass a topic, template type, or feature list as argument (e.g., \"may update\", \"event song wars 3\", \"imessage + pulse + hive\", \"ugc rewards for creators\").\nallowed-tools:\n  - read\n  - edit\n  - write\n  - grep\n  - glob\n  - bash\n  - agent\n---\n\n> run this playbook: `iris playbook run carousel-announce `\n# carousel announce — branded instagram carousels\n\ncreate polished instagram carousels for feature announcements, event promos, and product marketing. three template types, two primary brands, all at 1080x1440.\n\n## arguments\n\n`$arguments` — topic, template type, or feature list. examples:\n\n- `/carousel-announce atlas core data backbone` — product/platform carousel\n- `/carousel-announce may 16th update` — feature announcement carousel\n- `/carousel-announce event song wars 3 dallas` — event promo carousel\n- `/carousel-announce ugc rewards for creators` — product feature carousel\n- `/carousel-announce imessage + pulse + hive` — multi-feature carousel\n- `/carousel-announce last 7 days` — auto-scan diary for recent highlights\n- `/carousel-announce imessage-demo talent pipeline` — imessage mockup slides\n\n## brand identity (use these)\n\ntwo primary brands with full design token kits in the api:\n\n### iris (brand #8) — technology/saas\n- **accent:** emerald `#34d399` (irish spring green)\n- **handle:** @heyiris.io\n- **logo:** `https://freelabel.net/images/iris-logo-white-transparent.png` (white cube + iris wordmark on transparent)\n- **tagline:** \"ai business operations system\"\n- **voice:** confident, technical but approachable, direct, no fluff\n- **use for:** product features, cli tools, platform capabilities, saas announcements, atlas, agents, workflows\n- **design tokens:** `iris brands dt get iris`\n\n### freelabel (brand #9) — creator/music community\n- **accent:** bold red `#ff192c`\n- **handle:** @freelabelnet\n- **logo:** `https://freelabel.net/images/fllogo.png` (red fl square icon)\n- **full logo:** `https://freelabel.net/images/logos/freelabel-logo-full-text.png`\n- **tagline:** \"the leaders in online showcasing\"\n- **voice:** bold, street-smart, high energy, community-first\n- **use for:** events, creator-facing, talent pipeline, music, booking, community\n- **design tokens:** `iris brands dt get freelabel`\n\n### brand selection guide\n| topic | brand | why |\n|-------|-------|-----|\n| atlas, agents, workflows, cli, api | `heyiris` | technical product |\n| affiliate program, pricing, onboarding | `heyiris` | saas feature |\n| model proxy, branded ai, integrations | `heyiris` | infrastructure |\n| events, showcases, concerts | `freelabel` | community/music |\n| artist profiles, booking, talent | `freelabel` | creator economy |\n| ugc, discovery, content rewards | `freelabel` | creator monetization |\n| omnichannel messaging, outreach | `heyiris` | platform capability |\n\n## template types\n\n### 1. feature announcement (default)\n\n**best for:** ship notes, product launches, technical features, cli tools, platform capabilities\n**style:** editorial variant, code snippets, cli examples, stats from real data\n\n**slide layout:**\n| slide | content | notes |\n|-------|---------|-------|\n| 0 | cover | `*italic accent*` headline, subtitle, author |\n| 1 | feature 1 | serif italic title, body, optional code block |\n| 2 | feature 2 | big number overlay, title, body, optional code |\n| 3 | code/image showcase | full code block or architecture diagram (ascii art works great) |\n| 4 | stats grid | 2x2 cards with real numbers |\n| 5 | feature 3 | pull-quote style with code |\n| 6 | feature 4 | bordered card with code |\n| 7 | checklist | actionable commands to try |\n| 8 | cta | headline + install command |\n\n**content rules:**\n- 4 t"
+      "haystack": "carousel-announce carousel announce — branded instagram carousels <!-- auto-generated by iris playbook sync — do not edit -->\n---\nname: carousel-announce\ndescription: create branded instagram carousel announcements from daily diary entries and ship notes. three template types — feature (code-heavy, editorial), event (clean, infographic-style), and imessage mockups. renders 9 slides at 1080x1440 (3:4 instagram native). pass a topic, template type, or feature list as argument (e.g., \"may update\", \"event song wars 3\", \"imessage + pulse + hive\", \"ugc rewards for creators\").\nallowed-tools:\n  - read\n  - edit\n  - write\n  - grep\n  - glob\n  - bash\n  - agent\n---\n\n> run this playbook: `iris playbook run carousel-announce `\n# carousel announce — branded instagram carousels\n\ncreate polished instagram carousels for feature announcements, event promos, and product marketing. three template types, two primary brands, all at 1080x1440.\n\n## arguments\n\n`$arguments` — topic, template type, or feature list. examples:\n\n- `/carousel-announce atlas core data backbone` — product/platform carousel\n- `/carousel-announce may 16th update` — feature announcement carousel\n- `/carousel-announce event song wars 3 dallas` — event promo carousel\n- `/carousel-announce ugc rewards for creators` — product feature carousel\n- `/carousel-announce imessage + pulse + hive` — multi-feature carousel\n- `/carousel-announce last 7 days` — auto-scan diary for recent highlights\n- `/carousel-announce imessage-demo talent pipeline` — imessage mockup slides\n\n## brand identity (use these)\n\ntwo primary brands with full design token kits in the api:\n\n### iris (brand #8) — technology/saas\n- **accent:** emerald `#34d399` (irish spring green)\n- **handle:** @heyiris.io — ⚠️ the `heyiris` x account is currently **disabled** (`iris x accounts`);\n  only @freelabelnet is connected. posting iris content from freelabel is a brand decision, not a\n  fallback. ask before doing it.\n- **logo:** `https://freelabel.net/images/iris-logo-white-transparent.png` (white cube + iris wordmark on transparent)\n- **tagline:** \"ai business operations system\"\n- **voice:** confident, technical but approachable, direct, no fluff\n- **use for:** product features, cli tools, platform capabilities, saas announcements, atlas, agents, workflows\n- **design tokens:** `iris brands dt get iris`\n\n### freelabel (brand #9) — creator/music community\n- **accent:** bold red `#ff192c`\n- **handle:** @freelabelnet\n- **logo:** `https://freelabel.net/images/fllogo.png` (red fl square icon)\n- **full logo:** `https://freelabel.net/images/logos/freelabel-logo-full-text.png`\n- **tagline:** \"the leaders in online showcasing\"\n- **voice:** bold, street-smart, high energy, community-first\n- **use for:** events, creator-facing, talent pipeline, music, booking, community\n- **design tokens:** `iris brands dt get freelabel`\n\n### brand selection guide\n| topic | brand | why |\n|-------|-------|-----|\n| atlas, agents, workflows, cli, api | `heyiris` | technical product |\n| affiliate program, pricing, onboarding | `heyiris` | saas feature |\n| model proxy, branded ai, integrations | `heyiris` | infrastructure |\n| events, showcases, concerts | `freelabel` | community/music |\n| artist profiles, booking, talent | `freelabel` | creator economy |\n| ugc, discovery, content rewards | `freelabel` | creator monetization |\n| omnichannel messaging, outreach | `heyiris` | platform capability |\n\n## template types\n\n### 1. feature announcement (default)\n\n**best for:** ship notes, product launches, technical features, cli tools, platform capabilities\n**style:** editorial variant, code snippets, cli examples, stats from real data\n\n**slide layout:**\n| slide | content | notes |\n|-------|---------|-------|\n| 0 | cover | `*italic accent*` headline, subtitle, author |\n| 1 | feature 1 | serif italic title, body, optional code block |\n| 2 | feature 2 | big number overlay, title, body, optional code |\n| 3 | code/image showcase | full code block or architecture diagram (ascii art works great) |\n| 4 | stats grid | 2x2 cards with real numbers"
     },
     {
       "kind": "skill",
@@ -11571,6 +11579,14 @@
     },
     {
       "kind": "skill",
+      "name": "freelabel-social",
+      "describe": "FREELABEL → Social",
+      "aliases": [],
+      "run": "iris playbook run freelabel-social",
+      "haystack": "freelabel-social freelabel → social <!-- auto-generated by iris playbook sync — do not edit -->\n---\nname: freelabel-social\ndescription: turn a live bounty, opportunity, event or program into freelabel-branded social content for x and instagram. the creator-audience counterpart to howto-social — same render and publish rails, different source and different voice. money numbers are mapped from the record, never written by a model. pass an opportunity/bounty id, or \"list\" to see what is live.\nallowed-tools:\n  - read\n  - edit\n  - write\n  - grep\n  - glob\n  - bash\n---\n\n> run this playbook: `iris playbook run freelabel-social `\n# freelabel → social\n\n`howto-social` posts iris developer recipes to a developer audience. this is the other half:\n**freelabel content for creators** — bounties they can earn from, events they can play, programs\nthey can join.\n\nsame render and publish rails. different source, different voice, and one extra rule that does not\napply on the iris side: **the numbers are real money, so they get mapped, never generated.**\n\n## arguments\n\n`$arguments` — an opportunity/bounty id, or `list`.\n\n- `/freelabel-social 519` — artists wanted — song wars live 2\n- `/freelabel-social list` — what is live right now\n- `/freelabel-social event 41` — event promo\n\n## the rails already exist. audited 2026-08-21.\n\nnothing here needs building. know what is already there before adding anything:\n\n| rail | command | state |\n|---|---|---|\n| brand tokens | `remotion/src/brands.ts` | 9 brands: freelabel, discover, beatbox, emc_radio, capital_collective, noys, creative_gs, vanguard, heyiris |\n| bounties | `iris bounty list` | live — real budgets and spend |\n| opportunities | `iris opportunities list/get/pull` | live |\n| events | `iris events list/get/pull` | live |\n| programs | `iris programs list/get/pull` | live |\n| carousel from a record | `iris deliver:carousel --from opportunity:<id>` | exists, **ai-written** |\n| single promo image | `iris remotion still socialpost…` | exists |\n| ad with an approval gate | `iris playbook run freelabel-ads` | v2, multi-platform, ownership-enforced |\n| bounty promo, two commands | `iris playbook run freelabel-bounty-ads` | exists |\n| publish | `iris x post --brand freelabel --also instagram` | @freelabelnet **connected** |\n| asset hosting | `iris cloud:upload <file>` | returns a cdn url |\n\n`freelabel` and `discover` both post as **@freelabelnet** and both are connected. `heyiris` and\n`capital_collective` are **disabled**.\n\n## 🔴 the money rule\n\nan opportunity record carries `budget_pool_cents`, `budget_remaining_cents`, `budget_spent_cents`,\n`days_until_deadline`, `application_deadline`, `bounty_type`, `compensation_model` and\n`applicant_count`.\n\n**read those fields. do not let a model phrase them.**\n\n`iris deliver:carousel --from opportunity:<id>` and `remotion auto-carousel` write copy with a\nmodel. that is fine for a headline and fatal for a rate. a hallucinated `$0.50/1k views` on a post\npromising creators money is a commitment you did not make, to an audience that will screenshot it.\n\n```bash\n# pull the record and read the actual numbers first.\niris opportunities get 519 --json | jq '{title, bounty_type, budget_pool_cents,\n  budget_remaining_cents, days_until_deadline, application_deadline}'\n```\n\nput them on the stats slide verbatim, converted from cents. if a number is missing, **leave the\nslide off** — an empty stat is better than a confident wrong one. this is the same principle\n`howto-social` uses for recipe copy, and it matters more here because the downside is financial.\n\n## voice — freelabel is not iris\n\n| | iris | freelabel |\n|---|---|---|\n| audience | operators, developers | creators, artists, producers |\n| proof | \"here is the command\" | \"here is what it pays\" |\n| cta | read the recipe | apply / submit / pull up |\n| tone | precise, technical, no fluff | direct, warm, concrete |\n| handle | @heyiris.io *(disabled)* | @freelabelnet |\n\nlead with the offer, not the mechanism. a creator does not care that the payout is computed from a"
+    },
+    {
+      "kind": "skill",
       "name": "health-check",
       "describe": "Health Check",
       "aliases": [],
@@ -11584,6 +11600,14 @@
       "aliases": [],
       "run": "iris playbook run heartbeat-debug",
       "haystack": "heartbeat-debug heartbeat debug — production debugging skill <!-- auto-generated by iris playbook sync — do not edit -->\n---\nname: heartbeat-debug\ndescription: debug, diagnose, and manage the heartbeat agent system in production. use when heartbeats aren't running, agents are looping, circuit breakers trip, or you need to inspect/kill/restart heartbeat jobs. pass an action as argument (e.g., \"status\", \"diagnose\", \"kill\", \"logs\").\nallowed-tools:\n  - read\n  - bash\n  - grep\n  - glob\n  - task\n---\n\n> run this playbook: `iris playbook run heartbeat-debug `\n# heartbeat debug — production debugging skill\n\ndebug and manage the autonomous agent heartbeat system across fl-api and iris-api.\n\n## arguments\n\n`$arguments` — action to perform. examples:\n\n- `/heartbeat-debug status` — quick health overview of all heartbeat agents\n- `/heartbeat-debug diagnose` — full diagnostic (loop detection, rapid-fire, token burn)\n- `/heartbeat-debug diagnose 11` — diagnose specific agent\n- `/heartbeat-debug logs` — tail production heartbeat logs\n- `/heartbeat-debug kill 248` — emergency kill a runaway agent\n- `/heartbeat-debug run 766` — manually trigger heartbeat for agent\n- `/heartbeat-debug history 766` — view recent execution history\n- `/heartbeat-debug circuit-breaker 11` — check/reset circuit breaker\n- `/heartbeat-debug scheduler` — check if scheduler is running\n- `/heartbeat-debug jobs` — list all heartbeat scheduled jobs\n- `/heartbeat-debug pause 764` — safely pause a heartbeat (won't resurrect)\n- `/heartbeat-debug resume 764` — resume a paused heartbeat\n- `/heartbeat-debug model 604 grok-4-1-fast-non-reasoning xai` — change agent model\n\n---\n\n## architecture quick reference\n\n### infrastructure (railway — april 2026)\n\n| service | role | db | production url |\n|---------|------|-----|----------------|\n| **fl-api** | orchestrator — schedules jobs, runs `agents:process-jobs` every minute | `freelabelnet` | `raichu.heyiris.io` (railway) |\n| **iris-api** | executor — builds prompts, calls llms, writes results back | `iris_db` + `fl_api` connection to `freelabelnet` | `freelabel.net` (railway) |\n| **iris-worker** | queue worker — processes `runworkspaceagenticjob` for heartbeat execution | same as iris-api | railway (separate service) |\n\n### flow\n\n```\nscheduler (fl-api) → agents:process-jobs (every ~105s via schedule:run loop)\n  → getduejobs() finds all due jobs (agent-linked and non-agent)\n  → dispatch(executeagentjob) to redis queue 'agent-jobs'\n  → fl-api queue worker picks up from redis\n  → staleness guard: if job status != 'running' → skip (prevents backlog floods)\n  → type-aware routing:\n    ├─ heartbeat → irisapiservice → iris-api /api/v6/heartbeat/execute\n    │              → iris-worker runworkspaceagenticjob (18-25s)\n    │              → heartbeatexecutorservice builds prompt, calls llm\n    │              → results written back to fl-api db (completed_pending)\n    │              → discord notification via systemalertservice\n    ├─ hive_task_dispatch → irisapiservice::dispatchdirecttask()\n    │              → iris-api /api/v6/nodes/tasks → pusher → daemon\n    ├─ daily_newsletter → dailynewsletterservice\n    └─ default → irisapiservice agent execution\n  → markjobcompleted() → status='scheduled', next_run_at recalculated\n```\n\n### key principles\n\n1. heartbeat runs through `agents:process-jobs`, not its own cron. if heartbeat stops, the scheduling infrastructure is broken.\n2. the scheduler is the **universal cron harness** for all job types.\n3. `executeagentjob` has a **staleness guard** — if the job status is no longer \"running\" when the queue worker picks it up, it skips execution. this prevents backlog floods.\n4. `tries = 1` — no laravel retry. retries on scheduled jobs cause duplicates.\n\n---\n\n## iris cli commands (preferred)\n\n```bash\n# list all schedules with status\niris schedules list\n\n# view schedule details\niris schedules get <id>\n\n# view run history (with full response)\niris schedules history <id> --full\n\n# trigger a run immediately\niris schedules run <id>\n\n# enable/disable a schedule\niris schedules togg"
+    },
+    {
+      "kind": "skill",
+      "name": "howto-social",
+      "describe": "How-To → Social",
+      "aliases": [],
+      "run": "iris playbook run howto-social",
+      "haystack": "howto-social how-to → social <!-- auto-generated by iris playbook sync — do not edit -->\n---\nname: howto-social\ndescription: turn a published how-to recipe into an instagram carousel and an x post, with no ai writing step. a recipe is already structured content, so the slides are a mapping of it rather than a model's summary — which means the post cannot say something the recipe does not. pass a recipe slug (e.g. \"hive-tailscale\", \"remote-support-a-family-pc\"), or \"all\" to batch the library.\nallowed-tools:\n  - read\n  - edit\n  - write\n  - grep\n  - glob\n  - bash\n---\n\n> run this playbook: `iris playbook run howto-social `\n# how-to → social\n\nevery published recipe at `heyiris.io/how-to` is a finished piece of content with a real use case,\ncorrect copy, and a link that goes somewhere. this turns one into 9 carousel slides and an x post.\n\n**the content step uses no model.** a recipe already carries title, summary, category, level,\nduration, tags, section headings and a code block, and `carouselslide`'s schema wants exactly those\nfields. generating slides from it is a mapping, not an inference — so the post cannot drift from\nwhat the recipe actually says. use `iris remotion auto-carousel` when you have only a topic; use\nthis when you have the article.\n\n## arguments\n\n`$arguments` — a recipe slug, or `all`.\n\n- `/howto-social hive-tailscale`\n- `/howto-social remote-support-a-family-pc`\n- `/howto-social all` — batch every published recipe\n\nfind slugs with `iris how-to list` (grouped by category) or browse `heyiris.io/how-to`.\n\n## the pipeline\n\n```bash\n# 1. recipe -> props + x caption. writes <slug>-carousel.json, prints the post.\niris how-to social hive-tailscale\n\n# 2. render 9 slides at 1080x1080.\niris remotion carousel hive-tailscale-carousel.json -o slides/hive-tailscale\n\n# 3. slides must be urls for x, not local paths.\niris cloud:upload slides/hive-tailscale/slide-0.png -t \"hive-tailscale 1/9\"\n#    -> https://cdn.heyiris.io/cloud-files/<id>_slide-0.png\n\n# 4. post. --brand is required when more than one account is connected.\niris x post --file caption.txt --brand <slug> --image <url1> --image <url2> ...\n\n# 5. or route it through review first — creates a pending creative, nothing goes live.\niris remotion register slides/hive-tailscale/*.png\n```\n\n`--also instagram,threads` on `iris x post` cross-posts in one call.\n\n## check the account before you render\n\n```bash\niris x accounts\n```\n\nas of 2026-08-21: `heyiris` (@heyiris.io) is **disabled**, `capital_collective` is **disabled**,\nand only `freelabel` / `discover` (both @freelabelnet) are **connected**.\n\n**that matters for this playbook specifically.** these recipes are iris product content. posting\nthem from @freelabelnet is a brand decision, not a fallback — ask before doing it. if the intended\naccount is disabled, fix the connection rather than quietly posting as someone else.\n\n## verify the slides before posting. do not skip this.\n\n**`iris remotion carousel` used to render the composition's demo content and report success.** the\nshell wrapper passed props as an inline string (`--props \"$json\"`); remotion could not parse it and\nsilently fell back to placeholder copy, so every slide read *\"5 ways to grow your brand on social\nmedia\"* while the command printed `done. 9 slides saved`. fixed in cli **v1.3.198** by passing a\nprops file per slide.\n\ntwo habits survive the fix, because the failure mode is a wrong post rather than an error:\n\n1. **open slide-0.png and read it.** if it says anything about growing your brand on social media,\n   the props did not bind. a green run is not evidence.\n2. **count the files.** `ls slides/<slug>/*.png | wc -l` should be 9. the same wrapper also resolved\n   a relative `-o` against the remotion package instead of your cwd, printing `9 slides saved` over\n   an empty directory. also fixed in v1.3.198, but count anyway.\n\n## what lands on which slide\n\n| slide | content | source field |\n|---|---|---|\n| 0 | category badge, headline, opening paragraph | `category`, title, first `##` section |\n|"
     },
     {
       "kind": "skill",
@@ -11775,7 +11799,7 @@
       "describe": "Production Deploy — Railway Production Management",
       "aliases": [],
       "run": "iris playbook run production-deploy",
-      "haystack": "production-deploy production deploy — railway production management <!-- auto-generated by iris playbook sync — do not edit -->\n---\nname: production-deploy\ndescription: manage, debug, and monitor the railway production deployment. deep log debugging across all services (fl-api, iris-api, frontend, typesense) with noise filtering, error extraction, request tracing, and ssh container access. also handles health checks, env vars, restarts, custom domains, deploys, do env sync, and client readiness gates. pass an action as argument (e.g., \"status\", \"logs fl-api\", \"errors\", \"trace <keyword>\", \"queue-debug\", \"client-ready <feature>\", \"redeploy\").\nallowed-tools:\n  - read\n  - bash\n  - grep\n  - glob\n  - edit\n  - agent\n  - webfetch\n---\n\n> run this playbook: `iris playbook run production-deploy <action>`\n> steps: health-api → health-iris → health-frontend → health-typesense → health-pages → health-report → errors-api → errors-iris → errors-frontend → errors-report → logs-tail → trace-search → queue-check → benchmark-all → product-doors → redeploy-service\n# production deploy — railway production management\n\nmanage the freelabel production deployment on railway (primary production platform, fully migrated from digitalocean april 12, 2026).\n\n> **see also**: `/deploy-test-loop` — the tight deploy-test-fix cycle for validating new features against production. use it when shipping code that touches api endpoints, db records, or model $fillable. catches mass-assignment gaps, enum mismatches, and schema issues that only surface against real data.\n\n### deployment & infrastructure\n- `/production-deploy status` — health check all services\n- `/production-deploy restart <service>` — restart a service\n- `/production-deploy health` — test all endpoints and db connectivity\n- `/production-deploy domains` — check custom domain status and ssl\n- `/production-deploy env <service>` — list env vars for a service\n- `/production-deploy env-diff <service>` — compare do vs railway env vars\n- `/production-deploy env-sync <key> <service>` — sync a specific env var from do to railway\n- `/production-deploy redeploy <service>` — trigger a redeploy\n- `/production-deploy deploy-service <name> <image>` — deploy a new docker image service\n- `/production-deploy benchmark` — compare response times across all services\n- `/production-deploy migrate` — run artisan migrate on fl-api via railway mysql proxy\n\n### client readiness gate (ship checklist)\n- `/production-deploy client-ready <feature>` — run the full 21-gate client readiness checklist before shipping a feature\n- `/production-deploy client-ready` — run the checklist for the most recent commit/changes on the current branch\n\n### log debugging (primary debug workflow)\n- `/production-deploy logs <service>` — tail live logs for a service (fl-api, fl-iris-api, fl-elon-web-ui, typesense, redis, mysql)\n- `/production-deploy logs-all` — tail all services in parallel (opens multiple streams, summarizes output)\n- `/production-deploy errors [service]` — extract only error/critical/exception lines. if no service specified, checks all.\n- `/production-deploy trace <keyword>` — search a keyword (workflow id, user id, error string) across all service logs\n- `/production-deploy queue-debug` — check queue health: failed jobs, stuck workers, queue sizes, recent failures\n- `/production-deploy laravel-log <service>` — read the laravel storage/logs/laravel.log inside the container (fl-api or fl-iris-api)\n- `/production-deploy recent-errors [minutes]` — show errors from last n minutes (default: 30) across all services\n\n---\n\n## client readiness gate (21-gate ship checklist)\n\nbefore shipping any feature to production, run `/production-deploy client-ready <feature>` to execute all 21 gates below. a feature is not client-ready until every gate passes. the goal is to ensure nothing ships that feels \"admin-only\" or \"developer-internal\" — everything a client touches must be polished, documented, and tested.\n\nthe checklist runs in two halves. **gates 1-18 are release**: does it work, is it safe, did it ship. **gates 19"
+      "haystack": "production-deploy production deploy — railway production management <!-- auto-generated by iris playbook sync — do not edit -->\n---\nname: production-deploy\ndescription: manage, debug, and monitor the railway production deployment. deep log debugging across all services (fl-api, iris-api, frontend, typesense) with noise filtering, error extraction, request tracing, and ssh container access. also handles health checks, env vars, restarts, custom domains, deploys, do env sync, and client readiness gates. pass an action as argument (e.g., \"status\", \"logs fl-api\", \"errors\", \"trace <keyword>\", \"queue-debug\", \"client-ready <feature>\", \"redeploy\").\nallowed-tools:\n  - read\n  - bash\n  - grep\n  - glob\n  - edit\n  - agent\n  - webfetch\n---\n\n> run this playbook: `iris playbook run production-deploy <action>`\n> steps: health-api → health-iris → health-frontend → health-typesense → health-pages → health-report → errors-api → errors-iris → errors-frontend → errors-report → logs-tail → trace-search → queue-check → benchmark-all → product-doors → redeploy-service\n# production deploy — railway production management\n\nmanage the freelabel production deployment on railway (primary production platform, fully migrated from digitalocean april 12, 2026).\n\n> **see also**: `/deploy-test-loop` — the tight deploy-test-fix cycle for validating new features against production. use it when shipping code that touches api endpoints, db records, or model $fillable. catches mass-assignment gaps, enum mismatches, and schema issues that only surface against real data.\n\n### deployment & infrastructure\n- `/production-deploy status` — health check all services\n- `/production-deploy restart <service>` — restart a service\n- `/production-deploy health` — test all endpoints and db connectivity\n- `/production-deploy domains` — check custom domain status and ssl\n- `/production-deploy env <service>` — list env vars for a service\n- `/production-deploy env-diff <service>` — compare do vs railway env vars\n- `/production-deploy env-sync <key> <service>` — sync a specific env var from do to railway\n- `/production-deploy redeploy <service>` — trigger a redeploy\n- `/production-deploy deploy-service <name> <image>` — deploy a new docker image service\n- `/production-deploy benchmark` — compare response times across all services\n- `/production-deploy migrate` — run artisan migrate on fl-api via railway mysql proxy\n\n### client readiness gate (ship checklist)\n- `/production-deploy client-ready <feature>` — run the full 21-gate client readiness checklist before shipping a feature\n- `/production-deploy client-ready` — run the checklist for the most recent commit/changes on the current branch\n\n### log debugging (primary debug workflow)\n- `/production-deploy logs <service>` — tail live logs for a service (fl-api, fl-iris-api, fl-elon-web-ui, typesense, redis, mysql)\n- `/production-deploy logs-all` — tail all services in parallel (opens multiple streams, summarizes output)\n- `/production-deploy errors [service]` — extract only error/critical/exception lines. if no service specified, checks all.\n- `/production-deploy trace <keyword>` — search a keyword (workflow id, user id, error string) across all service logs\n- `/production-deploy queue-debug` — check queue health: failed jobs, stuck workers, queue sizes, recent failures\n- `/production-deploy laravel-log <service>` — read the laravel storage/logs/laravel.log inside the container (fl-api or fl-iris-api)\n- `/production-deploy recent-errors [minutes]` — show errors from last n minutes (default: 30) across all services\n\n---\n\n## client readiness gate (22-gate ship checklist)\n\nbefore shipping any feature to production, run `/production-deploy client-ready <feature>` to execute all 21 gates below. a feature is not client-ready until every gate passes. the goal is to ensure nothing ships that feels \"admin-only\" or \"developer-internal\" — everything a client touches must be polished, documented, and tested.\n\nthe checklist runs in two halves. **gates 1-18 are release**: does it work, is it safe, did it ship. **gates 19"
     },
     {
       "kind": "skill",

@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
@@ -265,12 +266,14 @@ const OutreachApplyCommand = cmd({
 
 // ── Parent command ──
 
-export const PlatformOutreachCommand = cmd({
-  command: "outreach",
-  // `outreach-strategy` / `reachr-strategy` are kept as aliases of this canonical
-  // command (was a separate re-export file — removed to drop the redundant 3rd path).
-  aliases: ["reachr", "outreach-strategy", "reachr-strategy"],
-  describe: "manage outreach strategies — list, show, create, update, apply, delete",
+// Reachr is the product; outreach is what it does. As an alias, `iris reachr --help`
+// printed "iris outreach" (#181888 PROD-4). Canonical name flipped; `outreach` and both
+// *-strategy spellings remain aliases, so nothing already written down breaks.
+export const PlatformOutreachCommand = productCommand({
+  name: "reachr",
+  aliases: ["outreach", "outreach-strategy", "reachr-strategy"],
+  purpose: "Reachr — outreach strategies: list, show, create, update, apply, delete",
+  keywords: ["reachr", "outreach", "strategy", "campaign", "sequence", "prospect", "send"],
   builder: (yargs) =>
     yargs
       .command(OutreachListCommand)
@@ -281,5 +284,4 @@ export const PlatformOutreachCommand = cmd({
       .command(OutreachApplyCommand)
       .command(OutreachApproveGroup)
       .demandCommand(),
-  async handler() {},
 })

@@ -82,7 +82,14 @@ export function findUnreadOptions(src: string): Array<{ command: string; option:
     // precisely the defect this file exists to prevent.
     const sigAt = b.indexOf(hm[0])
     const handler = b.slice(sigAt + hm[0].length)
-    const options = [...b.matchAll(/\.option\(\s*"([^"]+)"/g)].map((m) => m[1])
+    // Skip matches that sit inside a `//` comment. blocks() strips comments for BRACE
+    // matching but hands back the raw text, so a comment naming an option registers as
+    // one. That produced a false positive on `pages rollback --version`, flagged by the
+    // very comment explaining that `--version` had been REMOVED because it collides with
+    // yargs' global flag — the lint firing at the documentation of its own fix.
+    const options = [...b.matchAll(/\.option\(\s*"([^"]+)"/g)]
+      .filter((m) => !b.slice(b.lastIndexOf("\n", m.index!) + 1, m.index!).includes("//"))
+      .map((m) => m[1])
     if (options.length === 0) continue
 
     // A handler that never touches the param cannot be checked this way.

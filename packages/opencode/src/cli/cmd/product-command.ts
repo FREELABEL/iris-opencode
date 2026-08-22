@@ -35,8 +35,15 @@ export interface ProductSpec {
   howtos?: string[]
   /** Playbook names this product runs on. */
   playbooks?: string[]
-  /** The product's subcommands. */
-  subcommands: CommandModule<any, any>[]
+  /** The product's subcommands. Use this for a NEW product. */
+  subcommands?: CommandModule<any, any>[]
+  /**
+   * An existing builder to keep verbatim, for converting a command that already
+   * exists. Its options, .strict() and .demandCommand() are preserved exactly;
+   * only the epilogue is appended. Rewriting a working builder to fit a helper
+   * is how a cosmetic rename turns into a behaviour change.
+   */
+  builder?: (yargs: any) => any
 }
 
 /** Registry of every declared product, so Gate 22 and `iris help` can enumerate them. */
@@ -67,8 +74,9 @@ export function productCommand(spec: ProductSpec) {
     aliases: spec.aliases ?? [],
     describe: spec.purpose,
     builder: (yargs: any) => {
+      if (spec.builder) return spec.builder(yargs).epilogue(productEpilogue(spec))
       let y = yargs
-      for (const sub of spec.subcommands) y = y.command(sub)
+      for (const sub of spec.subcommands ?? []) y = y.command(sub)
       return y.epilogue(productEpilogue(spec)).demandCommand()
     },
     async handler() {},

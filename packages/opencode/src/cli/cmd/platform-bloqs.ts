@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import { AtlasUseCommand } from "./platform-atlas-use"
 import { buildListEnvelope } from "./list-envelope"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
@@ -3895,10 +3896,16 @@ export const PlatformSearchCommand = cmd({
   describe: "search everything you have written — item titles, item content, and board names",
 })
 
-export const PlatformBloqsCommand = cmd({
-  command: "bloqs",
-  aliases: ["kb", "knowledge", "memory", "projects", "atlas"],
-  describe: "manage knowledge bases (bloqs) — start with: iris search <query>",
+// `atlas` was an ALIAS here, so `iris atlas --help` printed "iris bloqs" and the brand
+// name vanished from the output (#181888 PROD-4). Atlas is one of the twelve products;
+// bloqs is the container inside it. The product name is therefore canonical and every
+// former name stays an alias, so all existing `iris atlas use|invite|ingest` and
+// `iris bloqs ...` invocations keep working unchanged.
+export const PlatformBloqsCommand = productCommand({
+  name: "atlas",
+  aliases: ["bloqs", "kb", "knowledge", "memory", "projects"],
+  purpose: "Atlas — your records: knowledge bases, boards, items, and the context agents read",
+  keywords: ["atlas", "bloq", "board", "item", "knowledge", "records", "memory", "context", "notes"],
   builder: (yargs) =>
     yargs
       .command(BloqsListCommand)
@@ -3943,5 +3950,4 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsRelationsCommand)
       .command(AtlasUseCommand)
       .demandCommand(),
-  async handler() {},
 })

@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -2951,11 +2952,16 @@ function printDesignStandardHint(): void {
   console.log(`  ${dim("Score the 10-point audit before this goes out — and open it in a browser.")}`)
 }
 
-export const PlatformPagesCommand = cmd({
-  command: "pages",
-  aliases: ["genesis"],
-  describe:
-    "manage composable pages — list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot. Design standard: `iris how-to view genesis-design-standard`",
+// Genesis is the product; "pages" is the noun it operates on. As an alias, `iris genesis
+// --help` printed "iris pages" (#181888 PROD-4). Canonical name flipped; `iris pages ...`
+// is unchanged and still works everywhere it is already written down.
+export const PlatformPagesCommand = productCommand({
+  name: "genesis",
+  aliases: ["pages"],
+  purpose:
+    "Genesis — composable pages and sites: list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot",
+  keywords: ["genesis", "page", "site", "component", "publish", "artifact", "landing", "screenshot"],
+  howtos: ["genesis-design-standard"],
   builder: (y) =>
     y
       .command(ListCmd)
@@ -2987,5 +2993,4 @@ export const PlatformPagesCommand = cmd({
       .command(ReassignCmd)
       .command(CacheClearCmd)
       .demandCommand(),
-  async handler() {},
 })
