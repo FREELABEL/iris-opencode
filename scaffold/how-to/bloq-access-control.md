@@ -146,6 +146,39 @@ command reads it. It's a note to yourself, not a control.
 
 ---
 
+## Three ways to give someone access, and nobody is emailed by default
+
+They are not variants of each other. Picking the wrong one is why people end up with access they
+never hear about.
+
+| | What it does | Needs an account? | Emails them? |
+|---|---|---|---|
+| `iris bloqs add-member <bloq> --email <e>` | grants an EXISTING account access, immediately | yes | only with `--notify` |
+| `iris bloq-members invite <bloq> -e <e>` | invites a person to become a member | no | only with `--send-email` |
+| `iris bloqs invite <bloq>` | mints a passwordless tokenized LINK you send yourself | no | **never** |
+
+```
+$ iris bloqs add-member 552 --email someone@example.com
+  Emailed:  no                                    # <- they have access and do not know
+
+$ iris bloqs add-member 552 --email someone@example.com --notify
+  Emailed:  yes
+```
+
+**`--notify` is idempotent, and that is how you "resend".** Re-running `add-member --notify` on
+somebody who is already a member reports `Permission updated` and sends the mail again. There is no
+separate resend verb because this is it.
+
+⚠️ **`iris bloqs invite --email` DOES NOT SEND EMAIL.** It addresses the link to a person — records
+who it is for — and hands you the URL to deliver yourself. A flag called `--email` on a command
+called `invite` that does not email anyone is the single most surprising thing on this page. If you
+want the platform to send it, you want `iris bloq-members invite --send-email`, which is a
+different command.
+
+The default is silence on purpose: granting access and announcing it are separate decisions, and a
+board is often prepared before the person is meant to see it. But the default means **checking
+`Emailed:` in the output is part of the job** — "shared successfully" is not "they know".
+
 ## Useful variants
 
 ```
