@@ -2,7 +2,14 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, dim, bold, writeJson } from "./iris-api"
-import { rollup, scoreScenario, ledgerToActuals, applyCategoryMapping, type ScenarioLine, type ActualLine } from "./mint-scenarios"
+import {
+  rollup,
+  scoreScenario,
+  ledgerToActuals,
+  applyCategoryMapping,
+  type ScenarioLine,
+  type ActualLine,
+} from "./mint-scenarios"
 
 // Lives in its own file rather than inside platform-mint.ts, which is mid-refactor into
 // mint-core.ts. Registration is a single line there so the two do not collide.
@@ -63,13 +70,22 @@ const ListCommand = cmd({
   describe: "list scenarios",
   builder: (y) => y.option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty(); prompts.intro("◈  Mint Scenarios")
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    UI.empty()
+    prompts.intro("◈  Mint Scenarios")
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
     const all = await rows(SCENARIOS)
-    if (args.json) { await writeJson(all); prompts.outro("Done"); return }
+    if (args.json) {
+      await writeJson(all)
+      prompts.outro("Done")
+      return
+    }
     if (!all.length) {
       prompts.log.warn("No scenarios yet. Create one with: iris mint scenario new <name>")
-      prompts.outro("Done"); return
+      prompts.outro("Done")
+      return
     }
     for (const s of all) {
       const lines = await rows(LINES, { scenario: String(s.name) })
@@ -88,12 +104,24 @@ const ShowCommand = cmd({
   describe: "show one scenario's lines and totals",
   builder: (y) => y.positional("name", { type: "string" }).option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty(); prompts.intro(`◈  Scenario — ${args.name}`)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    UI.empty()
+    prompts.intro(`◈  Scenario — ${args.name}`)
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
     const raw = await rows(LINES, { scenario: String(args.name) })
     const r = rollup(toScenarioLines(raw))
-    if (args.json) { await writeJson(r); prompts.outro("Done"); return }
-    if (!r.lines.length) { prompts.log.warn("No lines on this scenario."); prompts.outro("Done"); return }
+    if (args.json) {
+      await writeJson(r)
+      prompts.outro("Done")
+      return
+    }
+    if (!r.lines.length) {
+      prompts.log.warn("No lines on this scenario.")
+      prompts.outro("Done")
+      return
+    }
 
     for (const l of r.lines) {
       prompts.log.info(
@@ -129,8 +157,12 @@ const ScoreCommand = cmd({
       .option("scope", { type: "string", describe: "ledger scope to score against, e.g. business" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty(); prompts.intro(`◈  Scenario score — ${args.name}`)
-    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    UI.empty()
+    prompts.intro(`◈  Scenario score — ${args.name}`)
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
 
     const planned = toScenarioLines(await rows(LINES, { scenario: String(args.name) }))
     let actual: ActualLine[] = []
@@ -155,7 +187,11 @@ const ScoreCommand = cmd({
     }
 
     const s = scoreScenario(planned, actual)
-    if (args.json) { await writeJson(s); prompts.outro("Done"); return }
+    if (args.json) {
+      await writeJson(s)
+      prompts.outro("Done")
+      return
+    }
 
     prompts.log.info(dim(`actuals: ${sourceLabel}`))
     // An unmapped line cannot be scored, and saying so beats reporting a variance that is
@@ -171,7 +207,9 @@ const ScoreCommand = cmd({
 
     for (const l of s.lines) {
       const v = l.variance === null ? dim("no actuals recorded") : `${l.variance >= 0 ? "+" : ""}${usd(l.variance)}`
-      prompts.log.info(`${String(l.label).padEnd(28)} planned ${usd(l.planned).padStart(12)}  actual ${(l.actual === null ? dim("—") : usd(l.actual)).padStart(12)}  ${v}`)
+      prompts.log.info(
+        `${String(l.label).padEnd(28)} planned ${usd(l.planned).padStart(12)}  actual ${(l.actual === null ? dim("—") : usd(l.actual)).padStart(12)}  ${v}`,
+      )
     }
     prompts.log.step(
       `Scored ${s.lines.length - s.totals.lines_without_actuals}/${s.lines.length} lines · ` +
@@ -186,7 +224,9 @@ const ScoreCommand = cmd({
       )
     }
     if (s.unmatched_actual.length) {
-      prompts.log.warn(`Actual revenue with no scenario line: ${s.unmatched_actual.join(", ")} — the model is missing a line.`)
+      prompts.log.warn(
+        `Actual revenue with no scenario line: ${s.unmatched_actual.join(", ")} — the model is missing a line.`,
+      )
     }
     prompts.outro("Done")
   },

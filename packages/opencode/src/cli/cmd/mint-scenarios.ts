@@ -72,8 +72,7 @@ export function rollup(lines: ScenarioLine[]): Rollup {
     units: unitsTotal,
     monthly: toDollars(monthlyCents),
     margin_amount: anyUnmeasured || !hasLines ? null : toDollars(marginCents),
-    blended_margin_pct:
-      anyUnmeasured || !hasLines || monthlyCents === 0 ? null : marginCents / monthlyCents,
+    blended_margin_pct: anyUnmeasured || !hasLines || monthlyCents === 0 ? null : marginCents / monthlyCents,
     unmeasured_lines: unmeasured,
   }
 }
@@ -126,8 +125,7 @@ export function scoreScenario(planned: ScenarioLine[], actual: ActualLine[]): Sc
       planned: toDollars(plannedCents),
       actual: actualCents === null ? null : toDollars(actualCents),
       variance: actualCents === null ? null : toDollars(actualCents - plannedCents),
-      variance_pct:
-        actualCents === null || plannedCents === 0 ? null : (actualCents - plannedCents) / plannedCents,
+      variance_pct: actualCents === null || plannedCents === 0 ? null : (actualCents - plannedCents) / plannedCents,
       status: actualCents === null ? "no_actuals" : "scored",
     }
   })
@@ -182,10 +180,7 @@ export const UNCATEGORISED = "(uncategorised)"
  * A window that matches nothing returns NO lines rather than zeroed ones, so scoring reports
  * those scenario lines as `no_actuals` (unknown) instead of asserting they earned nothing.
  */
-export function ledgerToActuals(
-  txs: LedgerTx[],
-  opts: { from?: string; to?: string; scope?: string },
-): ActualLine[] {
+export function ledgerToActuals(txs: LedgerTx[], opts: { from?: string; to?: string; scope?: string }): ActualLine[] {
   const byCategory = new Map<string, number>()
   for (const tx of txs) {
     if (String(tx?.type ?? "").toLowerCase() !== "revenue") continue

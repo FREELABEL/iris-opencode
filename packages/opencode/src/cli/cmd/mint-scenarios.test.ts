@@ -159,11 +159,41 @@ describe("scoreScenario — the part that justifies building this", () => {
 
 describe("ledgerToActuals — turning the ledger into scoreable revenue", () => {
   const TX = [
-    { type: "revenue", amount_cents: 375000, category: "Membership Revenue", transaction_date: "2026-04-04T00:00:00Z", metadata: { scope: "business" } },
-    { type: "revenue", amount_cents: 245000, category: "Membership Revenue", transaction_date: "2026-04-04T00:00:00Z", metadata: { scope: "business" } },
-    { type: "expense", amount_cents: 1200000, category: "contracts", transaction_date: "2026-04-15T00:00:00Z", metadata: { scope: "business" } },
-    { type: "revenue", amount_cents: 100000, category: "Client Services", transaction_date: "2026-07-01T00:00:00Z", metadata: { scope: "business" } },
-    { type: "revenue", amount_cents: 50000, category: "Side gig", transaction_date: "2026-04-10T00:00:00Z", metadata: { scope: "personal" } },
+    {
+      type: "revenue",
+      amount_cents: 375000,
+      category: "Membership Revenue",
+      transaction_date: "2026-04-04T00:00:00Z",
+      metadata: { scope: "business" },
+    },
+    {
+      type: "revenue",
+      amount_cents: 245000,
+      category: "Membership Revenue",
+      transaction_date: "2026-04-04T00:00:00Z",
+      metadata: { scope: "business" },
+    },
+    {
+      type: "expense",
+      amount_cents: 1200000,
+      category: "contracts",
+      transaction_date: "2026-04-15T00:00:00Z",
+      metadata: { scope: "business" },
+    },
+    {
+      type: "revenue",
+      amount_cents: 100000,
+      category: "Client Services",
+      transaction_date: "2026-07-01T00:00:00Z",
+      metadata: { scope: "business" },
+    },
+    {
+      type: "revenue",
+      amount_cents: 50000,
+      category: "Side gig",
+      transaction_date: "2026-04-10T00:00:00Z",
+      metadata: { scope: "personal" },
+    },
   ]
 
   // An expense counted as revenue would invent income. This is the single most important
@@ -244,6 +274,11 @@ describe("applyCategoryMapping — explicit line to ledger-category wiring", () 
       { label: "A", ledger_category: "Membership Revenue" },
       { label: "B", ledger_category: "Membership Revenue" },
     ])
-    expect(m.filter((a) => a.monthly === 6200).map((a) => a.label).sort()).toEqual(["A", "B"])
+    expect(
+      m
+        .filter((a) => a.monthly === 6200)
+        .map((a) => a.label)
+        .sort(),
+    ).toEqual(["A", "B"])
   })
 })
