@@ -130,16 +130,21 @@ function collectBlocks(dir: string): BlockIndex {
     }
     imports.set(abs, fileImports)
 
-    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group))\s*=\s*cmd\(\s*\{/g)) {
+    // `cmd({...})` is the plain shape; `productCommand({...})` is the product front-door
+    // shape (#181888), which spells the same two fields `name:` and `purpose:`. Matching
+    // only `cmd(` silently dropped the first product built on the new helper from the
+    // index — the command resolved for a human typing `iris lexicon` and did not exist
+    // for any agent reading capabilities.json, which is the worse of the two failures.
+    for (const m of src.matchAll(/(?:export\s+)?const ([A-Za-z0-9_]+(?:Command|Group))\s*=\s*(?:cmd|productCommand)\(\s*\{/g)) {
       const openIdx = m.index! + m[0].length - 1
       const body = readBlock(src, openIdx)
       if (!body) continue
-      const command = body.match(/command:\s*"([^"]+)"/)?.[1]
+      const command = body.match(/command:\s*"([^"]+)"/)?.[1] ?? body.match(/\bname:\s*"([^"]+)"/)?.[1]
       if (!command) continue
       const aliasRaw = body.match(/aliases:\s*\[([^\]]*)\]/)?.[1] ?? ""
       const block: Block = {
         command,
-        describe: body.match(/describe:\s*"([^"]*)"/)?.[1] ?? "",
+        describe: body.match(/describe:\s*"([^"]*)"/)?.[1] ?? body.match(/purpose:\s*"([^"]*)"/)?.[1] ?? "",
         aliases: [...aliasRaw.matchAll(/"([^"]+)"/g)].map((a) => a[1]),
         body,
         file: abs,
