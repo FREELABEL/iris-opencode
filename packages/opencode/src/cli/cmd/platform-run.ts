@@ -1,4 +1,10 @@
 import { cmd } from "./cmd"
+import {
+  IntegrationsShareCommand,
+  IntegrationsUnshareCommand,
+  IntegrationsDisconnectCommand,
+  IntegrationsSetupNativeCommand,
+} from "./platform-integrations"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import {
@@ -1841,6 +1847,15 @@ export const PlatformRunCommand = cmd({
       .command(SetupCommand)
       .command(ConnectComposioCommand)
       .command(CleanupCommand)
+      // Adopted from platform-integrations.ts (#181924). That module registered the
+      // same `integrations` token as this one and lost it to registration order, so
+      // these four had no reachable route at all — sharing an integration with a
+      // bloq, revoking that share, disconnecting one, and creating a native API-key
+      // integration were CLI-unavailable while `iris --help` advertised them.
+      .command(IntegrationsShareCommand)
+      .command(IntegrationsUnshareCommand)
+      .command(IntegrationsDisconnectCommand)
+      .command(IntegrationsSetupNativeCommand)
       .command(PathwaysCommand)
       .demandCommand(),
   async handler() {},

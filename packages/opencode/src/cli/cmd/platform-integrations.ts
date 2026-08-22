@@ -241,7 +241,7 @@ const IntegrationsConnectCommand = cmd({
   },
 })
 
-const IntegrationsShareCommand = cmd({
+export const IntegrationsShareCommand = cmd({
   command: "share <id> <bloq-id>",
   describe: "share an existing integration with a bloq",
   builder: (yargs) =>
@@ -281,7 +281,7 @@ const IntegrationsShareCommand = cmd({
   },
 })
 
-const IntegrationsUnshareCommand = cmd({
+export const IntegrationsUnshareCommand = cmd({
   command: "unshare <id>",
   describe: "remove bloq sharing from an integration (make personal again)",
   builder: (yargs) =>
@@ -319,7 +319,7 @@ const IntegrationsUnshareCommand = cmd({
   },
 })
 
-const IntegrationsDisconnectCommand = cmd({
+export const IntegrationsDisconnectCommand = cmd({
   command: "disconnect <id>",
   aliases: ["rm", "delete"],
   describe: "disconnect an integration",
@@ -363,7 +363,7 @@ const IntegrationsDisconnectCommand = cmd({
   },
 })
 
-const IntegrationsSetupNativeCommand = cmd({
+export const IntegrationsSetupNativeCommand = cmd({
   command: "setup-native <type>",
   describe: "create a native API-key integration (mailjet, slack, smtp-email, …)",
   builder: (yargs) =>
