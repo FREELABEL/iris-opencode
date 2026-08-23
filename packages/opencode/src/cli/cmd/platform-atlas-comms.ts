@@ -742,6 +742,120 @@ const CommsSummaryCommand = cmd({
   },
 })
 
+/**
+ * Attachments — the files, not the words about them.
+ *
+ * The comms log records that a message HAD an attachment and stops there, so a
+ * document someone sent you was visible as a placeholder and unreachable as a
+ * file. Every search surface in the CLI then reported the topic had left no
+ * trail while the bytes sat on the disk. This is the verb that looks.
+ *
+ * `--out` is the ingest half: copying a file out of Messages' content-addressed
+ * store, under the name the sender gave it, is what turns "I know it exists"
+ * into something a person or an agent can actually open.
+ */
+const CommsAttachmentsCommand = cmd({
+  command: "attachments [id]",
+  aliases: ["files", "att"],
+  describe: "list and export files people sent you over iMessage (by lead, or --search across all)",
+  builder: (y) =>
+    y
+      .positional("id", { type: "string", describe: "lead ID or name (omit to search everything)" })
+      .option("search", { type: "string", aliases: ["s"], describe: "match the filename, case-insensitive" })
+      .option("days", { type: "number", default: 90, describe: "how far back to look" })
+      .option("limit", { type: "number", default: 50 })
+      .option("out", { type: "string", aliases: ["o"], describe: "copy the matching files into this directory" })
+      .option("include-links", { type: "boolean", default: false, describe: "also list Apple's rich-link payload rows" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Comms Attachments")
+
+    const imsg = require("../lib/imessage")
+    if (!imsg.isAvailable()) {
+      // Not "no attachments" — a different statement entirely, and the two need
+      // opposite responses.
+      prompts.log.error(imsg.diagnoseAccess())
+      prompts.outro("Done")
+      return
+    }
+
+    let handle: string | undefined
+    let who = "everyone"
+    if (args.id) {
+      if (!(await requireAuth())) { prompts.outro("Done"); return }
+      const resolved = await resolveLead(String(args.id))
+      if (!resolved) { prompts.log.error("Lead not found"); prompts.outro("Done"); return }
+      handle = resolved.lead?.phone ?? resolved.lead?.contact_info?.phone ?? resolved.lead?.email
+      if (!handle) {
+        prompts.log.error(`${resolved.lead?.name ?? `Lead #${resolved.id}`} has no phone or email on file, so there is no handle to match`)
+        prompts.outro("Done")
+        return
+      }
+      who = resolved.lead?.name || `Lead #${resolved.id}`
+    }
+
+    const sp = prompts.spinner()
+    sp.start("Reading Messages…")
+    const rows = imsg.listAttachments({
+      days: args.days,
+      limit: args.limit,
+      search: args.search,
+      handle,
+      includePluginPayloads: args["include-links"],
+    })
+    sp.stop(`${rows.length} attachment(s) from ${bold(who)} in the last ${args.days}d`)
+
+    if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
+
+    if (rows.length === 0) {
+      prompts.log.info(dim("Nothing matched. Widen with --days, or drop --search."))
+      prompts.outro("Done")
+      return
+    }
+
+    printDivider()
+    for (const a of rows) {
+      const size = a.bytes >= 1024 * 1024 ? `${(a.bytes / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(a.bytes / 1024))}KB`
+      // A row in the table is not a file on the disk. Say which one this is.
+      const state = a.onDisk ? "" : dim("  (not on disk)")
+      console.log(
+        `  ${dim(a.date.slice(0, 10))} ${directionArrow(a.from_me ? "outbound" : "inbound")} ${dim((a.handle ?? "").padEnd(18).slice(0, 18))} ${bold(a.name)} ${dim(size)}${state}`,
+      )
+    }
+    printDivider()
+
+    if (args.out) {
+      const { mkdirSync, copyFileSync, existsSync: exists } = require("fs")
+      const { join: pjoin, extname, basename } = require("path")
+      mkdirSync(String(args.out), { recursive: true })
+      let copied = 0
+      const skipped: string[] = []
+      const used = new Set<string>()
+      for (const a of rows) {
+        if (!a.onDisk) { skipped.push(a.name); continue }
+        // Two people can send `Scan.pdf`. Collisions are disambiguated rather
+        // than allowed to overwrite — a silent overwrite here loses a document.
+        let name = a.name
+        for (let n = 2; used.has(name.toLowerCase()) || exists(pjoin(String(args.out), name)); n++) {
+          const ext = extname(a.name)
+          name = `${basename(a.name, ext)} (${n})${ext}`
+        }
+        used.add(name.toLowerCase())
+        try { copyFileSync(a.path, pjoin(String(args.out), name)); copied++ } catch { skipped.push(a.name) }
+      }
+      prompts.log.success(`Copied ${success(String(copied))} file(s) → ${highlight(String(args.out))}`)
+      // Named, not summarised: "3 skipped" tells you nothing about which
+      // document you still do not have.
+      if (skipped.length) prompts.log.warn(`Not copied (${skipped.length}): ${skipped.slice(0, 8).join(", ")}${skipped.length > 8 ? "…" : ""}`)
+    } else {
+      prompts.log.info(dim(`Export:  iris atlas:comms attachments${args.id ? ` ${args.id}` : ""}${args.search ? ` --search "${args.search}"` : ""} --out ./inbox`))
+    }
+
+    prompts.outro("Done")
+  },
+})
+
 // ============================================================================
 // Parent command — registered as atlas:comms, aliased as leads:comms + comms
 // ============================================================================
@@ -749,13 +863,14 @@ const CommsSummaryCommand = cmd({
 export const PlatformAtlasCommsCommand = cmd({
   command: "atlas:comms",
   aliases: ["comms", "leads:comms"],
-  describe: "[Atlas OS] Unified lead communications log — ingest, view, search across all channels",
+  describe: "[Atlas OS] Unified lead communications log — ingest, view, search messages and attachments across all channels",
   builder: (yargs) =>
     yargs
       .command(CommsListCommand)
       .command(CommsIngestCommand)
       .command(CommsLogCommand)
       .command(CommsSummaryCommand)
-      .demandCommand(1, "specify a subcommand: list, ingest, log, summary"),
+      .command(CommsAttachmentsCommand)
+      .demandCommand(1, "specify a subcommand: list, ingest, attachments, log, summary"),
   async handler() {},
 })

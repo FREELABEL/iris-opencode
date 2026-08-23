@@ -1,4 +1,5 @@
 import { cmd } from "./cmd"
+import { PulseCheckCommand } from "./platform-pulse-check"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -12450,12 +12451,13 @@ export const PlatformPulseCommand = productCommand({
   aliases: ["daily"],
   purpose:
     "Pulse — account and deal health, with an agency-wide view behind --admin",
-  keywords: ["pulse", "health", "readiness", "account", "deal", "agency", "daily", "score"],
+  keywords: ["pulse", "health", "readiness", "account", "deal", "agency", "daily", "score", "attachments", "files", "documents"],
   howtos: ["pulse"],
   playbooks: ["lead-health-sweep"],
   builder: (yargs) =>
     yargs
       .command(PulseAlertsCommand)
+      .command(PulseCheckCommand)
       .option("admin", { describe: "agency view: diary digest + lead scorecard + ungated leads", type: "boolean", default: false })
       .option("status", { describe: "filter by lead status (admin mode)", type: "string", default: "Won,Active,In Negotiation,Negotiating" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID (admin mode)", type: "number" })
