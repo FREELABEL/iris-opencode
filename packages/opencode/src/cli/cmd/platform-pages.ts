@@ -2024,7 +2024,7 @@ export const COMPONENT_REGISTRY: { type: string; description: string; requiredPr
 
 const ComposeCmd = cmd({
   command: "compose <description..>",
-  describe: "AI-compose a page from a text description (uses Gemini)",
+  describe: "AI-compose a page from a text description",
   builder: (y) =>
     y
       .positional("description", { describe: "what the page should be", type: "string", array: true })
@@ -2032,7 +2032,7 @@ const ComposeCmd = cmd({
       .option("title", { describe: "page title", type: "string" })
       .option("theme", { describe: "dark or light", type: "string", default: "dark", choices: ["dark", "light"] })
       .option("style", { describe: "page style", type: "string", default: "landing", choices: ["landing", "dashboard", "product", "portfolio"] })
-      .option("model", { describe: "AI model override", type: "string" })
+      .option("model", { describe: "builder model override (server default: gpt-5.6-luna)", type: "string" })
       .option("domain", { describe: "publish onto this connected custom domain (e.g. catodrive.com)", type: "string" })
       .option("publish", { describe: "publish immediately (use --no-publish to leave a draft)", type: "boolean", default: true })
       .option("json", { type: "boolean" }),
