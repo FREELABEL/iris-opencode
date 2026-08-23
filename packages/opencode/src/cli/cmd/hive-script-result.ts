@@ -29,6 +29,12 @@ export interface ScriptRunResult {
   timed_out?: boolean
   script_path?: string | null
   machine?: string | null
+  /**
+   * Where the exit code came from. `error_text` means it was RECOVERED FROM PROSE and is
+   * not a value the node reported structurally — callers must label it as inferred rather
+   * than present it as a reported code.
+   */
+  exit_code_source?: "metadata" | "result" | "error_text" | null
 }
 
 /** Exit code used when the remote run failed but reported no usable code of its own. */
@@ -66,6 +72,83 @@ export function exitCodeForResult(result: ScriptRunResult | null | undefined): n
 export function verdictForResult(result: ScriptRunResult | null | undefined): "completed" | "timeout" | "failed" {
   if (result?.timed_out === true || result?.status === "timeout") return "timeout"
   return exitCodeForResult(result) === 0 ? "completed" : "failed"
+}
+
+/**
+ * The shape iris-api returns for a Hive TASK (`iris hive run`), as opposed to the
+ * script-push result this module was originally written for.
+ */
+export interface HiveTaskLike {
+  status?: string
+  error?: string | null
+  duration_ms?: number
+  metadata?: { exit_code?: number | null } | null
+  result?: {
+    output?: string
+    stdout?: string
+    stderr?: string
+    exit_code?: number | null
+    exitCode?: number | null
+  } | null
+}
+
+/**
+ * Normalise a Hive task into the ScriptRunResult this module's rules operate on.
+ *
+ * Exists because `iris hive run` re-derived these decisions inline and got two of them
+ * wrong (#182016):
+ *
+ *   1. THE EXIT CODE WAS READ FROM THE WRONG FIELD. The daemon submits it under
+ *      `metadata.exit_code` (coding-agent-bridge task-executor.js, submitResult). The CLI
+ *      read `result.exit_code`, which nothing sets — so it printed "exit=?" on every run,
+ *      including successful ones, and the caller could never branch on it.
+ *
+ *   2. "succeeded" IS iris-api's WORD; the contract's word is "completed". Only that one
+ *      synonym is normalised here. Any other unrecognised status is deliberately left
+ *      alone so exitCodeForResult() fails it closed — widening the accepted set is exactly
+ *      how an unknown state becomes a pass.
+ */
+export function fromHiveTask(task: HiveTaskLike | null | undefined): ScriptRunResult {
+  const t = task ?? {}
+  const r = t.result ?? {}
+  let reported: number | null = null
+  let source: ScriptRunResult["exit_code_source"] = null
+
+  if (typeof t.metadata?.exit_code === "number") {
+    reported = t.metadata.exit_code
+    source = "metadata"
+  } else if (typeof r.exit_code === "number") {
+    reported = r.exit_code
+    source = "result"
+  } else if (typeof r.exitCode === "number") {
+    reported = r.exitCode
+    source = "result"
+  } else {
+    // LAST RESORT, and deliberately last. The daemon's tmux path rejects with
+    // `new Error("Process exited with code N")` when N is non-zero, which means the error
+    // path posts NO metadata at all — so on exactly the runs where the exit code matters
+    // most, the only surviving copy of it is that English sentence (#182004, cause 4).
+    //
+    // Recovering it is strictly more information than discarding it, but it is PROSE, not
+    // a contract: if the daemon reworded that message this silently stops matching. So it
+    // is tagged `error_text` and must be displayed as inferred, never as reported. Delete
+    // this branch once #182004 makes the daemon post metadata on the failure path.
+    const m = /\bexited with code\s+(\d{1,3})\b/i.exec(String(t.error ?? ""))
+    if (m) {
+      reported = Number(m[1])
+      source = "error_text"
+    }
+  }
+
+  return {
+    status: t.status === "succeeded" ? "completed" : t.status,
+    exit_code: reported,
+    exit_code_source: source,
+    stdout: r.output ?? r.stdout ?? "",
+    stderr: r.stderr ?? "",
+    duration_ms: t.duration_ms,
+    timed_out: t.status === "timeout" || /timed out/i.test(String(t.error ?? "")),
+  }
 }
 
 export interface RenderedOutput {

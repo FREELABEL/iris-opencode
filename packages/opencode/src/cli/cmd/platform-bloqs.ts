@@ -12,6 +12,7 @@ import { detectKind, parseDelimited, parseXlsx, parseDocx, parsePlain, titleFrom
 import { RELATION_TYPES, isValidRelationType, formatRelationsGrouped, type RelationRow } from "./bloq-relation-format"
 import { createPageFromJson } from "./platform-pages"
 import { BloqsExportCommand } from "./platform-bloq-export"
+import { AtlasFilesCommandExport } from "./platform-atlas-files"
 import path from "path"
 
 // ============================================================================
@@ -3915,6 +3916,7 @@ export const PlatformBloqsCommand = productCommand({
       .command(BloqsListCommand)
       .command(BloqsGetCommand)
       .command(BloqsExportCommand)
+      .command(AtlasFilesCommandExport)
       .command(BloqsOpenCommand)
       .command(BloqsShareCommand)
       .command(BloqsMembersCommand)

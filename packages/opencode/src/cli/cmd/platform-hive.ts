@@ -13,6 +13,9 @@ import {
   HiveRunCommandExport,
   fetchNodes,
 } from "./platform-hive-nodes"
+import { HiveFilesCommandExport } from "./platform-hive-files"
+import { runRemoteDoctor } from "./platform-hive-doctor"
+import { HiveSelftestCommandExport } from "./platform-hive-selftest"
 import {
   HiveDiscoverCommandExport,
   HiveEnrollCommandExport,
@@ -1659,10 +1662,22 @@ const HivePurgeCommand = cmd({
 // ── iris hive doctor ────────────────────────────────────────────────────
 
 const HiveDoctorCommand = cmd({
-  command: "doctor",
-  describe: "diagnose daemon health, connectivity, and stale tasks",
-  builder: (yargs) => yargs,
-  async handler() {
+  command: "doctor [node]",
+  describe: "diagnose daemon health, connectivity, and stale tasks — this machine, or a named node over Tailscale",
+  builder: (yargs) =>
+    yargs
+      .positional("node", { describe: "check THIS node instead of the local machine (name or id)", type: "string" })
+      .option("all", { describe: "check every node you own", type: "boolean", default: false })
+      .option("expect-sha", { describe: "commit the remote daemon SHOULD be running; a mismatch is a failure", type: "string" })
+      .option("host", { describe: "override the address, skipping Tailscale resolution", type: "string" })
+      .option("user", { describe: "ssh user on the node (remembered after the first success)", type: "string" })
+      .option("user-id", { describe: "user ID", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(argv) {
+    // Naming a node moves the SAME question to a different machine (#182019). With no node
+    // this behaves exactly as before, so nothing that called `iris hive doctor` changes.
+    if (argv.node || argv.all) return runRemoteDoctor(argv)
+
     UI.empty()
     prompts.intro("◈  Hive Doctor")
 
@@ -4631,6 +4646,8 @@ export const PlatformHiveCommand = productCommand({
       // Node management + remote exec
       .command(HiveNodesCommandExport)
       .command(HiveRunCommandExport)
+      .command(HiveFilesCommandExport)
+      .command(HiveSelftestCommandExport)
       // Envelope encryption keys (#177946 phase 3) — a node must register one before it can
       // RECEIVE an envelope transfer; the send path fails closed rather than falling back.
       .command(HiveKeysCommandExport)

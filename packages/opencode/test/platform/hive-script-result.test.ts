@@ -23,6 +23,7 @@ import {
   renderOutput,
   GENERIC_FAILURE,
   TIMEOUT_EXIT,
+  fromHiveTask,
   type ScriptRunResult,
 } from "../../src/cli/cmd/hive-script-result"
 
@@ -149,5 +150,116 @@ describe("output truncation is announced (#179063)", () => {
     expect(r.droppedLines).toBe(0)
     expect(r.notice).toBeNull()
     expect(r.lines.at(-1)).toBe("line-50")
+  })
+})
+
+/**
+ * `iris hive run` — the TASK path, added 2026-08-23 (#182016).
+ *
+ * MEASURED FAILURE. `iris hive run MacBookPro "..."` printed `exit=?` on every run, success
+ * or failure, and a green ✓ above it. Two causes, both fixed by routing the task through
+ * fromHiveTask() into the rules above instead of re-deriving them in the handler:
+ *
+ *   1. FIELD-NAME MISMATCH. The daemon submits the exit code under `metadata.exit_code`;
+ *      the CLI read `result.exit_code`, which nothing sets.
+ *   2. NO CONTRACT. The handler decided success from the status word alone, so an unknown
+ *      exit code rendered as "?" beneath a success marker — the precise shape that let a
+ *      transport returning zero bytes look healthy for two days (#181633, #182004).
+ */
+describe("fromHiveTask — iris hive run", () => {
+  test("reads the exit code the daemon actually writes (metadata.exit_code)", () => {
+    const r = fromHiveTask({ status: "completed", metadata: { exit_code: 7 }, result: { output: "hi" } })
+    expect(r.exit_code).toBe(7)
+    expect(exitCodeForResult(r)).toBe(7)
+  })
+
+  test("still honours result.exit_code when that is where it arrives", () => {
+    expect(fromHiveTask({ status: "completed", result: { exit_code: 3 } }).exit_code).toBe(3)
+    expect(fromHiveTask({ status: "completed", result: { exitCode: 4 } }).exit_code).toBe(4)
+  })
+
+  test("metadata wins over result when both are present", () => {
+    const r = fromHiveTask({ status: "completed", metadata: { exit_code: 0 }, result: { exit_code: 9 } })
+    expect(r.exit_code).toBe(0)
+  })
+
+  test("normalises iris-api's 'succeeded' to the contract's 'completed'", () => {
+    expect(exitCodeForResult(fromHiveTask({ status: "succeeded" }))).toBe(0)
+  })
+
+  test("an unrecognised status still fails closed", () => {
+    // Deliberately NOT normalised. Widening the accepted set is how an unknown state
+    // becomes a pass.
+    expect(exitCodeForResult(fromHiveTask({ status: "weird_new_state" }))).toBe(GENERIC_FAILURE)
+    expect(verdictForResult(fromHiveTask({ status: "weird_new_state" }))).toBe("failed")
+  })
+
+  test("`hive run <node> \"false\"` must not be followed by the next command", () => {
+    // The literal case from #182016: a command that fails must produce a non-zero exit so
+    // `iris hive run … && echo SHOULD_NOT_PRINT` does not print.
+    const r = fromHiveTask({ status: "completed", metadata: { exit_code: 1 }, result: { output: "" } })
+    expect(exitCodeForResult(r)).not.toBe(0)
+    expect(verdictForResult(r)).toBe("failed")
+  })
+
+  test("a timeout is 124 and reads as a timeout, from either signal", () => {
+    expect(exitCodeForResult(fromHiveTask({ status: "timeout" }))).toBe(TIMEOUT_EXIT)
+    // iris-api reports the status as "failed" and puts the reason in `error` — this is the
+    // exact payload measured on 2026-08-23 (#182004).
+    const asMeasured = fromHiveTask({ status: "failed", error: "Task timed out after 30s", duration_ms: 36000 })
+    expect(asMeasured.timed_out).toBe(true)
+    expect(exitCodeForResult(asMeasured)).toBe(TIMEOUT_EXIT)
+    expect(verdictForResult(asMeasured)).toBe("timeout")
+  })
+
+  test("a missing exit code is null, never silently 0", () => {
+    const r = fromHiveTask({ status: "completed", result: { output: "x" } })
+    expect(r.exit_code).toBeNull()
+    // The status alone still resolves it, but the CLI can now tell it was never reported
+    // and refuse to print a number it does not have.
+    expect(exitCodeForResult(r)).toBe(0)
+  })
+
+  test("survives the empty/garbage task the broken transport actually returns", () => {
+    expect(exitCodeForResult(fromHiveTask(null))).toBe(GENERIC_FAILURE)
+    expect(exitCodeForResult(fromHiveTask({}))).toBe(GENERIC_FAILURE)
+    expect(fromHiveTask({}).stdout).toBe("")
+  })
+})
+
+describe("fromHiveTask — recovering the exit code the daemon throws away", () => {
+  test("parses the code out of the daemon's error prose, and TAGS it as inferred", () => {
+    // The exact payload measured 2026-08-23: the tmux path rejects with this message and
+    // posts no metadata, so the prose is the only surviving copy of the exit code.
+    const r = fromHiveTask({ status: "failed", error: "Process exited with code 5" })
+    expect(r.exit_code).toBe(5)
+    expect(r.exit_code_source).toBe("error_text")
+    expect(exitCodeForResult(r)).toBe(5)
+  })
+
+  test("a structurally reported code always wins over the prose", () => {
+    const r = fromHiveTask({
+      status: "completed",
+      metadata: { exit_code: 0 },
+      error: "Process exited with code 5",
+    })
+    expect(r.exit_code).toBe(0)
+    expect(r.exit_code_source).toBe("metadata")
+  })
+
+  test("does not invent a code from unrelated error text", () => {
+    const r = fromHiveTask({ status: "failed", error: "connection reset by peer" })
+    expect(r.exit_code).toBeNull()
+    expect(r.exit_code_source).toBeNull()
+  })
+
+  test("a timeout is still a timeout even though its message has no code", () => {
+    const r = fromHiveTask({ status: "failed", error: "Task timed out after 30s" })
+    expect(r.exit_code).toBeNull()
+    expect(exitCodeForResult(r)).toBe(TIMEOUT_EXIT)
+  })
+
+  test("source is null when the code was never reported at all", () => {
+    expect(fromHiveTask({ status: "completed" }).exit_code_source).toBeNull()
   })
 })

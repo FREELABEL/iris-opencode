@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
 import { resolveLocalNode } from "./hive-local-node"
+import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask } from "./hive-script-result"
 
 // ============================================================================
 // iris hive nodes / run
@@ -263,16 +264,17 @@ const HiveNodesCommand = cmd({
 
 const HiveRunCommand = cmd({
   command: "run <target> <command>",
-  describe: "run a shell command on a Hive node and stream the output back",
+  describe: "run a shell command on a Hive node and stream the output back (fails fast on the first error unless --no-fail-fast is given — see `command`)",
   builder: (yargs) =>
     yargs
       .positional("target", { describe: "node name or id", type: "string", demandOption: true })
-      .positional("command", { describe: "shell command (quote it)", type: "string", demandOption: true })
+      .positional("command", { describe: "shell command (quote it). Runs with `set -e` by default, so it stops at the first failing statement instead of running the rest — pass --no-fail-fast to run without it", type: "string", demandOption: true })
       .option("timeout", { describe: "task timeout in seconds", type: "number", default: 60 })
       .option("title", { describe: "task title shown in the dashboard", type: "string" })
       .option("priority", { describe: "task priority 1-10 (higher = sooner)", type: "number" })
       .option("queue", { alias: "fire-and-forget", describe: "queue the task and exit immediately (don't wait for completion)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
+      .option("fail-fast", { describe: "stop at the first failing statement (`set -e`)", type: "boolean", default: true })
       .option("json", { describe: "JSON output (full task object)", type: "boolean", default: false }),
   async handler(argv) {
     await requireAuth()
@@ -301,8 +303,20 @@ const HiveRunCommand = cmd({
       console.log(`${dim("→")} dispatching to ${bold(node.name)} (${node.id.slice(0, 8)})`)
     }
 
-    // Wrap as a bash script (sandbox_execute treats prompt as a script body)
-    const script = command.startsWith("#!") ? command : `#!/bin/bash\nset -e\n${command}`
+    // Wrap as a bash script (sandbox_execute treats prompt as a script body).
+    // `set -e` is opt-out (--no-fail-fast) rather than always-on — it used to
+    // be silently forced, so a script written assuming shell semantics (e.g.
+    // "run these three checks, report all three") could stop after the first
+    // non-zero exit with no indication why (#182005).
+    const failFast = argv["fail-fast"] !== false
+    if (failFast && !command.startsWith("#!") && !argv.json) {
+      console.log(dim("→ running with `set -e` (stop at first failure) — pass --no-fail-fast to disable"))
+    }
+    const script = command.startsWith("#!")
+      ? command
+      : failFast
+        ? `#!/bin/bash\nset -e\n${command}`
+        : `#!/bin/bash\n${command}`
     const title = (argv.title as string | undefined) ?? `iris hive run: ${command.slice(0, 60)}`
 
     const priority = argv.priority as number | undefined
@@ -385,32 +399,60 @@ const HiveRunCommand = cmd({
       return
     }
 
-    const result = final.result ?? {}
-    const output = result.output ?? result.stdout ?? ""
-    const stderr = result.stderr ?? ""
-    const exitCode = result.exit_code ?? result.exitCode
+    // The exit-code and output contract lives in hive-script-result.ts, written after two
+    // measured incidents. This handler used to re-derive a weaker version of it inline and
+    // got it wrong in the exact way that module exists to prevent: an unknown exit code
+    // printed as "?" underneath a green check (#182016).
+    //
+    // The field-name half of the same bug: the daemon submits the exit code under
+    // metadata.exit_code (coding-agent-bridge task-executor.js, submitResult), and this
+    // read result.exit_code, which nothing ever sets. Both are read now, metadata first
+    // because that is the one the daemon actually writes.
+    const runResult = fromHiveTask(final)
+
+    const exitCode = exitCodeForResult(runResult)
+    const verdict = verdictForResult(runResult)
+
+    // renderOutput keeps the TAIL, because the failure is at the bottom of a log, and it
+    // distinguishes truncation by the node from truncation here.
+    const OUTPUT_LINES = 500
+    const out = renderOutput(runResult.stdout, OUTPUT_LINES)
+    const err = renderOutput(runResult.stderr, OUTPUT_LINES)
 
     console.log()
-    if (output) {
+    if (out.lines.length) {
       console.log(bold("─── output ───"))
-      console.log(output)
+      console.log(out.lines.join("\n"))
+      if (out.notice) console.log(dim(`  (${out.notice})`))
     }
-    if (stderr) {
+    if (err.lines.length) {
       console.log(bold("─── stderr ───"))
-      console.log(stderr)
+      console.log(err.lines.join("\n"))
+      if (err.notice) console.log(dim(`  (${err.notice})`))
     }
     if (final.error) {
       console.log(bold("─── error ───"))
       console.log(final.error)
     }
     console.log()
-    const ok = final.status === "succeeded" || final.status === "completed"
-    const tag = ok ? success("✓") : dim("✗")
+
+    // Never a green check over an unknown exit code. "exit=?" beside a ✓ reads as success,
+    // and that is how a transport returning nothing at all (#181633, #182004) went on
+    // looking healthy for two days.
+    const tag = verdict === "completed" ? success("✓") : dim("✗")
+    const exitLabel =
+      typeof runResult.exit_code !== "number"
+        ? dim("unknown — the node reported none")
+        : runResult.exit_code_source === "error_text"
+          ? `${runResult.exit_code} ${dim("(inferred from the node's error text, not reported — #182004)")}`
+          : String(runResult.exit_code)
     console.log(
-      `  ${tag} ${final.status}  ${dim("exit=")}${exitCode ?? "?"}  ${dim("duration=")}${final.duration_ms ?? "?"}ms`,
+      `  ${tag} ${verdict}  ${dim("exit=")}${exitLabel}  ${dim("duration=")}${final.duration_ms ?? "?"}ms`,
     )
 
-    if (!ok) process.exit(1)
+    // Exit with the command's own code, so `iris hive run <node> "..." && next` means what
+    // it says. A timeout is 124 (distinct, so CI can retry only those) per the contract.
+    if (exitCode !== 0) process.exit(exitCode)
   },
 })
 

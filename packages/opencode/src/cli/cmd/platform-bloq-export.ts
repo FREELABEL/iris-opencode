@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
+import { normalizeFileList } from "./platform-atlas-files"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { resolveBloqId } from "./platform-bloqs"
 import fs from "fs"
@@ -104,15 +105,28 @@ async function exportOneBloq(
 
   progress?.("Fetching attachments…")
   let files: any[] = []
+  // Whether the LISTING succeeded, which is a different fact from how many files there are.
+  // Before 2026-08-23 these were conflated and the manifest could not tell them apart —
+  // see attachments_listing_ok below.
+  let listingOk = false
+  let listingError: string | null = null
   try {
     const filesRes = await irisFetch(`/api/v1/user/${userId}/bloqs/files?bloq_id=${bloqId}`)
     if (filesRes.ok) {
-      const filesData = (await filesRes.json()) as { data?: any[] }
-      files = filesData?.data ?? []
+      listingOk = true
+      // The payload is `data: { items, pagination, filters }` on THIS endpoint and
+      // `data: [...]` on /bloqs/{id}/files. Reading `data` as an array yielded the OBJECT,
+      // whose `.length` is undefined, so `files.length > 0` was false and NOT ONE attachment
+      // was ever exported — from a bloq that had sixteen. It then reported
+      // `attachments_downloaded: 0, attachments_failed: 0`, which is exactly what a bloq with
+      // no attachments reports. That mistake cost a wrong, confidently-stated conclusion that
+      // an irreplaceable artefact was unbacked.
+      files = normalizeFileList(await filesRes.json())
+    } else {
+      listingError = `HTTP ${filesRes.status}`
     }
-  } catch {
-    // Non-fatal: an export missing attachments still beats no export. The
-    // manifest records what we got, so the gap is visible rather than silent.
+  } catch (e: any) {
+    listingError = String(e?.message ?? e).slice(0, 160)
   }
 
   const slug = slugify(bloq?.name ?? "", `bloq-${bloqId}`)
@@ -175,6 +189,13 @@ async function exportOneBloq(
       items: itemCount,
       markdown_files: markdownWritten,
       attachments_listed: files.length,
+      // Whether we could ASK. Without this, "0 downloaded, 0 failed" is produced identically
+      // by a bloq with no attachments and by a listing call that failed — and a reader cannot
+      // tell which they are looking at. (`attachments_listed` already existed, but before the
+      // shape fix above it was `undefined`, which JSON.stringify DROPS — so the manifest was
+      // missing a key rather than reporting a zero, and nobody noticed the difference.)
+      attachments_listing_ok: listingOk,
+      ...(listingError ? { attachments_listing_error: listingError } : {}),
       attachments_downloaded: filesDownloaded,
       attachments_failed: filesFailed,
       attachment_bytes: bytesDownloaded,
