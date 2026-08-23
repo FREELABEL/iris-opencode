@@ -174,24 +174,62 @@ jobs:
     continue-on-error: true
     timeout-minutes: 45
     steps:
+      # CROSS_REPO_PAT expired on 2026-08-20 (a 90-day token minted 2026-05-22) and every
+      # release from v1.3.192 onward built no desktop app — ELEVEN of them — because this
+      # job is continue-on-error, so its red X neither gated anything nor said anything.
+      # "Bad credentials" from the checkout step is indistinguishable at a glance from any
+      # other cross-repo failure, so the job became a permanently-red light nobody reads:
+      # it could no longer tell "Electron broke" from "the token died".
+      #
+      # Check the credential FIRST and say so in the run summary. When the token is dead
+      # the remaining steps skip cleanly rather than cascading, so a red build-desktop
+      # once again means a genuine desktop-build failure.
+      - name: Preflight — is CROSS_REPO_PAT alive?
+        id: pat
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${{ secrets.CROSS_REPO_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/FREELABEL/fl-elon-web-ui)
+          if [ "$code" = "200" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "CROSS_REPO_PAT is valid (HTTP $code)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Desktop build skipped::CROSS_REPO_PAT cannot read FREELABEL/fl-elon-web-ui (HTTP $code) — rotate it, then: gh secret set CROSS_REPO_PAT --repo FREELABEL/iris-opencode"
+            {
+              echo "### Desktop build SKIPPED"
+              echo ""
+              echo "\`CROSS_REPO_PAT\` cannot read \`FREELABEL/fl-elon-web-ui\` (HTTP $code) — expired or revoked."
+              echo "The CLI binaries are unaffected; only the Electron desktop app was not built."
+              echo ""
+              echo "Fix: mint a PAT with \`repo\` scope, then"
+              echo "\`gh secret set CROSS_REPO_PAT --repo FREELABEL/iris-opencode\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Checkout elon-web-ui
+        if: steps.pat.outputs.ok == 'true'
         uses: actions/checkout@v4
         with:
           repository: FREELABEL/fl-elon-web-ui
           token: ${{ secrets.CROSS_REPO_PAT }}
 
       - name: Setup Node.js
+        if: steps.pat.outputs.ok == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install frontend dependencies
+        if: steps.pat.outputs.ok == 'true'
         run: npm ci --engine-strict=false
         env:
           npm_config_engine_strict: false
 
       - name: Generate static Nuxt build
+        if: steps.pat.outputs.ok == 'true'
         run: NUXT_TELEMETRY_DISABLED=1 npx nuxt generate
         env:
           # Raise V8 heap — the full elon static generate (pdfjs-dist etc.) blows
@@ -203,20 +241,25 @@ jobs:
           NUXT_TARGET: static
 
       - name: Copy web assets to Electron
+        if: steps.pat.outputs.ok == 'true'
         run: npx cap copy @capacitor-community/electron
 
       - name: Install Electron dependencies
+        if: steps.pat.outputs.ok == 'true'
         run: cd electron && npm ci
 
       - name: Build Electron TypeScript
+        if: steps.pat.outputs.ok == 'true'
         run: cd electron && npm run build
 
       - name: Package desktop app
+        if: steps.pat.outputs.ok == 'true'
         run: cd electron && npm run electron:pack
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create release archive
+        if: steps.pat.outputs.ok == 'true'
         run: |
           cd electron/dist
           if [ -d "mac-arm64" ]; then
@@ -227,6 +270,7 @@ jobs:
           ls -la ../*.zip 2>/dev/null || echo "No zip created"
 
       - name: Upload desktop artifact
+        if: steps.pat.outputs.ok == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: IRIS-app-darwin-${{ matrix.arch }}
