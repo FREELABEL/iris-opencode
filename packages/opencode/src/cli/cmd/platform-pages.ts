@@ -898,45 +898,41 @@ const PushCmd = cmd({
       // a page demoted to `unlisted` 404s on its /p/{slug} address — indistinguishable
       // from deleted.
       if (local.visibility) updateData.visibility = local.visibility
-      // Re-assert the OTP gate for the same reason, and more urgently: dropping
-      // `visibility` makes a page hard to find, dropping `requires_auth` makes a
-      // private page PUBLIC. (#180009)
+      // ACCESS CONTROL DOES NOT TRAVEL IN A CONTENT FILE. (#181984)
       //
-      // `!== undefined` rather than a truthy check so an explicit `false` is still sent.
-      // Note it may not be HONOURED: fl-api PageController::update forces requires_auth
-      // back on whenever json_content.requireOtp is true, and that block runs after the
-      // explicit assignment — so turning a gate off needs requireOtp cleared in the same
-      // push. Measured on page 406. Failing safe (gate stuck ON) is the right direction,
-      // so this is left as-is here and tracked against fl-api.
+      // push used to re-assert `requires_auth` from the local JSON, on the reasoning that
+      // dropping a field lets it drift (#180009). That reasoning was wrong for this field:
+      // fl-api's PageController::update assigns the column only inside
+      // `if ($request->has('requires_auth'))`, so NOT sending it leaves the gate exactly as
+      // it was. Verified against production on a gated probe page — pushed content with the
+      // key removed from the file, and the column read back `true`.
       //
-      // STALE-FILE GUARD (#181940). Re-asserting from local is right when the local file is
-      // current and WRONG when it is not: `pages set <slug> requires_auth true` writes the
-      // COLUMN, a local file pulled before that change still says false, and the next push
-      // silently reverts the gate. That happened — an internal page was left publicly
-      // readable, and every instrument reported success. `pages set` said "Updated", push
-      // said "Pushed", and only `pages check-public` disagreed.
+      // Re-asserting was therefore pure downside, and it collected: a pull wrote
+      // `requires_auth: false` for a page that was provably gated, push wrote that false
+      // back, and an internal document was served publicly for about thirty seconds. Every
+      // step reported success, because every step was telling the truth about itself.
       //
-      // So a push may TIGHTEN a gate freely and may not LOOSEN one from a file that does not
-      // know the gate exists. Fails closed, in the one direction where being wrong is a leak.
+      // The stale-file guard added for the previous instance (#181940) could not catch it.
+      // It compared the local value against `getBySlug()` — the SAME endpoint the pull had
+      // just read — so when that read was wrong both sides agreed and the guard went blind
+      // precisely when it was needed. A check whose two inputs share a failure mode is not a
+      // check.
+      //
+      // So: never send it. A gate is changed with `pages set`, `pages ungate` or the create
+      // path, all of which are explicit about what they are doing. A content push has no
+      // business carrying the flag that decides who may read the content.
       const liveGate = Boolean((page as any)?.requires_auth)
-      const localGate = local.requires_auth === undefined ? liveGate : Boolean(local.requires_auth)
-      if (liveGate && !localGate && !args.force) {
-        sp.stop("Refused", 1)
-        prompts.log.error(
-          `This page is GATED live, and ${slug}.json would remove the gate.\n\n` +
-            `  live:  requires_auth = true\n` +
-            `  local: requires_auth = ${JSON.stringify(local.requires_auth)}\n\n` +
-            `Your local copy was almost certainly pulled before the gate was set, so pushing it\n` +
-            `would make a private page public without saying so.\n\n` +
-            `  Refresh and retry:   ${highlight(`iris pages pull ${slug}`)}\n` +
-            `  Or open it on purpose: ${highlight(`iris pages push ${slug} --force`)}\n` +
-            `  Then always confirm:  ${highlight(`iris pages check-public ${slug}`)}`,
+      if (local.requires_auth !== undefined && Boolean(local.requires_auth) !== liveGate) {
+        // Say so rather than syncing either way. The file is now informational for this
+        // field, and a reader who believes otherwise is the person this note is for.
+        prompts.log.warn(
+          `${slug}.json says requires_auth = ${JSON.stringify(local.requires_auth)}, live is ${liveGate}. ` +
+            `Not sent — push never changes the gate.\n` +
+            `  Change it deliberately:  ${highlight(`iris pages set ${slug} requires_auth <true|false>`)}` +
+            `  ${dim("or")} ${highlight(`iris pages ungate ${slug}`)}\n` +
+            `  Confirm what a stranger sees: ${highlight(`iris pages check-public ${slug}`)}`,
         )
-        process.exitCode = 1
-        prompts.outro("Done")
-        return
       }
-      if (local.requires_auth !== undefined) updateData.requires_auth = local.requires_auth
       // Never send status during push — use publish/unpublish commands instead.
       // Sending status=published here caused the page to briefly publish with OLD content
       // before createVersion saved the new json_content, poisoning the iris-api cache.
