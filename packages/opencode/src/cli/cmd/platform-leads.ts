@@ -10593,8 +10593,22 @@ const LeadsStatsCommand = cmd({
     printKV("Pending", String(summary.pending_count ?? 0))
     printKV("Completion Rate", `${summary.completion_rate ?? 0}%`)
     printKV("Avg/Day", String(summary.avg_per_day ?? 0))
-    printKV("Pipeline Value", `$${Number(summary.pipeline_value ?? 0).toLocaleString()}`)
-    printKV("Pipeline Leads", String(summary.pipeline_lead_count ?? 0))
+    // Two different questions, previously answered by one confusingly-named number.
+    // "Outreach pipeline" counts only leads worked THIS PERIOD, so a live deal with a
+    // real amount reads as $0 unless someone logged a step. "Board pipeline" is what
+    // is actually in play. (#182075 RO-2)
+    printKV("Outreach pipeline", `$${Number(summary.pipeline_value ?? 0).toLocaleString()} (${summary.pipeline_lead_count ?? 0} worked this period)`)
+    printKV("Board pipeline", `$${Number(summary.board_pipeline_value ?? 0).toLocaleString()} (${summary.board_pipeline_leads ?? 0} of ${summary.board_open_leads ?? 0} open leads priced)`)
+    
+    // The capture gap, stated rather than hidden. An open lead with no amount is worth
+    // UNKNOWN, not zero — a board reading as fully valued when most of it was never
+    // priced is the failure this line exists to prevent.
+    const missingAmt = Number(summary.board_missing_amount ?? 0)
+    if (Number(summary.board_open_leads ?? 0) > 0) {
+      printKV("Amount coverage", missingAmt > 0
+        ? `${summary.board_amount_coverage ?? 0}% — ${missingAmt} open lead(s) carry NO amount`
+        : `${summary.board_amount_coverage ?? 0}% — every open lead priced`)
+    }
     printKV("Outreached Leads", String(summary.outreached_lead_count ?? 0))
     if (summary.percent_change !== undefined) {
       const arrow = summary.trend === "up" ? "↑" : summary.trend === "down" ? "↓" : "→"
