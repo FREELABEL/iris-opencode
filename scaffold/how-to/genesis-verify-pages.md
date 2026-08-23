@@ -73,6 +73,24 @@ iris how-to view genesis-design-standard
 Note screenshots of a backgrounded window can show black bands mid-paint — those are
 capture artifacts, not layout bugs. Measure the DOM before believing one.
 
+## Gated pages
+
+A `requires_auth` page served to an unauthenticated fetch returns **HTTP 200 with a fully
+rendered OTP gate**. Every ordinary success signal is present, and the text is the gate's:
+
+    Welcome to IRIS / Instant access — no code, no password / Email address / Continue
+
+So `--min-words 400` fails with "52 words" — which reads as an *empty page*, not as one you
+were never let into. Both commands now refuse it and point you at the right question:
+
+```bash
+iris pages check-public <slug>     # can a stranger actually read this?
+iris pages read <slug> --allow-gated   # inspect the GATE itself (not the page)
+```
+
+`verify` answers "does it say what I meant". `check-public` answers "who can read it".
+Different questions — use both.
+
 ## Drafts
 
 `/p/` serves PUBLISHED pages only. Both commands refuse the not-found page and exit 1

@@ -3407,6 +3407,7 @@ export interface RenderedPage {
   status: number
   title: string
   lane: PageLane
+  gated: boolean
   text: string
   headings: string[]
   words: number
@@ -3421,6 +3422,41 @@ export interface RenderedPage {
  */
 export function detectLane(rawHtml: string): PageLane {
   return /\sdata-page\s*=/.test(rawHtml) ? "composable" : "bespoke"
+}
+
+/**
+ * Is this the OTP gate rather than the page?
+ *
+ * An unauthenticated fetch of a `requires_auth` page returns HTTP 200 with a fully
+ * rendered gate, so every signal these commands rely on reads as a normal success:
+ * status 200, a title, real text. Measured on /p/iris-harness-gap-analysis — `read`
+ * returned "Welcome to IRIS / Instant access — no code, no password / Email address /
+ * Continue" as if that were the document, and `--min-words 400` would have failed with
+ * "52 words", which reads as an EMPTY page rather than one you were never let into.
+ *
+ * That is the exact defect these commands exist to remove — a check that cannot tell
+ * "broken" from "not measured" — so the gate has to be a refusal, not a low word count.
+ *
+ * The authoritative signal is the Inertia payload: `props.gateRequired`. The copy-based
+ * fallback covers a gate rendered outside that payload; it is deliberately narrow (an
+ * email input alone is not a gate — plenty of real pages have one).
+ */
+export function detectGated(rawHtml: string): boolean {
+  const m = rawHtml.match(/\sdata-page\s*=\s*"([^"]*)"/)
+  if (m) {
+    try {
+      const decoded = m[1]
+        .replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&apos;/g, "'")
+        .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&")
+      const props = (JSON.parse(decoded) as any)?.props ?? {}
+      if (props.gateRequired === true) return true
+      // An authenticated read is NOT gated even when the page carries a gate.
+      if (props.gateRequired === false) return false
+    } catch {
+      // fall through to the copy heuristic
+    }
+  }
+  return /Instant access\s*—\s*no code, no password/i.test(rawHtml)
 }
 
 /**
@@ -3452,7 +3488,7 @@ export function normalizeForMatch(input: string, opts?: { caseSensitive?: boolea
  * Shared by `read` and `verify` so the two can never disagree about what the page says —
  * `verify` is exactly `read` plus assertions plus an exit code.
  */
-async function renderPage(slug: string, opts: { width: number; timeout: number }): Promise<RenderedPage> {
+async function renderPage(slug: string, opts: { width: number; timeout: number; allowGated?: boolean }): Promise<RenderedPage> {
   const { chromium } = await import("playwright" as string)
   const url = publicUrl(slug)
   const browser = await chromium.launch()
@@ -3492,12 +3528,24 @@ async function renderPage(slug: string, opts: { width: number; timeout: number }
       return { text: body ? body.innerText : "", headings: heads }
     })
 
+    // Refuse the gate for the same reason we refuse the 404: returning its text as the
+    // page's would make every downstream assertion answer a question nobody asked.
+    if (detectGated(rawHtml) && !opts.allowGated) {
+      throw new Error(
+        `${url} served the OTP GATE, not the page — you are not authenticated.\n` +
+          `  Anything read here is the gate's own text, not the document.\n` +
+          `  Check who can actually read it:  iris pages check-public ${slug}\n` +
+          `  To inspect the gate itself:      add --allow-gated`,
+      )
+    }
+
     const text = String(extracted.text ?? "")
     return {
       url,
       status,
       title,
       lane: detectLane(rawHtml),
+      gated: detectGated(rawHtml),
       text,
       headings: extracted.headings ?? [],
       words: text.split(/\s+/).filter(Boolean).length,
@@ -3525,12 +3573,13 @@ const ReadCmd = cmd({
       .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
       .option("json", { describe: "emit a JSON envelope (url, lane, title, headings, words, text)", type: "boolean", default: false })
       .option("headings", { describe: "print only h1/h2/h3", type: "boolean", default: false })
+      .option("allow-gated", { describe: "read the OTP gate itself instead of refusing (the text will NOT be the page)", type: "boolean", default: false })
       .option("width", { describe: "viewport width", type: "number", default: 1440 })
       .option("timeout", { describe: "navigation timeout (ms)", type: "number", default: 30000 }),
   async handler(args) {
     const { slug } = normalizeSlugArg(args.slug)
     try {
-      const r = await renderPage(slug, { width: Number(args.width), timeout: Number(args.timeout) })
+      const r = await renderPage(slug, { width: Number(args.width), timeout: Number(args.timeout), allowGated: !!args["allow-gated"] })
 
       if (args.json) {
         writeJson(r)
@@ -3542,7 +3591,7 @@ const ReadCmd = cmd({
       // written to remove — you would filter away the one line saying the read was bad and
       // see a clean empty result. stderr survives the pipe.
       process.stderr.write(
-        `${dim(`  ${r.url}  ·  lane: ${r.lane}  ·  HTTP ${r.status}  ·  ${r.words} words`)}\n` +
+        `${dim(`  ${r.url}  ·  lane: ${r.lane}${r.gated ? "  ·  GATED (this is the gate, not the page)" : ""}  ·  HTTP ${r.status}  ·  ${r.words} words`)}\n` +
           `${dim(`  title: ${r.title}`)}\n`,
       )
       process.stdout.write((args.headings ? r.headings.join("\n") : r.text) + "\n")
@@ -3565,6 +3614,7 @@ const VerifyCmd = cmd({
       .option("min-words", { describe: "fail if the rendered page has fewer words than this", type: "number" })
       .option("lane", { describe: "assert which renderer served the page", type: "string", choices: ["composable", "bespoke"] })
       .option("case-sensitive", { describe: "match case exactly (default folds case — CSS uppercase makes exact matching a false-negative machine)", type: "boolean", default: false })
+      .option("allow-gated", { describe: "assert against the OTP gate itself instead of refusing", type: "boolean", default: false })
       .option("width", { describe: "viewport width", type: "number", default: 1440 })
       .option("timeout", { describe: "navigation timeout (ms)", type: "number", default: 30000 })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
@@ -3578,7 +3628,7 @@ const VerifyCmd = cmd({
     sp?.start("Rendering…")
 
     try {
-      const r = await renderPage(slug, { width: Number(args.width), timeout: Number(args.timeout) })
+      const r = await renderPage(slug, { width: Number(args.width), timeout: Number(args.timeout), allowGated: !!args["allow-gated"] })
       const caseSensitive = !!args["case-sensitive"]
       const hay = normalizeForMatch(r.text, { caseSensitive })
 
@@ -3602,7 +3652,7 @@ const VerifyCmd = cmd({
       const failed = checks.filter((c) => !c.pass)
 
       if (args.json) {
-        writeJson({ slug, url: r.url, lane: r.lane, status: r.status, title: r.title, words: r.words, checks, ok: failed.length === 0 })
+        writeJson({ slug, url: r.url, lane: r.lane, gated: r.gated, status: r.status, title: r.title, words: r.words, checks, ok: failed.length === 0 })
         if (failed.length) process.exitCode = 1
         return
       }
@@ -3610,6 +3660,7 @@ const VerifyCmd = cmd({
       sp?.stop(failed.length === 0 ? success("Rendered") : "Rendered")
       printKV("URL", r.url)
       printKV("Lane", r.lane)
+      if (r.gated) printKV("Gated", "YES — asserting against the GATE, not the page")
       printKV("Title", r.title)
       printKV("Words", String(r.words))
 
