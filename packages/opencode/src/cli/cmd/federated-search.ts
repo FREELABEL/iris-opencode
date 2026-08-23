@@ -17,13 +17,25 @@ import { irisFetch, IRIS_API, BRIDGE_URL, getBridgeToken, resolveUserId } from "
  * epic has been about.
  */
 
-export type SourceName = "bloq" | "obsidian" | "drive"
+export type SourceName = "bloq" | "obsidian" | "drive" | "imessage" | "gmail"
+
+/**
+ * The canonical list, in one place.
+ *
+ * It used to be spelled out as a literal in three separate filters, and when
+ * comms was added the type compiled while every one of those filters silently
+ * dropped the new name — an unrecognised --source falling back to the default is
+ * exactly the failure the comment below it warns about.
+ */
+export const SOURCE_NAMES: readonly SourceName[] = ["bloq", "obsidian", "drive", "imessage", "gmail"]
 
 export interface FederatedResult {
   source: SourceName
   title: string
-  /** Where it lives — a bloq list, a vault folder, a Drive path. */
+  /** Where it lives — a bloq list, a vault folder, a Drive path, a contact. */
   location?: string
+  /** ISO date of the artefact, where the source knows one. */
+  when?: string
   /** Enough context to judge relevance without opening it. */
   snippet?: string
   /** Whatever the source needs to fetch the full thing later. */
@@ -60,20 +72,20 @@ export function defaultSources(): SourceName[] {
   const cfg = readJson<{ search?: { sources?: string[] } }>(CONFIG_PATH)
   const configured = cfg?.search?.sources
   if (Array.isArray(configured) && configured.length) {
-    return configured.filter((s): s is SourceName => ["bloq", "obsidian", "drive"].includes(s))
+    return configured.filter((s): s is SourceName => SOURCE_NAMES.includes(s as SourceName))
   }
   return ["bloq"]
 }
 
 /** Resolve --source/--include-all into a concrete, de-duplicated list. */
 export function resolveSources(opts: { source?: string | string[]; includeAll?: boolean }): SourceName[] {
-  if (opts.includeAll) return ["bloq", "obsidian", "drive"]
+  if (opts.includeAll) return [...SOURCE_NAMES]
   if (opts.source) {
     const raw = Array.isArray(opts.source) ? opts.source : [opts.source]
     const picked = raw
       .flatMap((s) => String(s).split(","))
       .map((s) => s.trim().toLowerCase())
-      .filter((s): s is SourceName => ["bloq", "obsidian", "drive"].includes(s))
+      .filter((s): s is SourceName => SOURCE_NAMES.includes(s as SourceName))
     // An unrecognised --source must not silently fall back to the default.
     if (picked.length) return [...new Set(picked)]
   }
@@ -168,6 +180,46 @@ async function searchDrive(query: string, userId: number, limit: number): Promis
   }))
 }
 
+
+// ── comms (iMessage + Gmail) ──────────────────────────────────────────────────
+/**
+ * `iris search` advertised "search everything you have written" and covered bloq
+ * items, Obsidian and Drive. Not messages. Not mail. Searching it for something a
+ * person had texted you returned nothing, with no indication that an entire class
+ * of source had never been consulted — which is how a PDF sitting in
+ * ~/Library/Messages/Attachments read as a document that never arrived (#181967).
+ *
+ * Both searchers DELEGATE to the pulse sweep rather than querying the stores
+ * again. Reimplementing message reading per feature is what made the sweep blind
+ * to attributedBody and to attachments in the first place (#181990); a third
+ * implementation here would be the same mistake with the lesson still warm.
+ */
+async function searchImessage(query: string, limit: number): Promise<FederatedResult[]> {
+  const { sweepImessage } = await import("./pulse-check-sweep")
+  // A year, because search is a lookup rather than a momentum question — the
+  // sweep's 30-day framing is wrong for "where have I seen this".
+  const r = sweepImessage({ keyword: query, repo: process.cwd(), windowDays: 365, limit, sources: ["imessage"] })
+  if (!r.searched) throw new Error(r.unavailableReason ?? "iMessage unreadable")
+  return r.items.map((i) => ({
+    source: "imessage" as const,
+    title: i.text ? String(i.text).slice(0, 120) : "(attachment)",
+    location: i.where,
+    when: i.when,
+  }))
+}
+
+async function searchGmailSource(query: string, limit: number): Promise<FederatedResult[]> {
+  const { sweepGmail } = await import("./pulse-check-sweep")
+  const r = await sweepGmail({ keyword: query, repo: process.cwd(), windowDays: 365, limit, sources: ["gmail"] })
+  if (!r.searched) throw new Error(r.unavailableReason ?? "Gmail unavailable")
+  return r.items.map((i) => ({
+    source: "gmail" as const,
+    title: String(i.where ?? "(no subject)"),
+    snippet: i.text,
+    when: i.when,
+  }))
+}
+
 /**
  * Run the query across the chosen sources.
  *
@@ -209,6 +261,14 @@ export async function federatedSearch(
     opts.sources.includes("drive")
       ? run("drive", () => searchDrive(query, opts.userId!, limit), opts.userId == null ? "not signed in" : undefined)
       : Promise.resolve(),
+    opts.sources.includes("imessage")
+      ? run(
+          "imessage",
+          () => searchImessage(query, limit),
+          process.platform !== "darwin" ? "iMessage is only readable on macOS" : undefined,
+        )
+      : Promise.resolve(),
+    opts.sources.includes("gmail") ? run("gmail", () => searchGmailSource(query, limit)) : Promise.resolve(),
   ])
 
   return { results, outcomes }

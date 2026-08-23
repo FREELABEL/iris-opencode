@@ -45,6 +45,7 @@ const SOURCE_LABEL: Record<TopicSource, string> = {
   opencode: "opencode",
   imessage: "iMessage",
   email: "Apple Mail",
+  gmail: "Gmail",
   bloq: "Atlas",
 }
 

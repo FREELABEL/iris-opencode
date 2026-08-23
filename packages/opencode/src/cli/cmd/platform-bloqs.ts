@@ -2206,9 +2206,9 @@ export const BloqsSearchCommand = cmd({
       // this CLI runs yargs in strict mode and strict rejects the negated form outright
       // ("Unknown arguments: no-include-all"). Documenting a flag that errors would be its own
       // small version of the bug this ticket is about.
-      .option("include-all", { describe: "also search Obsidian and Drive (on by default)", type: "boolean", default: true })
-      .option("local-only", { describe: "skip Obsidian and Drive — search bloqs only (faster)", type: "boolean", default: false })
-      .option("source", { describe: "sources to search: bloq, obsidian, drive (comma-separated)", type: "string" })
+      .option("include-all", { describe: "also search Obsidian, Drive, iMessage and Gmail (on by default)", type: "boolean", default: true })
+      .option("local-only", { describe: "skip everything but bloqs (faster)", type: "boolean", default: false })
+      .option("source", { describe: "sources to search: bloq, obsidian, drive, imessage, gmail (comma-separated)", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
@@ -2326,10 +2326,12 @@ export const BloqsSearchCommand = cmd({
 
     if (fanOut) {
       printDivider()
-      console.log(`  ${bold("Obsidian & Drive")} ${dim(`(${external.length})`)}`)
-      if (!external.length) console.log(`  ${dim(`No external matches for "${query}"`)}`)
+      console.log(`  ${bold("Other sources")} ${dim(`(${external.length})`)}`)
+      if (!external.length) console.log(`  ${dim(`No matches for "${query}" outside your boards`)}`)
       for (const r of external.slice(0, limit)) {
-        console.log(`  ${dim(`[${r.source}]`)} ${bold(String(r.title ?? "(untitled)"))}`)
+        const when = r.when ? dim(` ${String(r.when).slice(0, 10)}`) : ""
+        console.log(`  ${dim(`[${r.source}]`)}${when} ${bold(String(r.title ?? "(untitled)"))}`)
+        if (r.location) console.log(`      ${dim(String(r.location).slice(0, 110))}`)
         if (r.snippet) console.log(`      ${dim(String(r.snippet).replace(/\s+/g, " ").slice(0, 110))}`)
       }
       // Per-source health, always — a skipped or failed source is information.
@@ -2978,7 +2980,7 @@ const BloqsItemsCommand = cmd({
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
       .option("list", { alias: "l", describe: "filter by list ID (scans across pages; warns if it stops early)", type: "number" })
       .option("search", { alias: "s", describe: "search items by keyword — pair with --fields content to read one item's body", type: "string" })
-      .option("source", { describe: "also search these sources: obsidian, drive (repeatable)", type: "string", array: true })
+      .option("source", { describe: "also search these sources: obsidian, drive, imessage, gmail (repeatable)", type: "string", array: true })
       .option("include-all", { describe: "search every available source", type: "boolean", default: false })
       .option("status", { describe: "filter by status", type: "string" })
       .option("limit", { describe: "items per page (max 200)", type: "number", default: 50 })
