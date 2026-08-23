@@ -1395,8 +1395,11 @@ const LeadsUpdateCommand = cmd({
     if (args.website) payload.website = args.website
     if (args.source) payload.source = args.source
     if (args.stage) payload.stage = args.stage
-    if (args.bid) payload.price_bid = args.bid
-    if (args.mrr) payload.mrr_amount = args.mrr
+    // `!== undefined`, not truthiness: 0 is a legitimate value and the ONLY way to clear
+    // an amount. A truthy guard silently discarded `--bid 0`, so an amount entered by
+    // mistake could be set but never unset — and the command reported success either way.
+    if (args.bid !== undefined) payload.price_bid = args.bid
+    if (args.mrr !== undefined) payload.mrr_amount = args.mrr
     if (args["revenue-type"]) payload.revenue_type = args["revenue-type"]
     if (args["payment-method"]) payload.payment_method = args["payment-method"]
     // #57668: --chat-id appends to contact_info.chat_ids (fetches existing to avoid overwrite)
