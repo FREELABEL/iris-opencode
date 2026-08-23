@@ -3780,15 +3780,29 @@ export function parseHtmlDocument(src: string): ParsedHtmlDoc {
   }
 }
 
-/** Build the json_content for either bespoke lane. */
+/**
+ * Build the json_content for either bespoke lane.
+ *
+ * `requiresAuth` must drive `json_content.requireOtp` here, not just the `requires_auth`
+ * record column the caller sets separately. The gate is genuinely two flags (#182059):
+ * `requires_auth` decides whether the page is LOCKED at all; `requireOtp` decides which
+ * modal the visitor sees once it is — a real emailed 6-digit code, or the frictionless
+ * "instant access, no code, no password" capture form. This function used to hardcode
+ * `requireOtp: false` on the standalone lane (and omit it entirely on the custom lane,
+ * which is the same false), so `publish-html --requires-auth` locked the page but always
+ * handed visitors the frictionless form — which for a page nobody had pre-registered on
+ * simply looped, because the "instant access" path has no code to submit at all. Measured
+ * live on /p/mediguide-boundary: the owner could not get past the email step.
+ */
 export function buildBespokeJsonContent(
   doc: ParsedHtmlDoc,
   lane: "standalone" | "custom",
-  opts?: { themeMode?: string; backgroundColor?: string; brandName?: string },
+  opts?: { themeMode?: string; backgroundColor?: string; brandName?: string; requiresAuth?: boolean },
 ): Record<string, any> {
+  const requireOtp = !!opts?.requiresAuth
   if (lane === "standalone") {
     // render_mode:html -> public-html.blade.php serves the document with a minimal reset.
-    return { version: "2.0", type: "article", render_mode: "html", html: doc.body, css: doc.css, requireOtp: false }
+    return { version: "2.0", type: "article", render_mode: "html", html: doc.body, css: doc.css, requireOtp }
   }
   // CustomHtml lane: one v-html block inside the normal composable shell. The CSS has to
   // ride along inside the fragment because props.html is a single field.
@@ -3801,6 +3815,7 @@ export function buildBespokeJsonContent(
       backgroundColor: opts?.backgroundColor ?? "#ffffff",
       branding: { name: opts?.brandName ?? "IRIS", description: doc.description ?? "" },
     },
+    requireOtp,
     components: [{ type: "CustomHtml", id: "doc", props: { html: fragment } }],
   }
 }
@@ -3865,7 +3880,10 @@ const PublishHtmlCmd = cmd({
     // semantic document is legitimate.
     if (!doc.css.trim()) prompts.log.warn("No <style> found — the page will publish unstyled.")
 
-    const jsonContent = buildBespokeJsonContent(doc, lane, { themeMode: String(args["theme-mode"]) })
+    const jsonContent = buildBespokeJsonContent(doc, lane, {
+      themeMode: String(args["theme-mode"]),
+      requiresAuth: !!args["requires-auth"],
+    })
 
     prompts.log.info(dim(`from ${filePath}`))
     printKV("Lane", lane === "standalone" ? "standalone (render_mode:html)" : "custom (CustomHtml component)")

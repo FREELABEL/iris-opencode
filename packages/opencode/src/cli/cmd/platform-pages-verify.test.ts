@@ -105,6 +105,21 @@ describe("buildBespokeJsonContent", () => {
     const bare = parseHtmlDocument(`<p>hi</p>`)
     expect(buildBespokeJsonContent(bare, "custom").components[0].props.html).toBe("<p>hi</p>")
   })
+
+  // #182059 — `publish-html --requires-auth` locked the page (requires_auth column) but
+  // always handed visitors the frictionless "instant access, no code, no password" modal
+  // instead of a real emailed code, because this function hardcoded (standalone) or omitted
+  // (custom) requireOtp regardless of what the caller asked for. Verified live on
+  // /p/mediguide-boundary: the page owner could not get past the email step.
+  test("requiresAuth:true sets requireOtp:true on both lanes", () => {
+    expect(buildBespokeJsonContent(doc, "standalone", { requiresAuth: true }).requireOtp).toBe(true)
+    expect(buildBespokeJsonContent(doc, "custom", { requiresAuth: true }).requireOtp).toBe(true)
+  })
+
+  test("requireOtp defaults to false when requiresAuth is not passed", () => {
+    expect(buildBespokeJsonContent(doc, "standalone").requireOtp).toBe(false)
+    expect(buildBespokeJsonContent(doc, "custom").requireOtp).toBe(false)
+  })
 })
 
 /**
