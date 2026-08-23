@@ -1,5 +1,5 @@
-const CLI_INSTALL_DIR: &str = ".opencode/bin";
-const CLI_BINARY_NAME: &str = "opencode";
+const CLI_INSTALL_DIR: &str = ".iris/bin";
+const CLI_BINARY_NAME: &str = "iris";
 
 fn get_cli_install_path() -> Option<std::path::PathBuf> {
     std::env::var("HOME").ok().map(|home| {
@@ -14,7 +14,7 @@ pub fn get_sidecar_path() -> std::path::PathBuf {
         .expect("Failed to get current exe")
         .parent()
         .expect("Failed to get parent dir")
-        .join("opencode-cli")
+        .join("iris-cli")
 }
 
 fn is_cli_installed() -> bool {
@@ -36,7 +36,7 @@ pub fn install_cli() -> Result<String, String> {
         return Err("Sidecar binary not found".to_string());
     }
 
-    let temp_script = std::env::temp_dir().join("opencode-install.sh");
+    let temp_script = std::env::temp_dir().join("iris-install.sh");
     std::fs::write(&temp_script, INSTALL_SCRIPT)
         .map_err(|e| format!("Failed to write install script: {}", e))?;
 
