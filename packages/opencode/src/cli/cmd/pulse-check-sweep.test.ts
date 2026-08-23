@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { keywordVariants, keywordPattern, topicSlug, toObservations, resolveRepoRoot, gitRepos, sweepImessage, sweepDiary, sweepFiles, decodeAttributedBody, type SourceSweep } from "./pulse-check-sweep"
+import { keywordVariants, keywordPattern, topicSlug, toObservations, resolveRepoRoot, gitRepos, sweepImessage, sweepDiary, sweepFiles, decodeAttributedBody, parseMailResponse, type SourceSweep } from "./pulse-check-sweep"
 import { execFileSync } from "child_process"
 import { mkdtempSync, rmSync } from "fs"
 import { join } from "path"
@@ -445,5 +445,38 @@ describe("PC-07 — collectors agree across spellings", () => {
     // token form must not LOSE the hits the punctuated spelling used to find.
     const a = sweepDiary({ ...base, keyword: "MAYO — Life Atlas" })
     expect(a.hits).toBeGreaterThan(0)
+  })
+})
+
+describe("parseMailResponse — a moved response key must not read as zero mail", () => {
+  test("reads the envelope-index shape (emails / date_sent)", () => {
+    const rows = parseMailResponse({
+      emails: [{ subject: "Your IRIS access code", sender: "alex@freelabel.net", sender_name: "FREELABEL", date_sent: "2026-08-23T16:27:25.000Z" }],
+      count: 1,
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows![0].where).toBe("FREELABEL · Your IRIS access code")
+    expect(rows![0].when).toBe("2026-08-23T16:27:25.000Z")
+  })
+
+  test("still reads the older AppleScript shape (messages / date)", () => {
+    const rows = parseMailResponse({ messages: [{ subject: "hi", sender: "a@b.c", date: "2026-08-01T00:00:00.000Z" }] })
+    expect(rows).toHaveLength(1)
+    expect(rows![0].where).toBe("a@b.c · hi")
+  })
+
+  test("an UNRECOGNISED shape returns null, never an empty array", () => {
+    // The live regression: `emails` replaced `messages`, the collector read
+    // `messages ?? []`, and pulse check reported "none" while a direct call to
+    // the same endpoint returned real mail. Zero is a claim about the mailbox;
+    // this is a claim about the parser, and they must not look alike.
+    expect(parseMailResponse({ items: [{ subject: "x" }] })).toBeNull()
+    expect(parseMailResponse({})).toBeNull()
+    expect(parseMailResponse(null)).toBeNull()
+    expect(parseMailResponse("nope")).toBeNull()
+  })
+
+  test("a genuinely empty mailbox is still an empty array, not null", () => {
+    expect(parseMailResponse({ emails: [], count: 0 })).toEqual([])
   })
 })

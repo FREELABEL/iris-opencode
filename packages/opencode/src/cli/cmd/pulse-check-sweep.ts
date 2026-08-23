@@ -813,6 +813,39 @@ ORDER BY m.date DESC LIMIT 4000;`
  * reason rather than returning an empty result that would read as "this topic
  * never came up over email".
  */
+/**
+ * Mail responses, across the shapes the bridge has actually returned.
+ *
+ * THE BUG THIS EXISTS FOR, found live on 2026-08-23: the endpoint was rewritten
+ * to read Mail's Envelope Index and its response key changed `messages` ->
+ * `emails`, with `date` -> `date_sent`. The collector still read `messages`, got
+ * undefined, defaulted to [] and reported **none** — while a direct call to the
+ * same endpoint returned real mail. A silent zero: "ran and found nothing" when
+ * what actually happened was "could not read the answer".
+ *
+ * That is the precise failure this whole sweep is built to refuse, so an
+ * UNRECOGNISED shape returns null and the caller reports the source unavailable
+ * with a reason. Nothing here may ever return an empty array for a body it did
+ * not understand.
+ */
+export function parseMailResponse(body: any): Array<{ when?: string; where: string }> | null {
+  if (!body || typeof body !== "object") return null
+
+  const rows = Array.isArray(body.emails) ? body.emails
+    : Array.isArray(body.messages) ? body.messages
+    : null
+  if (rows === null) return null
+
+  return rows.map((m: any) => {
+    const raw = m?.date_sent ?? m?.date ?? null
+    const parsed = raw ? new Date(raw) : null
+    return {
+      when: parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : undefined,
+      where: `${m?.sender_name || m?.sender || "unknown"} · ${m?.subject ?? "(no subject)"}`.slice(0, 110),
+    }
+  })
+}
+
 export async function sweepEmail(opts: SweepOptions): Promise<SourceSweep> {
   const bridge = (opts.bridgeUrl ?? "http://127.0.0.1:3200").replace(/\/$/, "")
   const headers: Record<string, string> = { Accept: "application/json" }
@@ -886,17 +919,22 @@ export async function sweepEmail(opts: SweepOptions): Promise<SourceSweep> {
       return unavailable("email", `Apple Mail search returned ${res.status}: ${body.slice(0, 140)}`)
     }
 
-    const body = (await res.json().catch(() => ({}))) as any
-    for (const msg of (body?.messages ?? []) as any[]) {
-      const where = `${msg?.sender ?? "unknown"} · ${msg?.subject ?? "(no subject)"}`.slice(0, 110)
+    const body = (await res.json().catch(() => null)) as any
+    const rows = parseMailResponse(body)
+    if (rows === null) {
+      return unavailable(
+        "email",
+        `Apple Mail returned a shape this collector does not understand (keys: ${
+          body && typeof body === "object" ? Object.keys(body).join(", ") : typeof body
+        }) — reporting unreadable rather than zero`,
+      )
+    }
+
+    for (const row of rows) {
       matched.add(variant)
-      if (seen.has(where)) continue
-      seen.add(where)
-      const parsed = msg?.date ? new Date(msg.date) : null
-      items.push({
-        when: parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : undefined,
-        where,
-      })
+      if (seen.has(row.where)) continue
+      seen.add(row.where)
+      items.push(row)
     }
   }
 
