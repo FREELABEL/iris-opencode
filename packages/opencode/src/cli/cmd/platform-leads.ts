@@ -297,7 +297,13 @@ const LeadsListCommand = cmd({
 
       // Default: hide Prospected leads (mass-scraped venue/SOM leads)
       // Use --all or --status to see everything
-      const totalFromApi = data?.meta?.total ?? leads.length
+      // The endpoint is a Laravel paginator: the real population is `total` at the TOP
+      // level and `meta.total` does not exist. Reading meta first meant this silently fell
+      // back to the PAGE SIZE, so the command could only ever report "N of N" and
+      // truncation was undetectable by construction (#182078). Measured while fixing it:
+      // per_page=5 returns total 28522, against the 56 rows every published funnel KPI
+      // had been computed from.
+      const totalFromApi = data?.total ?? data?.meta?.total ?? leads.length
       let prospectedCount = 0
       if (!args.all && !args.status && !args.search) {
         prospectedCount = leads.filter((l: any) => (l.status ?? "").toLowerCase() === "prospected").length
@@ -327,16 +333,37 @@ const LeadsListCommand = cmd({
 
       // Trim to requested limit
       leads = leads.slice(0, args.limit)
-      if (!args.all && !args.status && !args.search) {
-        const suffix = prospectedCount > 0 ? dim(` (${prospectedCount} Prospected hidden — use --all to include)`) : ""
-        spinner.stop(`${leads.length} lead(s)${suffix}`)
-      } else if (args.search && totalFromApi > leads.length) {
+      // #182078 — SAY WHEN THE ANSWER IS PARTIAL.
+      //
+      // This command hides Prospected by default, caps by recency, and reported only the
+      // page size. Each behaviour is defensible alone; together, with no total, they
+      // produce a confident partial answer indistinguishable from a complete one. It was
+      // used as a measurement instrument and the funnel KPIs computed from it were wrong
+      // in the FLATTERING direction — a truncated sample of WORKED leads looks like a
+      // healthy funnel precisely because the unworked ones are what is missing.
+      const truncated = totalFromApi > leads.length
+      const notes: string[] = []
+      if (prospectedCount > 0) notes.push(`${prospectedCount} Prospected hidden — use --all`)
+      if (truncated) notes.push(`newest ${leads.length} of ${totalFromApi}`)
+      const suffix = notes.length ? dim(` (${notes.join(" · ")})`) : ""
+
+      if (args.search && truncated) {
         spinner.stop(`Showing ${leads.length} of ${totalFromApi} results for "${args.search}"`)
       } else {
-        spinner.stop(`${leads.length} lead(s)`)
+        spinner.stop(`${leads.length} lead(s)${suffix}`)
       }
 
       if (args.json) {
+        // The array shape is preserved because callers parse it, so the caveat goes to
+        // STDERR — it reaches a human or an agent without corrupting piped stdout. A
+        // silent truncation in JSON is the exact failure this fix exists for.
+        if (truncated || prospectedCount > 0) {
+          const warn: string[] = []
+          if (truncated) warn.push(`TRUNCATED: newest ${leads.length} of ${totalFromApi} by id`)
+          if (prospectedCount > 0) warn.push(`FILTERED: ${prospectedCount} Prospected hidden (pass --all)`)
+          warn.push("This is a page, not a population — do not compute rates from it.")
+          process.stderr.write(warn.map((w) => `[leads list] ${w}`).join("\n") + "\n")
+        }
         await writeJson(leads)
         return
       }
@@ -718,7 +745,7 @@ const LeadsSearchCommand = cmd({
         return
       }
 
-      const data = (await res.json()) as { data?: any[]; meta?: { total?: number } }
+      const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
       let leads: any[] = data?.data ?? []
 
       // Fallback: if multi-word query returned 0, try searching by last name only
@@ -750,7 +777,7 @@ const LeadsSearchCommand = cmd({
         }
       }
 
-      const total = data?.meta?.total ?? leads.length
+      const total = data?.total ?? data?.meta?.total ?? leads.length
       spinner.stop(`${total} result(s)`)
 
       if (args.json) {
