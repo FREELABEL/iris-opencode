@@ -1406,6 +1406,17 @@ const PublishCommand = cmd({
     console.log(`  ${bold("Scope")}       ${pb.scope ?? args.scope}`)
     if (pb.bloq_id) console.log(`  ${bold("Bloq")}        #${pb.bloq_id}`)
     console.log(`  ${bold("Access")}      ${pb.access_type ?? args.access}`)
+    // The address, or why there is not one. /playbooks/{name} has worked all along; nothing ever
+    // returned it, so publish reported success and left the caller to guess — or to conclude that
+    // playbooks had no web surface at all.
+    if (pb.public_url) {
+      console.log(`  ${bold("URL")}         ${highlight(String(pb.public_url))}`)
+    } else {
+      console.log(
+        `  ${bold("URL")}         ${dim("none — only a public playbook gets one")}` +
+          dim(`  (re-run with --scope public)`),
+      )
+    }
     if (data?.marketplace) {
       console.log(`  ${bold("Marketplace")} ${highlight(String(data.marketplace.slug))} ${dim(`(${data.marketplace.status})`)}`)
     }

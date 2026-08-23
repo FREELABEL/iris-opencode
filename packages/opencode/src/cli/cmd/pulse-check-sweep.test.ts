@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { keywordVariants, topicSlug, toObservations, resolveRepoRoot, gitRepos, sweepImessage, decodeAttributedBody, type SourceSweep } from "./pulse-check-sweep"
+import { keywordVariants, keywordPattern, topicSlug, toObservations, resolveRepoRoot, gitRepos, sweepImessage, sweepDiary, sweepFiles, decodeAttributedBody, type SourceSweep } from "./pulse-check-sweep"
 import { execFileSync } from "child_process"
 import { mkdtempSync, rmSync } from "fs"
 import { join } from "path"
@@ -23,6 +23,22 @@ describe("keywordVariants", () => {
 
   test("a single word has exactly one form", () => {
     expect(keywordVariants("  Pulse  ")).toEqual(["pulse"])
+  })
+
+  test("punctuation in the subject does not change what gets searched", () => {
+    // REGRESSION. Splitting on spaces made the variant set depend on how the
+    // subject was punctuated: "MAYO — Life Atlas" produced `mayo-—-life-atlas`,
+    // an em-dash wedged between hyphens that matches nothing, and never produced
+    // the plain `mayo-life-atlas` the repo contains. The two spellings returned
+    // different local results for the same board — one subject, two confident
+    // answers, which is the bug this whole tool exists to refuse.
+    const punctuated = keywordVariants("MAYO — Life Atlas")
+    const plain = keywordVariants("mayo life atlas")
+
+    for (const v of plain) expect(punctuated).toContain(v)
+    expect(punctuated).toContain("mayo-life-atlas")
+    expect(punctuated.some((v) => v.includes("—"))).toBe(true) // the raw phrase is kept
+    expect(punctuated.filter((v) => v.includes("—")).length).toBe(1) // but only once
   })
 })
 
@@ -331,5 +347,103 @@ describe("decodeAttributedBody", () => {
 
   test("an undecodable blob yields empty rather than garbage", () => {
     expect(decodeAttributedBody("\x00\x01\x02\x03")).toBe("")
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PC-07 — one subject must produce one answer, however it is spelled.
+//
+// Written before the implementation. The existing variant list matches N LITERAL
+// strings, so it can only find the separators someone thought to enumerate:
+// `pulse check "MAYO — Life Atlas"` found 6 diary / 13 files and
+// `pulse check "mayo life atlas"` found 4 / 8 — the same board, two confident
+// answers. Matching the token SEQUENCE with any separator collapses that.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("keywordPattern", () => {
+  // Spellings that carry a SEPARATOR. The concatenated form is deliberately not
+  // here: "MAYOLIFEATLAS" cannot be split back into three words without a
+  // dictionary, so expecting it to compile to the same pattern was a wrong
+  // assumption in the test, not a gap in the code. It still has to MATCH.
+  const SEPARATED = [
+    "MAYO — Life Atlas",
+    "mayo life atlas",
+    "Mayo-Life-Atlas",
+    "mayo_life_atlas",
+    "  mayo / life / atlas  ",
+  ]
+  const SPELLINGS = [...SEPARATED, "MAYOLIFEATLAS"]
+
+  test("every separated spelling of one subject compiles to the SAME pattern", () => {
+    const patterns = new Set(SEPARATED.map((s) => keywordPattern(s)))
+    expect([...patterns]).toHaveLength(1)
+  })
+
+  test("that one pattern matches every spelling, concatenation included", () => {
+    const re = new RegExp(keywordPattern("mayo life atlas")!, "i")
+    for (const spelling of SPELLINGS) expect(re.test(spelling)).toBe(true)
+    // and the forms that actually occur in prose
+    expect(re.test("the MAYO — Life Atlas bloq #544")).toBe(true)
+    expect(re.test("see mayo/life/atlas")).toBe(true)
+  })
+
+  test("a separator run cannot span a paragraph break", () => {
+    // `[^a-z0-9]*` would let "…mayo." at the end of one paragraph join "Life
+    // Atlas" at the start of the next and call it a hit. Real separators are at
+    // most a few characters; the bound is what keeps the match local.
+    const re = new RegExp(keywordPattern("mayo life atlas")!, "i")
+    expect(re.test("mayo — life atlas")).toBe(true)
+    expect(re.test("...mayo.\n\n## Life Atlas is elsewhere")).toBe(false)
+  })
+
+  test("regex metacharacters in the subject cannot break or inject", () => {
+    // The pattern is built from alphanumeric TOKENS, so metacharacters are
+    // separators by construction and never reach the regex engine as syntax.
+    for (const nasty of ["a.b*c", "C++", "x)|(y", "[a-z]", "$(whoami)"]) {
+      expect(() => new RegExp(keywordPattern(nasty)!)).not.toThrow()
+    }
+    expect(new RegExp(keywordPattern("a.b")!, "i").test("a-b")).toBe(true)
+    expect(new RegExp(keywordPattern("a.b")!, "i").test("axb")).toBe(false)
+  })
+
+  test("a subject with no alphanumerics is refused rather than matching everything", () => {
+    // "" or "***" would compile to an empty pattern that matches every line.
+    expect(keywordPattern("***")).toBeNull()
+    expect(keywordPattern("   ")).toBeNull()
+  })
+})
+
+describe("PC-07 — collectors agree across spellings", () => {
+  const repo = resolveRepoRoot(import.meta.dir)!
+  const base = { repo, windowDays: 3650, limit: 500, sources: [] as any }
+
+  test("sweepDiary returns the SAME hits for a punctuated and a plain spelling", () => {
+    const a = sweepDiary({ ...base, keyword: "MAYO — Life Atlas" })
+    const b = sweepDiary({ ...base, keyword: "mayo life atlas" })
+
+    expect(a.searched && b.searched).toBe(true)
+    // Set equality, not containment. Containment is what the variant list
+    // earned; equality is the actual requirement.
+    expect(new Set(a.items.map((i) => i.where))).toEqual(new Set(b.items.map((i) => i.where)))
+    expect(a.hits).toBe(b.hits)
+  })
+
+  // 30s: this greps every tracked file in every repo under the root, twice. It passes
+  // alone and exceeded the 5s default inside the full suite — a timeout here reads as a
+  // logic failure, which is the most expensive kind of false alarm.
+  test("sweepFiles returns the SAME hits for a punctuated and a plain spelling", () => {
+    const a = sweepFiles({ ...base, keyword: "MAYO — Life Atlas" })
+    const b = sweepFiles({ ...base, keyword: "mayo life atlas" })
+
+    expect(a.searched && b.searched).toBe(true)
+    expect(new Set(a.items.map((i) => i.where))).toEqual(new Set(b.items.map((i) => i.where)))
+    expect(a.hits).toBe(b.hits)
+  }, 30000)
+
+  test("the punctuated spelling still finds the em-dashed occurrences", () => {
+    // The regression guard in the other direction: collapsing to a canonical
+    // token form must not LOSE the hits the punctuated spelling used to find.
+    const a = sweepDiary({ ...base, keyword: "MAYO — Life Atlas" })
+    expect(a.hits).toBeGreaterThan(0)
   })
 })

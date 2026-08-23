@@ -27,7 +27,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "fs"
 import { join, basename, relative, dirname } from "path"
 import { homedir } from "os"
 
-export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "imessage", "email", "bloq"] as const
+export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "imessage", "email", "gmail", "bloq"] as const
 export type TopicSource = typeof TOPIC_SOURCES[number]
 
 /**
@@ -108,14 +108,81 @@ export interface SweepOptions {
  */
 export function keywordVariants(keyword: string): string[] {
   const base = keyword.trim().toLowerCase().replace(/\s+/g, " ")
-  const words = base.split(" ").filter(Boolean)
+
+  // Tokenise on NON-ALPHANUMERICS, not on spaces. Splitting on spaces made the
+  // variant set depend on how the subject happened to be punctuated: a board
+  // called "MAYO — Life Atlas" produced `mayo-—-life-atlas` and `mayo—lifeatlas`
+  // — an em-dash wedged between hyphens, matching nothing — while never
+  // producing the plain `mayo-life-atlas` that the repo actually contains.
+  //
+  // Measured: `pulse check "MAYO — Life Atlas"` and `pulse check "mayo life
+  // atlas"` returned DIFFERENT local results for the same subject (git 1/diary
+  // 3/files 11 vs git 0/diary 4/files 8), neither a superset of the other. Same
+  // failure shape as the cwd bug — one subject, two spellings, two confident
+  // answers.
+  const words = base.split(/[^a-z0-9]+/).filter(Boolean)
+
+  // The raw phrase stays first so an exactly-punctuated match still works; the
+  // token-derived forms are what make the two spellings converge.
   const out = new Set<string>([base])
   if (words.length > 1) {
+    out.add(words.join(" "))
     out.add(words.join("-"))
     out.add(words.join("_"))
     out.add(words.join(""))
+  } else if (words.length === 1) {
+    out.add(words[0])
   }
   return [...out]
+}
+
+/**
+ * The token SEQUENCE, matched with any separator — one pattern per subject.
+ *
+ * The variant list can only find separators someone thought to enumerate, so the
+ * answer depended on how you happened to type the subject:
+ *
+ *     pulse check "MAYO — Life Atlas"   →  git 1 · diary 6 · files 13
+ *     pulse check "mayo life atlas"     →  git 0 · diary 4 · files  8
+ *
+ * Same board. Two confident answers. Matching `mayo`, then up to a few
+ * non-alphanumerics, then `life`, then `atlas` collapses every spelling onto one
+ * question.
+ *
+ * THREE DELIBERATE DETAILS:
+ *
+ *  · The pattern is built from ALPHANUMERIC TOKENS, so regex metacharacters in
+ *    the subject are separators by construction and never reach the engine as
+ *    syntax. `$(whoami)` and `[a-z]` are inert without an escaping pass.
+ *
+ *  · `\n` is excluded from the separator class so a match cannot span a
+ *    paragraph break — "…mayo." ending one line and "Life Atlas" starting the
+ *    next is not an occurrence. (In POSIX ERE `[^a-z0-9\n]` additionally
+ *    excludes a backslash, which is harmless: `n` is already covered by `a-z`.)
+ *
+ *  · The bound is 8, not 3, because grep counts BYTES under a C locale and an
+ *    em-dash is three of them — " — " is five bytes. A tighter bound would have
+ *    silently stopped matching the exact punctuation this fix exists for.
+ *
+ * Returns null when the subject has no alphanumerics at all: an empty pattern
+ * matches every line, which is the loudest possible way to be wrong.
+ */
+export function keywordPattern(keyword: string): string | null {
+  const tokens = keyword.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  if (tokens.length === 0) return null
+
+  return tokens.join("[^a-z0-9\\n]{0,8}")
+}
+
+/** The subject reduced to its tokens — one label for every spelling of it. */
+export function canonicalKeyword(keyword: string): string {
+  return keyword.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join(" ")
+}
+
+/** The pattern as a JS regex, applied one LINE at a time exactly as grep does. */
+function keywordRegex(keyword: string): RegExp | null {
+  const pattern = keywordPattern(keyword)
+  return pattern === null ? null : new RegExp(pattern, "i")
 }
 
 function matchesAny(haystack: string, variants: string[]): string[] {
@@ -261,8 +328,10 @@ export function sweepGit(opts: SweepOptions): SourceSweep {
   const repos = root ? gitRepos(root) : []
   if (repos.length === 0) return unavailable("git", `${opts.repo} is not inside a git repository`)
 
-  const variants = keywordVariants(opts.keyword)
-  const matched = new Set<string>()
+  const pattern = keywordPattern(opts.keyword)
+  if (pattern === null) return unavailable("git", `"${opts.keyword}" has no searchable characters`)
+
+  const matched = new Set<string>([canonicalKeyword(opts.keyword)])
   const items: Hit[] = []
   const seen = new Set<string>()
   let prior = 0
@@ -275,29 +344,27 @@ export function sweepGit(opts: SweepOptions): SourceSweep {
     // Deduped per repo: one commit matching three variants is one commit.
     const priorSeen = new Set<string>()
 
-    for (const variant of variants) {
-      // --all so work parked on an unmerged branch still counts; -i because
-      // commit style is not consistent enough to make case meaningful.
-      const current = run("git", [
-        "-C", repo, "log", "--all", "-i", `--grep=${variant}`,
-        `--since=${since}`, `--format=%h${SEP}%aI${SEP}%s`, "--max-count=200",
-      ])
+    // --all so work parked on an unmerged branch still counts; -i because commit
+    // style is not consistent enough to make case meaningful; -E because the
+    // pattern uses a bounded interval, which basic regex would need escaped.
+    const current = run("git", [
+      "-C", repo, "log", "--all", "-i", "-E", `--grep=${pattern}`,
+      `--since=${since}`, `--format=%h${SEP}%aI${SEP}%s`, "--max-count=200",
+    ])
 
-      for (const line of current.split("\n").filter(Boolean)) {
-        const [sha, date, subject] = line.split(SEP)
-        const where = `${name}@${sha}`
-        matched.add(variant)
-        if (seen.has(where)) continue
-        seen.add(where)
-        items.push({ when: date, where, text: subject })
-      }
-
-      const before = run("git", [
-        "-C", repo, "log", "--all", "-i", `--grep=${variant}`,
-        `--since=${priorSince}`, `--until=${since}`, "--format=%h", "--max-count=200",
-      ])
-      for (const sha of before.split("\n").filter(Boolean)) priorSeen.add(sha)
+    for (const line of current.split("\n").filter(Boolean)) {
+      const [sha, date, subject] = line.split(SEP)
+      const where = `${name}@${sha}`
+      if (seen.has(where)) continue
+      seen.add(where)
+      items.push({ when: date, where, text: subject })
     }
+
+    const before = run("git", [
+      "-C", repo, "log", "--all", "-i", "-E", `--grep=${pattern}`,
+      `--since=${priorSince}`, `--until=${since}`, "--format=%h", "--max-count=200",
+    ])
+    for (const sha of before.split("\n").filter(Boolean)) priorSeen.add(sha)
 
     prior += priorSeen.size
   }
@@ -318,8 +385,10 @@ export function sweepDiary(opts: SweepOptions): SourceSweep {
   const dir = join(root, "daily-diary")
   if (!existsSync(dir)) return unavailable("diary", `no daily-diary directory in ${root}`)
 
-  const variants = keywordVariants(opts.keyword)
-  const matched = new Set<string>()
+  const re = keywordRegex(opts.keyword)
+  if (re === null) return unavailable("diary", `"${opts.keyword}" has no searchable characters`)
+
+  const matched = new Set<string>([canonicalKeyword(opts.keyword)])
   const items: Hit[] = []
   let prior = 0
 
@@ -334,8 +403,11 @@ export function sweepDiary(opts: SweepOptions): SourceSweep {
       continue
     }
 
-    const hitVariants = matchesAny(body + " " + file, variants)
-    if (hitVariants.length === 0) continue
+    // LINE BY LINE, exactly as grep does it. Testing the whole file at once
+    // would let a match span a paragraph break, and would also disagree with
+    // every other collector — which is the failure this change exists to end.
+    const line = firstMentionLine(body, re) ?? (re.test(file) ? file : null)
+    if (line === null) continue
 
     const dated = file.match(/(\d{4}-\d{2}-\d{2})/)
     const when = dated ? new Date(`${dated[1]}T12:00:00Z`).toISOString() : undefined
@@ -347,8 +419,7 @@ export function sweepDiary(opts: SweepOptions): SourceSweep {
     }
 
     if (at >= cutoff) {
-      hitVariants.forEach((v) => matched.add(v))
-      items.push({ when, where: `daily-diary/${file}`, text: firstMentionLine(body, hitVariants) })
+      items.push({ when, where: `daily-diary/${file}`, text: line === file ? undefined : line })
     } else if (at >= priorCutoff) {
       prior++
     }
@@ -359,10 +430,9 @@ export function sweepDiary(opts: SweepOptions): SourceSweep {
 }
 
 /** The line the keyword actually appears on — context beats a leading excerpt. */
-function firstMentionLine(body: string, variants: string[]): string | undefined {
+function firstMentionLine(body: string, re: RegExp): string | undefined {
   for (const line of body.split("\n")) {
-    const lower = line.toLowerCase()
-    if (variants.some((v) => lower.includes(v))) {
+    if (re.test(line)) {
       return line.trim().replace(/\s+/g, " ").slice(0, 160)
     }
   }
@@ -383,26 +453,25 @@ export function sweepFiles(opts: SweepOptions): SourceSweep {
   const repos = root ? gitRepos(root) : []
   if (repos.length === 0) return unavailable("files", `${opts.repo} is not inside a git repository`)
 
-  const variants = keywordVariants(opts.keyword)
-  const matched = new Set<string>()
+  const pattern = keywordPattern(opts.keyword)
+  if (pattern === null) return unavailable("files", `"${opts.keyword}" has no searchable characters`)
+
+  const matched = new Set<string>([canonicalKeyword(opts.keyword)])
   const items: Hit[] = []
   const seen = new Set<string>()
 
   for (const repo of repos) {
     const prefix = repo === root ? "" : relative(root!, repo) + "/"
-    for (const variant of variants) {
-      const out = run("git", ["-C", repo, "grep", "-il", "--", variant], undefined, 30000)
-      for (const rel of out.split("\n").filter(Boolean)) {
-        const where = prefix + rel
-        matched.add(variant)
-        if (seen.has(where)) continue
-        seen.add(where)
-        let when: string | undefined
-        try {
-          when = new Date(statSync(join(repo, rel)).mtime).toISOString()
-        } catch {}
-        items.push({ when, where })
-      }
+    const out = run("git", ["-C", repo, "grep", "-E", "-il", "--", pattern], undefined, 30000)
+    for (const rel of out.split("\n").filter(Boolean)) {
+      const where = prefix + rel
+      if (seen.has(where)) continue
+      seen.add(where)
+      let when: string | undefined
+      try {
+        when = new Date(statSync(join(repo, rel)).mtime).toISOString()
+      } catch {}
+      items.push({ when, where })
     }
   }
 
@@ -436,28 +505,27 @@ export function sweepOpencode(opts: SweepOptions): SourceSweep {
   const partDir = join(storage, "part")
   if (!existsSync(partDir)) return unavailable("opencode", "no opencode storage on this machine")
 
-  const variants = keywordVariants(opts.keyword)
-  const matched = new Set<string>()
+  const pattern = keywordPattern(opts.keyword)
+  if (pattern === null) return unavailable("opencode", `"${opts.keyword}" has no searchable characters`)
+
+  const matched = new Set<string>([canonicalKeyword(opts.keyword)])
   const cutoff = Date.now() - opts.windowDays * 864e5
   const priorCutoff = Date.now() - opts.windowDays * 2 * 864e5
 
   const sessions = new Map<string, number>()
-  for (const variant of variants) {
-    const out = run("grep", ["-ril", "--include=*.json", variant, partDir], undefined, 60000)
-    for (const file of out.split("\n").filter(Boolean)) {
-      let sessionId: string | undefined
-      let at: number
-      try {
-        sessionId = JSON.parse(readFileSync(file, "utf8"))?.sessionID
-        at = statSync(file).mtimeMs
-      } catch {
-        continue
-      }
-      if (!sessionId) continue
-      matched.add(variant)
-      const existing = sessions.get(sessionId)
-      if (existing === undefined || at > existing) sessions.set(sessionId, at)
+  const out = run("grep", ["-rEil", "--include=*.json", pattern, partDir], undefined, 60000)
+  for (const file of out.split("\n").filter(Boolean)) {
+    let sessionId: string | undefined
+    let at: number
+    try {
+      sessionId = JSON.parse(readFileSync(file, "utf8"))?.sessionID
+      at = statSync(file).mtimeMs
+    } catch {
+      continue
     }
+    if (!sessionId) continue
+    const existing = sessions.get(sessionId)
+    if (existing === undefined || at > existing) sessions.set(sessionId, at)
   }
 
   const index = opencodeSessionIndex(join(storage, "session"))
@@ -505,20 +573,19 @@ function opencodeSessionIndex(sessionRoot: string): Map<string, { title?: string
 
 /** Shared body for flat per-session transcript stores. */
 function sweepSessionFiles(source: TopicSource, root: string, ext: string, opts: SweepOptions): SourceSweep {
-  const variants = keywordVariants(opts.keyword)
-  const matched = new Set<string>()
+  const pattern = keywordPattern(opts.keyword)
+  if (pattern === null) return unavailable(source, `"${opts.keyword}" has no searchable characters`)
+
+  const matched = new Set<string>([canonicalKeyword(opts.keyword)])
   const cutoff = Date.now() - opts.windowDays * 864e5
   const priorCutoff = Date.now() - opts.windowDays * 2 * 864e5
 
   const seen = new Map<string, number>()
-  for (const variant of variants) {
-    const out = run("grep", ["-ril", `--include=*${ext}`, variant, root], undefined, 60000)
-    for (const file of out.split("\n").filter(Boolean)) {
-      matched.add(variant)
-      try {
-        seen.set(file, statSync(file).mtimeMs)
-      } catch {}
-    }
+  const out = run("grep", ["-rEil", `--include=*${ext}`, pattern, root], undefined, 60000)
+  for (const file of out.split("\n").filter(Boolean)) {
+    try {
+      seen.set(file, statSync(file).mtimeMs)
+    } catch {}
   }
 
   const items: Hit[] = []
@@ -770,16 +837,37 @@ export async function sweepEmail(opts: SweepOptions): Promise<SourceSweep> {
     return unavailable("email", `IRIS bridge not reachable at ${bridge} — Apple Mail search runs through it`)
   }
 
-  for (const variant of variants) {
-    let res: Response
+  /**
+   * Mail.app is driven over AppleScript, and a COLD Mail fails the first script
+   * it is handed — osascript returns "Command failed" and the bridge surfaces a
+   * 500. Retrying the identical query a moment later succeeds; measured today,
+   * every variant that 500'd inside a sweep returned 200 when run again by hand.
+   *
+   * Without the retry a transient cold start writes off the whole source for the
+   * run, which under rule 1 is honest but useless — "not searched" for a reason
+   * that would have cleared in two seconds. One retry, and only for the failure
+   * shape that is actually transient.
+   */
+  const fetchVariant = async (variant: string, attempt = 0): Promise<Response | string> => {
     try {
-      res = await fetch(
+      const res = await fetch(
         `${bridge}/api/mail/search?subject=${encodeURIComponent(variant)}&days=${days}&limit=25`,
         { headers, signal: AbortSignal.timeout(45000) },
       )
+      if (res.status === 500 && attempt === 0) {
+        await new Promise((r) => setTimeout(r, 2000))
+        return fetchVariant(variant, 1)
+      }
+      return res
     } catch (e: any) {
-      return unavailable("email", `Apple Mail search failed: ${String(e?.message ?? e).slice(0, 140)}`)
+      return `Apple Mail search failed: ${String(e?.message ?? e).slice(0, 140)}`
     }
+  }
+
+  for (const variant of variants) {
+    const attempted = await fetchVariant(variant)
+    if (typeof attempted === "string") return unavailable("email", attempted)
+    const res: Response = attempted
 
     if (res.status === 401 || res.status === 403) {
       return unavailable(
@@ -981,6 +1069,79 @@ async function sweepBoard(opts: SweepOptions, board: any, cutoff: number, priorC
   return sweep
 }
 
+
+/**
+ * Gmail, through the platform's connected account.
+ *
+ * The `email` source above is APPLE MAIL over AppleScript, and it matches
+ * SUBJECTS ONLY. `atlas:comms` ingests from the GMAIL API. Those are two
+ * different stores answering to two different readers, and nothing reconciled
+ * them: a mail that never landed in Apple Mail was invisible to a topic sweep
+ * however well its subject matched, and a mail with NO subject was invisible
+ * even when it had landed. Both were reported as `searched: true, hits: 0`.
+ *
+ * Gmail's own query language searches subject, body AND attachment filenames in
+ * one pass, which is the whole of what the Apple Mail path cannot do. It also
+ * takes both ends of a window, so this source reports a REAL prior count instead
+ * of omitting it the way the Apple Mail path must.
+ */
+export async function sweepGmail(opts: SweepOptions): Promise<SourceSweep> {
+  let gmail: any
+  try {
+    gmail = await import("../lib/gmail")
+  } catch (e: any) {
+    return unavailable("gmail", `Gmail library unavailable: ${String(e?.message ?? e).slice(0, 100)}`)
+  }
+
+  let token: string | null = null
+  try {
+    token = await gmail.getToken()
+  } catch (e: any) {
+    return unavailable("gmail", `Gmail auth check failed: ${String(e?.message ?? e).slice(0, 100)}`)
+  }
+  // "Not connected" and "connected and quiet" are opposite findings and need
+  // opposite responses, so the reason travels rather than a zero.
+  if (!token) return unavailable("gmail", gmail.lastError?.() ?? "no Gmail account connected")
+
+  const variants = keywordVariants(opts.keyword)
+  // Quoted so a multi-word topic stays a phrase; Gmail would otherwise AND the
+  // words and match mail where they merely co-occur.
+  const phrase = variants.map((v) => `"${v.replace(/"/g, "")}"`).join(" OR ")
+  const days = Math.max(1, opts.windowDays)
+
+  const search = async (window: string): Promise<any[] | null> => {
+    try {
+      return (await gmail.searchMessages(token, `(${phrase}) ${window}`, 50)) ?? []
+    } catch {
+      return null
+    }
+  }
+
+  const current = await search(`newer_than:${days}d`)
+  if (current === null) return unavailable("gmail", "Gmail search failed — the connected account may have expired")
+
+  // A failed PRIOR query must not become a zero prior: that reads as explosive
+  // growth, which is the most flattering possible lie (rule 2).
+  const previous = await search(`older_than:${days}d newer_than:${days * 2}d`)
+
+  const matched = new Set<string>()
+  const items: Hit[] = current.map((m: any) => {
+    const from = String(m?.from ?? "unknown")
+    const subject = String(m?.subject ?? "").trim() || "(no subject)"
+    const snippet = String(m?.snippet ?? "").trim()
+    matchesAny([subject, snippet, from, String(m?.body_text ?? "")].join(" "), variants).forEach((v) => matched.add(v))
+    const parsed = m?.date ? new Date(m.date) : null
+    return {
+      when: parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : undefined,
+      where: `${from} · ${subject}`.slice(0, 110),
+      text: snippet || undefined,
+    }
+  })
+
+  items.sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""))
+  return finish("gmail", items, previous === null ? undefined : previous.length, matched, opts.limit)
+}
+
 // ── orchestration ───────────────────────────────────────────────────────────
 
 export async function sweepAll(opts: SweepOptions, onStart?: (s: TopicSource) => void): Promise<SourceSweep[]> {
@@ -1008,6 +1169,11 @@ export async function sweepAll(opts: SweepOptions, onStart?: (s: TopicSource) =>
   if (wanted.has("email")) {
     onStart?.("email")
     out.push(await sweepEmail(opts))
+  }
+
+  if (wanted.has("gmail")) {
+    onStart?.("gmail")
+    out.push(await sweepGmail(opts))
   }
 
   if (wanted.has("bloq")) {
