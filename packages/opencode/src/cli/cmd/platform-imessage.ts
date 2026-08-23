@@ -911,6 +911,8 @@ const ImessageMentionsCommand = cmd({
       .option("days", { type: "number", default: 30, describe: "look back N days" })
       .option("sender", { type: "string", describe: "filter by sender phone or name" })
       .option("lead", { type: "number", describe: "filter by lead ID" })
+      .option("node", { type: "string", describe: "filter by node name or id substring (cross-machine mode only)" })
+      .option("local", { type: "boolean", default: false, describe: "read only THIS machine's local log — skips the cross-machine Atlas dataset (#182119)" })
       .option("limit", { type: "number", default: 50, describe: "max mentions" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -918,51 +920,79 @@ const ImessageMentionsCommand = cmd({
     // already and this default handler is skipped. Reaching here = bare `mentions`.
     if (!args.json) { UI.empty(); prompts.intro("◈  @heyiris Mentions") }
 
-    const mentionsDir = `${require("os").homedir()}/.iris/mentions`
-    const { existsSync, readdirSync, readFileSync } = require("fs")
-
-    if (!existsSync(mentionsDir)) {
-      prompts.log.error(`Mentions directory not found: ${mentionsDir}`)
-      prompts.outro("Done")
-      return
-    }
-
-    // Read all JSONL files within date range
     const cutoff = new Date(Date.now() - (args.days as number) * 86400 * 1000)
-    const files = readdirSync(mentionsDir)
-      .filter((f: string) => f.endsWith(".jsonl"))
-      .sort()
-      .filter((f: string) => {
-        const dateStr = f.replace(".jsonl", "")
-        return new Date(dateStr) >= cutoff
-      })
-
-    if (!files.length) {
-      prompts.log.info(`No mention logs in the last ${args.days} days`)
-      prompts.outro("Done")
-      return
-    }
-
-    // Parse all mentions
     let mentions: any[] = []
-    for (const file of files) {
-      const lines = readFileSync(`${mentionsDir}/${file}`, "utf-8").split("\n").filter(Boolean)
-      for (const line of lines) {
-        try {
-          mentions.push(JSON.parse(line))
-        } catch {}
+    let source: "atlas" | "local" = args.local ? "local" : "atlas"
+
+    // Cross-machine (default): the Atlas 'mentions' dataset (#182118/#182119) — every
+    // node that has ever seen an @heyiris mention pushes here, so this reads history
+    // regardless of which machine captured it, including a node that's asleep right
+    // now. Falls back to the local file automatically if the dataset can't be reached
+    // (offline, no token, dataset not provisioned yet) rather than reporting nothing —
+    // --local skips straight to that path on purpose.
+    if (source === "atlas") {
+      try {
+        const { irisFetch: _fetch } = await import("./iris-api")
+        const p = new URLSearchParams({ per_page: String(Math.max(args.limit as number, 200)), sort: "created_at" })
+        const res = await _fetch(`/api/v1/atlas/datasets/mentions?${p}`)
+        if (res.ok) {
+          const body = (await res.json()) as any
+          const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+          mentions = records.map((r: any) => r.data ?? {})
+        } else if (res.status !== 404) {
+          // 404 = dataset not provisioned yet on this account (no mention ever pushed) —
+          // that is a real "nothing yet", not a reason to fall back. Anything else
+          // (network, auth) IS a reason to fall back rather than report a false empty.
+          throw new Error(`Atlas dataset fetch failed: HTTP ${res.status}`)
+        }
+      } catch (err) {
+        if (!args.json) {
+          prompts.log.warn(`Cross-machine dataset unreachable (${err instanceof Error ? err.message : String(err)}) — falling back to this machine's local log.`)
+        }
+        source = "local"
       }
     }
 
-    // Apply filters
+    if (source === "local") {
+      const mentionsDir = `${require("os").homedir()}/.iris/mentions`
+      const { existsSync, readdirSync, readFileSync } = require("fs")
+
+      if (!existsSync(mentionsDir)) {
+        prompts.log.error(`Mentions directory not found: ${mentionsDir}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const files = readdirSync(mentionsDir)
+        .filter((f: string) => f.endsWith(".jsonl"))
+        .sort()
+        .filter((f: string) => new Date(f.replace(".jsonl", "")) >= cutoff)
+
+      for (const file of files) {
+        const lines = readFileSync(`${mentionsDir}/${file}`, "utf-8").split("\n").filter(Boolean)
+        for (const line of lines) {
+          try { mentions.push(JSON.parse(line)) } catch {}
+        }
+      }
+    }
+
+    // Apply filters — same semantics regardless of source, so switching between
+    // --local and the default never changes what a filter means.
+    mentions = mentions.filter((m: any) => new Date(m.ts).getTime() >= cutoff.getTime())
     if (args.sender) {
       const s = String(args.sender).toLowerCase()
       mentions = mentions.filter((m: any) =>
-        m.sender?.includes(s) || m.lead_name?.toLowerCase().includes(s)
+        m.sender?.toLowerCase().includes(s) || m.lead_name?.toLowerCase().includes(s)
       )
     }
     if (args.lead) {
       mentions = mentions.filter((m: any) => m.lead_id === args.lead)
+    }
+    if (args.node) {
+      const n = String(args.node).toLowerCase()
+      mentions = mentions.filter((m: any) =>
+        m.node_id?.toLowerCase().includes(n) || m.node_name?.toLowerCase().includes(n)
+      )
     }
 
     // Sort newest first, apply limit
@@ -970,7 +1000,7 @@ const ImessageMentionsCommand = cmd({
     mentions = mentions.slice(0, args.limit as number)
 
     if (!mentions.length) {
-      prompts.log.info("No mentions found matching filters")
+      prompts.log.info(source === "atlas" ? "No mentions found matching filters (cross-machine)" : "No mentions found matching filters (this machine only)")
       prompts.outro("Done")
       return
     }
@@ -987,7 +1017,8 @@ const ImessageMentionsCommand = cmd({
       bySender.set(key, (bySender.get(key) || 0) + 1)
     }
 
-    prompts.log.info(bold(`${mentions.length} mention${mentions.length === 1 ? "" : "s"} from ${bySender.size} sender${bySender.size === 1 ? "" : "s"}`))
+    const sourceTag = source === "atlas" ? dim(" (cross-machine)") : dim(" (this machine only — --local)")
+    prompts.log.info(bold(`${mentions.length} mention${mentions.length === 1 ? "" : "s"} from ${bySender.size} sender${bySender.size === 1 ? "" : "s"}`) + sourceTag)
     for (const [sender, count] of bySender) {
       console.log(`    ${dim(`${count}x`)} ${sender}`)
     }
@@ -999,7 +1030,11 @@ const ImessageMentionsCommand = cmd({
       const leadTag = m.lead_id ? dim(` #${m.lead_id}`) : ""
       const date = dim(new Date(m.ts).toLocaleString())
       const groupTag = m.is_group ? dim(" [group]") : ""
-      console.log(`  ${date}  ${sender}${leadTag}${groupTag}`)
+      // node_name is the whole point of #182119 — a mention with no node attribution
+      // (--local, or an older row from before #182118 shipped) shows nothing extra
+      // rather than a misleading "unknown node".
+      const nodeTag = m.node_name ? dim(` · ${m.node_name}`) : ""
+      console.log(`  ${date}  ${sender}${leadTag}${groupTag}${nodeTag}`)
       console.log(`    ${m.text}`)
       console.log()
     }
