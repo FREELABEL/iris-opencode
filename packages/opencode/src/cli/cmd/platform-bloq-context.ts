@@ -592,6 +592,12 @@ const KpisGroup = makeListGroup({
     if (args.target != null) item.target = args.target
     if (args.current != null) item.current = args.current
     if (args.unit) item.unit = args.unit
+    // `--status` is registered for EVERY entity in this group (goals and strategies
+    // both persist it) and was the one builder that dropped it — accepted, echoed back
+    // as success, and absent from the stored record. A KPI's status is how you tell
+    // "measured and on track" from "measured and slipping" from "not measured at all",
+    // which is the distinction the whole layer exists to carry.
+    if (args.status) item.status = args.status
     return item
   },
 })
