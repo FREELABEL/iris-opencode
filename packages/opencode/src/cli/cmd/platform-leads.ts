@@ -843,6 +843,13 @@ const LeadsCreateCommand = cmd({
         type: "string",
         choices: LEAD_STATUSES,
       })
+      // Amounts at CREATE, not only at update (#182075 RO-2). The fields and the
+      // aggregate both already existed; what did not exist was any point in the
+      // workflow that ASKED. Board 368 reads 0% coverage — nine open leads, none
+      // priced. That is a capture gap, not a reporting one, and an amount is cheapest
+      // to record at the moment someone knows it.
+      .option("bid", { describe: "deal amount — counts toward board pipeline value", type: "number" })
+      .option("mrr", { describe: "monthly recurring revenue", type: "number" })
       .option("notes", { describe: "initial note to attach", type: "string" })
       .option("bloq-id", { describe: "CRM bloq ID (default: auto-detect)", type: "number" })
       .option("json", { describe: "JSON output (returns the created lead — capture the new id)", type: "boolean", default: false }),
@@ -912,6 +919,11 @@ const LeadsCreateCommand = cmd({
       if (args.company) payload.company = args.company
       if (args.source) payload.source = args.source
       if (args.status) payload.status = args.status
+      // `!== undefined` so an explicit 0 is sent. The same truthy guard on `update`
+      // silently discarded `--bid 0`, which made an amount possible to set and
+      // impossible to clear.
+      if (args.bid !== undefined) payload.price_bid = args.bid
+      if (args.mrr !== undefined) payload.mrr_amount = args.mrr
       // Store additional emails in contact_info.emails array
       if (args.emails) {
         const extras = String(args.emails)
