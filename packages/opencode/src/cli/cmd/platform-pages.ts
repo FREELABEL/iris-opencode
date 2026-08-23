@@ -1430,13 +1430,28 @@ const CheckPublicCmd = cmd({
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("url", { describe: "check this exact address instead of resolving the page's own", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    const url = publicUrl(String(args.slug))
+    // ASK THE PAGE WHERE IT LIVES. publicUrl(slug) falls back to freelabel.net, and a page served
+    // on heyiris.io or a client's own domain would then be checked at an address that is not the
+    // one anybody was given — an instrument built to stop false answers, returning one. The lookup
+    // is authenticated and is used ONLY to learn the host; if it fails (not the owner, no key) we
+    // fall back to the default rather than refusing, because a checked-at-the-default answer with
+    // the url printed beside it is still honest.
+    let url = typeof args.url === "string" && args.url ? args.url : publicUrl(String(args.slug))
+    if (!args.url) {
+      try {
+        const page = await getBySlug(String(args.slug))
+        if (page?.public_url) url = page.public_url
+      } catch {
+        // fall through to the default host
+      }
+    }
 
-    // No auth by design. requireAuth() is deliberately NOT called: the question is what an
-    // anonymous visitor gets, and answering it with a credential attached is the exact mistake
-    // this command exists to stop anyone repeating.
+    // The FETCH is unauthenticated by design. requireAuth() is deliberately NOT called: the
+    // question is what an anonymous visitor gets, and answering it with a credential attached is
+    // the exact mistake this command exists to stop anyone repeating.
     let status = 0
     let html = ""
     try {
