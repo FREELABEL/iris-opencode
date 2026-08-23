@@ -127,6 +127,48 @@ export function normalizePathIndexes(path: string): string {
   return path.replace(/(?<!\.)\[([^\]]*)\]/g, (_m, inner: string) => (inner === "" ? ".[]" : `.${inner}`))
 }
 
+/**
+ * Strip a redundant leading `json_content.` from a `pages set` path.
+ *
+ * The nested writer below is already rooted AT json_content, so `json_content.requireOtp`
+ * addressed `json_content.json_content.requireOtp` — a dead key. The write "succeeded", and
+ * the read-back verifier resolved the same dead path, found what it had just written, and
+ * confirmed it. An instrument agreeing with itself (#181940).
+ *
+ * Stripped rather than refused: everyone who typed the prefix meant the key inside
+ * json_content, and there is nothing else it could have addressed.
+ */
+export function normaliseSetPath(path: string): { path: string; stripped: boolean } {
+  const PREFIX = "json_content."
+  if (path.startsWith(PREFIX) && path.length > PREFIX.length) {
+    return { path: path.slice(PREFIX.length), stripped: true }
+  }
+  return { path, stripped: false }
+}
+
+/**
+ * Is this page gated, and by which flag?
+ *
+ * The OTP gate is TWO flags with different names in different places — the `requires_auth`
+ * COLUMN and `requireOtp` inside json_content — and fl-api re-derives the column from the
+ * key on write. Anything that asks "is this gated" while reading one of them gets the right
+ * answer only by luck, which is most of #181940. One reader, both flags.
+ */
+export function pageGateFlags(page: { requires_auth?: unknown; json_content?: any } | null | undefined): {
+  gated: boolean
+  requiresAuth: boolean
+  requireOtp: boolean
+  which: string
+} {
+  const requiresAuth = Boolean(page?.requires_auth)
+  const requireOtp = Boolean(page?.json_content?.requireOtp)
+  const which = [requiresAuth ? "requires_auth" : null, requireOtp ? "json_content.requireOtp" : null]
+    .filter(Boolean)
+    .join(" + ")
+
+  return { gated: requiresAuth || requireOtp, requiresAuth, requireOtp, which }
+}
+
 export function setNestedValue(obj: any, path: string, value: unknown): void {
   const parts = normalizePathIndexes(path).split(".")
   let cur: any = obj
@@ -503,6 +545,24 @@ const SetCmd = cmd({
       const page = await getBySlug(args.slug, true)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
 
+      // A leading `json_content.` is REDUNDANT here and used to be silently destructive
+      // (#181940). The nested write below is already rooted AT json_content, so
+      // `set <slug> json_content.requireOtp false` wrote json_content.json_content.requireOtp
+      // — a dead key — while the read-back verifier resolved that same dead path, found the
+      // value it had just written, and reported success. The instrument agreed with itself.
+      //
+      // That is the whole reason #181940 was filed as "the gate cannot be lifted": the
+      // documented two-command fix included this exact path, so the OTP flag never moved and
+      // the CLI said it had. Strip the prefix rather than refuse — every caller who typed it
+      // meant the key inside json_content, and there is no other thing they could have meant.
+      {
+        const norm = normaliseSetPath(args.path)
+        if (norm.stripped) {
+          prompts.log.info(`Path is already rooted at json_content — using '${norm.path}'.`)
+          args.path = norm.path
+        }
+      }
+
       // Top-level page COLUMNS are record fields, NOT json_content paths (#137875).
       // Route them straight to the update endpoint so e.g.
       //   iris pages set <slug> requires_auth true
@@ -515,6 +575,23 @@ const SetCmd = cmd({
         "requires_auth", "status", "title", "seo_title", "seo_description", "og_image",
         "visibility", "slug", "owner_type", "owner_id",
       ])
+
+      // IMMUTABLE. The API accepts a PUT carrying owner_id, returns 200, and does not apply
+      // it — the write-verifier below then catches the mismatch and reports "Not applied",
+      // which is honest but late: the caller has already been told the request went through
+      // and has to reason about a 200 that meant nothing (#181940). Refuse up front and name
+      // the command that CAN do it. Ownership moves through reassign, which updates
+      // owner_type and owner_id together — the pair, because either alone is a broken record.
+      if (args.path === "owner_id" || args.path === "owner_type") {
+        sp.stop("Refused", 1)
+        prompts.log.error(
+          `'${args.path}' cannot be changed through 'pages set' — the API accepts the request and ignores it.\n\n` +
+            `  iris pages reassign ${args.slug} --owner-type bloq --owner-id <id>`,
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
 
       // Legitimate TOP-LEVEL json_content keys. Anything else with no dot is almost certainly
       // a column the caller expected to exist — nesting it silently is how
@@ -563,6 +640,19 @@ const SetCmd = cmd({
         sp.stop(success(`Updated page column ${args.path} = ${JSON.stringify(colVal)}`))
         if (landed === undefined) {
           prompts.log.warn(`Could not read the page back to confirm. Check: iris pages view ${args.slug}`)
+        }
+
+        // HALF A GATE IS A GATE (#181940). The OTP gate is TWO flags with different names in
+        // different places — the requires_auth column and json_content.requireOtp — and
+        // fl-api's PageController::update forces the column back ON whenever requireOtp is
+        // still true. So clearing only this one looks like it worked, survives a purge, and
+        // the page keeps asking for a code. Say so here rather than let someone re-derive it.
+        if (args.path === "requires_auth" && colVal === false && (page.json_content as any)?.requireOtp) {
+          prompts.log.warn(
+            `json_content.requireOtp is still true, and the server re-applies requires_auth from it.\n` +
+              `This page will keep asking for a code. Use the one verb that clears both:\n\n` +
+              `  iris pages ungate ${args.slug}`,
+          )
         }
         prompts.outro(dim(`iris pages cache-clear ${args.slug}   # purge the rendered cache so the change takes effect`))
         return
@@ -852,7 +942,7 @@ const PushCmd = cmd({
         }).catch(() => {})
         sp.stop(success(`Pushed (${cnt} components) + published`))
         console.log(`  ${highlight(publicUrl(slug))}`)
-        printDesignStandardHint()
+        printDesignStandardHint(slug)
       // Safe-by-default: unpublish after push so live page is untouched
       } else if (!args.live && page.status === "published") {
         await pagesFetch(`/api/v1/pages/${page.id}/unpublish`, { method: "POST" })
@@ -977,6 +1067,7 @@ const PublishCmd = cmd({
       }).catch(() => {})
       sp.stop(success("Published"))
       console.log(`  ${highlight(publicUrl(args.slug))}`)
+      printDesignStandardHint(String(args.slug))
       prompts.outro("Done")
     } catch (err) {
       sp.stop("Error", 1)
@@ -1102,7 +1193,7 @@ const CreateCmd = cmd({
       printKV("Status", p.status)
       printKV("URL", publicUrl(p))
       printDivider()
-      printDesignStandardHint()
+      printDesignStandardHint(p.slug)
       prompts.outro(dim(`iris pages publish ${p.slug}`))
     } catch (err) {
       sp.stop("Error", 1)
@@ -1120,6 +1211,13 @@ const DuplicateCmd = cmd({
       .positional("source", { describe: "source page slug to clone", type: "string", demandOption: true })
       .option("slug", { describe: "new page slug", type: "string", demandOption: true })
       .option("title", { describe: "new page title (defaults to source title)", type: "string" })
+      .option("owner-type", { describe: "owner type for the clone (default: inherit from source)", type: "string" })
+      .option("owner-id", { describe: "owner id for the clone (default: inherit from source)", type: "number" })
+      .option("allow-gated-owner", {
+        describe: "clone onto a gated owner bloq anyway (the clone will be gated too)",
+        type: "boolean",
+        default: false,
+      })
       .option("publish", { describe: "publish immediately", type: "boolean", default: false })
       .option("force", {
         describe: "overwrite an existing local ./pages/<slug>.json (default: keep it)",
@@ -1149,6 +1247,53 @@ const DuplicateCmd = cmd({
         jsonContent.theme.branding.name = args.title
       }
 
+      // WHO WILL OWN THE CLONE — say it out loud, and refuse the trap. (#181940)
+      //
+      // The Atlas gate is bound to the OWNER BLOQ, not to the page. Copying the source's
+      // owner therefore copies its gate, and clearing requires_auth on the clone does not
+      // lift it. Until the owner_id fix landed alongside this there was no route back at
+      // all: the clone was gated, un-gatable, and the only remedy was to delete it.
+      //
+      // Inheriting silently is what made that reachable by accident, so an inherited GATED
+      // owner now stops the command. An explicit --owner-id is always honoured — the person
+      // who typed it knows what they are asking for.
+      const ownerInherited = args["owner-type"] === undefined && args["owner-id"] === undefined
+      const ownerType = args["owner-type"] ?? source.owner_type
+      const ownerId = args["owner-id"] ?? source.owner_id
+
+      // BOTH flags, because the gate is both (#181940). Reading only the column misses a
+      // source whose json_content still carries requireOtp — the clone would copy it, the
+      // server would re-derive requires_auth from it, and the "ungated" clone would ask for
+      // a code. The two are one gate wearing two names; a check on half of it is half a check.
+      const sourceGate = pageGateFlags({ requires_auth: source.requires_auth, json_content: jsonContent })
+      const sourceGated = sourceGate.gated
+
+      if (ownerInherited && sourceGated && !args["allow-gated-owner"]) {
+        sp.stop("Source is gated", 1)
+        prompts.log.error(
+          `${args.source} is gated (${sourceGate.which}) and owned by ${source.owner_type} ${source.owner_id}.`,
+        )
+        prompts.log.warn("A clone inherits that owner, and the gate follows the owner — not the page.")
+        prompts.log.info(dim(`Own it yourself:   iris pages duplicate ${args.source} --slug=${args.slug} --owner-id=<bloq>`))
+        prompts.log.info(dim(`Clone it gated:    iris pages duplicate ${args.source} --slug=${args.slug} --allow-gated-owner`))
+        prompts.log.info(dim(`Check any page:    iris pages check-public ${args.source}`))
+        prompts.outro("Done")
+        return
+      }
+
+      // Ownership was chosen deliberately, or the source is not gated — either way the clone
+      // proceeds. But if the SOURCE carried a gate flag in its content, the clone carries it
+      // too, and that is the "cloned a gated page to make an open one and got a gated one"
+      // surprise the ticket opens with. Not a refusal here: the caller has already made the
+      // ownership call. Just never silent.
+      if (sourceGated) {
+        prompts.log.warn(
+          `Cloned from a gated page — the gate comes with it.\n` +
+            `  ${args.slug} will ask visitors for an emailed code.\n` +
+            `  Lift it with:  iris pages ungate ${args.slug}`,
+        )
+      }
+
       const title = args.title ?? source.title
       const payload: Record<string, unknown> = {
         slug: args.slug,
@@ -1156,8 +1301,8 @@ const DuplicateCmd = cmd({
         seo_title: args.title ? title : source.seo_title,
         seo_description: source.seo_description,
         og_image: source.og_image,
-        owner_type: source.owner_type,
-        owner_id: source.owner_id,
+        owner_type: ownerType,
+        owner_id: ownerId,
         status: "draft",
         json_content: jsonContent,
       }
@@ -1195,6 +1340,12 @@ const DuplicateCmd = cmd({
       printKV("ID", p.id)
       printKV("Slug", args.slug)
       printKV("Source", args.source)
+      // Printed, never assumed. Which bloq owns the clone decides whether strangers can read
+      // it, and it was previously invisible at the one moment it was being decided.
+      printKV(
+        "Owner",
+        `${ownerType ?? "system"}${ownerId ? ` ${ownerId}` : ""} ${dim(ownerInherited ? "(inherited from source)" : "(explicit)")}`,
+      )
       printKV("Components", (jsonContent.components?.length ?? 0).toString())
       printKV("File", wroteFile ? filePath : `${filePath} ${dim("(kept — not overwritten)")}`)
       printDivider()
@@ -1227,6 +1378,112 @@ const DuplicateCmd = cmd({
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
+  },
+})
+
+/**
+ * What a STRANGER sees. (#181940)
+ *
+ * Every other instrument here reports on the authenticated view, and during that ticket three
+ * of them agreed on the wrong answer in a row:
+ *
+ *   curl                          -> 200 with the right SEO title (the gate is client-rendered)
+ *   a signed-in browser           -> the whole page (a stale atlas_session opened the gate)
+ *   pages set requires_auth false -> "Updated" (true, and irrelevant — the OWNER BLOQ gates it)
+ *
+ * A gated Genesis page still returns 200 and still carries correct metadata; the refusal lives
+ * in the `data-page` props the SPA hydrates from. So the only honest check is an unauthenticated
+ * request whose `gateRequired` / `gateBloqId` are read out of that payload — which is what this
+ * does, deliberately WITHOUT any credential, cookie or SDK key.
+ */
+const CheckPublicCmd = cmd({
+  command: "check-public <slug>",
+  describe: "fetch a page as a stranger would and report whether it is actually readable",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const url = publicUrl(String(args.slug))
+
+    // No auth by design. requireAuth() is deliberately NOT called: the question is what an
+    // anonymous visitor gets, and answering it with a credential attached is the exact mistake
+    // this command exists to stop anyone repeating.
+    let status = 0
+    let html = ""
+    try {
+      const res = await fetch(url, { headers: { "User-Agent": "iris-pages-check-public" }, redirect: "follow" })
+      status = res.status
+      html = await res.text()
+    } catch (err) {
+      if (args.json) {
+        console.log(JSON.stringify({ slug: args.slug, url, reachable: false, error: String(err) }, null, 2))
+      } else {
+        UI.empty()
+        prompts.intro(`◈  Check public — ${args.slug}`)
+        prompts.log.error(`Could not reach ${url}: ${err instanceof Error ? err.message : String(err)}`)
+        prompts.outro("Done")
+      }
+      return
+    }
+
+    // Two render lanes. A composable page hydrates from a `data-page` attribute holding the
+    // Inertia props; a bespoke render_mode=html page serves the author's blade with no such
+    // attribute at all — and no data-page on a 200 means nothing was withheld.
+    let props: any = null
+    const match = html.match(/data-page="([^"]*)"/)
+    if (match) {
+      try {
+        props = JSON.parse(match[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#039;/g, "'"))
+      } catch {
+        props = null
+      }
+    }
+
+    const page = props?.props ?? props ?? {}
+    const gateRequired = page.gateRequired === true
+    const gateBloqId = page.gateBloqId ?? null
+    const bespoke = status === 200 && !match
+    const readable = status === 200 && !gateRequired
+
+    if (args.json) {
+      console.log(JSON.stringify({
+        slug: args.slug, url, status, readable, gateRequired,
+        gateBloqId, render: bespoke ? "bespoke" : "composable", bytes: html.length,
+      }, null, 2))
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  Check public — ${args.slug}`)
+    printDivider()
+    printKV("URL", url)
+    printKV("Status", String(status))
+    printKV("Render", bespoke ? "bespoke (render_mode=html)" : match ? "composable (data-page)" : "unknown")
+    printKV("Bytes", String(html.length))
+    printKV(
+      "Gate",
+      gateRequired
+        ? `${UI.Style.TEXT_WARNING}REQUIRED${UI.Style.TEXT_NORMAL}${gateBloqId ? ` ${dim(`(owner bloq ${gateBloqId})`)}` : ""}`
+        : "none",
+    )
+    printDivider()
+
+    if (readable) {
+      console.log(`  ${success("A stranger can read this page.")}`)
+    } else if (gateRequired) {
+      prompts.log.warn("A stranger CANNOT read this page — the gate withholds the content.")
+      // Naming the bloq matters: clearing requires_auth on the page will not lift a gate the
+      // OWNER is carrying. That mismatch is what made this look impossible to diagnose.
+      if (gateBloqId) {
+        prompts.log.info(dim(`The gate is bound to owner bloq ${gateBloqId}, not to the page's own flags.`))
+        prompts.log.info(dim(`Move it:  iris pages set ${args.slug} owner_id <ungated-bloq>`))
+      }
+    } else {
+      prompts.log.warn(`A stranger gets HTTP ${status}.`)
+    }
+
+    prompts.outro("Done")
   },
 })
 
@@ -2247,6 +2504,138 @@ const ScreenshotCmd = cmd({
 })
 
 // ============================================================================
+// Ungate — lift the OTP gate. Both flags, right order, then the purge.
+// ============================================================================
+
+/**
+ * Lifting the gate takes three steps that nothing told you about (#181940).
+ *
+ * The gate is TWO flags with different names living in different places — the
+ * `requires_auth` COLUMN and the `requireOtp` key inside json_content — and they are not
+ * independent: fl-api's PageController::update re-applies the column from requireOtp, and
+ * that block runs AFTER the explicit assignment. So the order is forced. Clear requireOtp
+ * first; clear the column LAST, or the json write turns it straight back on. Then purge,
+ * because the gate decision is read from a cached page record and a stale cache is
+ * indistinguishable from a gate that will not lift.
+ *
+ * That last point is not theoretical: it is how #181940 came to be filed as "permanently
+ * gated, no route back". The commands were right, the order was wrong, and the cache made
+ * the failure look permanent. One verb, so nobody has to know any of this.
+ */
+const UngateCmd = cmd({
+  command: "ungate <slug>",
+  describe: "lift the OTP gate on a page — clears both flags in the order that works, then purges",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", demandOption: true, describe: "page slug" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Ungate ${args.slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const sp = prompts.spinner()
+    sp.start("Lifting the gate…")
+    try {
+      const page = await getBySlug(String(args.slug), true)
+      if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const before = {
+        requires_auth: (page as any).requires_auth ?? false,
+        requireOtp: ((page.json_content as any) ?? {}).requireOtp ?? false,
+      }
+
+      if (!before.requires_auth && !before.requireOtp) {
+        sp.stop(success("Already open"))
+        prompts.log.info(`No gate on this page. ${dim(publicUrl(String(args.slug)))}`)
+        prompts.outro("Done")
+        return
+      }
+
+      // 1. requireOtp first — a json_content write re-derives the column, so doing this
+      //    second would undo step 2.
+      const json: Record<string, unknown> = { ...((page.json_content as any) ?? {}) }
+      json.requireOtp = false
+      // Written by an older CLI that treated `json_content.x` as a path INSIDE json_content
+      // (#181940). Harmless but confusing, and it is the fingerprint of the bug — clear it
+      // while we are here rather than leave a dead key that reads like a real setting.
+      if (json.json_content && typeof json.json_content === "object") delete json.json_content
+
+      const jsonRes = await pagesFetch(`/api/v1/pages/${page.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ json_content: json }),
+      })
+      if (!(await handleApiError(jsonRes, "Clear requireOtp"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+
+      // 2. the column LAST.
+      const colRes = await pagesFetch(`/api/v1/pages/${page.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ requires_auth: false }),
+      })
+      if (!(await handleApiError(colRes, "Clear requires_auth"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+
+      // 3. purge, or the cached gate decision keeps answering.
+      let purged = false
+      try {
+        const purgeRes = await irisFetch("/api/internal/cache/purge-page", {
+          method: "POST",
+          body: JSON.stringify({ slug: String(args.slug) }),
+        }, IRIS_API)
+        purged = purgeRes.ok
+      } catch { /* reported below — a failed purge is a delay, not a failed ungate */ }
+
+      // VERIFY, against the record rather than against our own intent.
+      let after: { requires_auth: unknown; requireOtp: unknown } | null = null
+      try {
+        const fresh = await getBySlug(String(args.slug), true)
+        if (fresh) {
+          after = {
+            requires_auth: (fresh as any).requires_auth ?? false,
+            requireOtp: ((fresh.json_content as any) ?? {}).requireOtp ?? false,
+          }
+        }
+      } catch { /* fall through to the honest warning */ }
+
+      if (after && (after.requires_auth || after.requireOtp)) {
+        sp.stop("Not fully applied", 1)
+        prompts.log.error(
+          `The API accepted both writes but the page still reads ` +
+            `requires_auth=${JSON.stringify(after.requires_auth)}, requireOtp=${JSON.stringify(after.requireOtp)}.`,
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      sp.stop(success("Gate lifted"))
+      if (args.json) {
+        await writeJson({ slug: args.slug, before, after, purged })
+        prompts.outro("Done")
+        return
+      }
+
+      printKV("requires_auth", `${before.requires_auth} → false`)
+      printKV("requireOtp", `${before.requireOtp} → false`)
+      if (!after) prompts.log.warn("Could not read the page back to confirm.")
+
+      // Deliberately NOT "Verify: <url>". See CacheClearCmd — propagation is not instant,
+      // and an immediate check is how this ticket got the wrong root cause.
+      if (purged) {
+        prompts.log.info("Cache purged. Propagation is not instant — give it a minute before checking the URL.")
+      } else {
+        prompts.log.warn(`Cache purge did not confirm. Run: iris pages cache-clear ${args.slug}`)
+      }
+      prompts.log.info(dim(publicUrl(String(args.slug))))
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp.stop("Error", 1)
+      prompts.log.error(e.message ?? String(e))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Cache Clear — purge rendered page cache on iris-api
 // ============================================================================
 
@@ -2295,7 +2684,13 @@ const CacheClearCmd = cmd({
         prompts.log.success(entry)
       }
       if (slug) {
-        prompts.log.info(`Verify: ${dim(publicUrl(slug))}`)
+        // NOT "Verify: <url>" any more (#181940). Propagation is not instant, and an
+        // immediate check returns the PREVIOUS answer — which is how a working two-command
+        // gate fix got diagnosed as an unliftable gate and written up with the wrong root
+        // cause. A stale cache and a change that did not apply are indistinguishable from
+        // out here, so the one thing this must not do is invite the check straight away.
+        prompts.log.info("Propagation is not instant — give it a minute before checking:")
+        prompts.log.info(dim(publicUrl(slug)))
       }
       prompts.outro("Done")
     } catch (e: any) {
@@ -2543,6 +2938,15 @@ function renderReach(page: any, v: { mode: VisibilityMode; declared: boolean }, 
       `      ${dim("without one, ANY email that completes the OTP gets in")}`,
     )
   }
+  // WHERE THE GATE IS BOUND. (#181940) The flag above is the page's own; the gate itself is
+  // evaluated against the OWNER BLOQ, which is why clearing requires_auth on a page cloned
+  // from a gated source did not free it and looked impossible. Naming the owner here — and
+  // pointing at the one instrument that reads the served payload rather than this record —
+  // is the difference between a diagnosable state and a mystery.
+  if (page.owner_type === "bloq" && page.owner_id) {
+    console.log(`      ${dim(`the gate binds to owner bloq ${page.owner_id}, not to this flag`)}`)
+  }
+  console.log(`      ${dim("what a stranger actually gets: iris pages check-public " + page.slug)}`)
   console.log()
   console.log(`  ${bold("Who can reach this page right now")}`)
   console.log()
@@ -2937,6 +3341,557 @@ const ShareRevokeCmd = cmd({
 })
 
 // ============================================================================
+// Read / Verify — the READ-BACK surface
+// ============================================================================
+
+/**
+ * Until these commands existed, every `iris pages` verb was a WRITE verb (create,
+ * duplicate, push, publish, set, reassign, cache-clear) with exactly one read-back:
+ * `screenshot`, which returns a PNG and therefore no pass/fail. So anyone — human or
+ * agent — who had just published a page and wanted to know whether it worked had no
+ * CLI-shaped way to ask, and fell back to `curl | grep`.
+ *
+ * That fallback does not merely fail, it fails GREEN and it fails RED at random. Measured
+ * on /p/harness-position-paper (2026-08-22), on a page that had published perfectly:
+ *
+ *   grep -c 'THE HARNESS'      -> 0   the headline is text-transform:uppercase (8 rules in
+ *                                     that stylesheet); the bytes say "The harness"
+ *   data-page regex            -> AttributeError   the page is bespoke, served by
+ *                                     public-html.blade, so there IS no data-page attr.
+ *                                     The right answer, raised as a crash.
+ *   grep -c 'already shipping' -> 0   the phrase differs from the one remembered; the
+ *                                     count cannot distinguish "absent" from "reworded"
+ *   wc -c -> 21294                    no threshold exists that separates a bespoke doc
+ *                                     from an Inertia shell
+ *
+ * Four checks, zero information, on a page that was fine. This is the same family as
+ * confirming a deploy with `grep -c <symbol>` (PRODUCTION_DEBUGGING_GUIDE) — a check that
+ * cannot tell "broken" from "not measured".
+ *
+ * The fix is to read the page the way a reader does: render it in a browser and return
+ * the TEXT LAYER, then match against that with normalization. Not to wrap grep.
+ */
+
+export type PageLane = "composable" | "bespoke"
+
+export interface RenderedPage {
+  url: string
+  status: number
+  title: string
+  lane: PageLane
+  text: string
+  headings: string[]
+  words: number
+  bytes: number
+}
+
+/**
+ * `data-page` is the Inertia payload attribute. Present => the composable Genesis viewer
+ * rendered this; absent => it came from public-html.blade, i.e. a bespoke render_mode:html
+ * page. Reporting which lane served the page turns the single most confusing failure in
+ * this area ("my data-page parser threw") into a fact on stderr.
+ */
+export function detectLane(rawHtml: string): PageLane {
+  return /\sdata-page\s*=/.test(rawHtml) ? "composable" : "bespoke"
+}
+
+/**
+ * Normalize both haystack and needle before matching.
+ *
+ * Case folding is not a convenience here, it is the whole point: CSS `text-transform`
+ * means what a reader sees ("THE HARNESS") and what any text layer holds ("The harness")
+ * differ, so a case-sensitive match on remembered-as-seen text is a guaranteed false
+ * negative. Typographic folding covers the same class one layer down — bespoke pages are
+ * written with curly quotes, em dashes and non-breaking spaces, and nobody retypes those
+ * correctly into a shell argument.
+ */
+export function normalizeForMatch(input: string, opts?: { caseSensitive?: boolean }): string {
+  let s = input
+    .replace(/[‘’‚‛′]/g, "'")
+    .replace(/[“”„‟″]/g, '"')
+    .replace(/[‐‑‒–—―]/g, "-")
+    .replace(/[   ]/g, " ")
+    .replace(/…/g, "...")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (!opts?.caseSensitive) s = s.toLowerCase()
+  return s
+}
+
+/**
+ * Render a published page in a real browser and return its text layer.
+ *
+ * Shared by `read` and `verify` so the two can never disagree about what the page says —
+ * `verify` is exactly `read` plus assertions plus an exit code.
+ */
+async function renderPage(slug: string, opts: { width: number; timeout: number }): Promise<RenderedPage> {
+  const { chromium } = await import("playwright" as string)
+  const url = publicUrl(slug)
+  const browser = await chromium.launch()
+  try {
+    const page = await browser.newPage({ viewport: { width: opts.width, height: 900 } })
+    const resp = await page.goto(url, { waitUntil: "networkidle", timeout: opts.timeout })
+    // The composable lane hydrates after networkidle; without this the text layer of a
+    // Genesis page is the empty Inertia shell and every expectation fails for the wrong
+    // reason. Bespoke pages are already complete and just pay the wait.
+    await page.waitForTimeout(1500)
+
+    const status = resp?.status() ?? 0
+    const title = (await page.title().catch(() => "")) || ""
+    const rawHtml = await page.content()
+
+    // Same refusal as `screenshot` (#180796): /p/ serves PUBLISHED pages only, and the SPA
+    // route can serve the not-found view with HTTP 200. A read-back tool that returns the
+    // 404 page's text as if it were the page is the exact defect these commands exist to
+    // remove, so this throws rather than returning something plausible.
+    if (status >= 400 || /page not found/i.test(title)) {
+      throw new Error(
+        status >= 400
+          ? `${url} returned HTTP ${status} — nothing was read.\n  /p/ serves PUBLISHED pages only. If this is a draft: iris pages publish ${slug}`
+          : `${url} served the not-found page — nothing was read.\n  /p/ serves PUBLISHED pages only. If this is a draft: iris pages publish ${slug}`,
+      )
+    }
+
+    const extracted = await page.evaluate(() => {
+      const body = document.body
+      // innerText, not textContent: a display-block child inside a heading (the usual
+      // way a bespoke display headline is line-broken) yields no separator under
+      // textContent, so "The harness / is not / the moat" came back as
+      // "The harnessis notthe moat" — unmatchable and unreadable.
+      const heads = Array.from(document.querySelectorAll("h1,h2,h3"))
+        .map((h) => ((h as HTMLElement).innerText ?? h.textContent ?? "").replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+      return { text: body ? body.innerText : "", headings: heads }
+    })
+
+    const text = String(extracted.text ?? "")
+    return {
+      url,
+      status,
+      title,
+      lane: detectLane(rawHtml),
+      text,
+      headings: extracted.headings ?? [],
+      words: text.split(/\s+/).filter(Boolean).length,
+      bytes: rawHtml.length,
+    }
+  } finally {
+    await browser.close()
+  }
+}
+
+function playwrightHint(e: any): string {
+  const m = e?.message ?? String(e)
+  if (m.includes("Cannot find module") || m.toLowerCase().includes("playwright")) {
+    return "Playwright not installed. Run: npm install playwright"
+  }
+  return m
+}
+
+const ReadCmd = cmd({
+  command: "read <slug>",
+  aliases: ["text"],
+  describe: "render a live page in a browser and print its TEXT (stdout) — pipe it to grep",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
+      .option("json", { describe: "emit a JSON envelope (url, lane, title, headings, words, text)", type: "boolean", default: false })
+      .option("headings", { describe: "print only h1/h2/h3", type: "boolean", default: false })
+      .option("width", { describe: "viewport width", type: "number", default: 1440 })
+      .option("timeout", { describe: "navigation timeout (ms)", type: "number", default: 30000 }),
+  async handler(args) {
+    const { slug } = normalizeSlugArg(args.slug)
+    try {
+      const r = await renderPage(slug, { width: Number(args.width), timeout: Number(args.timeout) })
+
+      if (args.json) {
+        writeJson(r)
+        return
+      }
+
+      // Diagnostics on STDERR, content on STDOUT. `read | grep` is the intended use, and a
+      // pipe that swallowed the lane/status line would rebuild the hazard this command was
+      // written to remove — you would filter away the one line saying the read was bad and
+      // see a clean empty result. stderr survives the pipe.
+      process.stderr.write(
+        `${dim(`  ${r.url}  ·  lane: ${r.lane}  ·  HTTP ${r.status}  ·  ${r.words} words`)}\n` +
+          `${dim(`  title: ${r.title}`)}\n`,
+      )
+      process.stdout.write((args.headings ? r.headings.join("\n") : r.text) + "\n")
+    } catch (e: any) {
+      process.stderr.write(`${UI.Style.TEXT_DANGER}  ${playwrightHint(e)}${UI.Style.TEXT_NORMAL}\n`)
+      process.exitCode = 1
+    }
+  },
+})
+
+const VerifyCmd = cmd({
+  command: "verify <slug>",
+  aliases: ["check"],
+  describe: "assert a live page renders and contains expected text — exits non-zero on failure",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
+      .option("expect", { describe: "text that MUST appear (repeatable)", type: "string", array: true, default: [] as string[] })
+      .option("not-expect", { describe: "text that must NOT appear (repeatable)", type: "string", array: true, default: [] as string[] })
+      .option("min-words", { describe: "fail if the rendered page has fewer words than this", type: "number" })
+      .option("lane", { describe: "assert which renderer served the page", type: "string", choices: ["composable", "bespoke"] })
+      .option("case-sensitive", { describe: "match case exactly (default folds case — CSS uppercase makes exact matching a false-negative machine)", type: "boolean", default: false })
+      .option("width", { describe: "viewport width", type: "number", default: 1440 })
+      .option("timeout", { describe: "navigation timeout (ms)", type: "number", default: 30000 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const { slug, corrected } = normalizeSlugArg(args.slug)
+    if (!args.json) prompts.intro(`◈  Verify: ${slug}`)
+    if (corrected && !args.json) noteSlugCorrection(args.slug, slug)
+
+    const sp = args.json ? null : prompts.spinner()
+    sp?.start("Rendering…")
+
+    try {
+      const r = await renderPage(slug, { width: Number(args.width), timeout: Number(args.timeout) })
+      const caseSensitive = !!args["case-sensitive"]
+      const hay = normalizeForMatch(r.text, { caseSensitive })
+
+      type Check = { kind: string; label: string; pass: boolean }
+      const checks: Check[] = []
+
+      for (const raw of (args.expect as string[]) ?? []) {
+        checks.push({ kind: "expect", label: raw, pass: hay.includes(normalizeForMatch(raw, { caseSensitive })) })
+      }
+      for (const raw of (args["not-expect"] as string[]) ?? []) {
+        checks.push({ kind: "not-expect", label: raw, pass: !hay.includes(normalizeForMatch(raw, { caseSensitive })) })
+      }
+      if (args["min-words"] !== undefined) {
+        const min = Number(args["min-words"])
+        checks.push({ kind: "min-words", label: `>= ${min} words (got ${r.words})`, pass: r.words >= min })
+      }
+      if (args.lane) {
+        checks.push({ kind: "lane", label: `lane == ${args.lane} (got ${r.lane})`, pass: r.lane === args.lane })
+      }
+
+      const failed = checks.filter((c) => !c.pass)
+
+      if (args.json) {
+        writeJson({ slug, url: r.url, lane: r.lane, status: r.status, title: r.title, words: r.words, checks, ok: failed.length === 0 })
+        if (failed.length) process.exitCode = 1
+        return
+      }
+
+      sp?.stop(failed.length === 0 ? success("Rendered") : "Rendered")
+      printKV("URL", r.url)
+      printKV("Lane", r.lane)
+      printKV("Title", r.title)
+      printKV("Words", String(r.words))
+
+      if (checks.length === 0) {
+        // No assertions is not a pass. It renders and that is all we established — say so
+        // rather than printing a green outro that reads as "verified".
+        console.log()
+        prompts.log.warn("No assertions given — this only proves the page RENDERS.")
+        prompts.log.info(dim(`Add some: iris pages verify ${slug} --expect "a phrase from the page"`))
+        prompts.outro("Done")
+        return
+      }
+
+      console.log()
+      for (const c of checks) {
+        const mark = c.pass ? success("✓") : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+        console.log(`  ${mark} ${dim(c.kind)}  ${c.label}`)
+      }
+      console.log()
+
+      if (failed.length) {
+        prompts.log.error(`${failed.length} of ${checks.length} checks failed.`)
+        // The commonest cause of a failing --expect is a phrase remembered from the draft
+        // rather than read off the page. Point at the tool that settles it instead of
+        // leaving someone to re-derive curl+grep.
+        prompts.log.info(dim(`See what it actually says: iris pages read ${slug} | less`))
+        process.exitCode = 1
+      } else {
+        prompts.log.success(`All ${checks.length} checks passed.`)
+      }
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp?.stop("Failed", 1)
+      prompts.log.error(playwrightHint(e))
+      process.exitCode = 1
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
+// Publish HTML — a local .html file becomes a live bespoke page
+// ============================================================================
+
+/**
+ * The bespoke playbook (.claude/skills/bespoke/SKILL.md) shipped a `python3 -c` script for
+ * this, with no decisions in it — which is a verb that had not been written yet. Every
+ * bespoke page therefore went out through hand-rolled JSON surgery in a shell heredoc, and
+ * that path has two banked failure modes, both of them from the SAME cause: it works
+ * through ./pages, relative to the current working directory.
+ *
+ *   - a shell whose cwd was reset mid-session -> FileNotFoundError on the file just pulled
+ *   - a persisted `cd` into fl-iris-api -> an Aug-17 shadow of /p/docs shipped OVER the
+ *     live page, printing Done (#181601)
+ *
+ * This command writes no local file at all unless asked (--keep-json), so neither is
+ * reachable from it.
+ */
+
+export interface ParsedHtmlDoc {
+  title: string | null
+  description: string | null
+  css: string
+  body: string
+  isFullDocument: boolean
+}
+
+/**
+ * Split an authored HTML file into the fields a Genesis page needs.
+ *
+ * Regex, not a parser, and deliberately: the input is a file we authored for this purpose,
+ * not arbitrary web HTML. Anything with a <style> in the body or a </body> inside a string
+ * literal is out of contract — and `pages verify` is the backstop that catches it, which
+ * is the point of shipping the two together.
+ */
+export function parseHtmlDocument(src: string): ParsedHtmlDoc {
+  const titleMatch = src.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
+  const descMatch = src.match(/<meta\s+[^>]*name\s*=\s*["']description["'][^>]*content\s*=\s*["']([\s\S]*?)["']/i)
+
+  const styles: string[] = []
+  const styleRe = /<style[^>]*>([\s\S]*?)<\/style>/gi
+  let m: RegExpExecArray | null
+  while ((m = styleRe.exec(src)) !== null) styles.push(m[1].trim())
+
+  const isFullDocument = /<html[\s>]/i.test(src)
+  let body: string
+  const bodyMatch = src.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
+  if (bodyMatch) {
+    body = bodyMatch[1]
+  } else {
+    // A fragment: everything that is not head furniture.
+    body = src
+      .replace(/<!DOCTYPE[^>]*>/gi, "")
+      .replace(/<\/?html[^>]*>/gi, "")
+      .replace(/<head[\s\S]*?<\/head>/gi, "")
+      .replace(/<\/?body[^>]*>/gi, "")
+  }
+  body = body.replace(styleRe, "").trim()
+
+  return {
+    title: titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : null,
+    description: descMatch ? descMatch[1].replace(/\s+/g, " ").trim() : null,
+    css: styles.join("\n\n"),
+    body,
+    isFullDocument,
+  }
+}
+
+/** Build the json_content for either bespoke lane. */
+export function buildBespokeJsonContent(
+  doc: ParsedHtmlDoc,
+  lane: "standalone" | "custom",
+  opts?: { themeMode?: string; backgroundColor?: string; brandName?: string },
+): Record<string, any> {
+  if (lane === "standalone") {
+    // render_mode:html -> public-html.blade.php serves the document with a minimal reset.
+    return { version: "2.0", type: "article", render_mode: "html", html: doc.body, css: doc.css, requireOtp: false }
+  }
+  // CustomHtml lane: one v-html block inside the normal composable shell. The CSS has to
+  // ride along inside the fragment because props.html is a single field.
+  const fragment = doc.css ? `<style>\n${doc.css}\n</style>\n${doc.body}` : doc.body
+  return {
+    version: "2.0",
+    type: "landing",
+    theme: {
+      mode: opts?.themeMode ?? "light",
+      backgroundColor: opts?.backgroundColor ?? "#ffffff",
+      branding: { name: opts?.brandName ?? "IRIS", description: doc.description ?? "" },
+    },
+    components: [{ type: "CustomHtml", id: "doc", props: { html: fragment } }],
+  }
+}
+
+const PublishHtmlCmd = cmd({
+  command: "publish-html <slug>",
+  aliases: ["ship-html"],
+  describe: "publish a local .html file as a bespoke Genesis page (replaces the hand-rolled JSON surgery)",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug to create or update", type: "string", demandOption: true })
+      .option("file", { describe: "path to the .html file", type: "string", demandOption: true })
+      .option("lane", {
+        describe: "standalone (render_mode:html, own document) | custom (CustomHtml in the composable shell). Default: inferred from the file",
+        type: "string",
+        choices: ["standalone", "custom"],
+      })
+      .option("title", { describe: "page title (default: the file's <title>)", type: "string" })
+      .option("description", { describe: "SEO description (default: the file's meta description)", type: "string" })
+      .option("owner-type", { describe: "owner type", type: "string", default: "bloq" })
+      .option("owner-id", { describe: "owner bloq id", type: "number", default: 38 })
+      .option("theme-mode", { describe: "custom lane only: light | dark", type: "string", default: "light" })
+      .option("requires-auth", { describe: "put the page behind the OTP gate", type: "boolean", default: false })
+      .option("publish", { describe: "publish after upload (default)", type: "boolean", default: true })
+      // boolean-negation is disabled globally (src/index.ts:224), so `--no-publish` is NOT
+      // the negation of `--publish` — it is an unknown key, and `.strict()` turns it into a
+      // usage dump. Caught claiming the opposite in the playbook: a filtered check showed a
+      // leftover "Draft" from an earlier unpublish and read as a pass, while the command had
+      // not run at all. Register the literal flag, as `pulse check --no-push` does.
+      .option("no-publish", { describe: "upload but leave it a draft", type: "boolean", default: false })
+      .option("keep-json", { describe: "also write ./pages/<slug>.json", type: "boolean", default: false })
+      .option("dry-run", { describe: "show what would be sent, send nothing", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    const { slug, corrected } = normalizeSlugArg(args.slug)
+    prompts.intro(`◈  Publish HTML: ${slug}`)
+    if (corrected) noteSlugCorrection(args.slug, slug)
+
+    const filePath = resolve(String(args.file))
+    if (!existsSync(filePath)) {
+      prompts.log.error(`File not found: ${filePath}`)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    const src = readFileSync(filePath, "utf-8")
+    const doc = parseHtmlDocument(src)
+    const lane = (args.lane as "standalone" | "custom" | undefined) ?? (doc.isFullDocument ? "standalone" : "custom")
+
+    const title = (args.title as string) ?? doc.title ?? slug
+    const description = (args.description as string) ?? doc.description ?? undefined
+
+    if (!doc.body.trim()) {
+      prompts.log.error("No body content found in that file — nothing to publish.")
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+    // A bespoke page with no CSS is nearly always a file that was split wrong, and it
+    // publishes as unstyled text without erroring. Warn rather than block — a plain
+    // semantic document is legitimate.
+    if (!doc.css.trim()) prompts.log.warn("No <style> found — the page will publish unstyled.")
+
+    const jsonContent = buildBespokeJsonContent(doc, lane, { themeMode: String(args["theme-mode"]) })
+
+    prompts.log.info(dim(`from ${filePath}`))
+    printKV("Lane", lane === "standalone" ? "standalone (render_mode:html)" : "custom (CustomHtml component)")
+    printKV("Title", title)
+    printKV("HTML", `${doc.body.length} chars`)
+    printKV("CSS", `${doc.css.length} chars`)
+    if (description) printKV("Description", description)
+
+    if (args["dry-run"]) {
+      console.log()
+      prompts.log.info("Dry run — nothing sent.")
+      prompts.outro("Done")
+      return
+    }
+
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const shouldPublish = !!args.publish && !args["no-publish"]
+
+    const sp = prompts.spinner()
+    sp.start("Uploading…")
+    try {
+      let page = await getBySlug(slug, false)
+
+      if (!page) {
+        sp.message("No page for that slug yet — creating…")
+        page = await createPageFromJson({
+          slug,
+          title,
+          seo_title: title,
+          seo_description: description,
+          owner_type: String(args["owner-type"]),
+          owner_id: Number(args["owner-id"]),
+          json_content: jsonContent,
+          publish: shouldPublish,
+          requires_auth: !!args["requires-auth"],
+        })
+        if (!page) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      } else {
+        const updateData: Record<string, unknown> = {
+          json_content: jsonContent,
+          title,
+          seo_title: title,
+          requires_auth: !!args["requires-auth"],
+        }
+        if (description) updateData.seo_description = description
+        const res = await pagesFetch(`/api/v1/pages/${page.id}`, { method: "PUT", body: JSON.stringify(updateData) })
+        if (!(await handleApiError(res, "Update page"))) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+
+        if (shouldPublish) {
+          const pubRes = await pagesFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" })
+          if (!(await handleApiError(pubRes, "Publish"))) { sp.stop("Uploaded but publish failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+        }
+      }
+
+      // Purge unconditionally. `push --publish` does this too; the failure it prevents is
+      // verifying a stale render and concluding the publish did not work.
+      await pagesFetch("/api/internal/cache/purge-page", {
+        method: "POST",
+        body: JSON.stringify({ slug }),
+      }).catch(() => {})
+
+      if (args["keep-json"]) {
+        const dir = pagesDir()
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+        writeFileSync(
+          join(dir, `${slug}.json`),
+          JSON.stringify(
+            { id: page.id, slug, title, seo_title: title, seo_description: description ?? null, status: shouldPublish ? "published" : "draft", owner_type: String(args["owner-type"]), owner_id: Number(args["owner-id"]), requires_auth: !!args["requires-auth"], json_content: jsonContent },
+            null,
+            2,
+          ) + "\n",
+        )
+        prompts.log.info(dim(`wrote ${join(dir, `${slug}.json`)}`))
+      }
+
+      // Report the status the SERVER now holds, not the one the flags imply. `--no-publish`
+      // skips the publish call; it does not unpublish, so on an already-live page the old
+      // inferred message said "Uploaded (draft)" while the page was Published and still
+      // serving. A status line that can be wrong is worse than none — it is the same
+      // "cannot tell broken from not-measured" failure these commands were written to kill,
+      // reproduced inside the fix for it. Measured on cli-publish-html-selftest.
+      const after = await getBySlug(slug, false)
+      const liveNow = after?.status === "published"
+      sp.stop(success(liveNow ? "Published" : "Uploaded (draft)"))
+
+      if (!shouldPublish && liveNow) {
+        prompts.log.warn("--no-publish skips publishing; it does NOT unpublish.")
+        prompts.log.warn(`This page was already live, so the new version is LIVE now.`)
+        prompts.log.info(dim(`To take it down: iris pages unpublish ${slug}`))
+      }
+      console.log(`  ${highlight(publicUrl(slug))}`)
+      console.log()
+      // The publish is not the evidence. Hand over the command that produces evidence,
+      // with the page's own title pre-filled so it is one paste to run.
+      if (liveNow) {
+        // The shared hint below prints the generic verify line; this one is better because
+        // the title is a phrase we KNOW is on the page, so it is one paste to a real check.
+        prompts.log.info(`Verify it: ${highlight(`iris pages verify ${slug} --expect ${JSON.stringify(title)}`)}`)
+      } else {
+        // verify reads /p/, which serves PUBLISHED pages only — suggesting it on a draft
+        // would hand over a command guaranteed to fail for a reason unrelated to the page.
+        prompts.log.info(dim(`Draft — /p/ will 404 until: iris pages publish ${slug}`))
+      }
+      printDesignStandardHint(slug)
+      prompts.outro("Done")
+    } catch (e: any) {
+      sp.stop("Error", 1)
+      prompts.log.error(e?.message ?? String(e))
+      process.exitCode = 1
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
@@ -2946,10 +3901,20 @@ const ShareRevokeCmd = cmd({
  * at the moment a page is created or published puts it in front of the person actually shipping,
  * which is the only place it reliably lands.
  */
-function printDesignStandardHint(): void {
+function printDesignStandardHint(slug?: string): void {
   console.log()
   console.log(`  ${dim("Design standard:")} ${highlight("iris how-to view genesis-design-standard")}`)
   console.log(`  ${dim("Score the 10-point audit before this goes out — and open it in a browser.")}`)
+  // Discoverability by adjacency. `pages read`/`verify` exist because publishing used to
+  // dead-end here with nothing to run next, so people reached for `curl | grep` — which
+  // returns false negatives in both directions (see the ReadCmd header). A verb nobody
+  // knows about is the same as a verb that does not exist, and the moment someone wants it
+  // is the moment a publish finishes. Print it there.
+  if (slug) {
+    console.log()
+    console.log(`  ${dim("Verify the render:")} ${highlight(`iris pages verify ${slug} --expect "a phrase from the page"`)}`)
+    console.log(`  ${dim("Read it as text:  ")} ${highlight(`iris pages read ${slug}`)}`)
+  }
 }
 
 // Genesis is the product; "pages" is the noun it operates on. As an alias, `iris genesis
@@ -2959,8 +3924,8 @@ export const PlatformPagesCommand = productCommand({
   name: "genesis",
   aliases: ["pages"],
   purpose:
-    "Genesis — composable pages and sites: list, view, get/set, pull/push/diff, publish, visibility, share links, versions, qr, screenshot",
-  keywords: ["genesis", "page", "site", "component", "publish", "artifact", "landing", "screenshot"],
+    "Genesis — composable pages and sites: list, view, get/set, pull/push/diff, publish-html, read/verify, visibility, share links, versions, qr, screenshot",
+  keywords: ["genesis", "page", "site", "component", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html"],
   howtos: ["genesis-design-standard", "bespoke", "genesis-sdk", "pages"],
   playbooks: ["pages", "seed-pages"],
   builder: (y) =>
@@ -2982,6 +3947,7 @@ export const PlatformPagesCommand = productCommand({
       .command(ShareRevokeCmd)
       .command(CreateCmd)
       .command(DuplicateCmd)
+      .command(CheckPublicCmd)
       .command(RebrandCmd)
       .command(ComponentsCmd)
       .command(ComposeCmd)
@@ -2991,7 +3957,11 @@ export const PlatformPagesCommand = productCommand({
       .command(RollbackCmd)
       .command(QrCmd)
       .command(ScreenshotCmd)
+      .command(ReadCmd)
+      .command(VerifyCmd)
+      .command(PublishHtmlCmd)
       .command(ReassignCmd)
+      .command(UngateCmd)
       .command(CacheClearCmd)
       .demandCommand(),
 })

@@ -3,7 +3,7 @@ category: Pages & Design
 level: advanced
 tags: [genesis, pages, html, design]
 duration_min: 18
-prerequisites: [pages, genesis-design-standard]
+prerequisites: [pages, genesis-design-standard, genesis-verify-pages]
 ---
 # Bespoke Genesis Pages — How-To
 
@@ -28,27 +28,26 @@ See also: the `/bespoke` skill (`iris playbook run bespoke`) automates this whol
 | **CustomHtml component** | A raw-HTML block inside a normal page (`components:[{type:CustomHtml,props:{html}}]`) | Default. Keeps the page pipeline + theme; publish with `pages:batch` |
 | **Standalone `--template=html`** | A full HTML document served by `public-html.blade.php` | You need a bare document — your own `<head>`, no framework |
 
-## Quick path (CustomHtml lane)
+## Quick path
 
 ```bash
-# 1. Write fragment.html — a <style> block + content, ALL scoped under one wrapper class.
-# 2. Build the page JSON (script escapes the HTML for you):
-python3 -c "
-import json
-html=open('fragment.html').read()
-page={'slug':'my-audit','title':'My Audit','status':'published',
-  'owner_type':'bloq','owner_id':503,
-  'json_content':{'version':'2.0','type':'landing',
-    'theme':{'mode':'light','backgroundColor':'#f6f7f9','branding':{'name':'IRIS','primaryColor':'#16875a'}},
-    'components':[{'type':'CustomHtml','id':'doc','props':{'html':html}}]}}
-open('batch/my-audit.json','w').write(json.dumps(page,ensure_ascii=False,indent=2))"
+# 1. Write doc.html — a <style> block + content, ALL scoped under one wrapper class.
 
-# 3. Publish (batch — NOT `pages create`, see gotcha below):
-iris pages:batch batch --owner-id 503 --dry-run     # confirms "1 comps · wrapped"
-iris pages:batch batch --owner-id 503 --publish     # → created + published
+# 2. Publish it. One command: parses the file, picks the lane, uploads, publishes, purges.
+iris pages publish-html my-audit --file doc.html --owner-id 503 --dry-run   # see the parse
+iris pages publish-html my-audit --file doc.html --owner-id 503             # ship it
 
-# 4. Verify the live render — screenshot https://heyiris.io/p/my-audit
+# 3. Verify what actually rendered — NOT with curl (see below).
+iris pages verify my-audit --expect "a phrase from the page" --lane bespoke
+iris pages screenshot my-audit        # then score the 10-point design audit
 ```
+
+The lane is inferred: a full `<html>` document becomes a standalone `render_mode:html`
+page; a fragment becomes a `CustomHtml` component. `--lane` overrides it.
+
+This replaces the `python3 -c` JSON surgery this recipe used to prescribe, which worked
+through `./pages` relative to the current directory — how a persisted `cd` once shipped a
+stale shadow of `/p/docs` over the live page and printed Done (#181601).
 
 **Update later:** `iris pages pull my-audit` → edit `json_content.components[0].props.html` →
 `iris pages push my-audit` → `iris pages publish my-audit`.
@@ -141,8 +140,12 @@ Scoping is *not* required on this lane (no shell to collide with), which is the 
   `steps: array` while `config/genesis-component-schemas.php` requires `steps.*.label`. Sibling
   components call the same field `title`. When a push is rejected, the error names the exact paths —
   trust it over the component schema.
-- **Verify the LIVE render, not the API response.** A publish reporting success only means the JSON
-  stored. Check `curl` output for your own markup, and confirm it is raw HTML rather than the Vue shell
-  (`grep data-page` — present means `render_mode` did not apply).
+- **Verify the LIVE render, not the API response** — with `iris pages verify <slug>`, **never with
+  `curl | grep`.** A publish reporting success only means the JSON stored. But grepping the served
+  bytes returns false negatives in both directions: a `text-transform:uppercase` headline greps 0 for
+  the text a reader sees, and an absent `data-page` (which is the ANSWER — it means the bespoke blade
+  served it) shows up as a regex crash. `verify` renders in a browser, asserts against the text layer
+  with case and typography folded, reports the lane as a fact, and exits non-zero.
+  Full detail: `iris how-to view genesis-verify-pages`.
 - **Two caches.** After publishing, clear BOTH `iris pages cache-clear <slug>` and
   `iris pages cache-clear <uuid>`. The fan-out only works when the alias map is warm (#177872).
