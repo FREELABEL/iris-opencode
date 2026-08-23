@@ -20,6 +20,10 @@ import {
   DESC_COLS,
   sparkline,
   reconcile,
+  sourceRef,
+  classifySync,
+  planSplit,
+  reimbursableOf,
 } from "./mint-core"
 
 // =============================================================================
@@ -261,6 +265,21 @@ describe("reconcile — can this number be defended?", () => {
     expect(r.excluded.map((e) => e.reason).sort()).toEqual(["scope=business", "scope=client:vanguard"])
   })
 
+  test("REGRESSION: a split parent is excluded, not summed alongside its own children (#182035)", () => {
+    const r = reconcile({
+      ...base,
+      claimed_cents: 60000,
+      rows: [
+        { amount_cents: 60000, scope: "personal", date: "2026-08-05", superseded_by_split: true },
+        { amount_cents: 36000, scope: "personal", date: "2026-08-05" },
+        { amount_cents: 24000, scope: "personal", date: "2026-08-05" },
+      ],
+    })
+    expect(r.ok).toBe(true)
+    expect(r.actual_cents).toBe(60000)
+    expect(r.excluded).toContainEqual({ reason: "superseded by split", count: 1, cents: 60000 })
+  })
+
   test("category filtering is case-insensitive but still exclusive", () => {
     const r = reconcile({
       ...base,
@@ -301,5 +320,293 @@ describe("reconcile — can this number be defended?", () => {
       rows: [{ amount_cents: 100, scope: "personal", date: "2026-08-05T00:00:00.000000Z" }],
     })
     expect(r.ok).toBe(true)
+  })
+})
+
+// =============================================================================
+// Spending groups (#181985) + spend policy (#181986).
+// =============================================================================
+
+import {
+  budgetCategories,
+  groupResolves,
+  coveredCategories,
+  overlappingCategories,
+  evaluatePolicy,
+  groupViolations,
+  overlappingBudgets,
+  NO_POLICY,
+} from "./mint-core"
+
+const GROUPS = [
+  { key: "food", name: "Food & Home", categories: ["groceries", "dining", "household"], active: true },
+  { key: "wheels", name: "Getting Around", categories: ["transportation"], active: true },
+  { key: "old", name: "Retired", categories: ["groceries"], active: false },
+]
+
+describe("spending groups", () => {
+  test("a category budget measures exactly its own category", () => {
+    expect(budgetCategories({ category: "groceries" }, GROUPS)).toEqual(["groceries"])
+  })
+
+  test("a group budget measures every member category", () => {
+    expect(budgetCategories({ group: "food" }, GROUPS).sort()).toEqual(["dining", "groceries", "household"])
+  })
+
+  test("group membership is case- and whitespace-insensitive on both sides", () => {
+    const g = [{ key: "Food", categories: [" Groceries ", "DINING"], active: true }]
+    expect(budgetCategories({ group: "  fOOd " }, g).sort()).toEqual(["dining", "groceries"])
+  })
+
+  test("an inactive group is not a group", () => {
+    expect(budgetCategories({ group: "old" }, GROUPS)).toEqual([])
+    expect(groupResolves({ group: "old" }, GROUPS)).toBe(false)
+  })
+
+  test("a budget naming a group that does not exist measures NOTHING, and says so", () => {
+    // The dangerous alternative is returning [] silently and letting it read as
+    // a healthy $0 budget. groupResolves is what the CLI prints a warning from.
+    expect(budgetCategories({ group: "typo" }, GROUPS)).toEqual([])
+    expect(groupResolves({ group: "typo" }, GROUPS)).toBe(false)
+    expect(groupResolves({ category: "groceries" }, GROUPS)).toBe(true)
+  })
+
+  test("coveredCategories expands groups — the double-count guard", () => {
+    // REGRESSION GUARD: unbudgetedSpend used to subtract budgets.map(b=>b.category).
+    // With a group budget those are undefined, so every member category would
+    // have reappeared as "unbudgeted" while ALSO being inside the group total —
+    // the same dollars reported twice, in two places that each looked right.
+    const budgets = [{ group: "food", active: true }, { category: "transportation", active: true }]
+    expect(coveredCategories(budgets, GROUPS).sort()).toEqual([
+      "dining",
+      "groceries",
+      "household",
+      "transportation",
+    ])
+  })
+
+  test("coveredCategories ignores inactive budgets", () => {
+    expect(coveredCategories([{ group: "food", active: false }], GROUPS)).toEqual([])
+  })
+
+  test("a category in two active groups is reported as overlapping, not silently picked", () => {
+    const g = [
+      { key: "food", categories: ["groceries"], active: true },
+      { key: "essentials", categories: ["groceries", "household"], active: true },
+    ]
+    const dupes = overlappingCategories(g)
+    expect(dupes).toHaveLength(1)
+    expect(dupes[0].category).toBe("groceries")
+    expect(dupes[0].groups.sort()).toEqual(["essentials", "food"])
+  })
+
+  test("an inactive group cannot create an overlap", () => {
+    // GROUPS has "old" (inactive) also claiming groceries.
+    expect(overlappingCategories(GROUPS)).toEqual([])
+  })
+})
+
+describe("spend policy", () => {
+  const KNOWN = ["groceries", "dining", "household", "transportation"]
+
+  test("no policy means no enforcement — an upgrade cannot invalidate an old ledger", () => {
+    expect(evaluatePolicy({ amount_cents: 2000 }, null, KNOWN)).toEqual([])
+    expect(evaluatePolicy({ amount_cents: 2000 }, NO_POLICY, KNOWN)).toEqual([])
+  })
+
+  test("an explicitly inactive policy enforces nothing", () => {
+    const p = { require_category: true, active: false }
+    expect(evaluatePolicy({ amount_cents: 2000 }, p, KNOWN)).toEqual([])
+  })
+
+  test("require_category catches the exact row that started this — `mint spend 20 stuff`", () => {
+    const v = evaluatePolicy({ amount_cents: 2000, description: "stuff" }, { require_category: true }, KNOWN)
+    expect(v.map((x) => x.code)).toEqual(["category_required"])
+  })
+
+  test("every violation is returned, not just the first", () => {
+    const v = evaluatePolicy(
+      { amount_cents: 900000, description: "" },
+      { require_category: true, require_description: true, max_single_expense: 500 },
+      KNOWN,
+    )
+    expect(v.map((x) => x.code).sort()).toEqual(["category_required", "description_required", "over_single_limit"])
+  })
+
+  test("max_single_expense compares in CENTS — no float drift at the boundary", () => {
+    const p = { max_single_expense: 150 }
+    expect(evaluatePolicy({ amount_cents: 15000 }, p, KNOWN)).toEqual([]) // exactly at the cap is fine
+    expect(evaluatePolicy({ amount_cents: 15001 }, p, KNOWN).map((x) => x.code)).toEqual(["over_single_limit"])
+  })
+
+  test("a zero or null limit is not a limit of zero", () => {
+    expect(evaluatePolicy({ amount_cents: 99999 }, { max_single_expense: 0 }, KNOWN)).toEqual([])
+    expect(evaluatePolicy({ amount_cents: 99999 }, { max_single_expense: null }, KNOWN)).toEqual([])
+  })
+
+  test("allowed_categories rejects an off-list category and permits a listed one", () => {
+    const p = { allowed_categories: ["groceries", "household"] }
+    expect(evaluatePolicy({ category: "dining" }, p, KNOWN).map((x) => x.code)).toEqual(["category_not_allowed"])
+    expect(evaluatePolicy({ category: "GROCERIES" }, p, KNOWN)).toEqual([])
+  })
+
+  test("an empty allowed_categories is not an allowlist of nothing", () => {
+    expect(evaluatePolicy({ category: "dining" }, { allowed_categories: [] }, KNOWN)).toEqual([])
+  })
+
+  test("declared_only refuses to enforce against an EMPTY declared set", () => {
+    // Switching this on before any account is loaded would otherwise reject every
+    // write, and read as "mint is broken" rather than "nothing is declared yet".
+    const p = { declared_only: true }
+    expect(evaluatePolicy({ category: "groceries" }, p, [])).toEqual([])
+    expect(evaluatePolicy({ category: "nonsense" }, p, KNOWN).map((x) => x.code)).toEqual(["category_undeclared"])
+  })
+
+  test("declared_only says nothing about an uncategorised row — that is require_category's job", () => {
+    expect(evaluatePolicy({ category: "" }, { declared_only: true }, KNOWN)).toEqual([])
+  })
+
+  test("require_group flags a category that belongs to no group", () => {
+    const v = groupViolations({ category: "coffee" }, { require_group: true }, GROUPS)
+    expect(v.map((x) => x.code)).toEqual(["group_required"])
+    expect(groupViolations({ category: "household" }, { require_group: true }, GROUPS)).toEqual([])
+  })
+
+  test("require_group does not double-report an uncategorised row", () => {
+    // require_category already fires on this. Two errors for one missing field
+    // is how a person concludes the tool is nagging and reaches for --force.
+    expect(groupViolations({ category: "" }, { require_group: true }, GROUPS)).toEqual([])
+  })
+
+  test("require_group ignores an inactive group's members", () => {
+    // "old" is inactive and claims groceries; only "food" should satisfy it.
+    const onlyOld = [{ key: "old", categories: ["coffee"], active: false }]
+    expect(groupViolations({ category: "coffee" }, { require_group: true }, onlyOld).map((x) => x.code)).toEqual([
+      "group_required",
+    ])
+  })
+})
+
+describe("overlapping budgets (groups make this newly possible)", () => {
+  const G = [{ key: "food", categories: ["groceries", "household", "dining"], active: true }]
+
+  test("a group budget and a legacy category budget covering the same category are flagged", () => {
+    const budgets = [
+      { name: "Food & Home", group: "food", active: true },
+      { name: "Groceries — monthly", category: "groceries", active: true },
+    ]
+    const o = overlappingBudgets(budgets, G)
+    expect(o).toHaveLength(1)
+    expect(o[0].category).toBe("groceries")
+    expect(o[0].budgets.sort()).toEqual(["Food & Home", "Groceries — monthly"])
+  })
+
+  test("two budgets on DIFFERENT periods still overlap — a month and a week both count the same dollar", () => {
+    const budgets = [
+      { name: "monthly", category: "groceries", period: "monthly", active: true },
+      { name: "weekly", category: "groceries", period: "weekly", active: true },
+    ]
+    expect(overlappingBudgets(budgets, G)).toHaveLength(1)
+  })
+
+  test("no overlap when budgets cover disjoint categories", () => {
+    const budgets = [
+      { name: "a", category: "groceries", active: true },
+      { name: "b", category: "transportation", active: true },
+    ]
+    expect(overlappingBudgets(budgets, G)).toEqual([])
+  })
+
+  test("an inactive budget cannot create an overlap", () => {
+    const budgets = [
+      { name: "Food & Home", group: "food", active: true },
+      { name: "old", category: "groceries", active: false },
+    ]
+    expect(overlappingBudgets(budgets, G)).toEqual([])
+  })
+})
+
+describe("sourceRef — a dedup key that does not include the amount (#182038)", () => {
+  test("joins non-empty parts with |", () => {
+    expect(sourceRef(["meta", "acct123", "campaign456", "2026-08-23"])).toBe("meta|acct123|campaign456|2026-08-23")
+  })
+
+  test("drops empty/null/undefined parts rather than leaving a bare |", () => {
+    expect(sourceRef(["meta", null, "", undefined, "2026-08-23"])).toBe("meta|2026-08-23")
+  })
+
+  test("numbers are stringified the same as strings", () => {
+    expect(sourceRef(["meta", 123, "2026-08-23"])).toBe(sourceRef(["meta", "123", "2026-08-23"]))
+  })
+})
+
+describe("classifySync — re-syncing the same source_ref (#182038)", () => {
+  test("no existing row is fresh", () => {
+    expect(classifySync(undefined, 4100)).toBe("fresh")
+  })
+
+  test("same amount on re-sync is a duplicate, not a correction", () => {
+    expect(classifySync(4100, 4100)).toBe("duplicate")
+  })
+
+  test("REGRESSION: a platform's stats finalizing mid-day is a correction, not a second row", () => {
+    // This is the exact failure `fingerprint` cannot survive — the same logical
+    // fact reported twice with two different amounts.
+    expect(classifySync(4100, 4620)).toBe("correction")
+    expect(classifySync(4620, 4100)).toBe("correction")
+  })
+})
+
+describe("planSplit — one invoice across several campaigns (#182035)", () => {
+  test("parts that sum exactly to the total succeed, in order", () => {
+    const r = planSplit(60000, [
+      { label: "campaignA", cents: 36000 },
+      { label: "campaignB", cents: 24000 },
+    ])
+    expect(r).toEqual([
+      { label: "campaignA", cents: 36000 },
+      { label: "campaignB", cents: 24000 },
+    ])
+  })
+
+  test("REGRESSION: a split that does not sum to the invoice is refused, not silently rounded", () => {
+    const r = planSplit(60000, [
+      { label: "campaignA", cents: 36000 },
+      { label: "campaignB", cents: 23000 },
+    ]) as { error: string }
+    expect(r.error).toMatch(/drift of \$10\.00/)
+    expect(r.error).toMatch(/\$590\.00/)
+    expect(r.error).toMatch(/\$600\.00/)
+  })
+
+  test("no parts is refused", () => {
+    expect((planSplit(1000, []) as { error: string }).error).toMatch(/no split parts/)
+  })
+
+  test("a zero or negative part is refused", () => {
+    const r = planSplit(1000, [{ label: "a", cents: 0 }]) as { error: string }
+    expect(r.error).toMatch(/positive amount/)
+  })
+
+  test("an unlabeled part is refused", () => {
+    const r = planSplit(1000, [{ label: "  ", cents: 1000 }]) as { error: string }
+    expect(r.error).toMatch(/needs a label/)
+  })
+})
+
+describe("reimbursableOf — business-paid-from-personal (#182036)", () => {
+  test("no paid_from recorded is not a reimbursable — every pre-existing row", () => {
+    expect(reimbursableOf({ metadata: { scope: "business" } })).toBeNull()
+  })
+
+  test("paid_from equal to scope is not a reimbursable", () => {
+    expect(reimbursableOf({ metadata: { scope: "business", paid_from: "business" } })).toBeNull()
+  })
+
+  test("REGRESSION: a business ad bought on a personal card is owed business → personal", () => {
+    // Business benefited from the spend, personal fronted the cash — business
+    // owes personal, not the other way around.
+    const r = reimbursableOf({ metadata: { scope: "business", paid_from: "personal" } })
+    expect(r).toEqual({ owed_by: "business", owed_to: "personal" })
   })
 })

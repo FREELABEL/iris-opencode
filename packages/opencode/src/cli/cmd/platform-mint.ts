@@ -17,6 +17,10 @@ import {
   DESC_COLS,
   centsOf,
   fingerprint,
+  sourceRef,
+  classifySync,
+  planSplit,
+  reimbursableOf,
   normalizeDate,
   parseAmountDollars,
   parseCsv,
@@ -26,6 +30,16 @@ import {
   today,
   verifyAgainstSource,
   ymd,
+  budgetCategories,
+  groupResolves,
+  overlappingCategories,
+  overlappingBudgets,
+  evaluatePolicy,
+  groupViolations,
+  norm,
+  NO_POLICY,
+  type GroupLike,
+  type Policy,
 } from "./mint-core"
 
 // ============================================================================
@@ -102,7 +116,141 @@ async function actualCents(category: string, scope: string, from: string, to: st
   // STRICT: an untagged row belongs to no scope and is counted against none.
   // Defaulting untagged to "personal" would have silently pulled every legacy
   // business transaction into the personal budget the moment a category matched.
-  return rows.filter((tx) => tx?.metadata?.scope === scope).reduce((sum, tx) => sum + (Number(tx.amount_cents) || 0), 0)
+  // A split parent (#182035) is excluded too — its children carry the same
+  // money under their own categories, so counting the parent here double-books
+  // the original invoice on top of every campaign it was split into.
+  return rows
+    .filter((tx) => tx?.metadata?.scope === scope && !tx?.metadata?.superseded_by_split)
+    .reduce((sum, tx) => sum + (Number(tx.amount_cents) || 0), 0)
+}
+
+/**
+ * Sum expense cents across SEVERAL categories — what a group budget measures.
+ *
+ * An EMPTY list sums to 0 and does NOT fall back to "all categories". A budget
+ * pointing at a group that does not resolve must measure nothing; an unfiltered
+ * query would silently make it match every transaction in the scope and report
+ * a wildly overspent budget as fact.
+ */
+async function actualCentsMulti(categories: string[], scope: string, from: string, to: string): Promise<number> {
+  const cats = categories.map(norm).filter(Boolean)
+  if (cats.length === 0) return 0
+  let total = 0
+  for (const c of cats) total += await actualCents(c, scope, from, to)
+  return total
+}
+
+// ── groups + policy datasets (#181985, #181986) ──────────────────────────────
+
+/**
+ * Spending groups, stored as the Atlas dataset `mint-groups` — same pattern as
+ * budgets and merchants. A group is a named set of categories that one cap can
+ * sit on, so a shopping trip splitting across household/groceries/dining has
+ * somewhere to land.
+ */
+async function fetchGroups(scope?: string): Promise<GroupLike[]> {
+  const res = await irisFetch(`/api/v1/atlas/datasets/mint-groups?per_page=200`)
+  if (!res.ok) return []
+  const body = (await res.json()) as any
+  const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+  return records
+    .map((r) => ({ ...(r.data ?? {}) }) as GroupLike)
+    .filter((g) => String(g.key ?? "").trim() !== "")
+    .filter((g) => (scope ? !g.scope || g.scope === scope : true))
+}
+
+/**
+ * The spend policy for a scope (`mint-policy` dataset), or null when none is set.
+ *
+ * null rather than NO_POLICY so callers can tell "no policy exists" from "a
+ * policy exists and permits everything" — the first is a setup gap worth
+ * mentioning, the second is a decision someone made.
+ */
+async function fetchPolicy(scope: string): Promise<Policy | null> {
+  const res = await irisFetch(`/api/v1/atlas/datasets/mint-policy?per_page=200`)
+  if (!res.ok) return null
+  const body = (await res.json()) as any
+  const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+  const rows = records.map((r) => ({ ...(r.data ?? {}) }) as Policy)
+  return rows.find((x) => norm(x.scope) === norm(scope)) ?? null
+}
+
+/**
+ * Field definitions for mint's own datasets, so the first write can create the
+ * schema instead of failing with "Schema not found" and a dead end. Groups and
+ * policy are mint's data — asking someone to hand-craft a schema before using a
+ * feature is a setup step that exists only because nobody automated it.
+ */
+const MINT_SCHEMAS: Record<string, { name: string; fields: any[] }> = {
+  "mint-groups": {
+    name: "Mint Spending Groups",
+    fields: [
+      { key: "key", type: "text", label: "Key" },
+      { key: "name", type: "text", label: "Group" },
+      { key: "categories", type: "text", label: "Categories" },
+      { key: "scope", type: "text", label: "Scope" },
+      { key: "active", type: "boolean", label: "Active" },
+    ],
+  },
+  "mint-policy": {
+    name: "Mint Spend Policy",
+    fields: [
+      { key: "scope", type: "text", label: "Scope" },
+      { key: "require_category", type: "boolean", label: "Require category" },
+      { key: "require_group", type: "boolean", label: "Require group" },
+      { key: "require_description", type: "boolean", label: "Require description" },
+      { key: "declared_only", type: "boolean", label: "Declared only" },
+      { key: "max_single_expense", type: "money", label: "Max single $" },
+      { key: "allowed_categories", type: "text", label: "Allowed categories" },
+      { key: "active", type: "boolean", label: "Active" },
+    ],
+  },
+}
+
+/**
+ * Create one of mint's datasets if it does not exist yet.
+ *
+ * Returns true when the schema is present afterwards. A creation failure is
+ * reported by the CALLER against the write it was for — silently continuing
+ * would turn a missing schema into a lost record.
+ */
+async function ensureSchema(schema: string): Promise<boolean> {
+  const probe = await irisFetch(`/api/v1/atlas/datasets/${schema}?per_page=1`)
+  if (probe.ok) return true
+  const def = MINT_SCHEMAS[schema]
+  if (!def) return false
+  const res = await irisFetch("/api/v1/atlas/schemas", {
+    method: "POST",
+    body: JSON.stringify({ name: def.name, slug: schema, fields: def.fields }),
+  })
+  return res.ok
+}
+
+/** Upsert one record into an Atlas dataset. Idempotent on external_id. */
+async function upsertRecord(schema: string, externalId: string, data: Record<string, any>) {
+  await ensureSchema(schema)
+  return irisFetch(`/api/v1/atlas/datasets/${schema}/import`, {
+    method: "POST",
+    body: JSON.stringify({ records: [{ external_id: externalId, data }], validate: false }),
+  })
+}
+
+/**
+ * Categories the system knows about: chart of accounts + every group member.
+ *
+ * The declared set `declared_only` checks against. It unions both because an
+ * account can exist with no group and a group can name a category before its
+ * account exists — rejecting either would make the strictest setting unusable.
+ */
+async function declaredCategories(scope: string): Promise<string[]> {
+  const [accounts, groups] = await Promise.all([fetchAccounts(), fetchGroups(scope)])
+  const out = new Set<string>()
+  for (const a of accounts) {
+    const n = norm(a?.name)
+    if (n) out.add(n)
+  }
+  for (const g of groups) for (const c of (g.categories ?? []).map(norm)) if (c) out.add(c)
+  return [...out]
 }
 
 /** Transactions carrying no scope at all — invisible to every scoped total. */
@@ -140,7 +288,17 @@ const SpendCommand = cmd({
       .option("account-id", { type: "number", describe: "override the resolved chart-of-accounts id" })
       .option("source", { type: "string", default: "manual", describe: "manual|import|qb|stripe|invoice" })
       .option("revenue", { type: "boolean", default: false, describe: "log as revenue instead of an expense" })
+      .option("force", {
+        type: "boolean",
+        default: false,
+        describe: "write despite a policy violation — the override is recorded on the row",
+      })
       .option("bloq", { type: "number" })
+      .option("paid-from", {
+        type: "string",
+        describe: "the account that actually paid, when different from --scope — e.g. a business ad bought on a personal card (#182036)",
+      })
+      .option("dry-run", { type: "boolean", default: false })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -170,17 +328,71 @@ const SpendCommand = cmd({
     let accountId = args["account-id"]
     if (accountId == null && category) accountId = resolveAccountId(await fetchAccounts(), category)
 
+    // ── policy gate (#181986) ────────────────────────────────────────────────
+    // Checked BEFORE the write. A row that arrives uncategorised can be fixed
+    // later only if someone notices, and the evidence is that nobody does: it
+    // matches no budget, and every screen keeps reporting healthy.
+    const amountCents = Math.round(amount * 100)
+    const scopeStr = String(args.scope)
+    const policy = await fetchPolicy(scopeStr)
+    let violations: { code: string; message: string }[] = []
+    if (policy) {
+      const draft = { amount_cents: amountCents, description, category, scope: scopeStr }
+      violations = [
+        ...evaluatePolicy(draft, policy, await declaredCategories(scopeStr)),
+        ...groupViolations(draft, policy, await fetchGroups(scopeStr)),
+      ]
+    }
+    if (violations.length > 0 && !args.force) {
+      prompts.log.error(`Blocked by the spend policy for scope "${scopeStr}" — nothing was written:`)
+      for (const v of violations) console.log(`    ${dim("·")} ${v.message}  ${dim(`[${v.code}]`)}`)
+      console.log("  " + dim("Fix the row, relax the policy (iris mint policy set), or re-run with --force."))
+      // An audit row for the REFUSAL. A block that leaves no trace is
+      // indistinguishable from a command nobody ran. Logged as a FAILED create
+      // rather than a new "blocked" action: the server's enum rejects unknown
+      // actions with a 422, and ok:false + reason is already the documented
+      // shape for "someone tried and it did not happen".
+      await audit({
+        action: "create",
+        entity: "transaction",
+        scope: scopeStr,
+        after: description,
+        amount,
+        ok: false,
+        reason: `policy_blocked:${violations.map((v) => v.code).join(",")}`,
+      })
+      prompts.outro("Done")
+      return
+    }
+
     const body: Record<string, any> = {
       type: args.revenue ? "revenue" : "expense",
       description,
-      amount_cents: Math.round(amount * 100),
+      amount_cents: amountCents,
       transaction_date: date,
       source: args.source ?? "manual",
       metadata: { scope: args.scope },
     }
+    // The override travels ON the row. An out-of-policy transaction that looks
+    // identical to a compliant one makes the policy unauditable after the fact.
+    if (violations.length > 0 && args.force) {
+      body.metadata.policy_override = violations.map((v) => v.code)
+      body.metadata.policy_overridden_at = new Date().toISOString()
+    }
+    if (args["paid-from"]) body.metadata.paid_from = args["paid-from"]
     if (category) body.category = category
     if (accountId != null) body.account_id = accountId
     if (args.bloq != null) body.bloq_id = args.bloq
+
+    if (args["dry-run"]) {
+      prompts.log.info("Dry run — nothing written")
+      console.log(`  ${args.revenue ? "+" : "-"}${fmtCents(body.amount_cents)}  ${bold(description)}`)
+      console.log("  " + dim([args.scope, category ?? "uncategorized", date].join("  ·  ")))
+      if (args["paid-from"] && args["paid-from"] !== args.scope)
+        console.log("  " + dim(`reimbursable: ${args.scope} owes ${args["paid-from"]}`))
+      prompts.outro("Done")
+      return
+    }
 
     const res = await irisFetch(`/api/v1/atlas/transactions`, { method: "POST", body: JSON.stringify(body) })
     if (!res.ok) {
@@ -219,18 +431,31 @@ const SpendCommand = cmd({
 
     const sign = args.revenue ? "+" : "-"
     console.log(`  ${sign}${fmtCents(body.amount_cents)}  ${bold(description)}`)
+    if (violations.length > 0 && args.force) {
+      prompts.log.warn(
+        `Written with --force over ${violations.length} policy violation(s): ${violations.map((v) => v.code).join(", ")} — recorded on the row.`,
+      )
+    }
     const meta = [args.scope, category ?? dim("uncategorized"), date]
     if (accountId != null) meta.push(`acct #${accountId}`)
     else if (category) meta.push(dim("no matching account"))
     console.log("  " + dim(meta.join("  ·  ")))
+    if (args["paid-from"] && args["paid-from"] !== args.scope)
+      console.log("  " + dim(`reimbursable: ${args.scope} owes ${args["paid-from"]} — see: iris mint reimbursable`))
 
     // Immediate feedback against the budget this just hit — the whole point of
     // capture is seeing the number move, not filing a row.
     if (category) {
-      const budgets = (await fetchBudgets(args.scope)).filter((b) => b.category === category && b.active)
+      const spendGroups = await fetchGroups(String(args.scope))
+      // Include GROUP budgets whose members contain this category — otherwise
+      // moving a budget onto a group silently removes the feedback line that is
+      // the entire reason to log spend from a terminal.
+      const budgets = (await fetchBudgets(args.scope)).filter(
+        (b) => b.active && budgetCategories(b, spendGroups).includes(category),
+      )
       for (const b of budgets) {
         const [from, to] = periodWindow(b.period)
-        const spent = await actualCents(category, args.scope, from, to)
+        const spent = await actualCentsMulti(budgetCategories(b, spendGroups), args.scope, from, to)
         const capCents = Math.round(Number(b.cap ?? 0) * 100)
         if (capCents <= 0) continue
         const pct = (spent / capCents) * 100
@@ -278,6 +503,7 @@ const BudgetsCommand = cmd({
       return
     }
 
+    const listGroups = await fetchGroups(args.scope)
     printDivider()
     for (const b of budgets) {
       const cap = Math.round(Number(b.cap ?? 0) * 100)
@@ -285,6 +511,18 @@ const BudgetsCommand = cmd({
       const range = floor > 0 ? `${fmtCents(floor)}–${fmtCents(cap)}` : fmtCents(cap)
       const flag = b.active ? "" : dim("  (inactive)")
       console.log(`  ${bold(b.name ?? b.external_id)}  ${dim(`${b.scope} · ${b.period}`)}  ${range}${flag}`)
+      const cats = budgetCategories(b, listGroups)
+      if (b.group) {
+        if (!groupResolves(b, listGroups)) {
+          console.log("    " + `⚠ group "${b.group}" does not exist or is inactive — this budget measures NOTHING`)
+        } else {
+          console.log("    " + dim(`group ${b.group} → ${cats.join(", ")}`))
+        }
+      } else if (b.category) {
+        console.log("    " + dim(`category ${b.category}`))
+      } else {
+        console.log("    " + dim("bound to neither a category nor a group — measures nothing"))
+      }
       if (cap <= 0) console.log("    " + dim("no cap set — this budget cannot produce a variance"))
     }
     printDivider()
@@ -330,6 +568,7 @@ const StatusCommand = cmd({
     }
 
     const untagged = await fetchUntagged()
+    const statusGroups = await fetchGroups(String(args.scope))
     spinner.stop(`${rows.length} budget(s)`)
 
     if (args.json) {
@@ -344,9 +583,42 @@ const StatusCommand = cmd({
       )
     }
 
+    // A budget bound to a group that does not exist measures NO categories, so
+    // it reports $0 spent and looks like the healthiest row on the screen. That
+    // is the one shape on this page that must never be quiet.
+    for (const r of rows.filter((x) => !x.group_resolves)) {
+      prompts.log.error(
+        `"${r.name}" is bound to group "${r.group}", which does not exist or is inactive — it measures NOTHING. The $0.00 below is not a low number, it is an absent one.`,
+      )
+    }
+    // Overlapping groups double-count: the same dollars land in two budgets,
+    // each correct alone, and the total stops tying to the ledger.
+    for (const o of overlappingCategories(statusGroups)) {
+      prompts.log.warn(
+        `category "${o.category}" belongs to ${o.groups.length} active groups (${o.groups.join(", ")}) — its spend is counted in each`,
+      )
+    }
+    // The same hazard one level up, and the one groups newly introduce: a group
+    // budget and a legacy category budget can both cover a category. Each row
+    // reads correctly on its own; only the TOTAL is wrong, which is the hardest
+    // kind of wrong to notice.
+    for (const o of overlappingBudgets(
+      (await fetchBudgets(String(args.scope))).filter((b) => b.active),
+      statusGroups,
+    )) {
+      prompts.log.warn(
+        `"${o.category}" is covered by ${o.budgets.length} active budgets (${o.budgets.join(", ")}) — those dollars are counted in each, so the TOTAL double-counts them`,
+      )
+    }
+
     printDivider()
     for (const r of rows) {
-      console.log(`  ${bold(r.name)}  ${dim(`${r.from} → ${r.to}`)}`)
+      const binding = r.group ? dim(`  group:${r.group}`) : r.category ? dim(`  ${r.category}`) : ""
+      console.log(`  ${bold(r.name)}${binding}  ${dim(`${r.from} → ${r.to}`)}`)
+      if (!r.group_resolves) {
+        console.log("    " + dim(`measures 0 categories — unresolved group "${r.group}"`))
+        continue
+      }
       if (r.cap_cents <= 0) {
         console.log("    " + dim("no cap set — cannot compare") + `  (spent ${fmtCents(r.spent_cents)})`)
         continue
@@ -355,6 +627,11 @@ const StatusCommand = cmd({
       console.log(
         `    ${bar(r.pct)} ${String(Math.round(r.pct)).padStart(3)}%  ${fmtCents(r.spent_cents)} / ${fmtCents(r.cap_cents)}  ${dim(`${fmtCents(r.remaining_cents)} left`)}${warn}`,
       )
+      // The breakdown is the point of a group — a cap that fits while one member
+      // eats all of it is a different situation from an evenly spread one.
+      for (const pc of r.per_category ?? []) {
+        console.log(`      ${dim("·")} ${String(pc.category).padEnd(18)} ${dim(fmtCents(pc.cents))}`)
+      }
     }
     printDivider()
     prompts.outro("Done")
@@ -444,6 +721,165 @@ const ScopeCommand = cmd({
   },
 })
 
+/**
+ * Backfill metadata.paid_from onto existing rows (#182036) — the account that
+ * actually paid, when it differs from the scope (books) the row counts
+ * against. Same shape as ScopeCommand: it exists for the exact same reason —
+ * historical rows cannot be fixed by changing what NEW rows write.
+ */
+const PaidFromCommand = cmd({
+  command: "paid-from <scope>",
+  describe: "tag transactions with who actually paid, when different from --scope — `iris mint paid-from personal --tx 42`",
+  builder: (y) =>
+    y
+      .positional("scope", { type: "string", describe: "personal | business | client:<slug>" })
+      .option("tx", { type: "number", array: true, describe: "transaction id(s) to tag" })
+      .option("dry-run", { type: "boolean", default: false, describe: "show what would change, write nothing" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mint Paid-From")
+    const token = await requireAuth()
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
+
+    if (!args.tx?.length) {
+      prompts.log.error("Pass --tx <id> (one or more)")
+      prompts.outro("Done")
+      return
+    }
+    let targets: any[] = []
+    for (const id of args.tx) {
+      const res = await irisFetch(`/api/v1/atlas/transactions/${id}`)
+      if (res.ok) targets.push(((await res.json()) as any)?.data)
+    }
+    targets = targets.filter(Boolean)
+    if (targets.length === 0) {
+      prompts.log.warn("Nothing to tag")
+      prompts.outro("Done")
+      return
+    }
+
+    printDivider()
+    for (const tx of targets) {
+      console.log(
+        `  ${dim(`#${tx.id}`)}  ${dim(String(tx.transaction_date ?? "").slice(0, 10))}  ${fmtCents(tx.amount_cents)}  ${bold(tx.description ?? "")}  ${dim(`scope=${tx?.metadata?.scope ?? "(untagged)"}`)}`,
+      )
+    }
+    printDivider()
+
+    if (args["dry-run"]) {
+      prompts.log.info(`Dry run — ${targets.length} transaction(s) would be tagged paid_from=${args.scope}`)
+      prompts.outro("Done")
+      return
+    }
+
+    let ok = 0
+    for (const tx of targets) {
+      const before = tx?.metadata?.paid_from ?? null
+      const metadata = { ...(tx.metadata ?? {}), paid_from: args.scope }
+      const res = await irisFetch(`/api/v1/atlas/transactions/${tx.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ metadata }),
+      })
+      if (res.ok) ok++
+      else prompts.log.warn(`#${tx.id} failed (${res.status})`)
+      await audit({
+        action: "backfill",
+        entity: "transaction",
+        entity_id: tx.id,
+        scope: String(tx?.metadata?.scope ?? ""),
+        field: "metadata.paid_from",
+        before: before ?? "(unset)",
+        after: String(args.scope),
+        amount: (Number(tx.amount_cents) || 0) / 100,
+        ok: res.ok,
+        reason: res.ok ? undefined : `HTTP ${res.status}`,
+      })
+    }
+    prompts.log.success(`Tagged ${ok}/${targets.length} as paid_from=${args.scope}`)
+    prompts.outro("Done")
+  },
+})
+
+/**
+ * Which of these two accounts owes the other, and how much (#182036). Reads
+ * `metadata.paid_from` off every transaction where it differs from
+ * `metadata.scope` — the books say one account, the card says another.
+ */
+const ReimbursableCommand = cmd({
+  command: "reimbursable",
+  describe: "list transactions where the paying account differs from the scope they count against",
+  builder: (y) =>
+    y
+      .option("scope", { alias: "s", type: "string", describe: "only rows whose books-scope is this" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mint Reimbursable")
+    const token = await requireAuth()
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Reading the ledger…")
+    const res = await irisFetch(`/api/v1/atlas/transactions?per_page=500&type=expense`)
+    if (!res.ok) {
+      spinner.stop("Could not read the ledger", 1)
+      prompts.log.error(`HTTP ${res.status} — NOT a clean result. The check did not run.`)
+      prompts.outro("Done")
+      return
+    }
+    const body = (await res.json()) as any
+    const rows: any[] = body?.data?.data ?? body?.data ?? []
+
+    const found = rows
+      .map((tx) => ({ tx, rec: reimbursableOf(tx) }))
+      .filter((x): x is { tx: any; rec: { owed_by: string; owed_to: string } } => x.rec !== null)
+      .filter((x) => (args.scope ? x.tx?.metadata?.scope === args.scope : true))
+    spinner.stop(`${rows.length} row(s) examined`)
+
+    if (args.json) {
+      await writeJson(
+        found.map((x) => ({
+          id: x.tx.id,
+          date: x.tx.transaction_date,
+          description: x.tx.description,
+          amount_cents: x.tx.amount_cents,
+          owed_by: x.rec.owed_by,
+          owed_to: x.rec.owed_to,
+        })),
+      )
+      prompts.outro("Done")
+      return
+    }
+
+    if (found.length === 0) {
+      prompts.log.success("Nothing reimbursable — every row's paid_from matches its scope")
+      prompts.outro("Done")
+      return
+    }
+
+    const totals = new Map<string, number>()
+    printDivider()
+    for (const { tx, rec } of found) {
+      const key = `${rec.owed_by} owes ${rec.owed_to}`
+      totals.set(key, (totals.get(key) ?? 0) + (Number(tx.amount_cents) || 0))
+      console.log(
+        `  ${dim(String(tx.transaction_date ?? "").slice(0, 10))}  ${fmtCents(tx.amount_cents).padEnd(12)}  ${bold(String(tx.description ?? "").slice(0, 40))}  ${dim(key)}`,
+      )
+    }
+    printDivider()
+    for (const [key, cents] of [...totals.entries()].sort((a, b) => b[1] - a[1])) {
+      console.log(`  ${bold(fmtCents(cents))}  ${key}`)
+    }
+    prompts.outro("Done")
+  },
+})
+
 // ── statement / CSV import ───────────────────────────────────────────────────
 
 /** RFC4180-ish CSV. Handles quoted fields containing commas and escaped quotes. */
@@ -460,6 +896,25 @@ async function existingFingerprints(from: string, to: string): Promise<Set<strin
       const d = String(tx.transaction_date ?? "").slice(0, 10)
       out.add(fingerprint(d, Number(tx.amount_cents) || 0, String(tx.description ?? "")))
     }
+  }
+  return out
+}
+
+/**
+ * Existing rows indexed by `metadata.source_ref` (#182038) — the stable-identity
+ * dedup that survives a source revising its own amount, unlike `fingerprint`.
+ * Only rows written WITH a source_ref are indexed; rows without one are outside
+ * this mechanism entirely and keep going through `existingFingerprints` as before.
+ */
+async function existingBySourceRef(from: string, to: string): Promise<Map<string, { id: number; amount_cents: number }>> {
+  const out = new Map<string, { id: number; amount_cents: number }>()
+  const res = await irisFetch(`/api/v1/atlas/transactions?per_page=500&from=${from}&to=${to}`)
+  if (!res.ok) return out
+  const body = (await res.json()) as any
+  const rows: any[] = body?.data?.data ?? body?.data ?? []
+  for (const tx of rows) {
+    const ref = tx?.metadata?.source_ref
+    if (ref) out.set(String(ref), { id: tx.id, amount_cents: Number(tx.amount_cents) || 0 })
   }
   return out
 }
@@ -491,6 +946,18 @@ const ImportCommand = cmd({
       })
       .option("min-amount", { type: "number", default: 0.01, describe: "skip rows below this absolute amount" })
       .option("revenue", { type: "boolean", default: false, describe: "import as revenue instead of expense" })
+      .option("source-ref-col", {
+        type: "string",
+        describe:
+          "column holding a STABLE external id (e.g. platform:account:campaign:date). Dedup keys off this instead " +
+          "of date+amount+description, so a re-sync that revises the amount corrects the row instead of " +
+          "duplicating it (#182038). Ignored with --group-by, since a rolled-up row has no single source row. " +
+          "Rows without a value in this column fall back to the normal fingerprint dedup.",
+      })
+      .option("paid-from", {
+        type: "string",
+        describe: "the account that actually paid, when different from --scope — e.g. a business ad bought on a personal card (#182036)",
+      })
       .option("dry-run", { type: "boolean", default: false })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -524,9 +991,15 @@ const ImportCommand = cmd({
     const di = pickCol(headers, DATE_COLS, args["date-col"])
     const ai = pickCol(headers, AMT_COLS, args["amount-col"])
     const si = pickCol(headers, DESC_COLS, args["desc-col"])
+    const refCol = args["source-ref-col"] ? pickCol(headers, [], args["source-ref-col"]) : -1
     if (di < 0 || ai < 0) {
       prompts.log.error(`Could not find a date and amount column. Headers: ${headers.join(", ")}`)
       prompts.log.info("Point at them with --date-col and --amount-col")
+      prompts.outro("Done")
+      return
+    }
+    if (args["source-ref-col"] && refCol < 0) {
+      prompts.log.error(`No column named "${args["source-ref-col"]}". Headers: ${headers.join(", ")}`)
       prompts.outro("Done")
       return
     }
@@ -536,7 +1009,7 @@ const ImportCommand = cmd({
     const minAmount = Number(args["min-amount"])
     let skippedSmall = 0,
       skippedBad = 0
-    type Row = { date: string; amount: number; desc: string }
+    type Row = { date: string; amount: number; desc: string; ref?: string }
     const parsed: Row[] = []
     for (const r of grid.slice(1)) {
       const date = normalizeDate(r[di] ?? "")
@@ -547,7 +1020,8 @@ const ImportCommand = cmd({
       }
       if (args.invert) amount = -amount
       amount = Math.abs(amount)
-      parsed.push({ date, amount, desc: (si >= 0 ? r[si] : "") || path.basename(file) })
+      const ref = refCol >= 0 ? (r[refCol] ?? "").trim() : ""
+      parsed.push({ date, amount, desc: (si >= 0 ? r[si] : "") || path.basename(file), ref: ref || undefined })
     }
     if (parsed.length === 0) {
       prompts.log.warn(`Nothing to import (${skippedBad} unparseable)`)
@@ -560,6 +1034,9 @@ const ImportCommand = cmd({
     const groupBy = String(args["group-by"])
     const label = args.label ?? path.basename(file).replace(/\.csv$/i, "")
     let items: Row[] = parsed
+    if (groupBy !== "none" && refCol >= 0) {
+      prompts.log.warn("--source-ref-col is ignored with --group-by — a rolled-up row has no single source row")
+    }
     if (groupBy === "day" || groupBy === "month") {
       const buckets = new Map<string, { amount: number; n: number }>()
       for (const p of parsed) {
@@ -588,17 +1065,38 @@ const ImportCommand = cmd({
     }
 
     const dates = items.map((i) => i.date).sort()
-    const seen = await existingFingerprints(dates[0], dates[dates.length - 1])
-    const fresh = items.filter((i) => !seen.has(fingerprint(i.date, centsOf(i), i.desc)))
-    const dupes = items.length - fresh.length
+    const [seen, byRef] = await Promise.all([
+      existingFingerprints(dates[0], dates[dates.length - 1]),
+      refCol >= 0 ? existingBySourceRef(dates[0], dates[dates.length - 1]) : Promise.resolve(new Map<string, { id: number; amount_cents: number }>()),
+    ])
+
+    // Rows carrying a stable source_ref (#182038) are classified fresh / duplicate
+    // / correction by identity, independent of amount. Everything else keeps the
+    // original value-based fingerprint dedup, unchanged.
+    type Classified = Row & { cls: "fresh" | "duplicate" | "correction"; existingId?: number }
+    const classified: Classified[] = items.map((i) => {
+      if (i.ref) {
+        const existing = byRef.get(i.ref)
+        return { ...i, cls: classifySync(existing?.amount_cents, centsOf(i)), existingId: existing?.id }
+      }
+      const cls = seen.has(fingerprint(i.date, centsOf(i), i.desc)) ? "duplicate" : "fresh"
+      return { ...i, cls }
+    })
+    const fresh = classified.filter((i) => i.cls === "fresh")
+    const corrections = classified.filter((i) => i.cls === "correction")
+    const dupes = classified.filter((i) => i.cls === "duplicate").length
     const total = fresh.reduce((s, i) => s + centsOf(i), 0)
 
     printDivider()
     for (const i of fresh.slice(0, 20)) console.log(`  ${dim(i.date)}  ${fmtCents(centsOf(i)).padEnd(12)}  ${i.desc}`)
     if (fresh.length > 20) console.log("  " + dim(`… ${fresh.length - 20} more`))
+    for (const i of corrections.slice(0, 20))
+      console.log(`  ${dim(i.date)}  ${fmtCents(centsOf(i)).padEnd(12)}  ${i.desc}  ${dim(`(correcting #${i.existingId})`)}`)
+    if (corrections.length > 20) console.log("  " + dim(`… ${corrections.length - 20} more corrections`))
     printDivider()
     console.log(
-      `  ${bold(String(fresh.length))} new  ·  ${dim(`${dupes} already imported`)}  ·  ${bold(fmtCents(total))}`,
+      `  ${bold(String(fresh.length))} new  ·  ${bold(String(corrections.length))} corrected  ·  ` +
+        `${dim(`${dupes} unchanged`)}  ·  ${bold(fmtCents(total))}`,
     )
     if (skippedSmall || skippedBad)
       console.log("  " + dim(`skipped: ${skippedSmall} under min-amount, ${skippedBad} unparseable`))
@@ -608,7 +1106,7 @@ const ImportCommand = cmd({
       prompts.outro("Done")
       return
     }
-    if (fresh.length === 0) {
+    if (fresh.length === 0 && corrections.length === 0) {
       await recordRun({
         kind: "import",
         scope: String(args.scope),
@@ -627,17 +1125,20 @@ const ImportCommand = cmd({
 
     let ok = 0
     for (const i of fresh) {
+      const metadata: Record<string, any> = {
+        scope: args.scope,
+        fp: fingerprint(i.date, centsOf(i), i.desc),
+        imported_from: path.basename(file),
+      }
+      if (i.ref) metadata.source_ref = i.ref
+      if (args["paid-from"]) metadata.paid_from = args["paid-from"]
       const body: Record<string, any> = {
         type: args.revenue ? "revenue" : "expense",
         description: i.desc.slice(0, 500),
         amount_cents: centsOf(i),
         transaction_date: i.date,
         source: "import",
-        metadata: {
-          scope: args.scope,
-          fp: fingerprint(i.date, centsOf(i), i.desc),
-          imported_from: path.basename(file),
-        },
+        metadata,
       }
       if (args.category) body.category = args.category
       if (args["account-id"] != null) body.account_id = args["account-id"]
@@ -645,19 +1146,217 @@ const ImportCommand = cmd({
       if (res.ok) ok++
       else prompts.log.warn(`${i.date} ${fmtCents(centsOf(i))} failed (${res.status})`)
     }
+
+    // Corrections update the ONE row a revised source_ref belongs to — never a
+    // second row — and every correction is audited with before/after so a
+    // revised figure stays defensible (#182038).
+    let corrected = 0
+    for (const i of corrections) {
+      const before = byRef.get(i.ref!)!
+      const res = await irisFetch(`/api/v1/atlas/transactions/${i.existingId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          amount_cents: centsOf(i),
+          metadata: { source_ref: i.ref, corrected_at: new Date().toISOString(), imported_from: path.basename(file) },
+        }),
+      })
+      if (res.ok) corrected++
+      else prompts.log.warn(`#${i.existingId} correction failed (${res.status})`)
+      await audit({
+        action: "update",
+        entity: "transaction",
+        entity_id: i.existingId,
+        scope: String(args.scope),
+        field: "amount_cents",
+        before: fmtCents(before.amount_cents),
+        after: fmtCents(centsOf(i)),
+        amount: centsOf(i) / 100,
+        ok: res.ok,
+        reason: res.ok ? "source_ref_correction" : `HTTP ${res.status}`,
+      })
+    }
+
     await recordRun({
       kind: "import",
       scope: String(args.scope),
       rail: "csv",
-      ok: ok === fresh.length,
-      failures: fresh.length - ok,
+      ok: ok === fresh.length && corrected === corrections.length,
+      failures: fresh.length - ok + (corrections.length - corrected),
       candidates: items.length,
       written: ok,
       duplicates: dupes,
       amount: total / 100,
       notes: path.basename(file),
     })
-    prompts.log.success(`Imported ${ok}/${fresh.length} · ${fmtCents(total)} · scope=${args.scope}`)
+    prompts.log.success(
+      `Imported ${ok}/${fresh.length} new · corrected ${corrected}/${corrections.length} · ${fmtCents(total)} · scope=${args.scope}`,
+    )
+    prompts.outro("Done")
+  },
+})
+
+// ── split ─────────────────────────────────────────────────────────────────────
+
+/** `"campaignA=360.00,campaignB=240.00"` → [{label, cents}]. Dollars, like every other amount option here. */
+function parseSplitInto(raw: string): { label: string; cents: number }[] | { error: string } {
+  const parts: { label: string; cents: number }[] = []
+  for (const chunk of raw.split(",")) {
+    const piece = chunk.trim()
+    if (!piece) continue
+    const eq = piece.indexOf("=")
+    if (eq < 0) return { error: `"${piece}" is not label=amount` }
+    const label = piece.slice(0, eq).trim()
+    const dollars = parseAmountDollars(piece.slice(eq + 1))
+    if (dollars == null) return { error: `"${piece}" has no valid amount` }
+    parts.push({ label, cents: Math.round(dollars * 100) })
+  }
+  return parts
+}
+
+const SplitCommand = cmd({
+  command: "split <id>",
+  describe: "divide one invoice across several categories/campaigns — `iris mint split 42 --into \"campaignA=360.00,campaignB=240.00\"`",
+  builder: (y) =>
+    y
+      .positional("id", { type: "number", describe: "the transaction to split" })
+      .option("into", { type: "string", demandOption: true, describe: "comma-separated label=amount pairs, in dollars" })
+      .option("dry-run", { type: "boolean", default: false, describe: "show the plan, write nothing" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mint Split")
+    const token = await requireAuth()
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
+
+    const res = await irisFetch(`/api/v1/atlas/transactions/${args.id}`)
+    if (!res.ok) {
+      prompts.log.error(`#${args.id} not found (HTTP ${res.status})`)
+      prompts.outro("Done")
+      return
+    }
+    const parent = ((await res.json()) as any)?.data
+    if (!parent) {
+      prompts.log.error(`#${args.id} not found`)
+      prompts.outro("Done")
+      return
+    }
+    if (parent?.metadata?.superseded_by_split) {
+      prompts.log.error(`#${args.id} was already split — see metadata.split_into`)
+      prompts.outro("Done")
+      return
+    }
+    if (parent?.metadata?.split_of) {
+      prompts.log.error(`#${args.id} is itself a split line, not an invoice — split the original instead`)
+      prompts.outro("Done")
+      return
+    }
+
+    const parsed = parseSplitInto(String(args.into))
+    if ("error" in parsed) {
+      prompts.log.error(parsed.error)
+      prompts.outro("Done")
+      return
+    }
+
+    const plan = planSplit(Number(parent.amount_cents) || 0, parsed)
+    if ("error" in plan) {
+      prompts.log.error(plan.error)
+      prompts.outro("Done")
+      return
+    }
+
+    printDivider()
+    console.log(
+      `  #${parent.id}  ${fmtCents(parent.amount_cents)}  ${bold(parent.description ?? "")}  ${dim(`scope=${parent?.metadata?.scope ?? "(untagged)"}`)}`,
+    )
+    console.log("  " + dim("splits into:"))
+    for (const p of plan) console.log(`    ${fmtCents(p.cents).padEnd(12)}  ${p.label}`)
+    printDivider()
+
+    if (args["dry-run"]) {
+      prompts.log.info("Dry run — nothing written")
+      prompts.outro("Done")
+      return
+    }
+
+    const scope = parent?.metadata?.scope
+    const splitOf = parent?.metadata?.source_ref ?? parent?.metadata?.fp ?? String(parent.id)
+    const childIds: number[] = []
+    let ok = 0
+    for (const p of plan) {
+      const body: Record<string, any> = {
+        type: parent.type ?? "expense",
+        description: `${parent.description ?? ""} — ${p.label}`.slice(0, 500),
+        amount_cents: p.cents,
+        transaction_date: parent.transaction_date,
+        source: "split",
+        category: p.label,
+        metadata: { scope, split_of: splitOf, split_parent_id: parent.id },
+      }
+      const cres = await irisFetch(`/api/v1/atlas/transactions`, { method: "POST", body: JSON.stringify(body) })
+      if (cres.ok) {
+        ok++
+        const child = ((await cres.json()) as any)?.data
+        if (child?.id != null) childIds.push(child.id)
+      } else {
+        prompts.log.warn(`"${p.label}" failed (${cres.status})`)
+      }
+      await audit({
+        action: "create",
+        entity: "transaction",
+        scope: String(scope ?? ""),
+        field: `split_of=#${parent.id}`,
+        after: `${p.label} ${fmtCents(p.cents)}`,
+        amount: p.cents / 100,
+        ok: cres.ok,
+        reason: cres.ok ? "split" : `HTTP ${cres.status}`,
+      })
+    }
+
+    if (ok !== plan.length) {
+      prompts.log.error(`Only ${ok}/${plan.length} split line(s) written — the parent was NOT marked split. Fix the failures and re-run.`)
+      prompts.outro("Done")
+      return
+    }
+
+    // The parent is never deleted — it stays as the audit trail for the
+    // original invoice — but it must not be summed alongside its own children.
+    const pres = await irisFetch(`/api/v1/atlas/transactions/${parent.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        metadata: { ...(parent.metadata ?? {}), superseded_by_split: true, split_into: childIds },
+      }),
+    })
+    await audit({
+      action: "update",
+      entity: "transaction",
+      entity_id: parent.id,
+      scope: String(scope ?? ""),
+      field: "metadata.superseded_by_split",
+      before: "false",
+      after: "true",
+      amount: (Number(parent.amount_cents) || 0) / 100,
+      ok: pres.ok,
+      reason: pres.ok ? "split" : `HTTP ${pres.status}`,
+    })
+    if (!pres.ok) {
+      prompts.log.error(
+        `${plan.length} split line(s) written, but marking #${parent.id} as split failed (HTTP ${pres.status}) — ` +
+          `it will still be double-counted alongside its children until this is fixed.`,
+      )
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.json) {
+      await writeJson({ parent_id: parent.id, children: childIds })
+      prompts.outro("Done")
+      return
+    }
+    prompts.log.success(`Split #${parent.id} into ${ok} line(s)`)
     prompts.outro("Done")
   },
 })
@@ -1260,6 +1959,7 @@ async function unbudgetedSpend(scope: string, from: string, to: string, budgeted
   const buckets = new Map<string, number>()
   for (const tx of rows) {
     if (tx?.metadata?.scope !== scope) continue
+    if (tx?.metadata?.superseded_by_split) continue // its children carry this money now (#182035)
     const cat = String(tx.category ?? "").toLowerCase()
     if (known.has(cat)) continue
     buckets.set(cat || "(uncategorised)", (buckets.get(cat || "(uncategorised)") ?? 0) + (Number(tx.amount_cents) || 0))
@@ -1274,14 +1974,31 @@ async function unbudgetedSpend(scope: string, from: string, to: string, budgeted
 async function computePosition(scope: string, period?: string) {
   let budgets = (await fetchBudgets(scope)).filter((b) => b.active)
   if (period) budgets = budgets.filter((b) => b.period === period)
+  const posGroups = await fetchGroups(scope)
   const rows: any[] = []
   for (const b of budgets) {
     const [from, to] = periodWindow(b.period)
-    const spent = await actualCents(b.category, scope, from, to)
+    // A group budget measures every member category, a category budget one.
+    // Both go through the same path so a group cannot drift from a plain budget
+    // in how its actuals are summed.
+    const cats = budgetCategories(b, posGroups)
+    const resolves = groupResolves(b, posGroups)
+    const spent = await actualCentsMulti(cats, scope, from, to)
     const capCents = Math.round(Number(b.cap ?? 0) * 100)
+    const perCategory: any[] = []
+    if (b.group && resolves && cats.length > 1) {
+      for (const c of cats) perCategory.push({ category: c, cents: await actualCents(c, scope, from, to) })
+      perCategory.sort((x, y) => y.cents - x.cents)
+    }
     rows.push({
       name: b.name,
       category: b.category,
+      group: b.group ?? null,
+      // Every category this row actually measures — the snapshot and the
+      // unbudgeted calculation need the expanded set, not the binding.
+      categories: cats,
+      group_resolves: resolves,
+      per_category: perCategory,
       period: b.period,
       from,
       to,
@@ -1336,7 +2053,11 @@ const SnapshotCommand = cmd({
       String(args.scope),
       froms[0],
       tos[tos.length - 1],
-      rows.map((r) => r.category),
+      // Expanded, not `r.category` — a group budget has no single category, so
+      // the old form would re-report every member as unbudgeted while it was
+      // ALSO counted inside the group total: the same dollars twice, both
+      // looking correct alone. Guarded by a test in mint-core.test.ts.
+      rows.flatMap((r) => (r.categories?.length ? r.categories : [r.category])),
     )
 
     printDivider()
@@ -1729,6 +2450,405 @@ const VerifyCommand = cmd({
   },
 })
 
+
+// ── groups (#181985) ─────────────────────────────────────────────────────────
+
+const GroupListCommand = cmd({
+  command: "list",
+  aliases: ["ls"],
+  describe: "list spending groups and the categories in them",
+  builder: (y) =>
+    y
+      .option("scope", { alias: "s", type: "string", describe: "filter by scope" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mint Groups")
+    const token = await requireAuth()
+    if (!token) return prompts.outro("Done")
+
+    const groups = await fetchGroups(args.scope)
+    if (args.json) {
+      await writeJson(groups)
+      return prompts.outro("Done")
+    }
+    if (groups.length === 0) {
+      prompts.log.warn("No spending groups yet. Create one: iris mint group set food --add groceries --add household")
+      return prompts.outro("Done")
+    }
+
+    const budgets = (await fetchBudgets(args.scope)).filter((b) => b.active)
+    printDivider()
+    for (const g of groups) {
+      const cats = (g.categories ?? []).map(norm).filter(Boolean)
+      const flag = g.active === false ? dim("  (inactive)") : ""
+      const capped = budgets.filter((b) => norm(b.group) === norm(g.key))
+      console.log(`  ${bold(String(g.name ?? g.key))}  ${dim(`key:${g.key}${g.scope ? " · " + g.scope : ""}`)}${flag}`)
+      console.log(`    ${cats.length ? cats.join(", ") : dim("no categories — this group measures nothing")}`)
+      // A group with no budget is a label, not a cap. Saying so is the difference
+      // between "set up" and "set up and actually enforcing".
+      if (capped.length === 0) console.log("    " + dim("no budget is bound to this group — it caps nothing yet"))
+      else console.log("    " + dim(`capped by: ${capped.map((b) => b.name).join(", ")}`))
+    }
+    printDivider()
+    for (const o of overlappingCategories(groups)) {
+      prompts.log.warn(
+        `"${o.category}" is in ${o.groups.length} active groups (${o.groups.join(", ")}) — its spend counts in each`,
+      )
+    }
+    prompts.outro("Done")
+  },
+})
+
+const GroupSetCommand = cmd({
+  command: "set <key>",
+  describe: "create or edit a spending group — `iris mint group set food --add groceries --add household`",
+  builder: (y) =>
+    y
+      .positional("key", { type: "string", describe: "short stable key, e.g. food" })
+      .option("name", { type: "string", describe: "display name" })
+      .option("add", { type: "string", array: true, describe: "category to add (repeatable)" })
+      .option("remove", { type: "string", array: true, describe: "category to remove (repeatable)" })
+      .option("scope", {
+        alias: "s",
+        type: "string",
+        default: DEFAULT_SCOPE,
+        describe: "personal | business | client:<slug>",
+      })
+      .option("inactive", { type: "boolean", default: false, describe: "mark the group inactive" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mint Group")
+    const token = await requireAuth()
+    if (!token) return prompts.outro("Done")
+
+    const key = norm(args.key)
+    if (!key) {
+      prompts.log.error("Needs a key: iris mint group set food --add groceries")
+      return prompts.outro("Done")
+    }
+
+    const existing = (await fetchGroups()).find((g) => norm(g.key) === key)
+    const cats = new Set((existing?.categories ?? []).map(norm).filter(Boolean))
+    for (const c of (args.add ?? []).map(norm)) if (c) cats.add(c)
+    for (const c of (args.remove ?? []).map(norm)) cats.delete(c)
+    const categories = [...cats].sort()
+
+    const data = {
+      key,
+      name: args.name ?? existing?.name ?? args.key,
+      categories,
+      scope: args.scope ?? existing?.scope ?? DEFAULT_SCOPE,
+      active: args.inactive ? false : (existing?.active ?? true),
+    }
+
+    const res = await upsertRecord("mint-groups", key, data)
+    const ok = await handleApiError(res, "Save group")
+    if (!ok) return prompts.outro("Done")
+
+    await audit({
+      action: existing ? "update" : "create",
+      entity: "mint-group",
+      scope: String(data.scope),
+      field: `categories=${categories.join("|")}`,
+      after: key,
+      ok: true,
+    })
+
+    if (args.json) {
+      await writeJson(data)
+      return prompts.outro("Done")
+    }
+    console.log(`  ${bold(String(data.name))}  ${dim(`key:${key} · ${data.scope}`)}`)
+    console.log(`    ${categories.length ? categories.join(", ") : dim("no categories")}`)
+    if (categories.length === 0) {
+      prompts.log.warn(
+        "A group with no categories sums to $0 — any budget bound to it reads as healthy while measuring nothing.",
+      )
+    }
+    prompts.outro("Done")
+  },
+})
+
+const GroupRmCommand = cmd({
+  command: "rm <key>",
+  aliases: ["remove"],
+  describe: "deactivate a spending group",
+  builder: (y) => y.positional("key", { type: "string" }).option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mint Group")
+    const token = await requireAuth()
+    if (!token) return prompts.outro("Done")
+
+    const key = norm(args.key)
+    const existing = (await fetchGroups()).find((g) => norm(g.key) === key)
+    if (!existing) {
+      prompts.log.error(`No group "${key}"`)
+      return prompts.outro("Done")
+    }
+
+    // Refuse while a budget still points here. Deactivating underneath a live
+    // budget turns that budget into one measuring zero categories, which reads
+    // on `mint status` as the healthiest row on the screen.
+    const bound = (await fetchBudgets()).filter((b) => b.active && norm(b.group) === key)
+    if (bound.length > 0) {
+      prompts.log.error(`${bound.length} active budget(s) are bound to "${key}": ${bound.map((b) => b.name).join(", ")}`)
+      console.log("  " + dim("Rebind or deactivate those budgets first — otherwise they would silently measure nothing."))
+      return prompts.outro("Done")
+    }
+
+    const res = await upsertRecord("mint-groups", key, { ...existing, active: false })
+    const ok = await handleApiError(res, "Deactivate group")
+    if (!ok) return prompts.outro("Done")
+    await audit({ action: "delete", entity: "mint-group", after: key, ok: true })
+    prompts.log.success(`Group "${key}" deactivated`)
+    prompts.outro("Done")
+  },
+})
+
+const GroupCommand = cmd({
+  command: "group",
+  aliases: ["groups", "g"],
+  describe: "spending groups — one cap over several categories",
+  builder: (y) => y.command(GroupListCommand).command(GroupSetCommand).command(GroupRmCommand).demandCommand(),
+  async handler() {},
+})
+
+// ── policy (#181986) ─────────────────────────────────────────────────────────
+
+const PolicyShowCommand = cmd({
+  command: "show",
+  describe: "show the spend policy for a scope",
+  builder: (y) =>
+    y
+      .option("scope", {
+        alias: "s",
+        type: "string",
+        default: DEFAULT_SCOPE,
+        describe: "personal | business | client:<slug>",
+      })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mint Policy")
+    const token = await requireAuth()
+    if (!token) return prompts.outro("Done")
+
+    const scope = String(args.scope)
+    const policy = await fetchPolicy(scope)
+    if (args.json) {
+      await writeJson(policy)
+      return prompts.outro("Done")
+    }
+    // "No policy" and "a policy that permits everything" are different states,
+    // and only one of them is a decision someone made.
+    if (!policy) {
+      prompts.log.warn(`No spend policy for scope "${scope}" — nothing is enforced.`)
+      console.log("  " + dim("Set one: iris mint policy set --require-category --require-group"))
+      return prompts.outro("Done")
+    }
+
+    const p = { ...NO_POLICY, ...policy }
+    const on = (b: any) => (b ? "on" : dim("off"))
+    printDivider()
+    console.log(`  ${bold("scope")}                 ${scope}${p.active === false ? "  " + dim("(policy inactive)") : ""}`)
+    console.log(`  ${bold("require description")}   ${on(p.require_description)}`)
+    console.log(`  ${bold("require category")}      ${on(p.require_category)}`)
+    console.log(`  ${bold("require group")}         ${on(p.require_group)}`)
+    console.log(`  ${bold("declared only")}         ${on(p.declared_only)}`)
+    console.log(
+      `  ${bold("max single expense")}    ${p.max_single_expense ? fmtCents(Math.round(Number(p.max_single_expense) * 100)) : dim("none")}`,
+    )
+    console.log(
+      `  ${bold("allowed categories")}    ${(p.allowed_categories ?? []).length ? (p.allowed_categories ?? []).join(", ") : dim("any")}`,
+    )
+    printDivider()
+    console.log("  " + dim("Checked before every `mint spend`. --force writes anyway and records the override on the row."))
+    prompts.outro("Done")
+  },
+})
+
+const PolicySetCommand = cmd({
+  command: "set",
+  describe: "set the spend policy — `iris mint policy set --require-category --require-group`",
+  builder: (y) =>
+    y
+      .option("scope", {
+        alias: "s",
+        type: "string",
+        default: DEFAULT_SCOPE,
+        describe: "personal | business | client:<slug>",
+      })
+      .option("require-category", { type: "boolean", describe: "refuse an uncategorised expense" })
+      .option("require-group", { type: "boolean", describe: "refuse a category that belongs to no spending group" })
+      .option("require-description", { type: "boolean", describe: "refuse an empty description" })
+      .option("declared-only", { type: "boolean", describe: "refuse a category that is not an account or group member" })
+      .option("max-single", { type: "number", describe: "refuse a single expense above this many dollars (0 = none)" })
+      .option("allow", { type: "string", array: true, describe: "allowed category (repeatable) — omit for any" })
+      .option("off", { type: "boolean", default: false, describe: "deactivate the policy without deleting it" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mint Policy")
+    const token = await requireAuth()
+    if (!token) return prompts.outro("Done")
+
+    const scope = String(args.scope)
+    const existing = (await fetchPolicy(scope)) ?? {}
+    // Only flags actually PASSED change — an omitted flag keeps its current
+    // value rather than resetting to the default. Otherwise editing one setting
+    // would silently switch every other one off.
+    const pick = <T>(passed: T | undefined, prev: T | undefined, fallback: T): T =>
+      passed !== undefined ? passed : prev !== undefined ? prev : fallback
+
+    const data: Policy = {
+      scope,
+      require_category: pick(args["require-category"], existing.require_category, false),
+      require_group: pick(args["require-group"], existing.require_group, false),
+      require_description: pick(args["require-description"], existing.require_description, false),
+      declared_only: pick(args["declared-only"], existing.declared_only, false),
+      max_single_expense:
+        args["max-single"] !== undefined
+          ? Number(args["max-single"]) > 0
+            ? Number(args["max-single"])
+            : null
+          : (existing.max_single_expense ?? null),
+      allowed_categories:
+        args.allow !== undefined ? (args.allow ?? []).map(norm).filter(Boolean) : (existing.allowed_categories ?? []),
+      active: args.off ? false : (existing.active ?? true),
+    }
+
+    const res = await upsertRecord("mint-policy", `policy:${scope}`, data)
+    const ok = await handleApiError(res, "Save policy")
+    if (!ok) return prompts.outro("Done")
+    await audit({ action: "update", entity: "mint-policy", scope, after: JSON.stringify(data).slice(0, 200), ok: true })
+
+    if (args.json) {
+      await writeJson(data)
+      return prompts.outro("Done")
+    }
+    prompts.log.success(`Policy saved for scope "${scope}"`)
+    // Turning enforcement on says nothing about rows already written. Point at
+    // doctor rather than letting someone assume the ledger now complies.
+    if (data.active !== false && (data.require_category || data.require_group || data.declared_only)) {
+      console.log("  " + dim("This applies to NEW writes. For rows already in the ledger: iris mint doctor"))
+    }
+    prompts.outro("Done")
+  },
+})
+
+const PolicyCommand = cmd({
+  command: "policy",
+  describe: "spend policy — required fields and limits, enforced before a write",
+  builder: (y) => y.command(PolicyShowCommand).command(PolicySetCommand).demandCommand(),
+  async handler() {},
+})
+
+// ── doctor (#181986) ─────────────────────────────────────────────────────────
+
+const DoctorCommand = cmd({
+  command: "doctor",
+  describe: "list ledger rows that would fail the current spend policy",
+  builder: (y) =>
+    y
+      .option("scope", {
+        alias: "s",
+        type: "string",
+        default: DEFAULT_SCOPE,
+        describe: "personal | business | client:<slug>",
+      })
+      .option("limit", { type: "number", default: 500, describe: "rows to examine" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mint Doctor")
+    const token = await requireAuth()
+    if (!token) return prompts.outro("Done")
+
+    const scope = String(args.scope)
+    const policy = await fetchPolicy(scope)
+    if (!policy) {
+      prompts.log.warn(`No spend policy for scope "${scope}" — there is nothing to check against.`)
+      console.log("  " + dim("Set one first: iris mint policy set --require-category"))
+      return prompts.outro("Done")
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Checking the ledger…")
+    const perPage = Math.min(500, Number(args.limit) || 500)
+    const res = await irisFetch(`/api/v1/atlas/transactions?per_page=${perPage}&type=expense`)
+    if (!res.ok) {
+      // A failed fetch is not a clean ledger. Reporting "0 violations" here is
+      // the exact false-green this ticket exists to remove.
+      spinner.stop("Could not read the ledger", 1)
+      prompts.log.error(`HTTP ${res.status} — NOT a clean result. The check did not run.`)
+      return prompts.outro("Done")
+    }
+    const body = (await res.json()) as any
+    // A split parent (#182035) is superseded by its children — they are what
+    // should be checked against policy now, not the original invoice row.
+    const rows: any[] = (body?.data?.data ?? body?.data ?? []).filter(
+      (tx: any) => tx?.metadata?.scope === scope && !tx?.metadata?.superseded_by_split,
+    )
+
+    const [known, groups] = await Promise.all([declaredCategories(scope), fetchGroups(scope)])
+    const findings: any[] = []
+    for (const tx of rows) {
+      const draft = {
+        amount_cents: Number(tx.amount_cents) || 0,
+        description: String(tx.description ?? ""),
+        category: String(tx.category ?? ""),
+        scope,
+      }
+      const v = [...evaluatePolicy(draft, policy, known), ...groupViolations(draft, policy, groups)]
+      if (v.length > 0)
+        findings.push({
+          id: tx.id,
+          date: tx.transaction_date,
+          description: draft.description,
+          amount_cents: draft.amount_cents,
+          category: draft.category,
+          violations: v,
+        })
+    }
+    spinner.stop(`${rows.length} row(s) examined`)
+
+    if (args.json) {
+      await writeJson({ scope, examined: rows.length, violations: findings })
+      return prompts.outro("Done")
+    }
+    if (rows.length === 0) {
+      // Zero rows is not zero violations — it is an unmeasured ledger. The same
+      // distinction `mint verify` gets wrong today (#181947).
+      prompts.log.warn(`No transactions in scope "${scope}" — nothing was checked. That is not a pass.`)
+      return prompts.outro("Done")
+    }
+    if (findings.length === 0) {
+      prompts.log.success(`All ${rows.length} row(s) satisfy the policy`)
+      return prompts.outro("Done")
+    }
+
+    printDivider()
+    for (const f of findings.slice(0, 50)) {
+      console.log(
+        `  ${dim(String(f.date ?? "").slice(0, 10))} ${fmtCents(f.amount_cents).padStart(10)}  ${bold(String(f.description).slice(0, 40))}  ${dim(f.category || "(uncategorised)")}`,
+      )
+      for (const v of f.violations) console.log(`      ${dim("·")} ${v.message}`)
+    }
+    if (findings.length > 50) console.log("  " + dim(`… and ${findings.length - 50} more`))
+    printDivider()
+    const byCode = new Map<string, number>()
+    for (const f of findings) for (const v of f.violations) byCode.set(v.code, (byCode.get(v.code) ?? 0) + 1)
+    for (const [code, n] of [...byCode.entries()].sort((a, b) => b[1] - a[1])) {
+      console.log(`  ${String(n).padStart(4)}  ${code}`)
+    }
+    prompts.log.error(`${findings.length} of ${rows.length} row(s) would fail the current policy`)
+    prompts.outro("Done")
+  },
+})
+
 // ============================================================================
 export const PlatformMintCommand = productCommand({
   name: "mint",
@@ -1741,8 +2861,14 @@ export const PlatformMintCommand = productCommand({
       .command(BudgetsCommand)
       .command(StatusCommand)
       .command(ScopeCommand)
+      .command(PaidFromCommand)
+      .command(ReimbursableCommand)
       .command(ImportCommand)
+      .command(SplitCommand)
       .command(ScanCommand)
+      .command(GroupCommand)
+      .command(PolicyCommand)
+      .command(DoctorCommand)
       .command(MerchantsCommand)
       .command(SnapshotCommand)
       .command(TrendCommand)

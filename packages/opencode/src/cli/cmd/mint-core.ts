@@ -153,6 +153,38 @@ export function fingerprint(date: string, cents: number, desc: string): string {
   return `${date}|${cents}|${desc.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 60)}`
 }
 
+/**
+ * A dedup key that does NOT include the amount — unlike `fingerprint`.
+ *
+ * `fingerprint` breaks the moment the same external fact is reported twice with
+ * a different amount (#182038): an ad platform's daily spend stat is often
+ * partial when it first syncs and revised once the day finalizes, so the same
+ * logical row (same platform, account, campaign, date) hashes to two different
+ * fingerprints and gets inserted twice instead of corrected once. `sourceRef`
+ * is built from caller-supplied stable identity instead, so the same logical
+ * row keeps the same key across amount revisions — see `classifySync`.
+ */
+export function sourceRef(parts: (string | number | null | undefined)[]): string {
+  return parts
+    .map((p) => String(p ?? "").trim())
+    .filter(Boolean)
+    .join("|")
+}
+
+/**
+ * What a re-sync against a `source_ref` means, given what is already on file.
+ *
+ * Pure so the three-way branch is testable without a network: no existing row
+ * is a plain insert, the same amount is a no-op re-sync, and a DIFFERENT amount
+ * is a correction to the existing row — not a second transaction. That last
+ * case is the whole fix for #182038: a platform's stats finalizing during the
+ * day must update the one row that fact belongs to, not multiply it.
+ */
+export function classifySync(existingCents: number | undefined, newCents: number): "fresh" | "duplicate" | "correction" {
+  if (existingCents == null) return "fresh"
+  return existingCents === newCents ? "duplicate" : "correction"
+}
+
 export function centsOf(i: { amount: number }): number {
   return Math.round(i.amount * 100)
 }
@@ -221,7 +253,7 @@ export type ReconInput = {
   /** What a snapshot/report CLAIMS was spent, in cents. */
   claimed_cents: number
   /** The individual ledger rows that claim is supposedly built from. */
-  rows: { amount_cents: number; scope?: string; category?: string; date: string }[]
+  rows: { amount_cents: number; scope?: string; category?: string; date: string; superseded_by_split?: boolean }[]
   scope: string
   category?: string
   from: string
@@ -261,6 +293,13 @@ export function reconcile(input: ReconInput): ReconResult {
     counted = 0
   for (const r of input.rows) {
     const cents = Number(r.amount_cents) || 0
+    // A split parent (#182035) is replaced by its children, not summed alongside
+    // them — counting it here double-books the original invoice on top of every
+    // campaign it was split into.
+    if (r.superseded_by_split) {
+      note("superseded by split", cents)
+      continue
+    }
     // Untagged rows belong to NO scope. Counting them here would reintroduce the
     // exact bug the strict matching in mint was written to prevent.
     if (!r.scope) {
@@ -296,4 +335,279 @@ export function reconcile(input: ReconInput): ReconResult {
     counted,
     excluded,
   }
+}
+
+// =============================================================================
+// Spending groups (#181985) and spend policy (#181986).
+//
+// Both are pure functions over plain records so they can be tested without a
+// network. The bugs these guard against are the same family as the ones above:
+// a rule that silently does not apply is indistinguishable from a rule that
+// passed, and that is exactly how $18 of household spend became invisible.
+// =============================================================================
+
+export type BudgetLike = {
+  name?: string
+  category?: string
+  group?: string
+  scope?: string
+  period?: string
+  cap?: number | string
+  active?: boolean
+}
+
+export type GroupLike = {
+  key?: string
+  name?: string
+  categories?: string[]
+  scope?: string
+  active?: boolean
+}
+
+export const norm = (s: unknown): string => String(s ?? "").trim().toLowerCase()
+
+/**
+ * The categories a budget actually measures.
+ *
+ * A budget caps EITHER one category or a group of them. Returning [] for a
+ * group that does not resolve is deliberate and load-bearing: `actualCents`
+ * over an empty category list must sum nothing, so a typo'd group name shows
+ * as a budget measuring zero categories rather than one silently matching
+ * every transaction. See `groupResolves` — the caller is expected to say so.
+ */
+export function budgetCategories(b: BudgetLike, groups: GroupLike[]): string[] {
+  if (b.group) {
+    const g = groups.find((x) => norm(x.key) === norm(b.group) && x.active !== false)
+    if (!g) return []
+    return (g.categories ?? []).map(norm).filter(Boolean)
+  }
+  const c = norm(b.category)
+  return c ? [c] : []
+}
+
+/** False when a budget names a group that does not exist — a cap measuring nothing. */
+export function groupResolves(b: BudgetLike, groups: GroupLike[]): boolean {
+  if (!b.group) return true
+  return groups.some((g) => norm(g.key) === norm(b.group) && g.active !== false)
+}
+
+/**
+ * Every category covered by some active budget, groups expanded.
+ *
+ * `unbudgetedSpend` subtracts this set. Before groups existed it subtracted
+ * `budgets.map(b => b.category)`, so the moment a budget moved to a group its
+ * member categories would ALL have re-appeared as unbudgeted — the report would
+ * have doubled the same dollars, once inside the group and once outside it.
+ */
+export function coveredCategories(budgets: BudgetLike[], groups: GroupLike[]): string[] {
+  const out = new Set<string>()
+  for (const b of budgets) {
+    if (b.active === false) continue
+    for (const c of budgetCategories(b, groups)) out.add(c)
+  }
+  return [...out]
+}
+
+/**
+ * A category claimed by more than one active group.
+ *
+ * Overlapping groups double-count: the same $40 of groceries lands in "Food"
+ * and in "Essentials", both look correct in isolation, and the totals do not
+ * add up to the ledger. Detected rather than resolved — picking a winner would
+ * be a guess about intent.
+ */
+export function overlappingCategories(groups: GroupLike[]): { category: string; groups: string[] }[] {
+  const owners = new Map<string, string[]>()
+  for (const g of groups) {
+    if (g.active === false) continue
+    for (const c of (g.categories ?? []).map(norm).filter(Boolean)) {
+      owners.set(c, [...(owners.get(c) ?? []), String(g.key ?? g.name ?? "?")])
+    }
+  }
+  return [...owners.entries()]
+    .filter(([, gs]) => gs.length > 1)
+    .map(([category, gs]) => ({ category, groups: gs }))
+}
+
+// ── policy ───────────────────────────────────────────────────────────────────
+
+export type Policy = {
+  scope?: string
+  require_category?: boolean
+  require_group?: boolean
+  require_description?: boolean
+  declared_only?: boolean
+  max_single_expense?: number | null
+  allowed_categories?: string[]
+  active?: boolean
+}
+
+/**
+ * No policy is NOT an empty policy — it is no enforcement at all.
+ *
+ * Every flag defaults off so installing this feature cannot retroactively
+ * invalidate a ledger written before it existed. Turning enforcement on is a
+ * decision someone makes; it is never the side effect of an upgrade.
+ */
+export const NO_POLICY: Policy = {
+  require_category: false,
+  require_group: false,
+  require_description: false,
+  declared_only: false,
+  max_single_expense: null,
+  allowed_categories: [],
+}
+
+export type Violation = { code: string; message: string }
+
+export type TxDraft = {
+  amount_cents?: number
+  description?: string
+  category?: string
+  scope?: string
+}
+
+/**
+ * Check a transaction against a policy BEFORE it is written.
+ *
+ * Returns every violation rather than the first, because fixing them one
+ * round-trip at a time is how someone gives up and reaches for --force.
+ *
+ * `knownCategories` is the declared set (chart of accounts + group members).
+ * When it is EMPTY, `declared_only` cannot be evaluated — and an empty list is
+ * treated as "nothing is declared", which would reject everything. So the caller
+ * must pass a real list; this function refuses to enforce declared_only against
+ * an empty one and says so, rather than failing every write.
+ */
+export function evaluatePolicy(tx: TxDraft, policy: Policy | null | undefined, knownCategories: string[]): Violation[] {
+  const p = { ...NO_POLICY, ...(policy ?? {}) }
+  if (p.active === false) return []
+  const v: Violation[] = []
+  const cat = norm(tx.category)
+
+  if (p.require_description && !String(tx.description ?? "").trim()) {
+    v.push({ code: "description_required", message: "policy requires a description" })
+  }
+  if (p.require_category && !cat) {
+    v.push({ code: "category_required", message: "policy requires a category — pass -c <category>" })
+  }
+  if (p.max_single_expense != null && p.max_single_expense > 0) {
+    const capCents = Math.round(p.max_single_expense * 100)
+    if ((tx.amount_cents ?? 0) > capCents) {
+      v.push({
+        code: "over_single_limit",
+        message: `single expense exceeds the policy limit of $${p.max_single_expense.toFixed(2)}`,
+      })
+    }
+  }
+  const allowed = (p.allowed_categories ?? []).map(norm).filter(Boolean)
+  if (allowed.length > 0 && cat && !allowed.includes(cat)) {
+    v.push({ code: "category_not_allowed", message: `category "${cat}" is not in this scope's allowed list` })
+  }
+  if (p.declared_only && cat) {
+    const known = knownCategories.map(norm).filter(Boolean)
+    // Refusing to enforce against an empty declared set is the whole point:
+    // otherwise switching this on with no accounts loaded rejects every write
+    // and reads as "mint is broken" rather than "nothing is declared yet".
+    if (known.length > 0 && !known.includes(cat)) {
+      v.push({ code: "category_undeclared", message: `category "${cat}" is not declared — add it or use --force` })
+    }
+  }
+  return v
+}
+
+/**
+ * require_group is checked separately because it needs the group table, and a
+ * category can be valid while belonging to no group at all.
+ */
+export function groupViolations(tx: TxDraft, policy: Policy | null | undefined, groups: GroupLike[]): Violation[] {
+  const p = { ...NO_POLICY, ...(policy ?? {}) }
+  if (p.active === false || !p.require_group) return []
+  const cat = norm(tx.category)
+  if (!cat) return [] // already caught by require_category; do not double-report
+  const inGroup = groups.some(
+    (g) => g.active !== false && (g.categories ?? []).map(norm).includes(cat),
+  )
+  return inGroup
+    ? []
+    : [{ code: "group_required", message: `category "${cat}" belongs to no spending group — add it with: iris mint group set <key> --add ${cat}` }]
+}
+
+/**
+ * A category covered by more than one active BUDGET (groups expanded).
+ *
+ * Groups make this newly possible: a "Food & Home" group budget and a legacy
+ * "Groceries" category budget both legitimately cover groceries, each reads
+ * correctly on its own, and the TOTAL line then counts those dollars twice.
+ * Distinct from `overlappingCategories`, which compares groups to each other —
+ * this compares what the budgets actually measure.
+ */
+export function overlappingBudgets(
+  budgets: BudgetLike[],
+  groups: GroupLike[],
+): { category: string; budgets: string[] }[] {
+  const owners = new Map<string, string[]>()
+  for (const b of budgets) {
+    if (b.active === false) continue
+    const label = String(b.name ?? b.category ?? b.group ?? "?")
+    for (const c of budgetCategories(b, groups)) {
+      owners.set(c, [...(owners.get(c) ?? []), label])
+    }
+  }
+  return [...owners.entries()]
+    .filter(([, bs]) => bs.length > 1)
+    .map(([category, bs]) => ({ category, budgets: bs }))
+}
+
+// =============================================================================
+// Splits (#182035) and paid-from / reimbursable (#182036).
+// =============================================================================
+
+/**
+ * Divide one invoice's total across several campaigns/categories.
+ *
+ * Requires the parts to sum EXACTLY to the total — no silent rounding or
+ * remainder-absorption. A split that is off by a cent is not a rounding
+ * artifact to paper over; it means one of the numbers someone typed is wrong,
+ * and that has to surface now rather than as unexplained drift the next time
+ * `mint verify` runs.
+ */
+export function planSplit(
+  totalCents: number,
+  parts: { label: string; cents: number }[],
+): { label: string; cents: number }[] | { error: string } {
+  if (parts.length === 0) return { error: "no split parts given" }
+  for (const p of parts) {
+    if (!p.label.trim()) return { error: "every split part needs a label" }
+    if (!Number.isFinite(p.cents) || p.cents <= 0) return { error: `"${p.label}" must be a positive amount` }
+  }
+  const sum = parts.reduce((s, p) => s + p.cents, 0)
+  if (sum !== totalCents) {
+    const fmt = (c: number) => (c / 100).toFixed(2)
+    return {
+      error: `parts sum to $${fmt(sum)} but the invoice is $${fmt(totalCents)} — drift of $${fmt(Math.abs(sum - totalCents))}`,
+    }
+  }
+  return parts
+}
+
+/**
+ * A transaction paid from a different account than the budget it counts
+ * against (metadata.scope) is a reimbursable, not a normal expense — the
+ * "business ad bought on a personal card" case #182036 is about. `null` means
+ * there is nothing to reconcile: no `paid_from` recorded, or it matches scope,
+ * which is every transaction written before this existed.
+ *
+ * Direction: the BOOKS owe the ACCOUNT that actually paid. A business ad
+ * charged to a personal card is scope=business, paid_from=personal — business
+ * benefited from the spend, personal fronted the cash, so business owes
+ * personal, i.e. owed_by=scope, owed_to=paid_from.
+ */
+export function reimbursableOf(tx: {
+  metadata?: { scope?: string; paid_from?: string }
+}): { owed_by: string; owed_to: string } | null {
+  const scope = tx.metadata?.scope
+  const paidFrom = tx.metadata?.paid_from
+  if (!paidFrom || !scope || paidFrom === scope) return null
+  return { owed_by: scope, owed_to: paidFrom }
 }
