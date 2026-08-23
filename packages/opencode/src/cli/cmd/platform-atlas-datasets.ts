@@ -339,6 +339,13 @@ const RecordsListCommand = cmd({
   builder: (y) =>
     y
       .option("schema", { type: "string", demandOption: true, alias: "s", describe: "schema slug" })
+      // A schema slug is unique per (user, bloq) — ensureCustomerSchema() mints a fresh
+      // 'customers' schema for every bloq a gate is used on, so anyone with more than one
+      // gated page has several same-slug schemas. Without --bloq, the server picks whichever
+      // one it finds first for the slug (#182063) — this flag is how you reach a SPECIFIC
+      // bloq's records once that's true, e.g. `records list -s customers --bloq=38` for one
+      // page's gate-access log.
+      .option("bloq", { type: "number", describe: "disambiguate which same-slug schema to read (required once a slug is shared across bloqs)" })
       .option("filter", { type: "string", alias: "where", describe: "field=value filter (repeatable), e.g. --where status=active", array: true })
       .option("search", { type: "string", alias: "q", describe: "full-text search over record data" })
       .option("sort", { type: "string", default: "created_at" })
@@ -346,7 +353,7 @@ const RecordsListCommand = cmd({
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    prompts.intro(`◈  Dataset: ${args.schema}`)
+    prompts.intro(`◈  Dataset: ${args.schema}${args.bloq != null ? ` (bloq ${args.bloq})` : ""}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
@@ -354,6 +361,7 @@ const RecordsListCommand = cmd({
     try {
       const p = new URLSearchParams({ per_page: String(args.limit), sort: args.sort })
       if (args.search) p.set("search", args.search)
+      if (args.bloq != null) p.set("bloq_id", String(args.bloq))
       // Parse --filter stage_name=Negotiating into filter[stage_name]=Negotiating
       for (const f of args.filter ?? []) {
         const [key, ...rest] = f.split("=")
@@ -367,6 +375,11 @@ const RecordsListCommand = cmd({
       const total = body?.data?.records?.total ?? records.length
       const schema = body?.data?.schema
       spinner.stop(`${records.length} of ${total} record(s)`)
+      // Which same-slug schema actually answered — the ambiguity #182063 was about, made
+      // visible instead of silent. Only worth printing once there IS ambiguity to resolve.
+      if (schema?.id != null && args.bloq == null) {
+        prompts.log.info(dim(`Resolved '${args.schema}' -> schema #${schema.id}. If you have this slug on more than one bloq, pin it with --bloq=<id>.`))
+      }
 
       if (args.json) { await writeJson(records); prompts.outro("Done"); return }
       if (records.length === 0) { prompts.log.warn("No records"); prompts.outro("Done"); return }
