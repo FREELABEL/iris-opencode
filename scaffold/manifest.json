@@ -171,6 +171,18 @@
       "purpose": "How to: give a bespoke render_mode:html page data and behaviour with the Genesis SDK"
     },
     {
+      "src": "how-to/genesis-components.md",
+      "dest": "how-to/genesis-components.md",
+      "managed": true,
+      "purpose": "How to: build a Genesis page out of components backed by Atlas collections. Committed in ce2fdf8be without a manifest entry, so the installer never fetched it."
+    },
+    {
+      "src": "how-to/genesis-verify-pages.md",
+      "dest": "how-to/genesis-verify-pages.md",
+      "managed": true,
+      "purpose": "How to: verify a page actually renders \u2014 check-public, verify and read \u2014 rather than trusting a 200. Committed in ce2fdf8be without a manifest entry, so the installer never fetched it."
+    },
+    {
       "src": "how-to/hive-dispatch.md",
       "dest": "how-to/hive-dispatch.md",
       "managed": true,
