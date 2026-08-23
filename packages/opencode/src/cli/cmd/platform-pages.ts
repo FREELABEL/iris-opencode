@@ -908,6 +908,34 @@ const PushCmd = cmd({
       // explicit assignment — so turning a gate off needs requireOtp cleared in the same
       // push. Measured on page 406. Failing safe (gate stuck ON) is the right direction,
       // so this is left as-is here and tracked against fl-api.
+      //
+      // STALE-FILE GUARD (#181940). Re-asserting from local is right when the local file is
+      // current and WRONG when it is not: `pages set <slug> requires_auth true` writes the
+      // COLUMN, a local file pulled before that change still says false, and the next push
+      // silently reverts the gate. That happened — an internal page was left publicly
+      // readable, and every instrument reported success. `pages set` said "Updated", push
+      // said "Pushed", and only `pages check-public` disagreed.
+      //
+      // So a push may TIGHTEN a gate freely and may not LOOSEN one from a file that does not
+      // know the gate exists. Fails closed, in the one direction where being wrong is a leak.
+      const liveGate = Boolean((page as any)?.requires_auth)
+      const localGate = local.requires_auth === undefined ? liveGate : Boolean(local.requires_auth)
+      if (liveGate && !localGate && !args.force) {
+        sp.stop("Refused", 1)
+        prompts.log.error(
+          `This page is GATED live, and ${slug}.json would remove the gate.\n\n` +
+            `  live:  requires_auth = true\n` +
+            `  local: requires_auth = ${JSON.stringify(local.requires_auth)}\n\n` +
+            `Your local copy was almost certainly pulled before the gate was set, so pushing it\n` +
+            `would make a private page public without saying so.\n\n` +
+            `  Refresh and retry:   ${highlight(`iris pages pull ${slug}`)}\n` +
+            `  Or open it on purpose: ${highlight(`iris pages push ${slug} --force`)}\n` +
+            `  Then always confirm:  ${highlight(`iris pages check-public ${slug}`)}`,
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
       if (local.requires_auth !== undefined) updateData.requires_auth = local.requires_auth
       // Never send status during push — use publish/unpublish commands instead.
       // Sending status=published here caused the page to briefly publish with OLD content
