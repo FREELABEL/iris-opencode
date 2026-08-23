@@ -3703,6 +3703,41 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/corpus/entities/{}",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/corpus/observe",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/corpus/query",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/corpus/standing",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/corpus/standing",
+"service": "fl-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/corpus/standing/{}",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/corpus/standing/{}/run",
+"service": "fl-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/courses",
 "service": "fl-api"
 },
@@ -4778,6 +4813,31 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/genesis/components",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/genesis/components",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/genesis/components/compile",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/genesis/components/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/genesis/components/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/genesis/heartbeat/{}",
 "service": "fl-api"
 },
@@ -4799,6 +4859,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/genesis/heartbeat/{}/runs",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/genesis/onboard/{}/roster",
 "service": "fl-api"
 },
 {
@@ -5014,6 +5079,11 @@
 {
 "method": "POST",
 "uri": "/api/v1/integrations/callback",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/integrations/catalog",
 "service": "iris-api"
 },
 {
@@ -6484,6 +6554,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/marketplace/integrations",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/marketplace/integrations/catalog",
 "service": "fl-api"
 },
 {
@@ -8833,6 +8908,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/public/pages/{}/data/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/public/pages/{}/data/{}",
 "service": "iris-api"
 },
@@ -13873,6 +13953,46 @@
 },
 {
 "method": "GET",
+"uri": "/atlas",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/atlas/projects",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/atlas/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/atlas/{}/agents",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/atlas/{}/boards",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/atlas/{}/boards/{}/items",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/atlas/{}/data",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/atlas/{}/docs",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/auth/google/callback",
 "service": "iris-api"
 },
@@ -14627,6 +14747,66 @@
 "service": "fl-api"
 },
 {
+"method": "DELETE",
+"uri": "/p/genesis-fde",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/p/genesis-fde",
+"service": "iris-api"
+},
+{
+"method": "OPTIONS",
+"uri": "/p/genesis-fde",
+"service": "iris-api"
+},
+{
+"method": "PATCH",
+"uri": "/p/genesis-fde",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/p/genesis-fde",
+"service": "iris-api"
+},
+{
+"method": "PUT",
+"uri": "/p/genesis-fde",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/p/open-playbooks",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/p/open-playbooks",
+"service": "iris-api"
+},
+{
+"method": "OPTIONS",
+"uri": "/p/open-playbooks",
+"service": "iris-api"
+},
+{
+"method": "PATCH",
+"uri": "/p/open-playbooks",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/p/open-playbooks",
+"service": "iris-api"
+},
+{
+"method": "PUT",
+"uri": "/p/open-playbooks",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/p/{}",
 "service": "iris-api"
@@ -14744,6 +14924,46 @@
 {
 "method": "GET",
 "uri": "/pathways/hub",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/playbooks",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/playbooks",
+"service": "iris-api"
+},
+{
+"method": "OPTIONS",
+"uri": "/playbooks",
+"service": "iris-api"
+},
+{
+"method": "PATCH",
+"uri": "/playbooks",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/playbooks",
+"service": "iris-api"
+},
+{
+"method": "PUT",
+"uri": "/playbooks",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/playbooks/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/playbooks/{}/og-image.png",
 "service": "iris-api"
 },
 {
