@@ -1,7 +1,7 @@
 [package]
 name = "opencode-desktop"
 version = "0.0.0"
-description = "IRIS — AI coding agent desktop app"
+description = "IRIS — AI Business OS Copilot"
 authors = ["Freelabel"]
 edition = "2021"
 

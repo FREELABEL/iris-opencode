@@ -6,7 +6,7 @@
   <project_license>MIT</project_license>
 
   <name>IRIS</name>
-  <summary>AI coding agent desktop app</summary>
+  <summary>AI Business OS Copilot</summary>
 
   <developer id="net.freelabel">
     <name>Freelabel</name>
@@ -14,7 +14,7 @@
 
   <description>
     <p>
-      IRIS is an AI coding agent that helps you write and run code with any AI model.
+      IRIS is an AI Business OS Copilot that helps you run and grow your business with any AI model.
     </p>
   </description>
 
