@@ -66,7 +66,21 @@ const ItemsListCommand = cmd({
 
     printDivider()
     console.log(`  ${dim(`playbook #${data?.playbook?.id} · version ${data?.playbook?.version}`)}`)
-    if (items.length === 0) console.log(`  ${dim("(no procedures or skills yet)")}`)
+    if (items.length === 0) {
+      // An empty state that only says "empty" teaches nothing. This container
+      // shipped and sat unused because nothing told anyone what it was for, so
+      // the one moment a person is definitely looking at it is worth spending.
+      console.log(`  ${dim("(no procedures or skills yet)")}`)
+      console.log("")
+      console.log(`  ${dim("A playbook can hold the written SOPs a person follows, alongside")}`)
+      console.log(`  ${dim("the skills an agent runs:")}`)
+      console.log("")
+      console.log(`    ${dim(`iris playbook items add ${args.name} --label "<name>" --bloq-item <atlas-item-id>`)}`)
+      console.log(`    ${dim(`iris playbook items add ${args.name} --label "<name>" --skill <skill-id>`)}`)
+      console.log("")
+      console.log(`  ${dim("Draft an SOP from a recording or transcript with `iris playbook sop <file>`,")}`)
+      console.log(`  ${dim("publish it as an Atlas item, then attach it here by id.")}`)
+    }
     for (const i of items) {
       const req = i.is_required ? "" : dim(" (optional)")
       console.log(`  ${typeIcon(i.item_type)} ${bold(String(i.label))}  ${dim(`#${i.id}`)}${req}`)
@@ -81,17 +95,28 @@ const ItemsListCommand = cmd({
 
 const ItemsAddCommand = cmd({
   command: "add <name>",
-  describe: "add a procedure or skill to a playbook",
+  describe: "attach a human SOP (Atlas item) or a runnable skill to a playbook",
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", demandOption: true })
       .option("label", { type: "string", demandOption: true, describe: "what a person will see" })
       .option("type", { type: "string", choices: ["sop", "skill"], default: "sop" })
       .option("description", { type: "string" })
-      .option("bloq-item", { type: "number", describe: "BloqItem id holding the procedure text" })
-      .option("skill", { type: "number", describe: "marketplace skill id" })
+      .option("bloq-item", {
+        type: "number",
+        describe: "Atlas item id holding the written SOP — attached by reference, never copied",
+      })
+      .option("skill", { type: "number", describe: "marketplace skill id — a runnable capability" })
       .option("role", { type: "number", describe: "role that owns this; omit for everyone" })
-      .option("optional", { type: "boolean", default: false, describe: "not required to be read" }),
+      .option("optional", { type: "boolean", default: false, describe: "not required to be read" })
+      .example(
+        "$0 playbook items add onboarding --label 'Intake approval SOP' --bloq-item 182265",
+        "attach a written SOP a person follows",
+      )
+      .example(
+        "$0 playbook items add onboarding --label 'Score a case' --skill 41 --role 3",
+        "attach a runnable skill, owned by a role",
+      ),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Add to playbook")
@@ -166,9 +191,36 @@ const ItemsRemoveCommand = cmd({
 
 const PlaybookItemsCommand = cmd({
   command: "items <subcommand>",
-  describe: "procedures and skills inside a playbook",
+  describe: "hold human SOPs + skills inside a playbook — attach a written SOP (Atlas item) or a runnable skill",
   builder: (yargs) =>
-    yargs.command(ItemsListCommand).command(ItemsAddCommand).command(ItemsRemoveCommand).demandCommand(1, ""),
+    yargs
+      .command(ItemsListCommand)
+      .command(ItemsAddCommand)
+      .command(ItemsRemoveCommand)
+      .demandCommand(1, "")
+      // A playbook is a CONTAINER, not just a list of steps — and nothing in the
+      // command names said so, so the capability shipped and went unused. Every
+      // playbook's contents were empty because people did not know this existed.
+      .epilogue(
+        [
+          "A playbook holds two kinds of thing:",
+          "",
+          "  · a HUMAN SOP  — the written procedure a person reads and follows,",
+          "                   stored as an Atlas item and attached BY REFERENCE",
+          "  · a SKILL      — a runnable capability an agent executes",
+          "",
+          "The SOP lives in exactly one place and the playbook points at it, so",
+          "editing the Atlas item updates every playbook that carries it — nothing",
+          "is copied, nothing goes stale.",
+          "",
+          "  iris playbook items add <playbook> --label 'Intake approval SOP' --bloq-item 182265",
+          "  iris playbook items add <playbook> --label 'Score a case' --skill 41",
+          "  iris playbook items list <playbook>",
+          "",
+          "Draft the SOP first with `iris playbook sop <transcript>`, publish it as an",
+          "Atlas item, then attach it here by id. `iris playbook roles` says who owns what.",
+        ].join("\n"),
+      ),
   handler() {},
 })
 
