@@ -344,15 +344,17 @@ jobs:
           cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-${{ matrix.rust_target }}
           chmod +x packages/desktop/src-tauri/sidecars/iris-cli-${{ matrix.rust_target }}
 
+      # NOTE: no `env:` block here on purpose. Setting APPLE_SIGNING_IDENTITY/
+      # TAURI_SIGNING_PRIVATE_KEY to an explicit empty string (which a previous version of
+      # this job did) makes `codesign` fail outright ("no identity found") instead of falling
+      # back to ad-hoc signing -- confirmed by v1.3.205's build-desktop-tauri (macos-latest,
+      # arm64) failing with exactly that error. The vars must be entirely ABSENT, not empty,
+      # for Tauri's automatic ad-hoc-sign fallback to kick in. No signing certs/keys exist for
+      # this repo yet (see job comment above) -- this is expected/fine until that changes.
       - name: Build IRIS desktop app (Tauri)
         run: |
           cd packages/desktop
           ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles app,dmg
-        env:
-          # Deliberately unset: no signing certs/keys exist for this repo yet (see job comment).
-          # tauri build ad-hoc signs on macOS with no cert configured -- that's expected here.
-          APPLE_SIGNING_IDENTITY: ""
-          TAURI_SIGNING_PRIVATE_KEY: ""
 
       - name: Zip the .app bundle
         run: |
@@ -420,13 +422,12 @@ jobs:
           mkdir -p packages/desktop/src-tauri/sidecars
           cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-x86_64-pc-windows-msvc.exe
 
+      # NOTE: no `env:` block here either -- same reasoning as the macOS job above. No Windows
+      # code-signing cert exists for this repo yet; that's expected/fine as-is.
       - name: Build IRIS desktop app (Tauri)
         run: |
           cd packages/desktop
           ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis
-        env:
-          # Deliberately unset: no Windows code-signing cert exists for this repo yet.
-          TAURI_SIGNING_PRIVATE_KEY: ""
 
       - name: Rename installer to the IRIS-tauri-* convention
         run: |
