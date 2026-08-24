@@ -1,0 +1,70 @@
+name: Desktop test build (IRIS rebrand)
+
+# Manual, one-off build for testing the rebranded packages/desktop app on a machine
+# without local disk headroom to compile it. Not wired into the release process --
+# unsigned, ad-hoc output for local testing only. Safe to delete once the real
+# release.yml wiring (tracked in bloq #503 item #182113) lands.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build the iris CLI (sidecar binary)
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --single
+        env:
+          OPENCODE_VERSION: 0.0.0-test
+          OPENCODE_CHANNEL: latest
+
+      - name: Stage sidecar binary
+        run: |
+          set -euo pipefail
+          BIN=$(ls packages/opencode/dist/opencode-darwin-arm64/bin/opencode)
+          mkdir -p packages/desktop/src-tauri/sidecars
+          cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-aarch64-apple-darwin
+          chmod +x packages/desktop/src-tauri/sidecars/iris-cli-aarch64-apple-darwin
+
+      - name: Build IRIS desktop app
+        run: |
+          cd packages/desktop
+          ./node_modules/.bin/tauri build --debug --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target aarch64-apple-darwin --bundles app,dmg
+
+      - name: Zip the .app bundle
+        run: |
+          cd packages/desktop/src-tauri/target/aarch64-apple-darwin/debug/bundle/macos
+          ditto -c -k --sequesterRsrc --keepParent IRIS.app IRIS-darwin-arm64.zip
+
+      - name: Upload .app
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-darwin-arm64-app
+          path: packages/desktop/src-tauri/target/aarch64-apple-darwin/debug/bundle/macos/IRIS-darwin-arm64.zip
+
+      - name: Upload .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-darwin-arm64-dmg
+          path: packages/desktop/src-tauri/target/aarch64-apple-darwin/debug/bundle/dmg/*.dmg
+          if-no-files-found: ignore
