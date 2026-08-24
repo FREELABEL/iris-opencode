@@ -96,7 +96,15 @@ export function findUnreadOptions(src: string): Array<{ command: string; option:
     if (!handler.includes(`${param}.`) && !handler.includes(`${param}[`)) continue
     // A handler that forwards the whole object (`run(args)` / `...args`) passes everything
     // through, so per-option checking would be noise.
-    if (new RegExp(`\\w+\\(\\s*${param}\\s*[,)]`).test(handler) || handler.includes(`...${param}`)) continue
+    //
+    // The param is not always the FIRST argument. `targetFor(n, argv)` in platform-vault
+    // forwards argv wholesale and the handler reads --user through it, but a first-position
+    // pattern could not see that and reported three violations against working code. A
+    // ratchet with false positives gets muted, and then the ONE real violation in the same
+    // run — `mint group rm --json`, accepted and ignored — hides in the noise it created.
+    // Match the param as a bare identifier in any argument position instead.
+    const forwarded = new RegExp(`\\w+\\(\\s*(?:[^()]*?,\\s*)?${param}\\s*[,)]`)
+    if (forwarded.test(handler) || handler.includes(`...${param}`)) continue
 
     for (const o of options) {
       const camel = o.replace(/-(\w)/g, (_, c) => c.toUpperCase())
@@ -126,6 +134,23 @@ describe("argv mapping", () => {
       })`
     const found = findUnreadOptions(bug).map((v) => v.option).sort()
     expect(found).toEqual(["fresh", "thread"])
+  })
+
+  // Regression: three false positives against platform-vault, whose handlers read --user
+  // through `targetFor(n, argv)`. The option IS read; the detector could not see past a
+  // helper call that took the param in second position.
+  test("it does not flag an option forwarded wholesale in a non-first argument", () => {
+    const ok = `
+      export const FwdCommand = cmd({
+        command: "put <vault>",
+        builder: (y) => y.option("user", { type: "string" }),
+        async handler(argv) {
+          const node = await pick(argv.vault)
+          const t = await targetFor(node, argv)
+          console.log(t)
+        },
+      })`
+    expect(findUnreadOptions(ok)).toEqual([])
   })
 
   test("it does not flag options the handler actually reads", () => {

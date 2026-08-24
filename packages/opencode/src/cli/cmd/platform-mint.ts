@@ -2786,6 +2786,10 @@ const GroupRmCommand = cmd({
     // record happens to come back first".
     const existing = (await fetchGroupRecords(args.scope)).find((g) => norm(g.key) === key)
     if (!existing) {
+      if (args.json) {
+        console.log(JSON.stringify({ ok: false, key, reason: "not_found", scope: args.scope ?? null }, null, 2))
+        return prompts.outro("Done")
+      }
       prompts.log.error(`No group "${key}"${args.scope ? ` in scope "${args.scope}"` : ""}`)
       return prompts.outro("Done")
     }
@@ -2795,6 +2799,13 @@ const GroupRmCommand = cmd({
     // on `mint status` as the healthiest row on the screen.
     const bound = (await fetchBudgets()).filter((b) => b.active && norm(b.group) === key)
     if (bound.length > 0) {
+      if (args.json) {
+        // A refusal must be machine-readable too. A script that only parses the
+        // success shape reads a refusal as "no output" and carries on as though the
+        // group were gone.
+        console.log(JSON.stringify({ ok: false, key, reason: "bound_budgets", budgets: bound.map((b) => b.name) }, null, 2))
+        return prompts.outro("Done")
+      }
       prompts.log.error(`${bound.length} active budget(s) are bound to "${key}": ${bound.map((b) => b.name).join(", ")}`)
       console.log("  " + dim("Rebind or deactivate those budgets first — otherwise they would silently measure nothing."))
       return prompts.outro("Done")
@@ -2805,6 +2816,10 @@ const GroupRmCommand = cmd({
     const ok = await handleApiError(res, "Deactivate group")
     if (!ok) return prompts.outro("Done")
     await audit({ action: "delete", entity: "mint-group", after: key, ok: true })
+    if (args.json) {
+      console.log(JSON.stringify({ ok: true, key, scope: args.scope ?? null, active: false }, null, 2))
+      return prompts.outro("Done")
+    }
     prompts.log.success(`Group "${key}" deactivated`)
     prompts.outro("Done")
   },
