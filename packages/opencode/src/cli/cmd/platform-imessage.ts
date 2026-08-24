@@ -989,9 +989,18 @@ const ImessageMentionsCommand = cmd({
       mentions = mentions.filter((m: any) => m.lead_id === args.lead)
     }
     if (args.node) {
-      const n = String(args.node).toLowerCase()
+      // Alphanumeric-only comparison, not a raw substring match. node_name is the OS
+      // hostname (e.g. "Alexs-MacBook-Pro-11711.local"), but the thing people actually
+      // type is the registered Hive display name from `iris hive nodes list`
+      // ("MacBookPro") — no hyphens, no ".local". A literal .includes() never matches
+      // between those two forms (caught live: --node MacBookPro silently matched zero
+      // rows against a real "Alexs-MacBook-Pro-11711.local" node_name, on a filter that
+      // shipped moments earlier). Strip everything but letters/digits on both sides so
+      // "MacBookPro" and "Alexs-MacBook-Pro-11711.local" share a comparable form.
+      const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "")
+      const n = squash(String(args.node))
       mentions = mentions.filter((m: any) =>
-        m.node_id?.toLowerCase().includes(n) || m.node_name?.toLowerCase().includes(n)
+        (m.node_id && squash(m.node_id).includes(n)) || (m.node_name && squash(m.node_name).includes(n))
       )
     }
 
