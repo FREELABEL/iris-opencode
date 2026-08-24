@@ -33,6 +33,7 @@ function step(over: Partial<StepDef> = {}): StepDef {
     confirm: false, depends: null, retry: 0, delay: 0, condition: null,
     model: null, node: null, skillRef: null, skillArgs: null,
     workflowId: null, webhook: null, cron: null, input: null,
+    integrations: [],
     ...over,
   }
 }

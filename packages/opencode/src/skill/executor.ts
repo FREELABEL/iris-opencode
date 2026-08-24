@@ -40,6 +40,11 @@ export interface StepDef {
   webhook: string | null
   cron: string | null
   input: Record<string, any> | null
+  /** Which connected services this step actually touches — Slack, Gmail, Stripe, etc. Freeform,
+   * same reasoning as playbook-level `integrations` but scoped to the one step that needs it,
+   * so a reader (or an agent deciding whether it can run this step) doesn't have to assume the
+   * whole playbook's integration list applies to every step in it. */
+  integrations: string[]
 }
 
 export interface SkillPlan {
@@ -54,6 +59,8 @@ export interface SkillPlan {
   timeout: number
   integrations: string[]
   location: string
+  /** Vertical/industry classification for playbook-library discovery — freeform, not a fixed taxonomy. */
+  industries?: string[]
 }
 
 export interface StepResult {
@@ -188,6 +195,11 @@ export function parseSteps(markdownBody: string): StepDef[] {
       webhook: meta.webhook ?? null,
       cron: meta.cron ?? null,
       input: (meta.input && typeof meta.input === "object" && !Array.isArray(meta.input)) ? meta.input : null,
+      integrations: Array.isArray(meta.integrations)
+        ? meta.integrations.filter((v: unknown) => typeof v === "string")
+        : typeof meta.integrations === "string"
+          ? [meta.integrations]
+          : [],
     })
   }
 
@@ -219,6 +231,13 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
   // Parse steps from markdown body
   const steps = version === 2 ? parseSteps(md.content) : []
 
+  // Freeform vertical/industry tags — no fixed taxonomy, so accept a single string too.
+  const industries = Array.isArray(fm.industries)
+    ? fm.industries.filter((v: unknown) => typeof v === "string")
+    : typeof fm.industries === "string"
+      ? [fm.industries]
+      : []
+
   return {
     name: fm.name ?? skillInfo.name,
     version,
@@ -231,6 +250,7 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
     timeout: fm.timeout ?? 300,
     integrations: fm.integrations ?? [],
     location: skillInfo.location,
+    industries,
   }
 }
 

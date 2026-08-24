@@ -234,7 +234,7 @@ const SkillRunCommand = cmd({
             skill: plan.name,
             version: plan.version,
             args: resolvedArgs,
-            steps: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode })),
+            steps: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode, integrations: s.integrations })),
           })
           return
         }

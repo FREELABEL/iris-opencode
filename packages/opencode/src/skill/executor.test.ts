@@ -35,6 +35,7 @@ const makeStep = (overrides: Partial<StepDef>): StepDef => ({
   condition: null, model: null, node: null,
   skillRef: null, skillArgs: null,
   workflowId: null, webhook: null, cron: null, input: null,
+  integrations: [],
   ...overrides,
 })
 
