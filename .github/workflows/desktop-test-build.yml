@@ -41,7 +41,7 @@ jobs:
       - name: Stage sidecar binary
         run: |
           set -euo pipefail
-          BIN=$(ls packages/opencode/dist/opencode-darwin-arm64/bin/opencode)
+          BIN=$(ls packages/opencode/dist/opencode-darwin-arm64/bin/iris)
           mkdir -p packages/desktop/src-tauri/sidecars
           cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-aarch64-apple-darwin
           chmod +x packages/desktop/src-tauri/sidecars/iris-cli-aarch64-apple-darwin

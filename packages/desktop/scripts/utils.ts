@@ -1,12 +1,14 @@
 import { $ } from "bun"
 
-// These MUST match packages/opencode/script/build.ts's own local dist directory naming
-// (pkg.name + os + arch, e.g. "opencode-darwin-arm64") -- that script hardcodes both the
-// dist dir and the compiled binary's filename to "opencode", regardless of how release.yml
-// later renames the packaged .zip/.tar.gz for distribution. This is NOT the same thing as
-// the iris-<target> names release.yml uses for its uploaded artifacts/archives -- don't
-// "fix" these to iris-* without also confirming what build.ts actually emits, or predev.ts
-// (local `bun run tauri dev`) breaks looking for a directory that doesn't exist.
+// These `ocBinary` values MUST match packages/opencode/script/build.ts's own local dist
+// DIRECTORY naming (pkg.name + os + arch, e.g. "opencode-darwin-arm64") -- that part is
+// pkg.name-based and unrelated to how release.yml later renames the packaged .zip/.tar.gz
+// for distribution (iris-<target>). The compiled binary FILE inside that directory, though,
+// is genuinely named "iris" (packages/opencode/package.json's `"bin": {"iris": "./bin/iris"}`
+// wins over build.ts's literal outfile string once Bun's `--compile` step reads it via
+// `autoloadPackageJson: true`) -- see prepare.ts/predev.ts, which reference `bin/iris`.
+// Verified live via desktop-test-build.yml CI output (2026-08-24). Don't "fix" either half
+// of this without re-confirming what a real build actually produces.
 export const SIDECAR_BINARIES: Array<{ rustTarget: string; ocBinary: string; assetExt: string }> = [
   {
     rustTarget: "aarch64-apple-darwin",
