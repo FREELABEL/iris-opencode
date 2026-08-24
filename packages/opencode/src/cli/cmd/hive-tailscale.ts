@@ -138,11 +138,39 @@ async function writeSshCache(cache: Record<string, { host?: string; user?: strin
   }
 }
 
-/** Is this node THIS machine? Then no ssh is needed and none should be attempted. */
-export async function isSelf(nodeName: string): Promise<boolean> {
-  const peers = await tailscalePeers()
-  const selfNames = [process.env.HOSTNAME ?? "", (await hostnameSafe())].filter(Boolean)
-  return selfNames.some((h) => nameMatches(nodeName, h)) && peers.length >= 0
+/**
+ * Which registered node is THIS machine.
+ *
+ * Needed because the local node must never be dialled as a peer: it is already holding its own
+ * copy of everything, and attempting ssh to yourself fails, which then gets reported as
+ * "could not reach" for a machine that is demonstrably right here. Measured 2026-08-24:
+ * `hive vault status` counted the local blobs as "this machine" AND listed the same node under
+ * "could not reach" in the same breath.
+ *
+ * Resolution order matches `hive nodes list`, and for the same reason: config.node_id is a key
+ * nothing reliably writes, and macOS rewrites the hostname on every mDNS collision, so a
+ * hostname comparison compares a mutating name to a frozen one. The DAEMON knows its own id.
+ */
+export async function detectLocalNodeId(nodes: Array<{ id: string; name: string }>): Promise<string | null> {
+  let configNodeId: string | null = null
+  try {
+    const cfg = join(homedir(), ".iris", "config.json")
+    if (existsSync(cfg)) configNodeId = JSON.parse(await readFile(cfg, "utf-8")).node_id || null
+  } catch { /* fall through */ }
+
+  let daemonNodeId: string | null = null
+  try {
+    const res = await fetch("http://localhost:3200/health", { signal: AbortSignal.timeout(1500) })
+    if (res.ok) daemonNodeId = ((await res.json()) as any)?.node_id ?? null
+  } catch { /* daemon not running — weaker sources below */ }
+
+  const { resolveLocalNode } = await import("./hive-local-node")
+  return resolveLocalNode({
+    daemonNodeId,
+    configNodeId,
+    hostname: await hostnameSafe(),
+    nodes: nodes.map((n) => ({ id: String(n.id), name: String(n.name) })),
+  }).nodeId
 }
 
 async function hostnameSafe(): Promise<string> {

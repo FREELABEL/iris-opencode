@@ -31,7 +31,7 @@
 import { cmd } from "./cmd"
 import { requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
 import { fetchNodes } from "./platform-hive-nodes"
-import { resolveSshTarget, ensureSshUser, sshRun, pushFile, pullFile, shq, type SshTarget } from "./hive-tailscale"
+import { resolveSshTarget, ensureSshUser, sshRun, pushFile, pullFile, shq, detectLocalNodeId, type SshTarget } from "./hive-tailscale"
 import {
   buildEntry, reassemble, nextManifest, manifestDigest, normalizePath,
   choosePlacement, replicationHealth, generateVaultKey, sha256,
@@ -209,7 +209,11 @@ const PutCommand = cmd({
     const paths = ([] as string[]).concat(argv.path as any)
 
     // Capacity + liveness, measured now rather than assumed from the registry.
-    const nodes = (await fetchNodes(userId)) as any[]
+    const allNodes = (await fetchNodes(userId)) as any[]
+    // This machine is already copy one. Dialling it as a peer fails and then reads as
+    // "could not reach", for a node that is right here.
+    const selfId = await detectLocalNodeId(allNodes)
+    const nodes = allNodes.filter((n) => String(n.id) !== selfId)
     const cand: Array<PlacementNode & { node: any; t: SshTarget }> = []
     for (const n of nodes) {
       const t = await targetFor(n, argv)
@@ -328,7 +332,9 @@ const GetCommand = cmd({
 
     // Only reach for the mesh if something is genuinely absent locally.
     if (missing.length > 0) {
-      const nodes = (await fetchNodes(userId)) as any[]
+      const allNodes = (await fetchNodes(userId)) as any[]
+      const selfId = await detectLocalNodeId(allNodes)
+      const nodes = allNodes.filter((n) => String(n.id) !== selfId)
       for (const n of nodes) {
         if (missing.length === 0) break
         const t = await targetFor(n, argv)
@@ -410,7 +416,9 @@ const StatusCommand = cmd({
       for (const c of e.chunks) if (existsSync(blobPath(meta.id, c.id))) (pins[c.id] ??= []).push("this machine")
     }
 
-    const nodes = (await fetchNodes(userId)) as any[]
+    const allNodes = (await fetchNodes(userId)) as any[]
+    const selfId = await detectLocalNodeId(allNodes)
+    const nodes = allNodes.filter((n) => String(n.id) !== selfId)
     const unreachable: string[] = []
     for (const n of nodes) {
       const t = await targetFor(n, argv)
