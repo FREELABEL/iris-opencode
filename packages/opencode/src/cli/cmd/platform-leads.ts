@@ -2287,6 +2287,65 @@ export function gmailHealthFromStatus(status: number): ChannelHealth {
   return { name: "Gmail", ok: false, status: "error", error: `HTTP ${status}`, hint: "run: iris connect gmail" }
 }
 
+/**
+ * Probe a bridge-backed channel over the SAME endpoint the feature uses, and
+ * report what the bridge actually said (#178282, same class).
+ *
+ * Two things this exists to stop:
+ *   (a) collapsing the response body into `HTTP 503`. The bridge answers a TCC
+ *       denial with a 503 whose body names the problem exactly ("No permission
+ *       to read the Calendar store"). Printing only the status turned a
+ *       Full Disk Access problem into "check bridge: iris hive doctor" — the
+ *       bridge is fine, and that hint sends you to the wrong place.
+ *   (b) probing a different path than the feature. iMessage health read the
+ *       local Messages DB via sqlite3 while pulse reads it through the bridge;
+ *       the terminal holds Full Disk Access and iris-daemon does not, so health
+ *       printed "connected + verified" directly above a scan that failed.
+ */
+async function bridgeChannelHealth(name: string, path: string): Promise<ChannelHealth> {
+  try {
+    const res = await fetch(`${BRIDGE_BASE}${path}`, {
+      signal: AbortSignal.timeout(5000),
+      headers: bridgeHeaders(),
+    })
+    if (res.ok) return { name, ok: true, status: "verified" }
+
+    const body = await res.text().catch(() => "")
+    let detail = body.slice(0, 200)
+    try {
+      const parsed = JSON.parse(body)
+      if (parsed?.error) detail = String(parsed.error)
+    } catch {
+      /* not JSON — keep the raw text */
+    }
+
+    // A TCC denial is not a bridge fault. Name the real remedy.
+    if (/permission|full disk access|not permitted|authorization denied/i.test(detail)) {
+      return {
+        name,
+        ok: false,
+        status: "no_permission",
+        error: detail || `HTTP ${res.status}`,
+        hint: "grant Full Disk Access to iris-daemon (not just your terminal), then: iris-daemon restart",
+      }
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      return { name, ok: false, status: "expired", error: detail || `HTTP ${res.status}`, hint: "bridge key rejected — check ~/.iris/bridge-token" }
+    }
+
+    return {
+      name,
+      ok: false,
+      status: "error",
+      error: detail ? `HTTP ${res.status} — ${detail}` : `HTTP ${res.status}`,
+      hint: "check bridge: iris hive doctor",
+    }
+  } catch {
+    return { name, ok: false, status: "not_connected", hint: "bridge not running — iris-daemon start" }
+  }
+}
+
 export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
   const results: ChannelHealth[] = []
 
@@ -2324,49 +2383,13 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
       }
     })(),
 
-    // Google Calendar — verify via bridge
-    (async (): Promise<ChannelHealth> => {
-      try {
-        const res = await fetch(`${BRIDGE_BASE}/api/calendar/events?days=1&limit=1`, {
-          signal: AbortSignal.timeout(3000),
-          headers: bridgeHeaders(),
-        })
-        if (res.ok) return { name: "Google Calendar", ok: true, status: "verified" }
-        return {
-          name: "Google Calendar",
-          ok: false,
-          status: "error",
-          error: `HTTP ${res.status}`,
-          hint: "check bridge: iris hive doctor",
-        }
-      } catch {
-        return {
-          name: "Google Calendar",
-          ok: false,
-          status: "not_connected",
-          hint: "bridge not running — iris-daemon start",
-        }
-      }
-    })(),
+    // Google Calendar — verify via bridge, over the endpoint pulse actually reads
+    bridgeChannelHealth("Google Calendar", "/api/calendar/events?days=1&limit=1"),
 
-    // iMessage — verify macOS Messages.app SQLite access
-    (async (): Promise<ChannelHealth> => {
-      try {
-        const { isAvailable } = await import("../lib/imessage")
-        if (isAvailable()) {
-          return { name: "iMessage", ok: true, status: "verified" }
-        }
-        return {
-          name: "iMessage",
-          ok: false,
-          status: "no_permission",
-          error: "Full Disk Access required",
-          hint: "System Settings → Privacy → Full Disk Access → enable terminal",
-        }
-      } catch {
-        return { name: "iMessage", ok: false, status: "error", error: "check failed", hint: "check macOS Messages.app" }
-      }
-    })(),
+    // iMessage — probe the bridge, because that is what pulse reads iMessage
+    // through. Checking the local Messages DB from this process instead proved
+    // only that *the terminal* has Full Disk Access, which is not the question.
+    bridgeChannelHealth("iMessage", "/api/imessage/search?handle=health-probe&days=1&limit=1"),
 
     // WhatsApp — verify local macOS ChatStorage.sqlite access (groups read from here)
     (async (): Promise<ChannelHealth> => {
@@ -2387,30 +2410,8 @@ export async function runChannelHealthChecks(): Promise<ChannelHealth[]> {
       }
     })(),
 
-    // Apple Mail — verify via bridge
-    (async (): Promise<ChannelHealth> => {
-      try {
-        const res = await fetch(`${BRIDGE_BASE}/api/mail/search?from=test&days=1&limit=1`, {
-          signal: AbortSignal.timeout(3000),
-          headers: bridgeHeaders(),
-        })
-        if (res.ok) return { name: "Apple Mail", ok: true, status: "verified" }
-        return {
-          name: "Apple Mail",
-          ok: false,
-          status: "error",
-          error: `HTTP ${res.status}`,
-          hint: "check bridge: iris hive doctor",
-        }
-      } catch {
-        return {
-          name: "Apple Mail",
-          ok: false,
-          status: "not_connected",
-          hint: "bridge not running — iris-daemon start",
-        }
-      }
-    })(),
+    // Apple Mail — verify via bridge, over the endpoint pulse actually reads
+    bridgeChannelHealth("Apple Mail", "/api/mail/search?from=test&days=1&limit=1"),
 
     // Bridge health (covers iMessage bridge + Apple Mail)
     (async (): Promise<ChannelHealth> => {
@@ -2984,14 +2985,14 @@ const LeadsPulseCommand = cmd({
           } else if (!checks.payment_received) {
             fixHints.push({ signal: "deal", score: dealS, reason: "payment gate unpaid", fix: `iris leads pulse ${leadId} --hydrate` })
           } else {
-            fixHints.push({ signal: "deal", score: dealS, reason: "missing contract/proposal", fix: `iris leads upload ${leadId} ./proposal.pdf` })
+            fixHints.push({ signal: "deal", score: dealS, reason: "missing contract/proposal", fix: `iris proposals create ${leadId}` })
           }
         }
 
         // Knowledge completeness
         if (kbScore !== null && kbScore !== undefined && kbScore < 50) {
           const count = kbSig?.docs_count ?? 0
-          fixHints.push({ signal: "KB", score: kbScore, reason: `${count}/8 docs`, fix: `iris leads kb ${leadId} add ./doc.md` })
+          fixHints.push({ signal: "KB", score: kbScore, reason: `${count}/8 docs`, fix: `iris leads kb ${leadId} --generate` })
         }
 
         // Meeting engagement
@@ -3003,7 +3004,7 @@ const LeadsPulseCommand = cmd({
         if (delivS !== null && delivS !== undefined && delivS < 50) {
           const passed = delivSig?.passed ?? 0
           const total = delivSig?.total ?? 8
-          fixHints.push({ signal: "deliv", score: delivS, reason: `${passed}/${total} deliverables`, fix: `iris leads upload ${leadId} ./deliverable.pdf` })
+          fixHints.push({ signal: "deliv", score: delivS, reason: `${passed}/${total} deliverables`, fix: `iris deliver ${leadId} <workflow>` })
         }
 
         // Task completion
@@ -3019,7 +3020,7 @@ const LeadsPulseCommand = cmd({
           if (!cc.has_email) missing.push("email")
           if (!cc.has_company) missing.push("company")
           if (!cc.has_bloq) missing.push("bloq")
-          fixHints.push({ signal: "cfg", score: cfgS, reason: `missing ${missing.join(", ") || "config"}`, fix: `iris leads edit ${leadId}` })
+          fixHints.push({ signal: "cfg", score: cfgS, reason: `missing ${missing.join(", ") || "config"}`, fix: `iris leads update ${leadId}` })
         }
 
         // Requirements
@@ -3104,8 +3105,14 @@ const LeadsPulseCommand = cmd({
         }
         if (duplicateLeadIds.length > 0) {
           // #57685: Rank duplicates by data richness to suggest best master record
+          // Only leads that cleared the email/phone identity check above are real
+          // duplicates. This used to filter `allMatches` — the raw fuzzy-name search —
+          // so the list printed rows the header count excluded, and `bestDup` below
+          // could nominate a lead that was never a duplicate for deletion.
+          const confirmedDupIds = new Set(duplicateLeadIds)
           const uniqueDups = allMatches.filter(
-            (v: any, i: number, a: any[]) => a.findIndex((x: any) => x.id === v.id) === i,
+            (v: any, i: number, a: any[]) =>
+              confirmedDupIds.has(v.id) && a.findIndex((x: any) => x.id === v.id) === i,
           )
           const scoreLead = (l: any) => {
             let s = 0
