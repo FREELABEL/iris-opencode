@@ -38,9 +38,58 @@ const STATUS_ICON: Record<string, string> = {
   done: "\x1b[96m✓\x1b[0m", // cyan
 }
 
-export function fmtPct(current?: number | null, target?: number | null): string {
-  if (target == null || target === 0 || current == null) return dim("—")
-  const pct = Math.round((current / target) * 100)
+/**
+ * Percent complete for one key result, RESPECTING its direction.
+ *
+ * Returns null when the pair cannot produce a percentage at all (no target, no
+ * reading, a zero target an increase KR would divide by) — null is "not measured",
+ * which callers must render differently from 0%.
+ *
+ * The direction is not decoration. `current / target` is only correct for an
+ * INCREASE KR. Applied to a decrease KR it inverts: "cut manual effort from 6h to
+ * 1h" evaluates 6/1 = 600%, caps to 100%, and reports a key result sitting at its
+ * WORST possible value as complete — while dragging its objective's average up.
+ * That shipped, and it was caught by seeding real RevOps data rather than by
+ * reading the code: the objective read "60% avg" when its true progress was 10%.
+ *
+ * decrease  — target/current, so hitting the target is 100% and drifting away
+ *             falls toward 0. Without a stored baseline this is a ratio, not a
+ *             linear burn-down, but it is monotonic in the right direction and it
+ *             never reports "done" for a KR that has not moved.
+ * maintain  — 100% at the target, decaying by relative deviation either side.
+ *             Overshooting a "hold this steady" KR is a miss, not a win.
+ */
+export function krProgress(
+  current?: number | null,
+  target?: number | null,
+  direction?: string | null,
+): number | null {
+  if (target == null || current == null) return null
+  const dir = direction ?? "increase"
+
+  if (dir === "decrease") {
+    // At or under target is the goal met. Checked before the divide so current=0
+    // (a total elimination — the best case) cannot become Infinity.
+    if (current <= target) return 100
+    if (current === 0) return 100
+    return (target / current) * 100
+  }
+
+  if (dir === "maintain") {
+    if (target === 0) return current === 0 ? 100 : 0
+    const deviation = Math.abs(current - target) / Math.abs(target)
+    return Math.max(0, (1 - deviation) * 100)
+  }
+
+  if (target === 0) return null
+  return (current / target) * 100
+}
+
+/** Render a key result's progress. Direction-aware — see krProgress. */
+export function fmtPct(current?: number | null, target?: number | null, direction?: string | null): string {
+  const raw = krProgress(current, target, direction)
+  if (raw == null) return dim("—")
+  const pct = Math.round(raw)
   const color = pct >= 100 ? "\x1b[96m" : pct >= 60 ? "\x1b[92m" : pct >= 30 ? "\x1b[93m" : "\x1b[91m"
   return `${color}${pct}%\x1b[0m`
 }
@@ -181,7 +230,7 @@ const ObjectivesShowCmd = cmd({
     } else {
       printDivider()
       for (const kr of krs) {
-        const pct = fmtPct(kr.current_value, kr.target_value)
+        const pct = fmtPct(kr.current_value, kr.target_value, kr.direction)
         const arrow = kr.direction === "decrease" ? "↓" : kr.direction === "maintain" ? "→" : "↑"
         console.log(`  ${dim(`#${kr.id}`)}  ${kr.description}`)
         console.log(`    ${arrow} ${kr.current_value ?? 0}${kr.unit ?? ""} / ${kr.target_value ?? "?"}${kr.unit ?? ""}  ${pct}${kr.due_date ? dim(`  due ${kr.due_date}`) : ""}`)
@@ -320,7 +369,7 @@ const KrUpdateCmd = cmd({
     const body = (await res.json()) as any
     if (args.json) { await writeJson(body.data); return }
     const d = body.data?.data ?? {}
-    prompts.outro(`${success("✓")} ${d.current_value ?? "?"}${d.unit ?? ""} / ${d.target_value ?? "?"}${d.unit ?? ""}  ${fmtPct(d.current_value, d.target_value)}`)
+    prompts.outro(`${success("✓")} ${d.current_value ?? "?"}${d.unit ?? ""} / ${d.target_value ?? "?"}${d.unit ?? ""}  ${fmtPct(d.current_value, d.target_value, d.direction)}`)
   },
 })
 
@@ -376,14 +425,25 @@ const OkrStatusCmd = cmd({
       console.log(`  ${bold(track)}`)
       for (const o of trackObjs) {
         const ownKrs = krs.filter((k) => k.objective_id === o.id)
-        const avgPct =
-          ownKrs.length && ownKrs.some((k) => k.target_value)
-            ? Math.round(
-                ownKrs.filter((k) => k.target_value).reduce((sum, k) => sum + Math.min(100, ((k.current_value ?? 0) / k.target_value) * 100), 0) /
-                  ownKrs.filter((k) => k.target_value).length,
-              )
-            : null
-        const pctTag = avgPct != null ? dim(`  ${avgPct}% avg across ${ownKrs.length} KR${ownKrs.length === 1 ? "" : "s"}`) : dim("  no key results")
+        // Only KRs that actually yield a percentage are averaged, and each one is
+        // measured through krProgress so a decrease KR counts the direction it is
+        // meant to move. An unmeasurable KR is EXCLUDED rather than counted as 0 —
+        // "not measured yet" is not "no progress", and folding the two together
+        // makes an objective look worse than the evidence supports.
+        const measured = ownKrs
+          .map((k) => krProgress(k.current_value, k.target_value, k.direction))
+          .filter((p): p is number => p != null)
+        const avgPct = measured.length
+          ? Math.round(measured.reduce((sum, p) => sum + Math.min(100, p), 0) / measured.length)
+          : null
+        const unmeasured = ownKrs.length - measured.length
+        const pctTag =
+          avgPct != null
+            ? dim(`  ${avgPct}% avg across ${measured.length} KR${measured.length === 1 ? "" : "s"}`) +
+              (unmeasured ? dim(` (+${unmeasured} unmeasured)`) : "")
+            : ownKrs.length
+              ? dim(`  ${ownKrs.length} KR${ownKrs.length === 1 ? "" : "s"}, none measurable yet`)
+              : dim("  no key results")
         console.log(`    ${STATUS_ICON[o.status] ?? dim("○")} ${dim(`#${o.id}`)}  ${o.title}${pctTag}`)
       }
     }
@@ -431,11 +491,12 @@ const KpiListCmd = cmd({
 
     printDivider()
     for (const k of kpis) {
-      const pct = fmtPct(k.current_value, k.target_value)
+      const pct = fmtPct(k.current_value, k.target_value, k.direction)
       const trackTag = k.track ? dim(` [${k.track}]`) : ""
       const staleTag = k.last_updated ? dim(`  updated ${new Date(k.last_updated).toLocaleDateString()}`) : dim("  never updated")
       console.log(`  ${dim(`#${k.id}`)}  ${bold(k.name)}${trackTag}${dim(` · ${k.cadence ?? "?"}`)}`)
-      console.log(`    ${k.current_value ?? dim("no reading")}${k.unit ?? ""} / ${k.target_value ?? "?"}${k.unit ?? ""}  ${pct}${staleTag}`)
+      const arrow = k.direction === "decrease" ? "↓" : k.direction === "maintain" ? "→" : "↑"
+      console.log(`    ${arrow} ${k.current_value ?? dim("no reading")}${k.unit ?? ""} / ${k.target_value ?? "?"}${k.unit ?? ""}  ${pct}${staleTag}`)
     }
     printDivider()
     prompts.outro(`${success("✓")} ${kpis.length} KPI${kpis.length === 1 ? "" : "s"}`)
@@ -452,6 +513,12 @@ const KpiCreateCmd = cmd({
       .option("target", { type: "number" })
       .option("current", { type: "number", describe: "initial reading" })
       .option("unit", { type: "string" })
+      .option("direction", {
+        type: "string",
+        choices: KR_DIRECTIONS,
+        default: "increase",
+        describe: "which way is good — a response-time KPI is 'decrease', not 'increase'",
+      })
       .option("cadence", { type: "string", choices: KPI_CADENCES, default: "monthly" })
       .option("notes", { type: "string" })
       .option("json", { type: "boolean", default: false }),
@@ -467,6 +534,7 @@ const KpiCreateCmd = cmd({
       target_value: args.target ?? null,
       current_value: args.current ?? null,
       unit: args.unit ?? null,
+      direction: args.direction,
       cadence: args.cadence,
       last_updated: args.current !== undefined ? new Date().toISOString() : null,
       notes: args.notes ?? null,
@@ -505,7 +573,7 @@ const KpiUpdateCmd = cmd({
     const body = (await res.json()) as any
     if (args.json) { await writeJson(body.data); return }
     const d = body.data?.data ?? {}
-    prompts.outro(`${success("✓")} ${d.name}: ${d.current_value}${d.unit ?? ""} / ${d.target_value ?? "?"}${d.unit ?? ""}  ${fmtPct(d.current_value, d.target_value)}`)
+    prompts.outro(`${success("✓")} ${d.name}: ${d.current_value}${d.unit ?? ""} / ${d.target_value ?? "?"}${d.unit ?? ""}  ${fmtPct(d.current_value, d.target_value, d.direction)}`)
   },
 })
 
@@ -529,7 +597,7 @@ const KpiShowCmd = cmd({
 
     const d = record.data
     console.log(`  ${bold(d.name)}  ${dim(`[${d.track ?? "no track"}] · ${d.cadence ?? "?"}`)}`)
-    console.log(`    ${d.current_value ?? dim("no reading")}${d.unit ?? ""} / ${d.target_value ?? "?"}${d.unit ?? ""}  ${fmtPct(d.current_value, d.target_value)}`)
+    console.log(`    ${d.current_value ?? dim("no reading")}${d.unit ?? ""} / ${d.target_value ?? "?"}${d.unit ?? ""}  ${fmtPct(d.current_value, d.target_value, d.direction)}`)
     console.log(`    ${dim(d.last_updated ? `last updated ${new Date(d.last_updated).toLocaleString()}` : "never updated")}`)
     if (d.notes) console.log(`    ${dim(d.notes)}`)
     prompts.outro("Done")
