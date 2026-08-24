@@ -38,7 +38,7 @@ const STATUS_ICON: Record<string, string> = {
   done: "\x1b[96m✓\x1b[0m", // cyan
 }
 
-function fmtPct(current?: number | null, target?: number | null): string {
+export function fmtPct(current?: number | null, target?: number | null): string {
   if (target == null || target === 0 || current == null) return dim("—")
   const pct = Math.round((current / target) * 100)
   const color = pct >= 100 ? "\x1b[96m" : pct >= 60 ? "\x1b[92m" : pct >= 30 ? "\x1b[93m" : "\x1b[91m"
