@@ -110,6 +110,17 @@ export const PulseCheckCommand = cmd({
       process.exitCode = 1
       return
     }
+    // Reject BEFORE filing (#182193): topicSlug() strips every non-alphanumeric
+    // character, so a keyword with none (e.g. "***") collapses to the empty
+    // string and falls back to the literal slug "topic" — every such input
+    // then files under the same external_id "topic:topic", colliding with and
+    // overwriting any other invalid keyword's corpus entity. There is no
+    // meaningful topic to score here, so refuse rather than file a collision.
+    if (!/[a-z0-9]/i.test(keyword)) {
+      console.error(`"${keyword}" has no searchable characters — nothing to sweep or file. Use a real keyword.`)
+      process.exitCode = 1
+      return
+    }
 
     const requested = args.sources
       ? String(args.sources).split(",").map((s) => s.trim()).filter(Boolean)
@@ -118,6 +129,16 @@ export const PulseCheckCommand = cmd({
     const unknown = requested.filter((s) => !TOPIC_SOURCES.includes(s as TopicSource))
     if (unknown.length) {
       console.error(`Unknown source(s): ${unknown.join(", ")}. Known: ${TOPIC_SOURCES.join(", ")}`)
+      process.exitCode = 1
+      return
+    }
+    // #182192: a window below 1 day isn't "narrower", it's meaningless — every
+    // cutoff collapses to "now", so every source reports 0 hits and the run
+    // still exits 0 looking like a real (if quiet) result instead of a bad
+    // argument.
+    const days = Number(args.days)
+    if (!Number.isFinite(days) || days < 1) {
+      console.error(`--days must be at least 1 (got ${args.days})`)
       process.exitCode = 1
       return
     }
@@ -142,7 +163,7 @@ export const PulseCheckCommand = cmd({
       {
         keyword,
         repo: String(args.repo),
-        windowDays: Number(args.days),
+        windowDays: days,
         limit: Number(args.limit),
         sources,
         bridgeUrl: BRIDGE_URL,
@@ -165,7 +186,7 @@ export const PulseCheckCommand = cmd({
     // collector you cannot check before it writes.
     const observations = toObservations(keyword, sweeps, {
       includeContext: Boolean(args.includeContext),
-      windowDays: Number(args.days),
+      windowDays: days,
       ownerUserId: userId ?? undefined,
     })
 
@@ -201,7 +222,7 @@ export const PulseCheckCommand = cmd({
         keyword,
         slug: topicSlug(keyword),
         variants: keywordVariants(keyword),
-        window_days: Number(args.days),
+        window_days: days,
         sweeps,
         observations,
         pushed: push && !pushError,
@@ -329,6 +350,12 @@ export const PulseCheckCommand = cmd({
     }
 
     console.log()
-    prompts.outro(dim(`iris pulse check "${keyword}" --days 90  ·  --sources git,diary  ·  --json`))
+    // #182192: this used to be a literal hardcoded string ("--days 90 ·
+    // --sources git,diary --json") printed regardless of what was actually
+    // run, so a --days 7 --sources bloq run "rerun" hint pointed at a
+    // completely different query. Reflects the options this run actually
+    // used instead.
+    const rerunSources = args.sources ? ` --sources ${sources.join(",")}` : ""
+    prompts.outro(dim(`iris pulse check "${keyword}" --days ${days}${rerunSources}  ·  --json`))
   },
 })

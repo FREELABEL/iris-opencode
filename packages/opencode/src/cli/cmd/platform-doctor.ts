@@ -17,11 +17,40 @@ import { homedir } from "os"
 
 function printDivider() { console.log(dim("  " + "─".repeat(72))) }
 
+/**
+ * Category drives both grouping and exit status (#182194).
+ *
+ * The old flat list put a real fl-api outage next to a denied Contacts grant
+ * next to an unconfigured AI provider — three completely different kinds of
+ * "not ok" with no way to tell which one actually means something is broken
+ * versus which is a local machine's own setup, or a service nobody asked to
+ * enable. Only "core" failures are actionable production problems and are
+ * the only ones that drive a non-zero exit; the rest are surfaced (nothing
+ * here is hidden) but are not treated as the reason to page someone.
+ *
+ *   core       platform APIs, auth/credentials — a real, actionable failure
+ *   daemon     the local bridge/daemon — "not running" is often a CHOICE,
+ *              not a fault; it is never conflated with a production outage
+ *   permission macOS TCC grants (Full Disk Access, Contacts) — this
+ *              machine's own setup, not a service being down
+ *   optional   AI providers, channel integrations, SEO, local tooling — a
+ *              provider nobody uses being unconfigured is not "unhealthy"
+ */
+type CheckCategory = "core" | "daemon" | "permission" | "optional"
+
 interface CheckResult {
   name: string
   ok: boolean
   detail?: string
   hint?: string
+  category: CheckCategory
+}
+
+const CATEGORY_LABEL: Record<CheckCategory, string> = {
+  core: "Core platform",
+  daemon: "Local daemon",
+  permission: "macOS permissions",
+  optional: "Optional / local capabilities",
 }
 
 /**
@@ -40,51 +69,61 @@ interface CheckResult {
  * from a different provider entirely.
  *
  * Exported so the mapping is testable without a live server.
+ *
+ * Returns a bare ok/detail/hint, not a full CheckResult: the caller supplies
+ * the real `name` ("AI: <PROVIDER>") and `category` ("optional", #182194) —
+ * this function has no opinion on either, so it doesn't fake placeholder
+ * values for fields it doesn't own.
  */
-export function aiProviderHealth(status: string, message?: string): CheckResult {
+export interface ProviderHealth {
+  ok: boolean
+  detail: string
+  hint?: string
+}
+
+export function aiProviderHealth(status: string, message?: string): ProviderHealth {
   const detail = message ? `${status} — ${message}` : status
 
   switch (status) {
     // Healthy. billing_active is the BEST case, not a warning.
     case "billing_active":
-      return { name: "", ok: true, detail: "billing active (live completion succeeded)" }
+      return { ok: true, detail: "billing active (live completion succeeded)" }
     case "key_valid":
-      return { name: "", ok: true, detail: "key valid" }
+      return { ok: true, detail: "key valid" }
     case "ok":
-      return { name: "", ok: true, detail: "ok" }
+      return { ok: true, detail: "ok" }
 
     // Real problems, each with the action that actually fixes it — "check API
     // key" is wrong for most of these.
     case "quota_exceeded":
-      return { name: "", ok: false, detail, hint: "quota exhausted — add credits or raise the limit" }
+      return { ok: false, detail, hint: "quota exhausted — add credits or raise the limit" }
     case "payment_required":
-      return { name: "", ok: false, detail, hint: "billing needs payment on the provider account" }
+      return { ok: false, detail, hint: "billing needs payment on the provider account" }
     case "billing_blocked":
-      return { name: "", ok: false, detail, hint: "provider blocked this account — check billing status" }
+      return { ok: false, detail, hint: "provider blocked this account — check billing status" }
     case "rate_limited":
       // Billing is fine; the key is fine. Transient, but calls ARE failing now.
-      return { name: "", ok: false, detail, hint: "rate limited — transient, retry shortly" }
+      return { ok: false, detail, hint: "rate limited — transient, retry shortly" }
     case "missing":
     case "not_configured":
-      return { name: "", ok: false, detail, hint: "no API key configured for this provider" }
+      return { ok: false, detail, hint: "no API key configured for this provider" }
     case "error":
-      return { name: "", ok: false, detail, hint: "provider probe failed — see message" }
+      return { ok: false, detail, hint: "provider probe failed — see message" }
   }
 
   if (/^http_4\d\d$/.test(status)) {
     const code = status.slice(5)
     return {
-      name: "",
       ok: false,
       detail,
       hint: code === "401" || code === "403" ? "check API key" : `provider rejected the request (HTTP ${code})`,
     }
   }
   if (/^http_5\d\d$/.test(status)) {
-    return { name: "", ok: false, detail, hint: "provider outage — not your key" }
+    return { ok: false, detail, hint: "provider outage — not your key" }
   }
 
-  return { name: "", ok: false, detail, hint: "unrecognised provider status" }
+  return { ok: false, detail, hint: "unrecognised provider status" }
 }
 
 /**
@@ -98,7 +137,10 @@ export function aiProviderHealth(status: string, message?: string): CheckResult 
  */
 export const PLATFORM_PROBE_TIMEOUT_MS = 20000
 
-async function checkEndpoint(name: string, url: string, base?: string): Promise<CheckResult> {
+// category isn't this function's to decide (#182194) — the same probe backs
+// both a "core" API check and the "daemon" bridge check, so category is
+// merged in by each call site instead.
+async function checkEndpoint(name: string, url: string, base?: string): Promise<Omit<CheckResult, "category">> {
   try {
     const res = base
       ? await irisFetch(url, {}, base)
@@ -115,7 +157,9 @@ async function checkEndpoint(name: string, url: string, base?: string): Promise<
 // and profile/event pages return correct responses.
 
 async function runSEOChecks(): Promise<CheckResult[]> {
-  const results: CheckResult[] = []
+  // Every result here is "optional" (#182194) — appended once at return
+  // rather than on each of the ~10 push sites below.
+  const results: Omit<CheckResult, "category">[] = []
   const prodUrl = "https://freelabel.net"
   const flApiUrl = FL_API || "https://raichu.heyiris.io"
 
@@ -220,7 +264,7 @@ async function runSEOChecks(): Promise<CheckResult[]> {
     results.push({ name: "SEO: Event API", ok: false, detail: e.message?.slice(0, 50) ?? "unreachable" })
   }
 
-  return results
+  return results.map((r) => ({ ...r, category: "optional" as const }))
 }
 
 export const PlatformDoctorCommand = cmd({
@@ -240,10 +284,10 @@ export const PlatformDoctorCommand = cmd({
     sp.start("Checking SDK auth…")
     const token = await requireAuth()
     if (!token) {
-      allResults.push({ name: "SDK Auth", ok: false, hint: "run: iris auth login" })
+      allResults.push({ name: "SDK Auth", ok: false, hint: "run: iris auth login", category: "core" })
       sp.stop("Auth failed")
     } else {
-      allResults.push({ name: "SDK Auth", ok: true, detail: "token present" })
+      allResults.push({ name: "SDK Auth", ok: true, detail: "token present", category: "core" })
       sp.stop("Authenticated")
     }
 
@@ -266,6 +310,7 @@ export const PlatformDoctorCommand = cmd({
             ok: false,
             detail: `sdk/.env user (${envUser}) ≠ this node's user (${nodeUser})`,
             hint: "sdk/.env may hold another account's token — rm ~/.iris/sdk/.env then: iris auth login",
+            category: "core",
           })
         } else if (/pre-seeded/i.test(envText)) {
           allResults.push({
@@ -273,9 +318,10 @@ export const PlatformDoctorCommand = cmd({
             ok: false,
             detail: "sdk/.env holds a pre-seeded token (not self-authenticated)",
             hint: "confirm it's your own account, or rm ~/.iris/sdk/.env then: iris auth login",
+            category: "core",
           })
         } else {
-          allResults.push({ name: "Credentials", ok: true, detail: "sdk/.env scoped to this user" })
+          allResults.push({ name: "Credentials", ok: true, detail: "sdk/.env scoped to this user", category: "core" })
         }
       }
     } catch {}
@@ -288,7 +334,11 @@ export const PlatformDoctorCommand = cmd({
       checkEndpoint("iris-api", "/api/health", IRIS_API),
       checkEndpoint("iris-api deep health", "/api/health?deep=true", IRIS_API),
     ])
-    allResults.push(flApi, irisApi, irisHealth)
+    allResults.push(
+      { ...flApi, category: "core" },
+      { ...irisApi, category: "core" },
+      { ...irisHealth, category: "core" },
+    )
 
     // Parse AI provider status from deep health
     if (irisHealth.ok) {
@@ -306,6 +356,7 @@ export const PlatformDoctorCommand = cmd({
                 ok: health.ok,
                 detail: health.detail,
                 hint: health.hint,
+                category: "optional",
               })
             }
           }
@@ -317,7 +368,7 @@ export const PlatformDoctorCommand = cmd({
     // ── 3. Bridge / Daemon ──
     sp.start("Checking bridge + daemon…")
     const bridgeHealth = await checkEndpoint("IRIS Bridge", "http://localhost:3200/health")
-    allResults.push(bridgeHealth)
+    allResults.push({ ...bridgeHealth, category: "daemon" })
 
     // Check daemon PID
     const daemonPid = join(homedir(), ".iris", "daemon.pid")
@@ -329,12 +380,15 @@ export const PlatformDoctorCommand = cmd({
         } else {
           execSync(`kill -0 ${pid} 2>/dev/null`)
         }
-        allResults.push({ name: "IRIS Daemon", ok: true, detail: `PID ${pid}` })
+        allResults.push({ name: "IRIS Daemon", ok: true, detail: `PID ${pid}`, category: "daemon" })
       } catch {
-        allResults.push({ name: "IRIS Daemon", ok: false, detail: "PID file exists but process dead", hint: "run: iris-daemon start" })
+        allResults.push({ name: "IRIS Daemon", ok: false, detail: "PID file exists but process dead", hint: "run: iris-daemon start", category: "daemon" })
       }
     } else {
-      allResults.push({ name: "IRIS Daemon", ok: false, detail: "not running", hint: "run: iris-daemon start" })
+      // No PID file at all reads as "never started" rather than "crashed" — a
+      // daemon someone deliberately hasn't started is not the same finding as
+      // one that died, even though both were flattened into one failure before.
+      allResults.push({ name: "IRIS Daemon", ok: false, detail: "not running (no PID file — may be intentional)", hint: "run: iris-daemon start if you want it running", category: "daemon" })
     }
     sp.stop("Bridge checked")
 
@@ -347,6 +401,7 @@ export const PlatformDoctorCommand = cmd({
         ok: ch.ok,
         detail: ch.ok ? "connected + verified" : ch.error,
         hint: ch.hint,
+        category: "optional",
       })
     }
     sp.stop("Integrations verified")
@@ -363,19 +418,20 @@ export const PlatformDoctorCommand = cmd({
           ok,
           detail: ok ? "Messages.app readable" : "cannot read Messages.app",
           hint: ok ? undefined : "System Settings → Privacy → Full Disk Access",
+          category: "permission",
         })
       }
 
       // Contacts access (needed for address book matching)
       try {
         execSync(`sqlite3 "${homedir()}/Library/Application Support/AddressBook/AddressBook-v22.abcddb" "SELECT count(*) FROM ZABCDRECORD LIMIT 1" 2>&1`, { encoding: "utf-8", timeout: 3000 })
-        allResults.push({ name: "Contacts Access", ok: true, detail: "AddressBook readable" })
+        allResults.push({ name: "Contacts Access", ok: true, detail: "AddressBook readable", category: "permission" })
       } catch {
-        allResults.push({ name: "Contacts Access", ok: false, detail: "cannot read AddressBook", hint: "may need Contacts permission for terminal" })
+        allResults.push({ name: "Contacts Access", ok: false, detail: "cannot read AddressBook", hint: "may need Contacts permission for terminal", category: "permission" })
       }
       sp.stop("Permissions checked")
     } else {
-      allResults.push({ name: "macOS Permissions", ok: true, detail: "skipped (not macOS)" })
+      allResults.push({ name: "macOS Permissions", ok: true, detail: "skipped (not macOS)", category: "permission" })
     }
 
     // ── 6. SEO & Bot Protection ──
@@ -390,38 +446,61 @@ export const PlatformDoctorCommand = cmd({
     for (const tool of localTools) {
       try {
         execSync(`${whichCmd} ${tool}`, { encoding: "utf-8", timeout: 2000, stdio: "pipe" })
-        allResults.push({ name: `Tool: ${tool}`, ok: true })
+        allResults.push({ name: `Tool: ${tool}`, ok: true, category: "optional" })
       } catch {
-        allResults.push({ name: `Tool: ${tool}`, ok: false, hint: `install ${tool}` })
+        allResults.push({ name: `Tool: ${tool}`, ok: false, hint: `install ${tool}`, category: "optional" })
       }
     }
 
-    // ── Render Results ──
+    // ── Render Results (#182194) ──
+    //
+    // Only "core" failures are actionable production problems and are the
+    // only ones that set a non-zero exit — a stopped-by-choice daemon, a
+    // denied local permission, or an unconfigured optional provider are
+    // real information, surfaced below, but they are not the reason a
+    // script or a person should treat this run as "something is broken".
+    const passing = allResults.filter((r) => r.ok).length
+    const failing = allResults.filter((r) => !r.ok).length
+    const coreFailing = allResults.filter((r) => !r.ok && r.category === "core")
+
     if (args.json) {
-      await writeJson(allResults)
+      await writeJson({
+        results: allResults,
+        summary: { passing, failing, core_failing: coreFailing.length },
+        // Explicit, not inferred from `failing`, so a consumer never has to
+        // re-derive "does this count" from the category list themselves.
+        ok: coreFailing.length === 0,
+      })
       prompts.outro("Done")
+      if (coreFailing.length > 0) process.exitCode = 1
       return
     }
 
-    const passing = allResults.filter((r) => r.ok).length
-    const failing = allResults.filter((r) => !r.ok).length
-
     console.log()
-    printDivider()
-    for (const r of allResults) {
-      const icon = r.ok ? success("✓") : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
-      const detail = r.detail ? dim(` (${r.detail})`) : ""
-      const hint = (!r.ok && r.hint) ? `  ${dim(`→ ${r.hint}`)}` : ""
-      console.log(`  ${icon} ${r.name.padEnd(22)}${detail}${hint}`)
+    const order: CheckCategory[] = ["core", "daemon", "permission", "optional"]
+    for (const cat of order) {
+      const group = allResults.filter((r) => r.category === cat)
+      if (group.length === 0) continue
+      printDivider()
+      console.log(`  ${bold(CATEGORY_LABEL[cat])}`)
+      for (const r of group) {
+        const icon = r.ok ? success("✓") : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+        const detail = r.detail ? dim(` (${r.detail})`) : ""
+        const hint = (!r.ok && r.hint) ? `  ${dim(`→ ${r.hint}`)}` : ""
+        console.log(`  ${icon} ${r.name.padEnd(22)}${detail}${hint}`)
+      }
     }
     printDivider()
 
     console.log()
     if (failing === 0) {
       console.log(`  ${success(`All ${passing} checks passing`)}`)
+    } else if (coreFailing.length === 0) {
+      console.log(`  ${success(`${passing} passing`)}  ${dim(`${failing} not ok, none of them core`)}`)
     } else {
-      console.log(`  ${success(`${passing} passing`)}  ${UI.Style.TEXT_DANGER}${failing} failing${UI.Style.TEXT_NORMAL}`)
+      console.log(`  ${success(`${passing} passing`)}  ${UI.Style.TEXT_DANGER}${coreFailing.length} core failure(s)${UI.Style.TEXT_NORMAL}  ${dim(`(${failing} not ok total)`)}`)
     }
+    if (coreFailing.length > 0) process.exitCode = 1
 
     prompts.outro("Done")
   },

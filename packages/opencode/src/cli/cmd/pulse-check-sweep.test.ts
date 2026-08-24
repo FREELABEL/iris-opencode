@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { keywordVariants, keywordPattern, topicSlug, toObservations, resolveRepoRoot, gitRepos, sweepImessage, sweepDiary, sweepFiles, decodeAttributedBody, parseMailResponse, type SourceSweep } from "./pulse-check-sweep"
+import { keywordVariants, keywordPattern, topicSlug, toObservations, resolveRepoRoot, gitRepos, sweepImessage, sweepDiary, sweepFiles, sweepBloq, decodeAttributedBody, parseMailResponse, type SourceSweep } from "./pulse-check-sweep"
 import { execFileSync } from "child_process"
 import { mkdtempSync, rmSync } from "fs"
 import { join } from "path"
@@ -50,6 +50,45 @@ describe("topicSlug", () => {
 
   test("never produces an empty external id", () => {
     expect(topicSlug("!!!")).toBe("topic")
+  })
+})
+
+describe("sweepBloq — a non-array `data` must never crash the sweep (#182191)", () => {
+  function fakeRes(body: unknown, ok = true): Response {
+    return { ok, status: ok ? 200 : 500, json: async () => body } as unknown as Response
+  }
+
+  test("board list returning data:{} (no boards) does not throw", async () => {
+    // REGRESSION. `?.data ?? []` only substitutes on null/undefined — it lets
+    // a non-array truthy `data` (an empty PHP array serialising as `{}`
+    // instead of `[]`, a real shape from this endpoint) straight through,
+    // and `for (const row of rows)` on a plain object throws "{} is not
+    // iterable". This is exactly what a keyword matching no Atlas board hit.
+    const apiFetch = async (path: string) =>
+      path.includes("content-items") ? fakeRes({ data: {} }) : fakeRes({ data: {} })
+
+    await expect(
+      sweepBloq({ keyword: "no such board", repo: ".", windowDays: 30, limit: 6, sources: ["bloq"], apiFetch, userId: 1 }),
+    ).resolves.toMatchObject({ source: "bloq", items: [] })
+  })
+
+  test("item-search returning data:{} after a board-list miss does not throw", async () => {
+    const apiFetch = async (path: string) =>
+      path.includes("content-items") ? fakeRes({ data: {} }) : fakeRes({ data: [] })
+
+    await expect(
+      sweepBloq({ keyword: "another miss", repo: ".", windowDays: 30, limit: 6, sources: ["bloq"], apiFetch, userId: 1 }),
+    ).resolves.toMatchObject({ source: "bloq", items: [] })
+  })
+
+  test("a real array of boards/rows still works (not just the empty case)", async () => {
+    const apiFetch = async (path: string) =>
+      path.includes("content-items")
+        ? fakeRes({ data: [{ id: 1, updated_at: new Date().toISOString(), list_name: "L", title: "creator os thread" }] })
+        : fakeRes({ data: [] })
+
+    const result = await sweepBloq({ keyword: "creator os", repo: ".", windowDays: 30, limit: 6, sources: ["bloq"], apiFetch, userId: 1 })
+    expect(result.items.length).toBe(1)
   })
 })
 

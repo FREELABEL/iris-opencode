@@ -984,7 +984,13 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
   try {
     const res = await opts.apiFetch(`/api/v1/user/${opts.userId}/bloqs?simplified=1&per_page=500`)
     if (!res.ok) return unavailable("bloq", `board list returned ${res.status}`)
-    boards = ((await res.json()) as any)?.data ?? []
+    // Array.isArray, not `?? []` (#182191): `?? []` only substitutes on
+    // null/undefined, but an empty result from this endpoint can come back
+    // as `data: {}` (a PHP empty array serializing as an object) rather than
+    // `data: []` — `?? []` lets that non-array through, and the `for...of`
+    // below throws "not iterable" on it.
+    const rawBoards = ((await res.json()) as any)?.data
+    boards = Array.isArray(rawBoards) ? rawBoards : []
   } catch (e: any) {
     return unavailable("bloq", `could not reach Atlas: ${String(e?.message ?? e).slice(0, 120)}`)
   }
@@ -1016,7 +1022,9 @@ export async function sweepBloq(opts: SweepOptions): Promise<SourceSweep> {
       const params = new URLSearchParams({ search: variant, per_page: "100" })
       const res = await opts.apiFetch(`/api/v1/user/${opts.userId}/bloqs/content-items?${params}`)
       if (!res.ok) return unavailable("bloq", `item search returned ${res.status}`)
-      rows = ((await res.json()) as any)?.data ?? []
+      // Same non-array guard as the board-list fetch above (#182191).
+      const rawRows = ((await res.json()) as any)?.data
+      rows = Array.isArray(rawRows) ? rawRows : []
     } catch (e: any) {
       return unavailable("bloq", `Atlas search failed: ${String(e?.message ?? e).slice(0, 120)}`)
     }
