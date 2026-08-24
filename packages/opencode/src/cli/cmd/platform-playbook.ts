@@ -7,6 +7,7 @@ import { Skill } from "../../skill/skill"
 import { Instance } from "../../project/instance"
 import {
   parsePlan,
+  parseSteps,
   executeSkill,
   resolveArgs,
   splitPlaybookArgv,
@@ -251,7 +252,7 @@ const SkillRunCommand = cmd({
             skill: plan.name,
             version: plan.version,
             args: resolvedArgs,
-            steps: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode })),
+            steps: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode, integrations: s.integrations })),
           })
           return
         }
@@ -1169,8 +1170,9 @@ const PlaybookSyncCommand = cmd({
             const payload = {
               name: plan.name,
               description: plan.description,
+              industries: plan.industries ?? [],
               args_schema: plan.args,
-              steps_summary: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode })),
+              steps_summary: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode, integrations: s.integrations })),
               version: plan.version,
               ...(content ? { content } : {}),
             }
@@ -1348,8 +1350,9 @@ const PublishCommand = cmd({
           body: JSON.stringify({
             name: local.plan.name,
             description: local.plan.description,
+            industries: local.plan.industries ?? [],
             args_schema: local.plan.args,
-            steps_summary: local.plan.steps.map((s: any) => ({ id: s.id, title: s.title, mode: s.mode })),
+            steps_summary: local.plan.steps.map((s: any) => ({ id: s.id, title: s.title, mode: s.mode, integrations: s.integrations ?? [] })),
             version: local.plan.version,
             ...(local.content ? { content: local.content } : {}),
           }),
@@ -1425,6 +1428,244 @@ const PublishCommand = cmd({
   },
 })
 
+
+// ============================================================================
+// iris playbook doctor [name] — diagnose common playbook problems
+// ============================================================================
+// Every one of these was found by hand, once, the slow way: a version:1
+// playbook with `### step:` blocks in the body silently falls back to a raw
+// text dump instead of running (parsePlan only calls parseSteps when
+// version===2), and a stray second copy of a playbook (a global install, an
+// old clone) silently shadows the project one with no signal that it
+// happened. Both are invisible from `run`/`test` alone. `doctor` surfaces
+// them directly instead of a multi-hour bisection with python heredocs.
+
+const PlaybookDoctorCommand = cmd({
+  command: "doctor [name]",
+  describe: "diagnose common playbook problems: version/step mismatches, shadow copies, validation issues",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { type: "string", describe: "check a single playbook (default: check all)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    await withInstance(async () => {
+      const name = args.name as string | undefined
+
+      if (name) {
+        const info = await Skill.get(name)
+        if (!info) {
+          console.error(`Skill "${name}" not found`)
+          process.exit(1)
+        }
+      }
+
+      const targets = name ? [(await Skill.get(name))!] : await Skill.all()
+
+      type Problem = { level: "error" | "warning"; message: string }
+      type Report = { name: string; location: string; problems: Problem[] }
+      const reports: Report[] = []
+
+      for (const info of targets) {
+        const problems: Problem[] = []
+
+        // Shadow copies — every location this name resolves to, not just the winner.
+        const locs = await Skill.locations(info.name)
+        if (locs.length > 1) {
+          problems.push({
+            level: "warning",
+            message: `${locs.length} copies found on disk — using ${locs[0].location}; ignoring: ${locs.slice(1).map((l) => l.location).join(", ")}`,
+          })
+        }
+
+        let plan: SkillPlan
+        try {
+          plan = await parsePlan(info)
+        } catch (e: any) {
+          problems.push({ level: "error", message: `Failed to parse: ${e.message}` })
+          reports.push({ name: info.name, location: info.location, problems })
+          continue
+        }
+
+        // The version/steps trap: a "### step:" block exists in the body but
+        // parsePlan coerces frontmatter `version` to 1 unless it is EXACTLY 2
+        // (`fm.version === 2 ? 2 : 1`) — so "version: 3", "version: 1.5", or no
+        // field at all all silently collapse to v1. steps:[] follows, and `run`
+        // falls back to dumping raw text instead of executing or erroring.
+        if (plan.version !== 2) {
+          const rawMd = await Bun.file(info.location).text()
+          const matter = (await import("gray-matter")).default
+          const parsed = matter(rawMd)
+          const stepsInBody = parseSteps(parsed.content)
+          if (stepsInBody.length > 0) {
+            const declared = parsed.data?.version
+            const found = declared === undefined ? "no version field" : `version: ${JSON.stringify(declared)}`
+            problems.push({
+              level: "error",
+              message: `${stepsInBody.length} "### step:" block(s) found in the body, but frontmatter has ${found} (needs to be EXACTLY "version: 2") — steps will NOT execute; \`run\` silently dumps raw text instead. Fix: set "version: 2" in the frontmatter.`,
+            })
+          }
+        }
+
+        for (const issue of validatePlan(plan)) {
+          problems.push({
+            level: issue.level,
+            message: issue.stepId ? `[${issue.stepId}] ${issue.message}` : issue.message,
+          })
+        }
+
+        reports.push({ name: info.name, location: info.location, problems })
+      }
+
+      const unhealthy = reports.filter((r) => r.problems.length > 0)
+
+      if (args.json) {
+        await writeJson({ checked: reports.length, unhealthy: unhealthy.length, reports: unhealthy })
+        if (unhealthy.some((r) => r.problems.some((p) => p.level === "error"))) process.exitCode = 1
+        return
+      }
+
+      UI.empty()
+      prompts.intro(name ? `◈  Doctor: ${name}` : `◈  Doctor — ${reports.length} playbook(s)`)
+      printDivider()
+
+      if (unhealthy.length === 0) {
+        console.log(success(`  ✓ No problems found${name ? "" : ` across ${reports.length} playbook(s)`}`))
+      } else {
+        for (const r of unhealthy) {
+          console.log(`  ${bold(r.name)}  ${dim(r.location)}`)
+          for (const p of r.problems) {
+            const icon = p.level === "error" ? "✗" : "⚠"
+            console.log(p.level === "error" ? `    ${icon} ${p.message}` : dim(`    ${icon} ${p.message}`))
+          }
+          console.log()
+        }
+      }
+
+      printDivider()
+      const hasErrors = unhealthy.some((r) => r.problems.some((p) => p.level === "error"))
+      prompts.outro(unhealthy.length === 0 ? success("Healthy") : hasErrors ? "Problems found" : "Warnings found")
+      if (hasErrors) process.exitCode = 1
+    })
+  },
+})
+
+// ============================================================================
+// iris playbook verify <name> — confirm a publish actually landed
+// ============================================================================
+// Replaces the manual dance done by hand after every publish today: curl the
+// registry, grep the public page, python-parse the JSON, compare by eye.
+// One command, three layers — local file, API registry, live public page —
+// so "it published" (a checkmark) and "it's actually live and current"
+// (this) can no longer be silently different things (see the empty-404-body
+// and grep-for-a-symbol traps in PRODUCTION_DEBUGGING_GUIDE.md — same shape).
+
+const PlaybookVerifyCommand = cmd({
+  command: "verify <name>",
+  describe: "confirm a publish actually landed — checks local file vs API registry vs the live public page",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { type: "string", demandOption: true })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const name = String(args.name)
+    const json = args.json as boolean
+    if (!json) {
+      UI.empty()
+      prompts.intro(`◈  Verify — ${highlight(name)}`)
+    }
+
+    const token = await requireAuth()
+    if (!token) {
+      if (json) { await writeJson({ name, ok: false, checks: [], error: "not authenticated" }); process.exitCode = 1; return }
+      prompts.outro("Done"); return
+    }
+
+    type Check = { label: string; ok: boolean; detail: string }
+    const checks: Check[] = []
+
+    // 1. Local file
+    const local = await withInstance(async () => {
+      const info = await Skill.get(name)
+      if (!info) return null
+      try {
+        const plan = await parsePlan(info)
+        const content = await Bun.file(info.location).text()
+        return { plan, content, location: info.location }
+      } catch (e: any) {
+        return { error: e.message as string, location: info.location }
+      }
+    })
+    checks.push({
+      label: "Local file",
+      ok: Boolean(local && !("error" in local)),
+      detail: !local ? "not found locally" : "error" in local ? `parse error: ${local.error}` : local.location,
+    })
+
+    // 2. API registry
+    const { IRIS_API } = await import("./iris-api")
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`, {}, IRIS_API)
+    let pb: any = null
+    if (res.ok) {
+      const data = (await res.json()) as any
+      pb = data?.playbook ?? data
+    }
+    checks.push({
+      label: "API registry",
+      ok: Boolean(pb),
+      detail: pb ? `scope=${pb.scope}, version=${pb.version}, updated ${pb.updated_at ?? "?"}` : `not registered (HTTP ${res.status})`,
+    })
+
+    // 3. Content drift — does what's registered actually match the local file?
+    // A green publish checkmark says the request succeeded, not that the body sent was current.
+    if (local && !("error" in local) && pb?.content != null) {
+      const same = local.content.trim() === String(pb.content).trim()
+      checks.push({
+        label: "Content matches API",
+        ok: same,
+        detail: same ? "identical" : `local file differs from what's registered — re-run "iris playbook sync --api" or "publish"`,
+      })
+    }
+
+    // 4. Live public page — only meaningful once scope is public.
+    if (pb?.public_url) {
+      let pageOk = false
+      let pageDetail: string
+      try {
+        const pageRes = await fetch(pb.public_url)
+        pageOk = pageRes.ok
+        pageDetail = pageOk ? `HTTP ${pageRes.status}` : `HTTP ${pageRes.status} — page not live`
+      } catch (e: any) {
+        pageDetail = `fetch failed: ${e.message}`
+      }
+      checks.push({ label: "Public page", ok: pageOk, detail: `${pb.public_url} (${pageDetail})` })
+    } else if (pb) {
+      const expectedPublic = pb.scope === "public"
+      checks.push({
+        label: "Public page",
+        ok: !expectedPublic,
+        detail: expectedPublic
+          ? "scope is public but the API returned no public_url — inconsistent state"
+          : `scope is "${pb.scope}" — no public page expected`,
+      })
+    }
+
+    if (json) {
+      const allOk = checks.every((c) => c.ok)
+      await writeJson({ name, ok: allOk, checks })
+      if (!allOk) process.exitCode = 1
+      return
+    }
+
+    printDivider()
+    for (const c of checks) {
+      console.log(`  ${c.ok ? success("✓") : "✗"} ${bold(c.label)}  ${dim(c.detail)}`)
+    }
+    printDivider()
+    const allOk = checks.every((c) => c.ok)
+    prompts.outro(allOk ? success("Verified") : "Problems found")
+    if (!allOk) process.exitCode = 1
+  },
+})
 
 // ============================================================================
 // iris playbook available / install — the PULL half
@@ -1570,6 +1811,8 @@ export const PlatformPlaybookCommand = cmd({
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
       .command(PublishCommand)
+      .command(PlaybookDoctorCommand)
+      .command(PlaybookVerifyCommand)
       .command(PlaybookAvailableCommand)
       .command(PlaybookInstallCommand)
       .command(AttachCommand)
