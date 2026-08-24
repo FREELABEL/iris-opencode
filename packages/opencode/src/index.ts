@@ -75,6 +75,7 @@ import { PlatformReleaseCommand } from "./cli/cmd/platform-release"
 import { PlatformAnnounceCommand } from "./cli/cmd/platform-announce"
 import { PlatformBroadcastCommand } from "./cli/cmd/platform-broadcast"
 import { PlatformHiveCommand } from "./cli/cmd/platform-hive"
+import { VaultCommandExport } from "./cli/cmd/platform-vault"
 import { PlatformClipsCommand } from "./cli/cmd/platform-clips"
 import { PlatformPostCommand } from "./cli/cmd/platform-post"
 import { XCommand } from "./cli/cmd/platform-x"
@@ -334,6 +335,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAnnounceCommand))
   .command(reg(PlatformBroadcastCommand))
   .command(reg(PlatformHiveCommand))
+  .command(reg(VaultCommandExport))
   .command(reg(PlatformClipsCommand))
   .command(reg(PlatformPostCommand))
   .command(reg(XCommand))
