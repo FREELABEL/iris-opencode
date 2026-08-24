@@ -16,6 +16,7 @@ import {
 import { HiveFilesCommandExport } from "./platform-hive-files"
 import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
+import { VaultCommandExport } from "./platform-vault"
 import {
   HiveDiscoverCommandExport,
   HiveEnrollCommandExport,
@@ -4648,6 +4649,7 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveRunCommandExport)
       .command(HiveFilesCommandExport)
       .command(HiveSelftestCommandExport)
+      .command(VaultCommandExport)
       // Envelope encryption keys (#177946 phase 3) — a node must register one before it can
       // RECEIVE an envelope transfer; the send path fails closed rather than falling back.
       .command(HiveKeysCommandExport)
