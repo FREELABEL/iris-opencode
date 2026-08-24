@@ -105,3 +105,35 @@ describe("fmtPct — rendering", () => {
     expect(stripAnsi(fmtPct(6, 1, "decrease"))).toBe("17%")
   })
 })
+
+describe("KPI-linked key results — the goal layer reads the measurement layer", () => {
+  /**
+   * `iris bloq kpis` is the measurement layer (19 KPIs on #624, five computing from real
+   * data). A key result may reference one instead of carrying its own retyped numbers.
+   * These pin the ARITHMETIC of that hand-off; the fetch itself is exercised live.
+   */
+  test("a KPI-linked KR is scored on the KPI's numbers, not the KR's stale ones", () => {
+    // KR row was seeded 0/0; the live KPI says 39.3 against a target of 60.
+    const fromKpi = krProgress(39.3, 60, "increase")
+    // toBeCloseTo, not Math.round: 39.3/60*100 lands on 65.4999… in binary floating
+    // point, so rounding it is a coin-flip on the tie and tests nothing useful.
+    expect(fromKpi!).toBeCloseTo(65.5, 5)
+    // What the stale KR row alone would have claimed.
+    expect(krProgress(0, 0, "increase")).toBeNull()
+  })
+
+  test("a KPI carrying a reading but no target falls back to the KR's target per-field", () => {
+    // The resolver merges field-by-field rather than all-or-nothing, so a KPI with a
+    // live current and no target still scores against the target the KR declares.
+    const merged = { current: 45, target: undefined as number | undefined }
+    const krTarget = 60
+    expect(krProgress(merged.current, merged.target ?? krTarget, "increase")).toBe(75)
+  })
+
+  test("a decrease KPI (lower is better) scores correctly through the same path", () => {
+    // e.g. "Sales cycle length", target 30 days, currently 90.
+    expect(Math.round(krProgress(90, 30, "decrease")!)).toBe(33)
+    expect(krProgress(30, 30, "decrease")).toBe(100)
+    expect(krProgress(20, 30, "decrease")).toBe(100)
+  })
+})

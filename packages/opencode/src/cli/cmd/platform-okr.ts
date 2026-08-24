@@ -19,16 +19,27 @@ import { irisFetch, requireAuth, handleApiError, dim, bold, success, writeJson, 
  * standard RevOps category names, not that document's fingerprint; nothing here mirrors
  * its actual objectives, KPI table, or org-model recommendation.
  *
- * Two Atlas datasets (objectives+key_results are OKR-shaped: quarterly, goal-scoped;
- * kpis is the ongoing steady-state layer he named as missing — ongoing metrics with no
- * quarter or objective attached). Same schema-driven pattern as #182118's mentions
- * dataset — global per-user (bloq_id null), not scoped to a single project.
+ * SCOPE — this is the GOAL layer only, deliberately not a measurement layer.
+ *
+ * `iris bloq kpis <bloqId>` already measures: 19 KPIs on bloq #624, five computing from
+ * real data, each blocked one annotated with WHY (see the gap map, item #182060). This
+ * file originally shipped a second, parallel KPI store. That was a duplicate, and the
+ * weaker of the two — global instead of bloq-scoped, hand-entered instead of computed,
+ * with no blocked-reason tracking. It was retired rather than kept alongside, because
+ * two stores both called "KPI" is how a number ends up in the one nothing reads.
+ *
+ * What genuinely did not exist is an objective with SEVERAL key results under it.
+ * `bloq goals` carries one `target` string and one `--kpi` link; there is no way to say
+ * "this objective is these four measurable things." That is what this provides.
+ *
+ * A key result may either hold its own numbers, or REFERENCE a bloq KPI via
+ * `--kpi-bloq/--kpi` — in which case its current value is read live from the KPI that
+ * already computes, instead of being retyped here and drifting.
  */
 
 const TRACKS = ["marketing_ops", "crm_ops", "success_ops", "hr_ops", "platform"] as const
 const OBJ_STATUSES = ["not_started", "on_track", "at_risk", "off_track", "done"] as const
 const KR_DIRECTIONS = ["increase", "decrease", "maintain"] as const
-const KPI_CADENCES = ["daily", "weekly", "monthly", "quarterly"] as const
 
 const STATUS_ICON: Record<string, string> = {
   not_started: dim("○"),
@@ -112,6 +123,81 @@ async function fetchOne(schema: string, id: number): Promise<any | null> {
 
 async function createRecord(schema: string, data: Record<string, unknown>) {
   return irisFetch(`/api/v1/atlas/datasets/${schema}`, { method: "POST", body: JSON.stringify({ data }) })
+}
+
+/**
+ * The KPIs on one bloq, from the same business_context `iris bloq kpis` reads.
+ * Cached per bloq for the life of the process so rendering N key results that all
+ * point at the same board does not issue N identical requests.
+ */
+const kpiCache = new Map<number, any[]>()
+async function fetchBloqKpis(bloqId: number): Promise<any[]> {
+  if (kpiCache.has(bloqId)) return kpiCache.get(bloqId)!
+  const res = await irisFetch(`/api/v1/bloqs/${bloqId}/business-context`)
+  if (!res.ok) {
+    kpiCache.set(bloqId, [])
+    return []
+  }
+  const body = (await res.json()) as any
+  const kpis: any[] = body?.data?.business_context?.kpis ?? body?.business_context?.kpis ?? []
+  kpiCache.set(bloqId, kpis)
+  return kpis
+}
+
+/**
+ * Resolve a key result that references a bloq KPI to that KPI's LIVE numbers.
+ *
+ * Returns null when the KR holds no reference, and a row with `missing: true` when it
+ * references a KPI that no longer exists. A dangling reference must be visible: silently
+ * falling back to the KR's own stale numbers would show a confident figure sourced from
+ * nothing, which is worse than showing no figure at all.
+ */
+async function resolveKpiRef(kr: any): Promise<{ current?: number; target?: number; title?: string; status?: string; missing?: boolean } | null> {
+  if (!kr?.kpi_id || kr?.kpi_bloq == null) return null
+  const kpis = await fetchBloqKpis(Number(kr.kpi_bloq))
+  const hit = kpis.find((k) => String(k.id) === String(kr.kpi_id))
+  if (!hit) return { missing: true }
+  return {
+    current: hit.current != null ? Number(hit.current) : undefined,
+    target: hit.target != null ? Number(hit.target) : undefined,
+    title: hit.title ?? hit.name,
+    status: hit.status,
+  }
+}
+
+/**
+ * The numbers to DISPLAY for a key result: the referenced KPI's live values when it
+ * points at one, otherwise its own. Used by both `objectives show` and `okr status` so
+ * the two screens cannot disagree about the same key result.
+ */
+async function krValues(kr: any): Promise<{
+  current?: number | null
+  target?: number | null
+  sourced?: string
+  missing?: boolean
+  blocked?: string
+}> {
+  const ref = await resolveKpiRef(kr)
+  if (!ref) return { current: kr.current_value, target: kr.target_value }
+  if (ref.missing) return { current: null, target: null, missing: true }
+  return {
+    // The KPI is the SOURCE OF TRUTH for the reading. When it has none — because it is
+    // blocked, which is 14 of the 19 KPIs on #624 — this key result is UNMEASURED.
+    //
+    // It must NOT fall back to the KR's own current_value. That field defaults to 0, so
+    // the fallback rendered a confident "0%" for a metric nobody is computing: the exact
+    // shape of the decrease-KR bug one layer over. A blocked KPI reports WHY instead.
+    current: ref.current ?? null,
+    // The KPI's own status already reads "blocked: <reason>"; strip the prefix so the
+    // rendered line does not say "is blocked: blocked: …".
+    blocked:
+      ref.current == null
+        ? (ref.status?.replace(/^\s*blocked:\s*/i, "") ?? "no reading on the referenced KPI")
+        : undefined,
+    // Target still falls back — a KPI can declare a goal without yet measuring against it.
+    target: ref.target ?? kr.target_value,
+    sourced: ref.title,
+  }
 }
 
 async function updateRecord(schema: string, id: number, data: Record<string, unknown>) {
@@ -230,10 +316,25 @@ const ObjectivesShowCmd = cmd({
     } else {
       printDivider()
       for (const kr of krs) {
-        const pct = fmtPct(kr.current_value, kr.target_value, kr.direction)
+        const v = await krValues(kr)
         const arrow = kr.direction === "decrease" ? "↓" : kr.direction === "maintain" ? "→" : "↑"
         console.log(`  ${dim(`#${kr.id}`)}  ${kr.description}`)
-        console.log(`    ${arrow} ${kr.current_value ?? 0}${kr.unit ?? ""} / ${kr.target_value ?? "?"}${kr.unit ?? ""}  ${pct}${kr.due_date ? dim(`  due ${kr.due_date}`) : ""}`)
+        if (v.missing) {
+          // Loud on purpose. A reference to a KPI that no longer exists must not
+          // quietly render the KR's own stale numbers as if they were measured.
+          console.log(`    ⚠ ${dim(`references KPI ${kr.kpi_id} on bloq #${kr.kpi_bloq}, which no longer exists — not measured`)}`)
+          continue
+        }
+        if (v.blocked) {
+          console.log(
+            `    ${arrow} ${dim("not measured")} / ${v.target ?? "?"}${kr.unit ?? ""}  ${dim("—")}` +
+              dim(`  ← KPI "${v.sourced}" on #${kr.kpi_bloq} is blocked: ${v.blocked}`),
+          )
+          continue
+        }
+        const pct = fmtPct(v.current, v.target, kr.direction)
+        const src = v.sourced ? dim(`  ← live from KPI "${v.sourced}" on #${kr.kpi_bloq}`) : ""
+        console.log(`    ${arrow} ${v.current ?? 0}${kr.unit ?? ""} / ${v.target ?? "?"}${kr.unit ?? ""}  ${pct}${kr.due_date ? dim(`  due ${kr.due_date}`) : ""}${src}`)
       }
       printDivider()
     }
@@ -302,6 +403,11 @@ const KrAddCmd = cmd({
       .option("unit", { type: "string", describe: "e.g. %, $, count" })
       .option("direction", { type: "string", choices: KR_DIRECTIONS, default: "increase" })
       .option("due", { type: "string", describe: "YYYY-MM-DD" })
+      .option("kpi-bloq", { type: "number", describe: "bloq holding the KPI this KR measures (e.g. 624)" })
+      .option("kpi", {
+        type: "string",
+        describe: "id of a KPI on --kpi-bloq (see: iris bloq kpis list <bloqId>) — its live value drives this KR",
+      })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -324,6 +430,8 @@ const KrAddCmd = cmd({
       unit: args.unit ?? null,
       direction: args.direction,
       due_date: args.due ?? null,
+      kpi_bloq: args["kpi-bloq"] ?? null,
+      kpi_id: args.kpi ?? null,
     })
     const ok = await handleApiError(res, "Add key result")
     if (!ok) { prompts.outro("Done"); return }
@@ -425,13 +533,15 @@ const OkrStatusCmd = cmd({
       console.log(`  ${bold(track)}`)
       for (const o of trackObjs) {
         const ownKrs = krs.filter((k) => k.objective_id === o.id)
+        const resolved = await Promise.all(ownKrs.map(async (k) => ({ kr: k, v: await krValues(k) })))
         // Only KRs that actually yield a percentage are averaged, and each one is
         // measured through krProgress so a decrease KR counts the direction it is
         // meant to move. An unmeasurable KR is EXCLUDED rather than counted as 0 —
         // "not measured yet" is not "no progress", and folding the two together
         // makes an objective look worse than the evidence supports.
-        const measured = ownKrs
-          .map((k) => krProgress(k.current_value, k.target_value, k.direction))
+        const measured = resolved
+          .filter(({ v }) => !v.missing && !v.blocked)
+          .map(({ kr, v }) => krProgress(v.current, v.target, kr.direction))
           .filter((p): p is number => p != null)
         const avgPct = measured.length
           ? Math.round(measured.reduce((sum, p) => sum + Math.min(100, p), 0) / measured.length)
@@ -456,157 +566,4 @@ export const PlatformOkrCommand = productCommand({
   purpose: "RevOps OKRs — objectives and key results across marketing/CRM/success/HR ops",
   keywords: ["okr", "objective", "key result", "revops", "revenue operations", "goals"],
   builder: (y) => y.command(ObjectivesCmd).command(KrCmd).command(OkrStatusCmd).demandCommand(),
-})
-
-// ============================================================================
-// KPIs — the ongoing steady-state layer, distinct from quarterly OKRs
-// ============================================================================
-
-const KpiListCmd = cmd({
-  command: "list",
-  aliases: ["ls"],
-  describe: "list RevOps KPIs",
-  builder: (y) =>
-    y
-      .option("track", { type: "string", choices: TRACKS })
-      .option("cadence", { type: "string", choices: KPI_CADENCES })
-      .option("json", { type: "boolean", default: false }),
-  async handler(args) {
-    UI.empty()
-    prompts.intro("◈  RevOps KPIs")
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
-
-    let records = await fetchRecords("revops_kpis")
-    let kpis = records.map((r) => ({ id: r.id, ...r.data }))
-    if (args.track) kpis = kpis.filter((k) => k.track === args.track)
-    if (args.cadence) kpis = kpis.filter((k) => k.cadence === args.cadence)
-
-    if (args.json) { await writeJson(kpis); prompts.outro("Done"); return }
-    if (!kpis.length) {
-      prompts.log.warn("No KPIs yet. Add one with: iris kpi create --name \"...\" --track marketing_ops --cadence monthly")
-      prompts.outro("Done")
-      return
-    }
-
-    printDivider()
-    for (const k of kpis) {
-      const pct = fmtPct(k.current_value, k.target_value, k.direction)
-      const trackTag = k.track ? dim(` [${k.track}]`) : ""
-      const staleTag = k.last_updated ? dim(`  updated ${new Date(k.last_updated).toLocaleDateString()}`) : dim("  never updated")
-      console.log(`  ${dim(`#${k.id}`)}  ${bold(k.name)}${trackTag}${dim(` · ${k.cadence ?? "?"}`)}`)
-      const arrow = k.direction === "decrease" ? "↓" : k.direction === "maintain" ? "→" : "↑"
-      console.log(`    ${arrow} ${k.current_value ?? dim("no reading")}${k.unit ?? ""} / ${k.target_value ?? "?"}${k.unit ?? ""}  ${pct}${staleTag}`)
-    }
-    printDivider()
-    prompts.outro(`${success("✓")} ${kpis.length} KPI${kpis.length === 1 ? "" : "s"}`)
-  },
-})
-
-const KpiCreateCmd = cmd({
-  command: "create",
-  describe: "define a new KPI",
-  builder: (y) =>
-    y
-      .option("name", { type: "string", demandOption: true })
-      .option("track", { type: "string", choices: TRACKS })
-      .option("target", { type: "number" })
-      .option("current", { type: "number", describe: "initial reading" })
-      .option("unit", { type: "string" })
-      .option("direction", {
-        type: "string",
-        choices: KR_DIRECTIONS,
-        default: "increase",
-        describe: "which way is good — a response-time KPI is 'decrease', not 'increase'",
-      })
-      .option("cadence", { type: "string", choices: KPI_CADENCES, default: "monthly" })
-      .option("notes", { type: "string" })
-      .option("json", { type: "boolean", default: false }),
-  async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Create KPI")
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
-
-    const res = await createRecord("revops_kpis", {
-      name: args.name,
-      track: args.track ?? null,
-      target_value: args.target ?? null,
-      current_value: args.current ?? null,
-      unit: args.unit ?? null,
-      direction: args.direction,
-      cadence: args.cadence,
-      last_updated: args.current !== undefined ? new Date().toISOString() : null,
-      notes: args.notes ?? null,
-    })
-    const ok = await handleApiError(res, "Create KPI")
-    if (!ok) { prompts.outro("Done"); return }
-    const body = (await res.json()) as any
-    if (args.json) { await writeJson(body.data); return }
-    prompts.outro(`${success("✓")} Created KPI #${body.data?.id}: ${args.name}`)
-  },
-})
-
-const KpiUpdateCmd = cmd({
-  command: "update <id>",
-  describe: "log a new reading for a KPI",
-  builder: (y) =>
-    y
-      .positional("id", { type: "number", demandOption: true })
-      .option("current", { type: "number", demandOption: true, describe: "the new reading" })
-      .option("target", { type: "number" })
-      .option("notes", { type: "string" })
-      .option("json", { type: "boolean", default: false }),
-  async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Update KPI #${args.id}`)
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
-
-    const data: Record<string, unknown> = { current_value: args.current, last_updated: new Date().toISOString() }
-    if (args.target !== undefined) data.target_value = args.target
-    if (args.notes !== undefined) data.notes = args.notes
-
-    const res = await updateRecord("revops_kpis", args.id as number, data)
-    const ok = await handleApiError(res, "Update KPI")
-    if (!ok) { prompts.outro("Done"); return }
-    const body = (await res.json()) as any
-    if (args.json) { await writeJson(body.data); return }
-    const d = body.data?.data ?? {}
-    prompts.outro(`${success("✓")} ${d.name}: ${d.current_value}${d.unit ?? ""} / ${d.target_value ?? "?"}${d.unit ?? ""}  ${fmtPct(d.current_value, d.target_value, d.direction)}`)
-  },
-})
-
-const KpiShowCmd = cmd({
-  command: "show <id>",
-  describe: "show a KPI's current state",
-  builder: (y) => y.positional("id", { type: "number", demandOption: true }).option("json", { type: "boolean", default: false }),
-  async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  KPI #${args.id}`)
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
-
-    const record = await fetchOne("revops_kpis", args.id as number)
-    if (!record) {
-      prompts.log.error(`KPI #${args.id} not found`)
-      prompts.outro("Done")
-      return
-    }
-    if (args.json) { await writeJson({ ...record.data, id: record.id }); return }
-
-    const d = record.data
-    console.log(`  ${bold(d.name)}  ${dim(`[${d.track ?? "no track"}] · ${d.cadence ?? "?"}`)}`)
-    console.log(`    ${d.current_value ?? dim("no reading")}${d.unit ?? ""} / ${d.target_value ?? "?"}${d.unit ?? ""}  ${fmtPct(d.current_value, d.target_value, d.direction)}`)
-    console.log(`    ${dim(d.last_updated ? `last updated ${new Date(d.last_updated).toLocaleString()}` : "never updated")}`)
-    if (d.notes) console.log(`    ${dim(d.notes)}`)
-    prompts.outro("Done")
-  },
-})
-
-export const PlatformKpiCommand = productCommand({
-  name: "kpi",
-  purpose: "RevOps KPIs — the ongoing steady-state metrics layer (distinct from quarterly OKRs)",
-  keywords: ["kpi", "metric", "revops", "revenue operations", "dashboard"],
-  builder: (y) => y.command(KpiListCmd).command(KpiCreateCmd).command(KpiUpdateCmd).command(KpiShowCmd).demandCommand(),
 })
