@@ -366,6 +366,81 @@ jobs:
           path: packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.zip
           if-no-files-found: warn
 
+  # Windows leg of the Tauri desktop app, separate job (not a matrix entry above) because
+  # packaging differs enough (NSIS .exe output, no macOS bundle/zip step, bash via Git Bash
+  # rather than the default pwsh) to keep as its own linear job rather than branching the
+  # macOS job with conditionals. First proven working 2026-08-24 via desktop-test-build.yml —
+  # this is that same sequence, with the real release version instead of a hardcoded test one.
+  # Unsigned: no Windows code-signing cert exists for this repo (Alex's call — acceptable for
+  # now, see bloq #503 item #182113). Windows SmartScreen will warn on first run.
+  build-desktop-tauri-windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build the iris CLI (sidecar binary)
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --single
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: latest
+
+      - name: Stage sidecar binary
+        run: |
+          set -euo pipefail
+          BIN=$(ls packages/opencode/dist/opencode-windows-x64/bin/iris* | head -1)
+          mkdir -p packages/desktop/src-tauri/sidecars
+          cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-x86_64-pc-windows-msvc.exe
+
+      - name: Build IRIS desktop app (Tauri)
+        run: |
+          cd packages/desktop
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis
+        env:
+          # Deliberately unset: no Windows code-signing cert exists for this repo yet.
+          TAURI_SIGNING_PRIVATE_KEY: ""
+
+      - name: Rename installer to the IRIS-tauri-* convention
+        run: |
+          set -euo pipefail
+          SRC=$(ls packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe | head -1)
+          cp "$SRC" packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-tauri-windows-x64
+          path: packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe
+          if-no-files-found: warn
+
   release:
     # Gate the release ONLY on the CLI binaries (build). The desktop Electron app
     # (build-desktop) takes ~30-45 min and is optional — it uploads its assets to
@@ -529,7 +604,7 @@ jobs:
   # Same pattern as desktop-assets above, for the OTHER desktop app (build-desktop-tauri).
   # Unsigned -- see that job's comment. Attach here, async, non-blocking, same as Electron.
   desktop-tauri-assets:
-    needs: [build-desktop-tauri, release]
+    needs: [build-desktop-tauri, build-desktop-tauri-windows, release]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -553,7 +628,7 @@ jobs:
       - name: Upload desktop assets to release
         run: |
           shopt -s nullglob
-          assets=(desktop-tauri/IRIS-tauri-*.zip)
+          assets=(desktop-tauri/IRIS-tauri-*.zip desktop-tauri/IRIS-tauri-*.exe)
           if [ ${#assets[@]} -eq 0 ]; then
             echo "::warning::No Tauri desktop assets to upload (build skipped or failed)"
             exit 0
