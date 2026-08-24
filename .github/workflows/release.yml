@@ -277,6 +277,95 @@ jobs:
           path: electron/IRIS-app-darwin-*.zip
           if-no-files-found: warn
 
+  # Builds the OTHER desktop app: the native Tauri shell in packages/desktop (a rebrand of
+  # upstream anomalyco/opencode's own desktop client), NOT the Electron/SaaS-wrapper app built
+  # above. These are two unrelated products that happen to share the "IRIS desktop app" name —
+  # see bloq #503 item #182113 for the full writeup of why both exist.
+  #
+  # Unsigned/ad-hoc-signed and updater artifacts disabled: no Apple Developer ID cert, no
+  # Windows code-signing cert, and no owned TAURI_SIGNING_PRIVATE_KEY secret exist for this repo
+  # yet (`gh secret list` shows only CROSS_REPO_PAT). A public landing-page download needs real
+  # signing/notarization added here first — this job only gets a build produced on every
+  # release, same as build-desktop, optional and non-blocking.
+  build-desktop-tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            rust_target: aarch64-apple-darwin
+            oc_target: opencode-darwin-arm64
+            arch: arm64
+          - os: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            oc_target: opencode-darwin-x64
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Build the iris CLI (sidecar binary)
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --single
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: latest
+
+      - name: Stage sidecar binary
+        run: |
+          set -euo pipefail
+          BIN=$(ls packages/opencode/dist/${{ matrix.oc_target }}/bin/iris)
+          mkdir -p packages/desktop/src-tauri/sidecars
+          cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-${{ matrix.rust_target }}
+          chmod +x packages/desktop/src-tauri/sidecars/iris-cli-${{ matrix.rust_target }}
+
+      - name: Build IRIS desktop app (Tauri)
+        run: |
+          cd packages/desktop
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles app,dmg
+        env:
+          # Deliberately unset: no signing certs/keys exist for this repo yet (see job comment).
+          # tauri build ad-hoc signs on macOS with no cert configured -- that's expected here.
+          APPLE_SIGNING_IDENTITY: ""
+          TAURI_SIGNING_PRIVATE_KEY: ""
+
+      - name: Zip the .app bundle
+        run: |
+          cd packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos
+          ditto -c -k --sequesterRsrc --keepParent IRIS.app IRIS-tauri-darwin-${{ matrix.arch }}.zip
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-tauri-darwin-${{ matrix.arch }}
+          path: packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.zip
+          if-no-files-found: warn
+
   release:
     # Gate the release ONLY on the CLI binaries (build). The desktop Electron app
     # (build-desktop) takes ~30-45 min and is optional — it uploads its assets to
@@ -433,6 +522,42 @@ jobs:
           fi
           # --repo is required: this job has no checkout, so gh can't infer the
           # repo from a local .git ("fatal: not a git repository" otherwise).
+          gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" --clobber --repo "${{ github.repository }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Same pattern as desktop-assets above, for the OTHER desktop app (build-desktop-tauri).
+  # Unsigned -- see that job's comment. Attach here, async, non-blocking, same as Electron.
+  desktop-tauri-assets:
+    needs: [build-desktop-tauri, release]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "tag=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: desktop-tauri
+          pattern: IRIS-tauri-*
+          merge-multiple: true
+
+      - name: Upload desktop assets to release
+        run: |
+          shopt -s nullglob
+          assets=(desktop-tauri/IRIS-tauri-*.zip)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "::warning::No Tauri desktop assets to upload (build skipped or failed)"
+            exit 0
+          fi
           gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" --clobber --repo "${{ github.repository }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
