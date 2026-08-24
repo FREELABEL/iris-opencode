@@ -1,3 +1,4 @@
+import { describeListScope } from "./leads-scope"
 import { cmd } from "./cmd"
 import { PulseCheckCommand } from "./platform-pulse-check"
 import { productCommand } from "./product-command"
@@ -341,11 +342,10 @@ const LeadsListCommand = cmd({
       // used as a measurement instrument and the funnel KPIs computed from it were wrong
       // in the FLATTERING direction — a truncated sample of WORKED leads looks like a
       // healthy funnel precisely because the unworked ones are what is missing.
-      const truncated = totalFromApi > leads.length
-      const notes: string[] = []
-      if (prospectedCount > 0) notes.push(`${prospectedCount} Prospected hidden — use --all`)
-      if (truncated) notes.push(`newest ${leads.length} of ${totalFromApi}`)
-      const suffix = notes.length ? dim(` (${notes.join(" · ")})`) : ""
+      // Reporting lives in leads-scope.ts so it can be tested — it is the part that failed.
+      const scope = describeListScope({ shown: leads.length, total: totalFromApi, prospectedHidden: prospectedCount })
+      const truncated = scope.truncated
+      const suffix = scope.notes.length ? dim(` (${scope.notes.join(" · ")})`) : ""
 
       if (args.search && truncated) {
         spinner.stop(`Showing ${leads.length} of ${totalFromApi} results for "${args.search}"`)
@@ -358,11 +358,7 @@ const LeadsListCommand = cmd({
         // STDERR — it reaches a human or an agent without corrupting piped stdout. A
         // silent truncation in JSON is the exact failure this fix exists for.
         if (truncated || prospectedCount > 0) {
-          const warn: string[] = []
-          if (truncated) warn.push(`TRUNCATED: newest ${leads.length} of ${totalFromApi} by id`)
-          if (prospectedCount > 0) warn.push(`FILTERED: ${prospectedCount} Prospected hidden (pass --all)`)
-          warn.push("This is a page, not a population — do not compute rates from it.")
-          process.stderr.write(warn.map((w) => `[leads list] ${w}`).join("\n") + "\n")
+          process.stderr.write(scope.warnings.map((w) => `[leads list] ${w}`).join("\n") + "\n")
         }
         await writeJson(leads)
         return
@@ -10621,6 +10617,19 @@ const LeadsStatsCommand = cmd({
     // is actually in play. (#182075 RO-2)
     printKV("Outreach pipeline", `$${Number(summary.pipeline_value ?? 0).toLocaleString()} (${summary.pipeline_lead_count ?? 0} worked this period)`)
     printKV("Board pipeline", `$${Number(summary.board_pipeline_value ?? 0).toLocaleString()} (${summary.board_pipeline_leads ?? 0} of ${summary.board_open_leads ?? 0} open leads priced)`)
+    
+    // Recurring revenue EARNED on programs this account owns — not what it pays for
+    // other people's. Trials are reported apart because a trial has paid nothing yet;
+    // folding them in inflates MRR with money nobody has handed over. (RO-3 step 1)
+    const mrr = Number(summary.mrr ?? 0)
+    if (mrr > 0 || Number(summary.mrr_accounts ?? 0) > 0) {
+      printKV("MRR", `$${mrr.toLocaleString()} (${summary.mrr_accounts ?? 0} active)`)
+      printKV("ARR", `$${Number(summary.arr ?? 0).toLocaleString()}`)
+    }
+    const trialMrr = Number(summary.trialing_mrr ?? 0)
+    if (trialMrr > 0) {
+      printKV("Trialing", `$${trialMrr.toLocaleString()}/mo across ${summary.trialing_accounts ?? 0} — NOT counted in MRR`)
+    }
     
     // The capture gap, stated rather than hidden. An open lead with no amount is worth
     // UNKNOWN, not zero — a board reading as fully valued when most of it was never
