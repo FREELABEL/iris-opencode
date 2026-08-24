@@ -782,35 +782,82 @@ const ListCommand = cmd({
       return
     }
 
-    const params = new URLSearchParams({
-      per_page: String(args.limit),
-      page: String(args.page),
-    })
-    if (args.status && args.status !== "all") params.set("status", args.status)
-    if (args.search) params.set("search", args.search)
+    const severityOf = (item: any): string => {
+      // `content` is not always a string — some board items carry structured
+      // content, and calling .match() on those threw once the scan reached them.
+      const raw = item.content ?? item.description ?? ""
+      const contentStr = typeof raw === "string" ? raw : JSON.stringify(raw)
+      const fromBody = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1]
+      if (fromBody) return fromBody.toLowerCase()
+      // Older reports carry severity only as a title prefix: "[CRITICAL] ...".
+      const fromTitle = String(item.title ?? "").match(/^\s*\[(low|medium|high|critical)\]/i)?.[1]
+      return fromTitle ? fromTitle.toLowerCase() : ""
+    }
 
-    const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${BUG_BLOQ_ID}/items?${params}`)
-    const ok = await handleApiError(res, "List bug reports")
-    if (!ok) return
+    const fetchPage = async (page: number, perPage: number) => {
+      const params = new URLSearchParams({ per_page: String(perPage), page: String(page) })
+      if (args.status && args.status !== "all") params.set("status", args.status)
+      if (args.search) params.set("search", args.search)
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${BUG_BLOQ_ID}/items?${params}`)
+      const ok = await handleApiError(res, "List bug reports")
+      if (!ok) return null
+      const data = (await res.json()) as any
+      const rawItems = data?.data?.items ?? data?.data?.data ?? data?.data ?? []
+      const pageItems: any[] = Array.isArray(rawItems) ? rawItems : Object.values(rawItems)
+      const pagination = data?.data?.pagination ?? data?.meta ?? null
+      return { pageItems, pagination }
+    }
 
-    const data = (await res.json()) as any
-    const rawItems = data?.data?.items ?? data?.data?.data ?? data?.data ?? []
-    let items: any[] = Array.isArray(rawItems) ? rawItems : Object.values(rawItems)
+    let items: any[] = []
+    let totalItems = 0
+    let currentPage = args.page
+    let lastPage = 1
+    let scanTruncated = false
 
-    // Extract pagination info from response
-    const pagination = data?.data?.pagination ?? data?.meta ?? null
-    const totalItems = pagination?.total ?? items.length
-    const currentPage = pagination?.current_page ?? args.page
-    const lastPage = pagination?.last_page ?? Math.ceil(totalItems / args.limit)
-
-    // Client-side severity filter (API may not support this param)
     if (args.severity) {
-      const sev = args.severity.toLowerCase()
-      items = items.filter((item: any) => {
-        const contentStr = item.content ?? item.description ?? ""
-        const itemSev = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1]?.toLowerCase() ?? ""
-        return itemSev === sev
-      })
+      // Severity is not a column — it lives in the report body (and, for older
+      // reports, the title prefix), so the API cannot filter on it and we must.
+      //
+      // This used to filter ONLY the current page and then print the server's
+      // UNFILTERED total beside the result. `iris bug list --severity=critical`
+      // scanned 20 of 2,348 open bugs, found nothing, and printed
+      // "0 item(s) ... Page 1/118" — reported as "No bug reports found" while a
+      // critical auth bug (#182059) was open. A triage query answering "none"
+      // when the answer is "one, and it is an auth bypass" is the worst possible
+      // failure for this command. It also reported total=2347/last_page=24 in
+      // --json, so any consumer counting criticals got 2,347 instead of 1.
+      //
+      // Scan every page, filter across the whole set, then paginate the RESULT.
+      const SCAN_PAGE_SIZE = 100
+      const MAX_SCAN_PAGES = 60 // 6,000 reports — well past the current board
+      const matches: any[] = []
+      let page = 1
+      let serverLastPage = 1
+      for (; page <= MAX_SCAN_PAGES; page++) {
+        const got = await fetchPage(page, SCAN_PAGE_SIZE)
+        if (!got) return
+        const { pageItems, pagination } = got
+        serverLastPage = pagination?.last_page ?? serverLastPage
+        const sev = args.severity.toLowerCase()
+        for (const item of pageItems) if (severityOf(item) === sev) matches.push(item)
+        if (pageItems.length === 0 || page >= serverLastPage) break
+      }
+      // Never let a bounded scan masquerade as a complete answer.
+      if (page > MAX_SCAN_PAGES && page < serverLastPage) scanTruncated = true
+
+      totalItems = matches.length
+      lastPage = Math.max(1, Math.ceil(totalItems / args.limit))
+      currentPage = Math.min(Math.max(1, args.page), lastPage)
+      const start = (currentPage - 1) * args.limit
+      items = matches.slice(start, start + args.limit)
+    } else {
+      const got = await fetchPage(args.page, args.limit)
+      if (!got) return
+      items = got.pageItems
+      const pagination = got.pagination
+      totalItems = pagination?.total ?? items.length
+      currentPage = pagination?.current_page ?? args.page
+      lastPage = pagination?.last_page ?? Math.ceil(totalItems / args.limit)
     }
 
     if (args.json) {
@@ -822,7 +869,7 @@ const ListCommand = cmd({
       // fourth delivered all 142,482. It reads as corrupt data rather than a
       // lost write, and never reproduces in a terminal because TTY writes are
       // synchronous. Awaiting the write removes the race.
-      await writeJson({ items, page: currentPage, total: totalItems, last_page: lastPage })
+      await writeJson({ items, page: currentPage, total: totalItems, last_page: lastPage, ...(scanTruncated ? { scan_truncated: true } : {}) })
       return
     }
 
@@ -835,7 +882,12 @@ const ListCommand = cmd({
 
     console.log("")
     console.log(bold("📋 Bug Reports"))
-    console.log(`  ${dim(`Bloq #${BUG_BLOQ_ID} — ${items.length} item(s)${filterStr} — Page ${currentPage}/${lastPage}`)}`)
+    console.log(
+      `  ${dim(`Bloq #${BUG_BLOQ_ID} — ${items.length} of ${totalItems} item(s)${filterStr} — Page ${currentPage}/${lastPage}`)}`,
+    )
+    if (scanTruncated) {
+      console.log(`  ${dim(`⚠ scan stopped at 6,000 reports — results may be incomplete`)}`)
+    }
     printDivider()
 
     if (items.length === 0) {
