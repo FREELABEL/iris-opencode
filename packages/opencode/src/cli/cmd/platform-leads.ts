@@ -10631,6 +10631,24 @@ const LeadsStatsCommand = cmd({
         ? `${summary.board_amount_coverage ?? 0}% — ${missingAmt} open lead(s) carry NO amount`
         : `${summary.board_amount_coverage ?? 0}% — every open lead priced`)
     }
+    // Recurring revenue (#182112 RO-3). The endpoint has returned these since RO-3
+    // shipped and nothing displayed them — the number existed and no one could see it,
+    // which is the same as not having built it.
+    //
+    // MRR here is what is COLLECTING, from program_memberships. It currently reads one
+    // membership of 35 live subscriptions (#182189), so it understates; the account
+    // count is printed beside it so the figure is never read without its denominator.
+    const mrr = Number(summary.mrr ?? 0)
+    const trialing = Number(summary.trialing_mrr ?? 0)
+    if (mrr > 0 || trialing > 0) {
+      const accounts = Number(summary.mrr_accounts ?? 0)
+      printKV("MRR", `$${mrr.toLocaleString()}/mo across ${accounts} account(s)  ·  ARR $${(mrr * 12).toLocaleString()}`)
+      // Trials are not revenue until they convert. Folding them into MRR is the
+      // single most common way a subscription number flatters itself.
+      if (trialing > 0) {
+        printKV("Trialing", `$${trialing.toLocaleString()}/mo — NOT counted in MRR until it converts`)
+      }
+    }
     printKV("Outreached Leads", String(summary.outreached_lead_count ?? 0))
     if (summary.percent_change !== undefined) {
       const arrow = summary.trend === "up" ? "↑" : summary.trend === "down" ? "↓" : "→"
