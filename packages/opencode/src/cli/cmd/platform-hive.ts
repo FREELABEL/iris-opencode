@@ -1810,6 +1810,18 @@ const HiveDoctorCommand = cmd({
     // HMAC task signing (informational)
     checks.push({ name: "Task signing", status: "pass", detail: "HMAC-SHA256 verification enabled" })
 
+    const failures = checks.filter(c => c.status === "fail")
+
+    // --json was added to this command's builder when remote support
+    // (runRemoteDoctor) was bolted on, which honors it — this pre-existing
+    // local path never did (#182105), so `iris hive doctor --json` with no
+    // node argument printed decorated text and broke any JSON.parse() of it.
+    if (argv.json) {
+      await writeJson({ ok: failures.length === 0, checks })
+      if (failures.length > 0) process.exit(1)
+      return
+    }
+
     // Display results
     printDivider()
     for (const check of checks) {
@@ -1818,7 +1830,6 @@ const HiveDoctorCommand = cmd({
     }
     console.log()
 
-    const failures = checks.filter(c => c.status === "fail")
     if (failures.length > 0) {
       prompts.log.warn(`${failures.length} issue(s) found`)
     } else {

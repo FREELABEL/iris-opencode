@@ -91,34 +91,55 @@ export function nameMatches(nodeName: string, peerName: string): boolean {
   return a === b || a.includes(b) || b.includes(a)
 }
 
-/** Read the local Tailscale peer list. Returns [] when Tailscale is absent or not running. */
-export async function tailscalePeers(): Promise<TailscalePeer[]> {
+/**
+ * Query `tailscale status --json`, returning both the peers AND whether the
+ * query itself succeeded (#182104).
+ *
+ * The sibling platform-hive-vpn.ts's readStatus() was fixed for exactly this
+ * failure shape after a real 2026-08-16 incident: one transient query failure
+ * read as "not on the tailnet" seconds after the tailnet was confirmed
+ * healthy. This module previously had no retry at all and could not tell a
+ * caller "the query failed" from "the query succeeded and found nothing" —
+ * the same gap, on the module whose own docblock frames it as the reliable
+ * fallback specifically because it doesn't inherit the primary transport's
+ * outages (#182004). One retry per binary before moving to the next.
+ */
+async function tailscaleStatusQuery(): Promise<{ peers: TailscalePeer[]; queryOk: boolean }> {
   const bins = ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "tailscale"]
   for (const bin of bins) {
-    try {
-      const { stdout } = await pexec(bin, ["status", "--json"], { timeout: 10_000, maxBuffer: 8 << 20 })
-      const j = JSON.parse(stdout)
-      const out: TailscalePeer[] = []
-      const push = (p: any) => {
-        if (!p) return
-        const ip = Array.isArray(p.TailscaleIPs) ? p.TailscaleIPs.find((x: string) => x.includes(".")) : null
-        if (!ip) return
-        out.push({
-          ip,
-          hostName: String(p.HostName ?? ""),
-          dnsName: String(p.DNSName ?? "").replace(/\.$/, ""),
-          online: p.Online === true,
-          os: String(p.OS ?? ""),
-        })
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { stdout } = await pexec(bin, ["status", "--json"], { timeout: 10_000, maxBuffer: 8 << 20 })
+        const j = JSON.parse(stdout)
+        const out: TailscalePeer[] = []
+        const push = (p: any) => {
+          if (!p) return
+          const ip = Array.isArray(p.TailscaleIPs) ? p.TailscaleIPs.find((x: string) => x.includes(".")) : null
+          if (!ip) return
+          out.push({
+            ip,
+            hostName: String(p.HostName ?? ""),
+            dnsName: String(p.DNSName ?? "").replace(/\.$/, ""),
+            online: p.Online === true,
+            os: String(p.OS ?? ""),
+          })
+        }
+        push(j.Self)
+        for (const k of Object.keys(j.Peer ?? {})) push(j.Peer[k])
+        return { peers: out, queryOk: true }
+      } catch {
+        // One retry on THIS binary (the failure this exists for is transient
+        // and a second call costs milliseconds), then fall through to the
+        // next binary path.
       }
-      push(j.Self)
-      for (const k of Object.keys(j.Peer ?? {})) push(j.Peer[k])
-      return out
-    } catch {
-      // try the next binary
     }
   }
-  return []
+  return { peers: [], queryOk: false }
+}
+
+/** Read the local Tailscale peer list. Returns [] when Tailscale is absent, not running, or the query failed. */
+export async function tailscalePeers(): Promise<TailscalePeer[]> {
+  return (await tailscaleStatusQuery()).peers
 }
 
 async function readSshCache(): Promise<Record<string, { host?: string; user?: string }>> {
@@ -170,11 +191,17 @@ export async function resolveSshTarget(
   if (opts.host) return { host: opts.host, user: opts.user ?? cached.user ?? null, via: "explicit" }
   if (cached.host) return { host: cached.host, user: opts.user ?? cached.user ?? null, via: "cached" }
 
-  const peers = await tailscalePeers()
+  // queryOk (#182104) distinguishes "couldn't ask" from "asked, zero peers" —
+  // the same failure this module's docblock says it exists to survive.
+  // Reporting them identically told someone to "start Tailscale" when it was
+  // already running and a retry (now built into the query itself) would
+  // have succeeded.
+  const { peers, queryOk } = await tailscaleStatusQuery()
   if (peers.length === 0) {
     return {
-      error:
-        "Tailscale is not reachable on this machine (`tailscale status --json` failed), so a node cannot be resolved to an address. Pass --host explicitly, or start Tailscale.",
+      error: queryOk
+        ? "Tailscale reports zero peers on this tailnet, so a node cannot be resolved to an address. Pass --host explicitly."
+        : "Tailscale is not reachable on this machine (`tailscale status --json` failed twice), so a node cannot be resolved to an address. Pass --host explicitly, or start Tailscale.",
     }
   }
 

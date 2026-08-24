@@ -349,7 +349,7 @@ const HiveSshCommand = cmd({
         [
           "-o", "ConnectTimeout=3",
           "-o", "BatchMode=yes",
-          "-o", "StrictHostKeyChecking=no",
+          "-o", "StrictHostKeyChecking=accept-new",
           "-o", "PreferredAuthentications=publickey",
           `${u}@${ip}`,
           "echo SSH_OK",

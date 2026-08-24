@@ -197,7 +197,10 @@ export async function runRemoteDoctor(argv: any) {
     const userId = await requireUserId(argv["user-id"] as number | undefined)
     if (!userId) process.exit(1)
 
-    let nodes: Array<{ id: string; name: string; connection_status?: string; last_heartbeat_at?: string | null; capabilities?: any; active_tasks?: number; completed_tasks?: number }>
+    // total_tasks_completed, not completed_tasks (#182103) — that's the field
+    // name the real HiveNode interface uses (platform-hive-nodes.ts), and the
+    // one populated on the wire; the inverted name here was always undefined.
+    let nodes: Array<{ id: string; name: string; connection_status?: string; last_heartbeat_at?: string | null; capabilities?: any; active_tasks?: number; total_tasks_completed?: number }>
     if (argv.all) {
       nodes = (await fetchNodes(userId)) as any
     } else {
@@ -221,7 +224,7 @@ export async function runRemoteDoctor(argv: any) {
         heartbeat: n.last_heartbeat_at ?? null,
         capabilities: Array.isArray(n.capabilities) ? n.capabilities : Object.keys(n.capabilities ?? {}),
         active: n.active_tasks,
-        completed: n.completed_tasks,
+        completed: n.total_tasks_completed,
       }
 
       const resolved = await resolveSshTarget(n.id, n.name, {
