@@ -206,7 +206,11 @@ const BoardsCreateCommand = cmd({
       .option("description", { describe: "item description", type: "string" })
       // Mirrors BloqItemController::VALID_ITEM_TYPES (bug #177261). Previously this
       // list omitted diary/vehicle, which the API accepts.
-      .option("type", { describe: "item type", type: "string", choices: ["default", "research", "content", "diary", "vehicle", "task"], default: "default" }),
+      .option("type", { describe: "item type", type: "string", choices: ["default", "research", "content", "diary", "vehicle", "task"], default: "default" })
+      // Without this the API drops every new item into the bloq's default list.
+      // `iris boards list <bloq>` shows the real list per item, so an item filed
+      // "into a project" would silently land somewhere else and read as filed.
+      .option("list-id", { describe: "target list ID within the bloq (default: the bloq's default list)", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Board Item")
@@ -233,6 +237,7 @@ const BoardsCreateCommand = cmd({
       // `|| "task"` here defaulted to a value the API's create validator rejected
       // outright (bug #177261). yargs already defaults this to "default".
       const payload: Record<string, unknown> = { title, content: args.description || title, type: args.type || "default" }
+      if (args["list-id"] != null) payload.bloq_list_id = args["list-id"]
 
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items`, {
         method: "POST",
@@ -270,7 +275,11 @@ const BoardsUpdateCommand = cmd({
       .option("content-file", { describe: "read the item body from a file (use - for stdin)", type: "string" })
       .option("description", { describe: "new item body (writes `content`)", type: "string" })
       .option("status", { describe: "new status", type: "string" })
-      .option("type", { describe: "new type", type: "string" }),
+      .option("type", { describe: "new type", type: "string" })
+      // `boards push` diffs only title/content/status/type, so an edited
+      // bloq_list_id in a pulled file reports "Already in sync" and the item
+      // never moves. This is the only way to relist an item from the CLI.
+      .option("list-id", { describe: "move the item to this list ID", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Item #${args.id}`)
@@ -317,9 +326,10 @@ const BoardsUpdateCommand = cmd({
     if (body != null) payload.content = body
     if (args.status) payload.status = args.status
     if (args.type) payload.type = args.type
+    if (args["list-id"] != null) payload.bloq_list_id = args["list-id"]
 
     if (Object.keys(payload).length === 0) {
-      failNoOp("update", "Use --title, --content, --content-file, --status, or --type")
+      failNoOp("update", "Use --title, --content, --content-file, --status, --type, or --list-id")
     }
 
     const spinner = prompts.spinner()
