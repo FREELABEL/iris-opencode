@@ -94,6 +94,22 @@ async function runOnce(userId: number, nodeId: string, nodeName: string, timeout
     }
   }
 
+  // A dispatch that was REFUSED never ran, so there is nothing to assert about its transport.
+  // Scoring it anyway produced "2/9 — marker absent from the entire response", which reads as a
+  // broken transport when the truth was that the target node was offline and the hub correctly
+  // declined to run the work somewhere else. That is this command's own failure mode appearing
+  // inside it: a result that cannot distinguish "measured and bad" from "never measured".
+  if (final?.metadata?.reroute_refused === true) {
+    const why = String(final?.metadata?.reason ?? "could not accept work")
+    return {
+      node: nodeName,
+      ok: false,
+      taskId,
+      skipped: `not dispatched — the node ${why}. The hub refused to reroute it to another machine, which is correct: a job pinned to a node needs something only that node has. Nothing was measured. Bring the node online and re-run.`,
+      assertions: [],
+    }
+  }
+
   const mapped = fromHiveTask(final)
   const observed: RoundTripObserved = {
     executedByNodeId: final?.metadata?.executed_by_node_id ?? null,
