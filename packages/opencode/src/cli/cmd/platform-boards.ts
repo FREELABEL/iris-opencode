@@ -279,7 +279,14 @@ const BoardsUpdateCommand = cmd({
       // `boards push` diffs only title/content/status/type, so an edited
       // bloq_list_id in a pulled file reports "Already in sync" and the item
       // never moves. This is the only way to relist an item from the CLI.
-      .option("list-id", { describe: "move the item to this list ID", type: "number" }),
+      .option("list-id", { describe: "move the item to this list ID", type: "number" })
+      // Filing something in the wrong project is the normal case, not the exceptional one.
+      // Before this the only remedy was to recreate the item, which changes its id and
+      // breaks every cross-reference and public share URL pointing at it.
+      .option("bloq-id", {
+        describe: "move the item to this bloq (project) — refused if it would drop a PHI/sensitive boundary",
+        type: "number",
+      }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Item #${args.id}`)
@@ -327,6 +334,7 @@ const BoardsUpdateCommand = cmd({
     if (args.status) payload.status = args.status
     if (args.type) payload.type = args.type
     if (args["list-id"] != null) payload.bloq_list_id = args["list-id"]
+    if (args["bloq-id"] != null) payload.bloq_id = args["bloq-id"]
 
     if (Object.keys(payload).length === 0) {
       failNoOp("update", "Use --title, --content, --content-file, --status, --type, or --list-id")
