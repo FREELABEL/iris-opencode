@@ -164,16 +164,43 @@ export const UpgradeCommand = {
         }
       } catch { /* bridge update is non-critical */ }
 
-      // Update desktop app if on macOS (non-critical — don't crash update if this fails)
+      // Update the desktop app if one is actually installed (macOS only).
+      // Non-critical — never fail the CLI update over this.
+      //
+      // This pointed at IRIS-app-darwin-*.zip: the old Electron app, whose build job has
+      // been dead for weeks, so that URL 404s. `curl --fail` then short-circuited the &&
+      // chain, meaning this silently no-opped on EVERY update rather than erroring. Not
+      // destructive (the rm -rf sits behind the download succeeding) but entirely useless.
+      // Now points at the Tauri app published since v1.3.206.
       if (process.platform === "darwin") {
         try {
           const arch = process.arch === "arm64" ? "arm64" : "x64"
-          const appDir = `${home}/Applications`
-          const appPath = `${appDir}/IRIS.app`
-          const appUrl = `https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-app-darwin-${arch}.zip`
-          const updateApp = await $`tmpdir=$(mktemp -d) && curl -sL --fail -o "$tmpdir/IRIS-app.zip" "${appUrl}" 2>/dev/null && rm -rf "${appPath}" 2>/dev/null; mkdir -p "${appDir}" && unzip -q "$tmpdir/IRIS-app.zip" -d "${appDir}" 2>/dev/null && rm -rf "$tmpdir" && test -d "${appPath}" && echo "app-updated"`.nothrow().quiet().text()
-          if (updateApp.includes("app-updated")) {
-            prompts.log.info("Desktop app updated")
+          // Update in place, wherever it actually lives. Unconditionally unpacking into
+          // ~/Applications when the app is in /Applications would leave two IRIS.app
+          // copies silently drifting apart — so only touch an install that exists, and
+          // do not install one here (that is `iris install-app`'s job, not update's).
+          const candidates = [
+            { dir: "/Applications", app: "/Applications/IRIS.app" },
+            { dir: `${home}/Applications`, app: `${home}/Applications/IRIS.app` },
+          ]
+          let installed: { dir: string; app: string } | undefined
+          for (const c of candidates) {
+            const exists = await $`test -d ${c.app} && echo yes`.nothrow().quiet().text()
+            if (exists.includes("yes")) {
+              installed = c
+              break
+            }
+          }
+          if (installed) {
+            const appUrl = `https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-tauri-darwin-${arch}.zip`
+            const updateApp =
+              await $`tmpdir=$(mktemp -d) && curl -sL --fail -o "$tmpdir/IRIS-app.zip" "${appUrl}" 2>/dev/null && rm -rf "${installed.app}" 2>/dev/null; mkdir -p "${installed.dir}" && unzip -q "$tmpdir/IRIS-app.zip" -d "${installed.dir}" 2>/dev/null && rm -rf "$tmpdir" && xattr -cr "${installed.app}" 2>/dev/null; test -d "${installed.app}" && echo "app-updated"`
+                .nothrow()
+                .quiet()
+                .text()
+            if (updateApp.includes("app-updated")) {
+              prompts.log.info(`Desktop app updated (${installed.app})`)
+            }
           }
         } catch {
           // Desktop app update is non-critical — continue with rest of update
