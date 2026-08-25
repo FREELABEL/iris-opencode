@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import { PlaybookContentsCommands } from "./platform-playbook-contents"
 import * as prompts from "./clack"
+import { confirmWiden } from "./exposure-gate"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError, writeJson } from "./iris-api"
 import { Skill } from "../../skill/skill"
@@ -1307,6 +1308,7 @@ const PublishCommand = cmd({
         default: "free",
         describe: "access level for a public/marketplace publish",
       })
+      .option("force", { type: "boolean", default: false, describe: "consent to a PUBLIC publish — REQUIRED when there is no terminal" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -1315,6 +1317,27 @@ const PublishCommand = cmd({
     if (args.scope === "project" && !args.bloq) {
       console.error("  --bloq <id> is required when --scope project")
       prompts.outro("Done"); return
+    }
+
+    // #182344 G-04 — a marketplace publish is the widest thing this CLI can do.
+    // private/project never ask; public always does, and refuses with no terminal.
+    {
+      const to = args.scope === "public" ? "public" : args.scope === "project" ? "team" : "private"
+      const verdict = await confirmWiden({
+        noun: "playbook",
+        name: String(args.name),
+        from: "private",
+        to: to as any,
+        extra: args.scope === "public"
+          ? [`It is listed in the marketplace as ${String(args.access ?? "free")} and anyone can install it.`]
+          : [],
+        force: Boolean(args.force),
+      })
+      if (!verdict.ok) {
+        process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+        prompts.outro(verdict.reason === "needs-force" ? "Refused — nothing published" : "Cancelled — nothing published")
+        return
+      }
     }
 
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }

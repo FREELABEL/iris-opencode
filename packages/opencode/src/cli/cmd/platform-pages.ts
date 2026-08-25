@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, resolve, dirname } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
 import { LibraryCmd } from "./platform-components"
+import { confirmWiden, isWidening, type Tier } from "./exposure-gate"
 
 // ============================================================================
 // Helpers
@@ -3063,7 +3064,8 @@ const VisibilityCmd = cmd({
         type: "string",
         choices: VISIBILITY_MODES as unknown as string[],
       })
-      .option("yes", { describe: "skip the confirmation when restricting visibility", type: "boolean", default: false })
+      .option("yes", { describe: "consent to a widening without the prompt (alias of --force)", type: "boolean", default: false })
+      .option("force", { describe: "consent to widening exposure — REQUIRED when there is no terminal", type: "boolean", default: false })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -3124,7 +3126,14 @@ const VisibilityCmd = cmd({
       }
       sp.stop(`Currently ${current.declared ? current.mode : "public (default)"}`)
 
-      // Restricting breaks every /p/{slug} link already in the wild. Say so before doing it.
+      // #182345 — this guard used to sit on the RESTRICTING branch, so closing a door
+      // asked and opening one sailed through. The two directions are not symmetric:
+      // restricting is recoverable (re-widen and the link works again), widening is not
+      // (once fetched it can be cached, indexed and forwarded). Both are handled below,
+      // with the friction on the direction that earns it.
+
+      // NARROWING — never blocks. The warning stays because it is real information:
+      // links already in the wild stop working. It is recoverable, so it does not ask.
       const restricting = mode !== "public" && reachFor(current.mode).slug
       if (restricting) {
         console.log()
@@ -3134,9 +3143,29 @@ const VisibilityCmd = cmd({
           (mode === "private" && uuidUrl(page) ? `\n  Also breaking: ${uuidUrl(page)}` : "") +
           `\n  Still works:   ${mode === "unlisted" ? (uuidUrl(page) ?? "(no UUID alias on this page)") : "only active /s/{token} share links"}`,
         )
-        if (!args.yes && !isNonInteractive()) {
-          const ok = await prompts.confirm({ message: `Set ${slug} to ${mode}?` })
-          if (prompts.isCancel(ok) || !ok) { prompts.outro("Cancelled — nothing changed"); return }
+      }
+
+      // WIDENING — always confirms, and refuses outright without a terminal.
+      if (isWidening(current.mode as Tier, mode as Tier)) {
+        console.log()
+        const becomes: string[] = []
+        if (reachFor(mode).slug) becomes.push(publicUrl(page))
+        const uu = uuidUrl(page)
+        if (uu && reachFor(mode).uuid && !reachFor(current.mode).uuid) becomes.push(uu)
+
+        const verdict = await confirmWiden({
+          noun: "page",
+          name: slug,
+          from: current.mode as Tier,
+          to: mode as Tier,
+          urls: becomes,
+          force: Boolean(args.force),
+          yes: Boolean(args.yes),
+        })
+        if (!verdict.ok) {
+          process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+          prompts.outro(verdict.reason === "needs-force" ? "Refused — nothing changed" : "Cancelled — nothing changed")
+          return
         }
       }
 

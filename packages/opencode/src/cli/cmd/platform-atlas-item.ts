@@ -25,6 +25,7 @@ const AtlasItemPublishCommand = cmd({
       .option("new", { describe: "publish a SECOND item even though one with this title already exists in the list", type: "boolean", default: false })
       .option("update", { describe: "sync into this existing item ID instead of creating a new one (single file only)", type: "number" })
       .option("force", { describe: "overwrite even if the item was edited in the UI after the last publish", type: "boolean", default: false })
+      .option("force-public", { describe: "consent to making it PUBLIC — REQUIRED when there is no terminal", type: "boolean", default: false })
       .option("format", { describe: "content format: html or markdown (default: from the file extension)", type: "string", choices: ["html", "markdown"] })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
@@ -73,6 +74,7 @@ const AtlasItemShareCommand = cmd({
       .option("expires", { describe: "expiring link — ISO date/time, e.g. 2026-12-31", type: "string" })
       .option("allowed-emails", { describe: "gate the link to these named, address-verified emails (required for PHI-classified items)", type: "array", string: true })
       .option("allowed-domains", { describe: "gate the link to these bare domains, e.g. vanguard.com", type: "array", string: true })
+      .option("force", { describe: "consent to widening exposure — REQUIRED when there is no terminal", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {

@@ -8,6 +8,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
 import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
+import { confirmWiden } from "./exposure-gate"
 import { detectKind, parseDelimited, parseXlsx, parseDocx, parsePlain, titleFromHtml, inferSchema, type TableData, type ColumnSchema } from "./ingest-formats"
 import { RELATION_TYPES, isValidRelationType, formatRelationsGrouped, type RelationRow } from "./bloq-relation-format"
 import { createPageFromJson } from "./platform-pages"
@@ -1563,6 +1564,7 @@ const BloqsPublishCommand = cmd({
       .option("new", { describe: "publish a SECOND item even though one with this title already exists in the list", type: "boolean", default: false })
       .option("update", { describe: "sync into this existing item ID instead of creating a new one", type: "number" })
       .option("force", { describe: "overwrite even if the item was edited in the UI after the last publish", type: "boolean", default: false })
+      .option("force-public", { describe: "consent to making it PUBLIC — REQUIRED when there is no terminal", type: "boolean", default: false })
       .option("format", { describe: "content format: html or markdown (default: from the file extension)", type: "string", choices: ["html", "markdown"] })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
@@ -1581,6 +1583,7 @@ const BloqsMakePublicCommand = cmd({
       .positional("item-id", { describe: "item ID to share", type: "number", demandOption: true })
       .option("password", { describe: "gate the public link behind a password (min 6 chars)", type: "string" })
       .option("expires", { describe: "expiry as an ISO date/time (e.g. 2026-12-31)", type: "string" })
+      .option("force", { describe: "consent to widening exposure — REQUIRED when there is no terminal", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -1604,6 +1607,21 @@ const BloqsMakePublicCommand = cmd({
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // #182344 G-04 — widening confirms, and refuses without a terminal.
+    const verdict = await confirmWiden({
+      noun: "note",
+      name: `#${args["item-id"]}`,
+      from: "private",
+      to: args.password ? "gated" : "public",
+      force: Boolean(args.force),
+    })
+    if (!verdict.ok) {
+      process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+      if (args.json) console.log(JSON.stringify({ success: false, refused: verdict.reason }))
+      else prompts.outro(verdict.reason === "needs-force" ? "Refused — nothing changed" : "Cancelled — nothing changed")
+      return
+    }
 
     const spinner = args.json ? null : prompts.spinner()
     spinner?.start("Making item public…")

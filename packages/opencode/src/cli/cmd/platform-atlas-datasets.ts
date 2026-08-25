@@ -1,5 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
+import { confirmWiden } from "./exposure-gate"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, isNonInteractive, writeJson, failNoOp} from "./iris-api"
 import * as fs from "fs"
@@ -1080,11 +1081,30 @@ const FeedCreateCommand = cmd({
       .option("schema", { type: "string", demandOption: true, alias: "s", describe: "dataset slug you own" })
       .option("label", { type: "string", describe: "human label for the feed" })
       .option("filter", { type: "array", default: [] as string[], describe: 'pin the feed to a slice — "Region=north" (callers cannot widen it)' })
+      .option("force", { type: "boolean", default: false, describe: "consent to minting a reader token — REQUIRED when there is no terminal" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Mint feed token: ${args.schema}`)
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    // #182344 G-04 — a feed token is a bearer credential: anyone holding it reads the
+    // dataset, with no sign-in. That is the `unlisted` rung, and it confirms.
+    {
+      const verdict = await confirmWiden({
+        noun: "dataset feed",
+        name: String(args.schema),
+        from: "private",
+        to: "unlisted",
+        extra: ["Anyone holding the token can read this dataset. Revoke with: iris datasets feeds revoke <id>"],
+        force: Boolean(args.force),
+      })
+      if (!verdict.ok) {
+        process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+        prompts.outro(verdict.reason === "needs-force" ? "Refused — no token minted" : "Cancelled — no token minted")
+        return
+      }
+    }
 
     const filters: Record<string, string> = {}
     for (const raw of (args.filter as string[]) ?? []) {

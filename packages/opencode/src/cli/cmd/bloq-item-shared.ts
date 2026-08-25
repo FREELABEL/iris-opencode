@@ -3,6 +3,7 @@
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, isNonInteractive, FL_API } from "./iris-api"
 import * as prompts from "./clack"
 import { UI } from "../ui"
+import { confirmWiden, type Tier } from "./exposure-gate"
 import matter from "gray-matter"
 import { readFileSync, writeFileSync, existsSync } from "fs"
 import path from "path"
@@ -577,6 +578,25 @@ export async function executePublish(args: PublishArgs): Promise<void> {
     let publicUuid: string | null = null
     let accessLevel: string | undefined
     if (share) {
+      // #182344 G-04 — widening confirms here too. NOTE: this command's `--force`
+      // already means "overwrite an item edited in the UI" (#154763), so the exposure
+      // consent flag is `--force-public`. Overloading one flag with two unrelated
+      // meanings would be its own bug; the asymmetry is deliberate.
+      const verdict = await confirmWiden({
+        noun: "note",
+        name: title ?? path.basename(args.file),
+        from: "private",
+        to: opts.password || args.expires ? "gated" : "public",
+        force: !!(args as any)["force-public"],
+        forceFlag: "force-public",
+      })
+      if (!verdict.ok) {
+        spinner?.stop("Refused — item stays private", 1)
+        process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+        if (json) console.log(JSON.stringify({ success: false, refused: verdict.reason, item_id: itemId }))
+        else prompts.outro("Nothing was shared")
+        return
+      }
       const pub = await apiMakePublic(userId, itemId!, opts)
       if (pub) { publicUrl = pub.public_url; publicUuid = pub.public_uuid; accessLevel = pub.access_level }
       else {
@@ -690,6 +710,21 @@ export interface ItemActionArgs {
   "allowed-domains"?: string[]
   json?: boolean
   "user-id"?: number
+  force?: boolean
+  yes?: boolean
+}
+
+/**
+ * Which rung this actually lands on. A password, a named-email list or a domain
+ * list means the reader has to prove something, so it is `gated` rather than open —
+ * and the prompt should not claim internet exposure it does not cause.
+ */
+export function tierForShare(args: ItemActionArgs): Tier {
+  const conditioned =
+    !!args.password ||
+    (args["allowed-emails"]?.length ?? 0) > 0 ||
+    (args["allowed-domains"]?.length ?? 0) > 0
+  return conditioned ? "gated" : "public"
 }
 
 export async function executeMakePublic(args: ItemActionArgs): Promise<void> {
@@ -699,6 +734,23 @@ export async function executeMakePublic(args: ItemActionArgs): Promise<void> {
   if (!token) { if (!json) prompts.outro("Done"); return }
   const userId = await requireUserId(args["user-id"])
   if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  // #182344 G-04 — widening confirms, and refuses without a terminal. An item is
+  // private until this command runs, so `from` is private by definition.
+  const verdict = await confirmWiden({
+    noun: "note",
+    name: `#${args["item-id"]}`,
+    from: "private",
+    to: tierForShare(args),
+    force: !!args.force,
+    yes: !!args.yes,
+  })
+  if (!verdict.ok) {
+    process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+    if (json) console.log(JSON.stringify({ success: false, refused: verdict.reason }))
+    else prompts.outro(verdict.reason === "needs-force" ? "Refused — nothing changed" : "Cancelled — nothing changed")
+    return
+  }
 
   const spinner = json ? null : prompts.spinner()
   spinner?.start("Making item public…")
