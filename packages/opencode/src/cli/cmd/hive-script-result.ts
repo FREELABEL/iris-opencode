@@ -144,7 +144,11 @@ export function fromHiveTask(task: HiveTaskLike | null | undefined): ScriptRunRe
     status: t.status === "succeeded" ? "completed" : t.status,
     exit_code: reported,
     exit_code_source: source,
-    stdout: r.output ?? r.stdout ?? "",
+    // PREFER the separated stream. This read `r.output ?? r.stdout`, so the merged field —
+    // which every node sends and which contains BOTH streams — always won, and the
+    // "streams come back separate" assertion could never pass however correct the node was.
+    // `output` remains the fallback for nodes that predate separated streams.
+    stdout: r.stdout ?? r.output ?? "",
     stderr: r.stderr ?? "",
     duration_ms: t.duration_ms,
     timed_out: t.status === "timeout" || /timed out/i.test(String(t.error ?? "")),
