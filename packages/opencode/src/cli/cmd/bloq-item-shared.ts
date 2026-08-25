@@ -867,6 +867,47 @@ export interface ListArgs {
 }
 
 /** List the caller's published (public) bloq items + their URLs. */
+export interface PublishedItem {
+  id: number
+  title: string
+  bloq_id: number
+  public_url: string
+  access_level?: string | null
+}
+
+/**
+ * Every item of this user's that is currently reachable by a stranger.
+ *
+ * Extracted so `iris exposure audit` and `atlas:item list` cannot drift — two
+ * commands answering "what is public?" differently is the ambiguity epic #182344
+ * exists to remove.
+ *
+ * NOTE the 50-bloq cap, inherited from the original: it is a real bound on the
+ * answer, so callers that present this as an audit must SAY it is capped rather
+ * than imply completeness.
+ */
+export const PUBLISHED_SCAN_BLOQ_CAP = 50
+
+export async function collectPublishedItems(userId: number, bloqId?: number): Promise<PublishedItem[]> {
+  const bloqs = bloqId ? [{ id: bloqId }] : (await fetchBloqs(userId)).slice(0, PUBLISHED_SCAN_BLOQ_CAP)
+  const out: PublishedItem[] = []
+  for (const b of bloqs) {
+    const items = await fetchItems(userId, b.id)
+    for (const it of items) {
+      if (it.is_public && (it.public_url || it.public_uuid)) {
+        out.push({
+          id: it.id,
+          title: it.title ?? "(untitled)",
+          bloq_id: b.id,
+          public_url: it.public_url ?? it.public_uuid,
+          access_level: it.access_level ?? null,
+        })
+      }
+    }
+  }
+  return out
+}
+
 export async function executeListPublished(args: ListArgs): Promise<void> {
   const json = !!args.json
   if (!json) { UI.empty(); prompts.intro("◈  Published items") }
@@ -878,16 +919,7 @@ export async function executeListPublished(args: ListArgs): Promise<void> {
   const spinner = json ? null : prompts.spinner()
   spinner?.start("Scanning for published items…")
 
-  const bloqs = args.bloq ? [{ id: args.bloq }] : (await fetchBloqs(userId)).slice(0, 50)
-  const published: any[] = []
-  for (const b of bloqs) {
-    const items = await fetchItems(userId, b.id)
-    for (const it of items) {
-      if (it.is_public && (it.public_url || it.public_uuid)) {
-        published.push({ id: it.id, title: it.title ?? "(untitled)", bloq_id: b.id, public_url: it.public_url ?? it.public_uuid })
-      }
-    }
-  }
+  const published = await collectPublishedItems(userId, args.bloq)
 
   if (json) { spinner?.stop(); console.log(JSON.stringify({ success: true, count: published.length, items: published })); return }
   spinner?.stop(`${published.length} published item(s)`)
