@@ -800,7 +800,25 @@ async function executeHive(
       timeout_seconds: plan.timeout,
     }
     // Only send node_id if it's a real UUID — "default" breaks FK constraint
-    if (step.node && step.node !== "default") payload.node_id = step.node
+    // RESOLVE the node name to its id. This passed `step.node` straight through as `node_id`,
+    // but a playbook names a node the way a person does — `node: MacBookPro` — while the API
+    // expects a uuid. Every hive step that NAMED a machine got HTTP 500, and omitting `node:`
+    // worked, so the mode looked functional while its whole purpose — "run it where the data
+    // is" — was broken. Measured: `mode: hive-script` with `node: AlexMaysnow1063` -> 500;
+    // the identical step without `node:` -> passes in 3.0s.
+    //
+    // Same name-vs-identity confusion as #182368, one layer up.
+    if (step.node && step.node !== "default") {
+      const { resolveNode } = await import("../cli/cmd/platform-hive-nodes")
+      const resolved = await resolveNode(userId, step.node)
+      if (!resolved) {
+        return {
+          output: `Step ${step.id}: no Hive node matching "${step.node}". Run: iris hive nodes list`,
+          exit_code: 1,
+        }
+      }
+      payload.node_id = resolved.id
+    }
 
     const createRes = await hiveFetch("/api/v6/nodes/tasks", {
       method: "POST",
@@ -872,7 +890,25 @@ async function executeHiveScript(
       config: { timeout_seconds: plan.timeout },
       timeout_seconds: plan.timeout,
     }
-    if (step.node && step.node !== "default") payload.node_id = step.node
+    // RESOLVE the node name to its id. This passed `step.node` straight through as `node_id`,
+    // but a playbook names a node the way a person does — `node: MacBookPro` — while the API
+    // expects a uuid. Every hive step that NAMED a machine got HTTP 500, and omitting `node:`
+    // worked, so the mode looked functional while its whole purpose — "run it where the data
+    // is" — was broken. Measured: `mode: hive-script` with `node: AlexMaysnow1063` -> 500;
+    // the identical step without `node:` -> passes in 3.0s.
+    //
+    // Same name-vs-identity confusion as #182368, one layer up.
+    if (step.node && step.node !== "default") {
+      const { resolveNode } = await import("../cli/cmd/platform-hive-nodes")
+      const resolved = await resolveNode(userId, step.node)
+      if (!resolved) {
+        return {
+          output: `Step ${step.id}: no Hive node matching "${step.node}". Run: iris hive nodes list`,
+          exit_code: 1,
+        }
+      }
+      payload.node_id = resolved.id
+    }
 
     const createRes = await hiveFetch("/api/v6/nodes/tasks", {
       method: "POST",
