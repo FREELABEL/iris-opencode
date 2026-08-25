@@ -1486,26 +1486,12 @@ const PlaybookDoctorCommand = cmd({
           continue
         }
 
-        // The version/steps trap: a "### step:" block exists in the body but
-        // parsePlan coerces frontmatter `version` to 1 unless it is EXACTLY 2
-        // (`fm.version === 2 ? 2 : 1`) — so "version: 3", "version: 1.5", or no
-        // field at all all silently collapse to v1. steps:[] follows, and `run`
-        // falls back to dumping raw text instead of executing or erroring.
-        if (plan.version !== 2) {
-          const rawMd = await Bun.file(info.location).text()
-          const matter = (await import("gray-matter")).default
-          const parsed = matter(rawMd)
-          const stepsInBody = parseSteps(parsed.content)
-          if (stepsInBody.length > 0) {
-            const declared = parsed.data?.version
-            const found = declared === undefined ? "no version field" : `version: ${JSON.stringify(declared)}`
-            problems.push({
-              level: "error",
-              message: `${stepsInBody.length} "### step:" block(s) found in the body, but frontmatter has ${found} (needs to be EXACTLY "version: 2") — steps will NOT execute; \`run\` silently dumps raw text instead. Fix: set "version: 2" in the frontmatter.`,
-            })
-          }
-        }
-
+        // The version/steps trap (frontmatter `version` not EXACTLY 2 silently
+        // degrades the plan to v1, which parses zero steps and executes nothing)
+        // now lives in validatePlan, so `doctor`, `test`, `e2e` and the MCP
+        // listing all report it identically. It used to be implemented here and
+        // ONLY here — which is why `iris playbook test` passed a playbook that
+        // `doctor` failed, and why a mis-versioned playbook could ship green.
         for (const issue of validatePlan(plan)) {
           problems.push({
             level: issue.level,
@@ -1824,7 +1810,30 @@ export const PlatformPlaybookCommand = cmd({
       .command(PlaybookContentsCommands.roles)
       .command(PlaybookContentsCommands.require)
       .command(PlaybookContentsCommands.ack)
-      .demandCommand(1, ""),
+      .demandCommand(1, "")
+      // Playbooks COMPOSE — a step can run another playbook. That has worked since the
+      // executor shipped and no playbook in the registry uses it, because nothing anywhere
+      // said it was possible. Stating it here is most of the fix (#182309).
+      .epilogue(
+        [
+          "Playbooks compose. A step can hand off to another playbook:",
+          "",
+          "    ### step:s2 Capture the process as an SOP",
+          "",
+          "    ```yaml",
+          "    mode: playbook",
+          "    playbook: capture-sops-and-process-maps",
+          "    args: <passed positionally to the child's declared args>",
+          "    ```",
+          "",
+          "The child runs inline, its steps appear nested in the run output, and its",
+          "combined output becomes this step's result. A failing child fails the parent",
+          "step. Nesting is capped at 3 deep, and a playbook may not call itself.",
+          "",
+          "Use it to keep one procedure per playbook and chain them, rather than writing",
+          "\"now go run X\" as an instruction a person has to notice and follow.",
+        ].join("\n"),
+      ),
   handler() {},
 })
 
