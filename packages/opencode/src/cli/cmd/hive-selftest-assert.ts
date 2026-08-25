@@ -30,6 +30,9 @@ const WRAPPER_SIGNS = [
 const ANSI = /\[[0-?]*[ -/]*[@-~]|\][^]*(?:|\\)/
 
 export interface RoundTripObserved {
+  /** Which node the result says actually executed it. Null when the node did not say. */
+  executedByNodeId?: string | null
+  executedByNodeName?: string | null
   stdout: string
   stderr: string
   /** The exit code as a NUMBER the node reported structurally, or null if it did not. */
@@ -42,6 +45,9 @@ export interface RoundTripObserved {
 }
 
 export interface RoundTripExpected {
+  /** The node this run was ADDRESSED to. */
+  targetNodeId?: string | null
+  targetNodeName?: string | null
   stdoutMarker: string
   stderrMarker: string
   exitCode: number
@@ -68,6 +74,26 @@ export function assessRoundTrip(exp: RoundTripExpected, obs: RoundTripObserved):
   const out = obs.stdout ?? ""
   const err = obs.stderr ?? ""
   const both = out + "\n" + err
+
+  // FIRST, because every other assertion is about a machine, and if this one fails they are
+  // all describing the wrong one. Measured 2026-08-24: a task addressed to MacBookPro executed
+  // elsewhere, and three consecutive selftest scores turned out to describe two different
+  // computers (#182312).
+  if (exp.targetNodeId) {
+    const ran = obs.executedByNodeId ?? null
+    const matched = ran !== null && String(ran) === String(exp.targetNodeId)
+    a.push({
+      id: "ran-on-the-targeted-node",
+      claim: "the task executed on the node it was addressed to",
+      pass: matched,
+      detail: ran === null
+        ? "the result does not say which machine ran it — so every assertion below describes an UNKNOWN node"
+        : matched
+          ? `ran on ${obs.executedByNodeName ?? ran}`
+          : `ADDRESSED to ${exp.targetNodeName ?? exp.targetNodeId}, RAN ON ${obs.executedByNodeName ?? ran}`,
+      knownIssue: matched ? undefined : "#182312 — a daemon that does not know its own node_id can claim another machine's work; a job needing a permission only the target holds then returns an empty result",
+    })
+  }
 
   a.push({
     id: "stdout-arrives",

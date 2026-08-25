@@ -96,6 +96,8 @@ async function runOnce(userId: number, nodeId: string, nodeName: string, timeout
 
   const mapped = fromHiveTask(final)
   const observed: RoundTripObserved = {
+    executedByNodeId: final?.metadata?.executed_by_node_id ?? null,
+    executedByNodeName: final?.metadata?.executed_by_node_name ?? null,
     stdout: mapped.stdout ?? "",
     stderr: mapped.stderr ?? "",
     reportedExit: mapped.exit_code ?? null,
@@ -106,7 +108,7 @@ async function runOnce(userId: number, nodeId: string, nodeName: string, timeout
   }
 
   const assertions = assessRoundTrip(
-    { stdoutMarker, stderrMarker, exitCode: EXIT_CODE, expectedMs: SLEEP_MS },
+    { stdoutMarker, stderrMarker, exitCode: EXIT_CODE, expectedMs: SLEEP_MS, targetNodeId: nodeId, targetNodeName: nodeName },
     observed,
   )
   return { node: nodeName, ok: summarise(assertions).ok, assertions, taskId }
