@@ -147,6 +147,137 @@ export function stringifySource(result: any, maxChars = 12000): string {
 }
 
 // ----------------------------------------------------------------------------
+// survey helpers — pure, unit-tested in platform-data-sources.test.ts
+// ----------------------------------------------------------------------------
+
+/**
+ * The only source types `sync` can bulk-ingest. Mirrors SyncCommand's `choices`.
+ * Deliberately a constant rather than an inference: "connected" and "importable"
+ * are different questions, and conflating them is the mental-model error survey
+ * exists to prevent.
+ */
+export const BULK_INGESTABLE_TYPES = ["dropbox", "google_drive"] as const
+
+/**
+ * Fold `google_drive` / `google-drive` / `Google Drive` onto one key.
+ *
+ * The CLI genuinely disagrees with itself here: `sync` takes `google_drive`
+ * (underscore) while `read`, `connect` and the availability list all use
+ * `google-drive` (hyphen). Comparing raw strings across those two surfaces
+ * silently reports a connected source as missing.
+ */
+export function normalizeSourceType(type: unknown): string {
+  return String(type ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-")
+}
+
+/** Is this type one `sync` can bulk-ingest, regardless of which spelling arrived? */
+export function isBulkIngestable(type: unknown): boolean {
+  const n = normalizeSourceType(type)
+  return BULK_INGESTABLE_TYPES.some((t) => normalizeSourceType(t) === n)
+}
+
+/**
+ * Pick a function that lists what is INSIDE a source, without importing it.
+ *
+ * Ranked, not first-match: a `list_*` beats a `search_*` because search
+ * functions tend to require a query parameter the caller does not have yet
+ * (verified: google-drive `search_files` → "Missing required parameters: query").
+ * Returns null when nothing on the source can enumerate.
+ */
+export function pickEnumerator(functions: unknown): string | null {
+  const names: string[] = (Array.isArray(functions) ? functions : [])
+    .map((f: any) => (typeof f === "string" ? f : f?.name))
+    .filter((n: any): n is string => typeof n === "string" && n.length > 0)
+
+  const ranked = [
+    (n: string) => /^list_(files|folders|items|documents)$/.test(n),
+    (n: string) => /^list_/.test(n),
+    (n: string) => /^(search|find)_(files|folders|items|documents)$/.test(n),
+    (n: string) => /^(search|find)_/.test(n),
+  ]
+  for (const match of ranked) {
+    const hit = names.find(match)
+    if (hit) return hit
+  }
+  return null
+}
+
+export interface SurveyedSource {
+  type: string
+  name: string
+  /** Present in GET /bloqs/{id}/data-sources — i.e. the surface that answers "what can I ingest from". */
+  listed: boolean
+  /** Has at least one connection record on the integrations layer. */
+  connected: boolean
+  accounts: string[]
+  bulkIngestable: boolean
+  enumerator: string | null
+  /**
+   * Set when the two surfaces disagree in the direction that actually hurts:
+   * the integration is connected but the availability list does not mention it,
+   * so every discovery path tells the user they have nothing.
+   */
+  hiddenButConnected: boolean
+}
+
+/**
+ * Merge the availability list with the connections list and report the disagreement.
+ *
+ * This merge IS the feature. Verified live 2026-08-24: google-drive had three
+ * working connections and executed `list_files` fine, while being entirely absent
+ * from the availability list under both `--bloq 0` and a real bloq id. Reading
+ * either surface alone reports something false; only the join shows it.
+ */
+export function surveySources(available: any[], connections: any[]): SurveyedSource[] {
+  const byType = new Map<string, SurveyedSource>()
+
+  for (const s of Array.isArray(available) ? available : []) {
+    const key = normalizeSourceType(s?.type)
+    if (!key) continue
+    byType.set(key, {
+      type: String(s?.type ?? key),
+      name: String(s?.name ?? s?.type ?? key),
+      listed: true,
+      connected: false,
+      accounts: [],
+      bulkIngestable: isBulkIngestable(s?.type),
+      enumerator: pickEnumerator(s?.functions),
+      hiddenButConnected: false,
+    })
+  }
+
+  for (const c of Array.isArray(connections) ? connections : []) {
+    const rawType = c?.type ?? c?.integration_type ?? c?.provider
+    const key = normalizeSourceType(rawType)
+    if (!key) continue
+    const account = String(c?.account_email ?? c?.name ?? "").trim()
+    const existing = byType.get(key)
+    if (existing) {
+      existing.connected = true
+      if (account && !existing.accounts.includes(account)) existing.accounts.push(account)
+    } else {
+      byType.set(key, {
+        type: String(rawType),
+        name: String(c?.name ?? rawType),
+        listed: false,
+        connected: true,
+        accounts: account ? [account] : [],
+        bulkIngestable: isBulkIngestable(rawType),
+        enumerator: null, // the availability list is where functions come from; it omitted this one
+        hiddenButConnected: true,
+      })
+    }
+  }
+
+  return [...byType.values()].sort((a, b) => {
+    // Lead with the disagreements — they are the reason to run this.
+    if (a.hiddenButConnected !== b.hiddenButConnected) return a.hiddenButConnected ? -1 : 1
+    if (a.bulkIngestable !== b.bulkIngestable) return a.bulkIngestable ? -1 : 1
+    return a.type.localeCompare(b.type)
+  })
+}
+
+// ----------------------------------------------------------------------------
 // data-sources list
 // ----------------------------------------------------------------------------
 
@@ -159,24 +290,32 @@ const ListCommand = cmd({
       .option("bloq", { alias: "b", type: "number", describe: "bloq id scope (route param)", default: 0 })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Data Sources")
+    // #182326: chrome must never precede the JSON on stdout. This printed the
+    // intro banner BEFORE checking --json, so `| python3 -m json.tool` failed
+    // with "Expecting value: line 1 column 1" — and the trailing outro added
+    // "Extra data" on top of it. Same defect fixed in `iris playbook verify`.
+    const json = args.json as boolean
+    if (!json) {
+      UI.empty()
+      prompts.intro("◈  Data Sources")
+    }
     const token = await requireAuth()
     if (!token) {
+      if (json) { await writeJson([]); process.exitCode = 1; return }
       prompts.outro("Done")
       return
     }
     const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/data-sources`)
     const ok = await handleApiError(res, "List data sources")
     if (!ok) {
+      if (json) { await writeJson([]); process.exitCode = 1; return }
       prompts.outro("Done")
       return
     }
     const data = (await res.json()) as any
     const sources: any[] = data?.data?.sources ?? data?.sources ?? []
-    if (args.json) {
+    if (json) {
       await writeJson(sources)
-      prompts.outro("Done")
       return
     }
     printDivider()
@@ -234,16 +373,21 @@ const ReadCommand = cmd({
       .option("bloq", { alias: "b", type: "number", default: 0 })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Read ${args.type}.${args.function}`)
+    // #182326 — see ListCommand. Banner and spinner both stay off the JSON path.
+    const json = args.json as boolean
+    if (!json) {
+      UI.empty()
+      prompts.intro(`◈  Read ${args.type}.${args.function}`)
+    }
     const token = await requireAuth()
     if (!token) {
+      if (json) { await writeJson({ ok: false, error: "not authenticated" }); process.exitCode = 1; return }
       prompts.outro("Done")
       return
     }
     const parameters = parseParams((args.param as string[]).map(String))
-    const spinner = prompts.spinner()
-    spinner.start("Executing…")
+    const spinner = json ? null : prompts.spinner()
+    spinner?.start("Executing…")
     const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/data-sources/execute`, {
       method: "POST",
       body: JSON.stringify({
@@ -254,7 +398,8 @@ const ReadCommand = cmd({
     })
     const ok = await handleApiError(res, "Read source")
     if (!ok) {
-      spinner.stop("Failed", 1)
+      spinner?.stop("Failed", 1)
+      if (json) { await writeJson({ ok: false, error: "request failed" }); process.exitCode = 1; return }
       prompts.outro("Done")
       return
     }
@@ -264,22 +409,22 @@ const ReadCommand = cmd({
     // Honest reporting: the HTTP envelope is always success; surface the inner
     // integration failure instead of laundering it as a green "✓" (#147277).
     if (!innerOk) {
-      spinner.stop(`${dim("⚠")} source returned an error`, 1)
-      prompts.log.warn(`The integration reported failure (not a successful empty result): ${error}`)
-      if (args.json) await writeJson(result)
+      spinner?.stop(`${dim("⚠")} source returned an error`, 1)
       process.exitCode = 1
+      if (json) { await writeJson(result); return }
+      prompts.log.warn(`The integration reported failure (not a successful empty result): ${error}`)
       prompts.outro("Done")
       return
     }
 
-    spinner.stop(`${success("✓")} ok`)
-    if (args.json) {
+    spinner?.stop(`${success("✓")} ok`)
+    if (json) {
       await writeJson(result)
-    } else {
-      printDivider()
-      console.log(stringifySource(result, 4000))
-      printDivider()
+      return
     }
+    printDivider()
+    console.log(stringifySource(result, 4000))
+    printDivider()
     prompts.outro("Done")
   },
 })
@@ -677,6 +822,168 @@ const AddCommand = cmd({
   },
 })
 
+// ----------------------------------------------------------------------------
+// data-sources survey — what do I have, before I import any of it
+// ----------------------------------------------------------------------------
+//
+// Every other discovery surface here requires you to already know the answer:
+// `read` needs a function name, `sync` needs a bloq id AND a source AND a path,
+// and `pulse check` needs a keyword. On day one you have none of those. This is
+// the read-only manifest that comes first.
+//
+// It reads BOTH surfaces and reports where they disagree, because neither one
+// alone is trustworthy: on 2026-08-24 google-drive had three live connections
+// and executed `list_files` successfully while being absent from the
+// availability list entirely. Anyone reading the availability list concluded
+// they had no importable sources. They had three.
+
+const SurveyCommand = cmd({
+  command: "survey",
+  aliases: ["manifest"],
+  describe: "what data you have and what is actually importable — read-only, imports nothing",
+  builder: (yargs) =>
+    yargs
+      .option("bloq", { alias: "b", type: "number", default: 0, describe: "bloq id scope" })
+      .option("deep", { type: "boolean", default: false, describe: "also count what is inside each enumerable source (makes one call per source)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const json = args.json as boolean
+    if (!json) {
+      UI.empty()
+      prompts.intro("◈  Data Source Survey")
+    }
+    const token = await requireAuth()
+    if (!token) {
+      if (json) { await writeJson({ ok: false, error: "not authenticated" }); process.exitCode = 1; return }
+      prompts.outro("Done"); return
+    }
+
+    // 1. The availability list — what the ingest surface admits exists.
+    let available: any[] = []
+    const availRes = await irisFetch(`/api/v1/bloqs/${args.bloq}/data-sources`)
+    if (availRes.ok) {
+      const d = (await availRes.json()) as any
+      available = d?.data?.sources ?? d?.sources ?? []
+    }
+
+    // 2. The connections list — what is actually wired up. Best-effort: a survey
+    //    that half-works is still worth more than no manifest, so a failure here
+    //    degrades to "availability only" rather than aborting.
+    let connections: any[] = []
+    const userId = await requireUserId()
+    if (userId) {
+      try {
+        const connRes = await irisFetch(`/api/v1/users/${userId}/integrations`)
+        if (connRes.ok) {
+          const d = (await connRes.json()) as any
+          connections = d?.connections ?? d?.data ?? (Array.isArray(d) ? d : [])
+        }
+      } catch { /* degrade, don't abort */ }
+    }
+
+    const sources = surveySources(available, connections)
+
+    // 3. --deep: actually look inside. One call per enumerable source, and the
+    //    per-source result records WHY it could not count when it could not,
+    //    rather than rendering an unexplained blank.
+    const counts: Record<string, { count: number | null; note?: string }> = {}
+    if (args.deep) {
+      const sp = json ? null : prompts.spinner()
+      sp?.start("Counting…")
+      for (const s of sources) {
+        if (!s.enumerator) continue
+        try {
+          const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/data-sources/execute`, {
+            method: "POST",
+            body: JSON.stringify({ integration_type: s.type, function_name: s.enumerator, parameters: {} }),
+          })
+          if (!res.ok) { counts[s.type] = { count: null, note: `HTTP ${res.status}` }; continue }
+          const envelope = (await res.json()) as any
+          const { ok, error, result } = unwrapExecuteResult(envelope?.data ?? envelope)
+          if (!ok) { counts[s.type] = { count: null, note: error }; continue }
+          counts[s.type] = { count: countItems(result) }
+        } catch (e: any) {
+          counts[s.type] = { count: null, note: e?.message ?? "call failed" }
+        }
+      }
+      sp?.stop("Counted")
+    }
+
+    const importable = sources.filter((s) => s.bulkIngestable && s.connected)
+    const hidden = sources.filter((s) => s.hiddenButConnected)
+
+    if (json) {
+      await writeJson({
+        bloq: args.bloq,
+        total: sources.length,
+        importable: importable.length,
+        hidden_but_connected: hidden.map((s) => s.type),
+        sources: sources.map((s) => ({ ...s, inside: counts[s.type] ?? undefined })),
+      })
+      return
+    }
+
+    printDivider()
+    if (sources.length === 0) {
+      console.log(`  ${dim("No sources found. Connect one:")} ${highlight("iris connect <type>")}`)
+    }
+    for (const s of sources) {
+      const flags: string[] = []
+      if (s.bulkIngestable) flags.push(success("importable"))
+      else flags.push(dim("read-only"))
+      if (s.enumerator) flags.push(dim(`can list (${s.enumerator})`))
+      const inside = counts[s.type]
+      if (inside) {
+        flags.push(inside.count !== null ? bold(`${inside.count} items`) : dim(`count failed: ${inside.note}`))
+      }
+      console.log(`  ${bold(s.type)}  ${flags.join(dim(" · "))}`)
+      if (s.accounts.length) console.log(`    ${dim(s.accounts.join(", "))}`)
+      if (s.hiddenButConnected) {
+        // The headline finding. Say what it means, not just that a flag is set.
+        console.log(
+          `    ${UI.Style.TEXT_WARNING}⚠ connected but MISSING from the data-sources list${UI.Style.TEXT_NORMAL}` +
+            dim(" — usable via `read`, invisible to discovery"),
+        )
+      }
+    }
+    printDivider()
+
+    // The summary line is the whole point: two numbers that are usually different.
+    console.log(`  ${bold(String(sources.length))} source(s) · ${bold(String(importable.length))} bulk-importable`)
+    if (importable.length === 0) {
+      console.log(dim(`  Nothing can be bulk-ingested — \`sync\` only accepts: ${BULK_INGESTABLE_TYPES.join(", ")}`))
+    }
+    if (hidden.length) {
+      console.log(
+        `  ${UI.Style.TEXT_WARNING}${hidden.length} connected source(s) are hidden from discovery${UI.Style.TEXT_NORMAL}` +
+          dim(` (${hidden.map((s) => s.type).join(", ")})`),
+      )
+    }
+    if (!args.deep) console.log(dim(`  Look inside each one with: iris data-sources survey --deep`))
+    prompts.outro("Done")
+  },
+})
+
+/** Count the records in an integration result, whatever key the provider used to wrap them. */
+export function countItems(result: any): number | null {
+  const walk = (o: any, depth = 0): any[] | null => {
+    if (depth > 6 || o == null) return null
+    if (Array.isArray(o)) return o
+    if (typeof o === "object") {
+      for (const k of ["files", "items", "entries", "results", "data", "messages"]) {
+        if (Array.isArray(o[k])) return o[k]
+      }
+      for (const v of Object.values(o)) {
+        const hit = walk(v, depth + 1)
+        if (hit) return hit
+      }
+    }
+    return null
+  }
+  const arr = walk(result)
+  return arr ? arr.length : null
+}
+
 export const PlatformDataSourcesCommand = cmd({
   command: "data-sources",
   aliases: ["datasources", "ds"],
@@ -685,6 +992,7 @@ export const PlatformDataSourcesCommand = cmd({
     yargs
       .command(TypesCommand)
       .command(AddCommand)
+      .command(SurveyCommand)
       .command(ListCommand)
       .command(ReadCommand)
       .command(ArticleCommand)
