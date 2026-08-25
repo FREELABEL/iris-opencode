@@ -48,6 +48,10 @@ async function target(argv: any): Promise<{ t: SshTarget; nodeName: string } | n
   const resolved = await resolveSshTarget(node.id, node.name, {
     host: argv.host as string | undefined,
     user: argv.user as string | undefined,
+    // What the node itself reported in its heartbeat. Without this the resolver had to guess
+    // from names, and for a node whose Hive name differs from its tailnet name the first call
+    // dead-ended asking for the IP you wanted it to find (#182368).
+    advertised: (node as any).tailscale_ip ?? null,
   })
   if ("error" in resolved) {
     console.error(resolved.error)
