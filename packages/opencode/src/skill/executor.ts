@@ -24,7 +24,7 @@ export interface ArgDef {
 export interface StepDef {
   id: string
   title: string
-  mode: "shell" | "prompt" | "ai" | "hive" | "hive-script" | "skill" | "playbook" | "human" | "manual" | "cloud-workflow" | "cloud-agentic" | "n8n" | "langgraph" | "schedule"
+  mode: "shell" | "prompt" | "ai" | "hive" | "hive-script" | "skill" | "playbook" | "human" | "agent" | "manual" | "cloud-workflow" | "cloud-agentic" | "n8n" | "langgraph" | "schedule"
   body: string
   code: string | null
   confirm: boolean
@@ -1513,6 +1513,11 @@ export async function executeSkill(
         }
 
         case "human":
+        // Same runtime behaviour as human/manual — print the instruction, wait for a
+        // person to confirm. Listed explicitly so a reader can see that a drafted
+        // playbook's steps are deliberately not executed, rather than discovering it
+        // by tracing a fall-through.
+        case "agent":
         case "manual":
         default: {
           // Print instructions, wait for user to confirm done
@@ -1614,7 +1619,15 @@ export interface ValidationIssue {
 // falls into the executor's `default:` case — same behavior as an undeclared manual step.
 const KNOWN_STEP_MODES: ReadonlySet<string> = new Set([
   "shell", "prompt", "ai", "hive", "hive-script", "skill", "playbook",
-  "human", "manual", "cloud-workflow", "cloud-agentic", "n8n", "langgraph", "schedule",
+  // `agent` is what the server's WalkthroughStructurer emits for EVERY step of a
+  // drafted playbook, deliberately: a step drafted by a model from audio must not be
+  // executable on sight ("bare push" was transcribed as "bear push" on a real
+  // recording), so promoting one to `shell` is a human edit where someone takes
+  // responsibility for what runs. It behaved correctly only by accident — it was
+  // never in this union, so it fell through the executor's `default:` to manual.
+  // Declaring it keeps that behaviour, and stops validation crying wolf on every
+  // playbook the platform's own drafter produces.
+  "human", "agent", "manual", "cloud-workflow", "cloud-agentic", "n8n", "langgraph", "schedule",
 ])
 
 export function validatePlan(plan: SkillPlan): ValidationIssue[] {

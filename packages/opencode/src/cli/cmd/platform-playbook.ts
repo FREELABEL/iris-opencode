@@ -807,6 +807,7 @@ function modeLabel(mode: string): string {
     case "n8n": return highlight("n8n")
     case "langgraph": return highlight("langgraph")
     case "schedule": return highlight("schedule")
+    case "agent": return dim("agent")
     case "human":
     case "manual": return dim("human")
     default: return dim(mode)

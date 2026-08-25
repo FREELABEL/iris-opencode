@@ -2344,3 +2344,22 @@ describe("playbook container paths", () => {
     expect(out.a.b).toBe(`${ROOT}/x`)
   })
 })
+
+test('validatePlan: "agent" is a REAL mode, not an unrecognized one', () => {
+  // The server's WalkthroughStructurer emits mode: agent for every step of a drafted
+  // playbook, on purpose — a step extracted by a model from audio must not be runnable
+  // on sight. It previously worked only by falling through the executor's default:
+  // case, so validation flagged every drafted playbook as broken. Declaring it keeps
+  // the behaviour and stops the false positive.
+  const plan = { ...basePlan, steps: [makeStep({ id: "a1", mode: "agent" as any, code: null })] }
+  const issues = validatePlan(plan)
+  expect(issues.filter((i) => i.message.includes("Unrecognized mode"))).toHaveLength(0)
+})
+
+test('validatePlan: "agent" does not trip the default-manual warning either', () => {
+  // It is an explicit choice, not an omission — warning about it would be the same
+  // cry-wolf problem one level down.
+  const plan = { ...basePlan, steps: [makeStep({ id: "a1", mode: "agent" as any, code: null })] }
+  const issues = validatePlan(plan)
+  expect(issues.filter((i) => i.message.includes("default"))).toHaveLength(0)
+})
