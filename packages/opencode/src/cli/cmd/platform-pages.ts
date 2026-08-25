@@ -7,6 +7,7 @@ import { irisFetch, requireAuth, requireUserId, resolveUserId, handleApiError, i
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, resolve, dirname } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
+import { LibraryCmd } from "./platform-components"
 
 // ============================================================================
 // Helpers
@@ -4032,12 +4033,13 @@ export const PlatformPagesCommand = productCommand({
   name: "genesis",
   aliases: ["pages"],
   purpose:
-    "Genesis — composable pages and sites: list, view, get/set, pull/push/diff, publish-html, read/verify, visibility, share links, versions, qr, screenshot",
-  keywords: ["genesis", "page", "site", "component", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html"],
+    "Genesis — composable pages, sites and COMPONENTS: browse the component library with its props/emits/slots, see which pages use a component before changing it, roll a component back, plus pages list/view/get/set/pull/push/diff/publish/screenshot",
+  keywords: ["genesis", "page", "site", "component", "components", "library", "catalogue", "props", "emits", "slots", "usage", "rollback", "versions", "stale", "publish", "artifact", "landing", "screenshot", "verify", "read", "bespoke", "html"],
   howtos: ["genesis-design-standard", "bespoke", "genesis-sdk", "pages"],
   playbooks: ["pages", "seed-pages"],
   builder: (y) =>
     y
+      .command(LibraryCmd)
       .command(ListCmd)
       .command(SearchCmd)
       .command(ViewCmd)

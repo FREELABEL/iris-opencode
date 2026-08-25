@@ -912,7 +912,11 @@ const HowToSocialCommand = cmd({
   builder: (y) =>
     y
       .positional("name", { type: "string", demandOption: true, describe: "recipe slug" })
-      .option("brand", { type: "string", default: "heyiris", describe: "brand slug for design tokens" })
+      .option("brand", { type: "string", default: "heyiris", describe: "brand slug — drives design tokens AND the call-to-action" })
+      .option("url", {
+        type: "string",
+        describe: "canonical link for this recipe on the BRAND's own site (required for non-IRIS brands)",
+      })
       .option("out", { type: "string", describe: "write props JSON here (default: ./<slug>-carousel.json)" })
       .option("json", { type: "boolean", default: false, describe: "print props to stdout instead" }),
   async handler(args) {
@@ -937,7 +941,16 @@ const HowToSocialCommand = cmd({
     const headline = fullTitle.replace(/^How to:\s*/i, "").trim()
     const sections = extractSections(body)
     const lede = extractLede(body)
-    const url = `heyiris.io/how-to/${name}`
+    // #182088 — the CTA and links must follow the BRAND, not the docs site.
+    //
+    // These recipes live at heyiris.io/how-to/<slug>. That is correct for IRIS and
+    // wrong for every other brand: a FREELABEL post telling a musician to run
+    // `iris how-to view <slug>` is an instruction they cannot follow, and a link to
+    // IRIS docs is the wrong destination entirely. Nothing errored — the render
+    // reported success and the creative simply belonged to another company.
+    const brandSlug = String(args.brand)
+    const isIris = brandSlug === "heyiris"
+    const url = args.url ? String(args.url).replace(/^https?:\/\//, "") : isIris ? `heyiris.io/how-to/${name}` : ""
 
     const stats = [
       meta.duration_min ? { value: `${meta.duration_min}`, label: "min read" } : null,
@@ -966,17 +979,28 @@ const HowToSocialCommand = cmd({
       stats,
       statsHeadline: "At a glance",
       ctaHeadline: "Read the full recipe",
-      ctaBody: `Every recipe ships inside the IRIS CLI. ${headline}.`,
+      // IRIS keeps the CLI framing because it is true for IRIS. Every other brand
+      // gets the recipe's own headline and NO CLI incantation.
+      ctaBody: isIris ? `Every recipe ships inside the IRIS CLI. ${headline}.` : `${headline}.`,
       ctaButtonText: url,
-      ctaSubtext: `iris how-to view ${name}`,
+      // Empty for a non-IRIS brand ON PURPOSE: EditorialCarouselSlide falls back to
+      // that brand's own configured ctaUrl when this is falsy (see #182087, which
+      // had to be fixed first — a default in Root.tsx made the fallback
+      // unreachable). Setting a hand-typed URL here would drift the moment the
+      // brand config changes.
+      ctaSubtext: isIris ? `iris how-to view ${name}` : "",
     }
 
     // X caption. Kept under 280 including the link, and assembled from the recipe's own words.
     const tagStr = (meta.tags ?? []).slice(0, 3).map((t) => `#${t.replace(/-/g, "")}`).join(" ")
     const lead = (lede ?? sections[0]?.text)?.split(/(?<=\.)\s/)[0] ?? ""
-    let xPost = `${headline}\n\n${lead}\n\n${url}`
+    // Never append a link we do not have. A caption ending in a bare newline is
+    // survivable; one pointing at another company's docs is not.
+    let xPost = url ? `${headline}\n\n${lead}\n\n${url}` : `${headline}\n\n${lead}`
     if (tagStr) xPost += `\n${tagStr}`
-    if (xPost.length > 280) xPost = `${headline}\n\n${url}${tagStr ? `\n${tagStr}` : ""}`
+    if (xPost.length > 280) {
+      xPost = url ? `${headline}\n\n${url}${tagStr ? `\n${tagStr}` : ""}` : `${headline}${tagStr ? `\n${tagStr}` : ""}`
+    }
 
     if (args.json) {
       console.log(JSON.stringify({ props, xPost }, null, 2))
@@ -989,6 +1013,16 @@ const HowToSocialCommand = cmd({
     UI.empty()
     prompts.intro("◈  How-To → Social")
     console.log(dim(`  recipe   ${name}`) + (meta.category ? dim(`  ·  ${meta.category}`) : ""))
+    // Print the brand. The whole failure mode was that it was silent — creative
+    // rendered under the wrong brand and nothing in the output said so.
+    console.log(dim(`  brand    ${brandSlug}`) + (isIris ? "" : dim("  ·  non-IRIS: CTA follows this brand")))
+    if (!isIris && !args.url) {
+      console.log(
+        warning(`  ⚠ no --url given, so the post carries NO link.`) +
+          dim(` These recipes live on heyiris.io; linking a ${brandSlug} post there sends readers to another brand.`),
+      )
+      console.log(dim(`    Pass one:  iris how-to social ${name} --brand ${brandSlug} --url <brand-url>`))
+    }
     console.log(dim(`  sections ${sections.length}`) + dim(`  ·  tags ${(meta.tags ?? []).length}`))
     if (!sections.length) {
       console.log(warning("  ⚠ no ## sections found — the slides will be thin"))

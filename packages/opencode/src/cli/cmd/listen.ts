@@ -1,4 +1,6 @@
 import { existsSync, unlinkSync } from "fs"
+import { join } from "path"
+import { tmpdir } from "os"
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -57,8 +59,12 @@ export function renderMeter(unit: number, peak: number, elapsedMs: number): stri
 
 export const PlatformListenCommand = cmd({
   command: "listen",
-  aliases: ["dictate"],
-  describe: "record from the microphone with a live level meter, then transcribe it",
+  // `record` is what people actually type when they want to capture a walkthrough.
+  // The command existed and was unfindable: nobody hunting for "record" guesses
+  // "listen" or "dictate", so the capture step of the record → draft → publish
+  // pipeline read as missing when it was only misnamed (#182322).
+  aliases: ["dictate", "record"],
+  describe: "record from the microphone with a live level meter, then transcribe it (--draft turns it into a playbook)",
   builder: (yargs) =>
     yargs
       .option("seconds", { type: "number", describe: "Record for a fixed length instead of waiting for Enter" })
@@ -73,6 +79,13 @@ export const PlatformListenCommand = cmd({
         describe: "What this recording IS: clean, notes, meeting, standup, captions, idea",
       })
       .option("output", { type: "string", describe: "Write the transcript here (file or dir)" })
+      // The last link in the chain. `playbook draft` accepted a transcript all along,
+      // but listen deleted its audio and printed the transcript, leaving the user to
+      // find the file and re-invoke by hand — so "record a walkthrough, get a playbook"
+      // was two commands and a path lookup instead of one flag.
+      .option("draft", { type: "boolean", default: false, describe: "After transcribing, draft a playbook from it" })
+      .option("sop", { type: "boolean", default: false, describe: "After transcribing, draft a human-readable SOP from it" })
+      .option("name", { type: "string", describe: "Name for the drafted playbook/SOP (with --draft or --sop)" })
       .option("json", { type: "boolean", default: false }),
 
   async handler(args) {
@@ -175,18 +188,29 @@ export const PlatformListenCommand = cmd({
     const warn = silenceWarning(rec.peakSeen(), rec.device.name)
     if (warn) prompts.log.warn(warn)
 
+    // With --draft/--sop we need to KNOW where the transcript landed in order to hand
+    // it on. Pin it to an explicit path rather than re-transcribing the wav downstream:
+    // `playbook draft` accepts audio, but feeding it the wav would pay for transcription
+    // a second time for a result we already have.
+    const chaining = Boolean(args.draft) || Boolean(args.sop)
+    const transcriptPath =
+      (args.output as string | undefined) ??
+      (chaining ? join(tmpdir(), `iris-listen-${Date.now()}.md`) : undefined)
+
     const ok = await runLocalWhisper(
       rec.path,
       args.language as string | undefined,
       Boolean(args.json),
       undefined,
-      args.output as string | undefined,
+      transcriptPath,
       args.brand as number | undefined,
       Boolean(args.remote),
       args.treatment as string | undefined,
     )
 
-    if (!args.keep && ok) {
+    // Keep the wav whenever we are chaining, until the draft has actually succeeded —
+    // a failed draft must never be the reason the recording is gone.
+    if (!args.keep && ok && !chaining) {
       // The transcript is the artifact; the wav is a 16 kHz intermediate. Kept on failure so a
       // transcription that fell over never costs you the recording.
       try {
@@ -198,7 +222,51 @@ export const PlatformListenCommand = cmd({
       console.log(`  ${dim("recording kept at")} ${highlight(rec.path)}`)
     }
 
-    if (!ok) process.exitCode = 1
+    if (!ok) {
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    if (chaining) {
+      if (!transcriptPath || !existsSync(transcriptPath)) {
+        // Say which link broke. "draft failed" would send someone to debug the drafter
+        // when the transcript never arrived.
+        prompts.log.error(
+          `Transcript was not written to ${transcriptPath ?? "(no path)"} — cannot draft from it.` +
+            `\n  The recording is kept at ${rec.path}`,
+        )
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      // Reuse the real commands rather than reimplementing extraction — one drafter,
+      // one set of behaviours, same as `playbook install` reusing `playbook sync`.
+      const { PlaybookDraftCommand } = await import("./playbook-draft")
+      const { PlaybookSopDraftCommand } = await import("./sop-draft")
+      const target: any = args.sop ? PlaybookSopDraftCommand : PlaybookDraftCommand
+      await target.handler({
+        input: transcriptPath,
+        name: args.name as string | undefined,
+        model: "iris/gpt-4.1-nano",
+        force: false,
+        json: Boolean(args.json),
+      })
+
+      // Only now is the wav genuinely disposable.
+      if (!args.keep) {
+        try {
+          unlinkSync(rec.path)
+        } catch {
+          /* noop */
+        }
+      } else {
+        console.log(`  ${dim("recording kept at")} ${highlight(rec.path)}`)
+      }
+      return
+    }
+
     prompts.outro("Done")
   },
 })

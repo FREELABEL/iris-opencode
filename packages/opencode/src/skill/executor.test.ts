@@ -942,6 +942,49 @@ describe("validatePlan", () => {
     expect(issues.some((i) => i.message.includes("no steps"))).toBe(true)
   })
 
+  // The version-coercion trap (#182230). parsePlan collapses any `version` that
+  // is not EXACTLY the number 2 down to v1, and v1 parses zero steps — so a
+  // typo'd version shipped a playbook that validated clean and executed nothing.
+  // Silence is the bug here, so these assert an ERROR is raised.
+  test("errors when body has steps but version was coerced away from 2", () => {
+    const plan = { ...basePlan, version: 1 as const, declaredVersion: 3, steps: [], bodyStepCount: 8 }
+    const issues = validatePlan(plan)
+    const err = issues.find((i) => i.level === "error" && i.message.includes("### step:"))
+    expect(err).toBeDefined()
+    expect(err!.message).toContain("version: 3")
+  })
+
+  test("errors when version is the STRING '2' rather than the number", () => {
+    const plan = { ...basePlan, version: 1 as const, declaredVersion: "2", steps: [], bodyStepCount: 3 }
+    const issues = validatePlan(plan)
+    expect(issues.some((i) => i.level === "error" && i.message.includes('version: "2"'))).toBe(true)
+  })
+
+  test("errors when the version field is missing entirely but steps exist", () => {
+    const plan = { ...basePlan, version: 1 as const, declaredVersion: undefined, steps: [], bodyStepCount: 2 }
+    const issues = validatePlan(plan)
+    expect(issues.some((i) => i.level === "error" && i.message.includes("no version field"))).toBe(true)
+  })
+
+  // Must stay quiet for genuine v1 playbooks, or every prose skill turns red.
+  test("stays silent for a real v1 playbook with no step blocks", () => {
+    const plan = { ...basePlan, version: 1 as const, declaredVersion: undefined, steps: [], bodyStepCount: 0 }
+    const issues = validatePlan(plan)
+    expect(issues.some((i) => i.message.includes("### step:"))).toBe(false)
+  })
+
+  test("stays silent for a correct v2 playbook", () => {
+    const plan = {
+      ...basePlan,
+      version: 2 as const,
+      declaredVersion: 2,
+      steps: [makeStep({ id: "one", code: "echo hi" })],
+      bodyStepCount: 1,
+    }
+    const issues = validatePlan(plan)
+    expect(issues.some((i) => i.message.includes("### step:"))).toBe(false)
+  })
+
   test("errors on duplicate step IDs", () => {
     const step = makeStep({ id: "dup", code: "echo" })
     const plan = { ...basePlan, steps: [step, { ...step }] }
@@ -1843,10 +1886,12 @@ input:
     expect(result).toEqual({ count: 42, active: true, ratio: 3.14, zero: 0, neg: -1 })
   })
 
-  test("validatePlan: unknown mode doesn't error (falls to default)", () => {
+  test("validatePlan: unknown mode errors (used to silently fall through to default)", () => {
     const plan = { ...basePlan, steps: [makeStep({ id: "unk", mode: "invented-mode" as any, code: "x" })] }
     const issues = validatePlan(plan)
-    expect(issues.filter((i) => i.level === "error")).toHaveLength(0)
+    const modeErrors = issues.filter((i) => i.level === "error" && i.message.includes("Unrecognized mode"))
+    expect(modeErrors).toHaveLength(1)
+    expect(modeErrors[0].stepId).toBe("unk")
   })
 })
 
@@ -2298,4 +2343,23 @@ describe("playbook container paths", () => {
     const out = interpolateInput({ a: { b: "${{playbook.root}}/x" } }, {}, {}, ROOT)
     expect(out.a.b).toBe(`${ROOT}/x`)
   })
+})
+
+test('validatePlan: "agent" is a REAL mode, not an unrecognized one', () => {
+  // The server's WalkthroughStructurer emits mode: agent for every step of a drafted
+  // playbook, on purpose — a step extracted by a model from audio must not be runnable
+  // on sight. It previously worked only by falling through the executor's default:
+  // case, so validation flagged every drafted playbook as broken. Declaring it keeps
+  // the behaviour and stops the false positive.
+  const plan = { ...basePlan, steps: [makeStep({ id: "a1", mode: "agent" as any, code: null })] }
+  const issues = validatePlan(plan)
+  expect(issues.filter((i) => i.message.includes("Unrecognized mode"))).toHaveLength(0)
+})
+
+test('validatePlan: "agent" does not trip the default-manual warning either', () => {
+  // It is an explicit choice, not an omission — warning about it would be the same
+  // cry-wolf problem one level down.
+  const plan = { ...basePlan, steps: [makeStep({ id: "a1", mode: "agent" as any, code: null })] }
+  const issues = validatePlan(plan)
+  expect(issues.filter((i) => i.message.includes("default"))).toHaveLength(0)
 })

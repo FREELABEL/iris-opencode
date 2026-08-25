@@ -148,15 +148,27 @@ async function actualCentsMulti(categories: string[], scope: string, from: strin
  * sit on, so a shopping trip splitting across household/groceries/dining has
  * somewhere to land.
  */
-async function fetchGroups(scope?: string): Promise<GroupLike[]> {
+/**
+ * Like fetchGroups(), but keeps each record's Atlas external_id so a caller
+ * that needs to upsert can update the record it actually found in place,
+ * instead of minting a fresh id for something that already exists (#182098).
+ */
+async function fetchGroupRecords(scope?: string): Promise<(GroupLike & { external_id: string })[]> {
   const res = await irisFetch(`/api/v1/atlas/datasets/mint-groups?per_page=200`)
   if (!res.ok) return []
   const body = (await res.json()) as any
   const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
   return records
-    .map((r) => ({ ...(r.data ?? {}) }) as GroupLike)
+    .map((r) => ({ ...(r.data ?? {}), external_id: String(r.external_id) }) as GroupLike & { external_id: string })
     .filter((g) => String(g.key ?? "").trim() !== "")
     .filter((g) => (scope ? !g.scope || g.scope === scope : true))
+}
+
+async function fetchGroups(scope?: string): Promise<GroupLike[]> {
+  // Strips external_id back off — every existing caller (GroupListCommand's
+  // --json output among them) expects exactly the GroupLike shape it always
+  // returned, not fetchGroupRecords()'s storage-id-carrying superset.
+  return (await fetchGroupRecords(scope)).map(({ external_id, ...g }) => g)
 }
 
 /**
@@ -253,6 +265,70 @@ async function declaredCategories(scope: string): Promise<string[]> {
   return [...out]
 }
 
+/**
+ * The spend-policy gate (#181986), shared by every write path.
+ *
+ * Originally lived only inline in SpendCommand — `mint import` and `mint
+ * split` wrote transactions directly with no policy check at all, so a
+ * capped category (or any other active policy) was silently unenforced for
+ * both (#182097). Same shape as SpendCommand always used: block and audit
+ * the refusal unless `force`, in which case the violations travel on the
+ * row via `policy_override` so an out-of-policy write stays auditable.
+ *
+ * Returns `blocked: true` when the caller should NOT write this row.
+ */
+async function checkPolicyOrBlock(
+  scopeStr: string,
+  draft: { amount_cents?: number; description?: string; category?: string; scope?: string },
+  opts: {
+    force?: boolean
+    // A caller checking many rows against the same scope (import, split)
+    // fetches these ONCE up front and passes them in, instead of this
+    // function re-fetching policy/categories/groups on every single row.
+    // Omit any of them to have this function fetch it fresh (SpendCommand's
+    // single-transaction case). `policy: null` is itself a valid pre-fetch
+    // result ("no policy set") and is honored as-is, not treated as "unset".
+    policy?: Policy | null
+    knownCategories?: string[]
+    groups?: GroupLike[]
+    // Suppress the per-violation console output — a batch caller prints its
+    // own aggregate summary instead of one full block per row. The audit
+    // trail is written either way.
+    quiet?: boolean
+  } = {},
+): Promise<{ blocked: boolean; violations: { code: string; message: string }[] }> {
+  const policy = opts.policy !== undefined ? opts.policy : await fetchPolicy(scopeStr)
+  let violations: { code: string; message: string }[] = []
+  if (policy) {
+    const knownCategories = opts.knownCategories ?? (await declaredCategories(scopeStr))
+    const groups = opts.groups ?? (await fetchGroups(scopeStr))
+    violations = [...evaluatePolicy(draft, policy, knownCategories), ...groupViolations(draft, policy, groups)]
+  }
+  if (violations.length > 0 && !opts.force) {
+    if (!opts.quiet) {
+      prompts.log.error(`Blocked by the spend policy for scope "${scopeStr}" — nothing was written:`)
+      for (const v of violations) console.log(`    ${dim("·")} ${v.message}  ${dim(`[${v.code}]`)}`)
+      console.log("  " + dim("Fix the row, relax the policy (iris mint policy set), or re-run with --force."))
+    }
+    // An audit row for the REFUSAL. A block that leaves no trace is
+    // indistinguishable from a command nobody ran. Logged as a FAILED create
+    // rather than a new "blocked" action: the server's enum rejects unknown
+    // actions with a 422, and ok:false + reason is already the documented
+    // shape for "someone tried and it did not happen".
+    await audit({
+      action: "create",
+      entity: "transaction",
+      scope: scopeStr,
+      after: draft.description ?? "",
+      amount: (draft.amount_cents ?? 0) / 100,
+      ok: false,
+      reason: `policy_blocked:${violations.map((v) => v.code).join(",")}`,
+    })
+    return { blocked: true, violations }
+  }
+  return { blocked: false, violations }
+}
+
 /** Transactions carrying no scope at all — invisible to every scoped total. */
 async function fetchUntagged(): Promise<any[]> {
   const res = await irisFetch(`/api/v1/atlas/transactions?per_page=500`)
@@ -334,33 +410,9 @@ const SpendCommand = cmd({
     // matches no budget, and every screen keeps reporting healthy.
     const amountCents = Math.round(amount * 100)
     const scopeStr = String(args.scope)
-    const policy = await fetchPolicy(scopeStr)
-    let violations: { code: string; message: string }[] = []
-    if (policy) {
-      const draft = { amount_cents: amountCents, description, category, scope: scopeStr }
-      violations = [
-        ...evaluatePolicy(draft, policy, await declaredCategories(scopeStr)),
-        ...groupViolations(draft, policy, await fetchGroups(scopeStr)),
-      ]
-    }
-    if (violations.length > 0 && !args.force) {
-      prompts.log.error(`Blocked by the spend policy for scope "${scopeStr}" — nothing was written:`)
-      for (const v of violations) console.log(`    ${dim("·")} ${v.message}  ${dim(`[${v.code}]`)}`)
-      console.log("  " + dim("Fix the row, relax the policy (iris mint policy set), or re-run with --force."))
-      // An audit row for the REFUSAL. A block that leaves no trace is
-      // indistinguishable from a command nobody ran. Logged as a FAILED create
-      // rather than a new "blocked" action: the server's enum rejects unknown
-      // actions with a 422, and ok:false + reason is already the documented
-      // shape for "someone tried and it did not happen".
-      await audit({
-        action: "create",
-        entity: "transaction",
-        scope: scopeStr,
-        after: description,
-        amount,
-        ok: false,
-        reason: `policy_blocked:${violations.map((v) => v.code).join(",")}`,
-      })
+    const draft = { amount_cents: amountCents, description, category, scope: scopeStr }
+    const { blocked, violations } = await checkPolicyOrBlock(scopeStr, draft, { force: args.force })
+    if (blocked) {
       prompts.outro("Done")
       return
     }
@@ -882,14 +934,27 @@ const ReimbursableCommand = cmd({
 
 // ── statement / CSV import ───────────────────────────────────────────────────
 
-/** RFC4180-ish CSV. Handles quoted fields containing commas and escaped quotes. */
-async function existingFingerprints(from: string, to: string): Promise<Set<string>> {
+/**
+ * RFC4180-ish CSV. Handles quoted fields containing commas and escaped quotes.
+ *
+ * `scope`, when given, restricts the index to that scope's rows only (client-
+ * side — scope lives in metadata, not a queryable column, same as
+ * `actualCents`). Without it, no scope filter is applied at all — needed by
+ * the mail-receipt importer, whose rows can each carry a different resolved
+ * scope via merchant mapping, so no single scope value could index them all
+ * correctly. `mint import`, which imports one scope at a time, always passes
+ * one (#182100): a bank/card export re-imported into two different scopes in
+ * the same date window shared no dedup index before this, so a `source_ref`
+ * or fingerprint collision across scopes could patch the WRONG scope's row.
+ */
+async function existingFingerprints(from: string, to: string, scope?: string): Promise<Set<string>> {
   const out = new Set<string>()
   const res = await irisFetch(`/api/v1/atlas/transactions?per_page=500&from=${from}&to=${to}`)
   if (!res.ok) return out
   const body = (await res.json()) as any
   const rows: any[] = body?.data?.data ?? body?.data ?? []
   for (const tx of rows) {
+    if (scope && tx?.metadata?.scope !== scope) continue
     if (tx?.metadata?.fp) out.add(String(tx.metadata.fp))
     else {
       // Rows imported before fingerprinting, or added by hand, still dedup by value.
@@ -905,16 +970,27 @@ async function existingFingerprints(from: string, to: string): Promise<Set<strin
  * dedup that survives a source revising its own amount, unlike `fingerprint`.
  * Only rows written WITH a source_ref are indexed; rows without one are outside
  * this mechanism entirely and keep going through `existingFingerprints` as before.
+ *
+ * `scope` — see existingFingerprints() above; same rationale, same #182100.
  */
-async function existingBySourceRef(from: string, to: string): Promise<Map<string, { id: number; amount_cents: number }>> {
-  const out = new Map<string, { id: number; amount_cents: number }>()
+async function existingBySourceRef(
+  from: string,
+  to: string,
+  scope?: string,
+): Promise<Map<string, { id: number; amount_cents: number; category?: string }>> {
+  const out = new Map<string, { id: number; amount_cents: number; category?: string }>()
   const res = await irisFetch(`/api/v1/atlas/transactions?per_page=500&from=${from}&to=${to}`)
   if (!res.ok) return out
   const body = (await res.json()) as any
   const rows: any[] = body?.data?.data ?? body?.data ?? []
   for (const tx of rows) {
+    if (scope && tx?.metadata?.scope !== scope) continue
     const ref = tx?.metadata?.source_ref
-    if (ref) out.set(String(ref), { id: tx.id, amount_cents: Number(tx.amount_cents) || 0 })
+    // category travels with the existing row so a correction's policy check
+    // (below, ImportCommand) can evaluate against the row's REAL category —
+    // a correction never changes it, so treating it as "no category" would
+    // false-positive require_category/declared_only on every correction.
+    if (ref) out.set(String(ref), { id: tx.id, amount_cents: Number(tx.amount_cents) || 0, category: tx.category ?? undefined })
   }
   return out
 }
@@ -1065,9 +1141,14 @@ const ImportCommand = cmd({
     }
 
     const dates = items.map((i) => i.date).sort()
+    const importScope = String(args.scope)
+    // Scoped (#182100) — an unscoped index let a re-imported source_ref or
+    // fingerprint collide across scopes and patch the wrong one's row.
     const [seen, byRef] = await Promise.all([
-      existingFingerprints(dates[0], dates[dates.length - 1]),
-      refCol >= 0 ? existingBySourceRef(dates[0], dates[dates.length - 1]) : Promise.resolve(new Map<string, { id: number; amount_cents: number }>()),
+      existingFingerprints(dates[0], dates[dates.length - 1], importScope),
+      refCol >= 0
+        ? existingBySourceRef(dates[0], dates[dates.length - 1], importScope)
+        : Promise.resolve(new Map<string, { id: number; amount_cents: number; category?: string }>()),
     ])
 
     // Rows carrying a stable source_ref (#182038) are classified fresh / duplicate
@@ -1123,8 +1204,29 @@ const ImportCommand = cmd({
       return
     }
 
+    // Policy gate (#182097) — fetched ONCE for the whole import, not per row:
+    // this can be hundreds of rows, and each row's check only needs to
+    // re-evaluate against the same policy/categories/groups, not re-fetch
+    // them. `mint spend`'s force/violations plumbing (checkPolicyOrBlock)
+    // reused as-is; only the fetch-once-per-run part is new here.
+    const importPolicy = await fetchPolicy(importScope)
+    const importKnownCategories = importPolicy ? await declaredCategories(importScope) : []
+    const importGroups = importPolicy ? await fetchGroups(importScope) : []
+
     let ok = 0
+    let policyBlocked = 0
     for (const i of fresh) {
+      const draft = { amount_cents: centsOf(i), description: i.desc, category: args.category, scope: importScope }
+      const { blocked } = await checkPolicyOrBlock(importScope, draft, {
+        policy: importPolicy,
+        knownCategories: importKnownCategories,
+        groups: importGroups,
+        quiet: true,
+      })
+      if (blocked) {
+        policyBlocked++
+        continue
+      }
       const metadata: Record<string, any> = {
         scope: args.scope,
         fp: fingerprint(i.date, centsOf(i), i.desc),
@@ -1146,13 +1248,35 @@ const ImportCommand = cmd({
       if (res.ok) ok++
       else prompts.log.warn(`${i.date} ${fmtCents(centsOf(i))} failed (${res.status})`)
     }
+    if (policyBlocked > 0) {
+      prompts.log.warn(
+        `${policyBlocked} row(s) blocked by the spend policy for scope "${importScope}" — not imported. ` +
+          `Re-run with the offending rows fixed, relax the policy, or import to a different scope.`,
+      )
+    }
 
     // Corrections update the ONE row a revised source_ref belongs to — never a
     // second row — and every correction is audited with before/after so a
     // revised figure stays defensible (#182038).
     let corrected = 0
+    let correctionsPolicyBlocked = 0
     for (const i of corrections) {
       const before = byRef.get(i.ref!)!
+      // Policy check (#182097) — category comes from the EXISTING row
+      // (before.category), never args.category: a correction revises the
+      // amount, not the category, so checking against the row's real
+      // category is what "would this write still be allowed" actually means.
+      const draft = { amount_cents: centsOf(i), category: before.category, scope: importScope }
+      const { blocked } = await checkPolicyOrBlock(importScope, draft, {
+        policy: importPolicy,
+        knownCategories: importKnownCategories,
+        groups: importGroups,
+        quiet: true,
+      })
+      if (blocked) {
+        correctionsPolicyBlocked++
+        continue
+      }
       const res = await irisFetch(`/api/v1/atlas/transactions/${i.existingId}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -1176,6 +1300,12 @@ const ImportCommand = cmd({
       })
     }
 
+    if (correctionsPolicyBlocked > 0) {
+      prompts.log.warn(
+        `${correctionsPolicyBlocked} correction(s) blocked by the spend policy for scope "${importScope}" — the existing row's amount was NOT updated.`,
+      )
+    }
+
     await recordRun({
       kind: "import",
       scope: String(args.scope),
@@ -1186,7 +1316,10 @@ const ImportCommand = cmd({
       written: ok,
       duplicates: dupes,
       amount: total / 100,
-      notes: path.basename(file),
+      notes:
+        policyBlocked || correctionsPolicyBlocked
+          ? `${path.basename(file)} — ${policyBlocked + correctionsPolicyBlocked} row(s) policy-blocked`
+          : path.basename(file),
     })
     prompts.log.success(
       `Imported ${ok}/${fresh.length} new · corrected ${corrected}/${corrections.length} · ${fmtCents(total)} · scope=${args.scope}`,
@@ -1220,6 +1353,11 @@ const SplitCommand = cmd({
     y
       .positional("id", { type: "number", describe: "the transaction to split" })
       .option("into", { type: "string", demandOption: true, describe: "comma-separated label=amount pairs, in dollars" })
+      .option("force", {
+        type: "boolean",
+        default: false,
+        describe: "write despite a policy violation on a split line — the override is recorded on that line",
+      })
       .option("dry-run", { type: "boolean", default: false, describe: "show the plan, write nothing" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -1285,16 +1423,56 @@ const SplitCommand = cmd({
     const scope = parent?.metadata?.scope
     const splitOf = parent?.metadata?.source_ref ?? parent?.metadata?.fp ?? String(parent.id)
     const childIds: number[] = []
+
+    // Policy gate (#182097) — fetched once for all split lines, same reason
+    // as ImportCommand. An untagged parent (no scope) has no policy to check
+    // against, same as everywhere else scope drives enforcement in this file.
+    const splitPolicy = scope ? await fetchPolicy(String(scope)) : null
+    const splitKnownCategories = splitPolicy ? await declaredCategories(String(scope)) : []
+    const splitGroups = splitPolicy ? await fetchGroups(String(scope)) : []
+
     let ok = 0
+    let policyBlocked = 0
     for (const p of plan) {
+      const draft = {
+        amount_cents: p.cents,
+        description: `${parent.description ?? ""} — ${p.label}`,
+        category: p.label,
+        scope: scope ? String(scope) : undefined,
+      }
+      const { blocked, violations } = scope
+        ? await checkPolicyOrBlock(String(scope), draft, {
+            policy: splitPolicy,
+            knownCategories: splitKnownCategories,
+            groups: splitGroups,
+            force: args.force,
+          })
+        : { blocked: false, violations: [] as { code: string; message: string }[] }
+      if (blocked) {
+        policyBlocked++
+        continue
+      }
       const body: Record<string, any> = {
         type: parent.type ?? "expense",
         description: `${parent.description ?? ""} — ${p.label}`.slice(0, 500),
         amount_cents: p.cents,
         transaction_date: parent.transaction_date,
-        source: "split",
+        // NOT "split" — the server's source column only accepts
+        // manual,qb,stripe,invoice,import,barter (AtlasTransactionController
+        // validation) and rejects anything else with a 422, so every split
+        // has always failed on every child line since this command was
+        // written. The row's split provenance is already fully captured in
+        // metadata (split_of/split_parent_id); source doesn't need to
+        // duplicate it, and inventing an unlisted value here breaks the write.
+        source: "manual",
         category: p.label,
         metadata: { scope, split_of: splitOf, split_parent_id: parent.id },
+      }
+      // Same as `mint spend`: an out-of-policy line written with --force
+      // carries the override on the row, so it stays auditable after the fact.
+      if (violations.length > 0 && args.force) {
+        body.metadata.policy_override = violations.map((v) => v.code)
+        body.metadata.policy_overridden_at = new Date().toISOString()
       }
       const cres = await irisFetch(`/api/v1/atlas/transactions`, { method: "POST", body: JSON.stringify(body) })
       if (cres.ok) {
@@ -1317,7 +1495,8 @@ const SplitCommand = cmd({
     }
 
     if (ok !== plan.length) {
-      prompts.log.error(`Only ${ok}/${plan.length} split line(s) written — the parent was NOT marked split. Fix the failures and re-run.`)
+      const reason = policyBlocked > 0 ? ` (${policyBlocked} blocked by the spend policy — see above)` : ""
+      prompts.log.error(`Only ${ok}/${plan.length} split line(s) written${reason} — the parent was NOT marked split. Fix the failures and re-run.`)
       prompts.outro("Done")
       return
     }
@@ -2528,8 +2707,14 @@ const GroupSetCommand = cmd({
       prompts.log.error("Needs a key: iris mint group set food --add groceries")
       return prompts.outro("Done")
     }
+    const scopeStr = String(args.scope ?? DEFAULT_SCOPE)
 
-    const existing = (await fetchGroups()).find((g) => norm(g.key) === key)
+    // Scoped lookup (#182098): the old code searched every scope's groups for
+    // this key, so `group set food -s business ...` after `group set food -s
+    // personal ...` found the PERSONAL record, unioned its categories in, and
+    // relabelled it as business — silently deleting the personal group. A
+    // group in a different scope with the same key is a DIFFERENT group.
+    const existing = (await fetchGroupRecords(scopeStr)).find((g) => norm(g.key) === key)
     const cats = new Set((existing?.categories ?? []).map(norm).filter(Boolean))
     for (const c of (args.add ?? []).map(norm)) if (c) cats.add(c)
     for (const c of (args.remove ?? []).map(norm)) cats.delete(c)
@@ -2539,11 +2724,16 @@ const GroupSetCommand = cmd({
       key,
       name: args.name ?? existing?.name ?? args.key,
       categories,
-      scope: args.scope ?? existing?.scope ?? DEFAULT_SCOPE,
+      scope: scopeStr,
       active: args.inactive ? false : (existing?.active ?? true),
     }
 
-    const res = await upsertRecord("mint-groups", key, data)
+    // An existing record keeps whatever id it already has (upsert in place —
+    // nothing already stored under a bare key gets orphaned). A NEW group is
+    // written under a scope-qualified id so a same-named group in a different
+    // scope can never collide with it going forward.
+    const externalId = existing?.external_id ?? `${scopeStr}:${key}`
+    const res = await upsertRecord("mint-groups", externalId, data)
     const ok = await handleApiError(res, "Save group")
     if (!ok) return prompts.outro("Done")
 
@@ -2575,7 +2765,15 @@ const GroupRmCommand = cmd({
   command: "rm <key>",
   aliases: ["remove"],
   describe: "deactivate a spending group",
-  builder: (y) => y.positional("key", { type: "string" }).option("json", { type: "boolean", default: false }),
+  builder: (y) =>
+    y
+      .positional("key", { type: "string" })
+      .option("scope", {
+        alias: "s",
+        type: "string",
+        describe: "personal | business | client:<slug> — disambiguates a key shared across scopes (#182098)",
+      })
+      .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Mint Group")
@@ -2583,13 +2781,16 @@ const GroupRmCommand = cmd({
     if (!token) return prompts.outro("Done")
 
     const key = norm(args.key)
-    const existing = (await fetchGroups()).find((g) => norm(g.key) === key)
+    // Same-scope-first lookup as `group set` (#182098) — an unqualified key
+    // can only ever mean "the one in this scope", never "whichever scope's
+    // record happens to come back first".
+    const existing = (await fetchGroupRecords(args.scope)).find((g) => norm(g.key) === key)
     if (!existing) {
       if (args.json) {
-        await writeJson({ ok: false, key, reason: "not_found" })
+        await writeJson({ ok: false, key, reason: "not_found", scope: args.scope ?? null })
         return prompts.outro("Done")
       }
-      prompts.log.error(`No group "${key}"`)
+      prompts.log.error(`No group "${key}"${args.scope ? ` in scope "${args.scope}"` : ""}`)
       return prompts.outro("Done")
     }
 
@@ -2610,12 +2811,13 @@ const GroupRmCommand = cmd({
       return prompts.outro("Done")
     }
 
-    const res = await upsertRecord("mint-groups", key, { ...existing, active: false })
+    const { external_id, ...existingData } = existing
+    const res = await upsertRecord("mint-groups", external_id, { ...existingData, active: false })
     const ok = await handleApiError(res, "Deactivate group")
     if (!ok) return prompts.outro("Done")
     await audit({ action: "delete", entity: "mint-group", after: key, ok: true })
     if (args.json) {
-      await writeJson({ ok: true, key, active: false })
+      await writeJson({ ok: true, key, scope: args.scope ?? null, active: false })
       return prompts.outro("Done")
     }
     prompts.log.success(`Group "${key}" deactivated`)

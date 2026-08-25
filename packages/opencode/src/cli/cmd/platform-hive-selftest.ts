@@ -96,6 +96,8 @@ async function runOnce(userId: number, nodeId: string, nodeName: string, timeout
 
   const mapped = fromHiveTask(final)
   const observed: RoundTripObserved = {
+    executedByNodeId: final?.metadata?.executed_by_node_id ?? null,
+    executedByNodeName: final?.metadata?.executed_by_node_name ?? null,
     stdout: mapped.stdout ?? "",
     stderr: mapped.stderr ?? "",
     reportedExit: mapped.exit_code ?? null,
@@ -106,7 +108,7 @@ async function runOnce(userId: number, nodeId: string, nodeName: string, timeout
   }
 
   const assertions = assessRoundTrip(
-    { stdoutMarker, stderrMarker, exitCode: EXIT_CODE, expectedMs: SLEEP_MS },
+    { stdoutMarker, stderrMarker, exitCode: EXIT_CODE, expectedMs: SLEEP_MS, targetNodeId: nodeId, targetNodeName: nodeName },
     observed,
   )
   return { node: nodeName, ok: summarise(assertions).ok, assertions, taskId }
@@ -149,7 +151,12 @@ const HiveSelftestCommand = cmd({
       if (argv.json) {
         await writeJson({ ok: false, skipped: true, reason: msg, nodes: [] })
       } else {
-        console.log()
+        // FULL task id, not the first 8 characters. Task ids are UUIDv7 — time-ordered, so
+      // runs a second apart share a leading prefix. Three consecutive selftests printed the
+      // same truncated id and read as one cached result; they were three distinct tasks. That
+      // is the same truncated-uuid mistake that produced a wrong high-severity diagnosis in
+      // #182312, reproduced here by the tool built to catch exactly this class of defect.
+      console.log()
         console.log(`  ${bold(msg)}`)
         console.log()
       }
@@ -172,7 +179,7 @@ const HiveSelftestCommand = cmd({
     console.log()
     for (const r of reports) {
       const s = summarise(r.assertions)
-      console.log(`${r.ok ? success("✓") : dim("✗")} ${bold(r.node)}  ${dim(`${s.passed}/${r.assertions.length} assertions`)}${r.taskId ? dim(`  task ${r.taskId.slice(0, 8)}`) : ""}`)
+      console.log(`${r.ok ? success("✓") : dim("✗")} ${bold(r.node)}  ${dim(`${s.passed}/${r.assertions.length} assertions`)}${r.taskId ? dim(`  task ${r.taskId}`) : ""}`)
       if (r.skipped) console.log(`    ${r.skipped}`)
       for (const a of r.assertions) {
         const mark = a.pass ? success("  ✓") : dim("  ✗")

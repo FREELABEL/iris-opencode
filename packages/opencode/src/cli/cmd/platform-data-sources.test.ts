@@ -7,6 +7,11 @@ import {
   parseAbstention,
   stringifySource,
   groupTypesByCategory,
+  normalizeSourceType,
+  isBulkIngestable,
+  pickEnumerator,
+  surveySources,
+  countItems,
 } from "./platform-data-sources"
 
 // ---------------------------------------------------------------------------
@@ -159,4 +164,143 @@ test("groupTypesByCategory: tolerates empty/odd input without throwing", () => {
 test("groupTypesByCategory: falls back to 'other' category and type-as-name", () => {
   const grouped = groupTypesByCategory({ weird: { oauth_required: false } })
   expect(grouped.other[0]).toEqual({ type: "weird", name: "weird", oauth: false })
+})
+
+// ---------------------------------------------------------------------------
+// survey — normalizeSourceType / isBulkIngestable
+// ---------------------------------------------------------------------------
+
+test("normalizeSourceType: folds the underscore/hyphen split the CLI has with itself", () => {
+  // `sync` takes google_drive; `read`/`connect`/the availability list take google-drive.
+  expect(normalizeSourceType("google_drive")).toBe("google-drive")
+  expect(normalizeSourceType("google-drive")).toBe("google-drive")
+  expect(normalizeSourceType("Google Drive")).toBe("google-drive")
+  expect(normalizeSourceType("  GOOGLE_DRIVE ")).toBe("google-drive")
+})
+
+test("normalizeSourceType: survives null/undefined without throwing", () => {
+  expect(normalizeSourceType(null)).toBe("")
+  expect(normalizeSourceType(undefined)).toBe("")
+})
+
+test("isBulkIngestable: true for both spellings of the two supported types", () => {
+  expect(isBulkIngestable("google_drive")).toBe(true)
+  expect(isBulkIngestable("google-drive")).toBe(true)
+  expect(isBulkIngestable("dropbox")).toBe(true)
+})
+
+test("isBulkIngestable: false for connected-but-not-importable sources", () => {
+  // The distinction survey exists to make: these are readable, not bulk-ingestable.
+  for (const t of ["gmail", "obsidian", "slack", "google-calendar", "imessage-bridge"]) {
+    expect(isBulkIngestable(t)).toBe(false)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// survey — pickEnumerator
+// ---------------------------------------------------------------------------
+
+test("pickEnumerator: prefers list_files over a search_ that would demand a query", () => {
+  // Verified live: google-drive search_files -> "Missing required parameters: query".
+  const fns = [{ name: "search_files" }, { name: "list_files" }, { name: "download" }]
+  expect(pickEnumerator(fns)).toBe("list_files")
+})
+
+test("pickEnumerator: falls back to a search_ function when nothing lists", () => {
+  expect(pickEnumerator([{ name: "search_emails" }, { name: "send_email" }])).toBe("search_emails")
+})
+
+test("pickEnumerator: accepts bare strings as well as {name} objects", () => {
+  expect(pickEnumerator(["send_message", "list_conversations"])).toBe("list_conversations")
+})
+
+test("pickEnumerator: returns null when a source cannot enumerate at all", () => {
+  expect(pickEnumerator([{ name: "send_email" }, { name: "create_event" }])).toBeNull()
+  expect(pickEnumerator([])).toBeNull()
+  expect(pickEnumerator(undefined)).toBeNull()
+})
+
+// ---------------------------------------------------------------------------
+// survey — surveySources (the merge that catches the real bug)
+// ---------------------------------------------------------------------------
+
+test("surveySources: flags a source that is CONNECTED but absent from the availability list", () => {
+  // Reproduces the live 2026-08-24 defect exactly: google-drive had three working
+  // connections and executed list_files fine, while being entirely missing from
+  // GET /bloqs/{id}/data-sources. Reading either surface alone reports something false.
+  const available = [{ type: "gmail", name: "Gmail", functions: [{ name: "search_emails" }] }]
+  const connections = [
+    { type: "google-drive", account_email: "alex@freelabel.net" },
+    { type: "google-drive", account_email: "amayo@mypathwaysai.com" },
+  ]
+  const out = surveySources(available, connections)
+
+  const drive = out.find((s) => normalizeSourceType(s.type) === "google-drive")!
+  expect(drive.hiddenButConnected).toBe(true)
+  expect(drive.connected).toBe(true)
+  expect(drive.listed).toBe(false)
+  expect(drive.bulkIngestable).toBe(true)
+  expect(drive.accounts).toEqual(["alex@freelabel.net", "amayo@mypathwaysai.com"])
+
+  // And the hidden one sorts first — it is the reason to run the command.
+  expect(normalizeSourceType(out[0].type)).toBe("google-drive")
+})
+
+test("surveySources: a listed source with no connection is NOT flagged as hidden", () => {
+  const out = surveySources([{ type: "gmail", name: "Gmail", functions: [] }], [])
+  expect(out[0].listed).toBe(true)
+  expect(out[0].connected).toBe(false)
+  expect(out[0].hiddenButConnected).toBe(false)
+})
+
+test("surveySources: joins the two surfaces across the underscore/hyphen spelling split", () => {
+  // The availability list says google-drive; the connections list says google_drive.
+  // A naive string compare would double-count these and report a phantom hidden source.
+  const out = surveySources(
+    [{ type: "google-drive", name: "Google Drive", functions: [{ name: "list_files" }] }],
+    [{ type: "google_drive", account_email: "alex@freelabel.net" }],
+  )
+  expect(out).toHaveLength(1)
+  expect(out[0].listed).toBe(true)
+  expect(out[0].connected).toBe(true)
+  expect(out[0].hiddenButConnected).toBe(false)
+  expect(out[0].enumerator).toBe("list_files")
+})
+
+test("surveySources: dedupes multiple accounts of one type into a single row", () => {
+  const out = surveySources(
+    [{ type: "google-drive", name: "Google Drive", functions: [] }],
+    [
+      { type: "google-drive", account_email: "a@x.com" },
+      { type: "google-drive", account_email: "a@x.com" },
+      { type: "google-drive", account_email: "b@x.com" },
+    ],
+  )
+  expect(out).toHaveLength(1)
+  expect(out[0].accounts).toEqual(["a@x.com", "b@x.com"])
+})
+
+test("surveySources: tolerates empty/garbage input rather than throwing", () => {
+  expect(surveySources([], [])).toEqual([])
+  expect(surveySources(null as any, undefined as any)).toEqual([])
+  expect(surveySources([{ name: "no type field" }], [])).toEqual([])
+})
+
+// ---------------------------------------------------------------------------
+// survey — countItems
+// ---------------------------------------------------------------------------
+
+test("countItems: finds the record array under whichever key the provider used", () => {
+  expect(countItems({ files: [1, 2, 3] })).toBe(3)
+  expect(countItems({ data: { items: [1, 2] } })).toBe(2)
+  expect(countItems({ result: { entries: [] } })).toBe(0)
+  expect(countItems([1, 2, 3, 4])).toBe(4)
+})
+
+test("countItems: returns null (not 0) when there is no array to count", () => {
+  // null means "could not count"; 0 means "counted, and it was empty". Collapsing
+  // them would report an unreachable source as an empty one.
+  expect(countItems({ ok: true })).toBeNull()
+  expect(countItems(null)).toBeNull()
+  expect(countItems("a string")).toBeNull()
 })

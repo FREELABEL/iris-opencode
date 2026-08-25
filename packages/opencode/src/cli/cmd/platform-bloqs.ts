@@ -3218,6 +3218,14 @@ const BloqsUpdateItemCommand = cmd({
         type: "array",
       })
       .option("due", { describe: "due date (ISO, e.g. 2026-07-22; 'none' to clear)", type: "string" })
+      // MOVE. The API has accepted `bloq_id` and `bloq_list_id` on this endpoint for a while —
+      // its own comment says there was no way to move an item "at any layer, not the CLI, not
+      // the API", so the only way to file something in the right place after the fact was to
+      // RECREATE it. That changes the item id, which breaks every cross-reference and every
+      // public share URL pointing at it. The capability existed; only these two flags were
+      // missing.
+      .option("to-bloq", { describe: "move the item to this bloq (keeps its id, and its public URL)", type: "number" })
+      .option("to-list", { describe: "move the item to this list (id)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -3231,6 +3239,10 @@ const BloqsUpdateItemCommand = cmd({
     if (args.status) payload.status = normalizeItemStatus(args.status)
     if (args.title) payload.title = args.title
     if (args.content) payload.content = args.content
+    // A move keeps the item id, so its /n/<uuid> public URL keeps working — which is the whole
+    // reason to move rather than recreate.
+    if (args["to-bloq"] !== undefined) payload.bloq_id = Number(args["to-bloq"])
+    if (args["to-list"] !== undefined) payload.bloq_list_id = Number(args["to-list"])
     if (args.due !== undefined && args.due !== "") {
       // Allow clearing the due date explicitly.
       if (String(args.due).toLowerCase() === "none" || String(args.due).toLowerCase() === "null") {

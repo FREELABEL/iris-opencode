@@ -138,3 +138,52 @@ describe("assessRoundTrip — failures that must not be laundered into passes", 
     expect(byId(a, "streams-separated").pass).toBe(false)
   })
 })
+
+/**
+ * The task must run on the machine it was addressed to (#182312).
+ *
+ * MEASURED 2026-08-24: `iris hive selftest MacBookPro` placed a task on MacBookPro and it
+ * executed on a different machine — MacBookPro had no files for it; the other node's log did.
+ * Three consecutive runs scored 6/8, 0/1 and 4/8, and at least two of those numbers described
+ * different computers.
+ *
+ * This assertion is emitted FIRST on purpose: every other assertion is about a machine, and if
+ * this one fails they are all describing the wrong one.
+ */
+describe("ran-on-the-targeted-node", () => {
+  const EXPECT_T = { ...EXPECT, targetNodeId: "node-A", targetNodeName: "MacBookPro" }
+  const byId = (as: ReturnType<typeof assessRoundTrip>, id: string) => as.find((a) => a.id === id)
+
+  test("passes when the executing node matches the target", () => {
+    const a = assessRoundTrip(EXPECT_T, { ...WORKING, executedByNodeId: "node-A", executedByNodeName: "MacBookPro" })
+    expect(byId(a, "ran-on-the-targeted-node")!.pass).toBe(true)
+  })
+
+  test("FAILS when it ran somewhere else, and names both machines", () => {
+    const a = assessRoundTrip(EXPECT_T, { ...WORKING, executedByNodeId: "node-B", executedByNodeName: "AlexMaysnow1063" })
+    const x = byId(a, "ran-on-the-targeted-node")!
+    expect(x.pass).toBe(false)
+    expect(x.detail).toContain("MacBookPro")
+    expect(x.detail).toContain("AlexMaysnow1063")
+    expect(x.knownIssue).toContain("#182312")
+  })
+
+  test("a result that does not say which machine ran it is a FAILURE, not a pass", () => {
+    // Silence here is the pre-fix state. Treating it as "probably fine" is what let three
+    // scores describe two computers.
+    const a = assessRoundTrip(EXPECT_T, { ...WORKING, executedByNodeId: null })
+    const x = byId(a, "ran-on-the-targeted-node")!
+    expect(x.pass).toBe(false)
+    expect(x.detail).toContain("UNKNOWN")
+  })
+
+  test("it is asserted FIRST — the other assertions are meaningless if it fails", () => {
+    const a = assessRoundTrip(EXPECT_T, WORKING)
+    expect(a[0].id).toBe("ran-on-the-targeted-node")
+  })
+
+  test("omitted when no target was supplied, so old callers do not gain a phantom failure", () => {
+    const a = assessRoundTrip(EXPECT, WORKING)
+    expect(byId(a, "ran-on-the-targeted-node")).toBeUndefined()
+  })
+})

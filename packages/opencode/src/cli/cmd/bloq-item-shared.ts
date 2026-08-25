@@ -20,6 +20,8 @@ async function unwrap(res: Response): Promise<any> {
 export interface ShareOptions {
   password?: string
   expires?: string // ISO date/time, or e.g. "30d" handled server-side via expires_at
+  allowedEmails?: string[] // gate the link to these named, address-verified emails
+  allowedDomains?: string[] // gate the link to these bare domains
 }
 
 export async function apiMakePublic(
@@ -30,6 +32,8 @@ export async function apiMakePublic(
   const payload: Record<string, unknown> = {}
   if (opts.password) payload.password = opts.password
   if (opts.expires) payload.expires_at = opts.expires
+  if (opts.allowedEmails?.length) payload.allowed_emails = opts.allowedEmails
+  if (opts.allowedDomains?.length) payload.allowed_domains = opts.allowedDomains
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/item/${itemId}/make-public`, {
     method: "POST",
     body: JSON.stringify(payload),
@@ -682,6 +686,8 @@ export interface ItemActionArgs {
   "item-id": number
   password?: string
   expires?: string
+  "allowed-emails"?: string[]
+  "allowed-domains"?: string[]
   json?: boolean
   "user-id"?: number
 }
@@ -696,7 +702,12 @@ export async function executeMakePublic(args: ItemActionArgs): Promise<void> {
 
   const spinner = json ? null : prompts.spinner()
   spinner?.start("Making item public…")
-  const pub = await apiMakePublic(userId, args["item-id"], { password: args.password, expires: args.expires })
+  const pub = await apiMakePublic(userId, args["item-id"], {
+    password: args.password,
+    expires: args.expires,
+    allowedEmails: args["allowed-emails"],
+    allowedDomains: args["allowed-domains"],
+  })
   if (!pub) { spinner?.stop("Failed", 1); if (json) console.log(JSON.stringify({ success: false })); else prompts.outro("Done"); return }
 
   if (json) { console.log(JSON.stringify({ success: true, ...pub, is_public: true })); return }

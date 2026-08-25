@@ -3,11 +3,30 @@ import * as prompts from "./clack"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, writeJson } from "./iris-api"
 import { resolveNode } from "./platform-hive-nodes"
 import { existsSync, writeFileSync, readFileSync } from "fs"
+import { createHash } from "crypto"
 
 // User scripts live on the IRIS API (fl-iris-api), not fl-api.
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
 function scriptsFetch(path: string, options: RequestInit = {}) {
   return irisFetch(path, options, IRIS_API)
+}
+
+/**
+ * The content hash IS the script's identity.
+ *
+ * Sending it with the dispatch is what makes a stale cache impossible rather than merely
+ * unlikely. The daemon used to cache by SLUG — a mutable name — and reuse that copy forever
+ * with no version, hash, ETag or TTL (#182275), so pushing a fix changed nothing on any node
+ * that had already run the slug once. Two machines, same slug, different code, both reporting
+ * success.
+ *
+ * The fix is not to add revalidation on top of a slug-keyed cache. It is to stop keying on a
+ * mutable name: a different version is a different hash is a different file, so "which version
+ * does this node hold" stops being a question anyone can get wrong. Verification comes free —
+ * the address and the checksum are the same value (#182276).
+ */
+export function scriptDigest(content: string): string {
+  return createHash("sha256").update(content, "utf-8").digest("hex")
 }
 
 function inferRuntime(file: string): string {
@@ -141,7 +160,28 @@ const RunCmd = cmd({
     }
 
     const timeoutSec = Math.max(30, Math.min(3600, Number(args.timeout) || 120))
-    if (!args.json) console.log(`${dim("→")} dispatching ${bold(String(args.slug))} to ${bold(node.name)}`)
+
+    // Resolve the slug to a CONTENT HASH before dispatching, and send that with the task. The
+    // node then runs exactly this version or refuses — it never has to guess whether the copy
+    // it cached weeks ago is still current. Non-fatal: an older API or a transient failure
+    // just means no digest, and the daemon falls back to its previous behaviour while saying
+    // the run was unverified.
+    let digest: string | null = null
+    try {
+      const meta = await scriptsFetch(`/api/v1/scripts/${encodeURIComponent(String(args.slug))}`)
+      if (meta.ok) {
+        const body = (await meta.json()) as { data?: { script_content?: string } }
+        const content = body.data?.script_content
+        if (typeof content === "string") digest = scriptDigest(content)
+      }
+    } catch { /* leave digest null — reported below rather than silently assumed */ }
+
+    if (!args.json) {
+      console.log(`${dim("→")} dispatching ${bold(String(args.slug))} to ${bold(node.name)}`)
+      console.log(digest
+        ? dim(`   sha256 ${digest.slice(0, 12)}… — the node runs this exact version or refuses`)
+        : dim("   could not resolve a content hash — this run will be UNVERIFIED"))
+    }
 
     const createRes = await scriptsFetch("/api/v6/nodes/tasks", {
       method: "POST",
@@ -151,7 +191,7 @@ const RunCmd = cmd({
         type: "user_script",
         node_id: node.id,
         prompt: String(args.slug), // also the slug — the daemon reads config.script_slug ?? prompt
-        config: { script_slug: args.slug },
+        config: { script_slug: args.slug, ...(digest ? { script_sha256: digest } : {}) },
         timeout_seconds: timeoutSec,
       }),
     })

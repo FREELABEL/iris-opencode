@@ -1,3 +1,4 @@
+import { describeListScope } from "./leads-scope"
 import { cmd } from "./cmd"
 import { PulseCheckCommand } from "./platform-pulse-check"
 import { productCommand } from "./product-command"
@@ -341,11 +342,10 @@ const LeadsListCommand = cmd({
       // used as a measurement instrument and the funnel KPIs computed from it were wrong
       // in the FLATTERING direction — a truncated sample of WORKED leads looks like a
       // healthy funnel precisely because the unworked ones are what is missing.
-      const truncated = totalFromApi > leads.length
-      const notes: string[] = []
-      if (prospectedCount > 0) notes.push(`${prospectedCount} Prospected hidden — use --all`)
-      if (truncated) notes.push(`newest ${leads.length} of ${totalFromApi}`)
-      const suffix = notes.length ? dim(` (${notes.join(" · ")})`) : ""
+      // Reporting lives in leads-scope.ts so it can be tested — it is the part that failed.
+      const scope = describeListScope({ shown: leads.length, total: totalFromApi, prospectedHidden: prospectedCount })
+      const truncated = scope.truncated
+      const suffix = scope.notes.length ? dim(` (${scope.notes.join(" · ")})`) : ""
 
       if (args.search && truncated) {
         spinner.stop(`Showing ${leads.length} of ${totalFromApi} results for "${args.search}"`)
@@ -358,11 +358,7 @@ const LeadsListCommand = cmd({
         // STDERR — it reaches a human or an agent without corrupting piped stdout. A
         // silent truncation in JSON is the exact failure this fix exists for.
         if (truncated || prospectedCount > 0) {
-          const warn: string[] = []
-          if (truncated) warn.push(`TRUNCATED: newest ${leads.length} of ${totalFromApi} by id`)
-          if (prospectedCount > 0) warn.push(`FILTERED: ${prospectedCount} Prospected hidden (pass --all)`)
-          warn.push("This is a page, not a population — do not compute rates from it.")
-          process.stderr.write(warn.map((w) => `[leads list] ${w}`).join("\n") + "\n")
+          process.stderr.write(scope.warnings.map((w) => `[leads list] ${w}`).join("\n") + "\n")
         }
         await writeJson(leads)
         return

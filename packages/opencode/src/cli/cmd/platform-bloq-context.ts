@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
+import { resolveRevenueModel, partitionByModel, listRevenueModels, isKnownRevenueModel } from "./revenue-models"
 
 // ============================================================================
 // Bloq Context CLI — Andrew "Esher" Usher's hierarchy:
@@ -318,21 +319,84 @@ function makeListGroup(opts: {
     command: "list <bloqId>",
     aliases: ["ls"],
     describe: `list ${listKey} on a bloq`,
-    builder: (y) => y.positional("bloqId", { type: "number", demandOption: true }).option("user-id", { type: "number" }),
+    builder: (y) => {
+      let b = y.positional("bloqId", { type: "number", demandOption: true }).option("user-id", { type: "number" })
+      if (listKey === "kpis") {
+        b = b
+          .option("model", {
+            type: "string",
+            describe: "preview under a different revenue-model profile without changing the bloq (RO-7 #182271)",
+          })
+          .option("all", { type: "boolean", default: false, describe: "show KPIs from every profile, not just the active one" })
+      }
+      return b
+    },
     async handler(args) {
       UI.empty()
       prompts.intro(`◈  bloq ${listKey} for #${args.bloqId}`)
       const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
       const ctx = await getContext(args.bloqId)
       if (ctx == null) { prompts.outro("Done"); return }
-      const items: any[] = ctx.business_context?.[listKey] ?? []
+      let items: any[] = ctx.business_context?.[listKey] ?? []
+
+      // ── Revenue-model profile (RO-7 #182271) ────────────────────────────────
+      // KPIs are the one list whose MEANING depends on the revenue model: "win rate"
+      // and "clean claim rate" are the same computation over different nouns. Filter
+      // to the active profile, and ALWAYS say which profile answered — an unstated
+      // instrument is the defect this whole layer exists to avoid.
+      let modelBanner: string | null = null
+      let hiddenCount = 0
+      if (listKey === "kpis") {
+        const override = args.model ? String(args.model) : null
+        if (override && !isKnownRevenueModel(override)) {
+          prompts.log.error(
+            `Unknown revenue model "${override}". Known: ${listRevenueModels().map((m) => m.key).join(", ")}`,
+          )
+          prompts.outro("Done")
+          return
+        }
+        const resolved = resolveRevenueModel(
+          override ? { revenue_model: override } : ctx.business_context,
+        )
+        const p = resolved.profile
+
+        if (resolved.unknown) {
+          // Declared but not a profile we ship. Say so loudly rather than silently
+          // falling back — a typo in the key would otherwise read as a deliberate choice.
+          prompts.log.error(
+            `business_context.revenue_model is "${resolved.rawValue}", which is not a known profile — falling back to ${p.key}. Known: ${listRevenueModels().map((m) => m.key).join(", ")}`,
+          )
+        }
+
+        const origin = override
+          ? "preview via --model"
+          : resolved.declared
+            ? "declared on this bloq"
+            : "DEFAULT — not declared on this bloq"
+        modelBanner =
+          `${bold(p.label)} ${dim(`(${p.key})`)}  ${dim(`· ${origin}`)}\n` +
+          `    ${dim(`${p.workItem} → ${p.terminalPaid} / ${p.terminalUnpaid}  ·  why: ${p.reasonTaxonomy}  ·  recover: ${p.recovery}`)}\n` +
+          `    ${dim(`cycle: ${p.cycleMetric.name}  ·  efficiency: ${p.costRatio.name}`)}`
+
+        if (!args.all) {
+          const split = partitionByModel(items, p.key)
+          items = split.active
+          hiddenCount = split.hidden.length
+        }
+      }
 
       if (items.length === 0) {
-        prompts.log.warn(`No ${listKey} yet`)
+        if (modelBanner) prompts.log.info(modelBanner)
+        prompts.log.warn(
+          hiddenCount > 0
+            ? `No ${listKey} apply to this profile (${hiddenCount} belong to other profiles — see --all)`
+            : `No ${listKey} yet`,
+        )
         prompts.outro(dim(`iris bloq ${cmdName} add ${args.bloqId} ...`))
         return
       }
 
+      if (modelBanner) prompts.log.info(modelBanner)
       printDivider()
       for (const it of items) {
         const status = it.status ?? it.stage ?? ""
@@ -350,6 +414,11 @@ function makeListGroup(opts: {
         if (extras.length > 0) console.log("    " + dim(extras.join("  ")))
       }
       printDivider()
+      if (hiddenCount > 0) {
+        console.log(
+          "  " + dim(`${hiddenCount} KPI(s) belong to other revenue-model profiles — see them with --all`),
+        )
+      }
       prompts.outro(dim(`v${ctx.version}`))
     },
   })
@@ -365,6 +434,14 @@ function makeListGroup(opts: {
         .option("name", { type: "string" })
         .option("status", { type: "string" })
         .option("user-id", { type: "number" })
+      if (listKey === "kpis") {
+        b = b.option("applies-to", {
+          type: "array",
+          string: true,
+          describe:
+            "revenue-model profiles this KPI applies to (RO-7 #182271). Omit = applies to every profile.",
+        })
+      }
       if (listKey === "goals") {
         b = b
           .option("target", { type: "string" })
@@ -598,6 +675,11 @@ const KpisGroup = makeListGroup({
     // "measured and on track" from "measured and slipping" from "not measured at all",
     // which is the distinction the whole layer exists to carry.
     if (args.status) item.status = args.status
+    // RO-7 (#182271). Absent means "applies to every profile" — see kpiAppliesTo. Stored
+    // lowercase so the read path never has to guess at casing.
+    if (args["applies-to"]?.length) {
+      item.applies_to = (args["applies-to"] as string[]).map((v) => String(v).trim().toLowerCase()).filter(Boolean)
+    }
     return item
   },
 })
@@ -636,6 +718,65 @@ const ContextGroup = cmd({
   async handler() {},
 })
 
+/**
+ * `iris bloq models` — the declared revenue-model profiles (RO-7 #182271).
+ *
+ * Exists so the profiles are DISCOVERABLE. A capability nobody can find is one nobody uses,
+ * and the point of this layer is that switching model is a config value rather than tribal
+ * knowledge about a JSON key.
+ */
+const RevenueModelsCmd = cmd({
+  command: "models [bloqId]",
+  aliases: ["revenue-models"],
+  describe: "list revenue-model profiles, and show which one a bloq is running",
+  builder: (y) =>
+    y
+      .positional("bloqId", { type: "number", describe: "optional — show the active profile for this bloq" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Revenue-model profiles")
+    const models = listRevenueModels()
+
+    if (args.json && args.bloqId == null) {
+      await writeJson(models)
+      return
+    }
+
+    if (args.bloqId != null) {
+      const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+      const ctx = await getContext(args.bloqId as number)
+      if (ctx == null) { prompts.outro("Done"); return }
+      const r = resolveRevenueModel(ctx.business_context)
+      if (args.json) { await writeJson({ bloqId: args.bloqId, ...r }); return }
+      if (r.unknown) {
+        prompts.log.error(`revenue_model is "${r.rawValue}" — not a known profile. Falling back to ${r.profile.key}.`)
+      }
+      const origin = r.declared ? "declared" : "DEFAULT — not declared on this bloq"
+      prompts.log.info(`bloq #${args.bloqId} → ${bold(r.profile.label)} ${dim(`(${r.profile.key}) · ${origin}`)}`)
+      if (!r.declared && !r.unknown) {
+        console.log("  " + dim(`Set it:  iris bloq context set ${args.bloqId} revenue_model <key>`))
+      }
+      console.log()
+    }
+
+    printDivider()
+    for (const m of models) {
+      console.log(`  ${bold(m.label)} ${dim(`(${m.key})`)}`)
+      console.log(`    ${dim(m.whenToUse)}`)
+      console.log(
+        `    ${dim(`${m.workItem} → ${m.terminalPaid} / ${m.terminalUnpaid}  ·  why: ${m.reasonTaxonomy}  ·  recover: ${m.recovery}`)}`,
+      )
+      console.log(
+        `    ${dim(`cycle: ${m.cycleMetric.name}  ·  efficiency: ${m.costRatio.name} = ${m.costRatio.num} / ${m.costRatio.den}`)}`,
+      )
+      console.log()
+    }
+    printDivider()
+    prompts.outro(dim("RO-7 #182271 · preview with: iris bloq kpis list <bloqId> --model <key>"))
+  },
+})
+
 export const PlatformBloqContextCommand = cmd({
   command: "bloq",
   describe: "Andrew's hierarchy: purpose, strategies, goals, kpis, deals",
@@ -648,6 +789,7 @@ export const PlatformBloqContextCommand = cmd({
       .command(StrategiesGroup)
       .command(GoalsGroup)
       .command(KpisGroup)
+      .command(RevenueModelsCmd)
       .command(DealsGroup)
       .demandCommand(),
   async handler() {},

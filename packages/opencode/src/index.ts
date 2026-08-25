@@ -49,6 +49,7 @@ import { PlatformLinkedInCommand } from "./cli/cmd/platform-linkedin"
 import { PlatformBloqContextCommand } from "./cli/cmd/platform-bloq-context"
 import { PlatformAtlasLedgerCommand } from "./cli/cmd/platform-atlas-ledger"
 import { PlatformMintCommand } from "./cli/cmd/platform-mint"
+import { PlatformOkrCommand } from "./cli/cmd/platform-okr"
 import { PlatformAtlasStaffCommand } from "./cli/cmd/platform-atlas-staff"
 import { PlatformAtlasInventoryCommand } from "./cli/cmd/platform-atlas-inventory"
 import { PlatformAtlasDatasetsCommand } from "./cli/cmd/platform-atlas-datasets"
@@ -309,6 +310,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformBloqContextCommand))
   .command(reg(PlatformAtlasLedgerCommand))
   .command(reg(PlatformMintCommand))
+  .command(reg(PlatformOkrCommand))
   .command(reg(PlatformAtlasStaffCommand))
   .command(reg(PlatformAtlasInventoryCommand))
   .command(reg(PlatformAtlasDatasetsCommand))

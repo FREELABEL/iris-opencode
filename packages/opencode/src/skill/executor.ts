@@ -24,7 +24,7 @@ export interface ArgDef {
 export interface StepDef {
   id: string
   title: string
-  mode: "shell" | "prompt" | "ai" | "hive" | "hive-script" | "skill" | "playbook" | "human" | "manual" | "cloud-workflow" | "cloud-agentic" | "n8n" | "langgraph" | "schedule"
+  mode: "shell" | "prompt" | "ai" | "hive" | "hive-script" | "skill" | "playbook" | "human" | "agent" | "manual" | "cloud-workflow" | "cloud-agentic" | "n8n" | "langgraph" | "schedule"
   body: string
   code: string | null
   confirm: boolean
@@ -50,6 +50,19 @@ export interface StepDef {
 export interface SkillPlan {
   name: string
   version: 1 | 2
+  /**
+   * The `version` exactly as written in frontmatter, before coercion to 1|2.
+   * `version` above silently becomes 1 for anything that is not exactly 2, which
+   * makes an authoring typo ("version: 3") indistinguishable from a genuine v1
+   * playbook. Keep the raw value so validation can tell those two apart.
+   */
+  declaredVersion?: unknown
+  /**
+   * How many `### step:` blocks exist in the body, regardless of `version`.
+   * A non-2 version parses `steps` as [] — so without this a mis-versioned
+   * playbook looks identical to one that legitimately has no steps.
+   */
+  bodyStepCount?: number
   description: string
   args: Record<string, ArgDef>
   steps: StepDef[]
@@ -228,8 +241,11 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
     }
   }
 
-  // Parse steps from markdown body
-  const steps = version === 2 ? parseSteps(md.content) : []
+  // Parse steps from markdown body.
+  // Parse unconditionally so a mis-versioned playbook can be told apart from one
+  // that genuinely has no steps; only EXPOSE them as executable steps on v2.
+  const bodySteps = parseSteps(md.content)
+  const steps = version === 2 ? bodySteps : []
 
   // Freeform vertical/industry tags — no fixed taxonomy, so accept a single string too.
   const industries = Array.isArray(fm.industries)
@@ -241,6 +257,8 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
   return {
     name: fm.name ?? skillInfo.name,
     version,
+    declaredVersion: fm.version,
+    bodyStepCount: bodySteps.length,
     description: fm.description ?? skillInfo.description,
     args,
     steps,
@@ -1495,6 +1513,11 @@ export async function executeSkill(
         }
 
         case "human":
+        // Same runtime behaviour as human/manual — print the instruction, wait for a
+        // person to confirm. Listed explicitly so a reader can see that a drafted
+        // playbook's steps are deliberately not executed, rather than discovering it
+        // by tracing a fall-through.
+        case "agent":
         case "manual":
         default: {
           // Print instructions, wait for user to confirm done
@@ -1591,6 +1614,22 @@ export interface ValidationIssue {
   stepId?: string
 }
 
+// Mirrors StepDef["mode"] exactly. `meta.mode` is read as a bare string at parse time (never
+// validated against the union), so a typo like "agent" (meant "ai") is accepted silently and
+// falls into the executor's `default:` case — same behavior as an undeclared manual step.
+const KNOWN_STEP_MODES: ReadonlySet<string> = new Set([
+  "shell", "prompt", "ai", "hive", "hive-script", "skill", "playbook",
+  // `agent` is what the server's WalkthroughStructurer emits for EVERY step of a
+  // drafted playbook, deliberately: a step drafted by a model from audio must not be
+  // executable on sight ("bare push" was transcribed as "bear push" on a real
+  // recording), so promoting one to `shell` is a human edit where someone takes
+  // responsibility for what runs. It behaved correctly only by accident — it was
+  // never in this union, so it fell through the executor's `default:` to manual.
+  // Declaring it keeps that behaviour, and stops validation crying wolf on every
+  // playbook the platform's own drafter produces.
+  "human", "agent", "manual", "cloud-workflow", "cloud-agentic", "n8n", "langgraph", "schedule",
+])
+
 export function validatePlan(plan: SkillPlan): ValidationIssue[] {
   const issues: ValidationIssue[] = []
 
@@ -1599,6 +1638,27 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
 
   if (plan.version === 2 && plan.steps.length === 0) {
     issues.push({ level: "warning", message: "v2 skill has no steps defined" })
+  }
+
+  // The version-coercion trap. `parsePlan` collapses any frontmatter `version`
+  // that is not EXACTLY 2 down to 1, and a v1 plan parses zero steps — so
+  // "version: 3", "version: '2'" (a string), "version: 2.0" or a missing field
+  // all produce a playbook that validates clean, syncs clean, and executes
+  // NOTHING. Silence here reads as "fine", which is the whole problem: it is
+  // indistinguishable from a real v1 doc. Only fire when the body actually has
+  // steps, so genuine v1 playbooks stay quiet.
+  if (plan.version !== 2 && (plan.bodyStepCount ?? 0) > 0) {
+    const declared = plan.declaredVersion === undefined
+      ? "no version field"
+      : `version: ${JSON.stringify(plan.declaredVersion)}`
+    issues.push({
+      level: "error",
+      message:
+        `${plan.bodyStepCount} "### step:" block(s) in the body, but frontmatter has ${declared} ` +
+        `— it must be EXACTLY "version: 2" (the number, not a string). ` +
+        `As written these steps will NOT execute: the plan silently degrades to v1 and \`run\` ` +
+        `dumps raw text instead of running anything. Fix: set "version: 2".`,
+    })
   }
 
   const stepIds = new Set<string>()
@@ -1610,6 +1670,19 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
 
     if (step.mode === "manual") {
       issues.push({ level: "warning", message: `Step uses default "manual" mode (no mode: declared)`, stepId: step.id })
+    }
+
+    // Any mode string is accepted at parse time (it's a bare `string`, not validated against
+    // StepDef's mode union) — an unrecognized value like "agent" (meant "ai") doesn't error,
+    // it silently falls into the executor's `default:` case and behaves exactly like an
+    // undeclared manual step: print the body, wait for a human to say "done". A playbook whose
+    // steps all say `mode: agent` looks like it should invoke an AI automatically and never does.
+    if (!KNOWN_STEP_MODES.has(step.mode)) {
+      issues.push({
+        level: "error",
+        message: `Unrecognized mode "${step.mode}" — not a real step mode, so it silently falls through to manual/no-op behavior at runtime instead of executing. Known modes: ${[...KNOWN_STEP_MODES].join(", ")}`,
+        stepId: step.id,
+      })
     }
 
     if (step.mode === "shell" && !step.code) {

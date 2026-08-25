@@ -261,6 +261,23 @@ function collectCommands(): Entry[] {
     // uncommitted working tree (its file is dirty — not yours to index).
     COMMAND_SOURCE.set(`command:${path.join(" ")}`, b.file)
 
+    // OPTION names and their describe text.
+    //
+    // Without this the index knows what a command is CALLED but not what it can DO, and
+    // the difference is not academic: `atlas:item make-public` carries --allowed-emails
+    // and --allowed-domains, whose entire purpose is gating a shared link to named people.
+    // Searching "gate", "allowed emails" or "restrict who can read" returned NOTHING across
+    // all 1518 capabilities, because the only place that language exists is an option
+    // description — and the haystack was built from the command name, its aliases and its
+    // one-line describe. A capability nobody can find is one nobody uses; this is the same
+    // failure as a command that is registered but unreachable, one layer up.
+    const optionTokens: string[] = []
+    for (const m of b.body.matchAll(/\.option\(\s*["'`]([A-Za-z0-9_-]+)["'`]\s*,\s*\{([\s\S]{0,400}?)\}\s*\)/g)) {
+      optionTokens.push(m[1])
+      const d = m[2].match(/describ(?:e|tion)\s*:\s*["'`]([^"'`]+)["'`]/)
+      if (d) optionTokens.push(d[1])
+    }
+
     out.push({
       kind: "command",
       name: path.join(" "),
@@ -270,7 +287,9 @@ function collectCommands(): Entry[] {
       run: `iris ${path.join(" ")}${rest ? " " + rest : ""}`,
       // Descendant tokens go in the haystack too, so searching "publish" finds `pages`
       // even when the user does not know it is a subcommand.
-      haystack: [...path, ...b.aliases, b.describe, ...childTokens].join(" ").toLowerCase(),
+      haystack: [...path, ...b.aliases, b.describe, ...childTokens, ...optionTokens]
+        .join(" ")
+        .toLowerCase(),
     })
 
     return [token, ...childTokens]

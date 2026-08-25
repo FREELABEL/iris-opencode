@@ -303,6 +303,18 @@
       "purpose": "Finance recipe. Record revenue, expenses, and transfers using the Atlas ledger. Set up a chart of accounts for proper categorization. View summaries and prepare for QuickBooks sync."
     },
     {
+      "src": "how-to/playbook-sops-and-skills.md",
+      "dest": "how-to/playbook-sops-and-skills.md",
+      "managed": true,
+      "purpose": "How a playbook holds human SOPs (Atlas items, attached by reference) alongside agent skills \u2014 iris playbook items/roles. The container shipped long before anyone could find it."
+    },
+    {
+      "src": "how-to/playbook-composition.md",
+      "dest": "how-to/playbook-composition.md",
+      "managed": true,
+      "purpose": "Chaining playbooks \u2014 a step can run another playbook (mode: playbook). Worked since the executor shipped with zero usage because nothing said it was possible."
+    },
+    {
       "src": "playbooks/agentic-loop/PLAYBOOK.md",
       "dest": "playbooks/agentic-loop/PLAYBOOK.md",
       "managed": true,

@@ -71,6 +71,8 @@ const AtlasItemShareCommand = cmd({
       .positional("item-id", { describe: "item ID to share", type: "number", demandOption: true })
       .option("password", { describe: "share behind a password", type: "string" })
       .option("expires", { describe: "expiring link — ISO date/time, e.g. 2026-12-31", type: "string" })
+      .option("allowed-emails", { describe: "gate the link to these named, address-verified emails (required for PHI-classified items)", type: "array", string: true })
+      .option("allowed-domains", { describe: "gate the link to these bare domains, e.g. vanguard.com", type: "array", string: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
