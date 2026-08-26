@@ -6,6 +6,7 @@ import {
   parseSteps,
   interpolate,
   interpolateInput,
+  interpolateStepHeaders,
   playbookPaths,
   resolveContainerPath,
   shellEscape,
@@ -2362,4 +2363,79 @@ test('validatePlan: "agent" does not trip the default-manual warning either', ()
   const plan = { ...basePlan, steps: [makeStep({ id: "a1", mode: "agent" as any, code: null })] }
   const issues = validatePlan(plan)
   expect(issues.filter((i) => i.message.includes("default"))).toHaveLength(0)
+})
+
+describe("step header interpolation (#182415)", () => {
+  const base: StepDef = {
+    id: "s1", title: "t", mode: "hive-script", body: "", code: "x", confirm: false,
+    depends: null, retry: 0, delay: 0, condition: null, model: null, node: null,
+    skillRef: null, skillArgs: null, workflowId: null, webhook: null, cron: null, input: null,
+  } as StepDef
+
+  /**
+   * `node: ${target}` reached the resolver as that literal string, so a hive step could not be
+   * pointed at a machine chosen at run time — no fleet reuse, no failover. Every hive playbook
+   * was pinned to one machine at authoring time.
+   *
+   * The BODY was interpolated all along, which is what made this hard to see: the same `${}`
+   * syntax worked three lines lower in the same step.
+   */
+  test("node: is interpolated from an argument", () => {
+    const out = interpolateStepHeaders({ ...base, node: "${{args.target}}" }, { target: "MacBookPro" }, {})
+    expect(out.node).toBe("MacBookPro")
+  })
+
+  test("node: can come from a previous step's output", () => {
+    const out = interpolateStepHeaders(
+      { ...base, node: "${{steps.pick.output}}" },
+      {},
+      { pick: { id: "pick", status: "success", output: "node-b", exit_code: 0, duration_ms: 1, attempts: 1 } as StepResult },
+    )
+    expect(out.node).toBe("node-b")
+  })
+
+  test("model: has the same gap and the same fix", () => {
+    const out = interpolateStepHeaders({ ...base, mode: "ai", model: "${{args.m}}" }, { m: "gpt-4o-mini" }, {})
+    expect(out.model).toBe("gpt-4o-mini")
+  })
+
+  test("skillArgs, workflowId, webhook and cron interpolate too", () => {
+    const out = interpolateStepHeaders(
+      { ...base, skillArgs: "${{args.a}}", workflowId: "${{args.w}}", webhook: "${{args.h}}", cron: "${{args.c}}" },
+      { a: "one", w: "wf-9", h: "https://example.test/hook", c: "0 9 * * *" },
+      {},
+    )
+    expect(out.skillArgs).toBe("one")
+    expect(out.workflowId).toBe("wf-9")
+    expect(out.webhook).toBe("https://example.test/hook")
+    expect(out.cron).toBe("0 9 * * *")
+  })
+
+  test("a literal header is returned unchanged", () => {
+    const out = interpolateStepHeaders({ ...base, node: "MacBookPro" }, { target: "other" }, {})
+    expect(out.node).toBe("MacBookPro")
+  })
+
+  test("nulls stay null — absence must not become the string 'null'", () => {
+    const out = interpolateStepHeaders({ ...base }, {}, {})
+    expect(out.node).toBeNull()
+    expect(out.model).toBeNull()
+    expect(out.cron).toBeNull()
+  })
+
+  test("the original step is not mutated", () => {
+    // Steps are reused across retries; mutating one would bake the first run's values in.
+    const step = { ...base, node: "${{args.target}}" }
+    interpolateStepHeaders(step, { target: "MacBookPro" }, {})
+    expect(step.node).toBe("${{args.target}}")
+  })
+
+  test("an unresolved reference does not silently blank the header", () => {
+    // interpolate() resolves an unknown name to "". For a BODY that is harmless; for
+    // `node:` it is not — an empty node reads downstream as "no node given" and dispatches
+    // to ANY machine, silently doing the opposite of what naming a node asks for.
+    const out = interpolateStepHeaders({ ...base, node: "${{args.nope}}" }, {}, {})
+    expect(out.node).not.toBe("")
+    expect(out.node).toBe("${{args.nope}}")
+  })
 })

@@ -400,6 +400,53 @@ export function interpolate(
 }
 
 /**
+ * Interpolate the string-valued fields of a step's YAML HEADER.
+ *
+ * The step BODY and code have always been interpolated, which is exactly what made this gap
+ * hard to see: `${target}` worked three lines below a `node: ${target}` that did not. The
+ * header value reached the node resolver as the literal string "${target}", and every hive
+ * playbook was therefore pinned to one machine at authoring time — no fleet reuse, no
+ * failover, no "run this where the case data happens to live" (#182415).
+ *
+ * Returns a COPY. Steps are reused across retries, and mutating one would bake the first
+ * run's values in.
+ *
+ * Only fields that name a runtime target are interpolated. `mode`, `id` and `depends` are
+ * structural — resolving them from arguments would let an argument change the shape of the
+ * plan that was validated.
+ */
+export function interpolateStepHeaders(
+  step: StepDef,
+  args: Record<string, any>,
+  stepResults: Record<string, StepResult>,
+  root?: string,
+): StepDef {
+  const FIELDS = ["node", "model", "skillArgs", "workflowId", "webhook", "cron"] as const
+  const out: StepDef = { ...step }
+
+  for (const f of FIELDS) {
+    const v = out[f]
+    // Absence stays absence. Interpolating null would produce the string "null", which
+    // reads downstream as a value someone chose.
+    if (typeof v !== "string" || v === "") continue
+    if (!v.includes("${")) continue
+    try {
+      const resolved = interpolate(v, args, stepResults, { root })
+      // interpolate() resolves an UNKNOWN name to "". For a body that is harmless; for a
+      // header it is not. An empty `node:` reads downstream as "no node given" and
+      // dispatches to ANY machine — silently doing the opposite of what naming a node asks
+      // for. So a reference that resolves to nothing leaves the header AS WRITTEN, and the
+      // resolver then fails loudly with the unmatched name.
+      if (resolved.trim() !== "") out[f] = resolved as any
+    } catch {
+      // Same reasoning for a thrown reference: keep what the author wrote.
+    }
+  }
+
+  return out
+}
+
+/**
  * Recursively interpolate ${{}} variables inside an input object.
  * Unlike JSON.stringify→interpolate→JSON.parse, this is safe when
  * interpolated values contain JSON-special characters (quotes, backslashes).
@@ -1330,11 +1377,19 @@ export async function executeSkill(
     const isShell = step.mode === "shell"
     let interpolatedCode: string | null
     let interpolatedBody: string
+    // The step with its HEADER fields resolved. `step` itself is const and reused across
+    // retries, so the interpolated form is a copy bound here and used from this point on.
+    let stepH: StepDef = step
     try {
       interpolatedCode = step.code
         ? interpolate(step.code, rawArgs, stepResults, { shellSafe: isShell, root })
         : null
       interpolatedBody = interpolate(step.body, rawArgs, stepResults, { root })
+      // The HEADER too (#182415). Only the body and code were interpolated, so
+      // `node: ${{args.target}}` reached the node resolver as that literal string and every
+      // hive playbook was pinned to one machine at authoring time. The same `${{}}` syntax
+      // working three lines lower in the same step is what made it hard to see.
+      stepH = interpolateStepHeaders(step, rawArgs, stepResults, root)
     } catch (e) {
       // A container escape is a bad argument, not a crash. Fail this step the
       // way any other step failure is reported, and let on-error decide.
@@ -1438,7 +1493,7 @@ export async function executeSkill(
             .filter(([, r]) => r.status === "success" && r.output)
             .map(([id, r]) => `[${id}]: ${r.output.slice(0, 2000)}`)
             .join("\n\n")
-          const aiModel = step.model ?? "gpt-4o-mini"
+          const aiModel = stepH.model ?? "gpt-4o-mini"
           lastResult = await executeAi(interpolatedBody, aiModel, context)
           break
         }
@@ -1450,7 +1505,7 @@ export async function executeSkill(
           if (!userId) {
             lastResult = { output: "Not authenticated — cannot dispatch to Hive", exit_code: 1 }
           } else {
-            lastResult = await executeHive(interpolatedCode!, plan, step, userId)
+            lastResult = await executeHive(interpolatedCode!, plan, stepH, userId)
           }
           break
         }
@@ -1464,7 +1519,7 @@ export async function executeSkill(
           } else if (!interpolatedCode) {
             lastResult = { output: "[Step: " + step.id + "] FAILED: hive-script step has no code block", exit_code: 1 }
           } else {
-            lastResult = await executeHiveScript(interpolatedCode, plan, step, uid)
+            lastResult = await executeHiveScript(interpolatedCode, plan, stepH, uid)
           }
           break
         }
@@ -1527,8 +1582,8 @@ export async function executeSkill(
             lastResult = { output: content, exit_code: 0 }
           } else {
             const childArgs: Record<string, unknown> = {}
-            if (step.skillArgs) {
-              const parts = step.skillArgs.split(/\s+/)
+            if (stepH.skillArgs) {
+              const parts = stepH.skillArgs.split(/\s+/)
               const keys = Object.keys(targetPlan.args)
               parts.forEach((v, i) => { if (keys[i]) childArgs[keys[i]] = v })
             }
