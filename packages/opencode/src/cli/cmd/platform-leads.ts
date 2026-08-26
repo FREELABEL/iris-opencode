@@ -33,6 +33,16 @@ import {
   aiGenerateCarouselProps,
   resolveRemotionDir,
 } from "./platform-remotion"
+// #182461 — the CRM table is not the only place a person is written down.
+import {
+  searchBloqMentions,
+  hitMatchesLead,
+  gradeEvidence,
+  groupByProject,
+  type MentionHit,
+  type MentionSearchResult,
+  type CrmMatch,
+} from "./lead-mentions"
 
 // ============================================================================
 // Sync helpers
@@ -700,11 +710,20 @@ const LeadsGetCommand = cmd({
 
 const LeadsSearchCommand = cmd({
   command: "search <query>",
-  describe: "search leads",
+  describe: "search leads (CRM records + mentions across your bloq projects)",
   builder: (yargs) =>
     yargs
       .positional("query", { describe: "search query", type: "string", demandOption: true })
       .option("limit", { describe: "max results", type: "number", default: 10 })
+      // #182461 — mentions are ON by default, and that is the whole fix. The cross-project
+      // sweep existed as a reachable endpoint the entire time; nobody found Tyler Smith
+      // because nothing called it from here. A flag you have to know about would have left
+      // the default answer exactly as wrong as it was. `--crm-only` opts out.
+      //
+      // Named flag rather than yargs' automatic `--no-mentions`: this CLI runs yargs in
+      // strict mode, which rejects the negated form outright.
+      .option("crm-only", { describe: "skip the project-mention sweep (faster)", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -729,8 +748,30 @@ const LeadsSearchCommand = cmd({
     spinner.start("Searching…")
 
     try {
+      // The mention sweep needs a user id; the CRM query does not. Resolve it without
+      // failing the command — a search that can still answer from the CRM should, and the
+      // missing half gets NAMED below rather than silently returning zero mentions.
+      // resolveUserId() is the SILENT resolver on purpose. requireUserId() prints a
+      // three-line "set IRIS_USER_ID" lecture, and firing that mid-spinner over an
+      // optional second source would make the CRM answer look like it failed.
+      const userId = args["crm-only"]
+        ? null
+        : ((args["user-id"] as number | undefined) ?? (await resolveUserId()))
+
       const params = new URLSearchParams({ search: args.query, per_page: String(args.limit) })
-      const res = await irisFetch(`/api/v1/leads?${params}`)
+
+      // Both sources run CONCURRENTLY. The mention sweep is one API call against an
+      // endpoint the CRM query does not touch, so it costs latency only when it is slower
+      // than the leads query — not in addition to it.
+      const [res, mentionResult] = await Promise.all([
+        irisFetch(`/api/v1/leads?${params}`),
+        args["crm-only"]
+          ? Promise.resolve<MentionSearchResult>({ hits: [], searched: false, reason: "--crm-only" })
+          : userId
+            ? searchBloqMentions(String(args.query), userId, Math.max(Number(args.limit) * 2, 25))
+            : Promise.resolve<MentionSearchResult>({ hits: [], searched: false, reason: "not signed in" }),
+      ])
+
       if (!res.ok) {
         const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>
         const errMsg = String(errBody?.message || errBody?.error || `HTTP ${res.status}`)
@@ -743,6 +784,11 @@ const LeadsSearchCommand = cmd({
 
       const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
       let leads: any[] = data?.data ?? []
+
+      // Whether these rows answer the WHOLE query or only part of it. The fallback below
+      // is allowed to widen the search; it is not allowed to let the widened results
+      // masquerade as exact ones (#182461).
+      let crmMatch: CrmMatch = leads.length ? "exact" : "none"
 
       // Fallback: if multi-word query returned 0, try searching by last name only
       if (leads.length === 0 && args.query.includes(" ")) {
@@ -763,38 +809,135 @@ const LeadsSearchCommand = cmd({
                 return allWords.every((w) => haystack.includes(w))
               })
               if (filtered.length > 0) {
+                // Every word present, just not adjacent — that is still an exact answer.
                 leads = filtered
+                crmMatch = "exact"
                 break
               }
-              // If no multi-word match, show partial matches
-              if (leads.length === 0) leads = fbLeads
+              // If no multi-word match, show partial matches — LABELLED as partial.
+              if (leads.length === 0) {
+                leads = fbLeads
+                crmMatch = "partial"
+              }
             }
           }
         }
       }
 
       const total = data?.total ?? data?.meta?.total ?? leads.length
-      spinner.stop(`${total} result(s)`)
+
+      // Attribute each mention to a lead where we can. Unattributed hits are the
+      // interesting half: a person written about in projects who has no CRM row at all.
+      const claimed = new Set<MentionHit>()
+      const evidence = leads.map((l) => {
+        const hits = mentionResult.hits.filter((h) => hitMatchesLead(l, h))
+        hits.forEach((h) => claimed.add(h))
+        return {
+          lead: l,
+          hits,
+          evidence: gradeEvidence({ crm: crmMatch, hits, mentionsSearched: mentionResult.searched }),
+        }
+      })
+      const unclaimed = mentionResult.hits.filter((h) => !claimed.has(h))
+
+      // Report what is on SCREEN. The old line printed the first query's `total`, so a
+      // fallback that surfaced ten partial rows announced "0 result(s)" above a list of
+      // ten — a count that describes a query the reader never sees.
+      const crmLabel =
+        crmMatch === "partial"
+          ? `${leads.length} partial CRM match(es)`
+          : `${leads.length} CRM result(s)${total > leads.length ? ` of ${total}` : ""}`
+      spinner.stop(
+        crmLabel + (mentionResult.searched ? `, ${mentionResult.hits.length} project mention(s)` : ""),
+      )
 
       if (args.json) {
-        await writeJson(leads)
+        // Machine callers get the same distinction the terminal gets: `mentions_searched:
+        // false` is not zero mentions, and a caller that cannot tell them apart will
+        // publish "we have no record of this person" off a sweep that never ran.
+        await writeJson({
+          query: args.query,
+          crm_match: crmMatch,
+          leads: evidence.map((e) => ({
+            ...e.lead,
+            evidence: e.evidence,
+            mentions: e.hits.map(({ haystack: _h, ...rest }) => rest),
+          })),
+          unmatched_mentions: unclaimed.map(({ haystack: _h, ...rest }) => rest),
+          mentions_searched: mentionResult.searched,
+          mentions_unavailable_reason: mentionResult.reason,
+        })
         return
       }
 
-      if (leads.length === 0) {
+      // A name found ONLY in project content is a result, not an empty search. This is the
+      // exact case the bug was filed for — Tyler Smith exists all over the bloqs and every
+      // lookup answered "No leads matching", which reads as "we have nothing on them".
+      if (leads.length === 0 && unclaimed.length === 0) {
         prompts.log.warn(`No leads matching "${args.query}"`)
+        if (!mentionResult.searched) {
+          prompts.log.warn(
+            `Project content was NOT searched (${mentionResult.reason ?? "unavailable"}) — this is not "no mentions".`,
+          )
+        }
         prompts.outro("Done")
         return
       }
 
-      printDivider()
-      for (const l of leads) {
-        printLead(l)
-        console.log()
+      if (leads.length > 0) {
+        if (crmMatch === "partial") {
+          prompts.log.warn(
+            `No CRM lead matches all of "${args.query}" — showing partial name matches below.`,
+          )
+        }
+        printDivider()
+        for (const { lead, evidence: ev } of evidence) {
+          printLead(lead)
+          if (ev.mentions > 0) {
+            const when = ev.lastMentioned ? ` · last ${formatDate(ev.lastMentioned)}` : ""
+            const where = ev.projects.length ? ` — ${ev.projects.slice(0, 3).join(", ")}` : ""
+            console.log(`    ${dim("◇")} ${dim(`${ev.mentions} project mention(s)${where}${when}`)}`)
+          }
+          console.log(`    ${dim(`evidence: ${ev.source} — ${ev.why}`)}`)
+          console.log()
+        }
+        printDivider()
       }
-      printDivider()
 
-      prompts.outro(dim("iris leads get <id>"))
+      if (unclaimed.length > 0) {
+        console.log()
+        console.log(
+          `  ${bold("Mentioned in your projects")} ${dim(
+            leads.length ? "(not matched to any CRM lead above)" : "(no CRM record exists)",
+          )}`,
+        )
+        printDivider()
+        for (const group of groupByProject(unclaimed).slice(0, 5)) {
+          const board = group.bloqId != null ? dim(` bloq:${group.bloqId}`) : ""
+          console.log(`  ${bold(group.bloqName)}${board}  ${dim(`${group.hits.length} item(s)`)}`)
+          for (const h of group.hits.slice(0, 3)) {
+            const list = h.listName ? dim(`  ${h.listName}`) : ""
+            console.log(`    ${dim(`#${h.itemId}`)} ${h.title}${list}`)
+            if (h.snippet) console.log(`       ${dim(h.snippet.slice(0, 110))}`)
+          }
+          if (group.hits.length > 3) console.log(`    ${dim(`… ${group.hits.length - 3} more`)}`)
+        }
+        printDivider()
+      }
+
+      // Always say whether the second source ran. Fewer results because a source was down
+      // is indistinguishable from a genuinely small answer unless we say so.
+      if (!mentionResult.searched && !args["crm-only"]) {
+        prompts.log.warn(`Project mentions NOT searched (${mentionResult.reason ?? "unavailable"})`)
+      }
+
+      prompts.outro(
+        dim(
+          unclaimed.length && !leads.length
+            ? "iris bloqs items --bloq-id <id>"
+            : "iris leads get <id>  ·  iris leads search <query> --crm-only",
+        ),
+      )
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))

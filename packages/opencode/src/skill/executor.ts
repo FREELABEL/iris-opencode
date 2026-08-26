@@ -5,7 +5,7 @@ import { ConfigMarkdown } from "../config/markdown"
 import { Log } from "../util/log"
 import { homedir } from "os"
 import { join, dirname, resolve as resolvePath, relative as relativePath, isAbsolute } from "path"
-import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from "fs"
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync, chmodSync } from "fs"
 
 const log = Log.create({ service: "skill-executor" })
 
@@ -103,8 +103,39 @@ export interface SkillResult {
 
 const RUNS_DIR = join(homedir(), ".iris", "skill-runs")
 
+/**
+ * Run checkpoints are OWNER-READABLE ONLY (#182461).
+ *
+ * A checkpoint stores each step's captured output, so anything a step printed is on disk
+ * verbatim. Measured on a real machine: 10 of 81 checkpoints in ~/.iris/skill-runs held a
+ * populated OAuth `access_token=`, every file at mode 0644 — readable by any local process.
+ *
+ * This is not hypothetical tidiness. The CLI and Desktop app are going to beta users on
+ * machines we do not control, and a playbook that touches an integration writes its
+ * credentials into this directory as a side effect of running.
+ *
+ * Redacting the captured output is the deeper fix and is tracked separately; permissions are
+ * the part that must not wait, because it costs nothing and covers every secret shape at once.
+ */
 function ensureRunsDir() {
-  if (!existsSync(RUNS_DIR)) mkdirSync(RUNS_DIR, { recursive: true })
+  if (!existsSync(RUNS_DIR)) mkdirSync(RUNS_DIR, { recursive: true, mode: 0o700 })
+  // Re-assert on every call: `mode` applies only at CREATE, so an install that already has
+  // a 0755 directory would otherwise keep it forever and the upgrade would fix nobody.
+  try {
+    chmodSync(RUNS_DIR, 0o700)
+  } catch {
+    // Best effort — never lose the run because a platform lacks chmod.
+  }
+}
+
+/** Write a checkpoint 0600, re-asserting the mode for files that already exist. */
+function writeCheckpointFile(path: string, contents: string) {
+  writeFileSync(path, contents, { mode: 0o600 })
+  try {
+    chmodSync(path, 0o600)
+  } catch {
+    /* best effort */
+  }
 }
 
 function generateRunId(): string {
@@ -620,7 +651,7 @@ export interface Checkpoint {
 
 function saveCheckpoint(cp: Checkpoint) {
   ensureRunsDir()
-  writeFileSync(join(RUNS_DIR, `${cp.run_id}.json`), JSON.stringify(cp, null, 2))
+  writeCheckpointFile(join(RUNS_DIR, `${cp.run_id}.json`), JSON.stringify(cp, null, 2))
 }
 
 function loadCheckpoint(runId: string): Checkpoint | null {

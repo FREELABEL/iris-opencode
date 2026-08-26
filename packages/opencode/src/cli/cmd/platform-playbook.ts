@@ -1,8 +1,9 @@
 import { cmd } from "./cmd"
 import { PlaybookContentsCommands } from "./platform-playbook-contents"
 import * as prompts from "./clack"
+import { confirmWiden } from "./exposure-gate"
 import { UI } from "../ui"
-import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError, writeJson } from "./iris-api"
+import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError, writeJson, IRIS_API } from "./iris-api"
 import { Skill } from "../../skill/skill"
 import { Instance } from "../../project/instance"
 import {
@@ -1288,6 +1289,113 @@ const DetachCommand = cmd({
 // iris playbook publish — set an association scope and push to the cloud (#167269)
 // ============================================================================
 
+/**
+ * The verdict, as a pure function so it can be tested without a network.
+ *
+ * The rule worth pinning: UNMEASURED IS NOT SAFE. If the public list could not be
+ * reached we do not know whether the playbook is listed, and "we could not check"
+ * must never render as "it is private" — that is the same false-green this whole
+ * epic exists to remove.
+ */
+export function privacyVerdict(o: { directStatus: number; listed: boolean | null }): {
+  private: boolean
+  readable: boolean
+  measured: boolean
+} {
+  const readable = o.directStatus === 200
+  const measured = o.listed !== null
+  return { readable, measured, private: !readable && o.listed === false }
+}
+
+const PlaybookCheckPrivateCommand = cmd({
+  command: "check-private <name>",
+  aliases: ["check-scope", "verify-private"],
+  describe: "fetch a playbook as a stranger would and report whether it is actually private",
+  builder: (y) =>
+    y
+      .positional("name", { describe: "playbook name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    // #182344 G-11 — `--scope private` was an ASSERTED privacy claim with nothing behind it.
+    //
+    // The failure is asymmetric in the worst direction. If publishing breaks, the author sees
+    // an error. If PRIVACY breaks, the author sees exactly what success looks like: the command
+    // succeeds, no URL is printed, and the content is on the internet. People make disclosure
+    // decisions on the strength of that word, so it has to be measured rather than trusted.
+    //
+    // BOTH probes are unauthenticated ON PURPOSE. requireAuth() is deliberately not called —
+    // the question is what an anonymous caller gets, and answering it with a credential
+    // attached is the exact mistake this command exists to prevent.
+    const name = String(args.name)
+    const base = IRIS_API.replace(/\/$/, "")
+    const UA = { "User-Agent": "iris-playbook-check-private" }
+
+    let directStatus = 0
+    let directBody = ""
+    try {
+      const res = await fetch(`${base}/api/v1/playbooks/${encodeURIComponent(name)}`, { headers: UA })
+      directStatus = res.status
+      directBody = await res.text()
+    } catch (err) {
+      directStatus = -1
+      directBody = String(err)
+    }
+
+    let listed: boolean | null = null
+    let listCount = 0
+    try {
+      const res = await fetch(`${base}/api/v1/playbooks`, { headers: UA })
+      if (res.ok) {
+        const body: any = await res.json()
+        const rows: any[] = body?.playbooks ?? (Array.isArray(body) ? body : [])
+        listCount = rows.length
+        listed = rows.some((p) => String(p?.name) === name)
+      }
+    } catch {
+      listed = null // could not measure — say so rather than call it a pass
+    }
+
+    const verdict = privacyVerdict({ directStatus, listed })
+    const readable = verdict.readable
+    const isPrivate = verdict.private
+
+    if (args.json) {
+      await writeJson({
+        name,
+        private: isPrivate,
+        direct_status: directStatus,
+        readable_anonymously: readable,
+        listed_anonymously: listed,
+        anonymous_list_size: listCount,
+      })
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  Check private — ${name}`)
+    printDivider()
+    printKV("Direct fetch", `${directStatus}${readable ? "  ← READABLE" : "  (withheld)"}`)
+    printKV("In public list", listed === null ? "could not measure" : listed ? "YES  ← LISTED" : `no  (${listCount} public playbooks returned)`)
+    printDivider()
+
+    if (isPrivate) {
+      prompts.log.success("A stranger can neither read this playbook nor see that it exists.")
+    } else if (listed === null) {
+      process.exitCode = 1
+      prompts.log.warn("Could not reach the public list — privacy is UNMEASURED, which is not the same as safe.")
+    } else {
+      process.exitCode = 1
+      prompts.log.error(
+        `This playbook is NOT private.\n` +
+        (readable ? `  Its body is served to anonymous callers (HTTP ${directStatus}, ${directBody.length} bytes).\n` : "") +
+        (listed ? `  It is listed to anonymous callers.\n` : "") +
+        `  Narrow it:  iris playbook publish ${name} --scope private`,
+      )
+    }
+    prompts.outro("Done")
+  },
+})
+
 const PublishCommand = cmd({
   command: "publish <name>",
   describe: "publish a playbook with a scope: private | project | public",
@@ -1307,6 +1415,7 @@ const PublishCommand = cmd({
         default: "free",
         describe: "access level for a public/marketplace publish",
       })
+      .option("force", { type: "boolean", default: false, describe: "consent to a PUBLIC publish — REQUIRED when there is no terminal" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -1315,6 +1424,27 @@ const PublishCommand = cmd({
     if (args.scope === "project" && !args.bloq) {
       console.error("  --bloq <id> is required when --scope project")
       prompts.outro("Done"); return
+    }
+
+    // #182344 G-04 — a marketplace publish is the widest thing this CLI can do.
+    // private/project never ask; public always does, and refuses with no terminal.
+    {
+      const to = args.scope === "public" ? "public" : args.scope === "project" ? "team" : "private"
+      const verdict = await confirmWiden({
+        noun: "playbook",
+        name: String(args.name),
+        from: "private",
+        to: to as any,
+        extra: args.scope === "public"
+          ? [`It is listed in the marketplace as ${String(args.access ?? "free")} and anyone can install it.`]
+          : [],
+        force: Boolean(args.force),
+      })
+      if (!verdict.ok) {
+        process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+        prompts.outro(verdict.reason === "needs-force" ? "Refused — nothing published" : "Cancelled — nothing published")
+        return
+      }
     }
 
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
@@ -1798,6 +1928,7 @@ export const PlatformPlaybookCommand = cmd({
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
       .command(PublishCommand)
+      .command(PlaybookCheckPrivateCommand)
       .command(PlaybookDoctorCommand)
       .command(PlaybookVerifyCommand)
       .command(PlaybookAvailableCommand)
@@ -1858,6 +1989,7 @@ export const PlatformSkillCommand = cmd({
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
       .command(PublishCommand)
+      .command(PlaybookCheckPrivateCommand)
       .command(PlaybookAvailableCommand)
       .command(PlaybookInstallCommand)
       .command(AttachCommand)

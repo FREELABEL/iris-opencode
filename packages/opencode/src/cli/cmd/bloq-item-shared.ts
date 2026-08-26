@@ -3,6 +3,7 @@
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, isNonInteractive, FL_API } from "./iris-api"
 import * as prompts from "./clack"
 import { UI } from "../ui"
+import { confirmWiden, type Tier } from "./exposure-gate"
 import matter from "gray-matter"
 import { readFileSync, writeFileSync, existsSync } from "fs"
 import path from "path"
@@ -577,6 +578,25 @@ export async function executePublish(args: PublishArgs): Promise<void> {
     let publicUuid: string | null = null
     let accessLevel: string | undefined
     if (share) {
+      // #182344 G-04 — widening confirms here too. NOTE: this command's `--force`
+      // already means "overwrite an item edited in the UI" (#154763), so the exposure
+      // consent flag is `--force-public`. Overloading one flag with two unrelated
+      // meanings would be its own bug; the asymmetry is deliberate.
+      const verdict = await confirmWiden({
+        noun: "note",
+        name: title ?? path.basename(args.file),
+        from: "private",
+        to: opts.password || args.expires ? "gated" : "public",
+        force: !!(args as any)["force-public"],
+        forceFlag: "force-public",
+      })
+      if (!verdict.ok) {
+        spinner?.stop("Refused — item stays private", 1)
+        process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+        if (json) console.log(JSON.stringify({ success: false, refused: verdict.reason, item_id: itemId }))
+        else prompts.outro("Nothing was shared")
+        return
+      }
       const pub = await apiMakePublic(userId, itemId!, opts)
       if (pub) { publicUrl = pub.public_url; publicUuid = pub.public_uuid; accessLevel = pub.access_level }
       else {
@@ -690,6 +710,21 @@ export interface ItemActionArgs {
   "allowed-domains"?: string[]
   json?: boolean
   "user-id"?: number
+  force?: boolean
+  yes?: boolean
+}
+
+/**
+ * Which rung this actually lands on. A password, a named-email list or a domain
+ * list means the reader has to prove something, so it is `gated` rather than open —
+ * and the prompt should not claim internet exposure it does not cause.
+ */
+export function tierForShare(args: ItemActionArgs): Tier {
+  const conditioned =
+    !!args.password ||
+    (args["allowed-emails"]?.length ?? 0) > 0 ||
+    (args["allowed-domains"]?.length ?? 0) > 0
+  return conditioned ? "gated" : "public"
 }
 
 export async function executeMakePublic(args: ItemActionArgs): Promise<void> {
@@ -699,6 +734,23 @@ export async function executeMakePublic(args: ItemActionArgs): Promise<void> {
   if (!token) { if (!json) prompts.outro("Done"); return }
   const userId = await requireUserId(args["user-id"])
   if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  // #182344 G-04 — widening confirms, and refuses without a terminal. An item is
+  // private until this command runs, so `from` is private by definition.
+  const verdict = await confirmWiden({
+    noun: "note",
+    name: `#${args["item-id"]}`,
+    from: "private",
+    to: tierForShare(args),
+    force: !!args.force,
+    yes: !!args.yes,
+  })
+  if (!verdict.ok) {
+    process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+    if (json) console.log(JSON.stringify({ success: false, refused: verdict.reason }))
+    else prompts.outro(verdict.reason === "needs-force" ? "Refused — nothing changed" : "Cancelled — nothing changed")
+    return
+  }
 
   const spinner = json ? null : prompts.spinner()
   spinner?.start("Making item public…")
@@ -815,6 +867,47 @@ export interface ListArgs {
 }
 
 /** List the caller's published (public) bloq items + their URLs. */
+export interface PublishedItem {
+  id: number
+  title: string
+  bloq_id: number
+  public_url: string
+  access_level?: string | null
+}
+
+/**
+ * Every item of this user's that is currently reachable by a stranger.
+ *
+ * Extracted so `iris exposure audit` and `atlas:item list` cannot drift — two
+ * commands answering "what is public?" differently is the ambiguity epic #182344
+ * exists to remove.
+ *
+ * NOTE the 50-bloq cap, inherited from the original: it is a real bound on the
+ * answer, so callers that present this as an audit must SAY it is capped rather
+ * than imply completeness.
+ */
+export const PUBLISHED_SCAN_BLOQ_CAP = 50
+
+export async function collectPublishedItems(userId: number, bloqId?: number): Promise<PublishedItem[]> {
+  const bloqs = bloqId ? [{ id: bloqId }] : (await fetchBloqs(userId)).slice(0, PUBLISHED_SCAN_BLOQ_CAP)
+  const out: PublishedItem[] = []
+  for (const b of bloqs) {
+    const items = await fetchItems(userId, b.id)
+    for (const it of items) {
+      if (it.is_public && (it.public_url || it.public_uuid)) {
+        out.push({
+          id: it.id,
+          title: it.title ?? "(untitled)",
+          bloq_id: b.id,
+          public_url: it.public_url ?? it.public_uuid,
+          access_level: it.access_level ?? null,
+        })
+      }
+    }
+  }
+  return out
+}
+
 export async function executeListPublished(args: ListArgs): Promise<void> {
   const json = !!args.json
   if (!json) { UI.empty(); prompts.intro("◈  Published items") }
@@ -826,16 +919,7 @@ export async function executeListPublished(args: ListArgs): Promise<void> {
   const spinner = json ? null : prompts.spinner()
   spinner?.start("Scanning for published items…")
 
-  const bloqs = args.bloq ? [{ id: args.bloq }] : (await fetchBloqs(userId)).slice(0, 50)
-  const published: any[] = []
-  for (const b of bloqs) {
-    const items = await fetchItems(userId, b.id)
-    for (const it of items) {
-      if (it.is_public && (it.public_url || it.public_uuid)) {
-        published.push({ id: it.id, title: it.title ?? "(untitled)", bloq_id: b.id, public_url: it.public_url ?? it.public_uuid })
-      }
-    }
-  }
+  const published = await collectPublishedItems(userId, args.bloq)
 
   if (json) { spinner?.stop(); console.log(JSON.stringify({ success: true, count: published.length, items: published })); return }
   spinner?.stop(`${published.length} published item(s)`)

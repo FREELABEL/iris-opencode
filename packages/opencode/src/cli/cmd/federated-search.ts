@@ -93,9 +93,36 @@ export function resolveSources(opts: { source?: string | string[]; includeAll?: 
 }
 
 // ── bloq ──────────────────────────────────────────────────────────────────────
-async function searchBloq(query: string, bloqId: number, userId: number, limit: number): Promise<FederatedResult[]> {
+/**
+ * #182461 — a bloq id is an OPTIONAL narrowing, not a precondition.
+ *
+ * This used to take a required `bloqId` and the caller skipped the whole source with
+ * "no bloq context" whenever it was absent. So the one search that advertised itself as
+ * covering everything you have written could not answer "where have I seen this name"
+ * unless you already knew which project to look in — which is the opposite of the
+ * question. A person mentioned across three boards returned nothing, and the skip
+ * reason scrolled past as though it were a configuration nicety.
+ *
+ * With no bloq id we use the CROSS-PROJECT endpoint, which searches every board the
+ * user owns and ANDs the query's tokens server-side. With one, the board-scoped
+ * endpoint stays exact.
+ */
+async function searchBloq(
+  query: string,
+  bloqId: number | undefined,
+  userId: number,
+  limit: number,
+): Promise<FederatedResult[]> {
   const params = new URLSearchParams({ search: query, per_page: String(limit) })
-  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items?${params}`)
+  // Number(undefined) is NaN, and callers build this from an optional flag — an
+  // unguarded NaN would request `/bloqs/NaN/items` and surface as an HTTP error where
+  // the honest reading is "no board was named, search them all".
+  const scoped = Number.isFinite(bloqId as number) ? (bloqId as number) : undefined
+  const path =
+    scoped != null
+      ? `/api/v1/user/${userId}/bloqs/${scoped}/items?${params}`
+      : `/api/v1/user/${userId}/bloqs/content-items?${params}`
+  const res = await irisFetch(path)
   if (!res.ok) throw new Error(`bloq items HTTP ${res.status}`)
 
   const data = (await res.json()) as any
@@ -103,7 +130,10 @@ async function searchBloq(query: string, bloqId: number, userId: number, limit: 
   return (Array.isArray(items) ? items : []).map((i) => ({
     source: "bloq" as const,
     title: String(i.title ?? "(untitled)"),
-    location: i.list_name ?? undefined,
+    // Cross-project results MUST name their board — without it a hit is untraceable back
+    // to where it lives, and the single most useful thing a search can say is "it is in
+    // this project", because you rarely remember what a project is called.
+    location: [i.bloq_name, i.list_name].filter(Boolean).join(" › ") || undefined,
     snippet: typeof i.content === "string" ? i.content.replace(/\s+/g, " ").slice(0, 140) : undefined,
     ref: i.id != null ? String(i.id) : undefined,
   }))
@@ -253,8 +283,10 @@ export async function federatedSearch(
     opts.sources.includes("bloq")
       ? run(
           "bloq",
-          () => searchBloq(query, opts.bloqId!, opts.userId!, limit),
-          opts.bloqId == null || opts.userId == null ? "no bloq context" : undefined,
+          () => searchBloq(query, opts.bloqId, opts.userId!, limit),
+          // Only an unresolved USER is a genuine skip now. A missing bloq id just means
+          // "search all of them" — the previous skip made the default case the broken one.
+          opts.userId == null ? "not signed in" : undefined,
         )
       : Promise.resolve(),
     opts.sources.includes("obsidian") ? run("obsidian", () => searchObsidian(query, limit)) : Promise.resolve(),
