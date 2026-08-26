@@ -1727,6 +1727,42 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
   if (!plan.name) issues.push({ level: "error", message: "Missing skill name" })
   if (!plan.description) issues.push({ level: "error", message: "Missing skill description" })
 
+  // DEAD INTERPOLATION REFERENCES.
+  //
+  // Playbook interpolation is `${{args.x}}` — double braces, namespaced. A playbook written
+  // with `${args.x}` or `${x}` validated CLEAN and then silently never resolved: the literal
+  // text was passed through to the shell, the model, or the node resolver. Caught after
+  // writing one that way and having `iris playbook test` report "No issues found" — a check
+  // that could not tell a correct playbook from one whose references are all dead.
+  //
+  // Two different rules, because the false-positive risk differs:
+  //   CODE/BODY — flag only NAMESPACED references (args./steps./env./playbook.). A bare
+  //     `${i}` or `${process.env.HOME}` is a shell or JS template literal and is none of our
+  //     business; flagging those would make this noise, and a noisy check gets ignored.
+  //   HEADERS  — flag ANY single-brace reference. A header is never shell or JS, so there is
+  //     nothing else `${...}` could be there.
+  const NS = /(^|[^$])\$\{\s*(args|steps|env|playbook)\.[^{}]*\}/
+  const ANY = /(^|[^$])\$\{[^{}]*\}/
+  for (const step of plan.steps) {
+    for (const [field, value] of [["code", step.code], ["body", step.body]] as const) {
+      if (typeof value === "string" && NS.test(value)) {
+        issues.push({
+          level: "error",
+          message: `[${step.id}] ${field} uses \${...} — playbook interpolation is \${{...}} (double braces). As written it will never resolve and the literal text is passed through.`,
+        })
+      }
+    }
+    for (const field of ["node", "model", "skillArgs", "workflowId", "webhook", "cron"] as const) {
+      const v = step[field]
+      if (typeof v === "string" && ANY.test(v)) {
+        issues.push({
+          level: "error",
+          message: `[${step.id}] ${field}: uses \${...} — playbook interpolation is \${{...}} (double braces). As written it reaches the resolver as literal text.`,
+        })
+      }
+    }
+  }
+
   if (plan.version === 2 && plan.steps.length === 0) {
     issues.push({ level: "warning", message: "v2 skill has no steps defined" })
   }

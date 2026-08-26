@@ -2439,3 +2439,42 @@ describe("step header interpolation (#182415)", () => {
     expect(out.node).toBe("${{args.nope}}")
   })
 })
+
+describe("validatePlan: dead interpolation references", () => {
+  const plan = (steps: Partial<StepDef>[]): SkillPlan => ({
+    name: "p", description: "d", version: 2, steps: steps.map((s, i) => ({
+      id: `s${i}`, title: "t", mode: "shell", body: "", code: null, confirm: false,
+      depends: null, retry: 0, delay: 0, condition: null, model: null, node: null,
+      skillRef: null, skillArgs: null, workflowId: null, webhook: null, cron: null,
+      input: null, ...s,
+    })) as StepDef[], args: {}, onError: "stop", timeout: 60,
+  } as SkillPlan)
+
+  /**
+   * A playbook written with `${args.x}` or `${x}` — single braces — validated CLEAN, then
+   * silently never resolved at run time. I wrote one that way myself and `iris playbook test`
+   * said "No issues found", which is the same defect this whole epic keeps finding: a check
+   * that cannot tell a correct playbook from one whose references are dead.
+   */
+  test("flags a single-brace reference that will never resolve", () => {
+    const issues = validatePlan(plan([{ code: "echo ${args.name}" }]))
+    expect(issues.some((i) => /\$\{/.test(i.message))).toBe(true)
+  })
+
+  test("flags it in a header field too", () => {
+    const issues = validatePlan(plan([{ mode: "hive-script", node: "${target}", code: "x" }]))
+    expect(issues.some((i) => /node/.test(i.message) || /\$\{/.test(i.message))).toBe(true)
+  })
+
+  test("correct ${{...}} syntax is NOT flagged", () => {
+    const issues = validatePlan(plan([{ code: "echo ${{args.name}}", node: "${{args.node}}" }]))
+    expect(issues.filter((i) => /interpolat/i.test(i.message)).length).toBe(0)
+  })
+
+  test("shell and JS template literals are left alone", () => {
+    // ${dir} inside a bash heredoc or a JS template string is not playbook interpolation.
+    // Flagging those would make the check noise, and a noisy check gets ignored.
+    const issues = validatePlan(plan([{ code: 'const p = `${process.env.HOME}/x`\nfor i; do echo "${i}"; done' }]))
+    expect(issues.filter((i) => /interpolat/i.test(i.message)).length).toBe(0)
+  })
+})
