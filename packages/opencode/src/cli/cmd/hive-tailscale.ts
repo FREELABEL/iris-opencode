@@ -31,7 +31,16 @@ import { join, basename, dirname } from "path"
 const pexec = promisify(execFile)
 
 /** Where a resolved ssh user is remembered, so it is asked for at most once per node. */
-const SSH_CACHE = join(homedir(), ".iris", "hive-ssh.json")
+/**
+ * Where the node -> ssh-address bindings live.
+ *
+ * A function rather than a const so a test can redirect it. A module-level const bound to
+ * homedir() meant the only way to exercise the cache was to write to the developer's real
+ * ~/.iris, so this module shipped with no tests at all (#182368).
+ */
+function sshCachePath(): string {
+  return process.env.IRIS_HIVE_SSH_CACHE || join(homedir(), ".iris", "hive-ssh.json")
+}
 
 export interface TailscalePeer {
   ip: string
@@ -47,7 +56,7 @@ export interface SshTarget {
   /** Unix user on the node, or null to let ssh/ssh_config decide. */
   user: string | null
   /** How the host was determined, for honest reporting. */
-  via: "explicit" | "tailscale" | "cached"
+  via: "explicit" | "tailscale" | "cached" | "advertised"
   peer?: TailscalePeer
 }
 
@@ -144,7 +153,7 @@ export async function tailscalePeers(): Promise<TailscalePeer[]> {
 
 async function readSshCache(): Promise<Record<string, { host?: string; user?: string }>> {
   try {
-    return JSON.parse(await readFile(SSH_CACHE, "utf-8"))
+    return JSON.parse(await readFile(sshCachePath(), "utf-8"))
   } catch {
     return {}
   }
@@ -152,8 +161,8 @@ async function readSshCache(): Promise<Record<string, { host?: string; user?: st
 
 async function writeSshCache(cache: Record<string, { host?: string; user?: string }>): Promise<void> {
   try {
-    await mkdir(dirname(SSH_CACHE), { recursive: true })
-    await writeFile(SSH_CACHE, JSON.stringify(cache, null, 2), "utf-8")
+    await mkdir(dirname(sshCachePath()), { recursive: true })
+    await writeFile(sshCachePath(), JSON.stringify(cache, null, 2), "utf-8")
   } catch {
     // a cache that cannot be written is a lost convenience, not an error
   }
@@ -204,6 +213,25 @@ async function hostnameSafe(): Promise<string> {
 }
 
 /**
+ * Bind a Hive node to an ssh address, permanently.
+ *
+ * `--host` used to be honoured for exactly one invocation and thrown away, so a node whose
+ * Hive name differs from its tailnet name needed --host typed again on EVERY call — including
+ * every `hive vault` operation, which rides on this. Persisting it turns a permanent papercut
+ * into a one-time binding.
+ *
+ * Safe precisely because a human asserted the identity. The alternative fix — loosening
+ * nameMatches until the two names match — cannot distinguish the right machine from a
+ * similarly-named one, and `hive fs push` WRITES FILES onto whatever it picks. On a tailnet
+ * that carries other people's laptops that is a data leak, not a convenience.
+ */
+export async function rememberSshHost(nodeId: string, host: string, user?: string | null): Promise<void> {
+  const cache = await readSshCache()
+  cache[nodeId] = { ...(cache[nodeId] ?? {}), host, ...(user ? { user } : {}) }
+  await writeSshCache(cache)
+}
+
+/**
  * Resolve a Hive node to something ssh can address.
  *
  * Order: an explicit --host, then the cache, then Tailscale. Never guesses an IP.
@@ -211,13 +239,31 @@ async function hostnameSafe(): Promise<string> {
 export async function resolveSshTarget(
   nodeId: string,
   nodeName: string,
-  opts: { host?: string; user?: string } = {},
+  opts: { host?: string; user?: string; advertised?: string | null } = {},
 ): Promise<SshTarget | { error: string }> {
   const cache = await readSshCache()
   const cached = cache[nodeId] ?? {}
 
-  if (opts.host) return { host: opts.host, user: opts.user ?? cached.user ?? null, via: "explicit" }
+  if (opts.host) {
+    // Remember it, so this is the LAST time --host has to be typed for this node.
+    await rememberSshHost(nodeId, opts.host, opts.user ?? cached.user ?? null)
+    return { host: opts.host, user: opts.user ?? cached.user ?? null, via: "explicit" }
+  }
   if (cached.host) return { host: cached.host, user: opts.user ?? cached.user ?? null, via: "cached" }
+
+  // What the NODE ITSELF reported, from its heartbeat (#182368). This is the fix that matters:
+  // matching a Hive name against a tailnet name is a guess, and when the two names were chosen
+  // independently the guess fails and the FIRST call dead-ends — telling you to pass the IP you
+  // were asking the tool to find.
+  //
+  // Ranked below the cache on purpose: an operator-asserted or probe-confirmed binding is not
+  // overridden, so nothing that works today changes. This only fills the case that used to be
+  // a dead end.
+  //
+  // Trimmed and checked for emptiness because "" is not an address — treating a blank as one
+  // turns "the node told us nothing" into "connect to nowhere".
+  const advertised = (opts.advertised ?? "").trim()
+  if (advertised) return { host: advertised, user: opts.user ?? cached.user ?? null, via: "advertised" }
 
   // queryOk (#182104) distinguishes "couldn't ask" from "asked, zero peers" —
   // the same failure this module's docblock says it exists to survive.

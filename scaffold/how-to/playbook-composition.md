@@ -1,5 +1,5 @@
 ---
-category: Playbooks & Automation
+category: Agents & Automation
 level: intermediate
 tags: [playbooks, composition, chaining, automation]
 duration_min: 8

@@ -118,6 +118,93 @@ $ iris pages cache-clear my-page
 prop. Both live in the page JSON, so the wiring between two components is readable without
 opening either one.
 
+## Composition — a component inside a component
+
+A component declares WHERE a hole is. The **page** declares WHAT fills it. A component can
+never choose its own children — that authority is what `<component :is>` has, and it is banned
+for the same reason.
+
+```vue
+<template>
+  <section class="card">
+    <h2>{{ title }}</h2>
+    <slot name="body" />          <!-- literal name; :name="expr" is REFUSED -->
+  </section>
+</template>
+```
+
+```json
+{ "type": "CodeComponent",
+  "props": {
+    "componentSlug": "card",
+    "slots": {
+      "body": [
+        { "componentSlug": "session-list",
+          "collection": "dataset:sessions",
+          "emitTo": { "select": "session" } }
+      ]
+    } } }
+```
+
+**A slot child is a FLAT prop bag** — `{ componentSlug, collection, componentProps, slots }` —
+because the renderer binds it directly as props. A top-level block keeps its props under
+`props`; a child does not. Getting this wrong renders **nothing, with no error**, because a
+component with no artifact has nothing to mount.
+
+Nesting is capped at 8 deep, and a child gets its own data, its own gate and its own slots.
+
+## The verbs
+
+```js
+await this.$dataset.query({ search, sort, dir, page })
+await this.$dataset.create({ title: 'Untitled' })
+await this.$dataset.update(id, { title: 'Renamed' })
+await this.$dataset.delete(id)
+```
+
+`update` and `delete` require a row with a **stable identity**. A card-carried table has
+positional rows — index 3 of a JSON array — so "update row 3" means something different the
+moment anything is inserted. Those collections answer `canUpdate: false` and the refusal names
+the fix. Delete is **soft** and **admin-only**, deliberately narrower than create and update.
+
+## Two-way binding
+
+```json
+"model": { "query": "filterText" }
+```
+
+Feeds page state into the `query` prop AND writes `update:query` back to it. It is Vue's own
+v-model convention — `this.$emit('update:query', v)` — so there is no bespoke protocol. Use it
+instead of pairing `bindState` with `emitTo`, which can name different keys and produce a
+component that reads one value while writing another.
+
+## Finding a component to reuse
+
+```bash
+iris genesis library list --search "select"   # search props, emits AND slots
+iris genesis library show session-list        # its API, plus the JSON to paste
+iris genesis library usage session-list       # which pages name it — BEFORE you change it
+iris genesis library versions session-list    # publish history
+iris genesis library rollback <slug> --version 3
+```
+
+Browse it in a page: **https://heyiris.io/p/genesis-component-library**
+
+**Republishing a component changes every page naming it, immediately.** Check `usage` first.
+Version history exists now, so a mistake is recoverable — but a rollback still changes every
+one of those pages a second time.
+
+## Guard your props
+
+The platform stores `""` as **null** on page save, and Vue's `default` applies only to
+`undefined`. A `String` prop defaulted to `''` therefore arrives null, and the first
+`.toLowerCase()` throws **inside** the render — the component mounts nothing and shows no
+error. Until that is fixed platform-side:
+
+```js
+const q = String(this.query || '').toLowerCase()
+```
+
 ## Searching, sorting and writing
 
 ```js

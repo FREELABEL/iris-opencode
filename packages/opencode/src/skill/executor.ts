@@ -5,7 +5,7 @@ import { ConfigMarkdown } from "../config/markdown"
 import { Log } from "../util/log"
 import { homedir } from "os"
 import { join, dirname, resolve as resolvePath, relative as relativePath, isAbsolute } from "path"
-import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from "fs"
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, unlinkSync, chmodSync } from "fs"
 
 const log = Log.create({ service: "skill-executor" })
 
@@ -103,8 +103,39 @@ export interface SkillResult {
 
 const RUNS_DIR = join(homedir(), ".iris", "skill-runs")
 
+/**
+ * Run checkpoints are OWNER-READABLE ONLY (#182461).
+ *
+ * A checkpoint stores each step's captured output, so anything a step printed is on disk
+ * verbatim. Measured on a real machine: 10 of 81 checkpoints in ~/.iris/skill-runs held a
+ * populated OAuth `access_token=`, every file at mode 0644 — readable by any local process.
+ *
+ * This is not hypothetical tidiness. The CLI and Desktop app are going to beta users on
+ * machines we do not control, and a playbook that touches an integration writes its
+ * credentials into this directory as a side effect of running.
+ *
+ * Redacting the captured output is the deeper fix and is tracked separately; permissions are
+ * the part that must not wait, because it costs nothing and covers every secret shape at once.
+ */
 function ensureRunsDir() {
-  if (!existsSync(RUNS_DIR)) mkdirSync(RUNS_DIR, { recursive: true })
+  if (!existsSync(RUNS_DIR)) mkdirSync(RUNS_DIR, { recursive: true, mode: 0o700 })
+  // Re-assert on every call: `mode` applies only at CREATE, so an install that already has
+  // a 0755 directory would otherwise keep it forever and the upgrade would fix nobody.
+  try {
+    chmodSync(RUNS_DIR, 0o700)
+  } catch {
+    // Best effort — never lose the run because a platform lacks chmod.
+  }
+}
+
+/** Write a checkpoint 0600, re-asserting the mode for files that already exist. */
+function writeCheckpointFile(path: string, contents: string) {
+  writeFileSync(path, contents, { mode: 0o600 })
+  try {
+    chmodSync(path, 0o600)
+  } catch {
+    /* best effort */
+  }
 }
 
 function generateRunId(): string {
@@ -400,6 +431,53 @@ export function interpolate(
 }
 
 /**
+ * Interpolate the string-valued fields of a step's YAML HEADER.
+ *
+ * The step BODY and code have always been interpolated, which is exactly what made this gap
+ * hard to see: `${target}` worked three lines below a `node: ${target}` that did not. The
+ * header value reached the node resolver as the literal string "${target}", and every hive
+ * playbook was therefore pinned to one machine at authoring time — no fleet reuse, no
+ * failover, no "run this where the case data happens to live" (#182415).
+ *
+ * Returns a COPY. Steps are reused across retries, and mutating one would bake the first
+ * run's values in.
+ *
+ * Only fields that name a runtime target are interpolated. `mode`, `id` and `depends` are
+ * structural — resolving them from arguments would let an argument change the shape of the
+ * plan that was validated.
+ */
+export function interpolateStepHeaders(
+  step: StepDef,
+  args: Record<string, any>,
+  stepResults: Record<string, StepResult>,
+  root?: string,
+): StepDef {
+  const FIELDS = ["node", "model", "skillArgs", "workflowId", "webhook", "cron"] as const
+  const out: StepDef = { ...step }
+
+  for (const f of FIELDS) {
+    const v = out[f]
+    // Absence stays absence. Interpolating null would produce the string "null", which
+    // reads downstream as a value someone chose.
+    if (typeof v !== "string" || v === "") continue
+    if (!v.includes("${")) continue
+    try {
+      const resolved = interpolate(v, args, stepResults, { root })
+      // interpolate() resolves an UNKNOWN name to "". For a body that is harmless; for a
+      // header it is not. An empty `node:` reads downstream as "no node given" and
+      // dispatches to ANY machine — silently doing the opposite of what naming a node asks
+      // for. So a reference that resolves to nothing leaves the header AS WRITTEN, and the
+      // resolver then fails loudly with the unmatched name.
+      if (resolved.trim() !== "") out[f] = resolved as any
+    } catch {
+      // Same reasoning for a thrown reference: keep what the author wrote.
+    }
+  }
+
+  return out
+}
+
+/**
  * Recursively interpolate ${{}} variables inside an input object.
  * Unlike JSON.stringify→interpolate→JSON.parse, this is safe when
  * interpolated values contain JSON-special characters (quotes, backslashes).
@@ -573,7 +651,7 @@ export interface Checkpoint {
 
 function saveCheckpoint(cp: Checkpoint) {
   ensureRunsDir()
-  writeFileSync(join(RUNS_DIR, `${cp.run_id}.json`), JSON.stringify(cp, null, 2))
+  writeCheckpointFile(join(RUNS_DIR, `${cp.run_id}.json`), JSON.stringify(cp, null, 2))
 }
 
 function loadCheckpoint(runId: string): Checkpoint | null {
@@ -800,7 +878,25 @@ async function executeHive(
       timeout_seconds: plan.timeout,
     }
     // Only send node_id if it's a real UUID — "default" breaks FK constraint
-    if (step.node && step.node !== "default") payload.node_id = step.node
+    // RESOLVE the node name to its id. This passed `step.node` straight through as `node_id`,
+    // but a playbook names a node the way a person does — `node: MacBookPro` — while the API
+    // expects a uuid. Every hive step that NAMED a machine got HTTP 500, and omitting `node:`
+    // worked, so the mode looked functional while its whole purpose — "run it where the data
+    // is" — was broken. Measured: `mode: hive-script` with `node: AlexMaysnow1063` -> 500;
+    // the identical step without `node:` -> passes in 3.0s.
+    //
+    // Same name-vs-identity confusion as #182368, one layer up.
+    if (step.node && step.node !== "default") {
+      const { resolveNode } = await import("../cli/cmd/platform-hive-nodes")
+      const resolved = await resolveNode(userId, step.node)
+      if (!resolved) {
+        return {
+          output: `Step ${step.id}: no Hive node matching "${step.node}". Run: iris hive nodes list`,
+          exit_code: 1,
+        }
+      }
+      payload.node_id = resolved.id
+    }
 
     const createRes = await hiveFetch("/api/v6/nodes/tasks", {
       method: "POST",
@@ -872,7 +968,25 @@ async function executeHiveScript(
       config: { timeout_seconds: plan.timeout },
       timeout_seconds: plan.timeout,
     }
-    if (step.node && step.node !== "default") payload.node_id = step.node
+    // RESOLVE the node name to its id. This passed `step.node` straight through as `node_id`,
+    // but a playbook names a node the way a person does — `node: MacBookPro` — while the API
+    // expects a uuid. Every hive step that NAMED a machine got HTTP 500, and omitting `node:`
+    // worked, so the mode looked functional while its whole purpose — "run it where the data
+    // is" — was broken. Measured: `mode: hive-script` with `node: AlexMaysnow1063` -> 500;
+    // the identical step without `node:` -> passes in 3.0s.
+    //
+    // Same name-vs-identity confusion as #182368, one layer up.
+    if (step.node && step.node !== "default") {
+      const { resolveNode } = await import("../cli/cmd/platform-hive-nodes")
+      const resolved = await resolveNode(userId, step.node)
+      if (!resolved) {
+        return {
+          output: `Step ${step.id}: no Hive node matching "${step.node}". Run: iris hive nodes list`,
+          exit_code: 1,
+        }
+      }
+      payload.node_id = resolved.id
+    }
 
     const createRes = await hiveFetch("/api/v6/nodes/tasks", {
       method: "POST",
@@ -1294,11 +1408,19 @@ export async function executeSkill(
     const isShell = step.mode === "shell"
     let interpolatedCode: string | null
     let interpolatedBody: string
+    // The step with its HEADER fields resolved. `step` itself is const and reused across
+    // retries, so the interpolated form is a copy bound here and used from this point on.
+    let stepH: StepDef = step
     try {
       interpolatedCode = step.code
         ? interpolate(step.code, rawArgs, stepResults, { shellSafe: isShell, root })
         : null
       interpolatedBody = interpolate(step.body, rawArgs, stepResults, { root })
+      // The HEADER too (#182415). Only the body and code were interpolated, so
+      // `node: ${{args.target}}` reached the node resolver as that literal string and every
+      // hive playbook was pinned to one machine at authoring time. The same `${{}}` syntax
+      // working three lines lower in the same step is what made it hard to see.
+      stepH = interpolateStepHeaders(step, rawArgs, stepResults, root)
     } catch (e) {
       // A container escape is a bad argument, not a crash. Fail this step the
       // way any other step failure is reported, and let on-error decide.
@@ -1402,7 +1524,7 @@ export async function executeSkill(
             .filter(([, r]) => r.status === "success" && r.output)
             .map(([id, r]) => `[${id}]: ${r.output.slice(0, 2000)}`)
             .join("\n\n")
-          const aiModel = step.model ?? "gpt-4o-mini"
+          const aiModel = stepH.model ?? "gpt-4o-mini"
           lastResult = await executeAi(interpolatedBody, aiModel, context)
           break
         }
@@ -1414,7 +1536,7 @@ export async function executeSkill(
           if (!userId) {
             lastResult = { output: "Not authenticated — cannot dispatch to Hive", exit_code: 1 }
           } else {
-            lastResult = await executeHive(interpolatedCode!, plan, step, userId)
+            lastResult = await executeHive(interpolatedCode!, plan, stepH, userId)
           }
           break
         }
@@ -1428,7 +1550,7 @@ export async function executeSkill(
           } else if (!interpolatedCode) {
             lastResult = { output: "[Step: " + step.id + "] FAILED: hive-script step has no code block", exit_code: 1 }
           } else {
-            lastResult = await executeHiveScript(interpolatedCode, plan, step, uid)
+            lastResult = await executeHiveScript(interpolatedCode, plan, stepH, uid)
           }
           break
         }
@@ -1491,8 +1613,8 @@ export async function executeSkill(
             lastResult = { output: content, exit_code: 0 }
           } else {
             const childArgs: Record<string, unknown> = {}
-            if (step.skillArgs) {
-              const parts = step.skillArgs.split(/\s+/)
+            if (stepH.skillArgs) {
+              const parts = stepH.skillArgs.split(/\s+/)
               const keys = Object.keys(targetPlan.args)
               parts.forEach((v, i) => { if (keys[i]) childArgs[keys[i]] = v })
             }
@@ -1635,6 +1757,42 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
 
   if (!plan.name) issues.push({ level: "error", message: "Missing skill name" })
   if (!plan.description) issues.push({ level: "error", message: "Missing skill description" })
+
+  // DEAD INTERPOLATION REFERENCES.
+  //
+  // Playbook interpolation is `${{args.x}}` — double braces, namespaced. A playbook written
+  // with `${args.x}` or `${x}` validated CLEAN and then silently never resolved: the literal
+  // text was passed through to the shell, the model, or the node resolver. Caught after
+  // writing one that way and having `iris playbook test` report "No issues found" — a check
+  // that could not tell a correct playbook from one whose references are all dead.
+  //
+  // Two different rules, because the false-positive risk differs:
+  //   CODE/BODY — flag only NAMESPACED references (args./steps./env./playbook.). A bare
+  //     `${i}` or `${process.env.HOME}` is a shell or JS template literal and is none of our
+  //     business; flagging those would make this noise, and a noisy check gets ignored.
+  //   HEADERS  — flag ANY single-brace reference. A header is never shell or JS, so there is
+  //     nothing else `${...}` could be there.
+  const NS = /(^|[^$])\$\{\s*(args|steps|env|playbook)\.[^{}]*\}/
+  const ANY = /(^|[^$])\$\{[^{}]*\}/
+  for (const step of plan.steps) {
+    for (const [field, value] of [["code", step.code], ["body", step.body]] as const) {
+      if (typeof value === "string" && NS.test(value)) {
+        issues.push({
+          level: "error",
+          message: `[${step.id}] ${field} uses \${...} — playbook interpolation is \${{...}} (double braces). As written it will never resolve and the literal text is passed through.`,
+        })
+      }
+    }
+    for (const field of ["node", "model", "skillArgs", "workflowId", "webhook", "cron"] as const) {
+      const v = step[field]
+      if (typeof v === "string" && ANY.test(v)) {
+        issues.push({
+          level: "error",
+          message: `[${step.id}] ${field}: uses \${...} — playbook interpolation is \${{...}} (double braces). As written it reaches the resolver as literal text.`,
+        })
+      }
+    }
+  }
 
   if (plan.version === 2 && plan.steps.length === 0) {
     issues.push({ level: "warning", message: "v2 skill has no steps defined" })

@@ -230,6 +230,7 @@ export async function runRemoteDoctor(argv: any) {
       const resolved = await resolveSshTarget(n.id, n.name, {
         host: nodes.length === 1 ? (argv.host as string | undefined) : undefined,
         user: argv.user as string | undefined,
+        advertised: (n as any).tailscale_ip ?? null,
       })
       if ("error" in resolved) {
         verdicts.push({ node: n.name, reachable: false, degraded: true, problems: [resolved.error], notes: [], reading: {}, api })
