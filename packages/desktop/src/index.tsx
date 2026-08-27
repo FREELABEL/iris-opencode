@@ -207,13 +207,27 @@ root?.addEventListener("mousewheel", (e) => {
   e.stopPropagation()
 })
 
-// The sidecar's address. lib.rs injects window.__OPENCODE__.port (double underscore)
+// The sidecar connection. lib.rs injects window.__OPENCODE__.port (double underscore)
 // via initialization_script before the webview loads, so this is populated by mount time.
 //
-// AppInterface's ConnectionGate performs a BLOCKING health check against defaultServer:
-// if this key is wrong the UI never mounts and the app looks hung rather than erroring.
+// AppInterface needs BOTH halves and they must agree:
+//   - `servers`       the actual connection list. Without it the list is empty, the
+//                     default key resolves to nothing, server.current is undefined, and
+//                     useServerSDK's memo dies as `undefined is not an object
+//                     (evaluating 'e().scope')` behind AppBaseProviders' ErrorBoundary.
+//   - `defaultServer` a KEY, and for a sidecar connection ServerConnection.key() returns
+//                     the literal "sidecar" -- NOT the url. Passing the url here looks
+//                     right and silently matches nothing.
+// Derived with ServerConnection.key() rather than hardcoded so the two cannot drift.
 const serverPort = opencodeGlobal().port
-const defaultServer = ServerConnection.Key.make(`http://127.0.0.1:${serverPort}`)
+const sidecarConnection: ServerConnection.Any = {
+  displayName: "Local",
+  type: "sidecar",
+  variant: "base",
+  http: { url: `http://127.0.0.1:${serverPort}` },
+}
+const servers = [sidecarConnection]
+const defaultServer = ServerConnection.key(sidecarConnection)
 
 render(() => {
   return (
@@ -222,7 +236,7 @@ render(() => {
         <div class="mx-px bg-background-base border-b border-border-weak-base h-8" data-tauri-drag-region />
       )}
       <AppBaseProviders>
-        <AppInterface defaultServer={defaultServer} />
+        <AppInterface defaultServer={defaultServer} servers={servers} />
       </AppBaseProviders>
     </PlatformProvider>
   )
