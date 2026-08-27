@@ -5,7 +5,6 @@ import { open, save } from "@tauri-apps/plugin-dialog"
 import { open as shellOpen } from "@tauri-apps/plugin-shell"
 import { type as ostype } from "@tauri-apps/plugin-os"
 import { AsyncStorage } from "@solid-primitives/storage"
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http"
 import { Store } from "@tauri-apps/plugin-store"
 
 import { UPDATER_ENABLED, createUpdaterPlatform } from "./updater"
@@ -197,7 +196,22 @@ const platform: Platform = {
   },
 
   // @ts-expect-error
-  fetch: tauriFetch,
+  // Native fetch, NOT @tauri-apps/plugin-http.
+  //
+  // tauriFetch routes the request through Rust, and against the 1.18 server it opens the
+  // socket, the server replies, and the response is never drained -- observable as a stuck
+  // Recv-Q of ~10KB on every connection while the UI sits on the splash and eventually
+  // reports "Could not reach Local". The 1.3-era app got away with it; 1.18 does not.
+  //
+  // Upstream's own renderer (ef2880f37 packages/desktop/src/renderer/index.tsx:270) uses
+  // plain fetch for exactly this, and the server sends
+  // `Access-Control-Allow-Origin: tauri://localhost`, so the webview origin is explicitly
+  // supported cross-origin. The Request branch matters: passing a Request through with a
+  // separate init silently drops the init.
+  fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+    if (input instanceof Request) return fetch(input)
+    return fetch(input, init)
+  },
 }
 
 createMenu()
