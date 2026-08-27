@@ -1,0 +1,358 @@
+name: Release IRIS desktop (Tauri)
+
+# The 1.18 engine port had NO release pipeline. `main` owned release.yml, so every fix that
+# landed here was unreleasable by construction -- it could be written, reviewed, merged and
+# CI-green while remaining impossible for any client to install. That is not a process gap,
+# it is a missing mechanism, and it is what this file is.
+#
+# TWO DELIBERATE SAFETY PROPERTIES, both learned from shipping something broken:
+#
+#  1. SEPARATE TAG NAMESPACE (`desktop-v*`, not `v*`). main's release.yml fires on `v*`.
+#     Sharing that trigger would mean one tag racing two workflows over the same asset
+#     names, with whichever finished last deciding what clients download.
+#
+#  2. PUBLISHED AS A PRERELEASE. heyiris.io links
+#     /releases/latest/download/IRIS-tauri-darwin-*.zip -- and GitHub resolves that to the
+#     newest NON-prerelease containing the asset NAME. So an unproven build from this branch
+#     physically cannot land on the front page. Promotion is a separate, deliberate act:
+#       gh release edit desktop-vX.Y.Z --prerelease=false
+#     Verify the artifact FIRST (scripts/verify-shipped-app.sh), then promote.
+#
+# Asset names match main's convention exactly, so promotion needs no front-end change.
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g. 1.18.24)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            rust_target: aarch64-apple-darwin
+            oc_target: opencode-darwin-arm64
+            arch: arm64
+          # Intel is NOT optional. A client on an Intel i5 sat on a stale build for weeks
+          # because arm64 was the only artifact produced -- the fix existed and had no
+          # binary she could run. An architecture with no build is an architecture with
+          # no users.
+          - os: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            oc_target: opencode-darwin-x64
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/desktop-v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Stamp the desktop app version
+        # tauri.conf.json reads its version from packages/desktop/package.json. When nothing
+        # updates that file, every build ships calling itself whatever is checked in -- and a
+        # client's crash screen then names a build that was never released, sending you to
+        # debug the wrong binary. That cost an hour on 2026-08-27.
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const p = 'packages/desktop/package.json';
+            const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+            j.version = process.argv[1];
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            console.log('desktop version stamped ->', j.version);
+          " "${{ steps.version.outputs.version }}"
+
+      - name: Build the iris CLI (sidecar binary)
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --single
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: latest
+
+      - name: Stage sidecar binary
+        # The staged filename MUST match tauri.conf.json's externalBin ("sidecars/iris-cli")
+        # and the name lib.rs passes to .sidecar(). All three are asserted below rather than
+        # trusted: a mismatch here fails at launch with "program not found", which is exactly
+        # how the August 2026 outage presented.
+        run: |
+          set -euo pipefail
+          EXPECT=$(grep -oE '\.sidecar\("[^"]+"\)' packages/desktop/src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          CONF=$(grep -oE '"sidecars/[^"]+"' packages/desktop/src-tauri/tauri.conf.json | head -1 | sed -E 's|"sidecars/(.*)"|\1|')
+          echo "lib.rs resolves '$EXPECT'; tauri.conf.json bundles '$CONF'"
+          if [ "$EXPECT" != "$CONF" ]; then
+            echo "::error::sidecar name mismatch — lib.rs wants '$EXPECT' but externalBin ships '$CONF'. The app would build fine and fail to launch."
+            exit 1
+          fi
+          BIN=$(ls packages/opencode/dist/${{ matrix.oc_target }}/bin/iris)
+          mkdir -p packages/desktop/src-tauri/sidecars
+          cp "$BIN" "packages/desktop/src-tauri/sidecars/${EXPECT}-${{ matrix.rust_target }}"
+          chmod +x "packages/desktop/src-tauri/sidecars/${EXPECT}-${{ matrix.rust_target }}"
+
+      - name: Build IRIS desktop app (Tauri)
+        # Sign + notarize when the APPLE_* secrets exist; otherwise fall back to ad-hoc
+        # signing. Empty secrets are UNSET rather than exported as "" so the fallback
+        # actually triggers instead of codesign dying with "no identity found".
+        # Ad-hoc builds ARE flagged "damaged" by Gatekeeper on Apple Silicon -- so an
+        # unsigned build reaching a user is a build they cannot open at all.
+        run: |
+          cd packages/desktop
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v}" ]; then unset "$v"; fi
+          done
+          if [ -n "${APPLE_CERTIFICATE:-}" ]; then
+            echo "Apple signing secrets present — codesign + notarize enabled."
+          else
+            echo "::warning::APPLE_CERTIFICATE unset — ad-hoc signing. Gatekeeper will flag this 'damaged' on Apple Silicon."
+          fi
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles app,dmg
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Package .app and .dmg
+        # main builds the DMG and then throws it away, uploading only a zipped .app -- so
+        # users get a raw bundle with nowhere to drag it. Both are kept here.
+        run: |
+          set -euo pipefail
+          BUNDLE=packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle
+          cd "$BUNDLE/macos"
+          ditto -c -k --sequesterRsrc --keepParent IRIS.app "IRIS-tauri-darwin-${{ matrix.arch }}.zip"
+          cd - >/dev/null
+          DMG=$(ls "$BUNDLE"/dmg/*.dmg 2>/dev/null | head -1 || true)
+          if [ -n "$DMG" ]; then
+            cp "$DMG" "$BUNDLE/macos/IRIS-tauri-darwin-${{ matrix.arch }}.dmg"
+          else
+            echo "::warning::no .dmg produced for ${{ matrix.arch }}"
+          fi
+
+      - name: Smoke-test the bundle we just built
+        # Do not wait for a client to discover that the app cannot start. Boot the sidecar
+        # straight out of the bundle and parse a real response. Status codes are useless
+        # here: every unknown path on that server returns the SPA's index.html with HTTP 200.
+        run: |
+          set -uo pipefail
+          APP=packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS.app
+          SIDECAR=$(grep -oE '\.sidecar\("[^"]+"\)' packages/desktop/src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          test -x "$APP/Contents/MacOS/$SIDECAR" || { echo "::error::bundle is missing sidecar '$SIDECAR'"; exit 1; }
+          PLIST=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
+          if [ "$PLIST" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::bundle reports $PLIST but this release is ${{ steps.version.outputs.version }}"
+            exit 1
+          fi
+          echo "bundle version $PLIST ✓"
+          # An Intel binary cannot execute on the arm64 runner; only boot when native.
+          if [ "${{ matrix.arch }}" = "arm64" ] || [ "$(uname -m)" = "x86_64" ]; then
+            "$APP/Contents/MacOS/$SIDECAR" serve --port=47999 >/tmp/sc.log 2>&1 &
+            for _ in $(seq 1 40); do curl -s -m 2 -o /dev/null http://127.0.0.1:47999/doc && break; sleep 0.5; done
+            H=$(curl -s -m 10 http://127.0.0.1:47999/global/health)
+            kill %1 2>/dev/null || true
+            case "$H" in
+              '{'*) echo "health: $H" ;;
+              *) echo "::error::/global/health returned the SPA fallback, not JSON — API not serving"; exit 1 ;;
+            esac
+            echo "$H" | grep -q '"healthy":true' || { echo "::error::engine reports unhealthy"; exit 1; }
+            echo "engine healthy ✓"
+          else
+            echo "cross-arch build — skipping boot test (cannot execute x64 here)"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-tauri-darwin-${{ matrix.arch }}
+          path: |
+            packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.zip
+            packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.dmg
+          if-no-files-found: warn
+
+  windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/desktop-v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Stamp the desktop app version
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const p = 'packages/desktop/package.json';
+            const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+            j.version = process.argv[1];
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            console.log('desktop version stamped ->', j.version);
+          " "${{ steps.version.outputs.version }}"
+
+      - name: Build the iris CLI (sidecar binary)
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --single
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: latest
+
+      - name: Stage sidecar binary
+        run: |
+          set -euo pipefail
+          EXPECT=$(grep -oE '\.sidecar\("[^"]+"\)' packages/desktop/src-tauri/src/lib.rs | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          BIN=$(ls packages/opencode/dist/opencode-windows-x64/bin/iris* | head -1)
+          mkdir -p packages/desktop/src-tauri/sidecars
+          cp "$BIN" "packages/desktop/src-tauri/sidecars/${EXPECT}-x86_64-pc-windows-msvc.exe"
+
+      # Unsigned: no Windows code-signing certificate exists for this repo. SmartScreen will
+      # warn on first run. Tracked, accepted for now.
+      - name: Build IRIS desktop app (Tauri)
+        run: |
+          cd packages/desktop
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Rename installer to the IRIS-tauri-* convention
+        run: |
+          set -euo pipefail
+          SRC=$(ls packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe | head -1)
+          cp "$SRC" packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IRIS-tauri-windows-x64
+          path: packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe
+          if-no-files-found: warn
+
+  publish:
+    needs: [macos, windows]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "tag=desktop-v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "version=${GITHUB_REF#refs/tags/desktop-v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: IRIS-tauri-*
+          merge-multiple: true
+
+      - name: Refuse to publish an empty release
+        # A release with no assets looks successful in every dashboard and is useless to
+        # every user. Fail loudly instead of publishing a shell.
+        run: |
+          shopt -s nullglob
+          assets=(dist/IRIS-tauri-*.zip dist/IRIS-tauri-*.dmg dist/IRIS-tauri-*.exe)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "::error::no desktop assets were built — refusing to publish an empty release"
+            exit 1
+          fi
+          ls -la dist/
+          printf '%s\n' "${assets[@]}" > /tmp/assets.txt
+
+      - name: Publish as a PRERELEASE
+        # Prerelease is load-bearing, not cosmetic: /releases/latest/download resolves to the
+        # newest NON-prerelease carrying the asset name, so this cannot reach heyiris.io by
+        # accident. Verify, then promote:  gh release edit <tag> --prerelease=false
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          # Built with printf, not a heredoc: a heredoc inside a YAML block scalar keeps the
+          # YAML indentation in its body, which markdown then renders as a code block.
+          printf '%s\n' \
+            'Tauri desktop build from the 1.18 engine branch.' \
+            '' \
+            '**This is a prerelease and is NOT what heyiris.io serves.** The front page' \
+            'resolves `/releases/latest/download/` to the newest NON-prerelease, so nothing' \
+            'here reaches users until it is deliberately promoted.' \
+            '' \
+            'To verify, then promote:' \
+            '' \
+            '```' \
+            'ASSET=IRIS-tauri-darwin-arm64.zip scripts/verify-shipped-app.sh' \
+            "gh release edit $TAG --prerelease=false" \
+            '```' \
+            > /tmp/notes.md
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" \
+                 --repo "$GITHUB_REPOSITORY" \
+                 --title "IRIS Desktop ${{ steps.version.outputs.version }}" \
+                 --prerelease \
+                 --notes-file /tmp/notes.md
+          xargs -a /tmp/assets.txt gh release upload "$TAG" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "Published $TAG (prerelease) with:"
+          cat /tmp/assets.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
