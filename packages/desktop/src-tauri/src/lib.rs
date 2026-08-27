@@ -1,7 +1,7 @@
 mod cli;
 mod window_customizer;
 
-use cli::{get_sidecar_path, install_cli, sync_cli};
+use cli::{install_cli, sync_cli};
 use std::{
     collections::VecDeque,
     net::{SocketAddr, TcpListener},
@@ -93,10 +93,6 @@ fn get_sidecar_port() -> u32 {
         }) as u32
 }
 
-fn get_user_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
-}
-
 fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     let log_state = app.state::<LogState>();
     let log_state_clone = log_state.inner().clone();
@@ -119,22 +115,16 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
         .expect("Failed to spawn opencode");
 
     #[cfg(not(target_os = "windows"))]
-    let (mut rx, child) = {
-        let sidecar = get_sidecar_path();
-        let shell = get_user_shell();
-        app.shell()
-            .command(&shell)
-            .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")
-            .env("OPENCODE_CLIENT", "desktop")
-            .env("XDG_STATE_HOME", &state_dir)
-            .args([
-                "-il",
-                "-c",
-                &format!("{} serve --port={}", sidecar.display(), port),
-            ])
-            .spawn()
-            .expect("Failed to spawn opencode")
-    };
+    let (mut rx, child) = app
+        .shell()
+        .sidecar("iris-cli")
+        .expect("Failed to resolve iris-cli sidecar")
+        .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")
+        .env("OPENCODE_CLIENT", "desktop")
+        .env("XDG_STATE_HOME", &state_dir)
+        .args(["serve", &format!("--port={port}")])
+        .spawn()
+        .expect("Failed to spawn opencode");
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {

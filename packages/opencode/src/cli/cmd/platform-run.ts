@@ -22,6 +22,7 @@ import {
   PLATFORM_URLS,
   getBridgeToken, writeJson } from "./iris-api"
 import { exec } from "child_process"
+import { randomBytes } from "node:crypto"
 import { detectNewConnection, extractConnections, type ConnectionRow } from "./integration-connect-state"
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
 import { PathwaysCommand } from "./platform-integrations-pathways"
@@ -372,7 +373,16 @@ export async function resolveAccountToIntegrationId(
     })
     if (candidates.length === 0) return null
     return Number(candidates[0].id) || null
-  } catch {
+  } catch (err) {
+    // Distinguish network/transport errors (which should surface) from a
+    // genuine "no match". Previously swallowed as null, masking outages
+    // (bug #16).
+    if (err instanceof TypeError || (err as any)?.name === "FetchError" || (err as any)?.code === "ECONNREFUSED") {
+      throw err
+    }
+    if (process.env.IRIS_DEBUG) {
+      console.error(dim(`[resolveAccountToIntegrationId] lookup failed for ${normalizedType}/${account}:`), err)
+    }
     return null
   }
 }
@@ -949,7 +959,7 @@ const ConnectCommand = cmd({
             auth_config: { id: authConfig.id },
             connection: {
               user_id: `user-${userId}`,
-              callback_url: `${PLATFORM_URLS.irisApi}/api/v1/integrations-temp/oauth-callback/whatsapp?state=${encodeURIComponent(btoa(JSON.stringify({ type: "whatsapp", provider: "composio", user_id: userId, timestamp: Date.now() })))}`,
+              callback_url: `${PLATFORM_URLS.irisApi}/api/v1/integrations-temp/oauth-callback/whatsapp?state=${encodeURIComponent(Buffer.from(JSON.stringify({ type: "whatsapp", provider: "composio", user_id: userId, timestamp: Date.now(), nonce: randomBytes(16).toString("hex") }), "utf8").toString("base64"))}`,
               state: { authScheme: "OAUTH2", val: { generic_id: String(wabaId) } },
             },
           }),
@@ -1450,19 +1460,26 @@ const ExecCommand = cmd({
 
 // No hardcoded fallback: a stale key here silently 401s every integrations
 // call (see bug #164644). Require COMPOSIO_API_KEY and fail loud if missing.
-const COMPOSIO_KEY = process.env.COMPOSIO_API_KEY ?? ""
+// Read at call-time (not module load) so env vars set after import are honored
+// (see bug #17 — COMPOSIO_API_KEY read at module load time missed late-set vars).
 const COMPOSIO_BASE = "https://backend.composio.dev/api"
 
-async function composioFetch(path: string, init?: RequestInit) {
-  if (!COMPOSIO_KEY) {
+function getComposioKey(): string {
+  const key = process.env.COMPOSIO_API_KEY ?? ""
+  if (!key) {
     throw new Error(
       "COMPOSIO_API_KEY is not set. Generate a key at https://dashboard.composio.dev → API Keys and export it (e.g. `export COMPOSIO_API_KEY=ak_…`) before running `iris integrations …`.",
     )
   }
+  return key
+}
+
+async function composioFetch(path: string, init?: RequestInit) {
+  const key = getComposioKey()
   return fetch(`${COMPOSIO_BASE}${path}`, {
     ...init,
     headers: {
-      "x-api-key": COMPOSIO_KEY,
+      "x-api-key": key,
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
     },
