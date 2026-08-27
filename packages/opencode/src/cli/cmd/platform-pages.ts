@@ -14,20 +14,11 @@ import { confirmWiden, isWidening, type Tier } from "./exposure-gate"
 // Helpers
 // ============================================================================
 
-/**
- * Get the public URL for a page. Prefers the API-provided public_url,
- * falls back to constructing from slug.
- */
-function publicUrl(slugOrPage: string | { public_url?: string; slug?: string }): string {
-  if (typeof slugOrPage === "object" && slugOrPage.public_url) {
-    return slugOrPage.public_url
-  }
-  const slug = typeof slugOrPage === "string" ? slugOrPage : (slugOrPage.slug ?? "")
-  const env = process.env.IRIS_ENV ?? "production"
-  return env === "local"
-    ? `http://local.iris.freelabel.net:9300/p/${slug}`
-    : `https://freelabel.net/p/${slug}`
-}
+// Public-URL addressing (which host+path a slug lives at, and what to say when nothing is
+// there) lives in its own dependency-free module so it can be unit tested without loading
+// this file's yargs/UI/API graph. Re-exported so call sites elsewhere are unchanged.
+export { noteUuid, publicUrl, notFoundHint } from "./page-ref"
+import { publicUrl, notFoundHint } from "./page-ref"
 
 // Pages CRUD routes through iris-api (which proxies to fl-api with service token).
 // The SDK key authenticates against iris-api; fl-api doesn't recognize it directly.
@@ -2510,7 +2501,7 @@ const ScreenshotCmd = cmd({
             ? `${url} returned HTTP ${status} — nothing was captured.`
             : `${url} served the not-found page — nothing was captured.`,
         )
-        prompts.log.info(`/p/ serves PUBLISHED pages only. If this is a draft: iris pages publish ${slug}`)
+        prompts.log.info(notFoundHint(slug))
         prompts.outro("Done")
         process.exitCode = 1
         return
@@ -3551,9 +3542,9 @@ async function renderPage(slug: string, opts: { width: number; timeout: number; 
     // remove, so this throws rather than returning something plausible.
     if (status >= 400 || /page not found/i.test(title)) {
       throw new Error(
-        status >= 400
-          ? `${url} returned HTTP ${status} — nothing was read.\n  /p/ serves PUBLISHED pages only. If this is a draft: iris pages publish ${slug}`
-          : `${url} served the not-found page — nothing was read.\n  /p/ serves PUBLISHED pages only. If this is a draft: iris pages publish ${slug}`,
+        (status >= 400
+          ? `${url} returned HTTP ${status} — nothing was read.`
+          : `${url} served the not-found page — nothing was read.`) + `\n  ${notFoundHint(slug)}`,
       )
     }
 

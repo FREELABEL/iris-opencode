@@ -135,7 +135,7 @@ function buildMarkdown(item: any, url: string): string {
 export const AtlasUseCommand = cmd({
   command: "use <ref>",
   aliases: ["context", "pull"],
-  describe: "pull a shared Atlas item's context to stdout (pipe it into any agent)",
+  describe: "READ a published note or Atlas item as markdown text on stdout (pipe it into any agent)",
   builder: (yargs) =>
     yargs
       .positional("ref", {

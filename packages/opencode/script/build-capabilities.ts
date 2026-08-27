@@ -384,6 +384,22 @@ const TERMS: Record<string, string[]> = {
   "how-to": ["guide", "tutorial", "documentation", "docs", "instructions"],
   memory: ["remember", "recall", "knowledge base", "rag"],
   bug: ["issue", "report a problem", "defect", "ticket"],
+  // A published note reads at /n/<uuid> and `atlas use` is the ONLY verb that returns its
+  // text — but its own words ("pull a shared Atlas item's context") share nothing with how
+  // anyone asks for it. Every phrasing below returned zero hits for `atlas use` on 2026-08-27,
+  // which is how a five-step curl + HTML-scrape gets reinvented for a one-command job.
+  "atlas use": [
+    "read a note",
+    "note text",
+    "published note",
+    "read a published page as text",
+    "note markdown",
+    "note content",
+    "shared item",
+    "public url text",
+    "scrape a note",
+    "extract text",
+  ],
 }
 
 const entries: Entry[] = [
