@@ -99,11 +99,22 @@ export const PlatformCloudUploadCommand = cmd({
         const r = await fetch(args.url)
         if (!r.ok) { sp.stop("Failed", 1); prompts.outro("Done"); return }
         const buf = Buffer.from(await r.arrayBuffer())
-        const ext = (args.url.split("?")[0].split(".").pop() ?? "").slice(0, 6)
+        // Derive a real extension — Content-Type first (authoritative), then the URL
+        // path. Without one the stored object is served as text/plain and the image
+        // won't render in an <img> (#152289 — e.g. `--title` with no extension).
+        const ctMap: Record<string, string> = {
+          "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp",
+          "image/gif": "gif", "image/svg+xml": "svg", "application/pdf": "pdf", "video/mp4": "mp4",
+        }
+        const ct = (r.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase()
+        const urlExt = (args.url.split("?")[0].split(".").pop() ?? "").toLowerCase()
+        const ext = ctMap[ct] ?? (/^[a-z0-9]{2,5}$/.test(urlExt) ? urlExt : "")
         tempFile = `/tmp/iris_cloud_upload_${Date.now()}${ext ? "." + ext : ""}`
         require("fs").writeFileSync(tempFile, buf)
         localPath = tempFile
-        originalFilename = args.title ?? basename(args.url.split("?")[0])
+        let base = args.title ?? basename(args.url.split("?")[0])
+        if (ext && !/\.[a-z0-9]{2,5}$/i.test(base)) base = `${base}.${ext}` // keep an extension so MIME is correct
+        originalFilename = base
         sp.stop(`Downloaded ${formatBytes(buf.length)}`)
       } else {
         if (!existsSync(args.file!)) {

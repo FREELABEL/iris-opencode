@@ -124,6 +124,9 @@ const ListCommand = cmd({
       // a convenience that maps to the API's 1-based `page` given the current --limit.
       if (args.page != null) params.set("page", String(Math.max(1, args.page)))
       else if (args.offset != null) params.set("page", String(Math.floor(Math.max(0, args.offset) / Math.max(1, args.limit)) + 1))
+      // The public /events endpoint now defaults include_private=false (#152137);
+      // the CLI manages events, so it must explicitly opt in to see hidden drafts.
+      params.set("include_private", "true")
       if (args.future) params.set("future_only", "true")
       if (args.past) params.set("past_only", "true")
       if (args.city) params.set("city", args.city)
@@ -161,25 +164,30 @@ const GetCommand = cmd({
   command: "get <id>",
   describe: "show event details",
   builder: (yargs) =>
-    yargs.positional("id", { describe: "event ID", type: "number", demandOption: true }),
+    yargs
+      .positional("id", { describe: "event ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Event #${args.id}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Event #${args.id}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (args.json) { console.log(JSON.stringify({ error: "Not authenticated" })); } else { prompts.outro("Done"); } return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Loading…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
 
     try {
-      const res = await irisFetch(`/api/v1/events/${args.id}`)
+      // include_private=true so the CLI can read hidden/draft events by id (#152137)
+      const res = await irisFetch(`/api/v1/events/${args.id}?include_private=true`)
       const ok = await handleApiError(res, "Get event")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (args.json) { console.log(JSON.stringify({ error: "API error" })); } else { prompts.outro("Done"); } return }
 
       const data = (await res.json()) as { data?: any }
       const e = data?.data?.event ?? data?.data ?? data
-      spinner.stop(String(e.title ?? `#${e.id}`))
+
+      if (args.json) { console.log(JSON.stringify(e, null, 2)); return }
+
+      spinner!.stop(String(e.title ?? `#${e.id}`))
 
       printDivider()
       printKV("ID", e.id)
@@ -202,8 +210,10 @@ const GetCommand = cmd({
 
       prompts.outro(dim(`iris events pull ${args.id}`))
     } catch (err) {
-      spinner.stop("Error", 1)
-      prompts.log.error(err instanceof Error ? err.message : String(err))
+      const msg = err instanceof Error ? err.message : String(err)
+      if (args.json) { console.log(JSON.stringify({ error: msg })); return }
+      if (spinner) spinner.stop("Error", 1)
+      prompts.log.error(msg)
       prompts.outro("Done")
     }
   },

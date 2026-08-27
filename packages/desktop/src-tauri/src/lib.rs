@@ -117,6 +117,11 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     #[cfg(not(target_os = "windows"))]
     let (mut rx, child) = app
         .shell()
+        // MUST match tauri.conf.json's externalBin ("sidecars/iris-cli") and what
+        // scripts/utils.ts stages ("sidecars/iris-cli-<target>"). dev carries this same fix
+        // under the name "opencode-cli" because dev bundles it under that name; the name is
+        // per-branch, the fix is not. Resolving a sidecar that is not bundled fails at launch
+        // with the exact error this replaced, so change this ONLY alongside those two files.
         .sidecar("iris-cli")
         .expect("Failed to resolve iris-cli sidecar")
         .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")

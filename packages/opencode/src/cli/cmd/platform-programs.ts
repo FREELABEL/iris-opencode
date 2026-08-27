@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, resolveUserId, failNoOp} from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, resolveUserId, failNoOp } from "./iris-api"
+import { scrapeInstagramPost } from "./platform-content"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -290,6 +291,8 @@ const UpdateCommand = cmd({
       .option("has-paid-membership", { describe: "can this program take money", type: "boolean" })
       .option("bloq-id", { describe: "link to a bloq (validated; use --clear-bloq to unlink)", type: "number" })
       .option("clear-bloq", { describe: "remove the bloq link", type: "boolean" })
+      .option("image-url", { describe: "cover image URL", type: "string" })
+      .option("icon", { describe: "icon URL", type: "string" })
       .option("active", { describe: "active (true/false)", type: "boolean" }),
   async handler(args) {
     UI.empty()
@@ -304,6 +307,8 @@ const UpdateCommand = cmd({
     if (args.slug) payload.slug = args.slug
     if (args["base-price"] !== undefined) payload.base_price = args["base-price"]
     if (args["has-paid-membership"] !== undefined) payload.has_paid_membership = args["has-paid-membership"]
+    if (args["image-url"]) payload.image_url = args["image-url"]
+    if (args.icon) payload.icon = args.icon
     if (args["clear-bloq"]) payload.bloq_id = null
     if (args["bloq-id"] !== undefined) {
       if (!(await bloqExists(args["bloq-id"]))) {
@@ -317,7 +322,7 @@ const UpdateCommand = cmd({
     if (args.active !== undefined) payload.active = args.active
 
     if (Object.keys(payload).length === 0) {
-      failNoOp("update", "Use --name, --description, --tier, or --active")
+      failNoOp("update", "Use --name, --description, --tier, --image-url, --icon, or --active")
     }
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
@@ -446,15 +451,21 @@ const PushCommand = cmd({
 
       spinner.start(`Pushing ${basename(filepath)}…`)
 
-      const entity = readLocalProgram(filepath)
+      const p = readLocalProgram(filepath)
       const payload: Record<string, unknown> = {
-        name: entity.name, slug: entity.slug, description: entity.description,
-        active: entity.active, tier: entity.tier, bloq_id: entity.bloq_id,
-        base_price: entity.base_price, has_paid_membership: entity.has_paid_membership,
-        allow_free_enrollment: entity.allow_free_enrollment,
-        membership_features: entity.membership_features,
-        custom_fields: entity.custom_fields,
-        enrollment_form_config: entity.enrollment_form_config,
+        name: p.name, slug: p.slug, description: p.description,
+        active: p.active, tier: p.tier, bloq_id: p.bloq_id,
+        // Curation/visibility fields the update endpoint accepts — previously dropped,
+        // so pull→edit→push silently no-op'd on type/featured/visibility (#152269).
+        type: p.type, featured: p.featured, visibility: p.visibility,
+        image_url: p.image_url, icon: p.icon,
+        base_price: p.base_price, has_paid_membership: p.has_paid_membership,
+        allow_free_enrollment: p.allow_free_enrollment,
+        membership_features: p.membership_features,
+        // The API validates custom_fields as an array — only send when it actually is
+        // one (#66's is null → otherwise 422 "custom fields must be an array").
+        custom_fields: Array.isArray(p.custom_fields) ? p.custom_fields : undefined,
+        enrollment_form_config: p.enrollment_form_config,
       }
       for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
 
@@ -524,7 +535,9 @@ const DiffCommand = cmd({
 
       const local = readLocalProgram(filepath)
 
-      const fields = ["name", "slug", "description", "active", "tier", "bloq_id", "base_price", "has_paid_membership", "allow_free_enrollment"]
+      // Must mirror the push payload, else diff falsely reports "in sync" on fields
+      // push sends but diff ignored (type/featured/visibility/image_url/icon) — #152269.
+      const fields = ["name", "slug", "description", "active", "tier", "bloq_id", "type", "featured", "visibility", "image_url", "icon", "base_price", "has_paid_membership", "allow_free_enrollment"]
       const changes: { field: string; live: unknown; local: unknown }[] = []
 
       for (const f of fields) {
@@ -917,6 +930,77 @@ const VerifyCertCommand = cmd({
 })
 
 // ============================================================================
+// cover <id> — set a program's cover image from an IG post / image URL (one-shot)
+// ============================================================================
+
+const CoverCommand = cmd({
+  command: "cover <id>",
+  describe: "view or set a program's cover image (from an Instagram post or image URL)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "program ID", type: "number", demandOption: true })
+      .option("ig", { describe: "Instagram post URL — scrape its flyer & use as the cover", type: "string" })
+      .option("url", { describe: "direct image URL to use as the cover", type: "string" })
+      .option("user-id", { describe: "user ID for the IG scrape (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Program Cover #${args.id}`)
+
+    // No source → show the current cover.
+    if (!args.ig && !args.url) {
+      const res = await irisFetch(`/api/v1/programs/${args.id}`)
+      if (!(await handleApiError(res, "Get program"))) { prompts.outro("Done"); return }
+      const data = (await res.json()) as any
+      let p = data?.data ?? data
+      if (p && typeof p.program === "object" && p.program) p = p.program
+      printDivider()
+      printKV("Program", p?.name ?? args.id)
+      printKV("Cover", p?.image_url || dim("(none)"))
+      printDivider()
+      prompts.outro(dim(`iris programs cover ${args.id} --ig <url>  |  --url <image-url>`))
+      return
+    }
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    let coverUrl = args.url as string | undefined
+
+    // IG source → scrape the post and use its durable (re-hosted) flyer.
+    if (args.ig) {
+      const userId = await requireUserId(args["user-id"] as number | undefined)
+      if (!userId) { prompts.outro("Done"); return }
+      const spinner = prompts.spinner()
+      spinner.start("Scraping Instagram post…")
+      const scraped = await scrapeInstagramPost(args.ig as string, userId)
+      if (!scraped || !scraped.flyerUrl) {
+        spinner.stop("No flyer found in that post", 1)
+        prompts.outro("Done")
+        return
+      }
+      spinner.stop(success("Got flyer"))
+      coverUrl = scraped.flyerUrl
+    }
+
+    const spinner = prompts.spinner()
+    spinner.start("Setting cover…")
+    const res = await irisFetch(`/api/v1/programs/${args.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ image_url: coverUrl }),
+    })
+    const ok = await handleApiError(res, "Set cover")
+    if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+    spinner.stop(`${success("✓")} Cover set`)
+
+    printDivider()
+    printKV("Program", args.id)
+    printKV("Cover", coverUrl)
+    printDivider()
+    prompts.outro(dim(`iris programs get ${args.id}`))
+  },
+})
+
+// ============================================================================
 // Root command
 // ============================================================================
 
@@ -930,6 +1014,7 @@ export const PlatformProgramsCommand = cmd({
       .command(GetCommand)
       .command(CreateCommand)
       .command(UpdateCommand)
+      .command(CoverCommand)
       .command(PullCommand)
       .command(PushCommand)
       .command(DiffCommand)
