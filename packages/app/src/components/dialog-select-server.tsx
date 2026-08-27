@@ -115,7 +115,7 @@ export function DialogSelectServer() {
   }
 
   return (
-    <Dialog title="Servers" description="Switch which OpenCode server this app connects to.">
+    <Dialog title="Servers" description="Switch which IRIS server this app connects to.">
       <div class="flex flex-col gap-4 pb-4">
         <List
           search={{ placeholder: "Search servers", autofocus: true }}
