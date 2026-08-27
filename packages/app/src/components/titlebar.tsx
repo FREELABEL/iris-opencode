@@ -368,6 +368,7 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                   "md:pl-4": !macTrafficLights(),
                 }}
               >
+                <IrisMark />
                 <ChannelIndicator debugTools={props.debugTools} />
                 <Show when={windows() || linux()}>
                   <WindowsAppMenu command={command} platform={platform} variant="v2" />
@@ -562,6 +563,7 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                     <div id="opencode-titlebar-left" class="flex items-center gap-3 min-w-0 px-2" />
                   </div>
                 </div>
+                <IrisMark />
                 <ChannelIndicator debugTools={props.debugTools} />
               </div>
             </div>
@@ -642,6 +644,31 @@ function TitlebarUpdateIconButton(props: { state: TitlebarUpdatePillState }) {
         </span>
       </button>
     </div>
+  )
+}
+
+// The IRIS mark — an isometric cube, matching the app icon.
+//
+// Drawn inline rather than imported as a PNG: it sits at 16px next to the channel
+// badge, where a raster mark goes soft on non-Retina displays, and `currentColor`
+// lets it inherit the titlebar's text colour so it works in both themes without a
+// second asset. Three faces at two opacities read as a cube without an outline.
+function IrisMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      class="size-4 shrink-0 text-text-weak-base"
+      aria-label="IRIS"
+      role="img"
+      fill="currentColor"
+    >
+      {/* top face */}
+      <path d="M12 2 22 7.6 12 13.2 2 7.6Z" opacity="0.95" />
+      {/* left face */}
+      <path d="M2 9.2 11.1 14.3 11.1 22 2 16.9Z" opacity="0.55" />
+      {/* right face */}
+      <path d="M22 9.2 12.9 14.3 12.9 22 22 16.9Z" opacity="0.75" />
+    </svg>
   )
 }
 
