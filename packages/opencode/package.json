@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "1.18.23",
+  "version": "1.18.23-iris.3.2037",
   "name": "opencode",
   "type": "module",
   "license": "MIT",
@@ -16,7 +16,7 @@
     "dev:temporary": "bun run --conditions=browser ./src/temporary.ts"
   },
   "bin": {
-    "opencode": "./bin/opencode"
+    "iris": "./bin/iris"
   },
   "exports": {
     "./*": "./src/*.ts"

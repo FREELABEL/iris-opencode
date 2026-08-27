@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "IRIS",
+  "identifier": "io.heyiris.desktop",
+  "mainBinaryName": "IRIS",
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/prod/32x32.png",
+      "icons/prod/128x128.png",
+      "icons/prod/128x128@2x.png",
+      "icons/prod/icon.icns",
+      "icons/prod/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/prod/icon.ico"
+      }
+    },
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/metainfo/io.heyiris.desktop.metainfo.xml": "release/appstream.metainfo.xml"
+        }
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVENDc0NjVDNjY2Q0U4NjQKUldSazZHeG1YRVpIWFprb3pCcGwzbnh3Skd1eE9yWFhiVllIU2MxUFlDZzh5UjF6WnhBcDJWWDMK",
+      "endpoints": ["https://github.com/FREELABEL/iris-opencode/releases/latest/download/latest.json"]
+    }
+  }
+}

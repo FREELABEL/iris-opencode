@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.heyiris.desktop</id>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>IRIS</name>
+  <summary>AI Business OS Copilot</summary>
+
+  <developer id="net.freelabel">
+    <name>Freelabel</name>
+  </developer>
+
+  <description>
+    <p>
+      IRIS is an AI Business OS Copilot that helps you run and grow your business with any AI model.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.heyiris.desktop.desktop</launchable>
+
+  <content_rating type="oars-1.1" />
+
+  <url type="bugtracker">https://github.com/FREELABEL/iris-opencode/issues</url>
+  <url type="homepage">https://heyiris.io</url>
+  <url type="vcs-browser">https://github.com/FREELABEL/iris-opencode</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://heyiris.io/apple-touch-icon.png</image>
+    </screenshot>
+  </screenshots>
+</component>

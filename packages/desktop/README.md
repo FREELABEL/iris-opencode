@@ -1,19 +1,7 @@
-# OpenCode Desktop
+# Tauri + Vanilla TS
 
-The OpenCode Desktop app, built with Electron.
+This template should help get you started developing with Tauri in vanilla HTML, CSS and Typescript.
 
-## Development
+## Recommended IDE Setup
 
-```bash
-bun install
-bun dev
-```
-
-## Build
-
-Run the `build` script to build the app's JS assets, then `package` to
-bundle the assets as an application. The resulting app will be in `dist/`.
-
-```bash
-bun run build && bun run package
-```
+- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)

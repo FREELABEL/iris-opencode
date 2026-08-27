@@ -1,97 +1,57 @@
 import { $ } from "bun"
-import { chmod, copyFile, mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 
-const CLI_VERSION = "0.0.0-next-16350"
-
-export type Channel = "dev" | "beta" | "prod"
-
-export function resolveChannel(): Channel {
-  const raw = Bun.env.OPENCODE_CHANNEL
-  if (raw === "dev" || raw === "beta" || raw === "prod") return raw
-  return "dev"
-}
-
-export const CLI_BINARIES: Array<{ rustTarget: string; package: string; os: string; cpu: string }> = [
+// These `ocBinary` values MUST match packages/opencode/script/build.ts's own local dist
+// DIRECTORY naming (pkg.name + os + arch, e.g. "opencode-darwin-arm64") -- that part is
+// pkg.name-based and unrelated to how release.yml later renames the packaged .zip/.tar.gz
+// for distribution (iris-<target>). The compiled binary FILE inside that directory, though,
+// is genuinely named "iris" (packages/opencode/package.json's `"bin": {"iris": "./bin/iris"}`
+// wins over build.ts's literal outfile string once Bun's `--compile` step reads it via
+// `autoloadPackageJson: true`) -- see prepare.ts/predev.ts, which reference `bin/iris`.
+// Verified live via desktop-test-build.yml CI output (2026-08-24). Don't "fix" either half
+// of this without re-confirming what a real build actually produces.
+export const SIDECAR_BINARIES: Array<{ rustTarget: string; ocBinary: string; assetExt: string }> = [
   {
     rustTarget: "aarch64-apple-darwin",
-    package: "@opencode-ai/cli-darwin-arm64",
-    os: "darwin",
-    cpu: "arm64",
+    ocBinary: "opencode-darwin-arm64",
+    assetExt: "zip",
   },
   {
     rustTarget: "x86_64-apple-darwin",
-    package: "@opencode-ai/cli-darwin-x64-baseline",
-    os: "darwin",
-    cpu: "x64",
-  },
-  {
-    rustTarget: "aarch64-pc-windows-msvc",
-    package: "@opencode-ai/cli-windows-arm64",
-    os: "win32",
-    cpu: "arm64",
+    ocBinary: "opencode-darwin-x64",
+    assetExt: "zip",
   },
   {
     rustTarget: "x86_64-pc-windows-msvc",
-    package: "@opencode-ai/cli-windows-x64-baseline",
-    os: "win32",
-    cpu: "x64",
+    ocBinary: "opencode-windows-x64",
+    assetExt: "zip",
   },
   {
     rustTarget: "x86_64-unknown-linux-gnu",
-    package: "@opencode-ai/cli-linux-x64-baseline",
-    os: "linux",
-    cpu: "x64",
+    ocBinary: "opencode-linux-x64",
+    assetExt: "tar.gz",
   },
   {
     rustTarget: "aarch64-unknown-linux-gnu",
-    package: "@opencode-ai/cli-linux-arm64",
-    os: "linux",
-    cpu: "arm64",
+    ocBinary: "opencode-linux-arm64",
+    assetExt: "tar.gz",
   },
 ]
 
 export const RUST_TARGET = Bun.env.RUST_TARGET
 
-function nativeTarget() {
-  const { platform, arch } = process
-  if (platform === "darwin") return arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin"
-  if (platform === "win32") return arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc"
-  if (platform === "linux") return arch === "arm64" ? "aarch64-unknown-linux-gnu" : "x86_64-unknown-linux-gnu"
-  throw new Error(`Unsupported platform: ${platform}/${arch}`)
-}
+export function getCurrentSidecar(target = RUST_TARGET) {
+  if (!target && !RUST_TARGET) throw new Error("RUST_TARGET not set")
 
-export function getCurrentCli(target = RUST_TARGET ?? nativeTarget()) {
-  const binaryConfig = CLI_BINARIES.find((item) => item.rustTarget === target)
-  if (!binaryConfig) throw new Error(`CLI configuration not available for target '${target}'`)
+  const binaryConfig = SIDECAR_BINARIES.find((b) => b.rustTarget === target)
+  if (!binaryConfig) throw new Error(`Sidecar configuration not available for Rust target '${RUST_TARGET}'`)
 
   return binaryConfig
 }
 
-export async function downloadCliToResources() {
-  const cli = getCurrentCli()
-  const directory = await mkdtemp(join(tmpdir(), "opencode-cli-"))
-  const dest = windowsify("resources/opencode-cli")
-  try {
-    await $`bun install --no-save --cwd ${directory} ${`${cli.package}@${CLI_VERSION}`} ${`--os=${cli.os}`} ${`--cpu=${cli.cpu}`}`
-    await copyFile(
-      join(directory, "node_modules", cli.package, "bin", cli.os === "win32" ? "opencode2.exe" : "opencode2"),
-      dest,
-    )
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-  if (process.platform !== "win32") await chmod(dest, 0o755)
-  if (process.platform === "win32" && process.env.GITHUB_ACTIONS === "true") {
-    await $`pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../../script/sign-windows.ps1 ${dest}`
-  }
-  if (process.platform === "darwin") await $`codesign --force --sign - ${dest}`
+export async function copyBinaryToSidecarFolder(source: string, target = RUST_TARGET) {
+  await $`mkdir -p src-tauri/sidecars`
+  const dest = `src-tauri/sidecars/iris-cli-${target}${process.platform === "win32" ? ".exe" : ""}`
+  await $`cp ${source} ${dest}`
 
-  console.log(`Copied ${cli.package} to ${dest}`)
-}
-
-export function windowsify(path: string) {
-  if (path.endsWith(".exe")) return path
-  return `${path}${process.platform === "win32" ? ".exe" : ""}`
+  console.log(`Copied ${source} to ${dest}`)
 }

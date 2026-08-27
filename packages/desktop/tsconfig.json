@@ -14,10 +14,8 @@
     "isolatedModules": true,
     "noEmit": true,
     "emitDeclarationOnly": false,
-    "outDir": "node_modules/.ts-dist",
-    "types": ["vite/client", "node", "electron"]
+    "outDir": "node_modules/.ts-dist"
   },
   "references": [{ "path": "../app" }],
-  "include": ["src", "package.json"],
-  "exclude": ["src/**/*.test.ts"]
+  "include": ["src", "package.json"]
 }
