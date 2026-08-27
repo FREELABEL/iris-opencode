@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
 import { resolveLocalNode } from "./hive-local-node"
+import { describeUptime } from "./hive-uptime"
 import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask } from "./hive-script-result"
 
 // ============================================================================
@@ -168,6 +169,25 @@ const HiveNodesListCommand = cmd({
       // and completely invisible while being excluded, so Obsidian/Mail/Calendar silently
       // worked on exactly one machine (#178758). A fleet you cannot inventory cannot be
       // rolled out to.
+      // IS IT STAYING UP? (#182434 — Gap 1)
+      //
+      // ONLINE here means "has not missed a heartbeat", and a crash-looping daemon heartbeats
+      // once per restart, so it never misses one. This line is what separates a machine that
+      // has been up for hours from one dying every thirty seconds — the two were identical in
+      // this table while work kept being dispatched to both.
+      const up = describeUptime(n as any, Date.now())
+      if (up.kind === "looping") {
+        console.log(
+          `    ${UI.Style.TEXT_DANGER}⚠ ${up.label} · ${up.restarts} restarts in the last ${up.windowLabel} — ` +
+            `crash-looping; work sent here will hang to timeout${UI.Style.TEXT_NORMAL}`,
+        )
+      } else if (up.kind === "stable") {
+        console.log(`    ${dim("uptime:")} ${up.label}`)
+      } else {
+        // NOT MEASURED, said as such. Rendering this as "up 0s" would recreate the bug.
+        console.log(`    ${dim(`uptime: unknown — ${up.reason}`)}`)
+      }
+
       const ver = (n as any).daemon_version
       const caps = (n as any).bridge_capabilities
       if (ver || caps) {
