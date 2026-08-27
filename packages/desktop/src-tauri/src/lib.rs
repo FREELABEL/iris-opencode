@@ -93,9 +93,88 @@ fn get_sidecar_port() -> u32 {
         }) as u32
 }
 
+/// The baseline instruction that tells the agent it is IRIS.
+///
+/// Compiled into the binary so it ships. Until now this text existed only as an untracked
+/// file on one developer's laptop (`~/.config/opencode/AGENTS.md`) — written by no installer,
+/// referenced in no repo — which meant every client install was a generic coding agent that
+/// did not know it was IRIS, that `iris leads` existed, or that it could drive the platform.
+const IRIS_BASELINE_AGENTS_MD: &str = include_str!("../resources/iris-agents.md");
+
+/// Seed `~/.config/opencode/AGENTS.md` if, and only if, it does not already exist.
+///
+/// The engine (session/instruction.ts `systemPaths`) walks a list of global instruction files
+/// and takes the FIRST that exists, then breaks — `~/.config/opencode/AGENTS.md` before
+/// `~/.claude/CLAUDE.md`. So writing that path is enough to reach the system prompt, and needs
+/// no patch to upstream's engine, which keeps future rebases cheap.
+///
+/// NEVER overwrites. A user who has customised this file has said something we should not
+/// silently discard on next launch, and a user with their own `~/.claude/CLAUDE.md` and no
+/// AGENTS.md is deliberately choosing that one — seeding ours would hijack the precedence.
+/// Every failure here is non-fatal: a missing instruction file degrades the agent, it does not
+/// break the app, so a read-only home directory must not stop the app from starting.
+fn seed_iris_instructions() {
+    let Some(home) = dirs_next_home() else { return };
+    let dir = home.join(".config").join("opencode");
+    let target = dir.join("AGENTS.md");
+    if target.exists() {
+        return;
+    }
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    match std::fs::write(&target, IRIS_BASELINE_AGENTS_MD) {
+        Ok(()) => println!("Seeded IRIS baseline instructions at {}", target.display()),
+        Err(e) => eprintln!("Could not seed IRIS instructions ({e}) — continuing without them"),
+    }
+}
+
+/// Read a single key out of `~/.iris/sdk/.env`.
+///
+/// The IRIS provider is configured in opencode.json as an openai-compatible endpoint whose
+/// apiKey the engine expects to find in the environment. A GUI app launched from Finder
+/// inherits none of the user's shell, so `IRIS_API_KEY` is simply absent — verified: zero
+/// occurrences in the running app's environment, and every IRIS model call came back
+/// HTTP 401 "Provide a Bearer token" while the model LIST looked perfectly healthy.
+///
+/// The alternative (pasting the key into opencode.json) works on one machine and cannot
+/// ship: no client's config can carry someone else's credential.
+///
+/// Missing file, missing key and unreadable file are all the same non-fatal answer: None.
+/// A user who has not run `iris-login` yet must still get a working app.
+fn iris_env_value(key: &str) -> Option<String> {
+    let path = dirs_next_home()?.join(".iris").join("sdk").join(".env");
+    let contents = std::fs::read_to_string(path).ok()?;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // KEY=value, tolerating `export KEY=value` and surrounding quotes.
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == key {
+                let v = v.trim().trim_matches('"').trim_matches('\'');
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn dirs_next_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
 fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     let log_state = app.state::<LogState>();
     let log_state_clone = log_state.inner().clone();
+
+    // Empty string when absent: passing the var through unconditionally keeps both spawn
+    // branches identical, and an empty value behaves the same as an unset one downstream.
+    let iris_api_key = iris_env_value("IRIS_API_KEY").unwrap_or_default();
 
     let state_dir = app
         .path()
@@ -110,6 +189,7 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
         .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")
         .env("OPENCODE_CLIENT", "desktop")
         .env("XDG_STATE_HOME", &state_dir)
+        .env("IRIS_API_KEY", &iris_api_key)
         .args(["serve", &format!("--port={port}")])
         .spawn()
         .expect("Failed to spawn opencode");
@@ -122,6 +202,7 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
         .env("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY", "true")
         .env("OPENCODE_CLIENT", "desktop")
         .env("XDG_STATE_HOME", &state_dir)
+        .env("IRIS_API_KEY", &iris_api_key)
         .args(["serve", &format!("--port={port}")])
         .spawn()
         .expect("Failed to spawn opencode");
@@ -205,6 +286,10 @@ pub fn run() {
             {
               let app = app.clone();
               tauri::async_runtime::spawn(async move {
+                  // Before the server starts: make sure the agent has something telling it
+                  // it is IRIS. No-ops when the user already has an AGENTS.md.
+                  seed_iris_instructions();
+
                   let port = get_sidecar_port();
 
                   let should_spawn_sidecar = !is_server_running(port).await;
