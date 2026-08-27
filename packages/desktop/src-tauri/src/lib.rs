@@ -93,6 +93,82 @@ fn get_sidecar_port() -> u32 {
         }) as u32
 }
 
+// macOS runs a QUARANTINED app from a randomized read-only mount under
+// /private/var/folders/.../AppTranslocation/ instead of from where it actually lives. This
+// happens whenever someone double-clicks the app inside the .dmg, or runs it straight out of
+// Downloads, rather than dragging it to Applications first.
+//
+// Under translocation the sidecar never spawns, and the UI reports "Could not reach Local ·
+// Retrying automatically…" forever. Observed 2026-08-27: the translocated process had no
+// iris-cli child at all, while the SAME build running from /Applications was healthy at the
+// same moment.
+//
+// That message is indistinguishable from a real connection bug — it is the identical sentence
+// the August splash-hang produced — so without this check the user, and whoever they report it
+// to, both start debugging the app instead of moving it. Switching the download page to .dmg
+// makes this MORE likely, not less, because a disk image is exactly what people open and run
+// from.
+#[cfg(target_os = "macos")]
+fn translocated_from() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let path = exe.to_string_lossy().to_string();
+    if path.contains("/AppTranslocation/") {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn translocated_from() -> Option<String> {
+    None
+}
+
+// Tell the user what is wrong and what to do about it, then quit. Continuing is not an option
+// worth offering: the sidecar cannot start from here, so every screen after this one would be
+// a slower, more confusing version of the same failure.
+const TRANSLOCATION_MESSAGE: &str = concat!(
+    "IRIS is running from a temporary read-only copy, so it cannot start its local server.",
+    "\n\n",
+    "This happens when the app is opened directly from the disk image or from Downloads.",
+    "\n\n",
+    "To fix it: drag IRIS into your Applications folder, then open it from there.",
+);
+
+fn warn_if_translocated(app: &AppHandle) -> bool {
+    let Some(path) = translocated_from() else {
+        return false;
+    };
+
+    eprintln!("IRIS is translocated ({path}); sidecar cannot start. Asking user to move it.");
+
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+        let app_for_exit = app.clone();
+        // NOT blocking_show(): the plugin documents it as unsafe on the main thread, and
+        // setup() IS the main thread — using it here deadlocks at launch, which would be a
+        // worse bug than the one being reported. Show asynchronously and quit in the callback,
+        // once the user has actually read it.
+        app.dialog()
+            .message(TRANSLOCATION_MESSAGE)
+            .title("Move IRIS to Applications")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCustom("Quit".to_string()))
+            .show(move |_| {
+                app_for_exit.exit(1);
+            });
+    }
+
+    // No window and no sidecar are created. On macOS the event loop keeps the process alive
+    // while the dialog is up; the callback above ends it.
+    #[cfg(not(target_os = "macos"))]
+    app.exit(1);
+
+    true
+}
+
 fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     let log_state = app.state::<LogState>();
     let log_state_clone = log_state.inner().clone();
@@ -203,6 +279,12 @@ pub fn run() {
         ])
         .setup(move |app| {
             let app = app.handle().clone();
+
+            // FIRST, before anything tries to start: a translocated app cannot spawn its
+            // sidecar, so every later step would fail in a way that looks like a bug in IRIS.
+            if warn_if_translocated(&app) {
+                return Ok(());
+            }
 
             // Initialize log state
             app.manage(LogState(Arc::new(Mutex::new(VecDeque::new()))));
