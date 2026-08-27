@@ -647,27 +647,30 @@ function TitlebarUpdateIconButton(props: { state: TitlebarUpdatePillState }) {
   )
 }
 
-// The IRIS mark — an isometric cube, matching the app icon.
+// The IRIS mark — the isometric cube from heyiris.io/iris-logo.png.
 //
-// Drawn inline rather than imported as a PNG: it sits at 16px next to the channel
-// badge, where a raster mark goes soft on non-Retina displays, and `currentColor`
-// lets it inherit the titlebar's text colour so it works in both themes without a
-// second asset. Three faces at two opacities read as a cube without an outline.
+// Drawn as SVG rather than embedding that PNG: it renders at 16px beside the channel
+// badge, where a 512px raster is both oversized and soft on non-Retina, and
+// `currentColor` lets one asset serve both themes.
+//
+// Geometry matches the real mark: three faces at the SAME value, separated by thin
+// gaps that let the titlebar show through as the dark seams. An earlier version shaded
+// the faces at three different opacities to fake depth — that is a different logo.
 function IrisMark() {
   return (
     <svg
       viewBox="0 0 24 24"
-      class="size-4 shrink-0 text-text-weak-base"
+      class="size-4 shrink-0"
       aria-label="IRIS"
       role="img"
       fill="currentColor"
     >
-      {/* top face */}
-      <path d="M12 2 22 7.6 12 13.2 2 7.6Z" opacity="0.95" />
-      {/* left face */}
-      <path d="M2 9.2 11.1 14.3 11.1 22 2 16.9Z" opacity="0.55" />
-      {/* right face */}
-      <path d="M22 9.2 12.9 14.3 12.9 22 22 16.9Z" opacity="0.75" />
+      {/* top */}
+      <path d="M12 2.4 21.4 7 12 11.6 2.6 7Z" />
+      {/* left */}
+      <path d="M2.6 8.1 11.6 12.6 11.6 21.6 2.6 17.1Z" />
+      {/* right */}
+      <path d="M21.4 8.1 12.4 12.6 12.4 21.6 21.4 17.1Z" />
     </svg>
   )
 }
