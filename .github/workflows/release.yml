@@ -282,11 +282,12 @@ jobs:
   # above. These are two unrelated products that happen to share the "IRIS desktop app" name —
   # see bloq #503 item #182113 for the full writeup of why both exist.
   #
-  # Unsigned/ad-hoc-signed and updater artifacts disabled: no Apple Developer ID cert, no
-  # Windows code-signing cert, and no owned TAURI_SIGNING_PRIVATE_KEY secret exist for this repo
-  # yet (`gh secret list` shows only CROSS_REPO_PAT). A public landing-page download needs real
-  # signing/notarization added here first — this job only gets a build produced on every
-  # release, same as build-desktop, optional and non-blocking.
+  # macOS signing + NOTARIZATION is now wired (see the Build step below): when the APPLE_*
+  # repo secrets exist, `tauri build` Developer-ID-signs and notarizes the app, so Gatekeeper
+  # stops reporting it as "damaged" on Apple Silicon. Apple Developer Program membership was
+  # renewed 2026-08-26 (Team ID F23Q2DQNLA, Account Holder Alexander Mayo) — bloq #503 DESK-03.
+  # Windows remains UNSIGNED (no Windows code-signing cert yet; SmartScreen warns). This job is
+  # optional and non-blocking, same as build-desktop.
   build-desktop-tauri:
     strategy:
       fail-fast: false
@@ -344,17 +345,31 @@ jobs:
           cp "$BIN" packages/desktop/src-tauri/sidecars/iris-cli-${{ matrix.rust_target }}
           chmod +x packages/desktop/src-tauri/sidecars/iris-cli-${{ matrix.rust_target }}
 
-      # NOTE: no `env:` block here on purpose. Setting APPLE_SIGNING_IDENTITY/
-      # TAURI_SIGNING_PRIVATE_KEY to an explicit empty string (which a previous version of
-      # this job did) makes `codesign` fail outright ("no identity found") instead of falling
-      # back to ad-hoc signing -- confirmed by v1.3.205's build-desktop-tauri (macos-latest,
-      # arm64) failing with exactly that error. The vars must be entirely ABSENT, not empty,
-      # for Tauri's automatic ad-hoc-sign fallback to kick in. No signing certs/keys exist for
-      # this repo yet (see job comment above) -- this is expected/fine until that changes.
+      # Sign + NOTARIZE the macOS app when the APPLE_* secrets are present; otherwise fall back
+      # to ad-hoc signing (builds, but Gatekeeper flags it "damaged" on M1 — see bloq #503
+      # DESK-03). Empty secrets are UNSET (not exported as "") before invoking tauri, so the
+      # ad-hoc fallback still triggers instead of codesign dying with "no identity found"
+      # (the v1.3.205 failure). macOS runner default shell is bash, so `${!v}` indirect
+      # expansion works.
       - name: Build IRIS desktop app (Tauri)
         run: |
           cd packages/desktop
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v}" ]; then unset "$v"; fi
+          done
+          if [ -n "${APPLE_CERTIFICATE:-}" ]; then
+            echo "Apple signing secrets present — codesign + notarize enabled."
+          else
+            echo "APPLE_CERTIFICATE unset — ad-hoc signing fallback (app will be flagged 'damaged' on M1)."
+          fi
           ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles app,dmg
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Zip the .app bundle
         run: |
