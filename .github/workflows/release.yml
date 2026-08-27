@@ -384,7 +384,13 @@ jobs:
           else
             echo "APPLE_CERTIFICATE unset — ad-hoc signing fallback (app will be flagged 'damaged' on M1)."
           fi
-          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles app,dmg
+          # --bundles app ONLY. This used to be "app,dmg", and on 2026-08-27 the Intel
+          # release died with `error running bundle_dmg.sh` AFTER building a perfectly good
+          # .app -- so v1.3.214 shipped with no Intel build and the front page 404'd for
+          # every Intel Mac. The DMG was DISCARDED by the upload step anyway: the job was
+          # failing over an artifact nobody ever received. The DMG is now built in its own
+          # tolerant step below, where flakiness costs a warning instead of an architecture.
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles app
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -398,11 +404,35 @@ jobs:
           cd packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos
           ditto -c -k --sequesterRsrc --keepParent IRIS.app IRIS-tauri-darwin-${{ matrix.arch }}.zip
 
+      # Best effort, and non-fatal BY DESIGN: bundle_dmg.sh is flaky on hosted runners and a
+      # nice-to-have must never cost users an entire architecture. The Rust build is already
+      # cached in target/, so this only re-runs the bundling stage.
+      - name: Bundle the DMG (best effort)
+        continue-on-error: true
+        run: |
+          cd packages/desktop
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles dmg \
+            || echo "::warning::DMG bundling failed — shipping the .app zip only"
+          SRC=$(ls src-tauri/target/${{ matrix.rust_target }}/release/bundle/dmg/*.dmg 2>/dev/null | head -1 || true)
+          if [ -n "$SRC" ]; then
+            cp "$SRC" "src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.dmg"
+            echo "DMG staged for upload"
+          fi
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v4
         with:
           name: IRIS-tauri-darwin-${{ matrix.arch }}
-          path: packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.zip
+          path: |
+            packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.zip
+            packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.dmg
           if-no-files-found: warn
 
   # Windows leg of the Tauri desktop app, separate job (not a matrix entry above) because
@@ -684,7 +714,7 @@ jobs:
       - name: Upload desktop assets to release
         run: |
           shopt -s nullglob
-          assets=(desktop-tauri/IRIS-tauri-*.zip desktop-tauri/IRIS-tauri-*.exe)
+          assets=(desktop-tauri/IRIS-tauri-*.zip desktop-tauri/IRIS-tauri-*.dmg desktop-tauri/IRIS-tauri-*.exe)
           if [ ${#assets[@]} -eq 0 ]; then
             echo "::warning::No Tauri desktop assets to upload (build skipped or failed)"
             exit 0
