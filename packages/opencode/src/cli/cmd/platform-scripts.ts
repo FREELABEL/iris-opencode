@@ -1,5 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
+import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, writeJson } from "./iris-api"
 import { resolveNode } from "./platform-hive-nodes"
 import { existsSync, writeFileSync, readFileSync } from "fs"
@@ -226,6 +227,73 @@ const RunCmd = cmd({
   },
 })
 
+/**
+ * S1.4 — which nodes can run this script, and what each is missing.
+ *
+ * The verdict is computed by the HUB, not here. The hub is what actually refuses a dispatch,
+ * so the answer an operator reads has to come from the same code that makes the decision; a
+ * client that recomputed eligibility would be a second opinion that eventually disagrees with
+ * the router, and the operator would believe the wrong one.
+ */
+const DoctorCmd = cmd({
+  command: "doctor <slug>",
+  describe: "which nodes can run this script, and what each is missing",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "script slug", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) UI.empty()
+    const token = await requireAuth()
+    if (!token) return
+
+    const res = await scriptsFetch(`/api/v1/scripts/${encodeURIComponent(String(args.slug))}/doctor`)
+    if (!res.ok) return void (await handleApiError(res, `Doctor failed for '${args.slug}'`))
+
+    const d = ((await res.json()) as any).data
+    if (args.json) return void (await writeJson(d))
+
+    console.log()
+    console.log(`  ${bold(String(d.slug))}`)
+
+    if (!d.requires?.length) {
+      // Say this plainly. "No requirements" and "requirements we failed to parse" look the
+      // same in a list of zero, and only one of them means the script routes anywhere.
+      console.log(`  ${dim("declares no requirements — routes to any available node")}`)
+    } else {
+      console.log(`  ${dim("requires:")} ${d.requires.join(", ")}`)
+    }
+
+    // Parse errors first: an ignored directive is the likeliest reason a script is not routing
+    // the way its author expects, and it is invisible everywhere else.
+    for (const e of d.manifest_errors ?? []) {
+      console.log(`  ${UI.Style.TEXT_WARNING}⚠ manifest: ${e}${UI.Style.TEXT_NORMAL}`)
+    }
+
+    console.log()
+    for (const row of d.eligible ?? []) {
+      console.log(`  ${success("✓")} ${bold(row.node)}  ${dim("can run this")}`)
+    }
+    for (const row of d.blocked ?? []) {
+      console.log(`  ${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL} ${bold(row.node)}`)
+      for (const u of row.verdict?.unmet ?? []) {
+        console.log(`      ${dim(`${u.requirement} — ${u.reason}`)}`)
+      }
+    }
+
+    console.log()
+    // ELIGIBLE-BUT-OFFLINE IS NOT CAPACITY. A node that qualifies but is not online cannot run
+    // anything, and reporting it as capacity would say the script is fine while nothing runs.
+    if (d.runnable_now) {
+      prompts.outro(`${success("✓")} runnable now on ${d.eligible_online} node(s)`)
+    } else if ((d.eligible ?? []).length) {
+      prompts.outro(`No node can run this RIGHT NOW — ${d.eligible.length} qualify but none are online`)
+    } else {
+      prompts.outro("No node can run this")
+    }
+  },
+})
+
 // ============================================================================
 // Root
 // ============================================================================
@@ -234,6 +302,6 @@ export const PlatformScriptsCommand = cmd({
   command: "scripts",
   describe: "account-scoped, slug-addressed scripts that run on your Hive fleet",
   builder: (y) =>
-    y.command(ListCmd).command(PushCmd).command(PullCmd).command(RunCmd).command(RmCmd).demandCommand(),
+    y.command(ListCmd).command(PushCmd).command(PullCmd).command(RunCmd).command(RmCmd).command(DoctorCmd).demandCommand(),
   async handler() {},
 })
