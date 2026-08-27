@@ -84,6 +84,20 @@ else
 fi
 
 step "5. Run it — a real round-trip, not a status code"
+# A bundle built for another architecture cannot be booted here, and Rosetta does NOT help:
+# Bun's standard x64 binaries use AVX2, which Rosetta 2 does not implement, so an x86_64
+# sidecar dies with SIGILL on an arm64 Mac no matter what. That is a property of THIS
+# MACHINE, not of the build — reporting it as a defect would condemn a perfectly good
+# artifact, which is exactly the confusion this script exists to prevent.
+BUNDLE_ARCH="$(file "$APP/Contents/MacOS/$SIDECAR_NAME" | grep -oE 'x86_64|arm64' | head -1)"
+HOST_ARCH="$(uname -m)"
+if [ "$BUNDLE_ARCH" = "x86_64" ] && [ "$HOST_ARCH" = "arm64" ]; then
+  info "bundle is x86_64 and this host is arm64 — SKIPPING the boot test."
+  info "Rosetta cannot run Bun's AVX2 binaries; this must be verified on real Intel hardware."
+  info "Everything checkable without executing it has passed."
+  step "$([ $FAIL -eq 0 ] && echo $'\033[33mPARTIALLY VERIFIED — boot test needs an Intel Mac\033[0m' || echo $'\033[31mSHIPPED APP HAS DEFECTS A CLIENT WILL HIT\033[0m')"
+  exit $FAIL
+fi
 "$APP/Contents/MacOS/$SIDECAR_NAME" serve --port=$PORT >"$WORK/serve.log" 2>&1 &
 SC=$!; stop_sidecar() { kill $SC 2>/dev/null; wait $SC 2>/dev/null; }
 trap 'stop_sidecar; rm -rf "$WORK"' EXIT
