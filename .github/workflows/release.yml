@@ -56,8 +56,12 @@ jobs:
         with:
           path: ~/.bun
           key: ${{ runner.os }}-${{ matrix.arch }}-bun-${{ hashFiles('package.json') }}-${{ hashFiles('bun.lockb', 'bun.lock') }}
+          # Pin the restore to the SAME package.json hash (i.e. same bun version).
+          # A loose `macOS-arm64-bun-` prefix previously restored a stale ~/.bun that
+          # held an older bun, overwriting the version setup-bun just installed and
+          # breaking `bun run script/build.ts` ("requires bun@X, but you are using bun@Y").
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-bun-
+            ${{ runner.os }}-${{ matrix.arch }}-bun-${{ hashFiles('package.json') }}-
 
       # macos-15-intel arrives close to full, and `bun install` is enough to take it to zero:
       # v1.3.181 failed twice with "0.0 GB free" while the SAME runner label built the desktop
