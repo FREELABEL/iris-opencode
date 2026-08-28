@@ -74,3 +74,16 @@ export function extractConnections(payload: any): ConnectionRow[] {
 
   return Array.isArray(rows) ? rows : []
 }
+
+/**
+ * Should `connect` just print the authorize URL and stop?
+ *
+ * #182693. Without a terminal nobody can answer a prompt, see a browser we opened, or watch
+ * a poll spinner for an authorisation they have no way to perform — so the URL is the only
+ * useful output. `--print-url` already did exactly that; it simply was not the default in the
+ * one situation that needs it, which is how a user in IRIS Desktop asked an agent to connect
+ * an integration and got back nothing at all.
+ */
+export function shouldPrintUrlOnly(opts: { printUrl?: boolean; isTTY?: boolean }): boolean {
+  return Boolean(opts.printUrl) || !opts.isTTY
+}

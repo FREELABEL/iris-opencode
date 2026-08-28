@@ -23,7 +23,7 @@ import {
   getBridgeToken, writeJson } from "./iris-api"
 import { exec } from "child_process"
 import { randomBytes } from "node:crypto"
-import { detectNewConnection, extractConnections, type ConnectionRow } from "./integration-connect-state"
+import { detectNewConnection, extractConnections, shouldPrintUrlOnly, type ConnectionRow } from "./integration-connect-state"
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 
@@ -858,6 +858,21 @@ const ConnectCommand = cmd({
     UI.empty()
     const labelSuffix = args.name ? ` ${dim(`(${args.name})`)}` : ""
     prompts.intro(`◈  Connect: ${args.type}${labelSuffix}`)
+
+    // NO TERMINAL MEANS THE URL *IS* THE DELIVERABLE.
+    //
+    // Reported 2026-08-28 (#182693): a user in IRIS Desktop asked an agent to connect an
+    // integration and no OAuth URL ever came back. Every non-TTY path through this command
+    // ended in `outro("Cancelled")` with NO exit code set — so the caller saw success and
+    // nothing else, and could not tell "cancelled" from "worked".
+    //
+    // Without a TTY nobody can answer a prompt, see a browser we opened, or watch a poll
+    // spinner for an authorisation they have no way to perform. In that world the only
+    // useful output is the authorize URL itself, which is exactly what --print-url already
+    // produces. So absence of a terminal now IMPLIES it rather than disabling the one
+    // branch that works.
+    const headless = !process.stdin.isTTY
+    const printUrlOnly = shouldPrintUrlOnly({ printUrl: Boolean(args["print-url"]), isTTY: Boolean(process.stdin.isTTY) })
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     const type = String(args.type)
 
@@ -890,11 +905,15 @@ const ConnectCommand = cmd({
                 prompts.log.error(
                   `Existing ${type} connection found and no TTY for a prompt. Re-run with ${highlight("--yes")} to overwrite, or ${highlight("--name=\"Personal\"")} to add a new account.`,
                 )
+                // Refusing is right — overwriting a live credential unasked is worse than
+                // stopping. Exiting 0 while refusing is what made this invisible.
+                process.exitCode = 1
                 prompts.outro("Cancelled")
                 return
               } else {
                 const proceed = await prompts.confirm({ message: "Continue and overwrite?", initialValue: false })
                 if (prompts.isCancel(proceed) || !proceed) {
+                  process.exitCode = 1
                   prompts.outro("Cancelled")
                   return
                 }
@@ -934,7 +953,7 @@ const ConnectCommand = cmd({
       console.log(`  ${dim("Find it in Meta Business Suite → Business Settings → WhatsApp Accounts")}`)
       console.log()
       const wabaId = await prompts.text({ message: "Paste your WABA ID:" })
-      if (prompts.isCancel(wabaId) || !wabaId) { prompts.outro("Cancelled"); return }
+      if (prompts.isCancel(wabaId) || !wabaId) { process.exitCode = 1; prompts.outro("Cancelled"); return }
 
       const sp = prompts.spinner()
       sp.start("Connecting WhatsApp…")
@@ -976,7 +995,7 @@ const ConnectCommand = cmd({
         const connId = caData?.id ?? caData?.connectedAccountId
         if (oauthUrl) {
           sp.stop("OAuth URL ready")
-          if (args["print-url"]) {
+          if (printUrlOnly) {
             console.log(`\n  ${highlight(oauthUrl)}\n`)
           } else {
             console.log(`\n  ${dim("Opening browser…")}`)
@@ -1040,6 +1059,7 @@ const ConnectCommand = cmd({
           mask: "•",
         })
         if (prompts.isCancel(apiKey) || !apiKey) {
+          process.exitCode = 1
           prompts.outro("Cancelled")
           return
         }
@@ -1166,8 +1186,15 @@ const ConnectCommand = cmd({
 
     spinner.stop("Ready")
     console.log()
-    if (args["print-url"]) {
-      console.log(`  ${dim("Authorize at:")} ${url}`)
+    if (printUrlOnly) {
+      if (headless && !args["print-url"]) {
+        // Say why there is no browser, so this does not read as a half-finished run.
+        console.log(`  ${dim("No terminal detected — printing the URL instead of opening a browser.")}`)
+        console.log()
+      }
+      console.log(`  ${success("→")} Open this URL to authorize ${highlight(type)}:`)
+      console.log()
+      console.log(`  ${highlight(url)}`)
       console.log()
       console.log(`  ${dim("After authorizing, verify with:")} ${highlight("iris integrations list-connected")}`)
       prompts.outro("Done")
