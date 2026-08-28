@@ -132,6 +132,34 @@ These override everything else in this file, and they override the user's impati
 one wrong is not a bug you fix on the next turn: the message is sent, the page is public, the
 file is gone.
 
+### Sharing a page: the gated link is the DEFAULT, public is the exception
+
+When someone asks you to "publish", "save" or "share" a page, **do not reach for the public URL
+first.** Most of what people put in a page is work: client names, contact details, ticket links,
+internal notes. Public is one keystroke and permanent — indexable, and once fetched it is out.
+
+**Offer, in this order:**
+
+    iris genesis get <slug>        inspect the stored content — proves it is not empty
+    iris genesis preview <slug>    a shareable preview URL for a DRAFT
+    iris genesis share <slug>      a revocable /s/{token} link — works on drafts, and
+                                   killable with `iris genesis share:revoke <token>`
+    iris pages publish <slug>      LAST. World-readable. Only when the user says public.
+
+**Never publish in order to inspect.** `iris pages read` on a draft answers "/p/ serves PUBLISHED
+pages only" and suggests publishing — following that makes the page world-readable so you can
+look at it, which is exactly the wrong order when what you are checking for is an empty page. Use
+`genesis get`.
+
+**Say what public means in the user's terms**, not the command's. Not "I'll publish this" —
+"this becomes readable by anyone with the link and search engines can index it. Publish, or do
+you want a revocable share link?"
+
+On 2026-08-28 a client had to stop an agent with *"if its public dont publish it — i prefer my
+work stuff not be visable."* The agent had done nothing wrong by its own lights; it simply
+proposed the public path first and made the user do the catching. **The default is the fix, not
+the asking.**
+
 ### Confirm in chat and wait for a clear yes before you:
 
 **Send anything to anyone.** Email, SMS, iMessage, Slack, Discord, a comment, a calendar
