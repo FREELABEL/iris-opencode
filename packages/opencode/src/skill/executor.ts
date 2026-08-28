@@ -755,6 +755,22 @@ async function executeShell(code: string, timeoutMs: number): Promise<{ output: 
  * declares the bare form (11 steps on gpt-4o-mini, 6 on gpt-4.1-nano), so
  * normalising here is what lets them run unchanged.
  */
+/**
+ * Strip a reasoning model's thinking block, leaving only the answer.
+ *
+ * minimax-m3 and friends wrap their deliberation in <think>...</think>. Downstream steps are
+ * fed the previous step's output as context, so leaving the reasoning in doubles the context
+ * with text the next step should not treat as findings.
+ *
+ * An UNCLOSED block means the model ran out of tokens mid-thought and never answered — return
+ * empty so the caller can fail the step rather than pass an answer that does not exist.
+ */
+function stripReasoning(text: string): string {
+  if (!text.includes("<think>")) return text
+  const close = text.lastIndexOf("</think>")
+  if (close === -1) return ""
+  return text.slice(close + "</think>".length).trim()
+}
 function platformModelName(model: string): string {
   return model.includes("/") ? model : `iris/${model}`
 }
@@ -772,7 +788,12 @@ async function generateViaPlatform(
         method: "POST",
         body: JSON.stringify({
           model: platformModelName(model),
-          max_tokens: 2000,
+          // 2000 was too small for a reasoning model. minimax-m3 emits a <think> block
+          // before its answer, and on 2026-08-28 every step of `the-algorithm` spent the
+          // ENTIRE budget thinking: </think> closed at char 8586 of 8596 and the answer was
+          // cut off immediately after. The run reported "7 passed" having produced no
+          // answers at all — the reasoning was good and none of it survived the cap.
+          max_tokens: 8000,
           messages: [{ role: "user", content: prompt }],
         }),
       },
@@ -787,7 +808,20 @@ async function generateViaPlatform(
     const j = (await res.json()) as any
     const text = j?.choices?.[0]?.message?.content
     if (typeof text !== "string" || !text.trim()) return { error: "platform model proxy returned an empty reply" }
-    return { text }
+
+    // A reasoning model's <think> block is not an answer. If the reply is nothing but
+    // reasoning — because the token budget ran out mid-thought — the step has produced
+    // NOTHING usable, and passing it lets a run report success while every downstream step
+    // consumes an empty context. That is exactly what happened to `the-algorithm` on
+    // 2026-08-28: seven green steps, zero answers.
+    const answer = stripReasoning(text)
+    if (!answer.trim()) {
+      return {
+        error:
+          "the model produced only a reasoning block and no answer — it likely hit the output limit mid-thought. Retry, or use a model that does not emit <think>.",
+      }
+    }
+    return { text: answer }
   } catch (e: any) {
     return null
   }
@@ -842,7 +876,9 @@ async function executeAi(
         // Strip the proxy namespace — the vendor SDK has never heard of `iris/`.
         provider = openai(model.replace(/^iris\//, ""))
       }
-      const result = await generateText({ model: provider, prompt: fullPrompt, maxOutputTokens: 2000 })
+      // See the max_tokens note on the platform rail above — a reasoning model can spend the
+      // whole budget inside <think> and never reach its answer.
+      const result = await generateText({ model: provider, prompt: fullPrompt, maxOutputTokens: 8000 })
       return { output: result.text, exit_code: 0 }
     } catch (e: any) {
       return { output: `AI error: platform proxy — ${platformNote}; local key — ${e.message}`, exit_code: 1 }
