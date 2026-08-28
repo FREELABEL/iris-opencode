@@ -192,7 +192,14 @@ export const UpgradeCommand = {
             }
           }
           if (installed) {
-            const appUrl = `https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-tauri-darwin-${arch}.zip`
+            // NOT /releases/latest/download/. That URL resolves to whichever release holds the
+            // single repo-wide "latest" flag, with no fallback by asset name — and CLI releases
+            // (cut far more often than desktop ones) held it essentially always. So this
+            // silently replaced the user's app with the desktop build off `main`: version 1.1.3,
+            // no 1.18 engine, no rebrand. It is the reason "I re-downloaded and it is still the
+            // old opencode" kept being true no matter how many desktop releases were promoted.
+            // heyiris.io resolves the desktop-v* series by tag prefix instead.
+            const appUrl = `https://heyiris.io/download/mac-${arch}-zip`
             const updateApp =
               await $`tmpdir=$(mktemp -d) && curl -sL --fail -o "$tmpdir/IRIS-app.zip" "${appUrl}" 2>/dev/null && rm -rf "${installed.app}" 2>/dev/null; mkdir -p "${installed.dir}" && unzip -q "$tmpdir/IRIS-app.zip" -d "${installed.dir}" 2>/dev/null && rm -rf "$tmpdir" && xattr -cr "${installed.app}" 2>/dev/null; test -d "${installed.app}" && echo "app-updated"`
                 .nothrow()
