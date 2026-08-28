@@ -515,11 +515,19 @@ jobs:
 
       - name: Get tag
         id: version
+        # This step used to emit `tag` only. The promote step below then compared the live
+        # updater version against `steps.version.outputs.version` — which was EMPTY — so the
+        # comparison was "" != "", false, and the check passed vacuously on desktop-v1.18.39
+        # while the endpoint was in fact still serving 1.18.36. It would have passed for any
+        # release, forever. Emit both.
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
             echo "tag=desktop-v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+            echo "version=${TAG#desktop-v}" >> $GITHUB_OUTPUT
           fi
 
       - name: Verify the published artifact
@@ -555,12 +563,24 @@ jobs:
           # true minutes later. heyiris.io/desktop/latest.json resolves the desktop series by tag
           # prefix and cannot be displaced.
           VERSION="${{ steps.version.outputs.version }}"
-          for i in $(seq 1 10); do
+          # A comparison that cannot distinguish "absent" from "equal" is not a check. On
+          # desktop-v1.18.39 VERSION was empty, LIVE was empty, and `"" != ""` reported
+          # success while the endpoint served a different build entirely. Refuse to run the
+          # comparison at all unless there is something real on both sides.
+          if [ -z "$VERSION" ]; then
+            echo "::error::VERSION is empty — the promotion check would pass vacuously. Refusing to claim success."
+            exit 1
+          fi
+          # heyiris.io caches the resolved release for 300s, so a freshly-promoted build does
+          # not appear instantly. The first version of this loop waited 60s total — less than
+          # the cache TTL — and would have failed every release for a reason that was not a
+          # real fault. Wait past the TTL with margin.
+          for i in $(seq 1 42); do
             LIVE=$(curl -sfL --max-time 20 "https://heyiris.io/desktop/latest.json" \
               | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))' 2>/dev/null || true)
             [ "$LIVE" = "$VERSION" ] && break
-            echo "  updater endpoint still serving '${LIVE:-nothing}' (want $VERSION) — retry $i"
-            sleep 6
+            echo "  updater endpoint still serving '${LIVE:-nothing}' (want $VERSION) — retry $i/42"
+            sleep 10
           done
           if [ "$LIVE" != "$VERSION" ]; then
             echo "::error::promoted, but https://heyiris.io/desktop/latest.json serves '${LIVE:-nothing}' not $VERSION — installed clients will NOT see this release"

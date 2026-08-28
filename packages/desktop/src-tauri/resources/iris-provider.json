@@ -92,6 +92,9 @@
       }
     }
   },
+  "enabled_providers": [
+    "iris"
+  ],
   "disabled_providers": [
     "opencode"
   ],

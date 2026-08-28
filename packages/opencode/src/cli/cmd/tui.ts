@@ -202,7 +202,29 @@ export const TuiThreadCommand = cmd({
       try {
         process.chdir(next)
       } catch {
-        UI.error("Failed to change directory to " + next)
+        // This used to return with the process still exiting 0.
+        //
+        // Every agent we ship is told to verify its own work, and exit status is the one
+        // universal, model-independent way to do that. Exiting 0 for "that verb does not
+        // exist" actively teaches an agent that a hallucinated command succeeded — the only
+        // remaining signal is English prose it has to parse correctly.
+        //
+        // Seen live on a client's Windows machine, 2026-08-28 (#182737). Her agent guessed
+        // `iris status`, which is not a verb, and wrapped it exactly as it should have:
+        //     iris status 2>&1 | Out-String; echo "===EXIT $LASTEXITCODE==="
+        // It read EXIT 0, and recovered only by going on to guess `iris users me`, which
+        // happens to be real. Luck, not design.
+        //
+        // A bare word with no path separator is a mistyped command, not a directory — say so
+        // rather than reporting a chdir failure for something the user never meant as a path.
+        // 2 is the conventional usage-error code; 1 for a genuine filesystem failure.
+        if (args.project && !args.project.includes("/") && !args.project.includes("\\") && !args.project.includes(".")) {
+          UI.error(`Unknown command '${args.project}'. Run 'iris --help' for available commands.`)
+          process.exitCode = 2
+        } else {
+          UI.error("Failed to change directory to " + next)
+          process.exitCode = 1
+        }
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
