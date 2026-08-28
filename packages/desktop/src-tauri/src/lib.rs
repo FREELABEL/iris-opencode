@@ -121,10 +121,21 @@ const IRIS_BASELINE_AGENTS_MD: &str = include_str!("../resources/iris-agents.md"
 /// on any machine with XDG_CONFIG_HOME set, the file is written somewhere the agent never
 /// looks — and the symptom is an agent with no IRIS context and no error anywhere.
 fn opencode_config_dir() -> Option<std::path::PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| dirs_next_home().unwrap_or_default().join(".config"));
-    if base.as_os_str().is_empty() {
+    // Resolve from home explicitly rather than via unwrap_or_default(): defaulting an absent
+    // home to an empty PathBuf and then joining ".config" produced the RELATIVE path
+    // ".config", which is not empty, passed the guard, and made every seed land under the
+    // process's working directory instead of the user's home. Absent must stay absent.
+    let base = match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(v) if !v.is_empty() => std::path::PathBuf::from(v),
+        _ => dirs_next_home()?.join(".config"),
+    };
+    // Belt and braces: a relative config dir is never right, and writing to one is worse than
+    // not writing at all — it is invisible, and it silently disables the provider lock.
+    if base.as_os_str().is_empty() || base.is_relative() {
+        eprintln!(
+            "refusing to use a non-absolute config dir ({}); skipping seed",
+            base.display()
+        );
         return None;
     }
     Some(base.join("opencode"))
@@ -182,8 +193,27 @@ fn iris_env_value(key: &str) -> Option<String> {
     None
 }
 
+/// The user's home directory.
+///
+/// This read `$HOME` only. Windows does not set HOME — it sets USERPROFILE — so on every
+/// Windows machine this returned None, and the caller's `unwrap_or_default().join(".config")`
+/// turned that into the RELATIVE path `.config`, which is not empty and therefore sailed
+/// straight through the `is_empty()` guard below.
+///
+/// The app then wrote `AGENTS.md` and `opencode.json` into `.config\opencode\` relative to
+/// whatever its working directory happened to be. Both seeds silently missed, on 100% of
+/// Windows installs, with no error anywhere.
+///
+/// Seen on a client's machine 2026-08-28, and it explained two separate symptoms at once:
+/// her agent introduced itself as "the opencode CLI" and told her IRIS OS did not exist
+/// (no identity file), and it ran on `opencode/hy3-free` rather than our proxy (no provider
+/// config, so `enabled_providers`/`disabled_providers` never applied and her usage bypassed
+/// our billing entirely).
 fn dirs_next_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 // macOS runs a QUARANTINED app from a randomized read-only mount under
