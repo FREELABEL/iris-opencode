@@ -237,7 +237,21 @@ const BoardsCreateCommand = cmd({
       // `|| "task"` here defaulted to a value the API's create validator rejected
       // outright (bug #177261). yargs already defaults this to "default".
       const payload: Record<string, unknown> = { title, content: args.description || title, type: args.type || "default" }
-      if (args["list-id"] != null) payload.bloq_list_id = args["list-id"]
+      // The API's create validator reads `list_id`, NOT `bloq_list_id`. Since the field was
+      // not in its validation rules, Laravel discarded it silently, $listId came out null, and
+      // every item fell through to the auto-created "Generated Content" list — while the
+      // command printed an item ID and a success line.
+      //
+      // Measured 2026-08-28: `--list-id 1029` (Todo) left Todo at 0 items and took Generated
+      // Content from 12 to 13. Found by a client's agent, which then could not file its own
+      // bug reports into the right list.
+      //
+      // Both keys are sent: `list_id` is what the endpoint reads today, `bloq_list_id` is what
+      // the update endpoint (which works) uses, so this stays correct if they converge.
+      if (args["list-id"] != null) {
+        payload.list_id = args["list-id"]
+        payload.bloq_list_id = args["list-id"]
+      }
 
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items`, {
         method: "POST",
