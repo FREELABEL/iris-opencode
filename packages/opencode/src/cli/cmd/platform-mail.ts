@@ -194,7 +194,23 @@ const MailSendCommand = cmd({
       .option("subject", { type: "string", alias: "s", demandOption: true })
       .option("body", { type: "string", alias: "b", demandOption: true })
       .option("cc", { type: "string", describe: "CC email address" })
-      .option("attachment", { type: "string", describe: "file path to attach" }),
+      // Repeatable. The bridge has always accepted `attachments` as an ARRAY; the CLI wrapped a
+      // single string in a one-element array, so five files meant five sends. On 2026-08-28 an
+      // agent asked to attach five images concluded the task was impossible and told the user to
+      // drag them in by hand — the capability was there and nothing exposed it.
+      .option("attachment", {
+        type: "array",
+        string: true,
+        describe: "file path to attach (repeatable: --attachment a.png --attachment b.png)",
+      })
+      // draft=true composes and OPENS the message without sending. The bridge has supported this
+      // from the start and no flag reached it, so "let me look at it before it goes" was not
+      // expressible — the only choice was send or do not send.
+      .option("draft", {
+        type: "boolean",
+        default: false,
+        describe: "compose and open the message in Mail.app WITHOUT sending it",
+      }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Send Mail — to ${args.to}`)
@@ -212,7 +228,10 @@ const MailSendCommand = cmd({
     // Attachments and cc have no router path yet, and silently dropping them would be worse
     // than not routing: fall back to the direct bridge call and say so, rather than sending a
     // different email than the operator asked for.
-    const needsDirectBridge = Boolean(args.attachment || args.cc || args.from)
+    const attachments = ((args.attachment as string[] | undefined) ?? []).filter(Boolean)
+    // --draft joins this list because the comms router only knows how to SEND. Routing a draft
+    // would either send it or drop the flag, and both are worse than saying which path was taken.
+    const needsDirectBridge = Boolean(attachments.length || args.cc || args.from || args.draft)
 
     // --sender and --from answer the same question in opposite directions. `--from` is a raw
     // address nothing has checked, taking the unrouted bridge path; `--sender` is a registered
@@ -226,7 +245,7 @@ const MailSendCommand = cmd({
 
     if (args.sender && needsDirectBridge) {
       prompts.log.error(
-        "--sender cannot be combined with --attachment/--cc: those take the direct bridge path, which does not read channel bindings.",
+        "--sender cannot be combined with --attachment/--cc/--draft: those take the direct bridge path, which does not read channel bindings.",
       )
       prompts.outro("Done")
       return
@@ -255,7 +274,11 @@ const MailSendCommand = cmd({
       return
     }
 
-    prompts.log.warn("Attachment/cc/from set — sending direct via the bridge (not logged to comms).")
+    prompts.log.warn(
+      args.draft
+        ? "Draft mode — composing direct via the bridge (nothing is sent, and nothing is logged to comms)."
+        : "Attachment/cc/from set — sending direct via the bridge (not logged to comms).",
+    )
 
     const payload: any = {
       to_email: args.to,
@@ -263,8 +286,12 @@ const MailSendCommand = cmd({
       body_text: args.body,
     }
     if (args.from) payload.from_email = args.from
-    if (args.cc) payload.cc = args.cc
-    if (args.attachment) payload.attachments = [args.attachment]
+    // cc_email, NOT cc. The bridge destructures `cc_email` and always has; the CLI sent `cc`, so
+    // --cc was silently dropped on every send while the warning above told the operator it had
+    // been applied. A field name is not a contract until something checks it.
+    if (args.cc) payload.cc_email = args.cc
+    if (attachments.length) payload.attachments = attachments
+    if (args.draft) payload.draft = true
 
     const res = await bridgeFetch(`/api/mail/send`, {
       method: "POST",
@@ -278,7 +305,15 @@ const MailSendCommand = cmd({
       return
     }
 
-    prompts.outro(`${success("✓")} Email sent to ${args.to}`)
+    // Report the bridge's own `mode`, not our intent. It is the only party that knows whether
+    // Mail.app sent or merely opened the window.
+    const body = (await res.json().catch(() => ({}))) as { mode?: string }
+    const drafted = body.mode === "draft"
+    prompts.outro(
+      drafted
+        ? `${success("✓")} Draft opened in Mail.app for ${args.to}${attachments.length ? ` with ${attachments.length} attachment(s)` : ""} — nothing sent`
+        : `${success("✓")} Email sent to ${args.to}${attachments.length ? ` with ${attachments.length} attachment(s)` : ""}`,
+    )
   },
 })
 
