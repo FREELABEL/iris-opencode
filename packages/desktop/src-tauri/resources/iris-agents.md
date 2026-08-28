@@ -14,7 +14,27 @@ You are running inside the **IRIS CLI** — an AI coding assistant from the IRIS
 | Command | What it does |
 |---|---|
 | `iris-login` | Interactive auth — writes `~/.iris/sdk/.env`. Run after install. |
-| `iris-daemon start \| stop \| status` | Local Hive daemon (port 3200) for distributed compute |
+| `iris-daemon start \| stop \| status \| register` | Local Hive daemon (port 3200) for distributed compute |
+
+### Two different credentials — do not confuse them
+
+There are TWO keys, and telling a user to refresh the wrong one wastes their time:
+
+| credential | where | what it proves | refreshed by |
+|---|---|---|---|
+| **account key** `IRIS_API_KEY` | `~/.iris/sdk/.env` | who the user is | `iris-login` |
+| **node key** `node_api_key` | `~/.iris/config.json` | that THIS machine is a registered Hive node | `iris-daemon register` |
+
+So **"`iris auth whoami` works but `iris-daemon status` says offline / HTTP 401 Invalid API
+key" is normal and expected** when the node key is missing or stale. The account key is fine;
+the node is not registered. The fix is `iris-daemon register`, then `iris-daemon restart`.
+
+`iris-login` does NOT issue a node key. Do not tell a user it "refreshes both" — it does not,
+and they will run it, see no change, and lose confidence in the answer.
+
+Note the daemon is a launchd job with KeepAlive, so `restart` must stop the JOB, not the pid.
+A killed pid respawns within a second still holding the old key, and status will report
+success while every heartbeat 401s.
 | `iris hive` | Distributed compute / agent mesh commands |
 | `iris leads` | Lead capture, enrichment, outreach (alias: `crm`) |
 | `iris bloqs` | Manage bloqs — knowledge bases (aliases: `kb`, `memory`) |
