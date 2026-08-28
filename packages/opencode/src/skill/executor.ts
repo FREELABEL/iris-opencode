@@ -806,22 +806,42 @@ async function generateViaPlatform(
       return { error: `platform model proxy HTTP ${res.status}: ${body}` }
     }
     const j = (await res.json()) as any
-    const text = j?.choices?.[0]?.message?.content
-    if (typeof text !== "string" || !text.trim()) return { error: "platform model proxy returned an empty reply" }
+    const choice = j?.choices?.[0] ?? {}
+    const raw = choice?.message?.content
+    // Reasoning models split the reply in two different ways and BOTH can leave `content`
+    // empty. Name which one happened — "empty reply" sent three separate investigations down
+    // the wrong path on 2026-08-28.
+    //   inline:   minimax-m3 emits <think>…</think> inside content
+    //   sidecar:  hy3 puts deliberation in message.reasoning_content and leaves content ""
+    const reasoning = String(choice?.message?.reasoning_content ?? "")
+    const finish = String(choice?.finish_reason ?? "")
+    const answer = typeof raw === "string" ? stripReasoning(raw) : ""
 
-    // A reasoning model's <think> block is not an answer. If the reply is nothing but
-    // reasoning — because the token budget ran out mid-thought — the step has produced
-    // NOTHING usable, and passing it lets a run report success while every downstream step
-    // consumes an empty context. That is exactly what happened to `the-algorithm` on
-    // 2026-08-28: seven green steps, zero answers.
-    const answer = stripReasoning(text)
-    if (!answer.trim()) {
+    if (answer.trim()) return { text: answer }
+
+    // No answer. Say precisely why, because the three causes need three different actions.
+    if (finish === "length") {
+      const spent = reasoning.length
+        ? `${reasoning.length} characters of reasoning and none of answer`
+        : "the entire budget"
       return {
         error:
-          "the model produced only a reasoning block and no answer — it likely hit the output limit mid-thought. Retry, or use a model that does not emit <think>.",
+          `the model hit its output limit having produced ${spent} (finish_reason=length). ` +
+          `Raising max_tokens does NOT reliably help: measured on iris/hy3, 2000 -> 8000 tokens ` +
+          `grew reasoning from 10k to 38k characters and still returned no answer. ` +
+          `Use a model that answers before it runs out — iris/minimax-m3 completes this playbook.`,
       }
     }
-    return { text: answer }
+    if (reasoning.trim()) {
+      return {
+        error:
+          "the model returned reasoning but no answer (message.content was empty while " +
+          "reasoning_content was not). This model deliberates into a separate field and never " +
+          "committed to a reply; pick a different model for this step.",
+      }
+    }
+    if (typeof raw !== "string") return { error: "platform model proxy returned no content field" }
+    return { error: "platform model proxy returned an empty reply" }
   } catch (e: any) {
     return null
   }
