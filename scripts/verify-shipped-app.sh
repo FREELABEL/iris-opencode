@@ -37,7 +37,13 @@ SIDECAR_NAME="$(grep -oE '\.sidecar\("[^"]+"\)' packages/desktop/src-tauri/src/l
   | head -1 | sed -E 's/.*"(.*)".*/\1/')"
 SIDECAR_NAME="${SIDECAR_NAME:-iris-cli}"
 
-WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+# Resolve symlinks in the work dir. On macOS `mktemp -d` returns /var/folders/... and /var is
+# a symlink to /private/var — and Tauri's current_exe() REFUSES a path containing a symlink
+# ("StartingBinary found current_exe() that contains a symlink on a non-allowed platform"), so
+# the app panics resolving its own sidecar and never starts. That is a property of the test
+# location, not of the build: nobody installs an app to /var/folders. Testing from a path no
+# user has would fail every release for a reason no user would ever hit.
+WORK="$(cd "$(mktemp -d)" && pwd -P)"; trap 'rm -rf "$WORK"' EXIT
 PORT=$((20000 + RANDOM % 20000))
 FAIL=0
 
