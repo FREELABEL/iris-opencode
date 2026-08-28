@@ -31,31 +31,74 @@ export const Splash = (props: Pick<ComponentProps<"svg">, "ref" | "class">) => {
   )
 }
 
+// "IRIS OS" on the grid the original opencode wordmark used here: letters 24 wide on a 30
+// pitch, 6 stroke, rows at 6 / 18 / 30 / 36. Rendered on the error screen and legacy home.
+// Laid out from an array so the viewBox follows the word instead of being hardcoded.
+const LOGO_S = 6
+const LOGO_W = 24
+const LOGO_PITCH = 30
+const LOGO_SPACE = 15
+const LOGO_TOP = 6
+const LOGO_MID = 18
+const LOGO_BOT = 30
+const LOGO_H = 30
+
+type LogoRect = { x: number; y: number; w: number; h: number }
+
+const LOGO_GLYPHS: Record<string, (x: number) => LogoRect[]> = {
+  I: (x) => [
+    { x, y: LOGO_TOP, w: LOGO_W, h: LOGO_S },
+    { x: x + (LOGO_W - LOGO_S) / 2, y: LOGO_TOP, w: LOGO_S, h: LOGO_H },
+    { x, y: LOGO_BOT, w: LOGO_W, h: LOGO_S },
+  ],
+  R: (x) => [
+    { x, y: LOGO_TOP, w: LOGO_S, h: LOGO_H },
+    { x, y: LOGO_TOP, w: LOGO_W, h: LOGO_S },
+    { x: x + LOGO_W - LOGO_S, y: LOGO_TOP, w: LOGO_S, h: LOGO_MID - LOGO_TOP + LOGO_S },
+    { x, y: LOGO_MID, w: LOGO_W, h: LOGO_S },
+    { x: x + LOGO_W - LOGO_S, y: LOGO_MID + LOGO_S, w: LOGO_S, h: LOGO_H - (LOGO_MID - LOGO_TOP) - LOGO_S },
+  ],
+  S: (x) => [
+    { x, y: LOGO_TOP, w: LOGO_W, h: LOGO_S },
+    { x, y: LOGO_TOP, w: LOGO_S, h: LOGO_MID - LOGO_TOP + LOGO_S },
+    { x, y: LOGO_MID, w: LOGO_W, h: LOGO_S },
+    { x: x + LOGO_W - LOGO_S, y: LOGO_MID, w: LOGO_S, h: LOGO_BOT - LOGO_MID + LOGO_S },
+    { x, y: LOGO_BOT, w: LOGO_W, h: LOGO_S },
+  ],
+  O: (x) => [
+    { x, y: LOGO_TOP, w: LOGO_W, h: LOGO_S },
+    { x, y: LOGO_TOP, w: LOGO_S, h: LOGO_H },
+    { x: x + LOGO_W - LOGO_S, y: LOGO_TOP, w: LOGO_S, h: LOGO_H },
+    { x, y: LOGO_BOT, w: LOGO_W, h: LOGO_S },
+  ],
+}
+
+const LOGO = (() => {
+  const out: LogoRect[] = []
+  let x = 0
+  for (const ch of "IRIS OS") {
+    if (ch === " ") {
+      x += LOGO_SPACE
+      continue
+    }
+    out.push(...LOGO_GLYPHS[ch](x))
+    x += LOGO_PITCH
+  }
+  return { rects: out, width: x - (LOGO_PITCH - LOGO_W) }
+})()
+
 export const Logo = (props: { class?: string }) => {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 234 42"
+      viewBox={`0 0 ${LOGO.width} 42`}
       fill="none"
       classList={{ [props.class ?? ""]: !!props.class }}
     >
       <g>
-        <path d="M18 30H6V18H18V30Z" fill="var(--icon-weak-base)" />
-        <path d="M18 12H6V30H18V12ZM24 36H0V6H24V36Z" fill="var(--icon-base)" />
-        <path d="M48 30H36V18H48V30Z" fill="var(--icon-weak-base)" />
-        <path d="M36 30H48V12H36V30ZM54 36H36V42H30V6H54V36Z" fill="var(--icon-base)" />
-        <path d="M84 24V30H66V24H84Z" fill="var(--icon-weak-base)" />
-        <path d="M84 24H66V30H84V36H60V6H84V24ZM66 18H78V12H66V18Z" fill="var(--icon-base)" />
-        <path d="M108 36H96V18H108V36Z" fill="var(--icon-weak-base)" />
-        <path d="M108 12H96V36H90V6H108V12ZM114 36H108V12H114V36Z" fill="var(--icon-base)" />
-        <path d="M144 30H126V18H144V30Z" fill="var(--icon-weak-base)" />
-        <path d="M144 12H126V30H144V36H120V6H144V12Z" fill="var(--icon-strong-base)" />
-        <path d="M168 30H156V18H168V30Z" fill="var(--icon-weak-base)" />
-        <path d="M168 12H156V30H168V12ZM174 36H150V6H174V36Z" fill="var(--icon-strong-base)" />
-        <path d="M198 30H186V18H198V30Z" fill="var(--icon-weak-base)" />
-        <path d="M198 12H186V30H198V12ZM204 36H180V6H198V0H204V36Z" fill="var(--icon-strong-base)" />
-        <path d="M234 24V30H216V24H234Z" fill="var(--icon-weak-base)" />
-        <path d="M216 12V18H228V12H216ZM234 24H216V30H234V36H210V6H234V24Z" fill="var(--icon-strong-base)" />
+        {LOGO.rects.map((r) => (
+          <rect x={r.x} y={r.y} width={r.w} height={r.h} fill="var(--icon-base)" />
+        ))}
       </g>
     </svg>
   )
