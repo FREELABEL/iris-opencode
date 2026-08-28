@@ -514,8 +514,27 @@ else
     send_install_beacon "install_start"
 
     if [ -z "$requested_version" ]; then
-        url="https://github.com/FREELABEL/iris-opencode/releases/latest/download/$filename"
-        specific_version=$(curl -s https://api.github.com/repos/FREELABEL/iris-opencode/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p') || true
+        # Do NOT use /releases/latest. TWO release series share this repo — `v*` for this CLI
+        # and `desktop-v*` for the Tauri desktop app — and GitHub's "latest" is simply the most
+        # recently published NON-prerelease of either. On 2026-08-27, promoting
+        # desktop-v1.18.28 made /releases/latest return that tag; it has no bare `v` prefix, so
+        # the parse below produced an empty string and EVERY `curl | bash` install died with
+        # "Failed to fetch version information". The desktop app's release cadence must not be
+        # able to break the CLI installer.
+        #
+        # Ask for the newest release in THIS series instead. The `"v[0-9]` anchor is what
+        # excludes desktop-v*: after `"tag_name": "` that tag begins with `d`, not `v`.
+        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" \
+            | sed -n 's/.*"tag_name": *"v\([0-9][^"]*\)".*/\1/p' | head -1) || true
+
+        if [[ -z "$specific_version" ]]; then
+            # Last resort: the redirect target of /releases/latest/download still resolves by
+            # ASSET NAME, so it can land on a valid CLI release even when the API parse failed.
+            specific_version=$(curl -sI "https://github.com/FREELABEL/iris-opencode/releases/latest/download/$filename" \
+                | sed -n 's|.*/releases/download/v\([0-9][^/]*\)/.*|\1|p' | head -1) || true
+        fi
+
+        url="https://github.com/FREELABEL/iris-opencode/releases/download/v${specific_version}/$filename"
 
         if [[ -z "$specific_version" ]]; then
             echo -e "${RED}Failed to fetch version information${NC}"
