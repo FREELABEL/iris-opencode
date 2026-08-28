@@ -392,6 +392,7 @@ jobs:
           # tolerant step below, where flakiness costs a warning instead of an architecture.
           ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles app
         env:
+          OPENCODE_CHANNEL: latest
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -510,9 +511,15 @@ jobs:
       # NOTE: no `env:` block here either -- same reasoning as the macOS job above. No Windows
       # code-signing cert exists for this repo yet; that's expected/fine as-is.
       - name: Build IRIS desktop app (Tauri)
+        # OPENCODE_CHANNEL must be set HERE, not only on the CLI step. The Tauri build runs
+        # vite (beforeBuildCommand), and packages/app/vite.js resolves the channel from this
+        # env var — DEFAULTING TO "dev" when unset. That default is why every desktop release
+        # shipped with a blue DEV badge in the titlebar. "latest" maps to "prod".
         run: |
           cd packages/desktop
           ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis
+        env:
+          OPENCODE_CHANNEL: latest
 
       - name: Rename installer to the IRIS-tauri-* convention
         run: |
