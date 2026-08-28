@@ -42,7 +42,10 @@ step "1. What does the front page actually serve?"
 # releases/latest does NOT mean "newest tag" — GitHub falls back to the newest release that
 # CONTAINS this asset name. With two release series in one repo that is silently load-bearing,
 # so resolve it rather than trusting the word "latest".
-SERVED_TAG="$(curl -sI "$URL" | grep -i '^location' | grep -oE 'download/v[0-9.]+' | head -1 | cut -d/ -f2)"
+# Tag prefixes are not always plain "v" — the desktop line ships as desktop-vX.Y.Z, and a
+# regex that assumed otherwise reported "did not resolve to any release" for a release that
+# was serving perfectly well.
+SERVED_TAG="$(curl -sI "$URL" | grep -i '^location' | grep -oE 'download/[A-Za-z-]*v[0-9][0-9.]*' | head -1 | cut -d/ -f2)"
 if [ -z "$SERVED_TAG" ]; then fail "front-page URL did not resolve to any release"; exit 1; fi
 pass "front page serves $SERVED_TAG"
 info "$URL"
@@ -66,7 +69,7 @@ step "3. Does the app name itself honestly?"
 # The bundle version and the engine version are set by DIFFERENT things and have disagreed in
 # production. Check both, and compare them to each other — the disagreement is the bug.
 PLIST_V="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null)"
-WANT="${SERVED_TAG#v}"
+WANT="${SERVED_TAG#desktop-v}"; WANT="${WANT#v}"
 if [ "$PLIST_V" = "$WANT" ]; then
   pass "bundle version $PLIST_V matches the release"
 else
