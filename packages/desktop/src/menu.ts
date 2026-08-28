@@ -2,7 +2,7 @@ import { Menu, MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/men
 import { type as ostype } from "@tauri-apps/plugin-os"
 
 import { runUpdater, UPDATER_ENABLED } from "./updater"
-import { installCli } from "./cli"
+import { installCli, irisAction } from "./cli"
 
 export async function createMenu() {
   if (ostype() !== "macos") return
@@ -23,6 +23,29 @@ export async function createMenu() {
           await MenuItem.new({
             action: () => installCli(),
             text: "Install CLI...",
+          }),
+          await PredefinedMenuItem.new({
+            item: "Separator",
+          }),
+          // The Hive actions people actually need after installing, so recovery does not
+          // require a terminal. "Register" is the fix for the common case where `iris auth
+          // whoami` works but the daemon reports 401: the account key is fine and the machine
+          // simply is not a registered node — two different credentials.
+          await MenuItem.new({
+            action: () => irisAction("daemon-status", "Hive Daemon Status"),
+            text: "Hive: Daemon Status",
+          }),
+          await MenuItem.new({
+            action: () => irisAction("daemon-register", "Register Hive Node"),
+            text: "Hive: Register This Machine",
+          }),
+          await MenuItem.new({
+            action: () => irisAction("daemon-restart", "Restart Hive Daemon"),
+            text: "Hive: Restart Daemon",
+          }),
+          await MenuItem.new({
+            action: () => irisAction("auth-whoami", "IRIS Account"),
+            text: "Who Am I Logged In As",
           }),
           await PredefinedMenuItem.new({
             item: "Separator",

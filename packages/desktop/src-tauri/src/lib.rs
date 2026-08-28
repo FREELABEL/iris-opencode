@@ -228,6 +228,60 @@ const TRANSLOCATION_MESSAGE: &str = concat!(
     "To fix it: drag IRIS into your Applications folder, then open it from there.",
 );
 
+/// Run one of a FIXED set of IRIS maintenance actions and return its combined output.
+///
+/// A client spent tonight in a terminal running `iris-daemon register` because the app gave
+/// her no way to do it — while the app is meant to be the front door. These are the actions
+/// people actually need after install, so they belong in the menu.
+///
+/// The action is matched against an ALLOWLIST and mapped to argv here. It is never
+/// interpolated into a shell string: a menu handler that forwards arbitrary text to a shell
+/// is a remote-code-execution hole the moment anything but the menu can call it, and Tauri
+/// commands are reachable from page JavaScript.
+#[tauri::command]
+async fn iris_action(action: String) -> Result<String, String> {
+    let (bin, args): (&str, &[&str]) = match action.as_str() {
+        "daemon-status" => ("iris-daemon", &["status"]),
+        "daemon-restart" => ("iris-daemon", &["restart"]),
+        "daemon-register" => ("iris-daemon", &["register"]),
+        "auth-whoami" => ("iris", &["auth", "whoami"]),
+        other => return Err(format!("unknown action: {other}")),
+    };
+
+    let home = dirs_next_home().ok_or_else(|| "no HOME".to_string())?;
+    let path = home.join(".iris").join("bin").join(bin);
+    if !path.exists() {
+        return Err(format!(
+            "{bin} is not installed yet.\n\nUse IRIS -> Install CLI... first."
+        ));
+    }
+
+    // The daemon subcommands talk to the platform and can take a while (register does a
+    // round-trip); run off the UI thread so the menu does not appear frozen.
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new(&path).args(args).output()
+    })
+    .await
+    .map_err(|e| format!("could not run {bin}: {e}"))?
+    .map_err(|e| format!("could not run {bin}: {e}"))?;
+
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.trim().is_empty() {
+        text.push_str(&format!("\n{err}"));
+    }
+    if text.trim().is_empty() {
+        text = format!("{bin} {} finished with no output.", args.join(" "));
+    }
+    // A non-zero exit is still worth SHOWING — the daemon prints its reason on stderr, and
+    // hiding it behind a generic failure is what sent people to the terminal in the first place.
+    if out.status.success() {
+        Ok(text)
+    } else {
+        Err(text)
+    }
+}
+
 fn warn_if_translocated(app: &AppHandle) -> bool {
     let Some(path) = translocated_from() else {
         return false;
@@ -484,7 +538,8 @@ pub fn run() {
             kill_sidecar,
             copy_logs_to_clipboard,
             get_logs,
-            install_cli
+            install_cli,
+            iris_action
         ])
         .setup(move |app| {
             let app = app.handle().clone();
