@@ -124,6 +124,10 @@ jobs:
           chmod +x "packages/desktop/src-tauri/sidecars/${EXPECT}-${{ matrix.rust_target }}"
 
       - name: Build IRIS desktop app (Tauri)
+        # OPENCODE_CHANNEL must be set HERE, not only on the CLI step. The Tauri build runs
+        # vite (beforeBuildCommand), and packages/app/vite.js resolves the channel from this
+        # env var — DEFAULTING TO "dev" when it is unset. That default is why every desktop
+        # release shipped with a blue DEV badge in the titlebar. "latest" maps to "prod".
         # Sign + notarize when the APPLE_* secrets exist; otherwise fall back to ad-hoc
         # signing. Empty secrets are UNSET rather than exported as "" so the fallback
         # actually triggers instead of codesign dying with "no identity found".
@@ -141,6 +145,7 @@ jobs:
           fi
           ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles app,dmg
         env:
+          OPENCODE_CHANNEL: latest
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -267,9 +272,15 @@ jobs:
       # Unsigned: no Windows code-signing certificate exists for this repo. SmartScreen will
       # warn on first run. Tracked, accepted for now.
       - name: Build IRIS desktop app (Tauri)
+        # OPENCODE_CHANNEL must be set HERE, not only on the CLI step. The Tauri build runs
+        # vite (beforeBuildCommand), and packages/app/vite.js resolves the channel from this
+        # env var — DEFAULTING TO "dev" when it is unset. That default is why every desktop
+        # release shipped with a blue DEV badge in the titlebar. "latest" maps to "prod".
         run: |
           cd packages/desktop
           ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis
+        env:
+          OPENCODE_CHANNEL: latest
 
       - name: Rename installer to the IRIS-tauri-* convention
         run: |
