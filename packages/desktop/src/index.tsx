@@ -67,8 +67,20 @@ const platform: Platform = {
     return result
   },
 
-  openLink(url: string) {
-    void shellOpen(url).catch(() => undefined)
+  // openExternal, NOT openLink. The app calls platform.openExternal in six places
+  // (terminal, error page, help menus, usage dialog); nothing has ever called openLink. So on
+  // desktop this was undefined, the call threw, and the anchor's default behaviour took over —
+  // which in a webview NAVIGATES THE APP AWAY to the site, with no back button. Clicking any
+  // link replaced the whole app.
+  //
+  // Scheme allowlist mirrors the web implementation in packages/app/src/entry.tsx: this hands
+  // a string to the OS opener, so file:// or a custom scheme from page content would be worth
+  // more than a navigation bug.
+  openExternal(url: string) {
+    if (!URL.canParse(url)) return
+    const parsed = new URL(url)
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:" && parsed.protocol !== "mailto:") return
+    void shellOpen(parsed.href).catch(() => undefined)
   },
 
   storage: (name = "default.dat") => {
