@@ -91,5 +91,9 @@
         }
       }
     }
-  }
+  },
+  "disabled_providers": [
+    "opencode"
+  ],
+  "model": "iris/iris-ai"
 }

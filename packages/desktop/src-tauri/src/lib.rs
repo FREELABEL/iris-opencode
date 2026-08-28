@@ -312,6 +312,23 @@ fn seed_iris_provider() {
         return;
     };
 
+    // Carry over the seed's other top-level keys (model, disabled_providers) ONLY when the
+    // user has not set them. Same rule as the provider itself: fill a gap, never overwrite a
+    // choice. Someone who picked a different default model keeps it.
+    //
+    // Done BEFORE the `provider` entry is borrowed below — doing it after would hold a
+    // mutable borrow of `root` across a second use of `root`, which is the sort of thing
+    // that compiles on one Rust edition and not the next.
+    let mut changed = false;
+    if let Some(seed_obj) = seed.as_object() {
+        for (k, v) in seed_obj {
+            if k != "provider" && !root.contains_key(k) {
+                root.insert(k.clone(), v.clone());
+                changed = true;
+            }
+        }
+    }
+
     let providers = root
         .entry("provider")
         .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
@@ -320,22 +337,26 @@ fn seed_iris_provider() {
     };
 
     // Never touch an existing `iris` entry. Someone may have pointed it at a different
-    // endpoint or trimmed the model list on purpose, and this runs on EVERY launch.
-    if providers.contains_key("iris") {
-        return;
+    // endpoint or trimmed the model list on purpose, and this runs on EVERY launch. Falling
+    // through rather than returning: the top-level keys above may still need saving, and an
+    // early return here would silently discard them.
+    if !providers.contains_key("iris") {
+        if let Some(iris) = seed.get("provider").and_then(|p| p.get("iris")) {
+            providers.insert("iris".to_string(), iris.clone());
+            changed = true;
+        }
     }
 
-    let Some(iris) = seed.get("provider").and_then(|p| p.get("iris")) else {
+    if !changed {
         return;
-    };
-    providers.insert("iris".to_string(), iris.clone());
+    }
 
     match serde_json::to_string_pretty(&existing) {
         Ok(text) => {
             if let Err(e) = std::fs::write(&config_path, text + "\n") {
                 eprintln!("could not update {}: {e}", config_path.display());
             } else {
-                println!("added iris provider to {}", config_path.display());
+                println!("updated {}", config_path.display());
             }
         }
         Err(e) => eprintln!("could not serialize merged config: {e}"),
