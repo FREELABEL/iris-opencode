@@ -1064,7 +1064,9 @@ const DiffCmd = cmd({
 
 const PublishCmd = cmd({
   command: "publish <slug>",
-  describe: "publish a page",
+  describe:
+    "publish a page — WORLD-READABLE and indexable. For a private read use `genesis get`, " +
+    "for a private share use `genesis preview` or `genesis share`",
   builder: (y) => y.positional("slug", { describe: "page slug", type: "string", demandOption: true }),
   async handler(args) {
     UI.empty()
@@ -3046,7 +3048,11 @@ const VisibilityCmd = cmd({
   // page is LISTED and indexed; anyone holding the url still gets the full body. The
   // gate is `requires_auth` + json_content.gate.allowedDomains. Setting visibility and
   // believing the page was protected is how a client page stayed readable (#180009).
-  describe: "show or set how a page is LISTED (public | unlisted | private) — discoverability, not access",
+  describe:
+    "show or set how a page is LISTED (public | unlisted | private). NOTE: `private` takes the " +
+    "/p/ urls away entirely — dead, not merely delisted — leaving share links as the only way " +
+    "in. Pair with requires_auth for a login gate, and run `genesis cache-clear` after: neither " +
+    "takes effect until the cache is purged",
   builder: (y) =>
     y
       .positional("slug", { describe: "page slug", type: "string", demandOption: true })

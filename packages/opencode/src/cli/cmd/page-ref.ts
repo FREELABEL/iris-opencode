@@ -48,5 +48,14 @@ export function publicUrl(slugOrPage: string | { public_url?: string; slug?: str
 export function notFoundHint(slug: string): string {
   return noteUuid(slug)
     ? `That is a NOTE ref — notes render at /n/<uuid>, not /p/. If this url 404s the note is unshared or the uuid is wrong; read its text with: iris atlas use ${slug}`
-    : `/p/ serves PUBLISHED pages only. If this is a draft: iris pages publish ${slug}`
+    // Name the NON-PUBLIC options first. This used to say only "iris pages publish <slug>",
+    // which answers "how do I look at this?" with an action that makes it world-readable —
+    // the wrong order precisely when the thing being checked for is an empty page. On
+    // 2026-08-27 a page shipped reading "This page has no content yet"; it was the bug report
+    // about pages shipping empty. On 2026-08-28 a client's agent followed this line and she
+    // had to stop it with "if its public dont publish it".
+    : `/p/ serves PUBLISHED pages only. This looks like a draft.\n` +
+      `  inspect it:  iris genesis get ${slug}\n` +
+      `  share it:    iris genesis preview ${slug}   (or: iris genesis share ${slug} for a revocable link)\n` +
+      `  go public:   iris pages publish ${slug}     (world-readable, indexable)`
 }
