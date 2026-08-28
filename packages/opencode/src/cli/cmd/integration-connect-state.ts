@@ -11,6 +11,8 @@ export interface ConnectionRow {
   integration_type?: string
   name?: string
   status?: string
+  /** Composio account behind this row. A re-authorisation mints a NEW one — see below. */
+  connected_account_id?: string
 }
 
 function rowType(row: ConnectionRow): string {
@@ -38,9 +40,26 @@ function matchesType(row: ConnectionRow, type: string): boolean {
  *   - a connection of this type exists now that did not exist before, and it is active
  *   - a connection that existed before is now active when it previously was not
  *
+ *   - a connection kept its row and its active status, but the CREDENTIAL behind it
+ *     changed — i.e. `connected_account_id` is one we had not seen for this type
+ *
  * Crucially, an unchanged pre-existing connection is NOT success — that was the
  * bug: re-authorising a broken integration always matched the very row the user
  * was trying to repair.
+ *
+ * THE THIRD CASE IS WHY REPAIRS USED TO REPORT FAILURE (Emily, 2026-08-28).
+ * `iris integrations connect gmail --yes` OVERWRITES the existing record rather than
+ * creating one. So the row keeps its id, and `status` was already "active" — the local
+ * status is a claim about a connection, not a test of it, and a dead credential sits at
+ * "active" indefinitely (measured on Notion: rows marked active whose Composio accounts
+ * were EXPIRED). Neither of the first two cases can fire, so a user who authorised
+ * successfully in the browser was told:
+ *
+ *     No new connection detected — authorization did not complete
+ *
+ * ...which is the exact false negative the #171182 fix traded a false positive for.
+ * Reconnecting always mints a NEW Composio connected-account id, so that id — not the
+ * row id and not the status — is the thing that actually proves a fresh authorisation.
  */
 export function detectNewConnection(
   before: ConnectionRow[] | undefined,
@@ -55,6 +74,15 @@ export function detectNewConnection(
     if (row?.id) previousById.set(String(row.id), row)
   }
 
+  // Every credential we had for this type BEFORE. An id absent from this set can only
+  // have arrived from an authorisation that just happened.
+  const priorAccounts = new Set<string>()
+  for (const row of previous) {
+    if (!matchesType(row, type)) continue
+    const acct = row?.connected_account_id ? String(row.connected_account_id) : ""
+    if (acct) priorAccounts.add(acct)
+  }
+
   for (const row of after) {
     if (!matchesType(row, type) || !isActive(row)) continue
 
@@ -63,6 +91,11 @@ export function detectNewConnection(
 
     // Brand-new connection, or one that just transitioned into active.
     if (!prior || !isActive(prior)) return row
+
+    // Same row, still active — but a credential we had never seen. That is an overwrite
+    // (`--yes`), the shape a REPAIR takes, and it is real success.
+    const acct = row?.connected_account_id ? String(row.connected_account_id) : ""
+    if (acct && !priorAccounts.has(acct)) return row
   }
 
   return null
