@@ -52,24 +52,39 @@ fail() { printf '  \033[31m✗\033[0m %s\n' "$*"; FAIL=1; }
 info() { printf '    \033[90m%s\033[0m\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
+# The platform slug heyiris.io uses for whichever asset we were asked to verify.
+case "$ASSET" in
+  *darwin-arm64.dmg) SLUG="mac-arm64" ;;
+  *darwin-x64.dmg)   SLUG="mac-intel" ;;
+  *darwin-arm64.zip) SLUG="mac-arm64-zip" ;;
+  *darwin-x64.zip)   SLUG="mac-x64-zip" ;;
+  *windows*)         SLUG="windows" ;;
+  *)                 SLUG="mac-arm64" ;;
+esac
+
 if [ -n "$PIN_TAG" ]; then
   URL="https://github.com/$REPO/releases/download/$PIN_TAG/$ASSET"
 else
-  URL="https://github.com/$REPO/releases/latest/download/$ASSET"
+  # NOT /releases/latest/download/. That URL has no fallback by asset name — it resolves to
+  # whichever release holds the one repo-wide "latest" flag, which the CLI series takes on
+  # every publish. Asking it "what does the front page serve?" returned a CLI release's copy
+  # of this asset for a week, and the answer looked entirely healthy. The front page asks
+  # heyiris.io, so this must too, or it is not measuring what users get.
+  URL="https://heyiris.io/download/$SLUG"
 fi
 
 step "1. $([ -n "$PIN_TAG" ] && echo "Which release are we verifying?" || echo "What does the front page actually serve?")"
-# releases/latest does NOT mean "newest tag" — GitHub falls back to the newest release that
-# CONTAINS this asset name. With two release series in one repo that is silently load-bearing,
-# so resolve it rather than trusting the word "latest".
 if [ -n "$PIN_TAG" ]; then
   SERVED_TAG="$PIN_TAG"
   curl -sfIL -o /dev/null "$URL" || { fail "no such release asset: $PIN_TAG/$ASSET"; exit 1; }
   pass "pinned to $SERVED_TAG (not what the front page serves — prereleases are invisible there by design)"
 else
-  SERVED_TAG="$(curl -sI "$URL" | grep -i '^location' | grep -oE 'download/[a-z-]*v[0-9][0-9.]*' | head -1 | cut -d/ -f2)"
-  if [ -z "$SERVED_TAG" ]; then fail "front-page URL did not resolve to any release"; exit 1; fi
-  pass "front page serves $SERVED_TAG"
+  SERVED_TAG="$(curl -sIL "$URL" | grep -i '^location' | grep -oE 'releases/download/[a-z-]*v[0-9][0-9.]*' | head -1 | cut -d/ -f3)"
+  if [ -z "$SERVED_TAG" ]; then fail "heyiris.io/download/$SLUG did not resolve to any release"; exit 1; fi
+  case "$SERVED_TAG" in
+    desktop-v*) pass "front page serves $SERVED_TAG" ;;
+    *) fail "front page resolved to $SERVED_TAG — that is NOT a desktop release. The CLI series has taken the download again."; exit 1 ;;
+  esac
 fi
 info "$URL"
 if [ -n "$EXPECT_TAG" ]; then
