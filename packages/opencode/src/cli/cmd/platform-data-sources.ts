@@ -158,7 +158,7 @@ export function stringifySource(result: any, maxChars = 12000): string {
  * are different questions, and conflating them is the mental-model error survey
  * exists to prevent.
  */
-export const BULK_INGESTABLE_TYPES = ["dropbox", "google_drive", "s3"] as const
+export const BULK_INGESTABLE_TYPES = ["dropbox", "google_drive", "s3", "google-cloud-storage", "onedrive", "microsoft"] as const
 
 /**
  * THIS LIST MIRRORS A SERVER VALIDATION RULE. Keep them equal.
@@ -167,12 +167,15 @@ export const BULK_INGESTABLE_TYPES = ["dropbox", "google_drive", "s3"] as const
  *   'source' => 'required|in:dropbox,google_drive,s3'
  * and FileIngestionService switches on exactly those three, each implemented.
  *
- * s3 was missing here, so `survey` reported the CLI could bulk-ingest two sources when
- * the platform could do three — under-reporting a capability we already shipped.
+ * Widening this is a SERVER change, and this list may only grow after that change ships.
+ * Adding a type fl-api rejects turns a truthful "read-only" into a promise that fails at
+ * run time — the failure mode this file exists to prevent.
  *
- * Widening this further is a SERVER change, not an edit here. Adding a type the server
- * rejects would turn a truthful "read-only" into a promise that fails at run time, which
- * is the failure mode this file exists to prevent.
+ * s3 was the cautionary case. It appeared in the validation rule AND had a case in the
+ * download switch, so it looked supported; the case body was
+ * `return ['success' => false, 'error' => 'S3 integration not yet implemented']`. A case
+ * existing is not a handler existing. It is implemented now, along with
+ * google-cloud-storage and onedrive/microsoft (Graph), in fl-api dae7aeff.
  */
 
 /**

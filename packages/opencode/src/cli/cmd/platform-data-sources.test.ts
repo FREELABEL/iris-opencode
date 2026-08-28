@@ -325,7 +325,11 @@ test("countItems: returns null (not 0) when there is no array to count", () => {
 
 test("BULK_INGESTABLE_TYPES equals the server's validation rule — no more, no fewer", () => {
   // More would promise a source fl-api rejects at run time; fewer hides one we ship.
-  expect([...BULK_INGESTABLE_TYPES].sort()).toEqual(["dropbox", "google_drive", "s3"])
+  // fl-api dae7aeff: FileIngestionService::SOURCE_INTEGRATIONS, and the validation rule is
+  // derived from it. Widening here without widening there re-creates the original defect.
+  expect([...BULK_INGESTABLE_TYPES].sort()).toEqual(
+    ["dropbox", "google-cloud-storage", "google_drive", "microsoft", "onedrive", "s3"],
+  )
 })
 
 test("s3 is bulk-ingestable — it was missing, and that was the under-report", () => {
