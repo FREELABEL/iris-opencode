@@ -367,3 +367,57 @@ jobs:
           cat /tmp/assets.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Promote to the landing page ONLY if the published artifact passes verification.
+  #
+  # Manual promotion had a real failure mode — builds sat unpromoted while a client kept
+  # opening the old one — but blanket auto-promotion is worse: seven desktop releases were cut
+  # on 2026-08-27 alone, one of them (v1.18.27) carrying only half a change. Pushing all seven
+  # to every user would have been the opposite mistake.
+  #
+  # So the gate is the verifier, not a human remembering. It downloads what the release
+  # actually serves, launches the real app under a throwaway HOME, and checks the bundle
+  # version, the sidecar name, a parsed /global/health, and that a NEW USER gets iris models.
+  # A build that fails any of those stays a prerelease and never reaches the front page.
+  #
+  # macOS runner because the check launches the .app; the publish job is ubuntu.
+  verify-and-promote:
+    needs: [publish]
+    if: success()
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get tag
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "tag=desktop-v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify the published artifact
+        id: verify
+        run: |
+          set -uo pipefail
+          chmod +x scripts/verify-shipped-app.sh
+          ./scripts/verify-shipped-app.sh --tag "${{ steps.version.outputs.tag }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote — it passed
+        # Only reached when the step above exits 0.
+        run: |
+          set -euo pipefail
+          gh release edit "${{ steps.version.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
+          echo "Promoted ${{ steps.version.outputs.tag }} — it is now what heyiris.io serves."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Say why it was NOT promoted
+        if: failure()
+        run: |
+          echo "::warning::${{ steps.version.outputs.tag }} FAILED verification and was left as a prerelease. The landing page still serves the previous release, which is the intended outcome — fix the build and cut another tag."
