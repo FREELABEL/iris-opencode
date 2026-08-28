@@ -370,3 +370,11 @@ test("a source present on both sides is connected but NOT flagged hidden", () =>
 test("no connections means nothing is hidden, not everything", () => {
   expect(surveySources([{ type: "obsidian" }], []).some((s) => s.hiddenButConnected)).toBe(false)
 })
+
+test("sync's accepted choices ARE the bulk-ingestable list — no second copy to drift", () => {
+  // Measured on the shipped v1.3.223: survey advertised s3 as importable while
+  // `sync --help` still showed choices: "dropbox", "google_drive" and the parser rejected
+  // s3 outright. Two hardcoded copies of one fact, which is the bug this file keeps finding
+  // elsewhere — reproduced here by fixing only one of them.
+  expect([...BULK_INGESTABLE_TYPES]).toContain("s3")
+})

@@ -151,7 +151,8 @@ export function stringifySource(result: any, maxChars = 12000): string {
 // ----------------------------------------------------------------------------
 
 /**
- * The only source types `sync` can bulk-ingest. Mirrors SyncCommand's `choices`.
+ * The only source types `sync` can bulk-ingest. SyncCommand's `choices` is DERIVED from
+ * this, so the two cannot disagree.
  * Deliberately a constant rather than an inference: "connected" and "importable"
  * are different questions, and conflating them is the mental-model error survey
  * exists to prevent.
@@ -638,7 +639,10 @@ const SyncCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("bloqId", { type: "number", demandOption: true })
-      .positional("source", { type: "string", demandOption: true, choices: ["dropbox", "google_drive"] })
+      // DERIVED, not retyped. This was a second hardcoded copy that drifted from
+      // BULK_INGESTABLE_TYPES the moment that list changed: survey started advertising s3
+      // as importable while `sync` still rejected it at the argument parser. One list.
+      .positional("source", { type: "string", demandOption: true, choices: [...BULK_INGESTABLE_TYPES] })
       .positional("path", { type: "string", demandOption: true, describe: "folder path or ID" })
       .option("recursive", { alias: "r", type: "boolean", default: false })
       .option("list-name", { alias: "l", type: "string", default: "Imported Files" })
