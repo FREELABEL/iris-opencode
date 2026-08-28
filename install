@@ -26,7 +26,7 @@ Installs:
 
 Options:
     -h, --help              Display this help message
-    -v, --version <version> Install a specific IRIS CLI version (e.g., 1.0.180)
+    -v, --version <version> Install a specific IRIS CLI version (see the releases page)
     -b, --binary <path>     Install IRIS CLI from a local binary
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
         --skip-sdk          Skip SDK/CLI installation
@@ -42,7 +42,7 @@ Options:
 
 Examples:
     curl -fsSL https://heyiris.io/install-code | bash
-    curl -fsSL https://heyiris.io/install-code | bash -s -- --version 1.0.180
+    curl -fsSL https://heyiris.io/install-code | bash -s -- --version <version>
     curl -fsSL https://heyiris.io/install-code | bash -s -- --only-code
     curl -fsSL https://heyiris.io/install-code | bash -s -- --skip-app
     curl -fsSL https://heyiris.io/install-code | bash -s -- --api-url https://custom.example.com
@@ -539,7 +539,12 @@ else
         if [[ -z "$specific_version" ]]; then
             echo -e "${RED}Failed to fetch version information${NC}"
             echo -e "${MUTED}Check your internet connection or install a specific version:${NC}"
-            echo -e "${MUTED}  curl -fsSL https://heyiris.io/install-code | bash -s -- --version 1.1.6${NC}"
+            # Do NOT name a version here. This line used to say 1.1.6 — an ancient build —
+            # and on 2026-08-27 a client followed it verbatim and installed that, because a
+            # hardcoded example in an error message reads as a recommendation. Point at the
+            # list instead, which cannot go stale.
+            echo -e "${MUTED}  Pick a version from https://github.com/FREELABEL/iris-opencode/releases${NC}"
+            echo -e "${MUTED}  curl -fsSL https://heyiris.io/install-code | bash -s -- --version <version>${NC}"
             exit 1
         fi
     else

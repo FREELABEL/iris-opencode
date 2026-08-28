@@ -72,9 +72,14 @@ pub fn sync_cli(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
+    // A missing CLI used to mean "skip". That made the desktop app useless as an entry
+    // point: a client installed it on 2026-08-27, the app reported "No CLI installation
+    // found, skipping sync", and she was left to run a curl|bash by hand — which then
+    // installed an ancient version because the error message suggested one. The desktop app
+    // is the front door; if the CLI is not there, put it there.
     if !is_cli_installed() {
-        println!("No CLI installation found, skipping sync");
-        return Ok(());
+        println!("No CLI installation found — installing it");
+        return install_cli().map(|_| ());
     }
 
     let cli_path =
