@@ -13,7 +13,10 @@ async function requireToken(): Promise<string | null> {
     prompts.log.error(lastError())
     // GMAIL_ACCESS_TOKEN is no longer read — auth lives on the backend now, so
     // advertising it would send people down a path that does nothing.
-    prompts.log.info(dim("Check connection status with: iris integrations list-connected"))
+    // NOT list-connected: it reads a store that cannot see Composio-backed connections, so
+    // it will happily confirm "nothing connected" for a working account and send people into
+    // a reconnect loop. Point at the call that proves it either way.
+    prompts.log.info(dim("Verify by using it:  iris integrations exec gmail fetch_emails max_results=5"))
   }
   return token
 }

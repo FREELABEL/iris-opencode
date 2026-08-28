@@ -106,15 +106,43 @@ if ($RequestedVersion) {
         exit 1
     }
 } else {
-    $Url = "https://github.com/FREELABEL/iris-opencode/releases/latest/download/$Filename"
-
+    # Do NOT use /releases/latest. Two problems, both observed in production:
+    #
+    #  1. It is REPO-WIDE. This repo publishes two series — v1.3.x (this CLI) and
+    #     desktop-v1.18.x (the Tauri app). When a desktop release held the "latest" flag,
+    #     /releases/latest returned a tag with zero iris-* binaries and `iris update` broke
+    #     for the whole fleet (#182694). The bash installer was fixed for this; this file
+    #     was not, so Windows kept the bug.
+    #
+    #  2. It does not check the release actually CONTAINS the asset. A release is created
+    #     before its assets finish uploading, so hitting it mid-publish 404s. A client saw
+    #     exactly that today: "iris upgrade 1.3.222 -> 404 Not Found".
+    #
+    # So: enumerate releases, keep bare vX.Y.Z tags (desktop-v* are excluded by the anchor),
+    # skip drafts, and take the newest one that actually HAS this platform's asset.
     try {
-        $LatestResp = Invoke-RestMethod -Uri "https://api.github.com/repos/FREELABEL/iris-opencode/releases/latest" -UseBasicParsing -ErrorAction Stop
-        $SpecificVersion = $LatestResp.tag_name -replace "^v", ""
+        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" -UseBasicParsing -ErrorAction Stop
+        $Chosen = $null
+        foreach ($r in $Releases) {
+            if ($r.draft) { continue }
+            if ($r.tag_name -notmatch '^v\d+\.\d+\.\d+$') { continue }
+            if (-not ($r.assets | Where-Object { $_.name -eq $Filename })) { continue }
+            $Chosen = $r
+            break
+        }
+        if (-not $Chosen) {
+            Write-Host "No published release contains $Filename yet." -ForegroundColor Red
+            Write-Host "A release may still be uploading — try again shortly." -ForegroundColor DarkGray
+            exit 1
+        }
+        $SpecificVersion = $Chosen.tag_name -replace "^v", ""
+        # Pin the URL to the resolved tag rather than /latest/, so the version we announce and
+        # the bytes we download can never come from two different releases.
+        $Url = "https://github.com/FREELABEL/iris-opencode/releases/download/$($Chosen.tag_name)/$Filename"
     } catch {
         Write-Host "Failed to fetch version information." -ForegroundColor Red
         Write-Host "Check your internet connection or install a specific version:" -ForegroundColor DarkGray
-        Write-Host '  $env:VERSION="1.1.6"; irm https://heyiris.io/install-code.ps1 | iex' -ForegroundColor DarkGray
+        Write-Host '  $env:VERSION="1.3.223"; irm https://heyiris.io/install-code.ps1 | iex' -ForegroundColor DarkGray
         exit 1
     }
 }

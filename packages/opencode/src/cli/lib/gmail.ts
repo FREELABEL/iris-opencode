@@ -68,7 +68,19 @@ let _checked: string | null = null
 export async function getToken(): Promise<string | null> {
   if (_checked) return _checked
 
-  const status = await getGmailStatus()
+  // DEEP. This gate exists in front of commands that are about to make a real Gmail request
+  // anyway, so a shallow pre-check buys nothing and can only be wrong — and it was.
+  //
+  // The shallow path reads /api/v1/integrations, which does not surface Composio-backed
+  // connections. On 2026-08-28 that made `iris gmail inbox` refuse to run for a client whose
+  // Gmail was live and working: the very same execute-direct call the command was about to
+  // make returned her inbox fine. She was told "No Gmail connection found", her agent believed
+  // it, and the reconnect attempts that followed created duplicate dead connections that then
+  // shadowed the working one.
+  //
+  // getGmailStatus's own comment already said the shallow read "is not authoritative" and that
+  // "the truth is only ever what a live request returns". It was right; this just never used it.
+  const status = await getGmailStatus({ deep: true })
   if (status.ok) {
     _checked = BACKEND
     return BACKEND
