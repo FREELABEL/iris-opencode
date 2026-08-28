@@ -13,6 +13,7 @@ This directory contains step-by-step recipes for common IRIS workflows. Each fil
 | "NDA", "BAA", "agreement", "sign this", "e-signature", "counter-sign", "who hasn't signed", "revoke access", "gate on an agreement", "audit trail for a signature" | `agreements-and-signing.md` |
 | "manage deals", "deal pipeline", "deal status", "payment reminder", "stale deals", "win-back", "recover deal" | `deals.md` |
 | "build a page", "create a landing page", "genesis", "add components", "page builder" | `pages.md` |
+| "make it private", "don't publish it", "not visible", "share privately", "auth gate", "who can see this page", "unpublish", "lock it down" | `page-privacy.md` |
 | "rss", "feed", "syndicate", "subscribe to the newsroom", "json feed", "google news", "news sitemap", "aggregator", "feed.xml", "newsroom feed" | `newsroom-syndication.md` |
 | "their own database", "bring your own storage", "client's postgres", "client's S3 bucket", "move a workspace's data", "migrate storage", "bind a storage backend", "data residency", "provider proxy", "get off our servers" | `storage-backends.md` |
 | "dataset", "schema", "custom data", "store records", "atlas datasets", "create a tracker" | `atlas-datasets.md` |

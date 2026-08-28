@@ -255,6 +255,12 @@
       "purpose": "SOM pipeline: discover \u2192 enrich \u2192 dispatch outreach across LinkedIn / Twitter / Instagram."
     },
     {
+      "src": "how-to/page-privacy.md",
+      "dest": "how-to/page-privacy.md",
+      "managed": true,
+      "purpose": "Who can see a Genesis page and how to lock one down. The gating model is TWO independent settings (requires_auth for the login gate, visibility private to kill the public /p/ urls) plus a cache purge before either takes effect \u2014 the step whose absence makes the other two look broken. Also: inspect a draft with `genesis get`, never by publishing it, and offer preview/share links before publish."
+    },
+    {
       "src": "how-to/pages.md",
       "dest": "how-to/pages.md",
       "managed": true,
