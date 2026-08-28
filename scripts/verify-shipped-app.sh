@@ -83,6 +83,20 @@ else
   exit 1
 fi
 
+# Run the sidecar as a NEW USER would, not as the operator. On 2026-08-27 this script
+# reported "iris provider, 27 models" on a laptop that has a hand-built
+# ~/.config/opencode/opencode.json — a file NO shipped artifact creates. Under an isolated
+# HOME the same build serves the `opencode` provider instead, because the iris provider is
+# not shipped by the app or the installer. The check certified a product that does not exist
+# for anyone but the person running it. That is the whole failure mode this script was
+# written to prevent, so it must not be the first thing the script does wrong.
+FRESH_HOME="$WORK/home"
+mkdir -p "$FRESH_HOME"
+export HOME="$FRESH_HOME"
+export XDG_CONFIG_HOME="$FRESH_HOME/.config"
+export XDG_DATA_HOME="$FRESH_HOME/.local/share"
+export XDG_STATE_HOME="$FRESH_HOME/.local/state"
+
 step "5. Run it — a real round-trip, not a status code"
 # A bundle built for another architecture cannot be booted here, and Rosetta does NOT help:
 # Bun's standard x64 binaries use AVX2, which Rosetta 2 does not implement, so an x86_64
@@ -120,7 +134,7 @@ else
     || fail "engine version $ENGINE_V != release $WANT"
 fi
 
-step "6. Are there models a client can actually use?"
+step "6. Are there models a NEW USER can actually use?"
 # A provider COUNT was green here once while every call 401'd. Counting is not verifying, so
 # assert models exist under the provider we ship — the smallest claim that implies a usable app.
 P="$(probe /config/providers)"
