@@ -158,7 +158,38 @@ try {
         exit 1
     }
 
-    Copy-Item -Path $Binary.FullName -Destination "$INSTALL_DIR\iris.exe" -Force
+    # Windows LOCKS a running executable: it cannot be deleted or overwritten. `iris upgrade`
+    # shells out to this script FROM iris.exe, so the destination is ALWAYS in use during a
+    # self-update and this Copy-Item failed with "being used by another process" — every
+    # time, for every Windows user. The upgrade reported failure and left them pinned to
+    # whatever version they first installed. Found on a client's machine 2026-08-28, stuck on
+    # v1.3.207 while v1.3.220 was current (#182741).
+    #
+    # The Unix path a few files over already handles this with `rm -f` before the move, which
+    # works because unlinking a running binary is legal on POSIX. It is not on Windows.
+    # Windows DOES allow RENAMING a running image — the process keeps executing from the
+    # renamed file — which frees the name so a fresh binary can be written.
+    $Dest = Join-Path $INSTALL_DIR "iris.exe"
+
+    # Sweep leftovers from previous upgrades. These are only deletable once the process that
+    # held them has exited, so failures here are expected and must never abort an install.
+    Get-ChildItem -Path $INSTALL_DIR -Filter "iris.exe.old-*" -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue }
+
+    if (Test-Path $Dest) {
+        $StaleName = "iris.exe.old-$(Get-Random)"
+        try {
+            Rename-Item -Path $Dest -NewName $StaleName -Force -ErrorAction Stop
+        } catch {
+            Write-Host "Error: could not move the running iris.exe aside: $_" -ForegroundColor Red
+            Write-Host "Close any open IRIS windows and run the upgrade again." -ForegroundColor Yellow
+            Send-InstallBeacon -EventType "install_failed" -Step "rename_locked_binary" -Reason "$_"
+            Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
+            exit 1
+        }
+    }
+
+    Copy-Item -Path $Binary.FullName -Destination $Dest -Force
 } catch {
     Send-InstallBeacon -EventType "install_failed" -Step "extract" -Reason "$_"
     Write-Host "Error extracting archive: $_" -ForegroundColor Red
