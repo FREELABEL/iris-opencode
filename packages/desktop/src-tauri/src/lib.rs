@@ -113,9 +113,27 @@ const IRIS_BASELINE_AGENTS_MD: &str = include_str!("../resources/iris-agents.md"
 /// AGENTS.md is deliberately choosing that one — seeding ours would hijack the precedence.
 /// Every failure here is non-fatal: a missing instruction file degrades the agent, it does not
 /// break the app, so a read-only home directory must not stop the app from starting.
+/// The directory the CLI actually reads its global config from.
+///
+/// This must match `Global.Path.config` on the TypeScript side — `session/instruction.ts`
+/// loads `<that dir>/AGENTS.md`, and the config loader reads `<that dir>/opencode.json` from
+/// the same place. Hardcoding `~/.config` here (as the instruction seeder used to) means that
+/// on any machine with XDG_CONFIG_HOME set, the file is written somewhere the agent never
+/// looks — and the symptom is an agent with no IRIS context and no error anywhere.
+fn opencode_config_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| dirs_next_home().unwrap_or_default().join(".config"));
+    if base.as_os_str().is_empty() {
+        return None;
+    }
+    Some(base.join("opencode"))
+}
+
 fn seed_iris_instructions() {
-    let Some(home) = dirs_next_home() else { return };
-    let dir = home.join(".config").join("opencode");
+    let Some(dir) = opencode_config_dir() else {
+        return;
+    };
     let target = dir.join("AGENTS.md");
     if target.exists() {
         return;
@@ -258,13 +276,9 @@ const IRIS_PROVIDER_JSON: &str = include_str!("../resources/iris-provider.json")
 /// config loader from the process env, which spawn_sidecar populates from
 /// ~/.iris/sdk/.env. A shipped artifact must never carry a real key.
 fn seed_iris_provider() {
-    let Some(home) = dirs_next_home() else {
+    let Some(config_dir) = opencode_config_dir() else {
         return;
     };
-    let config_dir = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"))
-        .join("opencode");
     let config_path = config_dir.join("opencode.json");
 
     let seed: serde_json::Value = match serde_json::from_str(IRIS_PROVIDER_JSON) {
