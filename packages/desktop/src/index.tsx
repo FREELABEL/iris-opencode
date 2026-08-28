@@ -7,7 +7,7 @@ import { type as ostype } from "@tauri-apps/plugin-os"
 import { AsyncStorage } from "@solid-primitives/storage"
 import { Store } from "@tauri-apps/plugin-store"
 
-import { UPDATER_ENABLED, createUpdaterPlatform } from "./updater"
+import { UPDATER_ENABLED, createUpdaterPlatform, runUpdater } from "./updater"
 import { opencodeGlobal } from "./opencode-global"
 import { createMenu } from "./menu"
 import { check, Update } from "@tauri-apps/plugin-updater"
@@ -227,6 +227,23 @@ const platform: Platform = {
 }
 
 createMenu()
+
+// ── Check for updates on launch, then every 6 hours ───────────────────────────
+//
+// Until desktop-v1.18.37 the ONLY way to get a fix to a client was to ask them to visit the
+// site and re-download by hand — the updater was compiled out (the Rust side gates the plugin
+// on `option_env!("TAURI_SIGNING_PRIVATE_KEY")`, and that secret did not exist), so
+// UPDATER_ENABLED was false in every build ever shipped and the menu item sat greyed out.
+//
+// alertOnFail:false is deliberate: a launch-time check that pops "Failed to check for updates"
+// on a flaky connection trains people to dismiss update dialogs. Silence unless there is
+// genuinely something to install; the menu item stays for the case where someone asks on purpose.
+if (UPDATER_ENABLED) {
+  const checkQuietly = () => runUpdater({ alertOnFail: false }).catch(() => undefined)
+  // Not immediate — let the sidecar come up first so the prompt does not land on a splash.
+  setTimeout(checkQuietly, 15_000)
+  setInterval(checkQuietly, 6 * 60 * 60 * 1000)
+}
 
 // Stops mousewheel events from reaching Tauri's pinch-to-zoom handler
 root?.addEventListener("mousewheel", (e) => {

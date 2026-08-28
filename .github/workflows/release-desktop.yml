@@ -143,9 +143,15 @@ jobs:
           else
             echo "::warning::APPLE_CERTIFICATE unset — ad-hoc signing. Gatekeeper will flag this 'damaged' on Apple Silicon."
           fi
-          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target ${{ matrix.rust_target }} --bundles app,dmg
+          # createUpdaterArtifacts was FALSE on every build this app has ever shipped, so no
+          # release carried latest.json and the in-app "Check For Updates..." pointed at a 404.
+          # The app had an updater pubkey, a menu item and a UI, with nothing to update from —
+          # which is why every fix so far required telling every user to re-download by hand.
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}' --target ${{ matrix.rust_target }} --bundles app,dmg,updater
         env:
           OPENCODE_CHANNEL: latest
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -168,6 +174,23 @@ jobs:
           else
             echo "::warning::no .dmg produced for ${{ matrix.arch }}"
           fi
+
+      - name: Package the signed updater artifact
+        # Tauri names the updater tarball after productName, so BOTH arches produce a file
+        # called IRIS.app.tar.gz and the second would clobber the first once the publish job
+        # merges them. Rename per-arch before that can happen.
+        run: |
+          set -euo pipefail
+          BUNDLE=packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle
+          TGZ=$(ls "$BUNDLE"/macos/*.app.tar.gz 2>/dev/null | grep -v 'IRIS-tauri-' | head -1 || true)
+          if [ -z "$TGZ" ]; then
+            echo "::error::no updater tarball produced — createUpdaterArtifacts did not run"
+            exit 1
+          fi
+          test -f "$TGZ.sig" || { echo "::error::updater tarball is UNSIGNED (TAURI_SIGNING_PRIVATE_KEY missing?)"; exit 1; }
+          mv "$TGZ"     "$BUNDLE/macos/IRIS-tauri-darwin-${{ matrix.arch }}.app.tar.gz"
+          mv "$TGZ.sig" "$BUNDLE/macos/IRIS-tauri-darwin-${{ matrix.arch }}.app.tar.gz.sig"
+          echo "signed updater artifact ✓"
 
       - name: Smoke-test the bundle we just built
         # Do not wait for a client to discover that the app cannot start. Boot the sidecar
@@ -207,6 +230,8 @@ jobs:
           path: |
             packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.zip
             packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.dmg
+            packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.app.tar.gz
+            packages/desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/IRIS-tauri-darwin-${{ matrix.arch }}.app.tar.gz.sig
           if-no-files-found: warn
 
   windows:
@@ -278,21 +303,35 @@ jobs:
         # release shipped with a blue DEV badge in the titlebar. "latest" maps to "prod".
         run: |
           cd packages/desktop
-          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis
+          ./node_modules/.bin/tauri build --config ./src-tauri/tauri.prod.conf.json --config '{"bundle":{"createUpdaterArtifacts":true}}' --target x86_64-pc-windows-msvc --bundles nsis,updater
         env:
           OPENCODE_CHANNEL: latest
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Rename installer to the IRIS-tauri-* convention
         run: |
           set -euo pipefail
-          SRC=$(ls packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe | head -1)
-          cp "$SRC" packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe
+          NSIS=packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          SRC=$(ls "$NSIS"/*.exe | head -1)
+          cp "$SRC" "$NSIS/IRIS-tauri-windows-x64-setup.exe"
+          ZIP=$(ls "$NSIS"/*.nsis.zip 2>/dev/null | grep -v 'IRIS-tauri-' | head -1 || true)
+          if [ -z "$ZIP" ]; then
+            echo "::error::no updater zip produced — createUpdaterArtifacts did not run"
+            exit 1
+          fi
+          test -f "$ZIP.sig" || { echo "::error::updater zip is UNSIGNED (TAURI_SIGNING_PRIVATE_KEY missing?)"; exit 1; }
+          mv "$ZIP"     "$NSIS/IRIS-tauri-windows-x64.nsis.zip"
+          mv "$ZIP.sig" "$NSIS/IRIS-tauri-windows-x64.nsis.zip.sig"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: IRIS-tauri-windows-x64
-          path: packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe
+          path: |
+            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe
+            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64.nsis.zip
+            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64.nsis.zip.sig
           if-no-files-found: warn
 
   publish:
@@ -332,6 +371,57 @@ jobs:
           fi
           ls -la dist/
           printf '%s\n' "${assets[@]}" > /tmp/assets.txt
+
+      - name: Timestamp
+        id: pubdate
+        run: echo "now=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
+      - name: Build latest.json (the updater manifest)
+        # `tauri build --bundles updater` emits the signed tarball and its .sig but NOT the
+        # manifest -- that is generated by tauri-action, which this workflow does not use.
+        # Without this file the endpoint 404s and "Check For Updates..." is a dead menu item.
+        #
+        # URLs are pinned to THIS tag, not /latest/. A manifest that points at "latest" would
+        # keep resolving forward after a later release, so an old manifest could hand a client
+        # a binary whose signature it does not describe.
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          python3 - "$TAG" "$BASE" "${{ steps.version.outputs.version }}" <<'PY'
+          import json, os, sys, pathlib
+          tag, base, version = sys.argv[1], sys.argv[2], sys.argv[3]
+          targets = {
+              "darwin-aarch64": "IRIS-tauri-darwin-arm64.app.tar.gz",
+              "darwin-x86_64":  "IRIS-tauri-darwin-x64.app.tar.gz",
+              "windows-x86_64": "IRIS-tauri-windows-x64.nsis.zip",
+          }
+          platforms = {}
+          for target, asset in targets.items():
+              sig = pathlib.Path("dist") / (asset + ".sig")
+              if not sig.exists():
+                  print(f"::warning::no signature for {target} — that platform cannot auto-update from {tag}")
+                  continue
+              platforms[target] = {"signature": sig.read_text().strip(), "url": f"{base}/{asset}"}
+          if not platforms:
+              print("::error::latest.json would list zero platforms — refusing to publish a manifest that updates nobody")
+              sys.exit(1)
+          manifest = {
+              "version": version,
+              "notes": f"IRIS Desktop {version}",
+              "pub_date": os.environ["PUB_DATE"],
+              "platforms": platforms,
+          }
+          pathlib.Path("dist/latest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          print("latest.json covers:", ", ".join(platforms))
+          PY
+          cat dist/latest.json
+          # The updater assets ship alongside the installers; assets.txt drives the upload.
+          shopt -s nullglob
+          printf '%s\n' dist/latest.json dist/*.app.tar.gz dist/*.app.tar.gz.sig \
+                        dist/*.nsis.zip dist/*.nsis.zip.sig >> /tmp/assets.txt
+        env:
+          PUB_DATE: ${{ steps.pubdate.outputs.now }}
 
       - name: Publish as a PRERELEASE
         # Prerelease is load-bearing, not cosmetic: /releases/latest/download resolves to the
@@ -414,6 +504,25 @@ jobs:
           gh release edit "${{ steps.version.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
           echo "Promoted ${{ steps.version.outputs.tag }} — it is now what heyiris.io serves."
+
+          # The app asks /releases/latest/download/latest.json — an indirection GitHub resolves
+          # by asset name to the newest NON-prerelease carrying it. That indirection has already
+          # caused three separate outages in this repo, so assert what installed clients will
+          # actually receive rather than assuming promotion pointed it here.
+          VERSION="${{ steps.version.outputs.version }}"
+          for i in $(seq 1 10); do
+            LIVE=$(curl -sfL --max-time 20 \
+              "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json" \
+              | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))' 2>/dev/null || true)
+            [ "$LIVE" = "$VERSION" ] && break
+            echo "  updater endpoint still serving '${LIVE:-nothing}' (want $VERSION) — retry $i"
+            sleep 6
+          done
+          if [ "$LIVE" != "$VERSION" ]; then
+            echo "::error::promoted, but the updater endpoint serves '${LIVE:-nothing}' not $VERSION — installed clients will NOT see this release"
+            exit 1
+          fi
+          echo "Updater endpoint serves $VERSION — installed clients will be offered this build ✓"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -27,8 +27,10 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVENDc0NjVDNjY2Q0U4NjQKUldSazZHeG1YRVpIWFprb3pCcGwzbnh3Skd1eE9yWFhiVllIU2MxUFlDZzh5UjF6WnhBcDJWWDMK",
-      "endpoints": ["https://github.com/FREELABEL/iris-opencode/releases/latest/download/latest.json"]
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJBMTA2ODFBMjI4QzAzQUMKUldTc0E0d2lHbWdRS21aQ1dzQUVlcUllczYrS1lJU0JWS2tFOUZFcWh1K0syVnhWdkQ2L1lUQ0MK",
+      "endpoints": [
+        "https://github.com/FREELABEL/iris-opencode/releases/latest/download/latest.json"
+      ]
     }
   }
 }

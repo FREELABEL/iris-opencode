@@ -200,5 +200,76 @@ print(f"OK iris provider, {n} models")
 fi
 
 stop_sidecar
+
+step "7. Can this release actually deliver the NEXT one?"
+# For every build before desktop-v1.18.37 the answer was no: the app shipped an updater pubkey,
+# a "Check For Updates..." menu item and a whole UI, while the endpoint returned 404 and the
+# releases carried no manifest at all. So every fix reached users only by asking each of them to
+# re-download by hand. An update mechanism nobody has watched succeed is a claim, not a feature.
+MANIFEST_URL="https://github.com/$REPO/releases/download/$SERVED_TAG/latest.json"
+MJ="$(curl -sfL --max-time 20 "$MANIFEST_URL" || true)"
+if ! is_json "$MJ"; then
+  fail "no latest.json on $SERVED_TAG — installed clients cannot auto-update to it"
+else
+  # The pubkey compiled into the app must be the one whose private half signed this manifest,
+  # or the client downloads the update, checks it, and silently rejects it.
+  PUBKEY="$(python3 -c 'import json;print(json.load(open("packages/desktop/src-tauri/tauri.prod.conf.json"))["plugins"]["updater"]["pubkey"])' 2>/dev/null || true)"
+  printf '%s' "$MJ" | PUBKEY="$PUBKEY" TAG="$SERVED_TAG" python3 -c '
+import base64, json, os, sys
+m = json.load(sys.stdin)
+want = os.environ["TAG"].replace("desktop-v", "")
+got = m.get("version")
+if got != want:
+    print("FAIL manifest says " + str(got) + " but this release is " + want); sys.exit(1)
+plats = m.get("platforms") or {}
+need = {"darwin-aarch64", "darwin-x86_64", "windows-x86_64"}
+missing = need - set(plats)
+if missing:
+    print("FAIL manifest is missing " + ", ".join(sorted(missing))); sys.exit(1)
+# minisign layout: 2-byte algorithm, then an 8-byte key id, then the key/signature. The id is
+# NOT present as hex text anywhere in the signature -- an earlier version of this check looked
+# for the printed "2A10681A..." comment string and would have failed every release. Compare the
+# actual bytes. (The comment shows the same 8 bytes little-endian, which is why they look
+# unrelated at a glance.)
+def keyid(b64):
+    return base64.b64decode(b64)[2:10]
+
+want_id = None
+try:
+    want_id = keyid(base64.b64decode(os.environ["PUBKEY"]).decode().splitlines()[1])
+except Exception:
+    print("::warning::could not parse the app pubkey; skipping the key-match check")
+
+for name, p in plats.items():
+    url = p.get("url", "")
+    if not p.get("signature"):
+        print("FAIL " + name + " has an empty signature"); sys.exit(1)
+    if "/releases/download/" not in url:
+        print("FAIL " + name + " url is not pinned to a tag: " + url); sys.exit(1)
+    if want_id:
+        try:
+            got_id = keyid(base64.b64decode(p["signature"]).decode().splitlines()[1])
+        except Exception:
+            print("FAIL " + name + " signature is not a parseable minisign blob"); sys.exit(1)
+        if got_id != want_id:
+            print("FAIL " + name + " was signed by key " + got_id[::-1].hex().upper()
+                  + " but the app only trusts " + want_id[::-1].hex().upper()
+                  + " - every client would download this update and reject it"); sys.exit(1)
+shown = want_id[::-1].hex().upper() if want_id else "unchecked"
+print("OK manifest " + want + ", " + str(len(plats)) + " platforms, signed by " + shown)
+' > "$WORK/m.txt" 2>&1
+  R="$(cat "$WORK/m.txt")"
+  case "$R" in OK*) pass "${R#OK }";; *) fail "${R#FAIL }";; esac
+
+  # And the binary it points at must exist. A manifest naming a 404 fails at download time,
+  # on the client, silently.
+  MYURL="$(printf '%s' "$MJ" | python3 -c 'import json,sys;p=json.load(sys.stdin)["platforms"];print(p.get("darwin-aarch64",{}).get("url",""))' 2>/dev/null || true)"
+  if [ -n "$MYURL" ] && curl -sfIL -o /dev/null --max-time 30 "$MYURL"; then
+    pass "the payload it names is downloadable"
+  else
+    fail "manifest points at a URL that does not resolve: $MYURL"
+  fi
+fi
+
 step "$([ $FAIL -eq 0 ] && echo $'\033[32mSHIPPED APP VERIFIED\033[0m' || echo $'\033[31mSHIPPED APP HAS DEFECTS A CLIENT WILL HIT\033[0m')"
 exit $FAIL
