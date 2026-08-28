@@ -664,22 +664,51 @@ const ListConnectedCommand = cmd({
     // live Composio connected_accounts and surfaces account_email + entity_id
     // per record. Use it directly so multi-account stays visible (a user with
     // 2 Gmail accounts shows 2 rows, not 1 deduped by type).
-    const items: any[] = []
+    // The lookup either SUCCEEDS and returns a list, or it FAILS. Those are different
+    // answers and this used to collapse them: a bare `catch {}` plus `if (!res.ok)` fell
+    // through to an empty array, and an empty array printed "No integrations connected."
+    // So a 401, a 500, or a dropped connection all rendered as the confident claim that the
+    // user has nothing connected.
+    //
+    // On 2026-08-28 that told a client her Gmail was not connected while it was live and
+    // working (Composio ca_P1qS3-SNvUKQ, probe OK). Her agent believed the CLI, advised her
+    // to re-run `connect`, and the retry created a second half-finished OAuth — which is the
+    // single dominant cause of dead connections in the audit. The false negative did not just
+    // mislead, it manufactured the failure it described.
+    let items: any[] | null = null
+    let failure: string | null = null
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/integrations`)
       if (res.ok) {
         const data = (await res.json()) as any
-        for (const i of (data?.connections ?? data?.data ?? data ?? [])) items.push(i)
+        items = [...(data?.connections ?? data?.data ?? data ?? [])]
+      } else {
+        failure = `the integrations API returned HTTP ${res.status}`
       }
-    } catch {}
+    } catch (e) {
+      failure = e instanceof Error ? e.message : String(e)
+    }
 
     if (args.json) {
-      await writeJson(items)
+      // Machine consumers need the distinction most — an agent parsing `[]` will state it as
+      // fact. Emit the error instead of an empty list it cannot tell apart from "none".
+      await writeJson(failure ? { error: failure, connections: null } : items)
       prompts.outro("Done")
       return
     }
 
-    if (items.length === 0) {
+    if (failure) {
+      prompts.log.error(`Could not read your integrations — ${failure}`)
+      prompts.log.info(dim("This is NOT the same as having none connected; the lookup did not complete."))
+      prompts.log.info(dim("Retry, or check `iris auth whoami`. Do not re-run `connect` on a hunch —"))
+      prompts.log.info(dim("an abandoned OAuth leaves a dead connection behind."))
+      prompts.outro("Done")
+      return
+    }
+
+    // `!items` is unreachable here (failure returned above) but narrows the type for the
+    // probe loop below, and keeps this honest if the branches above are ever reordered.
+    if (!items || items.length === 0) {
       prompts.log.warn("No integrations connected.")
       prompts.outro(dim("iris integrations list-available"))
       return
