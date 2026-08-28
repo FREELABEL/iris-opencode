@@ -131,10 +131,28 @@ if [ "$BUNDLE_ARCH" = "x86_64" ] && [ "$HOST_ARCH" = "arm64" ]; then
   exit $FAIL
 fi
 
-"$APP/Contents/MacOS/$SIDECAR_NAME" serve --port=$PORT >"$WORK/serve.log" 2>&1 &
+# Launch the APP, not the sidecar on its own. The app's startup is where the provider config
+# and AGENTS.md are seeded, so booting the sidecar directly tests a machine state no user is
+# ever in — it reported "no iris provider" for a build that seeds it correctly, and would have
+# blocked every release had promotion been gated on it. Running a COMPONENT of the artifact
+# instead of the artifact is the same mistake this script exists to catch, in miniature.
+APP_BIN="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist" 2>/dev/null)"
+APP_BIN="${APP_BIN:-IRIS}"
+"$APP/Contents/MacOS/$APP_BIN" >"$WORK/serve.log" 2>&1 &
 SC=$!; stop_sidecar() { kill $SC 2>/dev/null; wait $SC 2>/dev/null; }
 trap 'stop_sidecar; rm -rf "$WORK"' EXIT
-for _ in $(seq 1 40); do curl -s -m 2 -o /dev/null "http://127.0.0.1:$PORT/doc" && break; sleep 0.5; done
+
+# The app picks its own free port, so read the one it chose rather than dictating one.
+PORT=""
+for _ in $(seq 1 60); do
+  PORT="$(grep -oE 'listening on http://127\.0\.0\.1:[0-9]+' "$WORK/serve.log" 2>/dev/null | grep -oE '[0-9]+$' | head -1)"
+  if [ -n "$PORT" ] && curl -s -m 2 -o /dev/null "http://127.0.0.1:$PORT/doc"; then break; fi
+  sleep 0.5
+done
+if [ -z "$PORT" ]; then
+  fail "the app never reported a listening port"
+  info "$(head -5 "$WORK/serve.log" 2>/dev/null)"
+fi
 
 # EVERY unknown path on this server returns the SPA's index.html with HTTP 200. Asserting on
 # status codes would be green against a build whose API is entirely unreachable. So parse.

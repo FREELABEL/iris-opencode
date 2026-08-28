@@ -9,12 +9,22 @@ fn get_cli_install_path() -> Option<std::path::PathBuf> {
     })
 }
 
-pub fn get_sidecar_path() -> std::path::PathBuf {
-    tauri::utils::platform::current_exe()
-        .expect("Failed to get current exe")
-        .parent()
-        .expect("Failed to get parent dir")
-        .join("iris-cli")
+/// Path to the bundled sidecar, or None when it cannot be determined.
+///
+/// This used to `.expect()`. That was survivable while it only ran when a user explicitly
+/// chose "Install CLI...", but CLI install now runs automatically for anyone without one — so
+/// a panic here became a crash on the startup path for every new user.
+///
+/// And it does panic in reality: `current_exe()` refuses a path containing a symlink on macOS
+/// ("StartingBinary found current_exe() that contains a symlink on a non-allowed platform:
+/// /var"), which is exactly what an app launched from anywhere under /var/folders gets —
+/// including a translocated copy. Caught by verify-shipped-app.sh running the real bundle out
+/// of mktemp, minutes after the auto-install shipped.
+pub fn get_sidecar_path() -> Option<std::path::PathBuf> {
+    let exe = tauri::utils::platform::current_exe()
+        .or_else(|_| std::env::current_exe())
+        .ok()?;
+    Some(exe.parent()?.join("iris-cli"))
 }
 
 fn is_cli_installed() -> bool {
@@ -31,7 +41,9 @@ pub fn install_cli() -> Result<String, String> {
         return Err("CLI installation is only supported on macOS & Linux".to_string());
     }
 
-    let sidecar = get_sidecar_path();
+    let Some(sidecar) = get_sidecar_path() else {
+        return Err("Could not locate the bundled CLI next to the app".to_string());
+    };
     if !sidecar.exists() {
         return Err("Sidecar binary not found".to_string());
     }
