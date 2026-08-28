@@ -718,14 +718,30 @@ jobs:
           pattern: IRIS-tauri-*
           merge-multiple: true
 
-      - name: Upload desktop assets to release
+      - name: Do NOT upload desktop assets to a CLI release
+        # This step used to `gh release upload` the IRIS-tauri-* bundles onto every CLI
+        # release. That is what broke desktop downloads for a week, and the mechanism is
+        # worth stating precisely because it produced no error anywhere:
+        #
+        #   - The desktop app ships from `iris/1.18.23` as `desktop-v1.18.x`, built by
+        #     .github/workflows/release-desktop.yml on that branch.
+        #   - This workflow ALSO builds packages/desktop, from `main` — version 1.1.3, without
+        #     the 1.18 engine port or the IRIS rebrand — and published it under the SAME asset
+        #     names onto the CLI release.
+        #   - GitHub has ONE "latest" per repo and /releases/latest/download/<asset> does not
+        #     fall back by asset name (measured 2026-08-28). CLI releases are cut far more
+        #     often, so they held that flag essentially always.
+        #
+        # Net effect: heyiris.io served the `main` desktop build continuously, every
+        # desktop promotion was silently reverted by the next CLI release, and the client
+        # reporting "the download still opens the old opencode" was correct every time.
+        #
+        # The build above stays — it is a useful compile check that packages/desktop still
+        # builds from main. Its output simply must not be published under names the desktop
+        # series owns. heyiris.io/download/{platform} resolves desktop-v* by tag prefix.
         run: |
           shopt -s nullglob
-          assets=(desktop-tauri/IRIS-tauri-*.zip desktop-tauri/IRIS-tauri-*.dmg desktop-tauri/IRIS-tauri-*.exe)
-          if [ ${#assets[@]} -eq 0 ]; then
-            echo "::warning::No Tauri desktop assets to upload (build skipped or failed)"
-            exit 0
-          fi
-          gh release upload "${{ steps.version.outputs.tag }}" "${assets[@]}" --clobber --repo "${{ github.repository }}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          assets=(desktop-tauri/IRIS-tauri-*)
+          echo "Built ${#assets[@]} desktop artifact(s) as a compile check; not publishing them."
+          printf '  %s\n' "${assets[@]}"
+          echo "The desktop app ships from release-desktop.yml on iris/1.18.23 as desktop-v*."
