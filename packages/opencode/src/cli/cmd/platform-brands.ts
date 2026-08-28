@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, writeJson, failNoOp} from "./iris-api"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
 import { join } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Brand CLI — first-class brand entity
@@ -85,7 +86,7 @@ const BrandsListCommand = cmd({
       }
 
       const data = (await res.json()) as { data?: any }
-      const brands: any[] = (data?.data?.data ?? data?.data ?? []) as any[]
+      const brands: any[] = firstArray(data?.data?.data, data?.data)
 
       if (args.json) { await writeJson(brands); return }
 
@@ -406,7 +407,7 @@ const PersonasListCommand = cmd({
       const ok = await handleApiError(res, "List personas"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
-      const personas: any[] = data?.data ?? []
+      const personas: any[] = firstArray(data?.data)
       spinner.stop(`${personas.length} persona(s)`)
 
       if (personas.length === 0) {
@@ -598,7 +599,7 @@ async function resolveBrandId(slug: string): Promise<number | null> {
   const res = await irisFetch(`/api/v1/brands?slug=${encodeURIComponent(slug)}&per_page=1`)
   if (!res.ok) return null
   const body = (await res.json()) as { data?: any }
-  const brands: any[] = body?.data?.data ?? body?.data ?? []
+  const brands: any[] = firstArray(body?.data?.data, body?.data)
   return brands.length ? brands[0].id : null
 }
 
@@ -1173,7 +1174,7 @@ const DesignTokensSetCommand = cmd({
       const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
       const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const listData = (await listRes.json()) as { data?: any }
-      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      const brands: any[] = firstArray(listData?.data?.data, listData?.data)
       if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
       const brandId = brands[0].id
 
@@ -1317,7 +1318,7 @@ const DesignTokensImportCommand = cmd({
       const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
       const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const listData = (await listRes.json()) as { data?: any }
-      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      const brands: any[] = firstArray(listData?.data?.data, listData?.data)
       if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
       const brandId = brands[0].id
 
@@ -1429,7 +1430,7 @@ const DesignTokensPushCommand = cmd({
       const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
       const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const listData = (await listRes.json()) as { data?: any }
-      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      const brands: any[] = firstArray(listData?.data?.data, listData?.data)
       if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
 
       spinner.message("Pushing tokens…")
@@ -1610,7 +1611,7 @@ const ProfileSetCommand = cmd({
       const listRes = await irisFetch(`/api/v1/brands?slug=${args.slug}&per_page=1`)
       const listOk = await handleApiError(listRes, "Find brand"); if (!listOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const listData = (await listRes.json()) as { data?: any }
-      const brands: any[] = listData?.data?.data ?? listData?.data ?? []
+      const brands: any[] = firstArray(listData?.data?.data, listData?.data)
       if (brands.length === 0) { spinner.stop("Not found", 1); prompts.log.error(`Brand "${args.slug}" not found`); prompts.outro("Done"); return }
       const brandId = brands[0].id
 

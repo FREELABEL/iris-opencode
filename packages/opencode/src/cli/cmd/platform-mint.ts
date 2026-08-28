@@ -41,6 +41,7 @@ import {
   type GroupLike,
   type Policy,
 } from "./mint-core"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // IRIS Mint — budget-vs-actual over the Atlas ledger.
@@ -98,7 +99,7 @@ async function fetchBudgets(scope?: string): Promise<any[]> {
   const res = await irisFetch(`/api/v1/atlas/datasets/budgets?${p}`)
   if (!res.ok) return []
   const body = (await res.json()) as any
-  const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+  const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
   return records
     .map((r) => ({ id: r.id, external_id: r.external_id, ...(r.data ?? {}) }))
     .filter((b) => (scope ? b.scope === scope : true))
@@ -111,7 +112,7 @@ async function actualCents(category: string, scope: string, from: string, to: st
   const res = await irisFetch(`/api/v1/atlas/transactions?${p}`)
   if (!res.ok) return 0
   const body = (await res.json()) as any
-  const rows: any[] = body?.data?.data ?? body?.data ?? []
+  const rows: any[] = firstArray(body?.data?.data, body?.data)
   // Scope is not a server-side filter yet (it lives in metadata), so filter here.
   // STRICT: an untagged row belongs to no scope and is counted against none.
   // Defaulting untagged to "personal" would have silently pulled every legacy
@@ -157,7 +158,7 @@ async function fetchGroupRecords(scope?: string): Promise<(GroupLike & { externa
   const res = await irisFetch(`/api/v1/atlas/datasets/mint-groups?per_page=200`)
   if (!res.ok) return []
   const body = (await res.json()) as any
-  const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+  const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
   return records
     .map((r) => ({ ...(r.data ?? {}), external_id: String(r.external_id) }) as GroupLike & { external_id: string })
     .filter((g) => String(g.key ?? "").trim() !== "")
@@ -182,7 +183,7 @@ async function fetchPolicy(scope: string): Promise<Policy | null> {
   const res = await irisFetch(`/api/v1/atlas/datasets/mint-policy?per_page=200`)
   if (!res.ok) return null
   const body = (await res.json()) as any
-  const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+  const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
   const rows = records.map((r) => ({ ...(r.data ?? {}) }) as Policy)
   return rows.find((x) => norm(x.scope) === norm(scope)) ?? null
 }
@@ -334,7 +335,7 @@ async function fetchUntagged(): Promise<any[]> {
   const res = await irisFetch(`/api/v1/atlas/transactions?per_page=500`)
   if (!res.ok) return []
   const body = (await res.json()) as any
-  const rows: any[] = body?.data?.data ?? body?.data ?? []
+  const rows: any[] = firstArray(body?.data?.data, body?.data)
   return rows.filter((tx) => !tx?.metadata?.scope)
 }
 
@@ -886,7 +887,7 @@ const ReimbursableCommand = cmd({
       return
     }
     const body = (await res.json()) as any
-    const rows: any[] = body?.data?.data ?? body?.data ?? []
+    const rows: any[] = firstArray(body?.data?.data, body?.data)
 
     const found = rows
       .map((tx) => ({ tx, rec: reimbursableOf(tx) }))
@@ -952,7 +953,7 @@ async function existingFingerprints(from: string, to: string, scope?: string): P
   const res = await irisFetch(`/api/v1/atlas/transactions?per_page=500&from=${from}&to=${to}`)
   if (!res.ok) return out
   const body = (await res.json()) as any
-  const rows: any[] = body?.data?.data ?? body?.data ?? []
+  const rows: any[] = firstArray(body?.data?.data, body?.data)
   for (const tx of rows) {
     if (scope && tx?.metadata?.scope !== scope) continue
     if (tx?.metadata?.fp) out.add(String(tx.metadata.fp))
@@ -982,7 +983,7 @@ async function existingBySourceRef(
   const res = await irisFetch(`/api/v1/atlas/transactions?per_page=500&from=${from}&to=${to}`)
   if (!res.ok) return out
   const body = (await res.json()) as any
-  const rows: any[] = body?.data?.data ?? body?.data ?? []
+  const rows: any[] = firstArray(body?.data?.data, body?.data)
   for (const tx of rows) {
     if (scope && tx?.metadata?.scope !== scope) continue
     const ref = tx?.metadata?.source_ref
@@ -1583,7 +1584,7 @@ async function fetchMerchants(): Promise<Merchant[]> {
   const res = await irisFetch(`/api/v1/atlas/datasets/mint-merchants?per_page=200`)
   if (!res.ok) return []
   const body = (await res.json()) as any
-  const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+  const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
   return records
     .map((r) => ({ ...(r.data ?? {}) }) as Merchant)
     .filter((m) => m.active !== false && String(m.term ?? "").trim() !== "")
@@ -1659,7 +1660,7 @@ async function collectFromGmail(days: number, limit: number, account?: string): 
   const q = `${RECEIPT_QUERY} newer_than:${days}d`
   const opts = account ? { account } : {}
   const result = await executeIntegrationCall("gmail", "search_emails", { query: q, max_results: limit }, opts)
-  let messages: any[] = result?.messages ?? result?.emails ?? result?.data ?? []
+  let messages: any[] = firstArray(result?.messages, result?.emails, result?.data)
   if (!Array.isArray(messages)) messages = []
   const out: Candidate[] = []
   for (const msg of messages) {
@@ -2111,7 +2112,7 @@ async function fetchRuns(kind?: string, limit = 60): Promise<any[]> {
   const res = await irisFetch(`/api/v1/atlas/datasets/mint-runs?${p}`)
   if (!res.ok) return []
   const body = (await res.json()) as any
-  const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+  const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
   // Order ascending for display. This is a normalisation of the page the server
   // returned, NOT the primary sort — the `sort`/`dir` params above do that, or
   // paging would hand back an arbitrary slice. Kept because an unknown sort field
@@ -2133,7 +2134,7 @@ async function unbudgetedSpend(scope: string, from: string, to: string, budgeted
   const res = await irisFetch(`/api/v1/atlas/transactions?${p}`)
   if (!res.ok) return { cents: 0, byCategory: [] as any[] }
   const body = (await res.json()) as any
-  const rows: any[] = body?.data?.data ?? body?.data ?? []
+  const rows: any[] = firstArray(body?.data?.data, body?.data)
   const known = new Set(budgetedCats.filter(Boolean).map((c) => String(c).toLowerCase()))
   const buckets = new Map<string, number>()
   for (const tx of rows) {
@@ -2365,8 +2366,8 @@ const TrendCommand = cmd({
         prompts.log.info("One snapshot is a reading, not a trend. Take more before drawing conclusions.")
 
       // Per-budget movement, newest vs oldest
-      const firstB: any[] = snaps[0].budgets ?? []
-      const lastB: any[] = snaps[snaps.length - 1].budgets ?? []
+      const firstB: any[] = firstArray(snaps[0].budgets)
+      const lastB: any[] = firstArray(snaps[snaps.length - 1].budgets)
       if (snaps.length > 1 && lastB.length) {
         printDivider()
         for (const b of lastB) {
@@ -2482,7 +2483,7 @@ const AuditCommand = cmd({
       return
     }
     const body = (await res.json()) as any
-    let rows: any[] = (body?.data?.records?.data ?? body?.data?.records ?? []).map((r: any) => ({
+    let rows: any[] = firstArray(body?.data?.records?.data, body?.data?.records).map((r: any) => ({
       id: r.id,
       ...(r.data ?? {}),
     }))
@@ -2564,7 +2565,7 @@ const VerifyCommand = cmd({
         continue
       }
       const body = (await res.json()) as any
-      const raw: any[] = body?.data?.data ?? body?.data ?? []
+      const raw: any[] = firstArray(body?.data?.data, body?.data)
 
       // A full page back means there may be more, and reconciling against a SUBSET
       // does not produce a smaller answer — it produces a wrong one, reported as
@@ -3006,7 +3007,7 @@ const DoctorCommand = cmd({
     const body = (await res.json()) as any
     // A split parent (#182035) is superseded by its children — they are what
     // should be checked against policy now, not the original invoice row.
-    const rows: any[] = (body?.data?.data ?? body?.data ?? []).filter(
+    const rows: any[] = firstArray(body?.data?.data, body?.data).filter(
       (tx: any) => tx?.metadata?.scope === scope && !tx?.metadata?.superseded_by_split,
     )
 

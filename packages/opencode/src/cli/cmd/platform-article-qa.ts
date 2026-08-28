@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, writeJson } from "./iris-api"
 import { homedir } from "os"
 import { join } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Article Quality Analysis — editorial content linter
@@ -199,7 +200,7 @@ async function listPages(prefix?: string): Promise<any[]> {
 
 function extractEditorialText(page: any): { text: string; title: string; wordCount: number } {
   const title = page?.title ?? page?.slug ?? "Untitled"
-  const components: any[] = page?.json_content?.components ?? []
+  const components: any[] = firstArray(page?.json_content?.components)
 
   const textParts: string[] = []
 

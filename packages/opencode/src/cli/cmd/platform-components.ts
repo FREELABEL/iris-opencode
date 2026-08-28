@@ -4,6 +4,7 @@ import {
   dim, bold, success, highlight, IRIS_API, writeJson,
 } from "./iris-api"
 import { UI } from "../ui"
+import { firstArray } from "../../util/array"
 
 /**
  * `iris genesis components …` — the stored Genesis Component library.
@@ -36,7 +37,7 @@ const ListCmd = cmd({
     if (!res.ok) { handleApiError(res, "list components"); return }
     const body = await res.json()
 
-    let rows: any[] = body.components ?? []
+    let rows: any[] = firstArray(body.components)
     const q = String(args.search ?? "").toLowerCase()
     if (q) {
       // Searching the declared API is the point: "the one that emits select" is how an author

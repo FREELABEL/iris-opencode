@@ -32,6 +32,7 @@ import {
 } from "./integration-catalog"
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
 import { PathwaysCommand } from "./platform-integrations-pathways"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Known integration types — anything else routes to V6 system tools.
@@ -215,7 +216,7 @@ async function buildComposioConnectionState(
     const res = await composioFetch(`/v3/auth_configs/${authConfigId}`)
     if (!res.ok) return null
     const ac = (await res.json()) as any
-    const fields: any[] = ac?.expected_input_fields ?? ac?.deprecated_params?.expected_input_fields ?? []
+    const fields: any[] = firstArray(ac?.expected_input_fields, ac?.deprecated_params?.expected_input_fields)
     const scheme = ac?.auth_scheme ?? "API_KEY"
     // Use provided key, falling back to whatever is stored on the auth_config
     const key = apiKey ?? ac?.credentials?.api_key ?? ac?.credentials?.generic_api_key ?? null
@@ -396,7 +397,7 @@ export async function resolveAccountToIntegrationId(
     const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {}, IRIS_API)
     if (!res.ok) return null
     const data = (await res.json()) as any
-    const items: any[] = data?.connections ?? data?.data ?? data ?? []
+    const items: any[] = firstArray(data?.connections, data?.data, data)
     const needle = account.toLowerCase()
     const candidates = items.filter((i) => {
       if (String(i.type ?? "").toLowerCase() !== normalizedType) return false
@@ -1179,7 +1180,7 @@ const ConnectCommand = cmd({
         // Find existing auth_config for whatsapp
         const acRes = await composioFetch(`/v3/auth_configs?toolkit_slug=whatsapp&limit=5`)
         const acData = (await acRes.json()) as any
-        const items: any[] = acData?.items ?? []
+        const items: any[] = firstArray(acData?.items)
         const authConfig = items.find((c: any) => String(c?.status ?? "").toUpperCase() === "ENABLED")
         if (!authConfig?.id) {
           sp.stop("Failed", 1)
@@ -1292,7 +1293,7 @@ const ConnectCommand = cmd({
             )
             if (existingRes.ok) {
               const existingData = (await existingRes.json()) as any
-              const items: any[] = existingData?.items ?? existingData?.auth_configs ?? existingData?.data ?? []
+              const items: any[] = firstArray(existingData?.items, existingData?.auth_configs, existingData?.data)
               // Pick the first ENABLED config
               const enabled = items.find((c) => String(c?.status ?? c?.state ?? "").toUpperCase() === "ENABLED")
               if (enabled?.id) authConfigId = String(enabled.id)

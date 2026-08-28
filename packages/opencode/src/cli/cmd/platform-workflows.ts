@@ -13,6 +13,7 @@ import {
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { PlatformAutomationCommand } from "./platform-automation"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -137,7 +138,7 @@ const WorkflowsListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const raw = await res.json()
-      const workflows: any[] = Array.isArray(raw) ? raw : (raw as any)?.data ?? []
+      const workflows: any[] = firstArray(raw, (raw as any)?.data)
 
       // Optionally merge campaign templates from IRIS_API
       let templates: any[] = []
@@ -462,7 +463,7 @@ const WorkflowsRunsCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[] }
-      const runs: any[] = data?.data ?? []
+      const runs: any[] = firstArray(data?.data)
       spinner.stop(`${runs.length} run(s)`)
 
       if (runs.length === 0) {
@@ -1021,7 +1022,7 @@ const WorkflowsHubListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const raw = (await res.json()) as { templates?: any[]; grouped?: Record<string, any[]> }
-      const templates: any[] = raw?.templates ?? []
+      const templates: any[] = firstArray(raw?.templates)
       const grouped: Record<string, any[]> = raw?.grouped ?? {}
 
       spinner.stop(`${templates.length} template(s)`)
@@ -1418,7 +1419,7 @@ const WorkflowsEvalListCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const w = data?.data ?? data
-      const tests: any[] = w?.settings?.eval_suite?.tests ?? []
+      const tests: any[] = firstArray(w?.settings?.eval_suite?.tests)
 
       spinner.stop(`${tests.length} test case(s)`)
 
@@ -1490,7 +1491,7 @@ const WorkflowsEvalAddCommand = cmd({
       const w = data?.data ?? data
       const settings = w?.settings ?? {}
       const evalSuite = settings.eval_suite ?? { name: `Eval Suite for Workflow #${args.workflowId}`, tests: [] }
-      const tests: any[] = evalSuite.tests ?? []
+      const tests: any[] = firstArray(evalSuite.tests)
 
       // Parse input JSON
       let inputData: Record<string, unknown> = {}
@@ -1586,7 +1587,7 @@ const WorkflowsEvalRunCommand = cmd({
 
       const wData = (await wRes.json()) as { data?: any }
       const w = wData?.data ?? wData
-      const tests: any[] = w?.settings?.eval_suite?.tests ?? []
+      const tests: any[] = firstArray(w?.settings?.eval_suite?.tests)
       const suiteName = w?.settings?.eval_suite?.name ?? `Eval Suite`
 
       if (tests.length === 0) {
@@ -1617,14 +1618,14 @@ const WorkflowsEvalRunCommand = cmd({
       if (args.json) {
         await writeJson(evaluation)
         if (args["exit-code"]) {
-          const results: any[] = evaluation?.results ?? []
+          const results: any[] = firstArray(evaluation?.results)
           const anyFailed = results.some((r: any) => r.passed === false || r.status === "failed")
           if (anyFailed) process.exitCode = 1
         }
         return
       }
 
-      const results: any[] = evaluation?.results ?? []
+      const results: any[] = firstArray(evaluation?.results)
       const score = evaluation?.score ?? 0
       const badge = badgeFor(score)
 
@@ -1692,7 +1693,7 @@ const WorkflowsEvalHistoryCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[] }
-      const runs: any[] = Array.isArray(data) ? data : (data?.data ?? [])
+      const runs: any[] = firstArray(data, data?.data)
 
       spinner.stop(`${runs.length} evaluation(s)`)
 

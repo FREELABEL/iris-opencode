@@ -4,6 +4,7 @@ import { BountyAdminCommand } from "./platform-bounty-admin"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Display helpers
@@ -817,7 +818,7 @@ const HuntersCommand = cmd({
     if (!(await handleApiError(res, "Bug-bounty leaderboard"))) return
     const body = (await res.json().catch(() => null)) as any
     const data = body?.data ?? body
-    const rows: any[] = data?.leaderboard ?? []
+    const rows: any[] = firstArray(data?.leaderboard)
     const opp = data?.opportunity ?? {}
 
     if (args.json) { await writeJson({ success: true, ...data }); return }
@@ -1083,7 +1084,7 @@ const BugsCommand = cmd({
     if (!(await handleApiError(res, "Bug-bounty bugs"))) return
     const body = (await res.json().catch(() => null)) as any
     const d = body?.data ?? body
-    const rows: any[] = Array.isArray(d) ? d : (d?.bugs ?? [])
+    const rows: any[] = firstArray(d, d?.bugs)
 
     if (args.json) { await writeJson({ success: true, count: rows.length, bugs: rows }); return }
 

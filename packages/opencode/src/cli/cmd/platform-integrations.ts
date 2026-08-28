@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, IRIS_API, writeJson } from "./iris-api"
 import { PathwaysCommand } from "./platform-integrations-pathways"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Helpers
@@ -66,7 +67,7 @@ const IntegrationsListCommand = cmd({
           const r = await irisFetch(`/api/v1/users/${userId}/integrations?${params}`, {}, store.base)
           if (!r.ok) { unreachable.push(`${store.label} (HTTP ${r.status})`); continue }
           const body = (await r.json()) as Record<string, any>
-          const rows: any[] = body?.connections ?? body?.data ?? (Array.isArray(body) ? body : [])
+          const rows: any[] = firstArray(body?.connections, body?.data, (Array.isArray(body) ? body : []))
           for (const row of rows) integrations.push({ ...row, store: store.label })
         } catch (e) {
           unreachable.push(`${store.label} (${e instanceof Error ? e.message : String(e)})`)
@@ -478,7 +479,7 @@ const IntegrationsExecCommand = cmd({
         const listRes = await irisFetch(`/api/v1/users/${userId}/integrations`)
         if (listRes.ok) {
           const listData = (await listRes.json()) as any
-          const items: any[] = listData?.connections ?? listData?.data ?? listData ?? []
+          const items: any[] = firstArray(listData?.connections, listData?.data, listData)
           const match = items.find((i: any) => {
             if (String(i.type ?? "").toLowerCase() !== String(args.type).toLowerCase()) return false
             const email = String(i.account_email ?? "").toLowerCase()

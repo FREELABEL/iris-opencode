@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { IRIS_API, loadIrisSdkEnvSync, dim, bold, printDivider, writeJson } from "./iris-api"
 import * as fs from "fs"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Instagram feed seeding — the repeatable version of a one-off script.
@@ -86,7 +87,7 @@ async function fetchProfile(handle: string): Promise<any> {
 /** Shape the raw profile into the {stats, posts} contract the seed endpoint expects. */
 function shapeFeed(user: any, handle: string, limit: number) {
   const media = user.edge_owner_to_timeline_media ?? {}
-  const edges: any[] = media.edges ?? []
+  const edges: any[] = firstArray(media.edges)
 
   const stats = {
     posts: media.count ?? 0,
@@ -274,7 +275,7 @@ const FeedShowCommand = cmd({
     if (args.json) { await writeJson(body); prompts.outro("Done"); return }
 
     const data = body?.instagram ?? body?.data ?? body
-    const posts: any[] = data?.posts ?? []
+    const posts: any[] = firstArray(data?.posts)
 
     printDivider()
     console.log(`  ${bold("Posts cached")}  ${posts.length}`)

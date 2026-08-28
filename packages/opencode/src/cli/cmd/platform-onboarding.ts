@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson } from "./iris-api"
 import * as fs from "fs"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Onboarding Flows CLI
@@ -71,7 +72,7 @@ const FlowsListCommand = cmd({
       if (args.bloq != null) p.set("bloq_id", String(args.bloq))
       const res = await irisFetch(`/api/v1/onboarding/flows?${p}`)
       const ok = await handleApiError(res, "List flows"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-      const rows: any[] = ((await res.json()) as any)?.flows ?? []
+      const rows: any[] = firstArray(((await res.json()) as any)?.flows)
       spinner.stop(`${rows.length} flow(s)`)
 
       if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
@@ -129,13 +130,13 @@ const FlowsShowCommand = cmd({
       console.log(`  ${dim("Name:")}  ${cfg.name ?? "—"}`)
       console.log(`  ${dim("Slug:")}  ${cfg.slug}`)
       printDivider()
-      const steps: any[] = cfg.steps ?? []
+      const steps: any[] = firstArray(cfg.steps)
       steps.forEach((st, i) => {
         const kind = st.type ?? "?"
         const rep = st.repeatable ? dim(" · repeatable") : ""
         const sch = st.schema_slug ? dim(` · ${st.schema_slug}`) : ""
         console.log(`  ${dim(String(i).padStart(2, "0"))}  ${bold(st.title ?? kind)}  ${dim(kind)}${sch}${rep}`)
-        const fields: any[] = st.fields ?? []
+        const fields: any[] = firstArray(st.fields)
         for (const f of fields) {
           console.log(`      ${dim("·")} ${f.key ?? f.name}  ${dim(f.type ?? "text")}${f.required ? "  " + dim("required") : ""}`)
         }
@@ -318,7 +319,7 @@ const SessionsCommand = cmd({
       const res = await irisFetch(`/api/v1/onboarding/flows/${args.slug}/sessions?${p}`)
       const ok = await handleApiError(res, "List sessions"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
-      const rows: any[] = body?.sessions ?? []
+      const rows: any[] = firstArray(body?.sessions)
       spinner.stop(`${rows.length} session(s)`)
 
       if (args.json) { await writeJson(rows); prompts.outro("Done"); return }

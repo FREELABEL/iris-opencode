@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // bloq-ingest start <bloqId> <source> <path>
@@ -121,7 +122,7 @@ const IngestJobsCommand = cmd({
     const ok = await handleApiError(res, "List jobs")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const jobs: any[] = data?.data ?? data?.jobs ?? (Array.isArray(data) ? data : [])
+    const jobs: any[] = firstArray(data?.data, data?.jobs, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(jobs); prompts.outro("Done"); return }
     printDivider()
     if (jobs.length === 0) console.log(`  ${dim("(no jobs)")}`)

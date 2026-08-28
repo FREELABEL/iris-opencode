@@ -11,6 +11,7 @@ import {
   bold,
   success,
   highlight, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // iris bloq-sync — operate the Bloq ↔ cloud-storage sync feature from the CLI
@@ -133,7 +134,7 @@ const ProvidersCommand = cmd({
     prompts.intro("◈  Cloud Sync · Providers")
     const data = await call(args, "List providers", `/api/v1/bloqs/${args.bloqId}/sync/providers`)
     if (!data) return
-    const providers: any[] = data?.data?.providers ?? data?.providers ?? []
+    const providers: any[] = firstArray(data?.data?.providers, data?.providers)
     if (args.json) {
       await writeJson(providers)
       prompts.outro("Done")
@@ -358,8 +359,8 @@ const BrowseCommand = cmd({
     const data = await call(args, "Browse folders", path)
     if (!data) return
     const payload = data?.data ?? data
-    const folders: any[] = payload?.folders ?? []
-    const files: any[] = payload?.files ?? []
+    const folders: any[] = firstArray(payload?.folders)
+    const files: any[] = firstArray(payload?.files)
     if (args.json) {
       await writeJson({ folders, files })
       prompts.outro("Done")

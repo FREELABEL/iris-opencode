@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Outreach Campaigns — port of OutreachCampaignCommand.php
@@ -69,7 +70,7 @@ const ListCmd = cmd({
     const res = await irisFetch(`${BASE}?${params}`)
     if (!(await handleApiError(res, "List campaigns"))) return
     const body = await getJson(res)
-    const campaigns: any[] = body.campaigns ?? body.data ?? []
+    const campaigns: any[] = firstArray(body.campaigns, body.data)
 
     if (args.json) { await writeJson(campaigns); return }
 
@@ -292,7 +293,7 @@ const RecipientsCmd = cmd({
     if (!(await handleApiError(res, "Recipients"))) return
     const body = await getJson(res)
     const raw = body.recipients ?? body.data ?? []
-    const recipients: any[] = raw.data ?? raw
+    const recipients: any[] = firstArray(raw.data, raw)
 
     if (args.json) { await writeJson(raw); return }
     if (recipients.length === 0) { prompts.log.info("No recipients"); return }

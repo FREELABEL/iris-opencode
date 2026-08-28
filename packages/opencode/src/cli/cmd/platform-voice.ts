@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Endpoints (VoiceResource):
 //   GET  /api/v1/voice/list             ?provider=
@@ -27,7 +28,7 @@ const VoiceListCommand = cmd({
     const ok = await handleApiError(res, "List voices")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const voices: any[] = data?.data ?? data?.voices ?? (Array.isArray(data) ? data : [])
+    const voices: any[] = firstArray(data?.data, data?.voices, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(voices); prompts.outro("Done"); return }
     printDivider()
     for (const v of voices) console.log(`  ${bold(String(v.name ?? v.voice_id ?? "?"))}  ${dim(String(v.provider ?? ""))}  ${dim(String(v.voice_id ?? ""))}`)

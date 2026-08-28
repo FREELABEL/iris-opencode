@@ -1,4 +1,5 @@
 import { irisFetch } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 /**
  * Cross-project mention search for people (#182461).
@@ -231,7 +232,7 @@ export async function searchBloqMentions(
       return { hits: [], searched: false, reason: `HTTP ${res.status}` }
     }
     const data = (await res.json()) as any
-    const rows: any[] = data?.data?.items ?? data?.items ?? data?.data ?? []
+    const rows: any[] = firstArray(data?.data?.items, data?.items, data?.data)
     if (!Array.isArray(rows)) return { hits: [], searched: true }
 
     const hits: MentionHit[] = rows.map((i) => {

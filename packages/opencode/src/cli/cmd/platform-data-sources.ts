@@ -13,6 +13,7 @@ import {
   bold,
   success,
   highlight, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // iris data-sources — unified surface over the platform "Data Sources" feature
@@ -329,7 +330,7 @@ const ListCommand = cmd({
       return
     }
     const data = (await res.json()) as any
-    const sources: any[] = data?.data?.sources ?? data?.sources ?? []
+    const sources: any[] = firstArray(data?.data?.sources, data?.sources)
 
     // #182734: THIS LIST IS A DISCOVERY SURFACE, AND IT WAS READING ONE SIDE.
     //
@@ -345,7 +346,7 @@ const ListCommand = cmd({
         const connRes = await irisFetch(`/api/v1/users/${userId}/integrations`)
         if (connRes.ok) {
           const cj = (await connRes.json()) as any
-          const connections: any[] = cj?.connections ?? cj?.data ?? (Array.isArray(cj) ? cj : [])
+          const connections: any[] = firstArray(cj?.connections, cj?.data, (Array.isArray(cj) ? cj : []))
           hiddenConnected = surveySources(sources, connections).filter((x) => x.hiddenButConnected)
         }
       }

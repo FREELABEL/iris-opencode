@@ -6,6 +6,7 @@ import { homedir } from "os"
 import { join } from "path"
 import { existsSync, readdirSync, readFileSync, statSync } from "fs"
 import { execFileSync } from "child_process"
+import { firstArray } from "../../util/array"
 
 /**
  * `iris timeline` — what happened, across every channel that already writes it down.
@@ -38,11 +39,6 @@ type Episode = { date: string; source: string; title: string; ref?: string }
  * OBJECT — and iterating an object yields nothing. The command then reports "0 episodes" against
  * a 200 OK, which is the same confident-omission this tool exists to expose. Check the type.
  */
-function firstArray(...cands: any[]): any[] {
-  for (const c of cands) if (Array.isArray(c)) return c
-  return []
-}
-
 const SOURCES = ["diary", "git", "opencode", "claude", "comms", "bloq"] as const
 
 /** Sources that cannot run without a scope, and what supplies it. */
@@ -92,7 +88,7 @@ async function fromDiary(since: Date): Promise<Episode[]> {
     if (!res.ok) return []
     const body: any = await res.json()
     // The endpoint returns { entries: [...] }; `data` and a bare array are accepted defensively.
-    const rows: any[] = body?.entries ?? body?.data ?? (Array.isArray(body) ? body : [])
+    const rows: any[] = firstArray(body?.entries, body?.data, (Array.isArray(body) ? body : []))
     const out: Episode[] = []
     for (const r of rows) {
       const date = String(r?.date ?? "").slice(0, 10)
@@ -136,7 +132,7 @@ async function resolveLead(idOrQuery: string): Promise<{ id: number; name: strin
     const res = await irisFetch(`/api/v1/leads?search=${encodeURIComponent(idOrQuery)}&per_page=1`)
     if (!res.ok) return null
     const d: any = await res.json()
-    const rows: any[] = d?.data?.data ?? d?.data ?? []
+    const rows: any[] = firstArray(d?.data?.data, d?.data)
     if (!rows.length) return null
     return { id: Number(rows[0].id), name: String(rows[0].name ?? idOrQuery) }
   } catch {

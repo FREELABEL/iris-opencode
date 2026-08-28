@@ -6,6 +6,7 @@ import { captureMic, speak, listMics } from "../lib/voice"
 import { transcribeLocal, which } from "../lib/transcription"
 import { createInterface } from "readline"
 import { ChatTracer, toTraceLevel, type TraceStep } from "./chat-trace"
+import { firstArray } from "../../util/array"
 
 /**
  * Which conversation this turn joins.
@@ -139,7 +140,7 @@ export async function executeChat(args: {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=20`)
       if (res.ok) {
         const data = (await res.json()) as { data?: any[] }
-        const agents: any[] = data?.data ?? []
+        const agents: any[] = firstArray(data?.data)
         spinner.stop(`${agents.length} agent(s) found`)
         if (agents.length > 0) {
           const selected = await prompts.select({

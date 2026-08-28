@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Endpoints (PaymentsResource — A2P agent wallets):
 //   POST /api/v1/a2p/wallets                              — create wallet
@@ -115,7 +116,7 @@ const WalletTransactionsCommand = cmd({
     const ok = await handleApiError(res, "List txns")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const txns: any[] = data?.data ?? data?.transactions ?? (Array.isArray(data) ? data : [])
+    const txns: any[] = firstArray(data?.data, data?.transactions, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(txns); prompts.outro("Done"); return }
     printDivider()
     if (txns.length === 0) console.log(`  ${dim("(no transactions)")}`)

@@ -3,6 +3,7 @@ import { probeBridge, assessBridge, printDegradations } from "./subsystem-health
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, getBridgeToken, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Atlas Comms CLI — Unified cross-channel lead communications log
@@ -289,7 +290,7 @@ const CommsListCommand = cmd({
     if (!res.ok) { await handleApiError(res, "List comms"); sp.stop("Failed", 1); prompts.outro("Done"); return }
 
     const data = (await res.json()) as any
-    const rows: any[] = data?.data?.data ?? data?.data ?? []
+    const rows: any[] = firstArray(data?.data?.data, data?.data)
     const total = data?.data?.total ?? rows.length
     sp.stop(`${rows.length} of ${total} comms for ${bold(resolved.lead.name || `Lead #${resolved.id}`)}`)
 

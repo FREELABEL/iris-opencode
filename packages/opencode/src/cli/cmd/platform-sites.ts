@@ -5,6 +5,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, writeJson } from "./iris-api"
 import { getBySlug, createPageFromJson } from "./platform-pages"
 import { profileFromBrand, rebrandJsonContent } from "./rebrand"
+import { firstArray } from "../../util/array"
 
 function pagesFetch(path: string, opts?: RequestInit) {
   return irisFetch(path, opts, FL_API)
@@ -19,7 +20,7 @@ async function resolveSite(idOrSlug: string): Promise<any | null> {
   }
   const listRes = await pagesFetch("/api/v1/sites?per_page=100")
   if (!listRes.ok) return null
-  const sites: any[] = ((await listRes.json()) as any).data ?? []
+  const sites: any[] = firstArray(((await listRes.json()) as any).data)
   const match = sites.find((s) => s.slug === idOrSlug)
   if (!match) return null
   const res = await pagesFetch(`/api/v1/sites/${match.id}`)
@@ -387,7 +388,7 @@ const CloneCmd = cmd({
     try {
       const sourceSite = await resolveSite(String(args.source))
       if (!sourceSite) { sp.stop("Source site not found", 1); prompts.outro("Done"); return }
-      const pages: any[] = sourceSite.pages ?? []
+      const pages: any[] = firstArray(sourceSite.pages)
       if (!pages.length) { sp.stop("Source site has no pages", 1); prompts.outro("Done"); return }
 
       let target
@@ -556,7 +557,7 @@ const InboxCmd = cmd({
     }
 
     const body = (await res.json()) as any
-    const rows: any[] = body.data ?? []
+    const rows: any[] = firstArray(body.data)
     const total = body.meta?.total ?? rows.length
 
     if (asJson) {

@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import { dim, bold, success, highlight } from "./iris-api"
 import { spawnSync } from "child_process"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // iris hive host  —  provision a secure Windows RDP host (the QB/PHI box)
@@ -297,7 +298,7 @@ const HostLockdownCommand = cmd({
     }
     const opensRdp = (r: any) => {
       const one = r?.destinationPortRange
-      const many: string[] = r?.destinationPortRanges ?? []
+      const many: string[] = firstArray(r?.destinationPortRanges)
       return one === "3389" || one === "*" || many.includes("3389") || many.includes("*")
     }
     const publicRdp = rules.filter(

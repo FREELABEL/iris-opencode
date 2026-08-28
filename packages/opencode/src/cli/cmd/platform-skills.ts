@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Endpoints (SkillsResource):
 //   GET    /api/v6/bloqs/agents/{agentId}/skills
@@ -26,7 +27,7 @@ const SkillsListCommand = cmd({
     const ok = await handleApiError(res, "List skills")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const skills: any[] = data?.data ?? data?.skills ?? (Array.isArray(data) ? data : [])
+    const skills: any[] = firstArray(data?.data, data?.skills, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(skills); prompts.outro("Done"); return }
     printDivider()
     if (skills.length === 0) console.log(`  ${dim("(no skills)")}`)
@@ -133,7 +134,7 @@ const SkillsReviewListCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/auto-generated/pending`)
     const ok = await handleApiError(res, "List pending drafts"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const drafts: any[] = data?.data ?? []
+    const drafts: any[] = firstArray(data?.data)
     if (args.json) { await writeJson(drafts); prompts.outro("Done"); return }
     if (drafts.length === 0) {
       printDivider()

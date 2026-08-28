@@ -7,6 +7,7 @@ import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, g
 import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
 import { routerSend, describeSend } from "./comms-send"
 import { ImessagePaymentsCommand } from "./imessage-payments"
+import { firstArray } from "../../util/array"
 
 const ImessageSearchCommand = cmd({
   command: "search <query>",
@@ -937,7 +938,7 @@ const ImessageMentionsCommand = cmd({
         const res = await _fetch(`/api/v1/atlas/datasets/mentions?${p}`)
         if (res.ok) {
           const body = (await res.json()) as any
-          const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+          const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
           mentions = records.map((r: any) => r.data ?? {})
         } else if (res.status !== 404) {
           // 404 = dataset not provisioned yet on this account (no mention ever pushed) —

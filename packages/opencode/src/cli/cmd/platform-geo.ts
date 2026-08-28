@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, printDivider, printKV, dim, bold, resolveUserId, IRIS_API, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 /**
  * Place lookup as a first-class verb (#180699).
@@ -94,7 +95,7 @@ async function searchPlaces(query: string, location: string | undefined, limit: 
 
   const raw = (await res.json()) as any
   const result = raw?.result ?? raw?.data ?? raw
-  const rows: any[] = result?.results ?? result?.places ?? []
+  const rows: any[] = firstArray(result?.results, result?.places)
   const places = rows.slice(0, limit).map(normalizePlace)
 
   const webDerived = places.some((p) => String(p.source ?? "").includes("tavily"))

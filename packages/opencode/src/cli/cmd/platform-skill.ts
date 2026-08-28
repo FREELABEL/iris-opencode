@@ -17,6 +17,7 @@ import {
   type StepResult,
   type ExecuteOptions,
 } from "../../skill/executor"
+import { firstArray } from "../../util/array"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
 async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
@@ -529,7 +530,7 @@ const RemoteListCommand = cmd({
     const ok = await handleApiError(res, "List skills")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const skills: any[] = data?.data ?? data?.skills ?? (Array.isArray(data) ? data : [])
+    const skills: any[] = firstArray(data?.data, data?.skills, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(skills); prompts.outro("Done"); return }
     printDivider()
     if (skills.length === 0) console.log(`  ${dim("(no skills)")}`)
@@ -649,7 +650,7 @@ const ReviewListCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/auto-generated/pending`)
     const ok = await handleApiError(res, "List pending drafts"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const drafts: any[] = data?.data ?? []
+    const drafts: any[] = firstArray(data?.data)
     if (args.json) { await writeJson(drafts); prompts.outro("Done"); return }
     if (drafts.length === 0) {
       printDivider()

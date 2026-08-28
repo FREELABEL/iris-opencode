@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, IRIS_API, requireAuth, handleApiError, printDivider, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Endpoints (ToolsResource) — served by iris-api (freelabel.net), NOT fl-api.
 // irisFetch defaults to FL_API (raichu), where these 404 (#117199), so pass IRIS_API.
@@ -24,7 +25,7 @@ const ToolsListCommand = cmd({
     const ok = await handleApiError(res, "List tools")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    let tools: any[] = data?.data ?? data?.tools ?? (Array.isArray(data) ? data : [])
+    let tools: any[] = firstArray(data?.data, data?.tools, (Array.isArray(data) ? data : []))
     if (args.category) tools = tools.filter((t) => (t.category ?? "").toLowerCase() === args.category!.toLowerCase())
     if (args.json) { await writeJson(tools); prompts.outro("Done"); return }
     printDivider()

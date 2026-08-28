@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 /**
  * Courses and certifications (#180765).
@@ -30,7 +31,7 @@ const CourseListCommand = cmd({
     if (!(await handleApiError(res, "List courses"))) { prompts.outro("Done"); return }
 
     const body = (await res.json()) as any
-    const list: any[] = body?.data?.data ?? body?.data?.courses ?? body?.data ?? []
+    const list: any[] = firstArray(body?.data?.data, body?.data?.courses, body?.data)
     if (args.json) { await writeJson(list); prompts.outro("Done"); return }
 
     printDivider()
@@ -66,7 +67,7 @@ const CourseGetCommand = cmd({
 
     printDivider()
     console.log(`  ${bold(String(course?.title ?? course?.program?.name ?? "Untitled"))}`)
-    const chapters: any[] = course?.chapters ?? []
+    const chapters: any[] = firstArray(course?.chapters)
     if (!chapters.length) console.log(`  ${dim("(no chapters yet)")}`)
     for (const ch of chapters) {
       const req = ch.is_required === false ? dim(" (optional)") : ""

@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Endpoints (PhoneResource):
 //   GET    /api/v1/phone/list           ?agent_id=
@@ -31,7 +32,7 @@ const PhoneListCommand = cmd({
     const ok = await handleApiError(res, "List phones")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const phones: any[] = data?.data ?? data?.phones ?? (Array.isArray(data) ? data : [])
+    const phones: any[] = firstArray(data?.data, data?.phones, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(phones); prompts.outro("Done"); return }
     printDivider()
     if (phones.length === 0) console.log(`  ${dim("(no phones)")}`)
@@ -83,7 +84,7 @@ const PhoneSearchCommand = cmd({
     const ok = await handleApiError(res, "Search phones")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const phones: any[] = data?.data ?? data?.numbers ?? (Array.isArray(data) ? data : [])
+    const phones: any[] = firstArray(data?.data, data?.numbers, (Array.isArray(data) ? data : []))
     printDivider()
     for (const p of phones) console.log(`  ${bold(String(p.phone_number ?? p.number))}  ${dim(String(p.locality ?? ""))}`)
     printDivider()

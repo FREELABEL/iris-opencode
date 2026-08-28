@@ -43,6 +43,7 @@ import {
   type MentionSearchResult,
   type CrmMatch,
 } from "./lead-mentions"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -209,7 +210,7 @@ async function resolveLeadId(idOrQuery: string): Promise<{ leadId: number; lead:
         return null
       }
       const searchData = (await searchRes.json()) as { data?: any[] }
-      const matches: any[] = searchData?.data ?? []
+      const matches: any[] = firstArray(searchData?.data)
       if (matches.length === 0) {
         spinner.stop("No leads found", 1)
         return null
@@ -304,7 +305,7 @@ const LeadsListCommand = cmd({
       }
 
       const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
-      let leads: any[] = data?.data ?? []
+      let leads: any[] = firstArray(data?.data)
 
       // Default: hide Prospected leads (mass-scraped venue/SOM leads)
       // Use --all or --status to see everything
@@ -439,7 +440,7 @@ const LeadsRepliedCommand = cmd({
       }
 
       const data = (await res.json()) as { data?: any[] }
-      let leads: any[] = data?.data ?? []
+      let leads: any[] = firstArray(data?.data)
       const repliedTime = (l: any) => new Date(l.replied_at ?? l.updated_at ?? 0).getTime()
       leads.sort((a, b) => repliedTime(b) - repliedTime(a)) // newest reply first
       leads = leads.slice(0, args.limit)
@@ -532,7 +533,7 @@ const LeadsGetCommand = cmd({
           return
         }
         const searchData = (await searchRes.json()) as { data?: any[] }
-        const matches: any[] = searchData?.data ?? []
+        const matches: any[] = firstArray(searchData?.data)
         if (matches.length === 0) {
           spinner.stop("No leads found", 1)
           process.exitCode = 1
@@ -783,7 +784,7 @@ const LeadsSearchCommand = cmd({
       }
 
       const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
-      let leads: any[] = data?.data ?? []
+      let leads: any[] = firstArray(data?.data)
 
       // Whether these rows answer the WHOLE query or only part of it. The fallback below
       // is allowed to widen the search; it is not allowed to let the widened results
@@ -1184,7 +1185,7 @@ const LeadsNotesCommand = cmd({
         return
       }
       const searchData = (await searchRes.json()) as { data?: any[] }
-      const matches: any[] = searchData?.data ?? []
+      const matches: any[] = firstArray(searchData?.data)
       if (matches.length === 0) {
         prompts.log.warn(`No leads matching "${args.id}"`)
         prompts.outro("Done")
@@ -1306,7 +1307,7 @@ const LeadsOutreachCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const body = (await res.json()) as any
-      const messages: any[] = body.messages ?? []
+      const messages: any[] = firstArray(body.messages)
       const stats = body.stats ?? {}
 
       spinner.stop(`${messages.length} messages`)
@@ -2149,7 +2150,7 @@ const LeadsMergeCommand = cmd({
       .option("dry-run", { describe: "preview what will be merged without executing", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
-    const removeIds: number[] = ((args.remove as number[]) ?? []).filter((id) => id !== args.keep)
+    const removeIds: number[] = firstArray<number>(args.remove).filter((id) => id !== args.keep)
     if (removeIds.length === 0) {
       prompts.log.error("Cannot merge a lead into itself.")
       prompts.outro("Done")
@@ -2866,7 +2867,7 @@ const LeadsPulseCommand = cmd({
           return
         }
         const searchData = (await searchRes.json()) as { data?: any[] }
-        const matches: any[] = searchData?.data ?? []
+        const matches: any[] = firstArray(searchData?.data)
         if (matches.length === 0) {
           spinner.stop("No leads found", 1)
           process.exitCode = 1
@@ -3681,7 +3682,7 @@ const LeadsPulseCommand = cmd({
         const reqRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
         if (reqRes.ok) {
           const reqBody = await reqRes.json().catch(() => ({}))
-          const reqs: any[] = reqBody.data ?? []
+          const reqs: any[] = firstArray(reqBody.data)
           if (reqs.length > 0) {
             const passing = reqs.filter((r) => r.last_status === "passed" || r.last_status === "completed").length
             const failing = reqs.filter((r) => r.last_status === "failed").length
@@ -5172,7 +5173,7 @@ const LeadsMeetCommand = cmd({
             // Resolve by display name
             try {
               const calsResult = await calExec("get_calendars", {}, accountOpts)
-              const cals: any[] = calsResult?.calendars ?? calsResult?.data?.calendars ?? []
+              const cals: any[] = firstArray(calsResult?.calendars, calsResult?.data?.calendars)
               const match = cals.find((c: any) => (c.name ?? "").toLowerCase() === calInput.toLowerCase())
               if (match) {
                 calendarId = match.id
@@ -5537,7 +5538,7 @@ const LeadsSyncCalendarCommand = cmd({
       spinner.start("Checking existing notes…")
       const leadRes = await irisFetch(`/api/v1/leads/${leadId}`)
       const leadData = leadRes.ok ? (await leadRes.json() as any)?.data : null
-      const existingNotes: any[] = leadData?.notes ?? []
+      const existingNotes: any[] = firstArray(leadData?.notes)
       const trackedIds = new Set<string>()
       for (const note of existingNotes) {
         try {
@@ -5922,7 +5923,7 @@ const LeadsPackagesCommand = cmd({
     if (!(await handleApiError(res, "List packages"))) return
 
     const result = await res.json().catch(() => ({}))
-    const packages: any[] = result?.data?.packages ?? result?.data ?? []
+    const packages: any[] = firstArray(result?.data?.packages, result?.data)
 
     if (args.json) {
       await writeJson(packages)
@@ -6276,7 +6277,7 @@ const LeadsTasksListCommand = cmd({
         return
       }
       const data = ((await res.json()) as any)?.data
-      let tasks: any[] = data?.tasks ?? data ?? []
+      let tasks: any[] = firstArray(data?.tasks, data)
 
       // Client-side filters (in case API doesn't support them)
       if (args.pending) tasks = tasks.filter((t: any) => !t.is_completed)
@@ -6611,8 +6612,8 @@ const LeadsEnrichCommand = cmd({
       }
       const out = (await res.json()) as any
       const data = out?.data ?? {}
-      const contacts: any[] = data.found_contacts ?? []
-      const tags: any[] = data.generated_tags ?? []
+      const contacts: any[] = firstArray(data.found_contacts)
+      const tags: any[] = firstArray(data.generated_tags)
 
       if (argv.json) {
         await writeJson({ ok: true, lead_id: leadId, found_contacts: contacts, generated_tags: tags, note: data.note ?? null, iterations: data.iterations ?? 0, requires_confirmation: out?.requires_confirmation ?? true })
@@ -7174,7 +7175,7 @@ const LeadsGateAllCommand = cmd({
         return
       }
       const body = (await res.json()) as { data?: any[] }
-      const allWon: any[] = body?.data ?? []
+      const allWon: any[] = firstArray(body?.data)
 
       // Filter: skip leads without email, already-gated, and self
       const needsGate: any[] = []
@@ -7383,7 +7384,7 @@ const LeadsKBCommand = cmd({
       }
 
       const body = (await res.json()) as any
-      const docs: any[] = body?.data ?? []
+      const docs: any[] = firstArray(body?.data)
       const completeness = body?.completeness ?? { count: docs.length, total: 8 }
 
       spinner.stop(`${completeness.count}/${completeness.total} sections`)
@@ -7562,7 +7563,7 @@ const LeadsPulseAllCommand = cmd({
             ])
             if (tasksRes.status === "fulfilled" && tasksRes.value?.ok) {
               const td = ((await tasksRes.value.json()) as any)?.data ?? []
-              const tasks: any[] = Array.isArray(td) ? td : (td?.tasks ?? [])
+              const tasks: any[] = firstArray(td, td?.tasks)
               const now = new Date()
               tasksCompleted = tasks.filter((t: any) => t.status === "completed" || t.completed).length
               const pending = tasks.filter((t: any) => t.status !== "completed" && !t.completed)
@@ -8143,7 +8144,7 @@ const LeadsOnboardCommand = cmd({
       const params = new URLSearchParams({ search: String(args.id), per_page: "5" })
       const searchRes = await irisFetch(`/api/v1/leads?${params}`)
       if (!searchRes.ok) { prompts.log.error("Search failed"); return }
-      const matches: any[] = ((await searchRes.json()) as any)?.data ?? []
+      const matches: any[] = firstArray(((await searchRes.json()) as any)?.data)
       if (matches.length === 0) { prompts.log.error(`No lead found for "${args.id}"`); return }
       leadId = matches[0].id
     }
@@ -8259,7 +8260,7 @@ const LeadsOnboardAllCommand = cmd({
       const params = new URLSearchParams({ status: args.status, per_page: "200" })
       const res = await irisFetch(`/api/v1/leads?${params}`)
       if (!res.ok) { spinner.stop("Failed", 1); return }
-      const leads: any[] = ((await res.json()) as any)?.data ?? []
+      const leads: any[] = firstArray(((await res.json()) as any)?.data)
       const eligible = leads.filter((l) => l.email && !l.email.endsWith("@instagram.com") && !l.email.endsWith("@twitter.com"))
       spinner.stop(`${leads.length} ${args.status} leads (${eligible.length} eligible)`)
 
@@ -8684,7 +8685,7 @@ const ContentEngineCreateCommand = cmd({
           if (bloqRes.ok) {
             const bd = (await bloqRes.json()) as { data?: any }
             const bloqObj = bd?.data?.bloq ?? bd?.data ?? bd
-            const allLists: any[] = bloqObj.lists ?? bd?.data?.lists ?? []
+            const allLists: any[] = firstArray(bloqObj.lists, bd?.data?.lists)
             for (const list of allLists) {
               const ln = (list.name ?? "").toLowerCase()
               if (ln.includes("deliverable") || ln.includes("article") || ln.includes("content")) {
@@ -8779,7 +8780,7 @@ const ContentEngineStatusCommand = cmd({
         spinner.stop("Failed", 1); prompts.outro("Done"); return
       }
       const agentsData = (await agentsRes.json()) as { data?: any[] }
-      const agents: any[] = agentsData?.data ?? []
+      const agents: any[] = firstArray(agentsData?.data)
 
       // Find content agents (match by name keywords or heartbeat_tools containing manageBloqItems)
       const contentAgents = agents.filter((a: any) => {
@@ -8921,7 +8922,7 @@ const ContentEngineDoctorCommand = cmd({
         spinner.stop("Failed", 1); prompts.outro("Done"); return
       }
       const agentsData = (await agentsRes.json()) as { data?: any[] }
-      const agents: any[] = agentsData?.data ?? []
+      const agents: any[] = firstArray(agentsData?.data)
 
       const contentAgents = agents.filter((a: any) => {
         const nameMatch = /newsletter|content|article|blog|writer/i.test(a.name ?? "")
@@ -8939,7 +8940,7 @@ const ContentEngineDoctorCommand = cmd({
       }
 
       const agent = contentAgents[0]
-      const heartbeatTools: string[] = agent.heartbeat_tools ?? agent.settings?.heartbeat_tools ?? []
+      const heartbeatTools: string[] = firstArray(agent.heartbeat_tools, agent.settings?.heartbeat_tools)
       const heartbeatMode = agent.heartbeat_mode ?? agent.settings?.heartbeat_mode ?? ""
       const maxIterations = agent.settings?.max_iterations ?? 5
 
@@ -9026,7 +9027,7 @@ const ContentEngineDoctorCommand = cmd({
 
       // Check 7: ManageBloqItemsTool in tools_used (last run)
       const lastExec = recentExecs[0]
-      const lastTools: string[] = lastExec?.tools_used ?? lastExec?.metadata?.tools_used ?? []
+      const lastTools: string[] = firstArray(lastExec?.tools_used, lastExec?.metadata?.tools_used)
       const manageBloqUsed = Array.isArray(lastTools) && lastTools.some((t) => /managebloq/i.test(t))
       checks.push({
         name: "ManageBloqItemsTool in last run",
@@ -9405,7 +9406,7 @@ async function fetchBrandTokens(brandSlug: string): Promise<Record<string, any> 
     const res = await irisFetch(`/api/v1/brands?per_page=50`)
     if (!res.ok) return null
     const bd = (await res.json()) as { data?: any[] | { data?: any[] } }
-    const brands: any[] = Array.isArray(bd.data) ? bd.data : (bd.data as any)?.data ?? []
+    const brands: any[] = firstArray(bd.data, (bd.data as any)?.data)
     const brand = brands.find((b: any) => b.slug === brandSlug)
     if (!brand) return null
     const dt = brand.metadata?.design_tokens
@@ -9614,7 +9615,7 @@ const ContentEnginePublishCommand = cmd({
 
       const bloqData = (await bloqRes.json()) as { data?: any }
       const bloq = bloqData?.data?.bloq ?? bloqData?.data ?? bloqData
-      const lists: any[] = bloq.lists ?? bloqData?.data?.lists ?? []
+      const lists: any[] = firstArray(bloq.lists, bloqData?.data?.lists)
 
       // Collect all items from Agent Deliverables and other content lists
       const items: any[] = []
@@ -9729,7 +9730,7 @@ async function ensureRequirementsForPages(
   // 1. Fetch existing requirements
   const reqListRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
   const reqListData = reqListRes.ok ? ((await reqListRes.json()) as any) : { data: [] }
-  const existingReqs: any[] = reqListData.data || []
+  const existingReqs: any[] = firstArray(reqListData.data)
 
   // 2. For each page, check if a requirement already exists (exact slug match)
   let created = 0
@@ -9757,7 +9758,7 @@ async function ensureRequirementsForPages(
   // 3. Re-fetch all requirements, then fetch script_content individually
   const freshListRes = await irisFetch(`/api/v1/leads/${leadId}/requirements`)
   const freshListData = freshListRes.ok ? ((await freshListRes.json()) as any) : { data: [] }
-  const allReqs: any[] = freshListData.data || []
+  const allReqs: any[] = firstArray(freshListData.data)
 
   const requirements: Array<{ id: number; name: string; script_content: string }> = []
   for (const req of allReqs) {
@@ -11146,7 +11147,7 @@ const DealsListCommand = cmd({
 
     const result = await res.json().catch(() => ({}))
     const data = result?.data ?? {}
-    const deals: any[] = data?.deals ?? []
+    const deals: any[] = firstArray(data?.deals)
 
     if (args.json) {
       await writeJson(data)
@@ -11923,7 +11924,7 @@ const SegmentViewCommand = cmd({
     if (!(await handleApiError(res, "Fetch segment leads"))) return
 
     const data = await res.json().catch(() => ({}))
-    const leads: any[] = data?.leads ?? data?.data ?? []
+    const leads: any[] = firstArray(data?.leads, data?.data)
     const seg = data?.segment
 
     if ((args as any).json) {
@@ -12234,7 +12235,7 @@ const ReqListCommand = cmd({
     if (!(await handleApiError(res, "List requirements"))) return
 
     const body = await res.json().catch(() => ({}))
-    const reqs: any[] = body.data ?? []
+    const reqs: any[] = firstArray(body.data)
 
     if ((args as any).json) {
       await writeJson(reqs)
@@ -12436,7 +12437,7 @@ const ReqAllCommand = cmd({
       return
     }
 
-    const items: any[] = body.data ?? []
+    const items: any[] = firstArray(body.data)
     const pg = body.pagination ?? {}
 
     if (items.length === 0) {
@@ -12833,7 +12834,7 @@ export const PlatformPulseCommand = productCommand({
           // answer was discarded. (#181136)
           const leadsRes = await irisFetch(`/api/v1/leads?user_id=${userId}&per_page=50`)
           const leadsBody = leadsRes.ok ? await leadsRes.json().catch(() => ({})) : {}
-          const myLeads: any[] = (leadsBody?.data ?? []).slice(0, 20)
+          const myLeads: any[] = firstArray(leadsBody?.data).slice(0, 20)
 
           if (myLeads.length === 0) {
             fallbackSpinner.stop(dim("no leads found"))
@@ -13048,7 +13049,7 @@ export const PlatformPulseCommand = productCommand({
       const gateRes = await irisFetch(`/api/v1/deals/active?per_page=200`)
       if (gateRes.ok) {
         const gateBody = await gateRes.json().catch(() => ({}))
-        const deals: any[] = gateBody?.data?.deals ?? []
+        const deals: any[] = firstArray(gateBody?.data?.deals)
         const ungated = deals.filter((d: any) => !d.has_gate)
         if (ungated.length > 0) {
           for (const d of ungated.slice(0, 10)) {

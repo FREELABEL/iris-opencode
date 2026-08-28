@@ -17,6 +17,7 @@ import { Global } from "../../global"
 import { McpServeCommand } from "./mcp-serve"
 import { McpInstallCommand } from "./mcp-install"
 import { McpClients } from "../../mcp/clients"
+import { firstArray } from "../../util/array"
 
 function getAuthStatusIcon(status: MCP.AuthStatus): string {
   switch (status) {
@@ -101,7 +102,7 @@ const McpToolsCommand = cmd({
     prompts.intro(`◈  MCP tools — ${server}`)
     if (tools.length === 0) prompts.log.warn("Server is connected but exposes no tools.")
     for (const t of tools) {
-      const req: string[] = (t.inputSchema as any)?.required ?? []
+      const req: string[] = firstArray((t.inputSchema as any)?.required)
       const props = Object.keys(((t.inputSchema as any)?.properties ?? {}) as Record<string, unknown>)
       console.log(`  ${t.name}`)
       if (t.description) console.log(`    ${String(t.description).split("\n")[0].slice(0, 100)}`)

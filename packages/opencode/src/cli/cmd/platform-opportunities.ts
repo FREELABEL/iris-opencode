@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -985,7 +986,7 @@ const InterestListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? []
+      const items: any[] = firstArray(raw?.data?.data, raw?.data)
       const meta: any = raw?.data?.meta ?? raw?.meta ?? {}
       const total: number = meta.total ?? items.length
       const totalAmount: number | undefined = meta.total_amount_usd
@@ -1028,7 +1029,7 @@ const InterestShowCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? []
+      const items: any[] = firstArray(raw?.data?.data, raw?.data)
       const interest = items.find((i) => Number(i.id) === Number(args.id))
 
       if (!interest) { spinner.stop("Not found", 1); prompts.log.error(`Interest #${args.id} not found`); prompts.outro("Done"); return }

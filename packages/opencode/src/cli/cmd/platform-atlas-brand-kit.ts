@@ -12,6 +12,7 @@ import {
   success,
   highlight, writeJson } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
+import { firstArray } from "../../util/array"
 
 // No hardcoded fallback: a stale key silently 401s every Composio call (bug
 // #165864/#164644). Read from env; empty key degrades gracefully (helpers below
@@ -75,7 +76,7 @@ async function listCanvaAssets(query = ""): Promise<Asset[]> {
   const result = await composioExecute("CANVA_LIST_USER_DESIGNS", accountId, params)
   if (!(result?.successful || result?.successfull)) return []
   const data = result.data?.response_data ?? result.data ?? {}
-  const items: any[] = data.items ?? data.designs ?? []
+  const items: any[] = firstArray(data.items, data.designs)
   return items.map((i) => ({
     id: i.id ?? null,
     name: i.title ?? i.name ?? "Untitled",
@@ -91,7 +92,7 @@ async function listDriveAssets(query = ""): Promise<Asset[]> {
     const result = await executeIntegrationCall("google-drive", "search_files", {
       query: query || "logo OR brand OR icon",
     })
-    const files: any[] = result?.files ?? result?.data ?? []
+    const files: any[] = firstArray(result?.files, result?.data)
     return files.map((f) => ({
       id: f.id ?? null,
       name: f.name ?? f.title ?? "Untitled",

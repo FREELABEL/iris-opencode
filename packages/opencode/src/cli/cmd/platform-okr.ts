@@ -3,6 +3,7 @@ import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, success, writeJson, printDivider } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 /**
  * RevOps OKRs + KPIs.
@@ -110,7 +111,7 @@ async function fetchRecords(schema: string, params: Record<string, string> = {})
   const res = await irisFetch(`/api/v1/atlas/datasets/${schema}?${p}`)
   if (!res.ok) return []
   const body = (await res.json()) as any
-  const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+  const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
   return records
 }
 
@@ -139,7 +140,7 @@ async function fetchBloqKpis(bloqId: number): Promise<any[]> {
     return []
   }
   const body = (await res.json()) as any
-  const kpis: any[] = body?.data?.business_context?.kpis ?? body?.business_context?.kpis ?? []
+  const kpis: any[] = firstArray(body?.data?.business_context?.kpis, body?.business_context?.kpis)
   kpiCache.set(bloqId, kpis)
   return kpis
 }

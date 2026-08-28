@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, requireUserId, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Affiliates — manage affiliate links, signups, commissions, and payouts
@@ -368,7 +369,7 @@ const EarningsCmd = cmd({
     if (!(await handleApiError(res, "Commission events"))) return
     const body = await getJson(res)
     const rawData = body.data ?? body
-    const events: any[] = Array.isArray(rawData) ? rawData : rawData?.data ?? []
+    const events: any[] = firstArray(rawData, rawData?.data)
 
     if (args.json) { await writeJson(events); return }
     if (events.length === 0) { prompts.log.info("No commission events yet. Earnings are created automatically when your referrals pay."); return }

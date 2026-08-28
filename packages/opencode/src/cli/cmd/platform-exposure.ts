@@ -35,6 +35,7 @@ import { confirmWiden, isOpen, TIERS, type Tier } from "./exposure-gate"
 import { getBySlug, pageGateFlags } from "./platform-pages"
 import { collectPublishedItems, apiMakePrivate, PUBLISHED_SCAN_BLOQ_CAP } from "./bloq-item-shared"
 import { privacyVerdict } from "./platform-playbook"
+import { firstArray } from "../../util/array"
 
 // ── addressing ───────────────────────────────────────────────────────────────
 
@@ -169,7 +170,7 @@ async function readPlaybook(name: string): Promise<ExposureState> {
     const res = await fetch(`${base}/api/v1/playbooks`, { headers: UA })
     if (res.ok) {
       const body: any = await res.json()
-      const rows: any[] = body?.playbooks ?? (Array.isArray(body) ? body : [])
+      const rows: any[] = firstArray(body?.playbooks, (Array.isArray(body) ? body : []))
       listed = rows.some((p) => String(p?.name) === name)
     }
   } catch {
@@ -261,7 +262,7 @@ const AuditCmd = cmd({
       const res = await irisFetch("/api/v1/pages?per_page=200", {}, IRIS_API)
       if (res.ok) {
         const body: any = await res.json()
-        const rows: any[] = body?.data?.data ?? body?.data ?? []
+        const rows: any[] = firstArray(body?.data?.data, body?.data)
         for (const p of rows) {
           const t = pageTier(p)
           if (isOpen(t) && p.status === "published") {
@@ -292,7 +293,7 @@ const AuditCmd = cmd({
         const res = await fetch(`${IRIS_API.replace(/\/$/, "")}/api/v1/playbooks`, { headers: { "User-Agent": "iris-exposure" } })
         if (res.ok) {
           const body: any = await res.json()
-          const rows: any[] = body?.playbooks ?? (Array.isArray(body) ? body : [])
+          const rows: any[] = firstArray(body?.playbooks, (Array.isArray(body) ? body : []))
           for (const p of rows) openPlaybooks.push({ name: p.name, tier: "public" })
         } else caveats.push(`could not list playbooks (HTTP ${res.status}) — UNMEASURED`)
       } catch {
