@@ -1085,7 +1085,28 @@ const PublishCmd = cmd({
         body: JSON.stringify({ slug: args.slug }),
       }).catch(() => {})
       sp.stop(success("Published"))
-      console.log(`  ${highlight(publicUrl(args.slug))}`)
+
+      // Report what publishing ACTUALLY did for THIS page, instead of printing a /p/ url that
+      // may be dead. A page with visibility=private has no public route at all — printing
+      // publicUrl() there hands over a link that 404s and calls it success.
+      //
+      // It also matters that "publish" and "make public" are not the same action. On
+      // 2026-08-28 a client's agent set requires_auth + visibility private, then went to
+      // publish, and the safety classifier blocked it as outward-facing — correctly, on the
+      // verb alone, because nothing in the output distinguished "live but gated" from
+      // "readable by the world".
+      const vis = readVisibility(page)
+      const gate = pageGateFlags(page)
+      if (vis.mode === "private") {
+        console.log(`  ${dim("live, but PRIVATE — /p/ has no public route.")}`)
+        console.log(`  ${dim("the only way in is a share link:")} ${highlight(`iris genesis share ${args.slug}`)}`)
+      } else if (gate.gated) {
+        console.log(`  ${highlight(publicUrl(args.slug))}`)
+        console.log(`  ${dim(`login/OTP required to view (${gate.which}) — not readable by the public`)}`)
+      } else {
+        console.log(`  ${highlight(publicUrl(args.slug))}`)
+        console.log(`  ${dim("WORLD-READABLE and indexable. Lock down with:")} ${highlight(`iris genesis visibility ${args.slug} private`)}`)
+      }
       printDesignStandardHint(String(args.slug))
       prompts.outro("Done")
     } catch (err) {
