@@ -27,8 +27,12 @@ export const InstallAppCommand = {
     // Uses fetch/Bun.write rather than the shell pipeline below, which is unix-only
     // (mktemp/unzip/xattr do not exist on Windows).
     if (process.platform === "win32") {
-      const setupUrl =
-        "https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-tauri-windows-x64-setup.exe"
+      // heyiris.io, not /releases/latest/download/. That URL has no fallback by asset name --
+      // it resolves to whichever release holds the one repo-wide "latest" flag, which the CLI
+      // series takes on every publish. It served the desktop build off `main` (version 1.1.3,
+      // no 1.18 engine, no rebrand), and now that CLI releases carry no desktop assets it
+      // would simply 404. heyiris.io selects the desktop-v* series by tag prefix.
+      const setupUrl = "https://heyiris.io/download/windows"
       const dest = `${os.homedir()}\\Downloads\\IRIS-Setup.exe`
       const winSpinner = prompts.spinner()
       winSpinner.start("Downloading the IRIS installer...")
@@ -81,7 +85,8 @@ export const InstallAppCommand = {
     // release — this command was silently broken. The current desktop app is the
     // Tauri build in packages/desktop, published as IRIS-tauri-darwin-{arm64,x64}.zip
     // since v1.3.206. See item:182113 / IT-182113.
-    const appUrl = `https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-tauri-darwin-${arch}.zip`
+    // Same reason as the Windows path above: heyiris.io resolves desktop-v* by tag prefix.
+    const appUrl = `https://heyiris.io/download/mac-${arch}-zip`
 
     const spinner = prompts.spinner()
     spinner.start("Downloading IRIS desktop app...")
