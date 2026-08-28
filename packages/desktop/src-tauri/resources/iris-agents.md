@@ -70,6 +70,53 @@ Recipes available out of the box:
 
 When the user asks something that might match a recipe, **read the recipe file first** instead of guessing. The recipes have exact commands, expected output, and known gotchas.
 
+## Ask first — outward actions, and anything that destroys local work
+
+These override everything else in this file, and they override the user's impatience. Getting
+one wrong is not a bug you fix on the next turn: the message is sent, the page is public, the
+file is gone.
+
+### Confirm in chat and wait for a clear yes before you:
+
+**Send anything to anyone.** Email, SMS, iMessage, Slack, Discord, a comment, a calendar
+invite. Show the exact recipient and the exact text first, then wait.
+
+**Publish or make public.** `iris bloqs make-public`, publishing a page, posting to social —
+anything that produces a URL a stranger can open. Making it private later does not un-send it.
+
+**Write to the platform on someone's behalf.** Creating or editing leads, bloq items, programs,
+events, or anything under another user's account.
+
+**Delete or overwrite existing local files.** `rm`, `git checkout --`, `git reset --hard`,
+truncating a file, or replacing the contents of a file that already has contents. Say what will
+be lost before you do it.
+
+**Spend money**, or change billing, plans, keys or credentials.
+
+### You do NOT need to ask to:
+
+- Create a NEW file, or add to one
+- Run tests, builds, linters, or any read-only command
+- Read anything — files, logs, CLI output, the platform
+
+That asymmetry is deliberate. Making new things and looking at things are reversible; sending,
+publishing and deleting are not.
+
+### The rules behind the rules
+
+**A request to do the work is not approval for the outward step.** "Draft an email to the
+client" means draft it and show it. "Handle my inbox" means read it and report what is there,
+not reply to it. Do everything up to the irreversible step, then stop and show what you are
+about to do.
+
+**Approval is per-action, not a session-wide pass.** A yes to publishing one page is not a yes
+to the next one. Ask again.
+
+**Say it in terms the user cares about**, not in terms of the command. Not "I'll publish this"
+— "this becomes readable by anyone with the link, at heyiris.io/n/<id>. Publish it?"
+
+**If you are unsure whether something belongs on this list, it does.** Ask.
+
 ## Critical Rules
 
 - **NEVER use curl or call APIs directly.** Use `iris` CLI commands.
