@@ -12,6 +12,7 @@ import {
   pickEnumerator,
   surveySources,
   countItems,
+  BULK_INGESTABLE_TYPES,
 } from "./platform-data-sources"
 
 // ---------------------------------------------------------------------------
@@ -303,4 +304,69 @@ test("countItems: returns null (not 0) when there is no array to count", () => {
   expect(countItems({ ok: true })).toBeNull()
   expect(countItems(null)).toBeNull()
   expect(countItems("a string")).toBeNull()
+})
+
+
+// ---------------------------------------------------------------------------
+// #182734 — bulk-ingest ceiling, and the join `list` was not doing
+// ---------------------------------------------------------------------------
+
+/**
+ * Measured 2026-08-28 with the CLI's own survey:
+ *
+ *     16 source(s) · 1 bulk-importable
+ *     8 connected source(s) are hidden from discovery (incl. google-drive)
+ *
+ * Two different defects. The first was UNDER-reporting: fl-api validates
+ * `in:dropbox,google_drive,s3` and FileIngestionService implements all three, while this
+ * CLI advertised two. The second was a discovery surface reading one side of a join that
+ * `survey` already knew how to do.
+ */
+
+test("BULK_INGESTABLE_TYPES equals the server's validation rule — no more, no fewer", () => {
+  // More would promise a source fl-api rejects at run time; fewer hides one we ship.
+  expect([...BULK_INGESTABLE_TYPES].sort()).toEqual(["dropbox", "google_drive", "s3"])
+})
+
+test("s3 is bulk-ingestable — it was missing, and that was the under-report", () => {
+  expect(isBulkIngestable("s3")).toBe(true)
+})
+
+test("bulk-ingestable matches across the spellings the CLI disagrees with itself about", () => {
+  expect(isBulkIngestable("google_drive")).toBe(true)
+  expect(isBulkIngestable("google-drive")).toBe(true)
+  expect(isBulkIngestable("Google Drive")).toBe(true)
+  expect(normalizeSourceType("Google_Drive")).toBe("google-drive")
+})
+
+test("a source the server would reject is never advertised as importable", () => {
+  for (const t of ["slack", "notion", "obsidian", "imessage-bridge", "youtube"]) {
+    expect(isBulkIngestable(t)).toBe(false)
+  }
+})
+
+test("surveySources flags a connected source the availability list omits", () => {
+  const available = [{ type: "obsidian", name: "Obsidian", functions: ["list_files"] }]
+  const connections = [
+    { type: "google-drive", name: "Google Drive", account_email: "alex@freelabel.net" },
+    { type: "obsidian", name: "Obsidian" },
+  ]
+  const hidden = surveySources(available, connections).filter((s) => s.hiddenButConnected)
+  expect(hidden.map((s) => s.type)).toEqual(["google-drive"])
+  expect(hidden[0].accounts).toEqual(["alex@freelabel.net"])
+  // A hidden google-drive is still correctly reported as importable.
+  expect(hidden[0].bulkIngestable).toBe(true)
+})
+
+test("a source present on both sides is connected but NOT flagged hidden", () => {
+  const ob = surveySources(
+    [{ type: "obsidian", name: "Obsidian" }],
+    [{ type: "obsidian", name: "Obsidian" }],
+  ).find((s) => s.type === "obsidian")!
+  expect(ob.connected).toBe(true)
+  expect(ob.hiddenButConnected).toBe(false)
+})
+
+test("no connections means nothing is hidden, not everything", () => {
+  expect(surveySources([{ type: "obsidian" }], []).some((s) => s.hiddenButConnected)).toBe(false)
 })

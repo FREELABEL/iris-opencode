@@ -156,7 +156,22 @@ export function stringifySource(result: any, maxChars = 12000): string {
  * are different questions, and conflating them is the mental-model error survey
  * exists to prevent.
  */
-export const BULK_INGESTABLE_TYPES = ["dropbox", "google_drive"] as const
+export const BULK_INGESTABLE_TYPES = ["dropbox", "google_drive", "s3"] as const
+
+/**
+ * THIS LIST MIRRORS A SERVER VALIDATION RULE. Keep them equal.
+ *
+ * fl-api BloqIngestionController::startFolderIngestion validates
+ *   'source' => 'required|in:dropbox,google_drive,s3'
+ * and FileIngestionService switches on exactly those three, each implemented.
+ *
+ * s3 was missing here, so `survey` reported the CLI could bulk-ingest two sources when
+ * the platform could do three — under-reporting a capability we already shipped.
+ *
+ * Widening this further is a SERVER change, not an edit here. Adding a type the server
+ * rejects would turn a truthful "read-only" into a promise that fails at run time, which
+ * is the failure mode this file exists to prevent.
+ */
 
 /**
  * Fold `google_drive` / `google-drive` / `Google Drive` onto one key.
@@ -314,12 +329,47 @@ const ListCommand = cmd({
     }
     const data = (await res.json()) as any
     const sources: any[] = data?.data?.sources ?? data?.sources ?? []
+
+    // #182734: THIS LIST IS A DISCOVERY SURFACE, AND IT WAS READING ONE SIDE.
+    //
+    // `survey` already joins the availability list against actual connections and reports
+    // the delta. Measured 2026-08-28: 8 of 16 connected sources were absent here —
+    // including google-drive with three working accounts, the one source most people want.
+    // A source that is connected and executable must never be missing from the list that
+    // tells you what you can use, so the same join runs here.
+    let hiddenConnected: SurveyedSource[] = []
+    try {
+      const userId = await requireUserId()
+      if (userId) {
+        const connRes = await irisFetch(`/api/v1/users/${userId}/integrations`)
+        if (connRes.ok) {
+          const cj = (await connRes.json()) as any
+          const connections: any[] = cj?.connections ?? cj?.data ?? (Array.isArray(cj) ? cj : [])
+          hiddenConnected = surveySources(sources, connections).filter((x) => x.hiddenButConnected)
+        }
+      }
+    } catch {
+      // Non-fatal. A failed join must not remove sources we DID resolve.
+    }
+
     if (json) {
-      await writeJson(sources)
+      // Hidden sources are real and executable; omitting them is the bug. Flagged so a
+      // caller can tell where each came from.
+      await writeJson([
+        ...sources,
+        ...hiddenConnected.map((h) => ({
+          type: h.type,
+          name: h.name,
+          connected: true,
+          listed_in_availability: false,
+          hidden_but_connected: true,
+          accounts: h.accounts,
+        })),
+      ])
       return
     }
     printDivider()
-    if (sources.length === 0) {
+    if (sources.length === 0 && hiddenConnected.length === 0) {
       console.log(`  ${dim("(no connected sources — add one with:")} ${highlight("iris integrations connect <type>")}${dim(")")}`)
     } else {
       for (const s of sources) {
@@ -352,7 +402,24 @@ const ListCommand = cmd({
         if (fns.length) console.log(`    ${dim("functions:")} ${fns.join(", ")}`)
       }
     }
+
+    // Connected, executable, and absent from the availability list. Shown rather than
+    // dropped, and labelled so the omission is visible instead of silent.
+    for (const h of hiddenConnected) {
+      console.log(
+        `  ${bold(h.type)}  ${dim(h.name ?? "")}  ${UI.Style.TEXT_WARNING}⚠ connected, not in the availability list${UI.Style.TEXT_NORMAL}`,
+      )
+      if (h.accounts.length) console.log(`    ${dim(h.accounts.join(", "))}`)
+      console.log(`    ${dim("usable with:")} iris data-sources read ${h.type}`)
+    }
+
     printDivider()
+    if (hiddenConnected.length) {
+      console.log(
+        `  ${UI.Style.TEXT_WARNING}${hiddenConnected.length} source(s) are connected but missing from the availability list${UI.Style.TEXT_NORMAL}`,
+      )
+      console.log(`  ${dim("Look closer:")} ${highlight("iris data-sources survey")}`)
+    }
     console.log(`  ${dim("read a source:")} ${highlight("iris data-sources read <type> -f <function> -p key=value")}`)
     prompts.outro("Done")
   },
