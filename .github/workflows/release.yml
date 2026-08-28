@@ -562,6 +562,29 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Drop Tauri desktop bundles before they reach the CLI release
+        # There are THREE paths that can attach an asset to a CLI release, and removing only
+        # the obvious one is not enough — v1.3.219 still shipped IRIS-tauri-darwin-arm64.zip
+        # after the explicit `desktop-tauri-assets` upload had already been removed, because
+        # this job downloads *all* artifacts and then publishes `artifacts/*.zip` wholesale.
+        #
+        # Those bundles are built from `main` (version 1.1.3, no 1.18 engine, no rebrand) and
+        # share asset names with the real desktop series. Publishing them here is what made
+        # heyiris.io serve the wrong app for a week; see the header of release-desktop.yml on
+        # iris/1.18.23. The desktop app ships as desktop-v*, and downloads resolve through
+        # heyiris.io/download/{platform}.
+        #
+        # IRIS-app-* (the Electron app) is a different product and stays.
+        run: |
+          shopt -s nullglob
+          doomed=(artifacts/IRIS-tauri-*)
+          if [ ${#doomed[@]} -gt 0 ]; then
+            printf 'not publishing on a CLI release: %s\n' "${doomed[@]}"
+            rm -f "${doomed[@]}"
+          else
+            echo "no Tauri bundles present"
+          fi
+
       - name: List artifacts
         run: ls -la artifacts/
 
