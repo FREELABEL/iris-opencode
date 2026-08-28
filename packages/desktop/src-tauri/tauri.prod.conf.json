@@ -29,6 +29,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJBMTA2ODFBMjI4QzAzQUMKUldTc0E0d2lHbWdRS21aQ1dzQUVlcUllczYrS1lJU0JWS2tFOUZFcWh1K0syVnhWdkQ2L1lUQ0MK",
       "endpoints": [
+        "https://heyiris.io/desktop/latest.json",
         "https://github.com/FREELABEL/iris-opencode/releases/latest/download/latest.json"
       ]
     }

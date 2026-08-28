@@ -11,14 +11,28 @@ name: Release IRIS desktop (Tauri)
 #     Sharing that trigger would mean one tag racing two workflows over the same asset
 #     names, with whichever finished last deciding what clients download.
 #
-#  2. PUBLISHED AS A PRERELEASE. heyiris.io links
-#     /releases/latest/download/IRIS-tauri-darwin-*.zip -- and GitHub resolves that to the
-#     newest NON-prerelease containing the asset NAME. So an unproven build from this branch
-#     physically cannot land on the front page. Promotion is a separate, deliberate act:
+#  2. PUBLISHED AS A PRERELEASE, so an unproven build cannot be resolved as the newest
+#     desktop release. Promotion is a separate, deliberate act, gated on the verifier:
 #       gh release edit desktop-vX.Y.Z --prerelease=false
-#     Verify the artifact FIRST (scripts/verify-shipped-app.sh), then promote.
 #
-# Asset names match main's convention exactly, so promotion needs no front-end change.
+# CORRECTION (2026-08-28) — this header used to claim that GitHub resolves
+# /releases/latest/download/<asset> "to the newest NON-prerelease containing the asset NAME".
+# That is FALSE, and believing it cost a week. Measured:
+#
+#     curl -sIL .../releases/latest/download/IRIS-tauri-darwin-arm64.dmg
+#       -> 302 .../releases/download/v1.3.218/IRIS-tauri-darwin-arm64.dmg
+#
+# There is no fallback by asset name. The URL resolves to whichever release holds the single
+# repo-wide "latest" flag, full stop -- and `main`'s release.yml ALSO builds the Tauri app,
+# publishing identically-named IRIS-tauri-* assets onto every CLI release. So the front page
+# was never serving this series at all: it served a desktop build off `main` (version 1.1.3,
+# no 1.18 engine, no rebrand), and every desktop promotion was undone by the next CLI release,
+# four of which shipped on 2026-08-28 alone.
+#
+# The client reported "the download still opens the old opencode" repeatedly and was right
+# every time. The fix is not in this file: heyiris.io/download/{platform} and
+# heyiris.io/desktop/latest.json resolve the `desktop-v*` series by tag prefix, which the CLI
+# series cannot displace. Promotion below asserts that endpoint, not GitHub's.
 
 on:
   push:
@@ -505,21 +519,24 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
           echo "Promoted ${{ steps.version.outputs.tag }} — it is now what heyiris.io serves."
 
-          # The app asks /releases/latest/download/latest.json — an indirection GitHub resolves
-          # by asset name to the newest NON-prerelease carrying it. That indirection has already
-          # caused three separate outages in this repo, so assert what installed clients will
-          # actually receive rather than assuming promotion pointed it here.
+          # Assert what installed clients will ACTUALLY receive.
+          #
+          # Not GitHub's /releases/latest/download/latest.json. Measured 2026-08-28: that URL has
+          # no fallback by asset name — it resolves to whichever release holds the repo-wide
+          # "latest" flag, and this repo publishes two series into one repo, so the CLI takes that
+          # flag back on its very next release. Promotion would look green and quietly stop being
+          # true minutes later. heyiris.io/desktop/latest.json resolves the desktop series by tag
+          # prefix and cannot be displaced.
           VERSION="${{ steps.version.outputs.version }}"
           for i in $(seq 1 10); do
-            LIVE=$(curl -sfL --max-time 20 \
-              "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json" \
+            LIVE=$(curl -sfL --max-time 20 "https://heyiris.io/desktop/latest.json" \
               | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))' 2>/dev/null || true)
             [ "$LIVE" = "$VERSION" ] && break
             echo "  updater endpoint still serving '${LIVE:-nothing}' (want $VERSION) — retry $i"
             sleep 6
           done
           if [ "$LIVE" != "$VERSION" ]; then
-            echo "::error::promoted, but the updater endpoint serves '${LIVE:-nothing}' not $VERSION — installed clients will NOT see this release"
+            echo "::error::promoted, but https://heyiris.io/desktop/latest.json serves '${LIVE:-nothing}' not $VERSION — installed clients will NOT see this release"
             exit 1
           fi
           echo "Updater endpoint serves $VERSION — installed clients will be offered this build ✓"
