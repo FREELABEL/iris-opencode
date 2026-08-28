@@ -25,6 +25,11 @@ import { exec } from "child_process"
 import { randomBytes } from "node:crypto"
 import { detectNewConnection, extractConnections, shouldPrintUrlOnly, type ConnectionRow } from "./integration-connect-state"
 import { verifyProbeFor, isProbeSuccess, isProbeInconclusive } from "./integration-verify-probe"
+import {
+  normalizeCatalog, normalizeEntry, findEntry, isOAuthEntry, requiredFields,
+  missingRequired, parseFieldFlags, connectCommandHint, groupByCategory,
+  type CatalogEntry,
+} from "./integration-catalog"
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 
@@ -170,6 +175,33 @@ const COMPOSIO_APIKEY_TOOLKITS: Record<string, string> = {
 
 function isIntegration(t: string): boolean {
   return INTEGRATION_TYPES.includes(t.toLowerCase())
+}
+
+/**
+ * The catalog the SERVER knows, with the hardcoded array as a labelled fallback.
+ *
+ * #182712: the array above listed 41 types while the registry held 69 enabled ones, so 37
+ * built integrations — wix, shopify, jira, linkedin, trello, zoho, notion … — could not be
+ * found or connected by anyone. The registry is the source of truth; this binary's list is
+ * only a last resort, and when we fall back to it we SAY so rather than presenting a partial
+ * catalog as the whole thing.
+ */
+async function loadCatalog(): Promise<{ entries: CatalogEntry[]; degraded: string | null }> {
+  try {
+    const res = await irisFetch("/api/v1/integrations-temp/registry", {}, IRIS_API)
+    if (res.ok) {
+      const entries = normalizeCatalog(await res.json())
+      if (entries.length > 0) return { entries, degraded: null }
+      return { entries: fallbackCatalog(), degraded: "the registry returned nothing" }
+    }
+    return { entries: fallbackCatalog(), degraded: `registry HTTP ${res.status}` }
+  } catch (e) {
+    return { entries: fallbackCatalog(), degraded: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+function fallbackCatalog(): CatalogEntry[] {
+  return INTEGRATION_TYPES.map((t) => normalizeEntry({ type: t })!).filter(Boolean)
 }
 
 // Fetch a Composio auth_config and build the connection.state.val payload
@@ -606,9 +638,12 @@ const ListIntegrationsCommand = cmd({
   async handler() {
     UI.empty()
     prompts.intro("◈  Available Integrations")
+    const { entries, degraded } = await loadCatalog()
+    if (degraded) prompts.log.warn(`Showing this binary's built-in list only — could not read the registry (${degraded}).`)
     printDivider()
-    for (const t of INTEGRATION_TYPES) console.log(`  ${highlight(t)}`)
+    for (const e of entries) console.log(`  ${highlight(e.type)}`)
     printDivider()
+    console.log(`  ${dim(`${entries.length} integration(s)`)}`)
     prompts.outro(dim("iris integrations <type> <function> key=value …"))
   },
 })
@@ -819,12 +854,27 @@ const ListAvailableCommand = cmd({
         }
       }
     } catch {}
+
+    const { entries, degraded } = await loadCatalog()
+    if (degraded) {
+      prompts.log.warn(`Showing this binary's built-in list only — could not read the registry (${degraded}).`)
+      prompts.log.warn("Integrations added since this binary was built will be missing from the list below.")
+    }
+
     printDivider()
-    for (const t of INTEGRATION_TYPES) {
-      const status = connected.has(t) ? success("connected") : dim("not connected")
-      console.log(`  ${highlight(t)}  ${status}`)
+    for (const [category, group] of groupByCategory(entries)) {
+      console.log(`  ${dim(category.toUpperCase())}`)
+      for (const e of group) {
+        const isOn = connected.has(e.type) || e.isConnected
+        const status = isOn ? success("connected") : dim("not connected")
+        // How it is connected matters as much as whether: `connect wix` used to route to
+        // OAuth and die because nothing said wix takes an api key (#182712).
+        const how = isOAuthEntry(e) ? "" : dim(`  ${e.authType}`)
+        console.log(`    ${highlight(e.type)}  ${status}${how}`)
+      }
     }
     printDivider()
+    console.log(`  ${dim(`${entries.length} integration(s) · ${connected.size} connected`)}`)
     prompts.outro(dim("iris integrations connect <type>"))
   },
 })
@@ -836,6 +886,10 @@ const ConnectCommand = cmd({
     y
       .positional("type", { type: "string", demandOption: true })
       .option("print-url", { type: "boolean", default: false, describe: "print the OAuth URL instead of opening a browser" })
+      .option("field", {
+        type: "array",
+        describe: "credential field for API-key style integrations, repeatable: --field api_key=… --field site_id=…",
+      })
       .option("yes", {
         alias: "y",
         type: "boolean",
@@ -924,6 +978,139 @@ const ConnectCommand = cmd({
         }
       } catch {
         // non-fatal — fall through to normal connect
+      }
+    }
+
+    // ── CREDENTIAL-BASED INTEGRATIONS, AS THE REGISTRY DECLARES THEM ──────────
+    //
+    // #182712. The old code decided how to authenticate from a 7-entry hardcoded array
+    // (APIKEY_TYPES). Wix was not in it, so `connect wix` fell through to OAuth and died
+    // with "OAuth URL generation not supported for type: wix" — for an integration that had
+    // been live for some time and whose own yml says `auth: {type: api_key}` with two
+    // fields. The registry knows the auth type AND the exact fields, with labels and help
+    // text. Ask it instead of guessing.
+    {
+      const { entries, degraded } = await loadCatalog()
+      const entry = findEntry(entries, type)
+
+      if (!entry && !degraded) {
+        // The registry answered and does not have this. That is a real negative, and it can
+        // now be stated without hedging — unlike the old array, which could only say "not in
+        // the list I was compiled with".
+        prompts.log.error(`No integration named ${highlight(type)} in the registry.`)
+        console.log(`  ${dim("Browse what exists:")} ${highlight("iris integrations list-available")}`)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      if (entry && !isOAuthEntry(entry)) {
+        const userId = await requireUserId(args["user-id"] as number | undefined)
+        if (!userId) { process.exitCode = 1; prompts.outro("Done"); return }
+
+        const provided = {
+          ...parseFieldFlags(args.field as string[] | undefined),
+        }
+        // --api-key stays supported for the single-field case people already type.
+        if (args["api-key"] && requiredFields(entry).length === 1) {
+          provided[requiredFields(entry)[0].name] = String(args["api-key"])
+        }
+
+        let missing = missingRequired(entry, provided)
+
+        if (missing.length > 0 && process.stdin.isTTY && !args.json) {
+          console.log()
+          console.log(`  ${entry.name} uses ${highlight(entry.authType)} authentication.`)
+          console.log()
+          for (const f of missing) {
+            if (f.description) console.log(`  ${dim(f.description)}`)
+            const v = await prompts.password({
+              message: f.label || f.name,
+              mask: "•",
+              validate: (x) => (!x || !x.trim() ? "Required" : undefined),
+            })
+            if (prompts.isCancel(v)) {
+              process.exitCode = 1
+              prompts.outro("Cancelled")
+              return
+            }
+            provided[f.name] = String(v).trim()
+          }
+          missing = missingRequired(entry, provided)
+        }
+
+        if (missing.length > 0) {
+          // Name the fields that are actually required, and hand over the command that
+          // works. The old message offered --api-key / --token / --webhook-url, and for
+          // Wix all three were wrong.
+          prompts.log.error(`${entry.name} needs: ${missing.map((f) => f.name).join(", ")}`)
+          for (const f of missing) {
+            if (f.description) console.log(`  ${dim(`${f.name} — ${f.description}`)}`)
+          }
+          console.log()
+          console.log(`  ${dim("Run:")} ${highlight(connectCommandHint(entry))}`)
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+
+        const sp = prompts.spinner()
+        sp.start(`Connecting ${entry.name}…`)
+        try {
+          const payload: Record<string, unknown> = { type: entry.type, credentials: provided, status: "active" }
+          if (args.name) payload.name = args.name
+          if (args.bloq) payload.bloq_id = args.bloq
+
+          const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {
+            method: "POST",
+            body: JSON.stringify(payload),
+          }, IRIS_API)
+
+          if (!res.ok) {
+            sp.stop("Failed", 1)
+            prompts.log.error(`Could not store the credential (HTTP ${res.status}).`)
+            process.exitCode = 1
+            prompts.outro("Done")
+            return
+          }
+          sp.stop(`${success("✓")} ${bold(entry.name)} stored`)
+        } catch (e) {
+          sp.stop("Failed", 1)
+          prompts.log.error(e instanceof Error ? e.message : String(e))
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+
+        // A stored credential is not a working one. Prove it the same way OAuth does now.
+        const probe = verifyProbeFor(entry.type)
+        if (probe) {
+          const vs = prompts.spinner()
+          vs.start(`Verifying by ${probe.label}…`)
+          try {
+            const r = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
+              method: "POST",
+              body: JSON.stringify({ integration: entry.type, action: probe.action, params: probe.params }),
+            })
+            const body = await r.json().catch(() => null)
+            if (isProbeSuccess(body)) {
+              vs.stop(`${success("✓")} ${bold(entry.type)} connected — verified by ${probe.label}`)
+            } else if (isProbeInconclusive(r.status, body)) {
+              vs.stop(`${dim("Stored — could not verify from here (not an authorization failure)")}`)
+            } else {
+              vs.stop(`${dim("Stored, but a live call did not succeed")}`, 1)
+              console.log(`  ${dim("Check with:")} ${highlight(`iris integrations exec ${entry.type} ${probe.action}`)}`)
+              process.exitCode = 1
+            }
+          } catch {
+            vs.stop(`${dim("Stored — verification call failed to run")}`)
+          }
+        } else {
+          console.log(`  ${dim("No read-only probe for this integration — stored but not verified.")}`)
+        }
+
+        prompts.outro("Done")
+        return
       }
     }
 
