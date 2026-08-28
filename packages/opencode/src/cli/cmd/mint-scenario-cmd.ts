@@ -10,6 +10,7 @@ import {
   type ScenarioLine,
   type ActualLine,
 } from "./mint-scenarios"
+import { firstArray } from "../../util/array"
 
 // Lives in its own file rather than inside platform-mint.ts, which is mid-refactor into
 // mint-core.ts. Registration is a single line there so the two do not collide.
@@ -36,7 +37,7 @@ async function rows(slug: string, filters: Record<string, string> = {}): Promise
   const res = await irisFetch(`/api/v1/atlas/datasets/${slug}?${p}`)
   if (!res.ok) return []
   const body = (await res.json().catch(() => null)) as any
-  const recs: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+  const recs: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
   return recs.map((r) => ({ ...(r?.data ?? {}), external_id: r?.external_id, _id: r?.id }))
 }
 

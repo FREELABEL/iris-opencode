@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs"
 import { join } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -118,7 +119,7 @@ const ProfileShowCommand = cmd({
       const r = await irisFetch(`/api/v1/profile/${profile.pk}/fan-funding`)
       if (r.ok) {
         const d = (await r.json()) as any
-        const pkgs: any[] = d?.packages ?? d?.data?.packages ?? []
+        const pkgs: any[] = firstArray(d?.packages, d?.data?.packages)
         console.log()
         console.log(`  ${dim(`Memberships (${pkgs.length}):`)}`)
         for (const p of pkgs) {
@@ -315,7 +316,7 @@ const ProfileMembershipsCommand = cmd({
     const ok = await handleApiError(res, "List packages")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const pkgs: any[] = data?.packages ?? data?.data?.packages ?? []
+    const pkgs: any[] = firstArray(data?.packages, data?.data?.packages)
     printDivider()
     if (pkgs.length === 0) console.log(`  ${dim("(no packages)")}`)
     else for (const p of pkgs) {
@@ -679,7 +680,7 @@ const ProfileListCommand = cmd({
     if (!ok) { prompts.outro("Done"); return }
 
     const data = (await res.json()) as any
-    const hits: any[] = data?.data ?? []
+    const hits: any[] = firstArray(data?.data)
     const meta = data?.meta ?? {}
 
     if (args.json) { await writeJson(data); prompts.outro("Done"); return }
@@ -746,7 +747,7 @@ const ProfileMediaCommand = cmd({
     if (!mediaOk) { prompts.outro("Done"); return }
 
     const mediaData = (await mediaRes.json()) as any
-    const items: any[] = mediaData?.data ?? mediaData ?? []
+    const items: any[] = firstArray(mediaData?.data, mediaData)
 
     if (args.json) { await writeJson({ counts, items }); prompts.outro("Done"); return }
 
@@ -1106,7 +1107,7 @@ const ProfileOpportunitiesCommand = cmd({
     if (!ok) { prompts.outro("Done"); return }
 
     const data = (await res.json()) as any
-    const items: any[] = data?.data?.data ?? data?.data ?? []
+    const items: any[] = firstArray(data?.data?.data, data?.data)
 
     if (args.json) { await writeJson(items); prompts.outro("Done"); return }
 

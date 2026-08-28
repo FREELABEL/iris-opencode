@@ -15,6 +15,7 @@ import { createPageFromJson } from "./platform-pages"
 import { BloqsExportCommand } from "./platform-bloq-export"
 import { AtlasFilesCommandExport } from "./platform-atlas-files"
 import path from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Display helpers
@@ -161,7 +162,7 @@ const BloqsListCommand = cmd({
       }
 
       const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
-      let bloqs: any[] = data?.data ?? []
+      let bloqs: any[] = firstArray(data?.data)
       // The index endpoint reports how many exist. Capture it — dropping it is what
       // made `bloqs list` look complete while withholding 117 of 137 boards.
       const serverTotal = data?.total ?? data?.meta?.total
@@ -473,7 +474,7 @@ const BloqsGetCommand = cmd({
         const filesRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/files`)
         if (filesRes.ok) {
           const filesData = (await filesRes.json()) as { data?: any[] }
-          const files: any[] = filesData?.data ?? []
+          const files: any[] = firstArray(filesData?.data)
           if (files.length > 0) {
             console.log(`  ${dim("Files:")}`)
             for (const f of files) {
@@ -820,7 +821,7 @@ async function resolveIngestList(
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists`)
   if (!res.ok) return { error: `Could not read the lists on bloq ${bloqId} (HTTP ${res.status}).` }
   const data = (await res.json()) as { data?: any[] }
-  const lists: any[] = data?.data ?? []
+  const lists: any[] = firstArray(data?.data)
   if (!lists.length) return { error: `Bloq ${bloqId} has no lists to ingest into.` }
 
   if (want !== undefined && String(want).trim() !== "") {
@@ -2257,7 +2258,7 @@ export const BloqsSearchCommand = cmd({
         const res = await irisFetch(`/api/v1/user/${userId}/bloqs`)
         if (res.ok) {
           const data = (await res.json()) as any
-          const rows: any[] = data?.data ?? []
+          const rows: any[] = firstArray(data?.data)
           boards = (Array.isArray(rows) ? rows : [])
             .filter((b) => matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, query))
             .slice(0, limit)
@@ -2898,7 +2899,7 @@ const BloqsContributorsCommand = cmd({
       }
 
       const data = await res.json() as Record<string, unknown>
-      const leads: any[] = (data as any)?.data ?? (data as any)?.leads ?? (Array.isArray(data) ? data : [])
+      const leads: any[] = firstArray((data as any)?.data, (data as any)?.leads, (Array.isArray(data) ? data : []))
 
       if (args.json) { await writeJson(leads); return }
 
@@ -3477,7 +3478,7 @@ async function resolveMemberId(
   if (!res.ok) return { error: `User lookup failed (HTTP ${res.status}).` }
 
   const body = (await res.json().catch(() => null)) as any
-  const rows: any[] = Array.isArray(body) ? body : (body?.data ?? [])
+  const rows: any[] = firstArray(body, body?.data)
 
   // Exact address only. A substring match here would grant board access to the wrong person,
   // which is not the kind of thing to be approximately right about.
@@ -3511,7 +3512,7 @@ const BloqsMembersCommand = cmd({
       if (!(await handleApiError(res, "List members"))) { if (!args.json) prompts.outro("Done"); return }
 
       const body = (await res.json().catch(() => ({}))) as any
-      const members: any[] = body?.data?.shared_users ?? body?.shared_users ?? []
+      const members: any[] = firstArray(body?.data?.shared_users, body?.shared_users)
 
       if (args.json) { await writeJson(members); return }
 

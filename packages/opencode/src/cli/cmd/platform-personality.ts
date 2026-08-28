@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Personality presets — list available preset library and apply to an agent.
 // Backed by config/personalities.php (fl-api).
@@ -23,7 +24,7 @@ const PersonalityListCommand = cmd({
     const res = await irisFetch(`/api/v1/personalities`)
     const ok = await handleApiError(res, "List personalities"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const presets: any[] = data?.data ?? []
+    const presets: any[] = firstArray(data?.data)
     if (args.json) { await writeJson(presets); prompts.outro("Done"); return }
     printDivider()
     for (const p of presets) {

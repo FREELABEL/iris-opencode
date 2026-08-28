@@ -10,6 +10,7 @@ import {
   bold,
   success,
   highlight, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // iris workspace — Workspace (team) ↔ Google Workspace identity sync, from the CLI
@@ -216,7 +217,7 @@ const OrgCommand = cmd({
       return
     }
     printDivider()
-    const tree: any[] = payload?.tree ?? []
+    const tree: any[] = firstArray(payload?.tree)
     if (!tree.length) {
       console.log(`  ${dim("No agents on bloq")} #${args.bloqId}`)
     } else {

@@ -65,6 +65,7 @@ import { irisFetch, requireAuth, resolveUserId, dim, bold } from "./iris-api"
 import { homedir } from "os"
 import { join } from "path"
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "fs"
+import { firstArray } from "../../util/array"
 
 const HOWTO_DIR = join(homedir(), ".iris", "how-to")
 const BACKUP_BLOQ_NAME = "IRIS How-To Recipes (private backup)"
@@ -92,17 +93,17 @@ async function findBackupBloq(): Promise<{ ok: true; id: number; listId: number 
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs?per_page=200`)
   if (!res.ok) return { ok: false, reason: `listing boards failed (HTTP ${res.status})` }
   const body = (await res.json()) as any
-  const rows: any[] = body?.data?.data ?? body?.data ?? body?.bloqs ?? []
+  const rows: any[] = firstArray(body?.data?.data, body?.data, body?.bloqs)
   const b = rows.find((x) => String(x?.name ?? "").trim() === BACKUP_BLOQ_NAME)
   if (!b) return { ok: false, reason: "no board with that exact name" }
 
-  const lists: any[] = b?.lists ?? []
+  const lists: any[] = firstArray(b?.lists)
   let list = lists.find((l) => String(l?.name ?? "").toLowerCase() === "recipes") ?? lists[0]
   if (!list) {
     const det = await irisFetch(`/api/v1/user/${userId}/bloqs/${b.id}`)
     if (det.ok) {
       const d = (await det.json()) as any
-      const dl: any[] = d?.data?.lists ?? d?.lists ?? []
+      const dl: any[] = firstArray(d?.data?.lists, d?.lists)
       list = dl.find((l) => String(l?.name ?? "").toLowerCase() === "recipes") ?? dl[0]
     }
   }
@@ -116,7 +117,7 @@ async function readRemote(bloqId: number): Promise<RemoteRecipe[]> {
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items?per_page=500&fields=id,title,content`)
   if (!res.ok) return []
   const body = (await res.json()) as any
-  const items: any[] = body?.items ?? body?.data?.items ?? body?.data ?? []
+  const items: any[] = firstArray(body?.items, body?.data?.items, body?.data)
   const out: RemoteRecipe[] = []
   for (const it of items) {
     const name = recipeNameFromTitle(String(it?.title ?? ""))

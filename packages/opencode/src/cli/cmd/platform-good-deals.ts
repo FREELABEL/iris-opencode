@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Good Deals CLI — Andrew "Esher" Usher's Chief-of-Staff financial engine
@@ -326,7 +327,7 @@ const ListCommand = cmd({
     try {
       const result = await callGoodDeals("list_artifacts", { bloq_id: args.bloqId }, userId)
       if (result == null) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-      const items: any[] = result?.data ?? []
+      const items: any[] = firstArray(result?.data)
       spinner.stop(`${items.length} artifact(s)`)
 
       if (args.json) {

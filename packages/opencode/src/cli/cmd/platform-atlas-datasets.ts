@@ -5,6 +5,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, FL_API, isNonInteractive, writeJson, failNoOp} from "./iris-api"
 import * as fs from "fs"
 import * as path from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Atlas Datasets CLI — Schema-driven generic data platform
@@ -58,7 +59,7 @@ const SchemaListCommand = cmd({
       const res = await irisFetch(`/api/v1/atlas/schemas?${p}`)
       const ok = await handleApiError(res, "List schemas"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
-      const rows: any[] = body?.data ?? []
+      const rows: any[] = firstArray(body?.data)
       spinner.stop(`${rows.length} schema(s)`)
 
       if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
@@ -372,7 +373,7 @@ const RecordsListCommand = cmd({
       const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}?${p}`)
       const ok = await handleApiError(res, "List records"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
-      const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+      const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
       const total = body?.data?.records?.total ?? records.length
       const schema = body?.data?.schema
       spinner.stop(`${records.length} of ${total} record(s)`)
@@ -442,7 +443,7 @@ const RecordsSearchCommand = cmd({
       const res = await irisFetch(`/api/v1/atlas/datasets/${args.schema}?${p}`)
       const ok = await handleApiError(res, "Search records"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
-      const records: any[] = body?.data?.records?.data ?? body?.data?.records ?? []
+      const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
       const total = body?.data?.records?.total ?? records.length
       const schema = body?.data?.schema
       spinner.stop(`${records.length} of ${total} match(es)`)
@@ -571,7 +572,7 @@ async function fetchDatasetRecords(
     if (!ok) throw new Error("Failed to list records")
     const body = (await res.json()) as any
     const recs = body?.data?.records
-    const pageRecords: any[] = recs?.data ?? recs ?? []
+    const pageRecords: any[] = firstArray(recs?.data, recs)
     total = recs?.total ?? body?.data?.total ?? total ?? pageRecords.length
     records = records.concat(pageRecords)
     const lastPage = recs?.last_page ?? Math.ceil((total || pageRecords.length) / perPage)
@@ -709,7 +710,7 @@ const AuditCommand = cmd({
         prompts.log.warn(`Auditing only ${records.length} of ${total} records (--limit ${args.limit}). The other ${total - records.length} were NOT examined — pass --all to audit the entire dataset.`)
       }
 
-      const fields: any[] = schema?.fields?.fields ?? []
+      const fields: any[] = firstArray(schema?.fields?.fields)
       const requiredKeys = fields.filter((f: any) => f.required).map((f: any) => f.key)
 
       interface AuditFlag {
@@ -1163,7 +1164,7 @@ const FeedListCommand = cmd({
 
     const res = await irisFetch(`/api/v1/atlas/feeds?${p}`)
     const ok = await handleApiError(res, "List feeds"); if (!ok) { prompts.outro("Done"); return }
-    const feeds: any[] = ((await res.json()) as any)?.data?.feeds ?? []
+    const feeds: any[] = firstArray(((await res.json()) as any)?.data?.feeds)
 
     if (args.json) { await writeJson(feeds); prompts.outro("Done"); return }
     if (feeds.length === 0) {
@@ -1441,7 +1442,7 @@ const AggregateCommand = cmd({
 
     if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
-    const groups: any[] = data?.groups ?? []
+    const groups: any[] = firstArray(data?.groups)
     const specs: string[] = [...new Set(groups.flatMap((g: any) => Object.keys(g.metrics ?? {})))] as string[]
 
     printDivider()
@@ -1518,7 +1519,7 @@ const DeriveCommand = cmd({
     if (args.json) { await writeJson(data); prompts.outro("Done"); return }
 
     printDivider()
-    const results: any[] = data?.results ?? []
+    const results: any[] = firstArray(data?.results)
     if (results.length === 0) {
       console.log(`  ${dim("No derived dimensions on this schema.")}`)
     }
@@ -1587,7 +1588,7 @@ function printEconomics(spec: any, defaults: any, configured: boolean) {
   if (effective?.title) console.log(`  ${dim("Card title:")}    ${effective.title}`)
   if (effective?.totalLabel) console.log(`  ${dim("Total label:")}   ${effective.totalLabel}`)
   console.log(`  ${bold("Breakdown (tried in order):")}`)
-  const dims: EconDimension[] = effective?.breakdown ?? []
+  const dims: EconDimension[] = firstArray(effective?.breakdown)
   if (!dims.length) console.log(`    ${dim("none — rows will not expand")}`)
   for (const [i, d] of dims.entries()) {
     const extra = d.type === "age" && d.buckets?.length ? dim(` buckets ${d.buckets.join("/")} days`) : ""

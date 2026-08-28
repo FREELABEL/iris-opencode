@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, promptOrFail, MissingFlagError, isNonInteractive, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -83,7 +84,7 @@ const ListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
+      const items: any[] = firstArray(raw?.data?.data, raw?.data, (Array.isArray(raw) ? raw : []))
       spinner.stop(`${items.length} product(s)`)
 
       if (items.length === 0) { prompts.log.warn("No products found"); prompts.outro("Done"); return }

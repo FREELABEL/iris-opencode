@@ -6,6 +6,7 @@ import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, pr
 import { resolveBloqId } from "./platform-bloqs"
 import fs from "fs"
 import path from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // iris bloqs export — get your data OUT.
@@ -100,7 +101,7 @@ async function exportOneBloq(
   const bloq = payload?.data ?? payload
   if (!bloq || (!bloq.id && !bloq.name)) throw new Error(`bloq ${bloqId}: empty response`)
 
-  const lists: any[] = bloq?.lists ?? []
+  const lists: any[] = firstArray(bloq?.lists)
   const itemCount = lists.reduce((n, l) => n + (l?.items?.length ?? 0), 0)
 
   progress?.("Fetching attachments…")
@@ -264,7 +265,7 @@ export const BloqsExportCommand = cmd({
           return
         }
         const listData = (await listRes.json()) as { data?: any[] }
-        const bloqs: any[] = listData?.data ?? []
+        const bloqs: any[] = firstArray(listData?.data)
 
         const results: Record<string, any>[] = []
         const failures: { bloq_id: number; name: string | null; error: string }[] = []

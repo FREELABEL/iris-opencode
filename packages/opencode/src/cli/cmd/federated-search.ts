@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import { irisFetch, IRIS_API, BRIDGE_URL, getBridgeToken, resolveUserId } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 /**
  * Federated search across bloq items and the user's other content sources.
@@ -126,7 +127,7 @@ async function searchBloq(
   if (!res.ok) throw new Error(`bloq items HTTP ${res.status}`)
 
   const data = (await res.json()) as any
-  const items: any[] = data?.data?.items ?? data?.items ?? data?.data ?? []
+  const items: any[] = firstArray(data?.data?.items, data?.items, data?.data)
   return (Array.isArray(items) ? items : []).map((i) => ({
     source: "bloq" as const,
     title: String(i.title ?? "(untitled)"),

@@ -4,6 +4,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, FL_API, IRIS_API, writeJson } from "./iris-api"
 import { PlaylistCommand } from "./platform-discover-playlist"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Shape helpers — discover endpoints return heterogeneous shapes; coerce
@@ -67,7 +68,7 @@ const SponsorsListCommand = cmd({
       }
 
       const data = (await res.json()) as any
-      const sponsors: string[] = data?.data?.sponsors ?? []
+      const sponsors: string[] = firstArray(data?.data?.sponsors)
       spinner.stop(`${sponsors.length} sponsor(s)`)
 
       if (args.json) {
@@ -292,7 +293,7 @@ const StreamersListCommand = cmd({
       const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
       if (!res.ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as any
-      const streamers: string[] = data?.data?.streamers ?? []
+      const streamers: string[] = firstArray(data?.data?.streamers)
       spinner.stop(`${streamers.length} streamer(s)`)
       if (args.json) { await writeJson({ streamers }); prompts.outro("Done"); return }
       printDivider()
@@ -318,7 +319,7 @@ const StreamersAddCommand = cmd({
     spinner.start("Updating…")
     try {
       const getRes = await irisFetch("/api/v1/platform-config/discover.streamers")
-      let streamers: string[] = getRes.ok ? ((await getRes.json()) as any)?.data?.value ?? [] : []
+      let streamers: string[] = getRes.ok ? firstArray(((await getRes.json()) as any)?.data?.value) : []
       if (streamers.includes(args.username)) { spinner.stop(`${args.username} is already a streamer`); prompts.outro("Done"); return }
       streamers.push(args.username)
       const putRes = await irisFetch("/api/v1/platform-config/discover.streamers", { method: "PUT", body: JSON.stringify({ value: streamers }) })
@@ -347,7 +348,7 @@ const StreamersRemoveCommand = cmd({
     spinner.start("Updating…")
     try {
       const getRes = await irisFetch("/api/v1/platform-config/discover.streamers")
-      let streamers: string[] = getRes.ok ? ((await getRes.json()) as any)?.data?.value ?? [] : []
+      let streamers: string[] = getRes.ok ? firstArray(((await getRes.json()) as any)?.data?.value) : []
       if (!streamers.includes(args.username)) { spinner.stop(`${args.username} is not a streamer`); prompts.outro("Done"); return }
       streamers = streamers.filter((s) => s !== args.username)
       const putRes = await irisFetch("/api/v1/platform-config/discover.streamers", { method: "PUT", body: JSON.stringify({ value: streamers }) })
@@ -426,7 +427,7 @@ const ProducersListCommand = cmd({
       const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
       if (!res.ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as any
-      const producers: string[] = data?.data?.producers ?? []
+      const producers: string[] = firstArray(data?.data?.producers)
       spinner.stop(`${producers.length} producer(s)`)
 
       if (args.json) { await writeJson({ producers }); prompts.outro("Done"); return }
@@ -526,7 +527,7 @@ const InstrumentalsListCommand = cmd({
       const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
       if (!res.ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as any
-      const instrumentals: any[] = data?.data?.instrumentals ?? []
+      const instrumentals: any[] = firstArray(data?.data?.instrumentals)
       spinner.stop(`${instrumentals.length} instrumental(s)`)
 
       if (args.json) { await writeJson({ instrumentals }); prompts.outro("Done"); return }
@@ -632,7 +633,7 @@ const ArtistsListCommand = cmd({
       const res = await fetch(`${FL_API}/api/v1/public/discover-config`, { headers: { Accept: "application/json" } })
       if (!res.ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as any
-      const artists: any[] = data?.data?.featuredArtists ?? []
+      const artists: any[] = firstArray(data?.data?.featuredArtists)
       const meta: any = data?.data?.curator ?? {}
       spinner.stop(`${artists.length} featured artist(s)`)
 
@@ -1305,11 +1306,11 @@ const StatusCommand = cmd({
 
       spinner.stop(success("Loaded"))
 
-      const sponsors: string[] = configData.sponsors ?? []
-      const streamers: string[] = configData.streamers ?? []
-      const producers: string[] = configData.producers ?? []
-      const instrumentals: any[] = configData.instrumentals ?? []
-      const featuredArtists: any[] = configData.featuredArtists ?? []
+      const sponsors: string[] = firstArray(configData.sponsors)
+      const streamers: string[] = firstArray(configData.streamers)
+      const producers: string[] = firstArray(configData.producers)
+      const instrumentals: any[] = firstArray(configData.instrumentals)
+      const featuredArtists: any[] = firstArray(configData.featuredArtists)
       const curator = configData.curator ?? {}
 
       if (args.json) {
@@ -1675,7 +1676,7 @@ Return ONLY the JSON object, no markdown or explanation.`
       console.log(`  ${suggestions.summary ?? "No summary"}`)
       console.log()
 
-      const actions: any[] = suggestions.actions ?? []
+      const actions: any[] = firstArray(suggestions.actions)
       if (actions.length === 0) {
         console.log(`  ${dim("No changes suggested — page looks good!")}`)
         prompts.outro("Done")

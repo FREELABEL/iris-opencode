@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { requireAuth, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Config
@@ -82,7 +83,7 @@ const N8nListCommand = cmd({
       }
 
       const raw = (await res.json()) as { data?: any[] }
-      const workflows: any[] = raw?.data ?? []
+      const workflows: any[] = firstArray(raw?.data)
       spinner.stop(`${workflows.length} workflow(s)`)
 
       if (workflows.length === 0) {
@@ -814,7 +815,7 @@ const N8nPatchCommand = cmd({
       }
 
       const wf = (await res.json()) as any
-      const nodes: any[] = wf.nodes ?? []
+      const nodes: any[] = firstArray(wf.nodes)
 
       // Find the node
       const node = nodes.find((n: any) => n.name === nodeName)

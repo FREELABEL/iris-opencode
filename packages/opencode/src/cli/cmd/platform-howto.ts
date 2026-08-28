@@ -9,6 +9,7 @@ import { existsSync, readdirSync, readFileSync } from "fs"
 import { createHash } from "crypto"
 import { irisFetch, IRIS_API } from "./iris-api"
 import { Installation } from "../../installation"
+import { firstArray } from "../../util/array"
 
 const HOWTO_DIR = join(homedir(), ".iris", "how-to")
 
@@ -55,7 +56,7 @@ async function fetchRemoteRecipeList(): Promise<Array<{ name: string; title: str
     const res = await irisFetch("/api/v1/how-tos?per_page=200", {}, IRIS_API)
     if (!res.ok) return []
     const body = (await res.json()) as any
-    const rows: any[] = body?.data ?? []
+    const rows: any[] = firstArray(body?.data)
     return rows.map((r) => ({
       name: String(r.slug ?? ""),
       title: String(r.title ?? r.slug ?? "").replace(/^How to:\s*/i, ""),

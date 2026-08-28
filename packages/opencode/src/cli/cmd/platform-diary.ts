@@ -8,6 +8,7 @@ import { join, basename, resolve, dirname } from "path"
 import { homedir } from "os"
 import { execFileSync } from "child_process"
 import matter from "gray-matter"
+import { firstArray } from "../../util/array"
 
 // Endpoints (DiaryResource):
 //   GET  /api/v6/diary           ?agent_id=&bloq_id=&user_id=
@@ -76,7 +77,7 @@ const DiaryTodayCommand = cmd({
 
     printDivider()
     const dayEntries: any[] = Array.isArray(data?.entries) ? data.entries : []
-    const timeline: any[] = data?.timeline ?? data?.data?.timeline ?? []
+    const timeline: any[] = firstArray(data?.timeline, data?.data?.timeline)
     if (dayEntries.length === 0 && timeline.length === 0) {
       console.log(`  ${dim("(no entries today)")}`)
     } else {
@@ -117,7 +118,7 @@ const DiaryListCommand = cmd({
     if (data.bloq_name) console.log(`  ${dim(`Bloq: ${data.bloq_name}`)}`)
     console.log()
 
-    const entries: any[] = data?.entries ?? data?.data ?? (Array.isArray(data) ? data : [])
+    const entries: any[] = firstArray(data?.entries, data?.data, (Array.isArray(data) ? data : []))
     printDivider()
     if (entries.length === 0) {
       console.log(`  ${dim("(no entries)")}`)
@@ -174,7 +175,7 @@ const DiaryViewCommand = cmd({
     }
 
     printDivider()
-    const timeline: any[] = data?.timeline ?? data?.data?.timeline ?? []
+    const timeline: any[] = firstArray(data?.timeline, data?.data?.timeline)
     if (timeline.length === 0 && dayEntries.length === 0 && !data.diary_content) {
       console.log(`  ${dim("(no entries)")}`)
     } else {

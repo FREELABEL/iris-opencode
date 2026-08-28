@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { SopDraftCommand } from "./sop-draft"
+import { firstArray } from "../../util/array"
 
 // Endpoints (from SopCommand.php):
 //   GET    /api/v1/services/requests/simplified
@@ -24,7 +25,7 @@ const SopRequestsCommand = cmd({
     const ok = await handleApiError(res, "List requests")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const items: any[] = data?.data ?? data?.requests ?? (Array.isArray(data) ? data : [])
+    const items: any[] = firstArray(data?.data, data?.requests, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(items); prompts.outro("Done"); return }
     printDivider()
     for (const r of items) console.log(`  ${bold(String(r.title ?? r.name ?? "Untitled"))}  ${dim(`#${r.id}`)}`)
@@ -49,7 +50,7 @@ const SopListCommand = cmd({
     const ok = await handleApiError(res, "List SOPs")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const sops: any[] = data?.data ?? data?.sops ?? (Array.isArray(data) ? data : [])
+    const sops: any[] = firstArray(data?.data, data?.sops, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(sops); prompts.outro("Done"); return }
     printDivider()
     if (sops.length === 0) console.log(`  ${dim("(no SOPs)")}`)

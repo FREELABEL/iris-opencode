@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, printKV, dim, bold, success, IRIS_API, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 async function callPathways(userId: number, func: string, params: Record<string, unknown> = {}): Promise<any> {
   const res = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
@@ -22,7 +23,7 @@ async function callPathways(userId: number, func: string, params: Record<string,
  * keep the older field names as fallbacks in case the API shape moves back.
  */
 function readPipeline(data: any): { cases: number; value: number; rows: Array<{ name: string; count: number; value: number }> } {
-  const raw: any[] = data?.pipeline ?? data?.stages ?? []
+  const raw: any[] = firstArray(data?.pipeline, data?.stages)
   const rows = raw.map((r) => ({
     name: r.stage ?? r.name ?? "Unknown",
     count: Number(r.count ?? 0),

@@ -12,6 +12,7 @@ import {
   writeJson,
   IRIS_API,
 } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 /**
  * A playbook's contents, and attaching one to a bounty (#180756).
@@ -57,7 +58,7 @@ const ItemsListCommand = cmd({
     }
 
     const data = (await res.json()) as any
-    const items: any[] = data?.items ?? []
+    const items: any[] = firstArray(data?.items)
     if (args.json) {
       await writeJson(data)
       prompts.outro("Done")
@@ -253,7 +254,7 @@ const RolesListCommand = cmd({
     }
 
     const data = (await res.json()) as any
-    const roles: any[] = data?.roles ?? []
+    const roles: any[] = firstArray(data?.roles)
     if (args.json) {
       await writeJson(data)
       prompts.outro("Done")
@@ -488,7 +489,7 @@ const PlaybookAckCommand = cmd({
         return
       }
 
-      const sops: any[] = ((await res.json()) as any)?.data?.sops ?? []
+      const sops: any[] = firstArray(((await res.json()) as any)?.data?.sops)
       if (args.json) {
         await writeJson(sops)
         prompts.outro("Done")

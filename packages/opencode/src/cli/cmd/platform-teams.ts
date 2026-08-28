@@ -10,6 +10,7 @@ import {
   bold,
   success,
   highlight, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // iris teams — Teams (pods): named, mixed human+AI subsets of a board's roster.
@@ -69,7 +70,7 @@ const ListCommand = cmd({
     const data = await call("List teams", `/api/v1/bloqs/${args.bloqId}/teams`)
     if (!data) return
     const payload = data?.data ?? data
-    const teams: any[] = payload?.teams ?? []
+    const teams: any[] = firstArray(payload?.teams)
     if (args.json) {
       await writeJson(teams)
       prompts.outro("Done")

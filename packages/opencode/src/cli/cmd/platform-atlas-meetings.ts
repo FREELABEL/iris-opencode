@@ -12,6 +12,7 @@ import {
   success,
   highlight, writeJson } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
+import { firstArray } from "../../util/array"
 
 // No hardcoded fallback: a stale key silently 401s every Composio call (bug
 // #165864/#164644). Read from env; empty key degrades gracefully (helpers below
@@ -247,7 +248,7 @@ const ScanCommand = cmd({
 
     try {
       const result = await executeIntegrationCall("gmail", "search_emails", { query, maxResults: 20 })
-      const messages: any[] = result?.messages ?? result?.data ?? result?.emails ?? []
+      const messages: any[] = firstArray(result?.messages, result?.data, result?.emails)
       spinner.stop(`${messages.length} meeting note(s) found`)
 
       if (args.json) { await writeJson({ meetings: messages, count: messages.length, query, days }); prompts.outro("Done"); return }

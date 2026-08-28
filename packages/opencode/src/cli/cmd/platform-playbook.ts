@@ -27,6 +27,7 @@ import { join as pathJoin } from "path"
 import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCoverage } from "../../skill/e2e/runner"
 import { PlaybookDraftCommand } from "./playbook-draft"
 import { PlaybookSopDraftCommand } from "./sop-draft"
+import { firstArray } from "../../util/array"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
 async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
@@ -835,7 +836,7 @@ const RemoteListCommand = cmd({
     const ok = await handleApiError(res, "List skills")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const skills: any[] = data?.data ?? data?.skills ?? (Array.isArray(data) ? data : [])
+    const skills: any[] = firstArray(data?.data, data?.skills, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(skills); prompts.outro("Done"); return }
     printDivider()
     if (skills.length === 0) console.log(`  ${dim("(no skills)")}`)
@@ -955,7 +956,7 @@ const ReviewListCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/auto-generated/pending`)
     const ok = await handleApiError(res, "List pending drafts"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const drafts: any[] = data?.data ?? []
+    const drafts: any[] = firstArray(data?.data)
     if (args.json) { await writeJson(drafts); prompts.outro("Done"); return }
     if (drafts.length === 0) {
       printDivider()
@@ -1229,7 +1230,7 @@ const AttachedCommand = cmd({
     const ok = await handleApiError(res, "List attached playbooks")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const attached: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+    const attached: any[] = firstArray(data?.data, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(attached); prompts.outro("Done"); return }
     printDivider()
     if (attached.length === 0) console.log(`  ${dim("(no playbooks attached)")}`)
@@ -1347,7 +1348,7 @@ const PlaybookCheckPrivateCommand = cmd({
       const res = await fetch(`${base}/api/v1/playbooks`, { headers: UA })
       if (res.ok) {
         const body: any = await res.json()
-        const rows: any[] = body?.playbooks ?? (Array.isArray(body) ? body : [])
+        const rows: any[] = firstArray(body?.playbooks, (Array.isArray(body) ? body : []))
         listCount = rows.length
         listed = rows.some((p) => String(p?.name) === name)
       }
@@ -1818,7 +1819,7 @@ const PlaybookAvailableCommand = cmd({
     const res = await irisFetch(`/api/v1/playbooks`, {}, IRIS_API)
     const ok = await handleApiError(res, "List playbooks"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const list: any[] = data?.playbooks ?? data?.data ?? []
+    const list: any[] = firstArray(data?.playbooks, data?.data)
 
     if (args.json) { await writeJson(list); prompts.outro("Done"); return }
     if (!list.length) {

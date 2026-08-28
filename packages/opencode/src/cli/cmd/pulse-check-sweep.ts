@@ -26,6 +26,7 @@ import { execFileSync } from "child_process"
 import { existsSync, readFileSync, readdirSync, statSync } from "fs"
 import { join, basename, relative, dirname } from "path"
 import { homedir } from "os"
+import { firstArray } from "../../util/array"
 
 export const TOPIC_SOURCES = ["git", "diary", "files", "claude_code", "opencode", "imessage", "email", "gmail", "bloq"] as const
 export type TopicSource = typeof TOPIC_SOURCES[number]
@@ -1062,14 +1063,14 @@ async function sweepBoard(opts: SweepOptions, board: any, cutoff: number, priorC
     return unavailable("bloq", `could not read board #${board.id}: ${String(e?.message ?? e).slice(0, 120)}`)
   }
 
-  const lists: any[] = full?.lists ?? []
+  const lists: any[] = firstArray(full?.lists)
   const items: Hit[] = []
   const silent: Array<{ id: number; name: string; items: number; newest: string | null }> = []
   let prior = 0
   let total = 0
 
   for (const list of lists) {
-    const rows: any[] = list?.items ?? []
+    const rows: any[] = firstArray(list?.items)
     total += rows.length
     let newest: number | null = null
 

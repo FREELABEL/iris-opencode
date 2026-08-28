@@ -7,6 +7,7 @@ import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from "fs"
 import { join, basename } from "path"
 import { homedir } from "os"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Deliver — port of DeliverCommand.php
@@ -248,7 +249,7 @@ export const DeliverCarouselCommand = cmd({
           const res = await irisFetch(`/api/v1/leads/${leadId}/tasks`)
           if (res.ok) {
             const data = ((await res.json()) as any)?.data
-            const allTasks: any[] = data?.tasks ?? data ?? []
+            const allTasks: any[] = firstArray(data?.tasks, data)
             resolvedFromApi = allTasks
               .filter((t: any) => taskIds.includes(t.id))
               .map((t: any) => ({ id: t.id, title: t.title, description: t.description }))

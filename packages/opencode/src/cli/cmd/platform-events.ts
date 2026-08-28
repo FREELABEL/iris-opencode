@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
 import { getBySlug } from "./platform-pages"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -137,7 +138,7 @@ const ListCommand = cmd({
       if (!ok) { if (spinner) spinner.stop("Failed", 1); if (args.json) { console.log(JSON.stringify({ error: "API error" })); } else { prompts.outro("Done"); } return }
 
       const data = (await res.json()) as { data?: any[] }
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      const items: any[] = firstArray(data?.data, (Array.isArray(data) ? data : []))
       if (spinner) spinner.stop(`${items.length} event(s)`)
 
       if (args.json) {
@@ -706,7 +707,7 @@ const StagesListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      const items: any[] = firstArray(data?.data, (Array.isArray(data) ? data : []))
       spinner.stop(`${items.length} stage(s)`)
 
       if (items.length === 0) { prompts.log.warn("No stages found"); prompts.outro("Done"); return }
@@ -964,7 +965,7 @@ const VendorsListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const items: any[] = data?.data ?? (Array.isArray(data) ? data : [])
+      const items: any[] = firstArray(data?.data, (Array.isArray(data) ? data : []))
       spinner.stop(`${items.length} vendor(s)`)
 
       if (items.length === 0) { prompts.log.warn("No vendors found"); prompts.outro("Done"); return }

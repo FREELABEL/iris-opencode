@@ -15,6 +15,7 @@ import {
   printDivider,
   printKV,
 } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Default Wispr Flow history DB on macOS (bundle id com.electron.wispr-flow).
 function defaultWisprDbPath(): string {
@@ -209,7 +210,7 @@ const WisprImportCommand = cmd({
     const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists`)
     if (listsRes.ok) {
       const listsData = (await listsRes.json()) as { data?: any[] }
-      const lists: any[] = listsData?.data ?? []
+      const lists: any[] = firstArray(listsData?.data)
       if (args.list) {
         const match = lists.find((l: any) => (l.name ?? "").toLowerCase() === String(args.list).toLowerCase())
         if (match) listId = match.id

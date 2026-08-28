@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Event Production CLI — runsheet, checklist, budget, overview
@@ -98,7 +99,7 @@ const OverviewCmd = cmd({
     printKV("Venue", event.venue_name || dim("not set"))
 
     // Runsheet
-    const runsheet: any[] = prod.runsheet ?? []
+    const runsheet: any[] = firstArray(prod.runsheet)
     // Also build from stage set times if no runsheet
     let timeline = runsheet
     if (timeline.length === 0) {
@@ -168,7 +169,7 @@ const OverviewCmd = cmd({
     }
 
     // Checklist
-    const checklist: any[] = prod.checklist ?? []
+    const checklist: any[] = firstArray(prod.checklist)
     if (checklist.length > 0) {
       const done = checklist.filter((c: any) => c.done).length
       const pct = Math.round((done / checklist.length) * 100)
@@ -222,7 +223,7 @@ const RunsheetCmd = cmd({
     }
 
     const prod = local.data.metadata?.production ?? {}
-    let runsheet: any[] = prod.runsheet ?? []
+    let runsheet: any[] = firstArray(prod.runsheet)
 
     // If no runsheet, build from stages + production_timeline
     if (runsheet.length === 0 && !args.add) {
@@ -354,7 +355,7 @@ const ChecklistCmd = cmd({
 
     if (!local.data.metadata) local.data.metadata = {}
     if (!local.data.metadata.production) local.data.metadata.production = {}
-    let checklist: any[] = local.data.metadata.production.checklist ?? []
+    let checklist: any[] = firstArray(local.data.metadata.production.checklist)
 
     // --add
     if (args.add) {

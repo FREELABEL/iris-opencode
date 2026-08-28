@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, IRIS_API, writeJson, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -86,7 +87,7 @@ const ListCommand = cmd({
       if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
+      const items: any[] = firstArray(raw?.data?.data, raw?.data, (Array.isArray(raw) ? raw : []))
       if (spinner) spinner.stop(`${items.length} venue(s)`)
 
       if (args.json) {
@@ -694,7 +695,7 @@ const SearchCommand = cmd({
         const ok = await handleApiError(res, "Search venues")
         if (!ok) { spinner0?.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
         const raw = (await res.json()) as any
-        const rows: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
+        const rows: any[] = firstArray(raw?.data?.data, raw?.data, (Array.isArray(raw) ? raw : []))
         spinner0?.stop(`${rows.length} of your venue(s)`)
 
         if (args.json) { await writeJson({ query: args.query, source: "your-venues", venues: rows }); return }
@@ -801,7 +802,7 @@ const SearchCommand = cmd({
             const checkRes = await irisFetch(`/api/v1/venues?query=${encodeURIComponent(searchName)}&limit=5`)
             if (checkRes.ok) {
               const checkRaw = (await checkRes.json()) as any
-              const candidates: any[] = checkRaw?.data?.data ?? checkRaw?.data ?? []
+              const candidates: any[] = firstArray(checkRaw?.data?.data, checkRaw?.data)
               existing = candidates.find((c: any) =>
                 (placeId && c.google_place_id === placeId) ||
                 (c.name && searchName && c.name.toLowerCase() === searchName.toLowerCase())
@@ -922,7 +923,7 @@ const EnrichCommand = cmd({
       const listRes = await irisFetch("/api/v1/venues?limit=100")
       if (!listRes.ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
       const listRaw = (await listRes.json()) as any
-      const allVenues: any[] = listRaw?.data?.data ?? listRaw?.data ?? (Array.isArray(listRaw) ? listRaw : [])
+      const allVenues: any[] = firstArray(listRaw?.data?.data, listRaw?.data, (Array.isArray(listRaw) ? listRaw : []))
       venueIds = allVenues
         .filter((v: any) => !v.google_place_id || !v.photo || !v.description)
         .map((v: any) => Number(v.id))
@@ -961,7 +962,7 @@ const EnrichCommand = cmd({
       if (!searchRes.ok) { if (spinner) spinner.stop(`#${vid}: search failed`, 1); continue }
       const searchRaw = (await searchRes.json()) as any
       const searchResult = searchRaw?.result ?? searchRaw?.data ?? searchRaw
-      const places: any[] = searchResult?.results ?? searchResult?.places ?? []
+      const places: any[] = firstArray(searchResult?.results, searchResult?.places)
       const match = places[0]
 
       if (!match) {

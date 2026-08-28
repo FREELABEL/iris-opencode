@@ -41,6 +41,7 @@ import {
 import {
   ExchangeCommand,
 } from "./platform-exchange"
+import { firstArray } from "../../util/array"
 
 // Use iris-api base for Hive endpoints
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
@@ -3046,7 +3047,7 @@ const HiveCredentialsListCommand = cmd({
     if (!ok) return
 
     const data = (await res.json()) as any
-    const creds: any[] = data?.data ?? []
+    const creds: any[] = firstArray(data?.data)
 
     printDivider()
     if (creds.length === 0) {

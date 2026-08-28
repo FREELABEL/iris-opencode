@@ -3,6 +3,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Domains CLI — connect, verify, list, and remove custom client domains
@@ -105,7 +106,7 @@ const DomainsListCommand = cmd({
       }
 
       const data = (await res.json()) as any
-      const domains: any[] = data?.domains ?? []
+      const domains: any[] = firstArray(data?.domains)
       const warnings: string[] = Array.isArray(data?.warnings) ? data.warnings : []
       sp.stop(`${domains.length} domain(s)`)
 
@@ -141,7 +142,7 @@ const DomainsListCommand = cmd({
       const mappingsRes = await irisFetch("/api/v1/domain-mappings", {}, FL_API)
       if (mappingsRes.ok) {
         const mappingsData = (await mappingsRes.json()) as any
-        const mappings: any[] = mappingsData?.data ?? []
+        const mappings: any[] = firstArray(mappingsData?.data)
         const clientMappings = mappings.filter((m: any) => !m.is_internal)
         if (clientMappings.length > 0) {
           printDivider()
@@ -456,7 +457,7 @@ const DomainsRemoveCommand = cmd({
       }
 
       const listData = (await listRes.json()) as any
-      const domains: any[] = listData?.domains ?? []
+      const domains: any[] = firstArray(listData?.domains)
       const match = domains.find((d: any) => (d.domain ?? d.name) === domain)
 
       if (!match) {
@@ -645,7 +646,7 @@ const DomainsAssignCommand = cmd({
       const listRes = await irisFetch("/api/v1/domain-mappings", {}, FL_API)
       if (!listRes.ok) { sp.stop("Failed", 1); await handleApiError(listRes, "List domain mappings"); prompts.outro("Done"); return }
       const listData = (await listRes.json()) as any
-      const mappings: any[] = listData?.data ?? []
+      const mappings: any[] = firstArray(listData?.data)
       const existing = mappings.find((m: any) => String(m.domain ?? "").toLowerCase() === domain)
 
       // status=active so the mapping resolves immediately (resolution uses the active scope).

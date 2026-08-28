@@ -5,6 +5,7 @@ import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, pr
 import { existsSync, readFileSync, statSync } from "fs"
 import { basename } from "path"
 import { Glob } from "bun"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // memory list — GET /api/v1/user/{userId}/bloqs
@@ -34,7 +35,7 @@ const MemoryListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const bloqs: any[] = data?.data ?? data?.bloqs ?? (Array.isArray(data) ? data : [])
+      const bloqs: any[] = firstArray(data?.data, data?.bloqs, (Array.isArray(data) ? data : []))
       spinner.stop(`${bloqs.length} bloq(s)`)
 
       if (args.json) { await writeJson(bloqs); prompts.outro("Done"); return }
@@ -83,8 +84,8 @@ const MemoryShowCommand = cmd({
       ])
 
       const bloq = ((await bloqRes.json()) as any)?.data ?? {}
-      const content: any[] = ((await contentRes.json().catch(() => ({}))) as any)?.data ?? []
-      const files: any[] = ((await filesRes.json().catch(() => ({}))) as any)?.data ?? []
+      const content: any[] = firstArray(((await contentRes.json().catch(() => ({}))) as any)?.data)
+      const files: any[] = firstArray(((await filesRes.json().catch(() => ({}))) as any)?.data)
 
       spinner.stop(String(bloq.title ?? `#${args.id}`))
 

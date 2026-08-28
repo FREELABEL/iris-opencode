@@ -10,6 +10,7 @@ import { AgentsBenchCommand } from "./platform-agents-bench"
 import { AgentsExportCommand } from "./platform-agents-export"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
+import { firstArray } from "../../util/array"
 
 /**
  * Resolve a mission argument to its text.
@@ -151,7 +152,7 @@ const AgentsListCommand = cmd({
       if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
 
       const raw = (await res.json()) as Record<string, any>
-      let agents: any[] = raw?.data ?? []
+      let agents: any[] = firstArray(raw?.data)
       const total = raw?.total ?? raw?.meta?.total ?? agents.length
       const currentPage = args.page
       const lastPage = Math.ceil(total / args.limit)
@@ -1131,7 +1132,7 @@ const AgentsBulkDeleteCommand = cmd({
         if (!ok) { spinner.stop("Failed", 1); return }
 
         const raw = (await res.json()) as Record<string, any>
-        let agents: any[] = raw?.data ?? []
+        let agents: any[] = firstArray(raw?.data)
 
         if (args.bloq) agents = agents.filter((a: any) => a.bloq_id === args.bloq)
         if (args.orphaned) agents = agents.filter((a: any) => !a.bloq_id)

@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Atlas Ledger CLI — Transactions + Accounts (Track 1)
@@ -55,7 +56,7 @@ const TxListCommand = cmd({
       const res = await irisFetch(`/api/v1/atlas/transactions?${p}`)
       const ok = await handleApiError(res, "List transactions"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
-      const rows: any[] = body?.data?.data ?? body?.data ?? []
+      const rows: any[] = firstArray(body?.data?.data, body?.data)
       const total = body?.data?.total ?? rows.length
       spinner.stop(`${rows.length} of ${total}`)
 
@@ -254,7 +255,7 @@ const AccListCommand = cmd({
 
     const res = await irisFetch(`/api/v1/atlas/accounts?${p}`)
     const ok = await handleApiError(res, "List accounts"); if (!ok) { prompts.outro("Done"); return }
-    const rows: any[] = ((await res.json()) as any)?.data ?? []
+    const rows: any[] = firstArray(((await res.json()) as any)?.data)
     if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
     if (rows.length === 0) { prompts.log.warn("No accounts"); prompts.outro("Done"); return }
 
@@ -313,7 +314,7 @@ const AccTreeCommand = cmd({
     if (args.bloq != null) p.set("bloq_id", String(args.bloq))
     const res = await irisFetch(`/api/v1/atlas/accounts/tree?${p}`)
     const ok = await handleApiError(res, "Tree"); if (!ok) { prompts.outro("Done"); return }
-    const rows: any[] = ((await res.json()) as any)?.data ?? []
+    const rows: any[] = firstArray(((await res.json()) as any)?.data)
     if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
 
     function printNode(n: any, depth = 0) {

@@ -3,6 +3,7 @@ import { DashboardRulesListCommand, DashboardRuleGetCommand } from "./platform-d
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 function dashFetch(path: string, options?: RequestInit): Promise<Response> {
   return irisFetch(path, options ?? {}, IRIS_API)
@@ -367,7 +368,7 @@ const AddAssistantCmd = cmd({
       try {
         const res = await dashFetch(`/api/v1/users/${userId}/bloqs/agents?bloq_id=${bloqId}`)
         const body = (await res.json()) as any
-        const agents: any[] = (Array.isArray(body) ? body : body?.data) ?? []
+        const agents: any[] = firstArray((Array.isArray(body) ? body : body?.data))
         const scoped = agents.filter((a) => Number(a.bloq_id) === Number(bloqId))
         const active = scoped.filter((a) => a.active)
         const pick = active.length ? active : scoped

@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, printDivider, dim, bold, writeJson } from "./iris-api"
 import { spawn } from "child_process"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // `iris prod` — what is actually happening on production, without memorising
@@ -255,7 +256,7 @@ const IntegrationsCommand = cmd({
       return
     }
     const body: any = await res.json()
-    const rows: any[] = body?.data?.data ?? body?.data ?? body?.integrations ?? []
+    const rows: any[] = firstArray(body?.data?.data, body?.data, body?.integrations)
 
     if (args.json) return writeJson({ count: rows.length, integrations: rows })
 

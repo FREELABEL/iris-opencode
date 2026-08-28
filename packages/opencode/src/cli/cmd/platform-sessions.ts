@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { bridgeFetch, dim, bold, highlight, success, writeJson } from "./iris-api"
 import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // iris sessions — see and steer the AI sessions running on this machine (#181239)
@@ -79,7 +80,7 @@ async function fetchSessions(provider: Provider, limit: number, withCounts: bool
   const res = await bridgeFetch(`/api/sessions/${provider}?${params}`)
   if (!res.ok) return []
   const data = (await res.json().catch(() => null)) as any
-  const rows: SessionRow[] = data?.sessions ?? []
+  const rows: SessionRow[] = firstArray(data?.sessions)
   return rows.map((r) => ({ ...r, provider: r.provider ?? provider }))
 }
 
@@ -247,7 +248,7 @@ const HistoryCommand = cmd({
       return
     }
     const data = (await res.json().catch(() => null)) as any
-    const messages: any[] = data?.messages ?? data?.history ?? []
+    const messages: any[] = firstArray(data?.messages, data?.history)
 
     if (args.json) { await writeJson(messages); prompts.outro("Done"); return }
 

@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
 import { resolveRevenueModel, partitionByModel, listRevenueModels, isKnownRevenueModel } from "./revenue-models"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Bloq Context CLI — Andrew "Esher" Usher's hierarchy:
@@ -337,7 +338,7 @@ function makeListGroup(opts: {
       const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
       const ctx = await getContext(args.bloqId)
       if (ctx == null) { prompts.outro("Done"); return }
-      let items: any[] = ctx.business_context?.[listKey] ?? []
+      let items: any[] = firstArray(ctx.business_context?.[listKey])
 
       // ── Revenue-model profile (RO-7 #182271) ────────────────────────────────
       // KPIs are the one list whose MEANING depends on the revenue model: "win rate"
@@ -535,7 +536,7 @@ function makeListGroup(opts: {
           // Read-modify-write the whole goals list (need to mutate one item's status)
           const ctx = await getContext(args.bloqId)
           if (ctx == null) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-          const goals: any[] = ctx.business_context?.goals ?? []
+          const goals: any[] = firstArray(ctx.business_context?.goals)
           let found = false
           const updated = goals.map((g: any) => {
             if (g?.id === args.itemId) {
@@ -583,7 +584,7 @@ function makeListGroup(opts: {
         try {
           const ctx = await getContext(args.bloqId)
           if (ctx == null) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-          const deals: any[] = ctx.business_context?.deals ?? []
+          const deals: any[] = firstArray(ctx.business_context?.deals)
           let found = false
           const updated = deals.map((d: any) => {
             if (d?.id === args.itemId) {

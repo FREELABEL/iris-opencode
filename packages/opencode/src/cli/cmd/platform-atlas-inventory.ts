@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson, failNoOp} from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Atlas Inventory CLI (Track 7)
@@ -41,7 +42,7 @@ const ListCommand = cmd({
       const res = await irisFetch(`/api/v1/atlas/inventory?${p}`)
       const ok = await handleApiError(res, "List"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
-      const rows: any[] = body?.data?.data ?? body?.data ?? []
+      const rows: any[] = firstArray(body?.data?.data, body?.data)
       spinner.stop(`${rows.length} item(s)`)
 
       if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
@@ -215,7 +216,7 @@ const LowStockCommand = cmd({
 
     const res = await irisFetch(`/api/v1/atlas/inventory/low-stock?${p}`)
     const ok = await handleApiError(res, "Low stock"); if (!ok) { prompts.outro("Done"); return }
-    const rows: any[] = ((await res.json()) as any)?.data ?? []
+    const rows: any[] = firstArray(((await res.json()) as any)?.data)
     if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
     if (rows.length === 0) { prompts.log.info("No low-stock items"); prompts.outro("Done"); return }
 

@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson, failNoOp} from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Atlas Staff CLI (Track 7)
@@ -43,7 +44,7 @@ const ListCommand = cmd({
       const res = await irisFetch(`/api/v1/atlas/staff?${p}`)
       const ok = await handleApiError(res, "List staff"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
       const body = (await res.json()) as any
-      const rows: any[] = body?.data?.data ?? body?.data ?? []
+      const rows: any[] = firstArray(body?.data?.data, body?.data)
       spinner.stop(`${rows.length} staff`)
 
       if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
@@ -189,7 +190,7 @@ const ByEventCommand = cmd({
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
     const res = await irisFetch(`/api/v1/atlas/staff/by-event/${args.eventId}`)
     const ok = await handleApiError(res, "By event"); if (!ok) { prompts.outro("Done"); return }
-    const rows: any[] = ((await res.json()) as any)?.data ?? []
+    const rows: any[] = firstArray(((await res.json()) as any)?.data)
     if (args.json) { await writeJson(rows) } else {
       for (const s of rows) console.log(`  ${bold(s.name)}  ${dim(`#${s.id}`)}  ${s.role ?? ""}`)
     }

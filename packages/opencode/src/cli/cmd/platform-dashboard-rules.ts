@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, success, highlight, IRIS_API, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Dashboard Rules — the Atlas rule surface, one command for all of them
@@ -136,7 +137,7 @@ const RulesListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const body = (await res.json()) as any
-      const rules: any[] = body?.rules ?? []
+      const rules: any[] = firstArray(body?.rules)
       spinner.stop(`${rules.length} available`)
 
       if (args.json) { await writeJson(body); prompts.outro("Done"); return }
@@ -155,7 +156,7 @@ const RulesListCommand = cmd({
 
       // The closed rules, when asked for. "That exists but is not cleared for this surface" is an
       // answer somebody can act on; silence sends them hunting for a typo.
-      const catalogue: any[] = body?.catalogue ?? []
+      const catalogue: any[] = firstArray(body?.catalogue)
       if (args.all && catalogue.length) {
         printDivider()
         console.log(bold("  Declared but NOT exposed:"))

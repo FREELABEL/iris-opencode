@@ -3,6 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, printDivider, printKV, dim, bold, success, resolveUserId, writeJson } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
+import { firstArray } from "../../util/array"
 
 // Google Calendar integration via iris-api execute-direct endpoint
 // Replaces the old bridge-based macOS Calendar.app implementation
@@ -217,7 +218,7 @@ const CalendarListCommand = cmd({
     // never did, so the human-readable list has ALWAYS printed "No events" while --json quietly
     // returned them. Found 2026-08-02 with 5 real events in the window. Accept both shapes so a
     // future response change cannot silently blank the list again.
-    let events: any[] = result.events ?? result.data?.items ?? result.items ?? []
+    let events: any[] = firstArray(result.events, result.data?.items, result.items)
     if (args.search) {
       const q = String(args.search).toLowerCase()
       events = events.filter((e: any) =>
@@ -291,7 +292,7 @@ const CalendarTodayCommand = cmd({
     // data.items, so `result.events` is always undefined and this printed "nothing on
     // your calendar" over a full day. Fixing only `list` left today/tomorrow lying —
     // a fix applied at one call site and not its siblings is a fix that looks done.
-    const events: any[] = result.events ?? result.data?.items ?? result.items ?? []
+    const events: any[] = firstArray(result.events, result.data?.items, result.items)
     if (events.length === 0) {
       prompts.log.info("Nothing on your calendar today")
       prompts.outro("Done")
@@ -347,7 +348,7 @@ const CalendarTomorrowCommand = cmd({
     // data.items, so `result.events` is always undefined and this printed "nothing on
     // your calendar" over a full day. Fixing only `list` left today/tomorrow lying —
     // a fix applied at one call site and not its siblings is a fix that looks done.
-    const events: any[] = result.events ?? result.data?.items ?? result.items ?? []
+    const events: any[] = firstArray(result.events, result.data?.items, result.items)
     if (events.length === 0) {
       prompts.log.info("Nothing on your calendar tomorrow")
       prompts.outro("Done")
@@ -672,7 +673,7 @@ const CalendarFreeCommand = cmd({
       return
     }
 
-    const slots: any[] = result.free_slots ?? []
+    const slots: any[] = firstArray(result.free_slots)
     if (slots.length === 0) {
       prompts.log.info("No free slots in that window — fully booked!")
       prompts.outro("Done")
@@ -845,7 +846,7 @@ const CalendarScheduleCommand = cmd({
     console.log()
 
     // Placed items
-    const placed: any[] = data.schedule ?? []
+    const placed: any[] = firstArray(data.schedule)
     if (placed.length > 0) {
       console.log(`  ${bold(`Placed: ${placed.length} items`)}`)
       printDivider()
@@ -864,7 +865,7 @@ const CalendarScheduleCommand = cmd({
     }
 
     // Unplaced items
-    const unplaced: any[] = data.could_not_place ?? []
+    const unplaced: any[] = firstArray(data.could_not_place)
     if (unplaced.length > 0) {
       console.log(`  ${bold(`Could not place: ${unplaced.length} items`)}`)
       for (const item of unplaced) {
@@ -1053,7 +1054,7 @@ const CalendarHabitsListCommand = cmd({
       return
     }
 
-    const habits: any[] = data.habits ?? []
+    const habits: any[] = firstArray(data.habits)
     if (habits.length === 0) {
       prompts.log.info("No habits yet. Create one: iris calendar habits add \"Deep work\" --duration 90 --freq 5")
       prompts.outro("Done")

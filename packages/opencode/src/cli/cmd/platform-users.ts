@@ -2,6 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, FL_API, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Endpoints (UsersResource):
 //   GET /api/v1/users               — list with filters
@@ -27,7 +28,7 @@ const UsersListCommand = cmd({
     const ok = await handleApiError(res, "List users")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const users: any[] = data?.data ?? data?.users ?? (Array.isArray(data) ? data : [])
+    const users: any[] = firstArray(data?.data, data?.users, (Array.isArray(data) ? data : []))
     if (args.json) { await writeJson(users); prompts.outro("Done"); return }
     printDivider()
     for (const u of users) {
@@ -80,7 +81,7 @@ const UsersSearchCommand = cmd({
     // The endpoint may return 500 but still include valid data in the body
     const res = await irisFetch(`/api/v1/users/search?${params}`, {}, FL_API)
     const data = await res.json().catch(() => ({})) as any
-    const users: any[] = data?.data ?? data?.users ?? (Array.isArray(data) ? data : [])
+    const users: any[] = firstArray(data?.data, data?.users, (Array.isArray(data) ? data : []))
 
     if (users.length === 0 && !res.ok) {
       if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }

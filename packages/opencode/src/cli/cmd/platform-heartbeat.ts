@@ -3,6 +3,7 @@ import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, printDivider, printKV, dim, bold, success, FL_API, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Helpers
@@ -95,7 +96,7 @@ const HeartbeatCommand = productCommand({
       const signals = data.signals ?? {}
       const weights = data.weights_applied ?? {}
       const clientLabels = data.client_labels ?? {}
-      const history: any[] = data.history ?? []
+      const history: any[] = firstArray(data.history)
       const onboarding = data.onboarding ?? null
 
       // Onboarding checklist mode — for new users or users with < 50% setup

@@ -3,6 +3,7 @@ import { assessScheduler, printDegradations } from "./subsystem-health"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Execution-verification helpers (#146511) — `run` reports "dispatched", then
@@ -168,7 +169,7 @@ const SchedulesListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as Record<string, any>
-      const allSchedules: any[] = data?.data ?? []
+      const allSchedules: any[] = firstArray(data?.data)
       let schedules: any[] = allSchedules
 
       // Assess the scheduler against the UNFILTERED set (#180927). Doing it
@@ -593,7 +594,7 @@ const SchedulesHistoryCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[] }
-      const runs: any[] = data?.data ?? []
+      const runs: any[] = firstArray(data?.data)
       spinner.stop(`${runs.length} run(s)`)
 
       if (runs.length === 0) {
@@ -1558,7 +1559,7 @@ const SchedulesHoursCommand = cmd({
       }
 
       // Parse days
-      let workingDays: string[] = currentSchedule.working_days ?? []
+      let workingDays: string[] = firstArray(currentSchedule.working_days)
       if (args.days) {
         const dayAbbrevs: Record<string, string> = {
           mon: "monday", tue: "tuesday", wed: "wednesday", thu: "thursday",

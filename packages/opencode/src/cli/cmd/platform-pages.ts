@@ -9,6 +9,7 @@ import { join, resolve, dirname } from "path"
 import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebrand"
 import { LibraryCmd } from "./platform-components"
 import { confirmWiden, isWidening, type Tier } from "./exposure-gate"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Helpers
@@ -1039,8 +1040,8 @@ const DiffCmd = cmd({
         }
       }
 
-      const lComps: any[] = localContent.components ?? []
-      const rComps: any[] = remoteContent.components ?? []
+      const lComps: any[] = firstArray(localContent.components)
+      const rComps: any[] = firstArray(remoteContent.components)
       console.log()
       console.log(`  ${dim("Components:")}  remote=${rComps.length}  local=${lComps.length}`)
       const max = Math.max(lComps.length, rComps.length)
@@ -1668,7 +1669,7 @@ const ComponentsCmd = cmd({
     try {
       const page = await getBySlug(args.slug, true)
       if (!page) { sp.stop("Failed", 1); prompts.outro("Done"); return }
-      const components: any[] = page?.json_content?.components ?? []
+      const components: any[] = firstArray(page?.json_content?.components)
       sp.stop(`${components.length} component(s)`)
       if (components.length === 0) { prompts.outro("None"); return }
       printDivider()
@@ -1845,7 +1846,7 @@ async function getValidComponentTypes(): Promise<Set<string>> {
     const res = await irisFetch("/api/v1/pages/schema-registry", {}, IRIS_API)
     if (res.ok) {
       const body = (await res.json()) as any
-      const types: string[] = body?.data?.types ?? []
+      const types: string[] = firstArray(body?.data?.types)
       if (types.length > 0) {
         _cachedValidTypes = new Set(types)
         return _cachedValidTypes
@@ -2175,7 +2176,7 @@ const AddTableCmd = cmd({
     if (!(await handleApiError(schemaRes, "Read schema"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
     const schemaBody = (await schemaRes.json()) as any
     const schema = schemaBody?.data?.schema ?? schemaBody?.data
-    const allFields: any[] = schema?.fields?.fields ?? []
+    const allFields: any[] = firstArray(schema?.fields?.fields)
 
     if (allFields.length === 0) {
       sp.stop("Refused", 1)
