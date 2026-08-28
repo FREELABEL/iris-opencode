@@ -329,14 +329,23 @@ jobs:
           NSIS=packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
           SRC=$(ls "$NSIS"/*.exe | head -1)
           cp "$SRC" "$NSIS/IRIS-tauri-windows-x64-setup.exe"
-          ZIP=$(ls "$NSIS"/*.nsis.zip 2>/dev/null | grep -v 'IRIS-tauri-' | head -1 || true)
-          if [ -z "$ZIP" ]; then
-            echo "::error::no updater zip produced — createUpdaterArtifacts did not run"
+          # Windows' updater payload is the NSIS installer ITSELF, signed in place:
+          #     bundle/nsis/IRIS_1.18.38_x64-setup.exe
+          #     bundle/nsis/IRIS_1.18.38_x64-setup.exe.sig
+          # NOT a .nsis.zip — that is the Tauri v1 layout, and looking for it failed the whole
+          # Windows job on desktop-v1.18.38 even though the build and signing had both succeeded.
+          # macOS is the one that uses a tarball (.app.tar.gz); the two platforms differ.
+          #
+          # The .sig covers the original bytes, and the copy above is byte-identical, so the
+          # signature stays valid for the renamed file.
+          SIG=$(ls "$NSIS"/*.exe.sig 2>/dev/null | grep -v 'IRIS-tauri-' | head -1 || true)
+          if [ -z "$SIG" ]; then
+            echo "::error::installer is UNSIGNED — no .exe.sig produced (createUpdaterArtifacts off, or TAURI_SIGNING_PRIVATE_KEY missing?)"
+            ls -la "$NSIS"
             exit 1
           fi
-          test -f "$ZIP.sig" || { echo "::error::updater zip is UNSIGNED (TAURI_SIGNING_PRIVATE_KEY missing?)"; exit 1; }
-          mv "$ZIP"     "$NSIS/IRIS-tauri-windows-x64.nsis.zip"
-          mv "$ZIP.sig" "$NSIS/IRIS-tauri-windows-x64.nsis.zip.sig"
+          cp "$SIG" "$NSIS/IRIS-tauri-windows-x64-setup.exe.sig"
+          echo "signed updater artifact ✓ ($(basename "$SIG"))"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -344,8 +353,7 @@ jobs:
           name: IRIS-tauri-windows-x64
           path: |
             packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe
-            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64.nsis.zip
-            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64.nsis.zip.sig
+            packages/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/IRIS-tauri-windows-x64-setup.exe.sig
           if-no-files-found: warn
 
   publish:
@@ -405,10 +413,13 @@ jobs:
           python3 - "$TAG" "$BASE" "${{ steps.version.outputs.version }}" <<'PY'
           import json, os, sys, pathlib
           tag, base, version = sys.argv[1], sys.argv[2], sys.argv[3]
+          # macOS updates from a signed .app tarball; Windows updates from the signed NSIS
+          # installer itself. Different shapes, and assuming Windows matched macOS (a
+          # .nsis.zip, which is the Tauri v1 layout) failed the whole Windows job once.
           targets = {
               "darwin-aarch64": "IRIS-tauri-darwin-arm64.app.tar.gz",
               "darwin-x86_64":  "IRIS-tauri-darwin-x64.app.tar.gz",
-              "windows-x86_64": "IRIS-tauri-windows-x64.nsis.zip",
+              "windows-x86_64": "IRIS-tauri-windows-x64-setup.exe",
           }
           platforms = {}
           for target, asset in targets.items():
@@ -433,14 +444,17 @@ jobs:
           # The updater assets ship alongside the installers; assets.txt drives the upload.
           shopt -s nullglob
           printf '%s\n' dist/latest.json dist/*.app.tar.gz dist/*.app.tar.gz.sig \
-                        dist/*.nsis.zip dist/*.nsis.zip.sig >> /tmp/assets.txt
+                        dist/*-setup.exe.sig >> /tmp/assets.txt
         env:
           PUB_DATE: ${{ steps.pubdate.outputs.now }}
 
       - name: Publish as a PRERELEASE
-        # Prerelease is load-bearing, not cosmetic: /releases/latest/download resolves to the
-        # newest NON-prerelease carrying the asset name, so this cannot reach heyiris.io by
-        # accident. Verify, then promote:  gh release edit <tag> --prerelease=false
+        # Prerelease is load-bearing, not cosmetic — but NOT for the reason this comment used
+        # to give ("/releases/latest/download resolves to the newest non-prerelease carrying
+        # the asset name"). That is false; see the correction in the file header.
+        # It works because heyiris.io/download/{platform} skips prereleases when it picks the
+        # newest desktop-v* release. So an unverified build cannot reach the front page.
+        # Verify, then promote:  gh release edit <tag> --prerelease=false
         run: |
           set -euo pipefail
           TAG="${{ steps.version.outputs.tag }}"
@@ -450,8 +464,14 @@ jobs:
             'Tauri desktop build from the 1.18 engine branch.' \
             '' \
             '**This is a prerelease and is NOT what heyiris.io serves.** The front page' \
-            'resolves `/releases/latest/download/` to the newest NON-prerelease, so nothing' \
-            'here reaches users until it is deliberately promoted.' \
+            'and the in-app updater both read `heyiris.io/download/{platform}` and' \
+            '`heyiris.io/desktop/latest.json`, which pick the newest NON-prerelease' \
+            '`desktop-v*` release BY TAG PREFIX — so nothing here reaches users until it is' \
+            'deliberately promoted.' \
+            '' \
+            'Note: `/releases/latest/download/<asset>` does NOT resolve this series. It has' \
+            'no fallback by asset name and points at whichever release holds the repo-wide' \
+            '"latest" flag, which the CLI series takes back on every publish.' \
             '' \
             'To verify, then promote:' \
             '' \
