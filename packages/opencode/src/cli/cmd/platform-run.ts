@@ -24,6 +24,7 @@ import {
 import { exec } from "child_process"
 import { randomBytes } from "node:crypto"
 import { detectNewConnection, extractConnections, shouldPrintUrlOnly, type ConnectionRow } from "./integration-connect-state"
+import { verifyProbeFor, isProbeSuccess, isProbeInconclusive } from "./integration-verify-probe"
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 
@@ -1227,9 +1228,43 @@ const ConnectCommand = cmd({
     const pollStart = Date.now()
     const pollTimeout = 60_000
     let connected = false
+    let verifiedBy: string | null = null
+
+    // A REAL CALL, NOT A LIST DIFF (#182697).
+    //
+    // The diff below can only report that a ROW CHANGED. It cannot report that the
+    // credential works, and every failure we have hit came from that gap: a repair
+    // overwrites a row so nothing looks new; the callback can land just after the poll
+    // gives up; `status: "active"` is a claim rather than a test; and a live connection
+    // can be pointed at entirely the wrong account. So the primary check is now a
+    // read-only call THROUGH the new credential — it either returns data or it does not.
+    //
+    // The diff is kept as a fallback for toolkits we have no trusted read-only probe for.
+    const probe = verifyProbeFor(type)
 
     while (pollUserId && Date.now() - pollStart < pollTimeout) {
       await new Promise((r) => setTimeout(r, 3000))
+
+      if (probe) {
+        try {
+          const probeRes = await irisFetch(`/api/v1/users/${pollUserId}/integrations/execute-direct`, {
+            method: "POST",
+            body: JSON.stringify({ integration: type, action: probe.action, params: probe.params }),
+          })
+          const body = await probeRes.json().catch(() => null)
+          if (isProbeSuccess(body)) {
+            connected = true
+            verifiedBy = probe.label
+            break
+          }
+          // "We were not allowed to ask" is not "your integration is broken" (#182581).
+          // Fall through to the diff rather than calling a good connection dead.
+          if (!isProbeInconclusive(probeRes.status, body)) {
+            // A real, answered failure — keep waiting; the callback may not have landed yet.
+          }
+        } catch {}
+      }
+
       try {
         const checkRes = await irisFetch(`/api/v1/users/${pollUserId}/integrations`)
         if (checkRes.ok) {
@@ -1245,7 +1280,17 @@ const ConnectCommand = cmd({
     }
 
     if (connected) {
-      pollSpinner.stop(`${success("✓")} ${bold(type)} connected successfully!`)
+      pollSpinner.stop(
+        verifiedBy
+          ? `${success("✓")} ${bold(type)} connected — verified by ${verifiedBy}`
+          : `${success("✓")} ${bold(type)} connected successfully!`,
+      )
+      if (!verifiedBy && probe) {
+        // Say which half we proved. A row exists; nobody has shown the credential works.
+        console.log()
+        console.log(`  ${dim("A connection record appeared, but no live call confirmed it yet.")}`)
+        console.log(`  ${dim("Confirm with:")} ${highlight(`iris integrations exec ${type} ${probe.action}`)}`)
+      }
     } else {
       pollSpinner.stop(`${dim("No new connection detected — authorization did not complete")}`)
       console.log()
