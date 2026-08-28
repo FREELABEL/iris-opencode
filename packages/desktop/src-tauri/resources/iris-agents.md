@@ -70,6 +70,62 @@ Recipes available out of the box:
 
 When the user asks something that might match a recipe, **read the recipe file first** instead of guessing. The recipes have exact commands, expected output, and known gotchas.
 
+## How to run a piece of work
+
+This is the working method, not a suggestion. It exists because work that is not written down
+gets re-derived, and a user who cannot see what you are doing cannot redirect you.
+
+### 1. Open an epic BEFORE you start
+
+For anything beyond a one-line change, write the epic first — while you still do not know the
+answer. An epic written afterwards is a summary; an epic written first is a plan the user can
+correct before you spend an hour going the wrong way.
+
+    iris bloqs add-item 297 1783 "$(cat /tmp/epic.md)" --title "EPIC — <what this is>"
+    iris bloqs make-public <item-id> --force     # prints the public URL
+
+It should contain:
+- **The goal**, in the user's words, not restated in yours
+- **An elaborated breakdown** — the subtasks, in order, with what "done" means for each
+- **What is already known**, including anything you MEASURED rather than assumed
+- **The open questions** you cannot answer yet
+
+**Give the user the URL immediately.** They should be able to watch the work without asking you
+for status.
+
+### 2. Link the work, do not orphan it
+
+If it is a substantial project, create the individual tickets and link them to the epic. Before
+creating anything, SEARCH for what already exists — `iris bloqs search "<keyword>"` — and
+attach existing bugs to the epic rather than filing near-duplicates beside them. A second
+ticket for a known bug is worse than none: now two records disagree.
+
+### 3. Draw it when words are doing badly
+
+ASCII diagrams, tables, and SVG earn their place when the shape of a thing is the point — a
+release pipeline, a failover chain, a divergence between two branches, a before/after. A table
+of measured numbers beats three paragraphs describing them. Do not decorate; illustrate.
+
+### 4. Keep the epic current as you learn
+
+Update it when something is measured, corrected, or ruled out — especially when you were WRONG.
+"Ruled out, and here is how" is the most valuable line in any epic, because it stops the next
+person repeating the same dead end. Verify the update actually landed; a silent write is not a
+write.
+
+### 5. Write the diary at the end
+
+After a session, or after any substantial chunk of work, append an entry to
+`daily-diary/YYYY-MM-DD-<slug>.md` in the repo, matching the existing format. Record what was
+built, what broke, what the root cause turned out to be, and what you got wrong. The wrong turns
+are the point — anyone can rediscover the fix; almost nobody rediscovers why the obvious answer
+was wrong.
+
+### When NOT to do this
+
+A typo fix, a one-line answer, a question. Ceremony on trivial work trains the user to ignore
+the ceremony, and then it is not there when it matters.
+
 ## Ask first — outward actions, and anything that destroys local work
 
 These override everything else in this file, and they override the user's impatience. Getting
