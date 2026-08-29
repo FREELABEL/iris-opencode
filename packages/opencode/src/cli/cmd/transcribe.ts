@@ -14,6 +14,7 @@ import {
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { transcribeLocal } from "../lib/transcription"
+import { resolveSttPolicy } from "../lib/stt-policy"
 import { treatTranscript, listTreatments } from "../lib/walkthrough"
 import { homedir, tmpdir } from "os"
 import { join, basename, extname, resolve } from "path"
@@ -65,6 +66,20 @@ async function fetchGlossary(brandId?: number): Promise<string | undefined> {
  * proceed on an empty transcript.
  */
 async function transcribeViaServer(absPath: string, language?: string, brandId?: number): Promise<string | null> {
+  // POLICY GATE (epic #182784). This function uploads the audio via irisFetch directly,
+  // so it does NOT pass through transcribeAudio()'s clamp — it was a second egress the
+  // clamp could not see. Worse, it is reached AUTOMATICALLY when local whisper is merely
+  // missing, so the machine least able to transcribe locally is the one that silently
+  // uploads. Refuse before reading the file, not after.
+  if (resolveSttPolicy() === "sovereign") {
+    prompts.log.error(
+      "Transcription policy is 'sovereign' — audio was NOT uploaded.\n" +
+        "  Install local transcription:  brew install whisper-cpp\n" +
+        "  Or allow the server for this run:  IRIS_TRANSCRIPTION_POLICY=standard",
+    )
+    return null
+  }
+
   const sp = prompts.spinner()
   sp.start("Transcribing on the server (gpt-transcribe)…")
 

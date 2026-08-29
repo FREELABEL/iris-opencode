@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, dim, bold, FL_API, IRIS_API, resolveUserId, streamAgentChat, requireUserId} from "./iris-api"
-import { captureMic, speak, listMics } from "../lib/voice"
+import { captureMic, discardRecording, speak, listMics } from "../lib/voice"
 import { transcribeLocal, which } from "../lib/transcription"
 import { createInterface } from "readline"
 import { ChatTracer, toTraceLevel, type TraceStep } from "./chat-trace"
@@ -361,9 +361,10 @@ export async function runVoiceChat(args: {
       // RECORD — the STOP is the next rl.question(); pressing ENTER resolves it,
       // which stops ffmpeg. Deterministic: the keystroke can't be missed.
       let text = ""
+      let wav: string | null = null
       try {
         const stopAsked = ask(`  ${bold("🔴 recording…")}  ${dim("speak, then press ENTER to send")}`)
-        const wav = await captureMic({ mic: args.mic, stopSignal: stopAsked.then(() => {}) })
+        wav = await captureMic({ mic: args.mic, stopSignal: stopAsked.then(() => {}) })
         await stopAsked
         process.stderr.write(`  ${dim("📝 transcribing…")}`)
         text = await transcribeLocal(wav)
@@ -371,6 +372,11 @@ export async function runVoiceChat(args: {
       } catch (err) {
         console.log(`  ${dim("⚠ " + (err instanceof Error ? err.message : String(err)))}`)
         continue
+      } finally {
+        // The recording dies with the turn — on success, on a transcription error,
+        // and on the `continue` above, which is why this is a finally and not a
+        // trailing statement.
+        discardRecording(wav)
       }
 
       if (!text || text.replace(/[^a-z0-9]/gi, "").length < 2 || /^\[.*\]$/.test(text)) {
