@@ -13,6 +13,7 @@ import {
   surveySources,
   countItems,
   BULK_INGESTABLE_TYPES,
+  summarizeJobErrors,
 } from "./platform-data-sources"
 
 // ---------------------------------------------------------------------------
@@ -381,4 +382,60 @@ test("sync's accepted choices ARE the bulk-ingestable list — no second copy to
   // s3 outright. Two hardcoded copies of one fact, which is the bug this file keeps finding
   // elsewhere — reproduced here by fixing only one of them.
   expect([...BULK_INGESTABLE_TYPES]).toContain("s3")
+})
+
+
+// ---------------------------------------------------------------------------
+// A failed job must say why
+// ---------------------------------------------------------------------------
+
+/**
+ * `status` printed "failed · 0 / 0" and stopped, while the API had already returned the
+ * reason in error_log. Chasing a dead Google Drive ingest on 2026-08-28, the answer was
+ * "No query results for model [App\\Models\\Integration]" — a lookup against the wrong
+ * type string — and finding it required reading raw JSON.
+ */
+const REAL_LOG = [
+  { file: "Job execution", error: "No query results for model [App\\Models\\Integration].", timestamp: "2026-08-28T23:40:35+00:00" },
+  { file: "Job execution", error: "No query results for model [App\\Models\\Integration].", timestamp: "2026-08-28T23:40:35+00:00" },
+  { file: "Job execution", error: "No query results for model [App\\Models\\Integration].", timestamp: "2026-08-28T23:40:35+00:00" },
+]
+
+test("collapses a repeated failure into one reason with a count", () => {
+  const out = summarizeJobErrors(REAL_LOG)
+  expect(out).toHaveLength(1)
+  expect(out[0].count).toBe(3)
+  expect(out[0].error).toContain("No query results for model")
+})
+
+test("keeps distinct reasons apart, most frequent first", () => {
+  const out = summarizeJobErrors([
+    { file: "a.pdf", error: "Unsupported file type" },
+    { file: "b.pdf", error: "Download failed" },
+    { file: "c.pdf", error: "Download failed" },
+  ])
+  expect(out.map((e) => e.error)).toEqual(["Download failed", "Unsupported file type"])
+  expect(out[0].count).toBe(2)
+})
+
+test("per-file errors keep their files, so you know WHICH documents failed", () => {
+  const out = summarizeJobErrors([
+    { file: "contract.pdf", error: "Encrypted PDF" },
+    { file: "nda.pdf", error: "Encrypted PDF" },
+  ])
+  expect(out).toHaveLength(1)
+  expect(out[0].count).toBe(2)
+  // One cause, two documents — the fix is one thing, and both names are still recoverable.
+  expect(out[0].files).toEqual(["contract.pdf", "nda.pdf"])
+})
+
+test("no errors renders nothing rather than an empty Errors heading", () => {
+  expect(summarizeJobErrors([])).toEqual([])
+  expect(summarizeJobErrors(undefined)).toEqual([])
+  expect(summarizeJobErrors(null)).toEqual([])
+  expect(summarizeJobErrors("not an array")).toEqual([])
+})
+
+test("blank error strings are not reasons", () => {
+  expect(summarizeJobErrors([{ file: "x", error: "   " }, { file: "y" }])).toEqual([])
 })

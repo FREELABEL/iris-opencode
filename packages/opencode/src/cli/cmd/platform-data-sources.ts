@@ -733,6 +733,28 @@ const StatusCommand = cmd({
     printKV("Processed", `${data.processed_files ?? 0} / ${data.total_files ?? 0}`)
     printKV("Successful", data.successful_files)
     printKV("Failed", data.failed_files)
+
+    // A FAILED JOB MUST SAY WHY.
+    //
+    // This printed "Status: failed · Processed: 0 / 0" and stopped. The reason was in the
+    // response the whole time — the API returns error_log — and only `--json` ever showed
+    // it. Measured 2026-08-28 chasing a dead Drive ingest: the answer was
+    // "No query results for model [App\Models\Integration]" (a lookup on the wrong type
+    // string), and it took reading raw JSON to find a message the server had already sent.
+    const errors = summarizeJobErrors(data.error_log)
+    if (errors.length) {
+      printDivider()
+      console.log(`  ${UI.Style.TEXT_DANGER}Errors${UI.Style.TEXT_NORMAL}`)
+      for (const e of errors) {
+        console.log(`    ${e.count > 1 ? dim(`${e.count}×  `) : ""}${e.error}`)
+        const named = e.files.filter((f) => f !== "Job execution")
+        if (named.length) {
+          const shown = named.slice(0, 3).join(", ")
+          console.log(`      ${dim(shown + (named.length > 3 ? `, +${named.length - 3} more` : ""))}`)
+        }
+      }
+    }
+
     printDivider()
     prompts.outro("Done")
   },
@@ -1076,3 +1098,38 @@ export const PlatformDataSourcesCommand = cmd({
       .demandCommand(),
   async handler() {},
 })
+
+
+/**
+ * Collapse a job's error_log into distinct reasons, most frequent first.
+ *
+ * A failed ingest repeats the same message once per retry — the Drive job that prompted
+ * this logged "No query results for model [App\\Models\\Integration]" three times. Printing
+ * the raw list buries one distinct cause under its own duplicates, so identical messages
+ * are counted rather than repeated.
+ */
+export function summarizeJobErrors(
+  errorLog: unknown,
+): Array<{ error: string; file: string | null; count: number; files: string[] }> {
+  const rows = Array.isArray(errorLog) ? errorLog : []
+  const seen = new Map<string, { error: string; file: string | null; count: number; files: string[] }>()
+
+  for (const row of rows) {
+    const error = String((row as any)?.error ?? "").trim()
+    if (!error) continue
+    const file = String((row as any)?.file ?? "").trim() || null
+
+    // Grouped by MESSAGE, not by message+file. One cause failing thirty documents is one
+    // problem to fix, and thirty identical lines hide that; the files are kept alongside so
+    // "which ones" is still answerable.
+    const hit = seen.get(error)
+    if (hit) {
+      hit.count += 1
+      if (file && !hit.files.includes(file)) hit.files.push(file)
+    } else {
+      seen.set(error, { error, file, count: 1, files: file ? [file] : [] })
+    }
+  }
+
+  return [...seen.values()].sort((a, b) => b.count - a.count)
+}
