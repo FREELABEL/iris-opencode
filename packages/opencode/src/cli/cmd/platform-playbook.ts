@@ -146,6 +146,11 @@ const SkillShowCommand = cmd({
       printKV("Version", plan.version)
       printKV("Description", plan.description)
       printKV("Location", plan.location)
+      // The shareable link, next to the local path (#182116). `show` used to give ONLY a
+      // filesystem path, which is useless to anyone but the author on this machine. Printed
+      // unconditionally rather than only when published: an unpublished playbook 404s at this
+      // URL, and seeing that is a clearer answer than being told nothing.
+      printKV("URL", playbookUrl(String(plan.name)))
       printKV("On Error", plan.onError)
       printKV("Timeout", `${plan.timeout}s`)
 
@@ -1397,6 +1402,32 @@ const PlaybookCheckPrivateCommand = cmd({
   },
 })
 
+/**
+ * The web URL for a published playbook (#182116).
+ *
+ * publish used to succeed and hand back nothing shareable — `show` returns a filesystem path —
+ * so a playbook could be published to a team and reach nobody. The page resolves by name and
+ * inherits the API's visibility exactly: public to anyone, project to the bloq, private to the
+ * owner, and a 404 for everyone else.
+ *
+ * Built from IRIS_API rather than hardcoded, so a staging or self-hosted install prints its own
+ * host instead of confidently sending somebody to production.
+ */
+function playbookUrl(name: string): string {
+  const base = String(IRIS_API).replace(/\/+$/, "")
+  return `${base}/p/playbook?name=${encodeURIComponent(name)}`
+}
+
+/** What a given scope means for who can open that URL. Said plainly, because "published" does not. */
+function audienceNote(scope?: string, bloqId?: number | null): string {
+  switch (scope) {
+    case "public":  return "anyone — it is listed in the marketplace"
+    case "project": return `unlisted — anyone in bloq #${bloqId ?? "?"} can open it, nobody else`
+    case "private": return "only you"
+    default:        return "whoever the API allows"
+  }
+}
+
 const PublishCommand = cmd({
   command: "publish <name>",
   describe: "publish a playbook with a scope: private | project | public",
@@ -1555,6 +1586,10 @@ const PublishCommand = cmd({
     if (data?.marketplace) {
       console.log(`  ${bold("Marketplace")} ${highlight(String(data.marketplace.slug))} ${dim(`(${data.marketplace.status})`)}`)
     }
+    // The link, and who can open it. A publish that prints neither is the bug this fixes.
+    const url = playbookUrl(String(args.name))
+    console.log(`  ${bold("URL")}         ${highlight(url)}`)
+    console.log(`  ${bold("Who can open")} ${audienceNote(pb.scope ?? String(args.scope), pb.bloq_id ?? args.bloq)}`)
     printDivider()
     prompts.outro(`${success("✓")} Published ${highlight(String(args.name))} as ${bold(String(args.scope))}`)
   },
