@@ -794,6 +794,22 @@ async function generateViaPlatform(
           // cut off immediately after. The run reported "7 passed" having produced no
           // answers at all — the reasoning was good and none of it survived the cap.
           max_tokens: 8000,
+          // THE fix for reasoning models, and the reason raising max_tokens alone did not
+          // work. Without it they deliberate until the budget runs out and never answer —
+          // and you are billed for every one of those reasoning tokens. Measured on
+          // iris/glm-5.3-flash with an identical prompt:
+          //
+          //   default                reasoning 18566   content    0   EMPTY
+          //   reasoning_effort=low   reasoning   336   content 4867   ANSWERS
+          //
+          // 55x less reasoning AND a full answer. It is not model-specific: it also
+          // rescued hy3 (0 -> 1908 content), which had been unusable at every cap, and
+          // costs nothing on models that do not reason (minimax-m3 answers either way).
+          //
+          // Skill steps want a considered answer, not a visible chain of thought. "low"
+          // is the right default here; a step that genuinely needs deep reasoning should
+          // ask for a model that reasons rather than paying for tokens it throws away.
+          reasoning_effort: "low",
           messages: [{ role: "user", content: prompt }],
         }),
       },
