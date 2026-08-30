@@ -648,7 +648,12 @@ const SyncCommand = cmd({
       // as importable while `sync` still rejected it at the argument parser. One list.
       .positional("source", { type: "string", demandOption: true, choices: [...BULK_INGESTABLE_TYPES] })
       .positional("path", { type: "string", demandOption: true, describe: "folder path or ID" })
-      .option("recursive", { alias: "r", type: "boolean", default: false })
+      // TRUE, matching the server. fl-api defaults `recursive` to true; this defaulted to
+      // false and sent it explicitly, so the CLI's false always won and "sync this folder"
+      // silently skipped every subfolder — reporting success for a partial import.
+      // Verified 2026-08-29: a Drive folder with one file and one subfolder ingested 1 of 2
+      // without the flag and 2 of 2 with it. Pass --recursive=false for the top level only.
+      .option("recursive", { alias: "r", type: "boolean", default: true })
       .option("list-name", { alias: "l", type: "string", default: "Imported Files" })
       .option("dataset", {
         alias: "d",
