@@ -313,10 +313,97 @@ const PublishCmd = cmd({
  *   genesis components <page-slug>   what is on THIS PAGE
  *   genesis library …                what exists to be reused ANYWHERE
  */
+/**
+ * `audit` — does "stale" mean OLD, or mean BROKEN? (#182770)
+ *
+ * `list` marks a component stale by comparing its stored compiler version to the current one.
+ * That is a version comparison wearing the clothes of a health check: it cannot tell a
+ * component that is merely old from one that would no longer compile, and those two facts
+ * lead to completely different days. Thirteen of twenty were marked stale, spanning 3.3.0 to
+ * 3.9.0, and the label gave no way to know whether any of them were a problem.
+ *
+ * This answers it the only way that is not a guess: send each stored source back through the
+ * CURRENT compiler and report what it says. The first run found all thirteen still compiling
+ * — "just old", every one — which is a fact worth being able to re-establish in one command
+ * rather than twenty.
+ *
+ * Nothing is published or modified. `compile` is the same endpoint `publish --dry-run` uses.
+ */
+const AuditCmd = cmd({
+  command: "audit [slug]",
+  aliases: ["recompile", "check"],
+  describe: "recompile stored components against the CURRENT compiler — tells 'just old' from 'would not build'",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "one component; omit to audit the whole library", type: "string" })
+      .option("stale-only", { describe: "only the ones list already marks stale", type: "boolean", default: false })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args: any) {
+    await requireAuth()
+
+    let slugs: string[] = []
+    if (args.slug) slugs = [args.slug]
+    else {
+      const res = await api(BASE)
+      if (!res.ok) { handleApiError(res, "list components"); return }
+      const body = await res.json()
+      slugs = (firstArray(body.components) ?? firstArray(body.data) ?? []).map((c: any) => c.slug).filter(Boolean)
+    }
+
+    const rows: any[] = []
+    for (const slug of slugs) {
+      const one = await api(`${BASE}/${slug}`)
+      if (!one.ok) { rows.push({ slug, ok: false, reason: `could not read (${one.status})` }); continue }
+      const stored = await one.json()
+      if (args["stale-only"] && !stored.stale) continue
+
+      const res = await api(`${BASE}/compile`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: stored.source ?? "", slug }),
+      })
+      // A transport failure is NOT a compile failure. Saying "would not build" because the
+      // network blinked is the same class of lie this command exists to remove.
+      if (!res.ok) { rows.push({ slug, version: stored.compilerVersion, stale: !!stored.stale, ok: null, reason: `compile call failed (${res.status})` }); continue }
+      const out = await res.json()
+      rows.push({
+        slug,
+        version: stored.compilerVersion,
+        stale: !!stored.stale,
+        ok: !!out.ok,
+        errors: (firstArray(out.errors) ?? []).map((e: any) => e.code).slice(0, 3),
+      })
+    }
+
+    if (args.json) { writeJson({ audited: rows.length, rows }); return }
+
+    UI.println("")
+    UI.println(`◈  Library audit — against the current compiler`)
+    printDivider()
+    for (const r of rows) {
+      const mark = r.ok === true ? success("  builds  ") : r.ok === false ? "  BROKEN  " : dim("  unknown ")
+      const ver = dim((r.version ?? "?").toString().padEnd(8))
+      const flag = r.stale ? dim("stale") : dim("     ")
+      const why = r.ok === false ? "  " + (r.errors ?? []).join(", ") : r.reason ? dim("  " + r.reason) : ""
+      UI.println(`${mark}${ver} ${flag}  ${bold(r.slug)}${why}`)
+    }
+    printDivider()
+    const broken = rows.filter((r) => r.ok === false).length
+    const staleOk = rows.filter((r) => r.stale && r.ok === true).length
+    // The headline is the DISTINCTION, because that is the thing `list` could not draw.
+    UI.println(
+      broken === 0
+        ? `  ${bold(String(rows.length))} audited · ${bold("0")} would fail to build · ${staleOk} marked stale are merely OLD`
+        : `  ${bold(String(rows.length))} audited · ${highlight(String(broken))} would NOT build`,
+    )
+    if (broken > 0) process.exitCode = 1
+  },
+})
+
 export const LibraryCmd = cmd({
   command: "library <command>",
   aliases: ["lib", "components-library"],
-  describe: "the stored component library — publish, list, show, usage, versions, rollback",
+  describe: "the stored component library — publish, list, show, usage, versions, audit, rollback",
   builder: (y) =>
     y
       .command(PublishCmd)
@@ -324,6 +411,7 @@ export const LibraryCmd = cmd({
       .command(ShowCmd)
       .command(UsageCmd)
       .command(VersionsCmd)
+      .command(AuditCmd)
       .command(RollbackCmd)
       .demandCommand(1),
   async handler() {},
