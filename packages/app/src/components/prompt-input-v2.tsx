@@ -45,6 +45,8 @@ export type PromptInputV2ComposerController = PromptInputV2Interaction & {
 }
 
 export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
+  // Read at request time, not captured: the selected server can change while mounted.
+  const sdkForDictation = useSDK()
   const dialog = useDialog()
   const command = useCommand()
   const language = useLanguage()
@@ -56,6 +58,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         borderUnderlay={props.borderUnderlay}
         class={props.class}
         variantControlVisible={!props.controller.model.loading}
+        transcribeUrl={() => sdkForDictation().url}
         attachKeybind={command.keybindParts("file.attach")}
         attachShortcut={command.keybind("file.attach")}
         modelControl={

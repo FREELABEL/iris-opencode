@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Show, type Accessor, type JSX } from "solid-js"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -10,6 +10,7 @@ import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
+import { createDictation } from "./dictation"
 import { AttachmentCardV2 } from "../attachment-card-v2"
 import { CommentCardV2 } from "../comment-card-v2"
 import { typeLabel } from "../../../components/message-file"
@@ -41,12 +42,22 @@ export type PromptInputV2Props = {
   borderUnderlay?: boolean
   class?: string
   modelControl?: JSX.Element
+  /** Dictation control, rendered beside the attach menu. */
+  /**
+   * Base URL of the local server that owns POST /transcribe, read at request time.
+   * Omit and the microphone is not rendered at all.
+   */
+  transcribeUrl?: () => string
   variantControlVisible?: boolean
   attachKeybind?: string[]
   attachShortcut?: string
 }
 
 export function PromptInputV2(props: PromptInputV2Props) {
+  // Dictation failures used to live only in a tooltip. A microphone that records, stops, and
+  // then silently does nothing is indistinguishable from a broken one — the error has to be
+  // on screen without hovering anything.
+  const [dictateError, setDictateError] = createSignal<string>()
   const i18n = useI18n()
   const state = props.controller.state
   const view = props.controller.view
@@ -216,6 +227,44 @@ export function PromptInputV2(props: PromptInputV2Props) {
               onContext={props.controller.openContext}
               onShell={props.controller.openShell}
             />
+            <Show when={dictateError()}>
+              {(message) => (
+                <div
+                  data-slot="prompt-dictate-error"
+                  role="status"
+                  class="mr-1 max-w-[320px] truncate text-[11px] text-v2-text-text-danger"
+                  title={message()}
+                >
+                  {message()}
+                </div>
+              )}
+            </Show>
+            <Show when={props.transcribeUrl}>
+              {(url) => (
+                <PromptInputV2Dictate
+                  url={url()}
+                  disabled={props.disabled}
+                  onError={(message) => setDictateError(message)}
+                  insert={(text) => {
+                    // Append into the editor and let the component's own onInput re-parse it.
+                    // Going through the real input path keeps attachments and mentions intact —
+                    // writing prompt state directly would have to reconstruct them.
+                    if (!editor) return
+                    const existing = editor.textContent ?? ""
+                    const gap = existing.length > 0 && !/\s$/.test(existing) ? " " : ""
+                    editor.appendChild(document.createTextNode(gap + text))
+                    editor.dispatchEvent(new InputEvent("input", { bubbles: true }))
+                    editor.focus()
+                    const range = document.createRange()
+                    range.selectNodeContents(editor)
+                    range.collapse(false)
+                    const sel = window.getSelection()
+                    sel?.removeAllRanges()
+                    sel?.addRange(range)
+                  }}
+                />
+              )}
+            </Show>
             <Show when={view.agent} keyed>
               {(control) => (
                 <PromptInputV2ConfiguredSelect
@@ -719,5 +768,71 @@ function PromptInputV2SuggestionIcon(props: { item: PromptInputV2Suggestion }) {
       node={{ path: props.item.path ?? props.item.label, type: props.item.kind === "reference" ? "directory" : "file" }}
       class="size-4 shrink-0"
     />
+  )
+}
+
+/**
+ * Microphone. Records in the webview and transcribes on the LOCAL server this app already
+ * runs, so the audio reaches 127.0.0.1 and nowhere else.
+ *
+ * Recording is shown with a colour change, a pulsing icon AND a running timer. An earlier
+ * version of this shipped with none of that and was indistinguishable from idle — an active
+ * microphone nobody can see is the failure this control exists to prevent.
+ */
+function PromptInputV2Dictate(props: {
+  url: () => string
+  disabled?: boolean
+  insert: (text: string) => void
+  onError?: (message: string | undefined) => void
+}) {
+  const [error, setError] = createSignal<string>()
+  const dictation = createDictation({
+    url: props.url,
+    onError: (message) => {
+      setError(message)
+      props.onError?.(message)
+    },
+    onTranscript: (text) => {
+      setError(undefined)
+      props.onError?.(undefined)
+      props.insert(text)
+    },
+  })
+
+  return (
+    <TooltipV2
+      placement="top"
+      value={
+        error() ??
+        (dictation.phase() === "recording"
+          ? "Stop and transcribe"
+          : dictation.phase() === "transcribing"
+            ? "Transcribing on this Mac…"
+            : "Dictate (on-device)")
+      }
+    >
+      <IconButtonV2
+        type="button"
+        data-action="prompt-dictate"
+        variant="ghost-muted"
+        size="large"
+        disabled={props.disabled || dictation.phase() === "transcribing"}
+        onClick={() => dictation.toggle()}
+        aria-label="Dictate"
+        icon={
+          <span class="flex items-center gap-1">
+            <IconV2
+              name="microphone"
+              class={dictation.phase() === "recording" ? "animate-pulse text-v2-text-text-danger" : undefined}
+            />
+            <Show when={dictation.phase() === "recording"}>
+              <span class="font-mono text-[10px] tabular-nums text-v2-text-text-danger">
+                {Math.floor(dictation.seconds() / 60)}:{String(dictation.seconds() % 60).padStart(2, "0")}
+              </span>
+            </Show>
+          </span>
+        }
+      />
+    </TooltipV2>
   )
 }

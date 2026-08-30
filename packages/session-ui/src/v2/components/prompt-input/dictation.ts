@@ -125,7 +125,13 @@ export function createDictation(opts: DictationOptions) {
       opts.onTranscript(text)
     } catch (e) {
       setPhase("idle")
-      opts.onError?.(e instanceof Error ? e.message : "Transcription failed.")
+      // "Failed to fetch" names nothing actionable. The base URL is the whole diagnosis when
+      // the app is pointed at a server that has no /transcribe (or none at all), which is
+      // exactly how this failed in testing.
+      const detail = e instanceof Error ? e.message : String(e)
+      opts.onError?.(
+        /fetch/i.test(detail) ? `Could not reach ${base} — is that server running?` : detail,
+      )
     }
   }
 

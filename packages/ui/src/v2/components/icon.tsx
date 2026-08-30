@@ -45,6 +45,10 @@ const icons = {
     viewBox: "0 0 16 16",
     body: `<path d="M2 8H14M2 4.664H14M2 11.336H14" stroke="currentColor"/>`,
   },
+  microphone: {
+    viewBox: "0 0 16 16",
+    body: `<path d="M8 2C8.8284 2 9.5 2.6716 9.5 3.5V7.5C9.5 8.3284 8.8284 9 8 9C7.1716 9 6.5 8.3284 6.5 7.5V3.5C6.5 2.6716 7.1716 2 8 2Z" stroke="currentColor"/><path d="M4.5 7.3333V8C4.5 9.933 6.067 11.5 8 11.5C9.933 11.5 11.5 9.933 11.5 8V7.3333M8 11.5V14M6 14H10" stroke="currentColor" stroke-linecap="square"/>`,
+  },
   plus: {
     viewBox: "0 0 16 16",
     body: `<path d="M8 2.88867V13.1109" stroke="currentColor" stroke-linejoin="round"/><path d="M2.88867 8H13.1109" stroke="currentColor" stroke-linejoin="round"/>`,

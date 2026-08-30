@@ -27,7 +27,7 @@ import {
 } from "@/context/prompt"
 import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
-import { createDictation } from "@/hooks/dictation"
+import { createDictation } from "@opencode-ai/session-ui/v2/prompt-input/dictation"
 import { useSync } from "@/context/sync"
 import { useComments } from "@/context/comments"
 import { Button } from "@opencode-ai/ui/button"
