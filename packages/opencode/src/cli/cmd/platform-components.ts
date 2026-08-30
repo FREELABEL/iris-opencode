@@ -199,6 +199,113 @@ const RollbackCmd = cmd({
 })
 
 /**
+ * `publish` — put a component INTO the library.
+ *
+ * The library could roll a component back but not put one there (#182769): list, show, usage,
+ * versions and rollback all existed, and the only way in was a hand-rolled curl with a platform
+ * token. That is backwards — the destructive verb was wrapped and the ordinary one was not.
+ *
+ * It matters more than convenience. Genesis composition is finished at the platform level:
+ * `<slot name="literal">` compiles, declarations reach the artifact, pages fill slots. So the
+ * remaining work in that layer is ENTIRELY "write a component and publish it", and half of
+ * that had no supported path — which is why the layout vocabulary stayed at two components
+ * for months.
+ *
+ * COMPILE ERRORS ARE THE NORMAL CASE, NOT THE EXCEPTION. This format refuses a lot on purpose
+ * — dynamic member access, runtime slot names, arrow-function prop defaults, `<form>`. So a
+ * failed publish prints every error with its line, rather than one generic message: the author
+ * is mid-edit and needs the list, not a verdict.
+ */
+const PublishCmd = cmd({
+  command: "publish <slug>",
+  aliases: ["push", "create"],
+  describe: "publish a component from a local .vue file (compiles server-side first)",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "component slug (lowercase, dashes)", type: "string", demandOption: true })
+      .option("file", { describe: "path to the .vue source", type: "string", demandOption: true })
+      .option("name", { describe: "display name (defaults to the slug)", type: "string" })
+      .option("description", { describe: "one line describing what it is for", type: "string" })
+      .option("dry-run", { describe: "compile only — report errors and slots, publish nothing", type: "boolean", default: false })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args: any) {
+    await requireAuth()
+
+    const file = Bun.file(args.file)
+    if (!(await file.exists())) {
+      UI.println("")
+      UI.println(`  no such file: ${args.file}`)
+      process.exitCode = 1
+      return
+    }
+    const source = await file.text()
+
+    // COMPILE FIRST, ALWAYS — including on a real publish. The store endpoint compiles too,
+    // but asking here means a failure is reported as a LIST OF ERRORS WITH LINES rather than
+    // a 422 the caller has to unpack. Same reason `pages verify` exists next to `pages push`.
+    const compiled = await api(`${BASE}/compile`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, slug: args.slug }),
+    })
+    if (!compiled.ok) { handleApiError(compiled, `compile ${args.slug}`); return }
+    const result = await compiled.json()
+
+    if (!result.ok) {
+      UI.println("")
+      UI.println(`  ${bold(args.slug)} did not compile`)
+      printDivider()
+      for (const e of firstArray(result.errors) ?? []) {
+        const where = e.line ? dim(`  line ${e.line}`) : ""
+        UI.println(`  ${e.code}${where}`)
+        UI.println(dim(`    ${e.message}`))
+      }
+      if (args.json) writeJson({ ok: false, slug: args.slug, errors: result.errors })
+      process.exitCode = 1
+      return
+    }
+
+    const declared = result.artifact?.declared ?? {}
+    const shape = [
+      declared.props?.length ? `props ${declared.props.join(" · ")}` : null,
+      declared.emits?.length ? `emits ${declared.emits.join(" · ")}` : null,
+      declared.slots?.length ? `slots ${declared.slots.join(" · ")}` : null,
+    ].filter(Boolean)
+
+    if (args["dry-run"]) {
+      UI.println("")
+      UI.println(`  ${success("compiles")}  ${bold(args.slug)}  ${dim("(nothing published)")}`)
+      for (const line of shape) UI.println(dim(`    ${line}`))
+      if (args.json) writeJson({ ok: true, published: false, slug: args.slug, declared })
+      return
+    }
+
+    const res = await api(BASE, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: args.slug,
+        name: args.name ?? args.slug,
+        description: args.description ?? "",
+        source,
+        // The slug already exists in most real uses — this is an edit, not a first publish.
+        replace: true,
+      }),
+    })
+    if (!res.ok) { handleApiError(res, `publish ${args.slug}`); return }
+    const body = await res.json()
+
+    UI.println("")
+    UI.println(`  ${success("published")}  ${bold(args.slug)}${body.version ? dim(`  v${body.version}`) : ""}`)
+    for (const line of shape) UI.println(dim(`    ${line}`))
+    // Every page naming this slug renders the NEW artifact from now on. Say so here rather
+    // than letting it be discovered on a page nobody was looking at.
+    UI.println(dim(`  ${highlight("iris genesis library usage " + args.slug)} — which pages this changes`))
+    if (args.json) writeJson(body)
+  },
+})
+
+/**
  * Named `library`, not `components`, because `iris genesis components <slug>` already exists
  * and means something DIFFERENT — the components used ON one page. One word with two meanings
  * is the drift that makes a CLI unlearnable, so the two stay distinct:
@@ -209,9 +316,10 @@ const RollbackCmd = cmd({
 export const LibraryCmd = cmd({
   command: "library <command>",
   aliases: ["lib", "components-library"],
-  describe: "the stored component library — list, show, usage, versions, rollback",
+  describe: "the stored component library — publish, list, show, usage, versions, rollback",
   builder: (y) =>
     y
+      .command(PublishCmd)
       .command(ListCmd)
       .command(ShowCmd)
       .command(UsageCmd)
