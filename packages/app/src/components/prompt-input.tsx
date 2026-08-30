@@ -28,6 +28,7 @@ import {
 } from "@/context/prompt"
 import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
+import { createDictation } from "@/hooks/dictation"
 import { useNavigate, useParams } from "@solidjs/router"
 import { useSync } from "@/context/sync"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
@@ -769,6 +770,31 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     handleInput()
     setStore("popover", null)
   }
+
+  // Dictation. Records in the webview and transcribes on the LOCAL server (POST /transcribe),
+  // which runs whisper.cpp on this machine — the audio goes to 127.0.0.1 and nowhere else.
+  const [dictationError, setDictationError] = createSignal<string>()
+  const dictation = createDictation({
+    url: sdk.url,
+    onError: setDictationError,
+    onTranscript: (text) => {
+      if (!editorRef) return
+      setDictationError(undefined)
+      // Append into the DOM and re-parse, rather than replacing the prompt with one text
+      // part — a whole-prompt set would silently drop file attachments and pills.
+      const existing = editorRef.textContent ?? ""
+      const gap = existing.length > 0 && !/\s$/.test(existing) ? " " : ""
+      editorRef.appendChild(createTextFragment(gap + text))
+      handleInput()
+      editorRef.focus()
+      const range = document.createRange()
+      range.selectNodeContents(editorRef)
+      range.collapse(false)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    },
+  })
 
   const abort = () =>
     sdk.client.session
@@ -1582,6 +1608,34 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     </Button>
                   </TooltipKeybind>
                 </Show>
+                <Tooltip
+                  placement="top"
+                  value={
+                    dictationError() ??
+                    (dictation.phase() === "recording"
+                      ? "Stop and transcribe"
+                      : dictation.phase() === "transcribing"
+                        ? "Transcribing on-device…"
+                        : "Dictate (on-device)")
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    aria-label="Dictate"
+                    disabled={dictation.phase() === "transcribing"}
+                    onClick={() => dictation.toggle()}
+                    classList={{
+                      "_hidden group-hover/prompt-input:flex size-6 items-center justify-center": true,
+                      "text-text-base": dictation.phase() === "idle",
+                      // Recording is the one state that must be obvious without hovering:
+                      // a hot microphone nobody noticed is the failure that matters here.
+                      "flex text-text-danger-base": dictation.phase() === "recording",
+                      "flex opacity-60": dictation.phase() === "transcribing",
+                    }}
+                  >
+                    <Icon name="microphone" />
+                  </Button>
+                </Tooltip>
                 <Show when={permission.permissionsEnabled() && params.id}>
                   <TooltipKeybind
                     placement="top"
