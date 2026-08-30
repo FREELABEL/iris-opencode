@@ -12,6 +12,20 @@ import { createSignal, onCleanup } from "solid-js"
  * Both ends are ours, and it keeps a multipart parser off a path that carries one file.
  */
 
+/**
+ * Candidate container types, best-supported first. WKWebView (the desktop) only does
+ * audio/mp4 for audio-only; Chromium prefers webm/opus. Whichever the engine reports as
+ * supported is what we ask for AND what we name the upload, so ffmpeg gets an honest hint.
+ */
+const MEDIA_TYPES = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"] as const
+
+function extensionFor(type: string | undefined): string {
+  if (!type) return "webm"
+  if (type.startsWith("audio/mp4")) return "m4a"
+  if (type.startsWith("audio/ogg")) return "ogg"
+  return "webm"
+}
+
 export type DictationPhase = "idle" | "recording" | "transcribing"
 
 export interface DictationOptions {
@@ -32,6 +46,7 @@ export function createDictation(opts: DictationOptions) {
   // A moving number is the difference between "recording" and "hung".
   const [seconds, setSeconds] = createSignal(0)
   let recorder: MediaRecorder | undefined
+  let mimeType: string | undefined
   let stream: MediaStream | undefined
   let chunks: Blob[] = []
   let timeout: ReturnType<typeof setTimeout> | undefined
@@ -70,12 +85,36 @@ export function createDictation(opts: DictationOptions) {
     }
 
     chunks = []
-    recorder = new MediaRecorder(stream)
+
+    // PICK A TYPE THE ENGINE ACTUALLY SUPPORTS.
+    //
+    // The desktop is a WKWebView, where audio-only recording is audio/mp4 — it does not do
+    // webm/opus. `new MediaRecorder(stream)` with no options gave a recorder that emitted no
+    // data at all, so every dictation ended in "Nothing was recorded." The bug was invisible
+    // in Chrome, which defaults to webm and works.
+    const chosen = MEDIA_TYPES.find((t) => {
+      try {
+        return typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)
+      } catch {
+        return false
+      }
+    })
+    mimeType = chosen
+    try {
+      recorder = chosen ? new MediaRecorder(stream, { mimeType: chosen }) : new MediaRecorder(stream)
+    } catch (e) {
+      return fail(`This engine could not start a recorder (${e instanceof Error ? e.message : String(e)}).`)
+    }
+
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data)
     }
+    // A recorder error was previously silent — it just looked like an empty recording.
+    recorder.onerror = () => fail("The recorder stopped unexpectedly. Try again.")
     recorder.onstop = () => void transcribe()
-    recorder.start()
+    // Timeslice, not a single flush at stop: some engines only deliver a final chunk on
+    // stop, and if that path misfires there is nothing at all to send.
+    recorder.start(250)
     setSeconds(0)
     setPhase("recording")
     ticker = setInterval(() => setSeconds((n) => n + 1), 1000)
@@ -89,19 +128,21 @@ export function createDictation(opts: DictationOptions) {
   }
 
   async function transcribe() {
-    const type = recorder?.mimeType || "audio/webm"
+    const type = recorder?.mimeType || mimeType || "audio/webm"
     const blob = new Blob(chunks, { type })
     chunks = []
     teardown()
 
     if (blob.size === 0) {
       setPhase("idle")
-      return opts.onError?.("Nothing was recorded.")
+      // Name the format that produced nothing — "Nothing was recorded" alone sent me looking
+      // at the microphone when the real answer was an unsupported container.
+      return opts.onError?.(`No audio captured (recorder type: ${type}). Check the input device.`)
     }
 
     const base = opts.url().replace(/\/$/, "")
     try {
-      const res = await fetch(`${base}/transcribe?filename=dictation.webm`, {
+      const res = await fetch(`${base}/transcribe?filename=dictation.${extensionFor(type)}`, {
         method: "POST",
         headers: { "Content-Type": type },
         body: blob,
