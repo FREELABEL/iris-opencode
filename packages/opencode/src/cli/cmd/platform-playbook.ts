@@ -22,7 +22,7 @@ import {
   type StepResult,
   type ExecuteOptions,
 } from "../../skill/executor"
-import { existsSync, readdirSync } from "fs"
+import { existsSync, readdirSync, readFileSync } from "fs"
 import { join as pathJoin } from "path"
 import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCoverage } from "../../skill/e2e/runner"
 import { PlaybookDraftCommand } from "./playbook-draft"
@@ -123,7 +123,12 @@ const SkillShowCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", demandOption: true })
-      .option("json", { type: "boolean", default: false }),
+      .option("json", { type: "boolean", default: false })
+      .option("full", {
+        type: "boolean",
+        default: false,
+        describe: "print the whole playbook — step bodies, code and prose, not just the outline",
+      }),
   async handler(args) {
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
@@ -186,6 +191,40 @@ const SkillShowCommand = cmd({
           const deps = step.depends ? dim(` (after: ${step.depends})`) : ""
           const cond = step.condition ? dim(` (if: ${step.condition})`) : ""
           console.log(`    ${bold(step.id)} — ${step.title}  ${mode}${confirm}${deps}${cond}`)
+        }
+      }
+
+      // The outline above is not the playbook. The step bodies, the step code, and any prose
+      // after the last step ARE the procedure — and `show` printed none of it (#182906).
+      // Silently, which is what made it a bug rather than a preference: a model that ran
+      // `show` had no way to tell it was holding 57% of the document. work-the-epic made it
+      // concrete — its step 02 tells the reader to "read 'Writing it well' at the bottom of
+      // this playbook", and `show` never printed that section. The instruction was not
+      // followable through the surface that delivered it.
+      // `--json` always carried the whole text; only this path dropped it.
+      const rawDoc = existsSync(plan.location) ? readFileSync(plan.location, "utf8") : ""
+      const docBody = rawDoc.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trimEnd()
+
+      if (docBody) {
+        if (args.full) {
+          console.log()
+          console.log(bold("  Playbook:"))
+          console.log()
+          for (const line of docBody.split("\n")) console.log(`  ${line}`)
+        } else {
+          // Never truncate silently. Report how much is withheld and how to get it: someone
+          // told "310 lines, the outline omits them" goes and reads them, where someone shown
+          // only an outline reasonably concludes the outline was the whole thing.
+          const lines = docBody.split("\n").length
+          const chars = plan.steps.reduce((n, s) => n + (s.body?.length ?? 0) + (s.code?.length ?? 0), 0)
+          console.log()
+          console.log(
+            `  ${bold("Body:")} ${lines} lines. The outline above omits the step bodies` +
+              (chars ? ` (${chars.toLocaleString()} chars)` : "") +
+              ` and any prose.`,
+          )
+          console.log(`        ${dim("full text:")} iris playbook show ${plan.name} --full`)
+          console.log(`        ${dim("json:     ")} iris playbook show ${plan.name} --json`)
         }
       }
 
