@@ -388,37 +388,104 @@ async function executeMacosLocal(
  * the first match. If multiple exist, the user should disambiguate
  * with --integration-id directly.
  */
+/**
+ * Why this reports what it FOUND, not just that it failed (#182862).
+ *
+ * `--account=alex@freelabel.net` on gmail said "No connection ... Run: iris integrations list".
+ * The user runs that, sees Gmail plainly connected, and concludes --account is broken. It was
+ * not: alex@freelabel.net is a GOOGLE-DRIVE account, and the two gmail connections are one with
+ * a different email and one with no account email recorded at all. The resolution was right and
+ * the sentence was useless — it described the outcome instead of the evidence.
+ *
+ * 21 of 25 connections on this account carry NO account_email, so matching an email against them
+ * can never succeed. That is worth saying out loud at the moment it bites, because the fix is to
+ * reconnect or pass --integration-id, and neither is guessable from "No connection".
+ */
+export type AccountResolution =
+  | { ok: true; integrationId: number }
+  | { ok: false; message: string }
+
 export async function resolveAccountToIntegrationId(
   userId: number,
   normalizedType: string,
   account: string,
-): Promise<number | null> {
+): Promise<AccountResolution> {
+  let items: any[] = []
   try {
     const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {}, IRIS_API)
-    if (!res.ok) return null
+    if (!res.ok) {
+      // Was `return null`, which the caller rendered as "no connection". A 500 on the
+      // lookup is not evidence about the user's connections — same conflation as #182861.
+      return {
+        ok: false,
+        message:
+          `Could not look up connections — iris-api returned HTTP ${res.status}. ` +
+          `This says nothing about whether '${normalizedType}' is connected; the lookup itself failed.`,
+      }
+    }
     const data = (await res.json()) as any
-    const items: any[] = firstArray(data?.connections, data?.data, data)
-    const needle = account.toLowerCase()
-    const candidates = items.filter((i) => {
-      if (String(i.type ?? "").toLowerCase() !== normalizedType) return false
-      const email = String(i.account_email ?? "").toLowerCase()
-      const name = String(i.name ?? "").toLowerCase()
-      return email === needle || name === needle || email.includes(needle) || name.includes(needle)
-    })
-    if (candidates.length === 0) return null
-    return Number(candidates[0].id) || null
+    items = firstArray(data?.connections, data?.data, data)
   } catch (err) {
-    // Distinguish network/transport errors (which should surface) from a
-    // genuine "no match". Previously swallowed as null, masking outages
-    // (bug #16).
     if (err instanceof TypeError || (err as any)?.name === "FetchError" || (err as any)?.code === "ECONNREFUSED") {
       throw err
     }
     if (process.env.IRIS_DEBUG) {
       console.error(dim(`[resolveAccountToIntegrationId] lookup failed for ${normalizedType}/${account}:`), err)
     }
-    return null
+    return { ok: false, message: `Connection lookup failed for '${normalizedType}'. Re-run with IRIS_DEBUG=1 for the cause.` }
   }
+
+  const ofType = items.filter((i) => String(i.type ?? "").toLowerCase() === normalizedType)
+  const needle = account.toLowerCase()
+  const candidates = ofType.filter((i) => {
+    const email = String(i.account_email ?? "").toLowerCase()
+    const name = String(i.name ?? "").toLowerCase()
+    return email === needle || name === needle || email.includes(needle) || name.includes(needle)
+  })
+
+  if (candidates.length > 0) {
+    const id = Number(candidates[0].id)
+    if (id) return { ok: true, integrationId: id }
+  }
+
+  return { ok: false, message: describeAccountMiss(normalizedType, account, ofType) }
+}
+
+/**
+ * The sentence a failed --account match should produce.
+ *
+ * Pure and exported so it can be tested without a transport — the bug here was never in the
+ * matching, it was in what the failure SAID, so the sentence is the thing worth pinning.
+ */
+export function describeAccountMiss(
+  normalizedType: string,
+  account: string,
+  ofType: Array<{ id?: unknown; account_email?: unknown; name?: unknown }>,
+): string {
+  // "nothing matched" and "nothing is connected" are different problems with different fixes,
+  // and the old message could not tell them apart.
+  if (ofType.length === 0) {
+    return `No '${normalizedType}' connection exists. Connect one: iris connect ${normalizedType}`
+  }
+
+  const rows = ofType
+    .map((i) => {
+      const email = i.account_email ? String(i.account_email) : "(no account email recorded)"
+      return `    #${i.id}  ${email}  ${String(i.name ?? "")}`.trimEnd()
+    })
+    .join("\n")
+
+  const missingEmail = ofType.filter((i) => !i.account_email).length
+  const hint = missingEmail
+    ? `\n  ${missingEmail} of these ${missingEmail === 1 ? "has" : "have"} no account email stored, so an ` +
+      `--account match can never succeed against ${missingEmail === 1 ? "it" : "them"}. ` +
+      `Use --integration-id=<id> above, or reconnect to record the address.`
+    : `\n  Use --integration-id=<id> above.`
+
+  return (
+    `No '${normalizedType}' connection matches --account='${account}', but ${ofType.length} ` +
+    `'${normalizedType}' connection${ofType.length === 1 ? " exists" : "s exist"}:\n${rows}${hint}`
+  )
 }
 
 // Composio returns slugs without hyphens (googledrive), but iris-api expects
@@ -492,13 +559,9 @@ export async function executeIntegrationCall(
   // name matches case-insensitively.
   let integrationId: number | undefined = options.integrationId
   if (!integrationId && options.account) {
-    integrationId = (await resolveAccountToIntegrationId(userId, normalized, options.account)) ?? undefined
-    if (!integrationId) {
-      throw new Error(
-        `No connection for type='${normalized}' matching --account='${options.account}'. ` +
-        `Run: iris integrations list`
-      )
-    }
+    const resolution = await resolveAccountToIntegrationId(userId, normalized, options.account)
+    if (!resolution.ok) throw new Error(resolution.message)
+    integrationId = resolution.integrationId
   }
 
   // Canva uses native service on fl-api (Composio has 0 actions)
