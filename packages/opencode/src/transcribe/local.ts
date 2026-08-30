@@ -20,10 +20,52 @@ const MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggm
 /** Hard ceiling so a wedged ffmpeg/whisper cannot hang the server forever. */
 const TIMEOUT_MS = Number(process.env.IRIS_TRANSCRIPTION_TIMEOUT_MS ?? 10 * 60 * 1000)
 
+/**
+ * Locate a binary WITHOUT trusting PATH.
+ *
+ * A Finder-launched macOS app inherits PATH=/usr/bin:/bin:/usr/sbin:/sbin — measured on the
+ * running sidecar. Homebrew installs to /opt/homebrew/bin, which is not on it. So `which`
+ * returns nothing even when the tool is installed, and the honest-looking advice
+ * "brew install ffmpeg" tells the user to install something they already have.
+ */
+const EXTRA_BIN_DIRS = [
+  "/opt/homebrew/bin", // Apple Silicon Homebrew
+  "/usr/local/bin", // Intel Homebrew, and most manual installs
+  "/opt/local/bin", // MacPorts
+  `${homedir()}/.local/bin`,
+  "/usr/bin",
+  "/bin",
+]
+
 function which(bin: string): string | null {
   const r = spawnSync("which", [bin], { encoding: "utf8" })
-  const p = r.stdout?.trim()
-  return p && r.status === 0 ? p : null
+  const found = r.stdout?.trim()
+  if (found && r.status === 0) return found
+  for (const dir of EXTRA_BIN_DIRS) {
+    const candidate = join(dir, bin)
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+/**
+ * Is this already 16 kHz mono 16-bit PCM — i.e. exactly what whisper wants?
+ *
+ * The desktop capture path produces precisely that, so converting it would spend an ffmpeg
+ * dependency to turn a file into itself. Parsed from the header rather than trusted from the
+ * filename, because the extension is a caller's claim.
+ */
+function isWhisperReadyWav(bytes: Uint8Array): boolean {
+  if (bytes.length < 44) return false
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const tag = (o: number) => String.fromCharCode(bytes[o]!, bytes[o + 1]!, bytes[o + 2]!, bytes[o + 3]!)
+  if (tag(0) !== "RIFF" || tag(8) !== "WAVE") return false
+  return (
+    view.getUint16(20, true) === 1 && // PCM, uncompressed
+    view.getUint16(22, true) === 1 && // mono
+    view.getUint32(24, true) === 16000 && // 16 kHz
+    view.getUint16(34, true) === 16 // 16-bit
+  )
 }
 
 export class TranscribeError extends Error {}
@@ -50,11 +92,20 @@ export async function transcribeLocal(
   audio: Uint8Array,
   opts: { filename?: string; language?: string } = {},
 ): Promise<TranscribeResult> {
-  const ffmpeg = which("ffmpeg")
+  // Only DECODING needs ffmpeg. The desktop sends 16 kHz mono PCM already, so that path has
+  // no ffmpeg dependency at all — which matters, because a packaged app cannot see Homebrew.
+  const ready = isWhisperReadyWav(audio)
+  const ffmpeg = ready ? null : which("ffmpeg")
   const whisper = which("whisper-cli") || which("whisper-cpp")
-  if (!ffmpeg) throw new TranscribeError("ffmpeg not found. Install it with: brew install ffmpeg")
+  if (!ready && !ffmpeg) {
+    throw new TranscribeError(
+      "Cannot decode that audio format: ffmpeg was not found (looked on PATH and in /opt/homebrew/bin, /usr/local/bin, /opt/local/bin). Install it with: brew install ffmpeg",
+    )
+  }
   if (!whisper) {
-    throw new TranscribeError("Local transcription needs whisper-cpp. Install it with: brew install whisper-cpp")
+    throw new TranscribeError(
+      "Local transcription needs whisper-cpp, which was not found (looked on PATH and in /opt/homebrew/bin, /usr/local/bin, /opt/local/bin). Install it with: brew install whisper-cpp",
+    )
   }
 
   const modelDir = join(homedir(), ".whisper")
@@ -73,12 +124,15 @@ export async function transcribeLocal(
     const src = join(work, opts.filename?.replace(/[^\w.-]/g, "_") || "input.webm")
     writeFileSync(src, audio)
 
-    const wav = join(work, "audio.wav")
-    const conv = spawnSync(ffmpeg, ["-y", "-i", src, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav], {
-      stdio: "ignore",
-      timeout: TIMEOUT_MS,
-    })
-    if (conv.status !== 0 || !existsSync(wav)) throw new TranscribeError("Could not decode that audio")
+    let wav = src
+    if (!ready) {
+      wav = join(work, "audio.wav")
+      const conv = spawnSync(ffmpeg!, ["-y", "-i", src, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav], {
+        stdio: "ignore",
+        timeout: TIMEOUT_MS,
+      })
+      if (conv.status !== 0 || !existsSync(wav)) throw new TranscribeError("Could not decode that audio")
+    }
 
     const outBase = join(work, "out")
     const args = ["-m", modelPath, "-otxt", "-of", outBase]
