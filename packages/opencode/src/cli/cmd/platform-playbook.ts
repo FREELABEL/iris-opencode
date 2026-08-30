@@ -217,11 +217,13 @@ const SkillShowCommand = cmd({
           // only an outline reasonably concludes the outline was the whole thing.
           const lines = docBody.split("\n").length
           const chars = plan.steps.reduce((n, s) => n + (s.body?.length ?? 0) + (s.code?.length ?? 0), 0)
+          const guide = plan.guidance?.length ?? 0
           console.log()
           console.log(
             `  ${bold("Body:")} ${lines} lines. The outline above omits the step bodies` +
               (chars ? ` (${chars.toLocaleString()} chars)` : "") +
-              ` and any prose.`,
+              (guide ? ` and ${guide.toLocaleString()} chars of playbook guidance` : ` and any prose`) +
+              `.`,
           )
           console.log(`        ${dim("full text:")} iris playbook show ${plan.name} --full`)
           console.log(`        ${dim("json:     ")} iris playbook show ${plan.name} --json`)

@@ -66,6 +66,12 @@ export interface SkillPlan {
   description: string
   args: Record<string, ArgDef>
   steps: StepDef[]
+  /**
+   * Playbook-level prose written after the last step — the guidance sections authors put at
+   * the bottom. Belongs to the document, not to the final step, which is where it used to
+   * end up (#182907).
+   */
+  guidance?: string
   includes: string[]
   confirm: string[]
   onError: "continue" | "stop" | "ask"
@@ -185,16 +191,52 @@ const FENCE = "\x60\x60\x60"  // three backticks, avoids bundler template litera
 const YAML_BLOCK_RE = new RegExp(`${FENCE}yaml\\n([\\s\\S]*?)${FENCE}`)
 const CODE_BLOCK_RE = new RegExp(`${FENCE}(\\w+)\\n([\\s\\S]*?)${FENCE}`)
 
+/**
+ * Where the steps stop and the playbook's own prose resumes.
+ *
+ * A `# ` heading is a SIBLING of the playbook's title, so it cannot belong to a `### step:`.
+ * Without this boundary the last step ran to end-of-file and absorbed everything after it
+ * (#182907): on work-the-epic the whole 5,554-char "Writing it well" section — an H1 at the
+ * same level as the playbook title — was parsed as part of the `diary` step and went into
+ * that step's prompt on every run. General, not specific: any playbook with trailing prose
+ * had its final step quietly padded with it.
+ *
+ * Fenced regions are masked first. Step code is full of `# comment` lines, and any one of
+ * them would otherwise read as an H1 and truncate the step mid-body.
+ */
+export function findTrailingDocsIndex(markdownBody: string, afterIdx: number): number {
+  // Blank the fences rather than removing them, so every index still refers to the original.
+  const masked = markdownBody.replace(new RegExp(`${FENCE}[\\s\\S]*?${FENCE}`, "g"), (m) =>
+    m.replace(/[^\n]/g, " "),
+  )
+  for (const m of masked.matchAll(/^# .+$/gm)) {
+    if (m.index! > afterIdx) return m.index!
+  }
+  return markdownBody.length
+}
+
+/** Playbook-level prose written after the last step — documentation, not part of any step. */
+export function parseGuidance(markdownBody: string): string {
+  const matches = [...markdownBody.matchAll(STEP_HEADING)]
+  if (matches.length === 0) return ""
+  const idx = findTrailingDocsIndex(markdownBody, matches[matches.length - 1].index!)
+  return idx >= markdownBody.length ? "" : markdownBody.slice(idx).trim()
+}
+
 export function parseSteps(markdownBody: string): StepDef[] {
   const steps: StepDef[] = []
   const matches = [...markdownBody.matchAll(STEP_HEADING)]
+
+  // The last step ends here, not at end-of-file. See findTrailingDocsIndex.
+  const docsIdx =
+    matches.length > 0 ? findTrailingDocsIndex(markdownBody, matches[matches.length - 1].index!) : markdownBody.length
 
   for (let i = 0; i < matches.length; i++) {
     const match = matches[i]
     const id = match[1]
     const title = match[2]
     const startIdx = match.index! + match[0].length
-    const endIdx = i + 1 < matches.length ? matches[i + 1].index! : markdownBody.length
+    const endIdx = i + 1 < matches.length ? matches[i + 1].index! : docsIdx
     const section = markdownBody.slice(startIdx, endIdx)
 
     // Parse step YAML metadata — find and remove the yaml block first
@@ -277,6 +319,9 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
   // that genuinely has no steps; only EXPOSE them as executable steps on v2.
   const bodySteps = parseSteps(md.content)
   const steps = version === 2 ? bodySteps : []
+  // Prose after the last step. Carried on the plan so it is addressable as what it is —
+  // playbook documentation — instead of being smuggled inside the final step (#182907).
+  const guidance = parseGuidance(md.content)
 
   // Freeform vertical/industry tags — no fixed taxonomy, so accept a single string too.
   const industries = Array.isArray(fm.industries)
@@ -293,6 +338,7 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
     description: fm.description ?? skillInfo.description,
     args,
     steps,
+    guidance,
     includes: fm.includes ?? [],
     confirm: fm.confirm ?? [],
     onError: fm["on-error"] ?? "ask",
