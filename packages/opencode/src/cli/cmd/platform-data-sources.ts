@@ -660,6 +660,20 @@ const SyncCommand = cmd({
         type: "string",
         describe: "target Atlas Dataset slug — files become structured, cited records (not raw list items)",
       })
+      // MULTIMODAL WAS UNREACHABLE. fl-api gates image OCR on include_images (default
+      // false) and silently drops every image when it is off — and no CLI flag set it, so
+      // the vision path could not be turned on from here at all.
+      .option("include-images", {
+        type: "boolean",
+        default: false,
+        describe: "read images with vision/OCR instead of skipping them (costs vision calls)",
+      })
+      .option("image-detail", {
+        type: "string",
+        choices: ["low", "high", "auto"],
+        default: "high",
+        describe: "vision detail level for images (low is cheaper and coarser)",
+      })
       .option("model", { type: "string", describe: "nano model for extraction (default gpt-4o-mini)" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -680,6 +694,8 @@ const SyncCommand = cmd({
         source: args.source,
         path: args.path,
         recursive: args.recursive,
+        include_images: args["include-images"],
+        image_detail_level: args["image-detail"],
         list_name: args["list-name"],
         ...(args.dataset ? { dataset_slug: args.dataset } : {}),
         ...(args.model ? { extractor_model: args.model } : {}),
