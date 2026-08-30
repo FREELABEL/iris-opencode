@@ -434,6 +434,26 @@ export const PlatformUsageCommand = cmd({
       }
     }
 
+    // Which SURFACE spent it, and how fat its prompts were. avg-in is the column that
+    // earns this table: total tokens cannot tell a bloated system prompt from a long
+    // answer, and those have opposite fixes. A surface whose avg-in dwarfs its avg-out
+    // is paying for context it did not ask for on every single turn.
+    if (s.available && (s.by_surface ?? []).length) {
+      console.log()
+      console.log(
+        `  ${dim("surface".padEnd(24))}${dim("calls".padStart(8))}${dim("avg-in".padStart(10))}` +
+          `${dim("max-in".padStart(10))}${dim("cost".padStart(10))}`,
+      )
+      for (const r of s.by_surface.slice(0, 10)) {
+        console.log(
+          `  ${String(r.surface ?? "—").slice(0, 23).padEnd(24)}${String(r.calls).padStart(8)}` +
+            `${Number(r.avg_input_tokens ?? 0).toLocaleString().padStart(10)}` +
+            `${Number(r.max_input_tokens ?? 0).toLocaleString().padStart(10)}` +
+            `${money(Number(r.cost)).padStart(10)}`,
+        )
+      }
+    }
+
     if (s.available && (s.by_type ?? []).length) {
       console.log()
       console.log(`  ${dim("by type:")} ${s.by_type.map((t: any) => `${t.usage_type ?? "—"} ${money(Number(t.cost))}`).join(dim(" · "))}`)

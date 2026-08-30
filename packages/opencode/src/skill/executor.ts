@@ -74,6 +74,11 @@ export interface SkillPlan {
   location: string
   /** Vertical/industry classification for playbook-library discovery — freeform, not a fixed taxonomy. */
   industries?: string[]
+  /**
+   * WHEN to invoke this playbook — the situations that should make a model pick it.
+   * Distinct from `description`, which says what it does. Freeform, not a taxonomy.
+   */
+  triggers?: string[]
 }
 
 export interface StepResult {
@@ -285,6 +290,19 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
       ? [fm.industries]
       : []
 
+  // WHEN to reach for this playbook, as opposed to WHAT it is (#182840 / CTX-2).
+  //
+  // `description` says what a playbook does; a model choosing between forty of them
+  // needs the situation that should make it pick this one. Weak models (gpt-4.1-nano,
+  // gpt-4o-mini) route on the trigger far more reliably than on a prose summary, which
+  // is the failure this field exists to fix. Same freeform shape as `industries`:
+  // accept a list or a bare string, no taxonomy.
+  const triggers = Array.isArray(fm.triggers)
+    ? fm.triggers.filter((v: unknown) => typeof v === "string")
+    : typeof fm.triggers === "string"
+      ? [fm.triggers]
+      : []
+
   return {
     name: fm.name ?? skillInfo.name,
     version,
@@ -300,6 +318,7 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
     integrations: fm.integrations ?? [],
     location: skillInfo.location,
     industries,
+    triggers,
   }
 }
 
