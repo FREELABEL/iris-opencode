@@ -151,6 +151,10 @@ const SkillShowCommand = cmd({
       printDivider()
       printKV("Version", plan.version)
       printKV("Description", plan.description)
+      // What a model routes on. Printed next to the description because the two are
+      // easy to conflate: description is WHAT this does, triggers are WHEN to reach
+      // for it (#182840 / CTX-2).
+      if (plan.triggers?.length) printKV("Triggers", plan.triggers.join(", "))
       printKV("Location", plan.location)
       // The shareable link, next to the local path (#182116). `show` used to give ONLY a
       // filesystem path, which is useless to anyone but the author on this machine. Printed
@@ -1224,6 +1228,7 @@ const PlaybookSyncCommand = cmd({
               name: plan.name,
               description: plan.description,
               industries: plan.industries ?? [],
+              triggers: plan.triggers ?? [],
               args_schema: plan.args,
               steps_summary: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode, integrations: s.integrations })),
               version: plan.version,
@@ -1674,6 +1679,7 @@ const PublishCommand = cmd({
             name: local.plan.name,
             description: local.plan.description,
             industries: local.plan.industries ?? [],
+            triggers: local.plan.triggers ?? [],
             args_schema: local.plan.args,
             steps_summary: local.plan.steps.map((s: any) => ({ id: s.id, title: s.title, mode: s.mode, integrations: s.integrations ?? [] })),
             version: local.plan.version,
