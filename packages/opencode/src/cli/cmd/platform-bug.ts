@@ -1207,6 +1207,7 @@ const CloseCommand = cmd({
       if (args.json) {
         spinner.stop("")
         await writeJson({ results, ok: okCount, failed: failCount, fix_commit: fixCommit ?? null })
+        if (failCount > 0) process.exit(1)
         return
       }
 
@@ -1217,7 +1218,11 @@ const CloseCommand = cmd({
         for (const r of results.filter((r) => !r.ok)) prompts.log.error(`#${r.id}: ${r.error}`)
       }
       if (fixCommit) console.log(`  ${dim("Fix commit:")} ${highlight(fixCommit)}`)
-      console.log(dim("  Other machines will see this fix via iris bug list --status=all"))
+      // Only promise propagation if something actually resolved. This line used to print
+      // unconditionally — including directly under "0 resolved, 1 failed", where it reads
+      // as reassurance about work that did not happen.
+      if (okCount > 0) console.log(dim("  Other machines will see this fix via iris bug list --status=all"))
+      if (failCount > 0) process.exit(1)
       return
     }
 
@@ -1258,6 +1263,7 @@ const CloseCommand = cmd({
     if (args.json) {
       spinner.stop("")
       await writeJson({ results, ok: okCount, failed: failCount })
+      if (failCount > 0) process.exit(1)
       return
     }
 
@@ -1269,8 +1275,12 @@ const CloseCommand = cmd({
         prompts.log.error(`#${r.id}: ${r.error}`)
       }
     }
-    console.log(dim("  Tip: iris bug close <id> --solution \"how you fixed it\" records the fix for other machines"))
+    // The tip is advice for a close that worked. Under a failure it is noise on top of an error.
+    if (okCount > 0) {
+      console.log(dim("  Tip: iris bug close <id> --solution \"how you fixed it\" records the fix for other machines"))
+    }
     console.log(dim("  iris bug list --status=all  — view all bugs"))
+    if (failCount > 0) process.exit(1)
   },
 })
 
