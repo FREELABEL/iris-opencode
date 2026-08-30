@@ -12,5 +12,10 @@
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!-- Dictation records in the webview and transcribes on the LOCAL sidecar, so the audio
+         never leaves this Mac. Without this the hardened runtime denies getUserMedia and the
+         only symptom is a permission error the user cannot act on. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>

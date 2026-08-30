@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- macOS will not even SHOW the microphone prompt without a usage string; it terminates
+         the app instead. Accurate as written: dictation is transcribed by the bundled sidecar. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>IRIS uses your microphone for dictation. Recordings are transcribed on this Mac and are never uploaded.</string>
+</dict>
+</plist>

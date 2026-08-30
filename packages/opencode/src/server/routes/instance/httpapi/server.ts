@@ -3,6 +3,7 @@ import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
 import { HttpClient, HttpMiddleware, HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { transcribeRoute } from "./transcribe"
 import * as Observability from "@opencode-ai/core/observability"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
@@ -280,6 +281,8 @@ export function createRoutes(
     instanceRoutes,
     serverRoutes,
     docRoute,
+    // BEFORE uiRoute: that one matches "*" "/*", so anything registered after it is dead.
+    transcribeRoute.pipe(Layer.provide(authOnlyRouterLayer)),
     uiRoute,
   ).pipe(
     Layer.provide([

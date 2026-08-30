@@ -27,6 +27,7 @@ import {
 } from "@/context/prompt"
 import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
+import { createDictation } from "@/hooks/dictation"
 import { useSync } from "@/context/sync"
 import { useComments } from "@/context/comments"
 import { Button } from "@opencode-ai/ui/button"
@@ -1020,6 +1021,25 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     queueScroll()
   }
 
+  // Dictation. Records in the webview, transcribes on the LOCAL sidecar this app already
+  // runs — the audio goes to 127.0.0.1 and nowhere else.
+  const [dictationError, setDictationError] = createSignal<string>()
+  const dictation = createDictation({
+    url: () => sdk().url,
+    onError: setDictationError,
+    onTranscript: (text) => {
+      setDictationError(undefined)
+      // Append into the editor DOM and re-parse via handleInput, rather than replacing the
+      // prompt with one text part — a whole-prompt set would drop file attachments and pills.
+      const existing = editorRef.textContent ?? ""
+      const gap = existing.length > 0 && !/\s$/.test(existing) ? " " : ""
+      editorRef.appendChild(createTextFragment(gap + text))
+      handleInput()
+      editorRef.focus()
+      setCursorPosition(editorRef, (editorRef.textContent ?? "").length)
+    },
+  })
+
   const addPart = (part: ContentPart) => {
     if (part.type === "image") return false
 
@@ -1646,6 +1666,47 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 </Button>
               </div>
               <div class="flex items-center gap-1.5 min-w-0 flex-1 h-7">
+                <Tooltip
+                  placement="top"
+                  gutter={4}
+                  value={
+                    dictationError() ??
+                    (dictation.phase() === "recording"
+                      ? "Stop and transcribe"
+                      : dictation.phase() === "transcribing"
+                        ? "Transcribing on this Mac…"
+                        : "Dictate (on-device)")
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="normal"
+                    aria-label="Dictate"
+                    disabled={dictation.phase() === "transcribing"}
+                    onClick={() => {
+                      dictation.toggle()
+                      restoreFocus()
+                    }}
+                    classList={{
+                      "flex items-center gap-1 shrink-0": true,
+                      "text-text-base": dictation.phase() !== "recording",
+                      // Recording must be obvious at a glance: an active microphone nobody
+                      // notices is the failure this indicator exists to prevent.
+                      "text-text-danger-base": dictation.phase() === "recording",
+                    }}
+                  >
+                    <Icon
+                      name="microphone"
+                      classList={{ "animate-pulse": dictation.phase() === "recording" }}
+                    />
+                    <Show when={dictation.phase() === "recording"}>
+                      <span class="font-mono text-2xs tabular-nums">
+                        {Math.floor(dictation.seconds() / 60)}:
+                        {String(dictation.seconds() % 60).padStart(2, "0")}
+                      </span>
+                    </Show>
+                  </Button>
+                </Tooltip>
                 <Show when={!agentsLoading()}>
                   <div
                     data-component="prompt-agent-control"
