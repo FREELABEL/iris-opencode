@@ -34,6 +34,7 @@ import { useSync } from "@/context/sync"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Button } from "@opencode-ai/ui/button"
 import { Icon } from "@opencode-ai/ui/icon"
+import { Spinner } from "@opencode-ai/ui/spinner"
 import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Select } from "@opencode-ai/ui/select"
@@ -775,7 +776,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   // which runs whisper.cpp on this machine — the audio goes to 127.0.0.1 and nowhere else.
   const [dictationError, setDictationError] = createSignal<string>()
   const dictation = createDictation({
-    url: sdk.url,
+    url: () => sdk.url,
     onError: setDictationError,
     onTranscript: (text) => {
       if (!editorRef) return
@@ -1625,15 +1626,37 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     disabled={dictation.phase() === "transcribing"}
                     onClick={() => dictation.toggle()}
                     classList={{
-                      "_hidden group-hover/prompt-input:flex size-6 items-center justify-center": true,
+                      "size-6 items-center justify-center": true,
+                      // Hover-to-reveal ONLY while idle. Recording and transcribing must stay
+                      // on screen: the first version kept `_hidden` applied in every state and
+                      // tried to win it back with `flex`, so an active microphone vanished the
+                      // moment the pointer left the prompt. A mic you cannot see is the exact
+                      // failure this indicator exists to prevent.
+                      "_hidden group-hover/prompt-input:flex": dictation.phase() === "idle",
                       "text-text-base": dictation.phase() === "idle",
-                      // Recording is the one state that must be obvious without hovering:
-                      // a hot microphone nobody noticed is the failure that matters here.
-                      "flex text-text-danger-base": dictation.phase() === "recording",
-                      "flex opacity-60": dictation.phase() === "transcribing",
+                      "!flex w-auto gap-1 px-1 text-text-danger-base": dictation.phase() === "recording",
+                      "!flex w-auto gap-1 px-1 text-text-base": dictation.phase() === "transcribing",
                     }}
                   >
-                    <Icon name="microphone" />
+                    <Show
+                      when={dictation.phase() !== "transcribing"}
+                      fallback={<Spinner class="size-3.5" />}
+                    >
+                      <Icon
+                        name="microphone"
+                        classList={{ "animate-pulse": dictation.phase() === "recording" }}
+                      />
+                    </Show>
+                    {/* A moving number is the difference between "recording" and "hung". */}
+                    <Show when={dictation.phase() === "recording"}>
+                      <span class="font-mono text-2xs tabular-nums">
+                        {Math.floor(dictation.seconds() / 60)}:
+                        {String(dictation.seconds() % 60).padStart(2, "0")}
+                      </span>
+                    </Show>
+                    <Show when={dictation.phase() === "transcribing"}>
+                      <span class="text-2xs">transcribing…</span>
+                    </Show>
                   </Button>
                 </Tooltip>
                 <Show when={permission.permissionsEnabled() && params.id}>

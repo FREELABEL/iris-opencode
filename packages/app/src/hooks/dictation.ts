@@ -18,8 +18,16 @@ import { createSignal, onCleanup } from "solid-js"
 export type DictationPhase = "idle" | "recording" | "transcribing"
 
 export interface DictationOptions {
-  /** Base URL of the local opencode server (sdk.url). */
-  url: string
+  /**
+   * Base URL of the local opencode server, read as a GETTER at request time.
+   *
+   * Not a string: sdk.url changes when the user switches servers, and a snapshot taken at
+   * mount keeps posting to the server that was selected when the prompt first rendered.
+   * That happened — dictation kept hitting an old 1.3.214 server after the app had been
+   * switched to a new one, and the old build answers 200 to unknown POSTs, so it looked
+   * like "transcribed to nothing" instead of "wrong server".
+   */
+  url: () => string
   /** Called with the finished transcript. Only fires for a non-empty result. */
   onTranscript: (text: string) => void
   /** Called with a human-readable reason. Never throws at the caller. */
@@ -30,6 +38,10 @@ export interface DictationOptions {
 
 export function createDictation(opts: DictationOptions) {
   const [phase, setPhase] = createSignal<DictationPhase>("idle")
+  // Elapsed recording time. A mic that shows no moving number is indistinguishable from
+  // a mic that has silently died, which is the complaint this exists to answer.
+  const [seconds, setSeconds] = createSignal(0)
+  let ticker: ReturnType<typeof setInterval> | undefined
   let recorder: MediaRecorder | undefined
   let stream: MediaStream | undefined
   let chunks: Blob[] = []
@@ -38,6 +50,8 @@ export function createDictation(opts: DictationOptions) {
   function teardown() {
     if (timeout) clearTimeout(timeout)
     timeout = undefined
+    if (ticker) clearInterval(ticker)
+    ticker = undefined
     // Releasing the tracks is what turns off the OS recording indicator. Leaving them live
     // is the kind of thing nobody notices until it is a support ticket about the orange dot.
     stream?.getTracks().forEach((t) => t.stop())
@@ -73,7 +87,9 @@ export function createDictation(opts: DictationOptions) {
     }
     recorder.onstop = () => void transcribe()
     recorder.start()
+    setSeconds(0)
     setPhase("recording")
+    ticker = setInterval(() => setSeconds((n) => n + 1), 1000)
 
     timeout = setTimeout(() => stop(), (opts.maxSeconds ?? 300) * 1000)
   }
@@ -98,8 +114,9 @@ export function createDictation(opts: DictationOptions) {
     try {
       const form = new FormData()
       form.append("audio", blob, "dictation.webm")
-      const res = await fetch(`${opts.url.replace(/\/$/, "")}/transcribe`, { method: "POST", body: form })
-      const body = await res.json().catch(() => ({}) as any)
+      const base = opts.url().replace(/\/$/, "")
+      const res = await fetch(`${base}/transcribe`, { method: "POST", body: form })
+      const body = await res.json().catch(() => null as any)
 
       if (!res.ok) {
         // The server's message already names the real cause — whisper-cpp missing, a
@@ -108,7 +125,17 @@ export function createDictation(opts: DictationOptions) {
         return opts.onError?.(body?.error || `Transcription failed (HTTP ${res.status})`)
       }
 
-      const text = String(body?.text ?? "").trim()
+      // A 200 is not proof this route exists. Older servers answer 200 (and HTML) to unknown
+      // POSTs, so "no text field" means we talked to something that is not the transcriber —
+      // report THAT, rather than blaming the microphone for a routing mistake.
+      if (!body || typeof body.text !== "string") {
+        setPhase("idle")
+        return opts.onError?.(
+          `${base} answered without a transcript — it may be an older server without /transcribe. Switch servers, or update it.`,
+        )
+      }
+
+      const text = body.text.trim()
       setPhase("idle")
       if (!text) return opts.onError?.("That transcribed to nothing — check the input device and try again.")
       opts.onTranscript(text)
@@ -127,5 +154,5 @@ export function createDictation(opts: DictationOptions) {
 
   onCleanup(teardown)
 
-  return { phase, start, stop, toggle }
+  return { phase, seconds, start, stop, toggle }
 }
