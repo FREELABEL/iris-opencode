@@ -742,19 +742,48 @@ const ListConnectedCommand = cmd({
       return msg ? `${target} unreachable — ${msg}` : `${target} unreachable`
     }
 
+    // A FAILING PROBE IS NOT A FAILING INTEGRATION (#182861, #182867).
+    //
+    // The state model above already says the right thing — "unknown" renders dim, as "we could
+    // not determine this", and is deliberately not coloured like a failure. The classification
+    // did not match it: only a 404 reached that branch, so a 500/502/503 from the probe endpoint,
+    // or iris-api being unreachable, fell through to `error` and rendered [unverified]. That is a
+    // claim about the INTEGRATION made on the strength of a failure in OUR probe path — and it
+    // was measurably wrong: connections reporting [unverified] executed their functions fine.
+    //
+    // The distinction that matters is WHO failed:
+    //   - the probe transport failed (4xx-not-auth, 5xx, network) -> we could not ask -> unknown
+    //   - the probe ran and was REFUSED (401/403)                 -> we asked, denied  -> expired
+    // Only the second is evidence about the integration.
+    //
+    // Deliberately NOT applied to the calendar/bridge probe: there the bridge IS the execution
+    // path, so a dead bridge means calendar reads genuinely do not work. That one stays `error`.
+    const probeUnavailable = (status: number, endpoint: string): Probe | null => {
+      if (status === 401 || status === 403) return null // auth answers are real answers
+      if (status === 404)
+        return { state: "unknown", reason: `probe endpoint ${endpoint} returned 404` }
+      if (status === 408 || status === 429 || status >= 500)
+        return {
+          state: "unknown",
+          reason: `probe endpoint ${endpoint} returned HTTP ${status} — the probe is unavailable, which says nothing about the integration`,
+        }
+      return null
+    }
+
     const verifyFns: Record<string, (row: any) => Promise<Probe>> = {
       gmail: async () => {
         let r: Response | null = null
         try {
           r = await irisFetch(`/api/v1/leads/0/gmail-threads`)
         } catch (e) {
-          return { state: "error", reason: netReason(e, "iris-api") }
+          // Could not reach our own API. That is a fact about us, not about Gmail.
+          return { state: "unknown", reason: netReason(e, "iris-api") }
         }
-        if (!r) return { state: "error", reason: "iris-api unreachable" }
+        if (!r) return { state: "unknown", reason: "iris-api unreachable" }
         if (r.status === 401 || r.status === 403)
           return { state: "expired", reason: "Google OAuth token rejected" }
-        if (r.status === 404)
-          return { state: "unknown", reason: "probe endpoint /leads/0/gmail-threads returned 404" }
+        const gUnavail = probeUnavailable(r.status, "/leads/0/gmail-threads")
+        if (gUnavail) return gUnavail
         if (!r.ok) return { state: "error", reason: `iris-api returned HTTP ${r.status}` }
         return { state: "verified", reason: "Gmail API reachable" }
       },
@@ -803,13 +832,13 @@ const ListConnectedCommand = cmd({
         try {
           r = await irisFetch("/api/v1/integrations/exec", { method: "POST", body: JSON.stringify(body) })
         } catch (e) {
-          return { state: "error", reason: netReason(e, "iris-api") }
+          return { state: "unknown", reason: netReason(e, "iris-api") }
         }
-        if (!r) return { state: "error", reason: "iris-api unreachable" }
+        if (!r) return { state: "unknown", reason: "iris-api unreachable" }
         if (r.status === 401 || r.status === 403)
           return { state: "expired", reason: "Google OAuth token rejected" }
-        if (r.status === 404)
-          return { state: "unknown", reason: "probe endpoint /integrations/exec returned 404" }
+        const dUnavail = probeUnavailable(r.status, "/integrations/exec")
+        if (dUnavail) return dUnavail
         if (!r.ok) return { state: "error", reason: `iris-api returned HTTP ${r.status}` }
         return { state: "verified", reason: "Drive API reachable" }
       },
