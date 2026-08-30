@@ -430,6 +430,45 @@ const SLUG_ALIASES: Record<string, string> = {
   outlookcalendar: "outlook-calendar",
 }
 
+/**
+ * The same parameter has two names depending on which backend answers (#182866).
+ *
+ * `iris integrations exec gmail read_emails limit=3` returns ONE message. The same call with
+ * max_results=3 returns three. Neither is a typo on the caller's part — the two Gmail services
+ * genuinely disagree:
+ *
+ *   fl-api   app/Services/Integrations/GmailIntegrationService.php        $parameters['max_results']
+ *   iris-api app/Services/Integrations/Gmail/GmailIntegrationService.php  $parameters['limit']
+ *
+ * Both default to 10, so neither explains the 1 that actually comes back — the executing backend
+ * is a third path again. But the caller-visible defect does not depend on resolving that: a
+ * parameter the backend does not recognise is DROPPED IN SILENCE, and the caller is handed a
+ * result that quietly ignored what they asked for. A wrong answer with a 200 on it.
+ *
+ * Sending every spelling is the fix that survives not knowing which backend answers. These are
+ * synonyms for one another, no backend errors on an extra key, and whichever service runs finds
+ * the name it expects. Only fills in spellings the caller did NOT supply, so an explicit value
+ * always wins and passing two different values for the same idea is left alone rather than
+ * silently reconciled.
+ */
+const PARAM_SYNONYMS: string[][] = [
+  ["limit", "max_results", "maxResults"],
+  ["query", "q"],
+]
+
+export function withParamSynonyms(params: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...params }
+  for (const group of PARAM_SYNONYMS) {
+    const supplied = group.filter((k) => out[k] !== undefined && out[k] !== null)
+    // 0 supplied: nothing to broadcast. 2+ supplied: the caller was explicit about
+    // different keys and guessing which they meant would be worse than passing both.
+    if (supplied.length !== 1) continue
+    const value = out[supplied[0]!]
+    for (const k of group) if (out[k] === undefined) out[k] = value
+  }
+  return out
+}
+
 export async function executeIntegrationCall(
   type: string,
   fn: string,
@@ -444,6 +483,7 @@ export async function executeIntegrationCall(
   }
 
   const normalized = SLUG_ALIASES[type] ?? type
+  params = withParamSynonyms(params)
   const userId = await requireUserId()
   if (!userId) throw new Error("user_id required")
 
