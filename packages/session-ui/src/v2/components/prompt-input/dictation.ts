@@ -92,6 +92,8 @@ export function createDictation(opts: DictationOptions) {
   let processor: ScriptProcessorNode | undefined
   let source: MediaStreamAudioSourceNode | undefined
   let captured: Float32Array[] = []
+  let peak = 0
+  let keepAlive: MediaStreamAudioSourceNode | undefined
   let capturedRate = TARGET_RATE
   let timeout: ReturnType<typeof setTimeout> | undefined
   let ticker: ReturnType<typeof setInterval> | undefined
@@ -151,13 +153,24 @@ export function createDictation(opts: DictationOptions) {
 
       capturedRate = audioCtx.sampleRate
       source = audioCtx.createMediaStreamSource(stream)
+      // Held in a closure deliberately. If the source node is garbage-collected the graph
+      // keeps running and delivers SILENCE — a failure that looks like a dead microphone.
+      keepAlive = source
       // ScriptProcessor is deprecated in favour of AudioWorklet, and used deliberately: a
       // worklet needs a separately-loaded module, and this has to work inside a packaged
       // webview with no extra asset plumbing. It is supported everywhere we ship.
       processor = audioCtx.createScriptProcessor(4096, 1, 1)
       captured = []
+      peak = 0
       processor.onaudioprocess = (event) => {
-        captured.push(new Float32Array(event.inputBuffer.getChannelData(0)))
+        const frame = event.inputBuffer.getChannelData(0)
+        captured.push(new Float32Array(frame))
+        // Track the loudest sample seen. Whisper answers "You" to silence, so without this
+        // an empty microphone is indistinguishable from a bad transcription.
+        for (let i = 0; i < frame.length; i++) {
+          const v = Math.abs(frame[i]!)
+          if (v > peak) peak = v
+        }
       }
       // The graph only pulls a processor that reaches the destination — but routing the mic
       // to the speakers would echo it. A zero-gain node keeps it pulled and silent.
@@ -166,6 +179,10 @@ export function createDictation(opts: DictationOptions) {
       source.connect(processor)
       processor.connect(mute)
       mute.connect(audioCtx.destination)
+      // Resume AFTER the graph is connected as well as before. WebKit will happily leave a
+      // context running while delivering empty input buffers if it was resumed against an
+      // unconnected graph, which produces a full-length recording of pure silence.
+      if (audioCtx.state === "suspended") await audioCtx.resume()
     } catch (e) {
       return fail(`Could not open the audio pipeline (${e instanceof Error ? e.message : String(e)}).`)
     }
@@ -188,10 +205,22 @@ export function createDictation(opts: DictationOptions) {
     captured = []
     teardown()
 
+    const level = peak
+    peak = 0
     const total = frames.reduce((n, f) => n + f.length, 0)
     if (total === 0) {
       setPhase("idle")
       return opts.onError?.("No audio reached the recorder. Check the input device in System Settings › Sound.")
+    }
+    // Whisper answers "You" (or "Thank you.") to silence — confidently, every time. Sending a
+    // silent clip and surfacing that as a transcript is worse than saying nothing: it looks
+    // like the model is broken when the microphone never heard anything.
+    // 0.01 is ~ -40 dBFS: quieter than speech, louder than a noise floor.
+    if (level < 0.01) {
+      setPhase("idle")
+      return opts.onError?.(
+        `The microphone recorded silence (peak ${level.toFixed(4)}). Check the input device in System Settings › Sound, and that IRIS is allowed under Privacy & Security › Microphone.`,
+      )
     }
 
     const merged = new Float32Array(total)
