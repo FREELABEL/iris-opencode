@@ -329,7 +329,8 @@ export const PlatformUsageCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("days", { type: "number", default: 30, describe: "window in days (1-365)" })
-      .option("source", { type: "string", describe: "filter to one surface: cli | mcp | proxy | installer" })
+      .option("source", { type: "string", describe: "filter ACTIVITY to one caller: cli | mcp | api | installer" })
+      .option("surface", { type: "string", describe: "filter SPEND to one surface: command_bar | react_loop | heartbeat | proxy | transcription" })
       .option("user", { type: "number", describe: "another user's rows (requires a platform operator token)" })
       .option("local", { type: "boolean", default: false, describe: "local Claude Code / Codex sessions instead of the server" })
       .option("json", { type: "boolean", default: false, describe: "machine-readable" }),
@@ -343,6 +344,7 @@ export const PlatformUsageCommand = cmd({
 
     const params = new URLSearchParams({ days: String(args.days ?? 30) })
     if (args.source) params.set("source", String(args.source))
+    if (args.surface) params.set("surface", String(args.surface))
     if (args.user) params.set("user_id", String(args.user))
 
     let data: any
@@ -361,6 +363,21 @@ export const PlatformUsageCommand = cmd({
 
     const a = data.activity ?? {}
     const s = data.spend ?? {}
+
+    // An older server does not know `surface`, ignores the query param, and answers 200
+    // with the UNFILTERED numbers. Those look exactly like a filtered answer — same shape,
+    // same fields, plausible totals — and a reader would quote them as one surface's cost.
+    // iris-api and the CLI ship separately, so this is the normal state during a rollout,
+    // not an edge case. Refuse rather than print a number that means something else.
+    if (args.surface && s.available && s.surface_filter !== String(args.surface)) {
+      console.error()
+      console.error(`  --surface ${args.surface} was not applied: this IRIS API does not support surface filtering yet.`)
+      console.error(`  Showing nothing rather than unfiltered totals under a filtered heading.`)
+      console.error(dim(`  Needs iris-api with TelemetryController::spendStats($surface) — epic #182840 / CTX-0b.`))
+      console.error()
+      process.exitCode = 1
+      return
+    }
 
     console.log()
     console.log(bold(`  Usage · last ${data.window_days} days`))
@@ -450,6 +467,37 @@ export const PlatformUsageCommand = cmd({
             `${Number(r.avg_input_tokens ?? 0).toLocaleString().padStart(10)}` +
             `${Number(r.max_input_tokens ?? 0).toLocaleString().padStart(10)}` +
             `${money(Number(r.cost)).padStart(10)}`,
+        )
+      }
+    }
+
+    // How big the prompts actually are. Percentiles, not an average, and here is the
+    // reason: a context block is paid on EVERY turn, so the number that decides whether a
+    // budget blows is the worst turn on a populated account — an account with no leads and
+    // an account with four hundred share an average and differ entirely at p99.
+    //
+    // This is the observation that replaces the hand-tokenised estimate in CTX-0, which
+    // measured the SOURCE and said so. Narrow it with --surface to size one surface.
+    const pp = s.input_percentiles
+    if (s.available && pp) {
+      console.log()
+      if (pp.available === false) {
+        console.log(`  ${dim("prompt size:")} unavailable — ${pp.reason}`)
+      } else if (!pp.calls) {
+        // Say which filter emptied it. "0 calls" under a --surface nobody ever wrote is a
+        // typo, not a finding, and the two must not look the same.
+        console.log(
+          `  ${dim("prompt size:")} no model calls${s.surface_filter ? ` on surface ${bold(String(s.surface_filter))}` : ""} in this window`,
+        )
+        if (s.surface_filter && (s.by_surface ?? []).length) {
+          console.log(dim(`  surfaces with rows: ${s.by_surface.map((r: any) => r.surface).join(", ")}`))
+        }
+      } else {
+        const label = s.surface_filter ? `prompt tokens · ${s.surface_filter}` : "prompt tokens · all surfaces"
+        console.log(`  ${bold(label)} ${dim(`(${pp.calls.toLocaleString()} calls)`)}`)
+        console.log(
+          `  ${dim("p50")} ${String(pp.p50.toLocaleString()).padEnd(10)}${dim("p90")} ${String(pp.p90.toLocaleString()).padEnd(10)}` +
+            `${dim("p99")} ${String(pp.p99.toLocaleString()).padEnd(10)}${dim("max")} ${pp.max.toLocaleString()}`,
         )
       }
     }
