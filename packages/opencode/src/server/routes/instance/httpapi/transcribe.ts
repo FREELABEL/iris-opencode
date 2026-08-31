@@ -2,6 +2,8 @@ import { Effect, Layer, Stream } from "effect"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { transcribeLocal, TranscribeError } from "@/transcribe/local"
 import { cancelCapture, isRecording, peakAmplitude, startCapture, stopCapture } from "@/transcribe/capture"
+import { readRemoteConfig, transcribeRemote } from "@/transcribe/remote"
+import { stripNonSpeech } from "@/transcribe/local"
 
 /**
  * POST /transcribe — on-device dictation for the desktop app.
@@ -61,6 +63,30 @@ export const dictateRoute = HttpRouter.use((router) =>
               },
               { status: 422 },
             )
+          }
+
+          // GROK FIRST, local as the fallback.
+          //
+          // Measured on identical audio: local base.en heard "Southern transcription", grok
+          // heard "Sovereign transcription". The 0.3s grok costs is nothing against being
+          // wrong. Set IRIS_TRANSCRIBE_PROVIDER=local to force on-device — which is what
+          // anything under a PHI policy should do, since remote means the audio leaves.
+          const prefer = process.env["IRIS_TRANSCRIBE_PROVIDER"]?.trim().toLowerCase()
+          const remote = prefer === "local" ? null : readRemoteConfig()
+
+          if (remote) {
+            try {
+              const r = await transcribeRemote(audio, remote, { filename: "dictation.wav" })
+              return HttpServerResponse.jsonUnsafe({
+                text: stripNonSpeech(r.text),
+                provider: r.provider,
+                ms,
+                peak,
+              })
+            } catch {
+              // Never fail the dictation because the network did. Falling through to the
+              // on-device model is worse words, not no words.
+            }
           }
 
           const result = await transcribeLocal(audio, { filename: "dictation.wav" })

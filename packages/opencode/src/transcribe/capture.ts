@@ -133,7 +133,9 @@ export async function stopCapture(): Promise<{ audio: Uint8Array; ms: number }> 
     current.proc.on("close", done)
     current.proc.on("error", done)
     current.proc.kill("SIGINT")
-    // If ffmpeg ignores SIGINT we still return rather than hanging the request.
+    // If ffmpeg ignores SIGINT we still return rather than hanging the request. Short,
+    // because -flush_packets means everything spoken is ALREADY on disk — we are waiting for
+    // a clean exit, not for data. Three seconds here was most of the felt latency.
     setTimeout(() => {
       try {
         current.proc.kill("SIGKILL")
@@ -141,7 +143,7 @@ export async function stopCapture(): Promise<{ audio: Uint8Array; ms: number }> 
         /* already gone */
       }
       done()
-    }, 3000)
+    }, 700)
   })
 
   try {
