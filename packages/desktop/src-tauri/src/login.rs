@@ -60,11 +60,80 @@ pub fn save_iris_token(token: String) -> Result<(), String> {
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
 
+    // Signing in is not finishing setup. Do the rest here, so "download the app" is the whole
+    // instruction rather than the first of four.
+    finish_setup_in_background();
+
     Ok(())
 }
 
+/// Install the CLI, install the Hive daemon, and register this machine — after sign-in.
+///
+/// Every one of these already worked; nothing ever ran them in order. That gap is what a
+/// client walked on 2026-08-31: install the app, then a terminal one-liner for the CLI,
+/// another for the daemon, a third command to register, and a dependency discovered at each
+/// step from an error that did not name it.
+///
+/// Runs AFTER sign-in because the daemon needs a credential to register, and BACKGROUND
+/// because none of it should freeze the window — the app is usable while this proceeds.
+///
+/// Every step is idempotent and self-checking: `install_cli` no-ops when the CLI is present,
+/// `daemon install` refuses to reinstall over an existing daemon, and `register` is safe to
+/// repeat. So a re-login costs nothing, and a partial previous attempt is completed rather
+/// than duplicated.
+fn finish_setup_in_background() {
+    std::thread::spawn(|| {
+        // The CLI first: the daemon verbs live in it. install_cli() uses the BUNDLED sidecar,
+        // so this needs no network and cannot be broken by a bad release URL.
+        match crate::cli::install_cli() {
+            Ok(msg) => println!("setup: cli -> {msg}"),
+            Err(e) => {
+                eprintln!("setup: cli install failed: {e}");
+                return; // nothing downstream can work without it
+            }
+        }
+
+        let Some(iris) = crate::cli::get_cli_install_path() else {
+            eprintln!("setup: could not locate the installed CLI; skipping daemon setup");
+            return;
+        };
+
+        for (label, args) in [
+            ("daemon install", ["daemon", "install"]),
+            ("daemon register", ["daemon", "register"]),
+        ] {
+            match std::process::Command::new(&iris).args(args).output() {
+                Ok(out) => {
+                    let text = String::from_utf8_lossy(if out.status.success() {
+                        &out.stdout
+                    } else {
+                        &out.stderr
+                    });
+                    // Name the step. "setup failed" with no step is the error shape this whole
+                    // week was spent removing.
+                    println!(
+                        "setup: {label} -> {} {}",
+                        if out.status.success() { "ok" } else { "FAILED" },
+                        text.trim().lines().last().unwrap_or("")
+                    );
+                }
+                Err(e) => eprintln!("setup: {label} could not run: {e}"),
+            }
+        }
+    });
+}
+
+/// Home directory, on every platform.
+///
+/// This read `$HOME` only, which is unset on Windows — so sign-in, the whole point of this
+/// module, would fail there with "Could not resolve home directory". Same defect as lib.rs
+/// had until earlier today (#182738), reintroduced in a new file because the helper was
+/// copied rather than shared.
 fn dirs_next_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Open the sign-in window. Idempotent — focuses the existing one rather than stacking.

@@ -1,7 +1,7 @@
 const CLI_INSTALL_DIR: &str = ".iris/bin";
 const CLI_BINARY_NAME: &str = "iris";
 
-fn get_cli_install_path() -> Option<std::path::PathBuf> {
+pub fn get_cli_install_path() -> Option<std::path::PathBuf> {
     std::env::var("HOME").ok().map(|home| {
         std::path::PathBuf::from(home)
             .join(CLI_INSTALL_DIR)
