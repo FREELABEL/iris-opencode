@@ -499,6 +499,37 @@ install_node() {
     node_ok
 }
 
+# tmux — the daemon runs agent sessions inside it (173 references in the bridge).
+# Same failure as Node: never installed, never checked, and the daemon does not test for it
+# either — it simply exits code 1. A client hit this on 2026-08-31 immediately after the Node
+# fix and had to read daemon logs to discover the cause.
+#
+# Unlike Node there is no official static tarball, so brew is the only sane automatic route.
+# When brew is absent we FAIL LOUDLY naming tmux, rather than leaving a daemon that exits 1
+# with no reason given.
+ensure_tmux() {
+    command -v tmux >/dev/null 2>&1 && return 0
+    case "$os" in darwin|linux) ;; *) return 1 ;; esac
+    if command -v brew >/dev/null 2>&1; then
+        print_message info "${MUTED}Installing ${NC}tmux${MUTED} (needed by the Hive daemon)${NC}"
+        brew install tmux >/dev/null 2>&1 || true
+        command -v tmux >/dev/null 2>&1 && return 0
+    fi
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y tmux >/dev/null 2>&1 || true
+        command -v tmux >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+if ensure_tmux; then
+    print_message info "${MUTED}tmux ${NC}$(tmux -V 2>/dev/null | awk '{print $2}')${MUTED} present${NC}"
+else
+    print_message warning "tmux is not installed — the Hive daemon will exit immediately without it."
+    print_message info "  macOS:  brew install tmux"
+    print_message info "  Linux:  sudo apt-get install tmux"
+fi
+
 if node_ok; then
     print_message info "${MUTED}Node ${NC}$(node -v)${MUTED} already present${NC}"
 elif install_node; then
