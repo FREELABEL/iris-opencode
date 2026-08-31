@@ -641,7 +641,8 @@ pub fn run() {
             get_logs,
             install_cli,
             iris_action,
-            login::save_iris_token
+            login::save_iris_token,
+            login::open_login_window
         ])
         .setup(move |app| {
             let app = app.handle().clone();

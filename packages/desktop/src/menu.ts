@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core"
 import { Menu, MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/menu"
 import { type as ostype } from "@tauri-apps/plugin-os"
 
@@ -19,6 +20,15 @@ export async function createMenu() {
             enabled: UPDATER_ENABLED,
             action: () => runUpdater({ alertOnFail: true }),
             text: "Check For Updates...",
+          }),
+          // Sign-in, always reachable. It used to appear ONLY as a startup prompt when no
+          // credential existed, so dismissing it left no way back except relaunching the app —
+          // and the thing it fixes ("0 tokens", empty replies) does not look like a sign-in
+          // problem, so nobody would think to relaunch for it. A permanent item also covers
+          // re-authenticating after a token expires, which the startup path never handled.
+          await MenuItem.new({
+            action: () => invoke("open_login_window"),
+            text: "Sign In...",
           }),
           await MenuItem.new({
             action: () => installCli(),

@@ -85,3 +85,9 @@ pub fn show_login_window(app: &AppHandle) {
         Err(e) => eprintln!("Could not open the sign-in window: {e}"),
     }
 }
+
+/// Menu entry point. The window itself is idempotent, so repeated clicks focus rather than stack.
+#[tauri::command]
+pub fn open_login_window(app: AppHandle) {
+    show_login_window(&app);
+}
