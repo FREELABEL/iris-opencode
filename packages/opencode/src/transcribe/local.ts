@@ -37,7 +37,7 @@ const EXTRA_BIN_DIRS = [
   "/bin",
 ]
 
-function which(bin: string): string | null {
+export function resolveBin(bin: string): string | null {
   const r = spawnSync("which", [bin], { encoding: "utf8" })
   const found = r.stdout?.trim()
   if (found && r.status === 0) return found
@@ -78,6 +78,27 @@ function secureTempDir(): string {
   return mkdtempSync(join(tmpdir(), "iris-dictate-"))
 }
 
+/**
+ * Strip whisper's non-speech annotations.
+ *
+ * whisper narrates what it hears when it hears no words: "[ Inaudible ]", "[BLANK_AUDIO]",
+ * "(keyboard clicking)", "[MUSIC]". Both of those first two arrived in real dictation tests.
+ * Inserted into a prompt they read as the user having typed them, which is worse than an
+ * empty result — an empty result is obviously nothing, a stray "[ Inaudible ]" looks
+ * deliberate and gets sent to a model.
+ *
+ * Only annotations are removed. A transcript that merely CONTAINS brackets keeps its words.
+ */
+export function stripNonSpeech(text: string): string {
+  const cleaned = text
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  // If removing the annotations removed everything, there was no speech.
+  return cleaned
+}
+
 export interface TranscribeResult {
   text: string
   provider: "whisper-local"
@@ -95,8 +116,8 @@ export async function transcribeLocal(
   // Only DECODING needs ffmpeg. The desktop sends 16 kHz mono PCM already, so that path has
   // no ffmpeg dependency at all — which matters, because a packaged app cannot see Homebrew.
   const ready = isWhisperReadyWav(audio)
-  const ffmpeg = ready ? null : which("ffmpeg")
-  const whisper = which("whisper-cli") || which("whisper-cpp")
+  const ffmpeg = ready ? null : resolveBin("ffmpeg")
+  const whisper = resolveBin("whisper-cli") || resolveBin("whisper-cpp")
   if (!ready && !ffmpeg) {
     throw new TranscribeError(
       "Cannot decode that audio format: ffmpeg was not found (looked on PATH and in /opt/homebrew/bin, /usr/local/bin, /opt/local/bin). Install it with: brew install ffmpeg",
@@ -145,8 +166,8 @@ export async function transcribeLocal(
     if (res.status !== 0) throw new TranscribeError(res.stderr?.slice(-300) || "whisper failed")
 
     const txt = `${outBase}.txt`
-    const text = existsSync(txt) ? readFileSync(txt, "utf8").trim() : ""
-    return { text, provider: "whisper-local", ms: Date.now() - started }
+    const raw = existsSync(txt) ? readFileSync(txt, "utf8").trim() : ""
+    return { text: stripNonSpeech(raw), provider: "whisper-local", ms: Date.now() - started }
   } finally {
     try {
       rmSync(work, { recursive: true, force: true })

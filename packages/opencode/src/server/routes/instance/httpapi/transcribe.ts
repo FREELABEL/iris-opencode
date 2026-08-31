@@ -1,6 +1,7 @@
 import { Effect, Layer, Stream } from "effect"
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { transcribeLocal, TranscribeError } from "@/transcribe/local"
+import { cancelCapture, isRecording, peakAmplitude, startCapture, stopCapture } from "@/transcribe/capture"
 
 /**
  * POST /transcribe — on-device dictation for the desktop app.
@@ -17,6 +18,75 @@ import { transcribeLocal, TranscribeError } from "@/transcribe/local"
  * Registered BEFORE the UI catch-all in server.ts — `uiRoute` matches "*" "/*", so a route
  * added after it would never be reached.
  */
+/**
+ * Dictation capture, driven from the UI but performed HERE.
+ *
+ * The webview cannot record: Tauri's macOS shell implements no WKUIDelegate media-capture
+ * callback, so WebKit never grants getUserMedia and hands back a track that emits nothing —
+ * measured in the shipped app as a 10-second recording with peak 0.0000, while the app's own
+ * microphone permission was granted. This process has that permission and can just record.
+ *
+ * Loopback-only for the same reason /transcribe is: a microphone the network can start is a
+ * microphone the network can listen through.
+ */
+export const dictateRoute = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    yield* router.add("POST", "/dictate/start", () =>
+      Effect.sync(() => {
+        try {
+          const { startedAt } = startCapture()
+          return HttpServerResponse.jsonUnsafe({ recording: true, startedAt })
+        } catch (e) {
+          return HttpServerResponse.jsonUnsafe(
+            { error: e instanceof Error ? e.message : String(e) },
+            { status: 409 },
+          )
+        }
+      }),
+    )
+
+    yield* router.add("POST", "/dictate/stop", () =>
+      Effect.tryPromise({
+        try: async () => {
+          const { audio, ms } = await stopCapture()
+
+          // whisper answers "You" to silence, confidently, every time. Refusing here means a
+          // dead input device never arrives disguised as a bad transcription.
+          const peak = peakAmplitude(audio)
+          if (peak < 0.01) {
+            return HttpServerResponse.jsonUnsafe(
+              {
+                error: `The microphone recorded silence (peak ${peak.toFixed(4)}). Check the input device in System Settings › Sound.`,
+                peak,
+              },
+              { status: 422 },
+            )
+          }
+
+          const result = await transcribeLocal(audio, { filename: "dictation.wav" })
+          return HttpServerResponse.jsonUnsafe({ text: result.text, provider: result.provider, ms, peak })
+        },
+        catch: (e) => (e instanceof TranscribeError ? e : new TranscribeError(String(e))),
+      }).pipe(
+        Effect.catch((e) =>
+          Effect.succeed(HttpServerResponse.jsonUnsafe({ error: e.message }, { status: 500 })),
+        ),
+      ),
+    )
+
+    yield* router.add("POST", "/dictate/cancel", () =>
+      Effect.sync(() => {
+        cancelCapture()
+        return HttpServerResponse.jsonUnsafe({ recording: false })
+      }),
+    )
+
+    yield* router.add("GET", "/dictate/status", () =>
+      Effect.sync(() => HttpServerResponse.jsonUnsafe({ recording: isRecording() })),
+    )
+  }),
+)
+
 export const transcribeRoute = HttpRouter.use((router) =>
   router.add("POST", "/transcribe", (request) =>
     Effect.gen(function* () {
