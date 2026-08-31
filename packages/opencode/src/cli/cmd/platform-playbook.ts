@@ -1454,9 +1454,14 @@ const PlaybookCheckPrivateCommand = cmd({
  * Built from IRIS_API rather than hardcoded, so a staging or self-hosted install prints its own
  * host instead of confidently sending somebody to production.
  */
-function playbookUrl(name: string): string {
+export function playbookUrl(name: string): string {
   const base = String(IRIS_API).replace(/\/+$/, "")
-  return `${base}/p/playbook?name=${encodeURIComponent(name)}`
+
+  // /playbooks/{name} — the real detail route (web.php: playbooks.show), serving a
+  // Playbooks/Show page. This used to build /p/playbook?name=… : a query string against a
+  // generic viewer page, which is not the address anyone would type, link, or recognise.
+  // The docblock above already described /playbooks semantics; only the string was wrong.
+  return `${base}/playbooks/${encodeURIComponent(name)}`
 }
 
 /** What a given scope means for who can open that URL. Said plainly, because "published" does not. */
@@ -1616,19 +1621,18 @@ const PublishCommand = cmd({
     // The address, or why there is not one. /playbooks/{name} has worked all along; nothing ever
     // returned it, so publish reported success and left the caller to guess — or to conclude that
     // playbooks had no web surface at all.
-    if (pb.public_url) {
-      console.log(`  ${bold("URL")}         ${highlight(String(pb.public_url))}`)
-    } else {
-      console.log(
-        `  ${bold("URL")}         ${dim("none — only a public playbook gets one")}` +
-          dim(`  (re-run with --scope public)`),
-      )
-    }
     if (data?.marketplace) {
       console.log(`  ${bold("Marketplace")} ${highlight(String(data.marketplace.slug))} ${dim(`(${data.marketplace.status})`)}`)
     }
-    // The link, and who can open it. A publish that prints neither is the bug this fixes.
-    const url = playbookUrl(String(args.name))
+
+    // ONE url line. This printed two: "none — only a public playbook gets one", immediately
+    // followed by an actual URL. Both were labelled URL, so the output contradicted itself
+    // and the reader had to guess which half to believe.
+    //
+    // The address is the same whatever the scope — /playbooks/{name} resolves by name and
+    // inherits the API's visibility. Scope decides who can OPEN it, not whether it exists,
+    // so that is said on its own line rather than by withholding the link.
+    const url = String(pb.public_url || playbookUrl(String(args.name)))
     console.log(`  ${bold("URL")}         ${highlight(url)}`)
     console.log(`  ${bold("Who can open")} ${audienceNote(pb.scope ?? String(args.scope), pb.bloq_id ?? args.bloq)}`)
     printDivider()
