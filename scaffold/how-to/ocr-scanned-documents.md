@@ -1,5 +1,5 @@
 ---
-category: Data & Ingestion
+category: Data & Atlas
 level: intermediate
 tags: [ocr, vision, images, ingestion, invoices, scans, multimodal, cross-reference]
 duration_min: 10
