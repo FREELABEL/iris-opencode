@@ -217,13 +217,16 @@ const SkillShowCommand = cmd({
           // only an outline reasonably concludes the outline was the whole thing.
           const lines = docBody.split("\n").length
           const chars = plan.steps.reduce((n, s) => n + (s.body?.length ?? 0) + (s.code?.length ?? 0), 0)
-          const guide = plan.guidance?.length ?? 0
+          // `plan.guidance` was read here and does not exist on SkillPlan — never has. The
+          // branch it gated could not fire, so this line has always rendered "and any prose"
+          // while appearing to offer a character count. Surfaced when a later change let the
+          // compiler see the property access; removed rather than typed away, because the
+          // count it promised was never available to give.
           console.log()
           console.log(
             `  ${bold("Body:")} ${lines} lines. The outline above omits the step bodies` +
               (chars ? ` (${chars.toLocaleString()} chars)` : "") +
-              (guide ? ` and ${guide.toLocaleString()} chars of playbook guidance` : ` and any prose`) +
-              `.`,
+              ` and any prose.`,
           )
           console.log(`        ${dim("full text:")} iris playbook show ${plan.name} --full`)
           console.log(`        ${dim("json:     ")} iris playbook show ${plan.name} --json`)
@@ -1469,22 +1472,25 @@ function audienceNote(scope?: string, bloqId?: number | null): string {
   switch (scope) {
     case "public":  return "anyone — it is listed in the marketplace"
     case "project": return `unlisted — anyone in bloq #${bloqId ?? "?"} can open it, nobody else`
-    case "private": return "only you"
+    case "private": return "only you — but stored in the cloud registry, so it can reach another machine you sign into"
+    case "local":   return "nobody but this machine — it is never uploaded, so there is no URL to open"
     default:        return "whoever the API allows"
   }
 }
 
 const PublishCommand = cmd({
   command: "publish <name>",
-  describe: "publish a playbook with a scope: private | project | public",
+  describe: "publish a playbook with a scope: local | private | project | public",
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", demandOption: true })
       .option("scope", {
         type: "string",
-        choices: ["private", "project", "public"] as const,
+        choices: ["local", "private", "project", "public"] as const,
         demandOption: true,
-        describe: "association scope: private (you), project (a bloq/team), public (marketplace)",
+        describe:
+          "association scope: local (this machine only, never uploaded), private (you, via the cloud registry), " +
+          "project (a bloq/team), public (marketplace)",
       })
       .option("bloq", { type: "number", describe: "bloq (project) id — required when --scope project" })
       .option("access", {
@@ -1498,6 +1504,60 @@ const PublishCommand = cmd({
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Publish Playbook — ${highlight(String(args.name))}`)
+
+    // #182937 — `local` returns HERE, above everything.
+    //
+    // "private" was read as "stays on my machine". It does not: it is a cloud-backed,
+    // you-only association — `playbook verify` compares the local file against the API
+    // registry, and `check-private` fetches the URL "as a stranger would", both of which
+    // require the thing to have been uploaded. That is the right primitive for reaching a
+    // second machine you sign into, and the wrong one for "no cloud footprint".
+    //
+    // So this branch sits ABOVE the consent prompt, ABOVE requireAuth, and above every
+    // irisFetch in this handler. Not as an optimisation — as the guarantee. There is no
+    // ordering of the code below that can be reached with scope=local, which is what makes
+    // "never written to the API registry" a property of the control flow rather than a promise
+    // in a docstring.
+    if (args.scope === "local") {
+      const resolved = await withInstance(async () => {
+        const info = await Skill.get(String(args.name))
+        if (!info) return null
+        const plan = await parsePlan(info)
+        return { location: info.location, version: plan.version ?? undefined }
+      })
+
+      if (!resolved) {
+        console.error(`  No playbook named '${args.name}' resolves on this machine.`)
+        console.error(`  ${dim("`iris playbook list` shows the exact names.")}`)
+        process.exitCode = 1
+        prompts.outro("Done"); return
+      }
+
+      if (args.json) {
+        await writeJson({
+          ok: true,
+          name: String(args.name),
+          scope: "local",
+          location: resolved.location,
+          version: resolved.version ?? null,
+          uploaded: false,
+          audience: audienceNote("local"),
+        })
+        return
+      }
+
+      console.log()
+      console.log(`  ${success(">")} ${bold(String(args.name))} is registered locally — nothing was uploaded.`)
+      console.log(`    ${dim("on disk")}    ${resolved.location}`)
+      if (resolved.version) console.log(`    ${dim("version")}   ${resolved.version}`)
+      console.log(`    ${dim("audience")}  ${audienceNote("local")}`)
+      console.log()
+      console.log(`  ${dim(`Run it:   iris playbook run ${args.name}`)}`)
+      console.log(`  ${dim(`List it:  iris playbook list`)}`)
+      console.log(`  ${dim(`Later, to put it in the cloud registry: iris playbook publish ${args.name} --scope private`)}`)
+      prompts.outro("Done")
+      return
+    }
 
     if (args.scope === "project" && !args.bloq) {
       console.error("  --bloq <id> is required when --scope project")
