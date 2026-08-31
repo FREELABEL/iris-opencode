@@ -75,6 +75,33 @@ pub fn install_cli() -> Result<String, String> {
     let install_path =
         get_cli_install_path().ok_or_else(|| "Could not determine install path".to_string())?;
 
+    // "Installed" is not "usable", and reporting the first as if it were the second is what
+    // sent a client in circles on 2026-08-30.
+    //
+    // The install script copies the binary and fixes PATH. It performs NO sign-in and no node
+    // registration — grep it for login/register/whoami/sdk/.env and you get zero hits. So on a
+    // brand-new machine this returns success and leaves a CLI that answers every platform
+    // command with "pass a bearer token". The menu said "CLI installed ✓" and it was, narrowly,
+    // true; it was just not the fact anyone needed.
+    //
+    // Ask the CLI who it is. `auth whoami` is the cheapest question that distinguishes
+    // "installed" from "installed and signed in", and it is the same check a human would run.
+    let signed_in = std::process::Command::new(&install_path)
+        .arg("auth")
+        .arg("whoami")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !signed_in {
+        // Deliberately Ok, not Err: the install genuinely succeeded and re-running it will not
+        // help. This is the next step, not a failure — but it must not be silent.
+        return Ok(format!(
+            "{} — installed, but NOT signed in.\n\nRun in a terminal:\n  iris auth login\n\nUntil then every platform command will report a missing bearer token.",
+            install_path.to_string_lossy()
+        ));
+    }
+
     Ok(install_path.to_string_lossy().to_string())
 }
 

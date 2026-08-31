@@ -312,6 +312,49 @@ async fn iris_action(action: String) -> Result<String, String> {
     }
 }
 
+/// Tell the user when the app has no credential, instead of letting it fail as "0 tokens".
+///
+/// ~/.iris/sdk/.env is written by `iris auth login` and by nothing else — the installer has no
+/// login step (grep it for login/whoami/sdk: zero hits), and neither does the desktop's
+/// "Install CLI". So the first launch on a new machine reliably has no key, the engine starts
+/// with IRIS_API_KEY="", and every model call 401s with no stated cause.
+///
+/// Observed on a client's new Mac, 2026-08-30: an evening spent debugging the CLI while the APP
+/// was equally unauthenticated. The condition costs one file read to detect, and saying it out
+/// loud converts a mystery into a one-line instruction.
+///
+/// Non-fatal and non-blocking, unlike the translocation warning: the app is genuinely usable
+/// for anything that does not need the platform, so this informs rather than quits. Async
+/// `.show()` for the same reason as there — `blocking_show()` on setup()'s thread deadlocks.
+fn warn_if_signed_out(app: &AppHandle) {
+    if iris_env_value("IRIS_API_KEY").is_some() {
+        return;
+    }
+
+    eprintln!(
+        "IRIS_API_KEY is not set — ~/.iris/sdk/.env is missing or has no key. \
+         Model calls will fail authentication until `iris auth login` is run."
+    );
+
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+        app.dialog()
+            .message(
+                "IRIS is not signed in on this machine, so AI requests will fail — often showing as \"0 tokens\" or an empty reply.\n\n\
+                 Open a terminal and run:\n\n    iris auth login\n\n\
+                 then restart IRIS. If `iris` is not found, use the IRIS menu → Install CLI first.",
+            )
+            .title("Sign in to IRIS")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::Ok)
+            .show(|_| {});
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
 fn warn_if_translocated(app: &AppHandle) -> bool {
     let Some(path) = translocated_from() else {
         return false;
@@ -469,6 +512,25 @@ fn spawn_sidecar(app: &AppHandle, port: u32) -> CommandChild {
     // branches identical, and an empty value behaves the same as an unset one downstream.
     let iris_api_key = iris_env_value("IRIS_API_KEY").unwrap_or_default();
 
+    // ...but "behaves the same as unset" is exactly the problem on a FRESH machine.
+    //
+    // ~/.iris/sdk/.env does not exist until someone runs `iris auth login`, and nothing in the
+    // install path does that — the installer has no login step at all. So a new user launches
+    // the app, the engine starts with IRIS_API_KEY="", every model call 401s, and what they
+    // see is "0 tokens" or an empty screen with no stated cause. Observed on a client's new
+    // Mac, 2026-08-30: hours spent on the CLI when the APP had no credential either.
+    //
+    // The condition is knowable at startup and costs one file read, so say so. This does not
+    // fix onboarding — the app still cannot sign anyone in — but an unauthenticated app that
+    // announces itself is a support call that ends in minutes instead of an evening.
+    if iris_api_key.is_empty() {
+        eprintln!(
+            "IRIS_API_KEY is not set — ~/.iris/sdk/.env is missing or has no key.\n\
+             The engine will start but every model call will fail authentication.\n\
+             Fix: run `iris auth login` in a terminal, then restart IRIS."
+        );
+    }
+
     let state_dir = app
         .path()
         .resolve("", BaseDirectory::AppLocalData)
@@ -579,6 +641,11 @@ pub fn run() {
             if warn_if_translocated(&app) {
                 return Ok(());
             }
+
+            // Then: is there a credential at all? An app that starts without one looks broken
+            // rather than unauthenticated — "0 tokens", empty replies, a blank screen — and the
+            // cause is invisible because nothing in the install path signs anyone in.
+            warn_if_signed_out(&app);
 
             // Initialize log state
             app.manage(LogState(Arc::new(Mutex::new(VecDeque::new()))));
