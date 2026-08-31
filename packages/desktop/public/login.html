@@ -1,0 +1,164 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Sign in to IRIS</title>
+<!--
+  In-app sign-in. Exists so a client never opens a terminal to start using IRIS.
+
+  Mirrors `iris auth login` exactly — two POSTs, no OAuth, no callback server — and writes the
+  same ~/.iris/sdk/.env, so signing in here also signs in the CLI.
+
+  Theme follows prefers-color-scheme deliberately: this is a standalone window that owns its
+  own document, which is the case where the OS is the right signal. (Inside a Genesis page the
+  rule is the opposite — switch on html.dark — because there the HOST owns the theme.)
+-->
+<style>
+  :root {
+    --bg: #fbfaf9; --fg: #1a1714; --muted: #6b625a;
+    --line: #e3ded8; --field: #fff; --accent: #1a1714;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17161a; --fg: #f2efec; --muted: #9b938c;
+      --line: #302c33; --field: #201e24; --accent: #f2efec;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 34px; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 { font-size: 21px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  p.sub { color: var(--muted); margin: 0 0 26px; font-size: 13.5px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 7px;
+          text-transform: uppercase; letter-spacing: 0.06em; }
+  input {
+    width: 100%; padding: 11px 13px; font-size: 15px; color: var(--fg);
+    background: var(--field); border: 1px solid var(--line); border-radius: 9px;
+    font-family: inherit;
+  }
+  /* Mono on the code: it is data, and the digits must not shift as they are typed. */
+  input#code { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+               letter-spacing: 0.42em; text-align: center; font-size: 19px; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  button {
+    width: 100%; margin-top: 18px; padding: 12px; font-size: 15px; font-family: inherit;
+    font-weight: 550; color: var(--bg); background: var(--accent);
+    border: 0; border-radius: 9px; cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .msg { margin-top: 16px; font-size: 13.5px; min-height: 20px; }
+  .err { color: #c0392b; }
+  @media (prefers-color-scheme: dark) { .err { color: #ff8b7a; } }
+  .ok { color: #2e7d5b; }
+  @media (prefers-color-scheme: dark) { .ok { color: #6ee7a8; } }
+  .back { background: none; border: 0; color: var(--muted); font-size: 13px;
+          cursor: pointer; margin-top: 14px; padding: 0; width: auto; font-family: inherit; }
+</style>
+
+<h1>Sign in to IRIS</h1>
+<p class="sub" id="sub">We'll email you a 6-digit code. No password.</p>
+
+<div id="step-email">
+  <label for="email">Email</label>
+  <input id="email" type="email" autocomplete="email" placeholder="you@example.com" autofocus />
+  <button id="send">Send code</button>
+</div>
+
+<div id="step-code" hidden>
+  <label for="code">6-digit code</label>
+  <input id="code" inputmode="numeric" maxlength="6" placeholder="000000" />
+  <button id="verify">Sign in</button>
+  <button class="back" id="back">Use a different email</button>
+</div>
+
+<div class="msg" id="msg"></div>
+
+<script>
+  const API = "https://raichu.heyiris.io";
+  const invoke = window.__TAURI__.core.invoke;
+  const $ = (id) => document.getElementById(id);
+  const msg = (t, cls) => { $("msg").textContent = t; $("msg").className = "msg " + (cls || ""); };
+
+  let email = "";
+
+  async function post(path, body) {
+    const r = await fetch(API + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    let data = {};
+    try { data = await r.json(); } catch {}
+    if (!r.ok) throw new Error(data.message || data.error || ("Request failed (" + r.status + ")"));
+    return data;
+  }
+
+  $("send").onclick = async () => {
+    email = $("email").value.trim();
+    if (!email) return msg("Enter your email address.", "err");
+    $("send").disabled = true;
+    msg("Sending…");
+    try {
+      // Exactly the CLI's payload. `email` alone returns 422 — auto_create is what lets a
+      // new client sign in at all, and method/expiration are required by the endpoint.
+      await post("/api/v1/auth/send-login-code", {
+        email,
+        method: "with_login_code",
+        expiration_minutes: 30,
+        auto_create: true,
+      });
+      $("step-email").hidden = true;
+      $("step-code").hidden = false;
+      $("sub").textContent = "We sent a code to " + email + ".";
+      msg("");
+      $("code").focus();
+    } catch (e) {
+      msg(e.message, "err");
+    } finally {
+      $("send").disabled = false;
+    }
+  };
+
+  $("verify").onclick = async () => {
+    const code = $("code").value.trim().replace(/\s/g, "");
+    if (code.length < 6) return msg("Enter the 6-digit code.", "err");
+    $("verify").disabled = true;
+    msg("Verifying…");
+    try {
+      // Same payload the CLI sends, including the 365-day SDK token — so the credential this
+      // writes is indistinguishable from one created by `iris auth login`.
+      const data = await post("/api/v1/auth/login-with-code", {
+        email,
+        login_code: code,           // NOT `code` — the endpoint names this field login_code
+        generate_sdk_token: true,
+        sdk_token_name: "IRIS Desktop",
+        sdk_token_expires_days: 365,
+        generate_dashboard_url: true,
+      });
+      // The token is nested: data.data.sdk_token.key. Reading data.sdk_token returns an
+      // object, and writing that to the env file would produce "[object Object]" as the
+      // credential — a file that exists, passes every "is it signed in" check, and 401s.
+      const token = data?.data?.sdk_token?.key;
+      if (!token) throw new Error("Signed in, but no token was returned. Contact support.");
+      await invoke("save_iris_token", { token });
+      msg("Signed in. Restart IRIS to finish.", "ok");
+      $("step-code").hidden = true;
+      $("sub").textContent = "You're signed in on this machine. The iris CLI is signed in too.";
+    } catch (e) {
+      msg(e.message, "err");
+    } finally {
+      $("verify").disabled = false;
+    }
+  };
+
+  $("back").onclick = () => {
+    $("step-code").hidden = true;
+    $("step-email").hidden = false;
+    $("sub").textContent = "We'll email you a 6-digit code. No password.";
+    msg("");
+  };
+
+  $("email").addEventListener("keydown", (e) => { if (e.key === "Enter") $("send").click(); });
+  $("code").addEventListener("keydown", (e) => { if (e.key === "Enter") $("verify").click(); });
+</script>

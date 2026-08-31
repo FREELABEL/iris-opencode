@@ -1,4 +1,5 @@
 mod cli;
+mod login;
 mod window_customizer;
 
 use cli::{install_cli, sync_cli};
@@ -336,23 +337,31 @@ fn warn_if_signed_out(app: &AppHandle) {
          Model calls will fail authentication until `iris auth login` is run."
     );
 
-    #[cfg(target_os = "macos")]
-    {
-        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-        app.dialog()
-            .message(
-                "IRIS is not signed in on this machine, so AI requests will fail — often showing as \"0 tokens\" or an empty reply.\n\n\
-                 Open a terminal and run:\n\n    iris auth login\n\n\
-                 then restart IRIS. If `iris` is not found, use the IRIS menu → Install CLI first.",
-            )
-            .title("Sign in to IRIS")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::Ok)
-            .show(|_| {});
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    let _ = app;
+    // Offer to fix it, rather than naming a command in a terminal the user may never open.
+    // The sign-in window mirrors `iris auth login` exactly and writes the same
+    // ~/.iris/sdk/.env, so this signs in the CLI too.
+    let app_for_login = app.clone();
+    app.dialog()
+        .message(
+            "IRIS is not signed in on this machine, so AI requests will fail — often showing as \"0 tokens\" or an empty reply.\n\nSigning in takes a moment: we email you a 6-digit code, no password.",
+        )
+        .title("Sign in to IRIS")
+        .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Sign in".to_string(),
+            "Later".to_string(),
+        ))
+        .show(move |confirmed| {
+            if confirmed {
+                // Clone for the inner closure: run_on_main_thread borrows the handle it is
+                // called on, so the closure cannot also own it. Window creation must happen on
+                // the main thread — the dialog callback does not run there.
+                let app_inner = app_for_login.clone();
+                let _ = app_for_login.run_on_main_thread(move || {
+                    login::show_login_window(&app_inner);
+                });
+            }
+        });
 }
 
 fn warn_if_translocated(app: &AppHandle) -> bool {
@@ -631,7 +640,8 @@ pub fn run() {
             copy_logs_to_clipboard,
             get_logs,
             install_cli,
-            iris_action
+            iris_action,
+            login::save_iris_token
         ])
         .setup(move |app| {
             let app = app.handle().clone();
