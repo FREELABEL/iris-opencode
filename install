@@ -68,7 +68,36 @@ done
 INSTALL_DIR=$HOME/.opencode/bin
 mkdir -p "$INSTALL_DIR"
 
-# If --binary is provided, skip all download/detection logic
+# Platform detection runs UNCONDITIONALLY, before the --binary branch.
+#
+# It used to live inside the `else` below — i.e. only on the download path. The desktop app
+# installs the CLI from its BUNDLED sidecar, so it always passes --binary, always took the
+# `if` branch, and never set os/arch. The Node section further down then hit
+# `node-v$NODE_VERSION-$os-$arch` under `set -u` and died with:
+#
+#     line 461: os: unbound variable
+#
+# So the app's install path was broken 100% of the time while the curl-pipe path was fine —
+# and a bare-machine test of the curl path passes cleanly right next to it. Detection is
+# cheap, has no side effects, and every later section wants it, so it belongs out here where
+# both branches get it.
+raw_os=$(uname -s)
+os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
+case "$raw_os" in
+  Darwin*) os="darwin" ;;
+  Linux*) os="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) os="windows" ;;
+esac
+
+arch=$(uname -m)
+if [[ "$arch" == "aarch64" ]]; then
+  arch="arm64"
+fi
+if [[ "$arch" == "x86_64" ]]; then
+  arch="x64"
+fi
+
+# If --binary is provided, skip all download logic (but NOT the detection above)
 if [ -n "$binary_path" ]; then
     if [ ! -f "$binary_path" ]; then
         echo -e "${RED}Error: Binary not found at ${binary_path}${NC}"
@@ -76,21 +105,6 @@ if [ -n "$binary_path" ]; then
     fi
     specific_version="local"
 else
-    raw_os=$(uname -s)
-    os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
-    case "$raw_os" in
-      Darwin*) os="darwin" ;;
-      Linux*) os="linux" ;;
-      MINGW*|MSYS*|CYGWIN*) os="windows" ;;
-    esac
-
-    arch=$(uname -m)
-    if [[ "$arch" == "aarch64" ]]; then
-      arch="arm64"
-    fi
-    if [[ "$arch" == "x86_64" ]]; then
-      arch="x64"
-    fi
 
     if [ "$os" = "darwin" ] && [ "$arch" = "x64" ]; then
       rosetta_flag=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
