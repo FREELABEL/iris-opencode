@@ -10,7 +10,7 @@ import {
   dim,
   bold,
   success,
-  streamAgentChat, writeJson } from "./iris-api"
+  streamAgentChat, isNonInteractive, writeJson } from "./iris-api"
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { join } from "path"
 import { homedir, tmpdir } from "os"
@@ -153,18 +153,90 @@ function renderSession(session: Session, speakerNames: Record<string, string>): 
  */
 const ingestMarker = (session: Session) => `<!-- iris-meeting: ${session.source}/${session.id} -->`
 
-/** Where a meeting lands when nothing is passed: ~/.iris/config.json default_bloq_id. */
-function resolveDefaultBloqId(): number | undefined {
+/**
+ * WHERE A MEETING LANDS.
+ *
+ * The bloq is the PROJECT and the caller chooses it; the list is a fixed convention
+ * ("Meetings", created on demand) so nothing has to be decided twice.
+ *
+ * The choice is remembered PER ACCOUNT, not per machine. `default_bloq_id` in config.json
+ * is deliberately not consulted: it belongs to `iris announce`, and one machine here signs
+ * in as more than one account — a single machine-wide destination would file one account's
+ * meetings onto the other account's board, and a meeting transcript is exactly the payload
+ * you cannot afford to misroute.
+ *
+ * There is also no auto-create fallback, on purpose. Elsewhere in this CLI a missing
+ * destination invents a bloq and files into it. For a transcript that is wrong: it can carry
+ * client conversation or PHI, so a run that does not know where to put it must STOP and say
+ * so rather than pick somewhere plausible.
+ */
+const PREFS_PATH = join(homedir(), ".iris", "meetings.json")
+
+type MeetingPrefs = Record<string, { bloqId: number; list?: string }>
+
+function readPrefs(): MeetingPrefs {
   try {
-    const p = join(homedir(), ".iris", "config.json")
-    if (existsSync(p)) {
-      const cfg = JSON.parse(readFileSync(p, "utf-8"))
-      const v = cfg.meetings_bloq_id ?? cfg.default_bloq_id ?? cfg.bloq_id
-      if (typeof v === "number") return v
-      if (typeof v === "string" && /^\d+$/.test(v)) return parseInt(v, 10)
-    }
+    if (existsSync(PREFS_PATH)) return JSON.parse(readFileSync(PREFS_PATH, "utf-8")) as MeetingPrefs
   } catch {}
-  return undefined
+  return {}
+}
+
+function rememberDestination(userId: number, bloqId: number, list: string) {
+  try {
+    const prefs = readPrefs()
+    prefs[String(userId)] = { bloqId, list }
+    writeFileSync(PREFS_PATH, JSON.stringify(prefs, null, 2), "utf-8")
+  } catch {
+    // Not being able to remember is a papercut, not a failure — the run still files.
+  }
+}
+
+async function fetchBloqs(userId: number): Promise<any[]> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs?per_page=100&simplified=1`)
+  if (!res.ok) return []
+  const j = (await res.json()) as { data?: any[] }
+  return j?.data ?? []
+}
+
+/**
+ * Resolve the destination bloq: explicit flag, then this account's remembered choice, then
+ * ask. Returns null when it cannot be settled — callers must treat that as "file nothing".
+ */
+async function resolveDestinationBloq(args: any, userId: number): Promise<number | null> {
+  const remembered = readPrefs()[String(userId)]
+
+  if (args.bloq) {
+    // Seed the default from the first explicit --bloq, but never overwrite one that already
+    // exists: filing a single meeting to a client's board is a one-off, not a new home for
+    // everything after it.
+    if (!remembered?.bloqId) rememberDestination(userId, Number(args.bloq), String(args.list))
+    return Number(args.bloq)
+  }
+
+  if (remembered?.bloqId) return Number(remembered.bloqId)
+
+  if (isNonInteractive() || args.json) {
+    prompts.log.error(
+      "No destination for this account. Pass --bloq <id> once and it is remembered, " +
+        "or run this interactively to pick a project.",
+    )
+    return null
+  }
+
+  const bloqs = await fetchBloqs(userId)
+  if (!bloqs.length) {
+    prompts.log.error("No bloqs on this account to file into. Create one, then pass --bloq <id>.")
+    return null
+  }
+  const pick = await prompts.select({
+    message: "File meetings into which project?",
+    options: bloqs.slice(0, 50).map((b: any) => ({ value: b.id, label: `${b.name} (#${b.id})` })),
+  })
+  if (prompts.isCancel(pick)) return null
+
+  rememberDestination(userId, Number(pick), String(args.list))
+  prompts.log.info(dim(`Remembered for this account — change it any time with --bloq <id>.`))
+  return Number(pick)
 }
 
 /** NDJSON → a readable, attributed transcript. */
@@ -301,11 +373,6 @@ async function runIngest(args: any) {
   const { sessions, warnings } = listSessions(args.limit ?? 50, { source: args.source, days: args.days })
   for (const w of warnings) prompts.log.warn(w)
 
-  if (!args.bloqId) {
-    prompts.log.error("Nowhere to file. Pass --bloq <id>, or set default_bloq_id in ~/.iris/config.json")
-    prompts.outro("Done")
-    return
-  }
   if (!sessions.length) {
     prompts.log.warn(`No meetings in the last ${args.days} days from ${args.source === "all" ? "any source" : args.source}.`)
     prompts.outro("Done")
@@ -316,15 +383,18 @@ async function runIngest(args: any) {
   const userId = await requireUserId(undefined)
   if (!userId) { prompts.outro("Done"); return }
 
+  const bloqId = await resolveDestinationBloq(args, userId)
+  if (!bloqId) { prompts.outro("Done"); return }
+
   // Reading the bloq is safe; RESOLVING the list is not, because it CREATES the list when
   // it is absent. So a dry run has to finish before that, or "show me what would happen"
   // leaves a new list behind — which is exactly the thing a dry run promises not to do.
-  const already = await filedMarkers(userId, Number(args.bloqId))
+  const already = await filedMarkers(userId, Number(bloqId))
   const pending = sessions.filter((s) => !already.has(`${s.source}/${s.id}`))
   const dryRun = Boolean(args["dry-run"] ?? args.dryRun)
 
   printDivider()
-  printKV("Destination", `bloq ${args.bloqId} → "${args.list}" list`)
+  printKV("Destination", `bloq ${bloqId} → "${args.list}" list`)
   printKV("Window", `${args.days} days · source: ${args.source}`)
   printKV("Found", `${sessions.length} meeting(s) · ${sessions.length - pending.length} already filed`)
   printDivider()
@@ -343,9 +413,9 @@ async function runIngest(args: any) {
     return
   }
 
-  const listId = await resolveMeetingsList(userId, Number(args.bloqId), String(args.list))
+  const listId = await resolveMeetingsList(userId, Number(bloqId), String(args.list))
   if (!listId) {
-    prompts.log.error(`Could not find or create a "${args.list}" list on bloq ${args.bloqId}`)
+    prompts.log.error(`Could not find or create a "${args.list}" list on bloq ${bloqId}`)
     prompts.outro("Done")
     return
   }
@@ -358,7 +428,7 @@ async function runIngest(args: any) {
     try {
       const { body, segments } = await composeBody(s, args, userId)
       const stamp = s.mtime.toISOString().slice(0, 10)
-      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.bloqId}/lists/${listId}/items`, {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists/${listId}/items`, {
         method: "POST",
         body: JSON.stringify({
           title: defaultTitle(s, stamp),
@@ -396,7 +466,8 @@ export const PlatformMeetingsCommand = cmd({
       .option("days", { type: "number", default: 30, describe: "how far back to look for rabbit meeting mail" })
       .option("dry-run", { type: "boolean", describe: "with --ingest: show what would be filed, file nothing" })
       .option("resummarize", { type: "boolean", describe: "run the AI summary over a rabbit note that already has one" })
-      .option("bloq", { type: "number", describe: "bloq id to file the summary under (default: config default_bloq_id)" })
+      .option("bloq", { type: "number", describe: "bloq id (project) to file under — remembered per account after the first time" })
+      .option("file", { type: "boolean", describe: "file this meeting to the remembered project (or pick one)" })
       .option("list", { type: "string", default: "Meetings", describe: "list name on the bloq — created if absent" })
       .option("lead", { type: "number", describe: "also run `leads:meeting` intel for this lead id" })
       .option("speaker", { type: "array", describe: "label a diarised speaker, e.g. --speaker 2=Arthur" })
@@ -420,11 +491,9 @@ export const PlatformMeetingsCommand = cmd({
     if (args.ingest && !args.source) {
       prompts.log.info(dim("Source defaulted to rabbit (deliberate recordings). Pass --source all to include Wispr."))
     }
-    const bloqId = args.bloq ?? resolveDefaultBloqId()
-
     // ── ingest mode: file everything new in the window ───────────────────────
     if (args.ingest) {
-      await runIngest({ ...args, source, bloqId })
+      await runIngest({ ...args, source })
       return
     }
 
@@ -491,6 +560,15 @@ export const PlatformMeetingsCommand = cmd({
     if (!(await requireAuth())) { prompts.outro("Done"); return }
     const userId = await requireUserId(undefined)
     if (!userId) { prompts.outro("Done"); return }
+
+    // Only ask where to file when filing was actually requested. A bare `iris meetings <id>`
+    // is a read — interrupting it with a destination prompt would be an answer to a question
+    // nobody asked.
+    let bloqId: number | null = null
+    if (args.bloq || args.file) {
+      bloqId = await resolveDestinationBloq(args, userId)
+      if (!bloqId) { prompts.outro("Done"); return }
+    }
 
     printDivider()
     printKV("Session", session.id)
