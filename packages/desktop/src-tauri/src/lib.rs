@@ -642,6 +642,7 @@ pub fn run() {
             install_cli,
             iris_action,
             login::save_iris_token,
+            login::restart_app,
             login::open_login_window
         ])
         .setup(move |app| {

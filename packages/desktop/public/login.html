@@ -141,10 +141,44 @@
       // credential — a file that exists, passes every "is it signed in" check, and 401s.
       const token = data?.data?.sdk_token?.key;
       if (!token) throw new Error("Signed in, but no token was returned. Contact support.");
-      await invoke("save_iris_token", { token });
-      msg("Signed in. Restart IRIS to finish.", "ok");
       $("step-code").hidden = true;
       $("sub").textContent = "You're signed in on this machine. The iris CLI is signed in too.";
+
+      // Sign-in kicks off the rest of setup (CLI, daemon, registration) in Rust. Follow it
+      // here so the window narrates real progress instead of sitting on one static line —
+      // and so the restart WAITS for that work to finish rather than racing it.
+      const listen = window.__TAURI__.event.listen;
+      let settled = false;
+
+      const finish = async (label) => {
+        if (settled) return;
+        settled = true;
+        // Count down visibly. A window that vanishes unannounced reads as a crash; three
+        // seconds is long enough to see what happened and still feel automatic.
+        for (let n = 3; n > 0; n--) {
+          msg(`${label} Restarting in ${n}…`, "ok");
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        msg("Restarting…", "ok");
+        await invoke("restart_app");
+      };
+
+      await listen("setup-step", (e) => { if (!settled) msg(e.payload + "…", "ok"); });
+      await listen("setup-done", () => finish("Setup complete."));
+      await listen("setup-failed", (e) => {
+        if (settled) return;
+        settled = true;
+        // Name the failing step and leave the window open. Restarting over a broken setup
+        // would hide the one message that explains what to fix.
+        msg(String(e.payload) + " — you are signed in; run `iris daemon install` to finish.", "err");
+      });
+
+      msg("Signed in. Finishing setup…", "ok");
+      await invoke("save_iris_token", { token });
+
+      // Backstop: if no event ever arrives (older build, dead thread), still finish rather
+      // than stranding the user on a dead window — the exact failure this change fixes.
+      setTimeout(() => finish("Signed in."), 45000);
     } catch (e) {
       msg(e.message, "err");
     } finally {

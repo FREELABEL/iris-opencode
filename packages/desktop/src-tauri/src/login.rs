@@ -18,7 +18,7 @@
 //! The CLI reads the same ~/.iris/sdk/.env, so signing in here signs in BOTH. That is the
 //! point: one flow, no terminal, and the CLI works afterwards without the user knowing why.
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow};
 
 /// Write the token exactly where the CLI and the app both already look for it.
 ///
@@ -26,7 +26,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow};
 /// value in some setups, and clobbering it to "fix" login would break integrations that were
 /// working — a fix that breaks a neighbour is not a fix.
 #[tauri::command]
-pub fn save_iris_token(token: String) -> Result<(), String> {
+pub fn save_iris_token(app: AppHandle, token: String) -> Result<(), String> {
     let token = token.trim();
     if token.is_empty() {
         return Err("Empty token".into());
@@ -62,7 +62,7 @@ pub fn save_iris_token(token: String) -> Result<(), String> {
 
     // Signing in is not finishing setup. Do the rest here, so "download the app" is the whole
     // instruction rather than the first of four.
-    finish_setup_in_background();
+    finish_setup_in_background(app);
 
     Ok(())
 }
@@ -81,27 +81,36 @@ pub fn save_iris_token(token: String) -> Result<(), String> {
 /// `daemon install` refuses to reinstall over an existing daemon, and `register` is safe to
 /// repeat. So a re-login costs nothing, and a partial previous attempt is completed rather
 /// than duplicated.
-fn finish_setup_in_background() {
-    std::thread::spawn(|| {
+fn finish_setup_in_background(app: AppHandle) {
+    std::thread::spawn(move || {
+        // Report each step to the sign-in window. Silence for ten seconds after a click reads
+        // as a hang, and the window then asks the user to do something it can do itself.
+        let step = |label: &str| {
+            let _ = app.emit("setup-step", label);
+        };
         // The CLI first: the daemon verbs live in it. install_cli() uses the BUNDLED sidecar,
         // so this needs no network and cannot be broken by a bad release URL.
+        step("Installing the CLI");
         match crate::cli::install_cli() {
             Ok(msg) => println!("setup: cli -> {msg}"),
             Err(e) => {
                 eprintln!("setup: cli install failed: {e}");
+                let _ = app.emit("setup-failed", format!("CLI install failed: {e}"));
                 return; // nothing downstream can work without it
             }
         }
 
         let Some(iris) = crate::cli::get_cli_install_path() else {
             eprintln!("setup: could not locate the installed CLI; skipping daemon setup");
+            let _ = app.emit("setup-failed", "Could not locate the installed CLI");
             return;
         };
 
         for (label, args) in [
-            ("daemon install", ["daemon", "install"]),
-            ("daemon register", ["daemon", "register"]),
+            ("Installing the Hive daemon", ["daemon", "install"]),
+            ("Registering this machine", ["daemon", "register"]),
         ] {
+            step(label);
             match std::process::Command::new(&iris).args(args).output() {
                 Ok(out) => {
                     let text = String::from_utf8_lossy(if out.status.success() {
@@ -120,7 +129,20 @@ fn finish_setup_in_background() {
                 Err(e) => eprintln!("setup: {label} could not run: {e}"),
             }
         }
+
+        // Done. The window restarts itself from here — a new user should never be told to go
+        // and relaunch an app that is already running and already knows it needs to.
+        let _ = app.emit("setup-done", ());
     });
+}
+
+/// Relaunch the app so the freshly-written credential and PATH are picked up.
+///
+/// Tauri hands us this directly; the alternative was asking the user to quit and reopen, which
+/// is a chore the app can do for itself and the last manual step left in onboarding.
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
 }
 
 /// Home directory, on every platform.
