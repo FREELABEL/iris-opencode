@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, writeJson, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -680,6 +681,97 @@ const BoardsDeleteCommand = cmd({
   },
 })
 
+
+// ============================================================================
+// Lead <-> item links
+// ============================================================================
+
+const BoardsLinkLeadCommand = cmd({
+  command: "link-lead <id> <lead-id>",
+  aliases: ["attach-lead"],
+  describe: "link a CRM lead to this board item (who reported it, who it is about)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "item ID", type: "number", demandOption: true })
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("relation", { describe: "why the lead is on this item (e.g. reported-by, about, stakeholder)", type: "string" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Link lead #${args["lead-id"]} → item #${args.id}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner(); spinner.start("Linking…")
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/attach-item`, {
+        method: "POST",
+        body: JSON.stringify({ item_id: args.id, relation: args.relation ?? null }),
+      })
+      const ok = await handleApiError(res, "Link lead"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      spinner.stop(`${success("✓")} linked${args.relation ? ` as ${bold(String(args.relation))}` : ""}`)
+      prompts.outro(dim(`iris boards leads ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done")
+    }
+  },
+})
+
+const BoardsUnlinkLeadCommand = cmd({
+  command: "unlink-lead <id> <lead-id>",
+  aliases: ["detach-lead"],
+  describe: "remove the link between a lead and this board item",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "item ID", type: "number", demandOption: true })
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Unlink lead #${args["lead-id"]} from item #${args.id}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner(); spinner.start("Unlinking…")
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/detach-item`, {
+        method: "POST", body: JSON.stringify({ item_id: args.id }),
+      })
+      const ok = await handleApiError(res, "Unlink lead"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const body = (await res.json()) as any
+      spinner.stop(body?.data?.removed ? `${success("✓")} unlinked` : "no such link")
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done")
+    }
+  },
+})
+
+const BoardsLeadsCommand = cmd({
+  command: "leads <id>",
+  describe: "list the CRM leads linked to a board item",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "item ID", type: "number", demandOption: true })
+      .option("json", { describe: "output JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Leads on item #${args.id}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    try {
+      const res = await irisFetch(`/api/v1/bloq-items/${args.id}/leads`)
+      const ok = await handleApiError(res, "List leads"); if (!ok) { prompts.outro("Done"); return }
+      const body = (await res.json()) as any
+      const rows: any[] = firstArray(body?.data, body)
+      if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
+      printDivider()
+      if (!rows.length) console.log(dim("  Not linked to any lead.  iris boards link-lead <id> <lead-id>"))
+      for (const l of rows) {
+        console.log(`  ${bold(String(l.name ?? "Unnamed"))}  ${dim(`#${l.id}`)}${l.relation ? `  ${dim(String(l.relation))}` : ""}`)
+        if (l.email || l.company) console.log(`    ${dim([l.email, l.company].filter(Boolean).join(" · "))}`)
+      }
+      printDivider()
+      prompts.outro("Done")
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done")
+    }
+  },
+})
+
 // ============================================================================
 // Root command
 // ============================================================================
@@ -697,6 +789,9 @@ export const PlatformBoardsCommand = cmd({
       .command(BoardsPushCommand)
       .command(BoardsDiffCommand)
       .command(BoardsDeleteCommand)
+      .command(BoardsLinkLeadCommand)
+      .command(BoardsUnlinkLeadCommand)
+      .command(BoardsLeadsCommand)
       .demandCommand(),
   async handler() {},
 })

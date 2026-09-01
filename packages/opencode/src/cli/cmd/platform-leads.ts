@@ -11062,6 +11062,39 @@ const LeadsAnalyzeCommand = cmd({
 // Root command
 // ============================================================================
 
+
+const LeadsItemsCommand = cmd({
+  command: "items <lead-id>",
+  aliases: ["bloq-items"],
+  describe: "list the bloq items (tickets, notes, bugs) linked to a lead",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
+      .option("json", { describe: "output JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Items linked to lead #${args["lead-id"]}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/items`)
+      const ok = await handleApiError(res, "List items"); if (!ok) { prompts.outro("Done"); return }
+      const body = (await res.json()) as any
+      const rows: any[] = firstArray(body?.data, body)
+      if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
+      printDivider()
+      if (!rows.length) console.log(dim("  No items linked.  iris boards link-lead <item-id> <lead-id>"))
+      for (const i of rows) {
+        console.log(`  ${bold(String(i.title ?? "Untitled"))}  ${dim(`#${i.id}`)}${i.relation ? `  ${dim(String(i.relation))}` : ""}`)
+        if (i.bloq_id || i.status) console.log(`    ${dim([i.status, i.bloq_id ? `bloq #${i.bloq_id}` : null].filter(Boolean).join(" · "))}`)
+      }
+      printDivider()
+      prompts.outro("Done")
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformLeadsCommand = cmd({
   command: "leads",
   aliases: ["crm"],
@@ -11116,6 +11149,7 @@ export const PlatformLeadsCommand = cmd({
       .command(LeadsDemoVideoCommand)
       .command(LeadsReviewCommand)
       .command(LeadsAttachBloqCommand)
+      .command(LeadsItemsCommand)
       .command(LeadsDetachBloqCommand)
       .command(LeadsStatsCommand)
       .command(LeadsQuotaCommand)
