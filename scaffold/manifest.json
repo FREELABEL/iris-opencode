@@ -249,6 +249,12 @@
       "purpose": "How to: Create Schema-Driven Onboarding Flows"
     },
     {
+      "src": "how-to/ocr-scanned-documents.md",
+      "dest": "how-to/ocr-scanned-documents.md",
+      "managed": true,
+      "purpose": "OCR and vision ingestion \u2014 reading scanned documents that have no text layer. Covers --include-images, which is OFF by default, so images are silently stripped from a sync."
+    },
+    {
       "src": "how-to/outreach-campaign.md",
       "dest": "how-to/outreach-campaign.md",
       "managed": true,
