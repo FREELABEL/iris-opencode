@@ -159,19 +159,35 @@ fn dirs_next_home() -> Option<std::path::PathBuf> {
 }
 
 /// Open the sign-in window. Idempotent — focuses the existing one rather than stacking.
-pub fn show_login_window(app: &AppHandle) {
+///
+/// `required` is first launch with no credential: the app cannot do anything useful yet, so
+/// the window is the app. It floats above the main window and has no close button — not to
+/// trap anyone (Cmd-Q still quits) but because dismissing it leads nowhere. The old flow let
+/// people close it and land in an IRIS where every request failed as "0 tokens", which reads
+/// as a broken product rather than an unauthenticated one.
+///
+/// From the menu (`required = false`) it is an ordinary window: someone re-authenticating has
+/// a working app behind it and every right to change their mind.
+pub fn show_login_window(app: &AppHandle, required: bool) {
     if let Some(w) = app.get_webview_window("iris-login") {
         let _ = w.set_focus();
         return;
     }
 
-    match WebviewWindow::builder(app, "iris-login", WebviewUrl::App("login.html".into()))
+    let mut builder = WebviewWindow::builder(app, "iris-login", WebviewUrl::App("login.html".into()))
         .title("Sign in to IRIS")
         .inner_size(420.0, 560.0)
         .resizable(false)
-        .center()
-        .build()
-    {
+        .center();
+
+    if required {
+        // always_on_top: the main window opens moments later and would otherwise cover the one
+        // screen the user has to act on — the failure being fixed is precisely "it worked but
+        // it just sat there", and a sign-in window hidden behind the app is a worse version.
+        builder = builder.always_on_top(true).closable(false);
+    }
+
+    match builder.build() {
         Ok(_) => {}
         Err(e) => eprintln!("Could not open the sign-in window: {e}"),
     }
@@ -180,5 +196,6 @@ pub fn show_login_window(app: &AppHandle) {
 /// Menu entry point. The window itself is idempotent, so repeated clicks focus rather than stack.
 #[tauri::command]
 pub fn open_login_window(app: AppHandle) {
-    show_login_window(&app);
+    // Menu-initiated: not required. The app behind it already works.
+    show_login_window(&app, false);
 }

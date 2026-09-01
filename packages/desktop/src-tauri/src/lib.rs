@@ -324,44 +324,39 @@ async fn iris_action(action: String) -> Result<String, String> {
 /// was equally unauthenticated. The condition costs one file read to detect, and saying it out
 /// loud converts a mystery into a one-line instruction.
 ///
-/// Non-fatal and non-blocking, unlike the translocation warning: the app is genuinely usable
-/// for anything that does not need the platform, so this informs rather than quits. Async
-/// `.show()` for the same reason as there — `blocking_show()` on setup()'s thread deadlocks.
-fn warn_if_signed_out(app: &AppHandle) {
+/// NOT a prompt, and deliberately not a choice.
+///
+/// This used to ask, with buttons "Sign in" and "Later". That framing was wrong in both
+/// directions: it implied signing in was optional, and "Later" produced an app that looks
+/// broken rather than signed-out — every model call 401s as "0 tokens" or an empty reply,
+/// with the cause invisible. Nobody who clicked "Later" got a working IRIS; they got the
+/// original bug plus the belief that they had been offered an alternative.
+///
+/// There IS no alternative. Without a credential nothing that matters works, so first launch
+/// simply IS the sign-in screen — the way it already is for every product that needs an
+/// account. The window opens on top, cannot be dismissed, and closes itself once signed in.
+///
+/// Silent and free when a key exists: one file read, then return.
+fn require_sign_in(app: &AppHandle) {
     if iris_env_value("IRIS_API_KEY").is_some() {
         return;
     }
 
     eprintln!(
         "IRIS_API_KEY is not set — ~/.iris/sdk/.env is missing or has no key. \
-         Model calls will fail authentication until `iris auth login` is run."
+         Opening sign-in; model calls cannot authenticate until it completes."
     );
 
-    // Offer to fix it, rather than naming a command in a terminal the user may never open.
-    // The sign-in window mirrors `iris auth login` exactly and writes the same
-    // ~/.iris/sdk/.env, so this signs in the CLI too.
-    let app_for_login = app.clone();
-    app.dialog()
-        .message(
-            "IRIS is not signed in on this machine, so AI requests will fail — often showing as \"0 tokens\" or an empty reply.\n\nSigning in takes a moment: we email you a 6-digit code, no password.",
-        )
-        .title("Sign in to IRIS")
-        .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Sign in".to_string(),
-            "Later".to_string(),
-        ))
-        .show(move |confirmed| {
-            if confirmed {
-                // Clone for the inner closure: run_on_main_thread borrows the handle it is
-                // called on, so the closure cannot also own it. Window creation must happen on
-                // the main thread — the dialog callback does not run there.
-                let app_inner = app_for_login.clone();
-                let _ = app_for_login.run_on_main_thread(move || {
-                    login::show_login_window(&app_inner);
-                });
-            }
-        });
+    // Straight to the window. No dialog in front of it: an extra click that can only be
+    // answered one way is not a decision, it is a speed bump before the real screen.
+    //
+    // On the main thread because window creation requires it, and setup() already is the main
+    // thread — run_on_main_thread here is a no-op in the common case and correct if that
+    // changes.
+    let app_inner = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        login::show_login_window(&app_inner, true);
+    });
 }
 
 fn warn_if_translocated(app: &AppHandle) -> bool {
@@ -657,7 +652,9 @@ pub fn run() {
             // Then: is there a credential at all? An app that starts without one looks broken
             // rather than unauthenticated — "0 tokens", empty replies, a blank screen — and the
             // cause is invisible because nothing in the install path signs anyone in.
-            warn_if_signed_out(&app);
+            //
+            // So this REQUIRES rather than suggests. First launch is the sign-in screen.
+            require_sign_in(&app);
 
             // Initialize log state
             app.manage(LogState(Arc::new(Mutex::new(VecDeque::new()))));
