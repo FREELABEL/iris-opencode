@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { auditOffers, carriesDestination, componentsOf, effortModeOf, priceBands } from "../../src/cli/cmd/offers-audit"
+import { auditOffers, carriesDestination, componentsOf, effortModeOf, priceBands, stackMath } from "../../src/cli/cmd/offers-audit"
 
 /**
  * The audit makes claims about somebody's catalogue, so every rule has to be checkable.
@@ -153,5 +153,88 @@ describe("auditOffers", () => {
     const rank = { high: 0, medium: 1, low: 2 } as const
     const seq = a.findings.map((f) => rank[f.severity])
     expect([...seq].sort((x, y) => x - y)).toEqual(seq)
+  })
+})
+
+describe("stackMath — the subtraction the prospect performs", () => {
+  const withComponents = (comps: any[], price = 500): any => ({
+    title: "Bundle",
+    price,
+    features: { kind: "product", seats: 1, sales_led: false, displayFeatures: comps },
+  })
+
+  test("sums standalone value across components", () => {
+    const m = stackMath(withComponents([{ name: "a", value: 400 }, { name: "b", value: 900 }]))
+    expect(m.separately).toBe(1300)
+    expect(m.valued).toBe(2)
+    expect(m.components).toBe(2)
+  })
+
+  test("bare strings contribute nothing and are still counted as components", () => {
+    // The half-filled stack: 1 of 3 valued. The sum must not pretend to be complete.
+    const m = stackMath(withComponents([{ name: "a", value: 400 }, "b", "c"]))
+    expect(m.separately).toBe(400)
+    expect(m.valued).toBe(1)
+    expect(m.components).toBe(3)
+  })
+
+  test("cost is null when nothing carries one — not zero", () => {
+    // Zero cost and unknown cost are different claims, and zero would compute a 100% margin.
+    expect(stackMath(withComponents([{ name: "a", value: 400 }])).cost).toBeNull()
+  })
+
+  test("cost sums when present", () => {
+    const m = stackMath(withComponents([{ name: "a", value: 400, cost: 25 }, { name: "b", value: 100, cost: 5 }]))
+    expect(m.cost).toBe(30)
+    expect(m.costed).toBe(2)
+  })
+
+  test("accepts the synonyms a catalogue actually uses", () => {
+    const m = stackMath(withComponents([{ name: "a", worth: 200, cost_to_deliver: 10 }]))
+    expect(m.separately).toBe(200)
+    expect(m.cost).toBe(10)
+  })
+})
+
+describe("auditOffers — stack findings", () => {
+  const pkg = (comps: any[], price: number): any => ({
+    title: "Bundle",
+    price,
+    features: { kind: "product", seats: 1, sales_led: false, displayFeatures: comps },
+  })
+
+  test("flags a partially valued stack — the dangerous one", () => {
+    const a = auditOffers([pkg([{ name: "a", value: 900 }, "b", "c"], 200)])
+    const f = a.findings.find((x) => x.code === "partial-anchor")
+    expect(f).toBeDefined()
+    expect(f!.evidence[0]).toContain("1/3")
+  })
+
+  test("flags a package priced at or above its own stack", () => {
+    // No gap means no steal — the mechanism inverted.
+    const a = auditOffers([pkg([{ name: "a", value: 100 }, { name: "b", value: 100 }], 500)])
+    expect(a.findings.some((x) => x.code === "no-gap")).toBe(true)
+  })
+
+  test("a real gap raises neither anchor finding", () => {
+    const a = auditOffers([pkg([{ name: "a", value: 900 }, { name: "b", value: 900 }], 300)])
+    expect(a.findings.some((x) => x.code === "no-anchor")).toBe(false)
+    expect(a.findings.some((x) => x.code === "no-gap")).toBe(false)
+    expect(a.findings.some((x) => x.code === "partial-anchor")).toBe(false)
+  })
+
+  test("computes margin against the ~80% compass when cost is present", () => {
+    const a = auditOffers([pkg([{ name: "a", value: 900, cost: 200 }], 500)])
+    expect(a.findings.some((x) => x.code === "thin-margin")).toBe(true)
+  })
+
+  test("STOPS reporting trim as unmeasurable once cost exists", () => {
+    // A permanent "cannot measure" on something now measurable is the same lie as a false pass,
+    // pointing the other way.
+    const without = auditOffers([pkg([{ name: "a", value: 900 }], 300)])
+    expect(without.unmeasured.some((u) => u.code === "trim-2x2")).toBe(true)
+
+    const withCost = auditOffers([pkg([{ name: "a", value: 900, cost: 10 }], 300)])
+    expect(withCost.unmeasured.some((u) => u.code === "trim-2x2")).toBe(false)
   })
 })

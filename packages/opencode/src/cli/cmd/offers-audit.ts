@@ -105,6 +105,62 @@ export function componentsOf(pkg: OfferPackage): string[] {
   return []
 }
 
+/**
+ * The "if bought separately" arithmetic, when the catalogue carries it.
+ *
+ * THIS IS THE MECHANISM, not a nice-to-have. The chapter's whole move is a subtraction the
+ * PROSPECT performs: a summed standalone value against one price, so the gap is felt rather than
+ * claimed. Without per-component value there is no sum, and the price is asked for on trust —
+ * which is why `no-anchor` is the highest finding this file can raise.
+ *
+ * Components may be bare strings (no value) or objects carrying `value` and `cost`. Both shapes
+ * exist in the catalogue because `features` is JSON and nothing has ever required the richer one.
+ * A component with no value contributes nothing to the sum AND is counted as unvalued, so a
+ * half-filled stack cannot masquerade as a complete one.
+ */
+export type StackMath = {
+  components: number
+  valued: number
+  /** Summed standalone value, in whatever unit the catalogue uses. */
+  separately: number
+  /** Summed cost to deliver, when present. */
+  cost: number | null
+  costed: number
+}
+
+export function stackMath(pkg: OfferPackage): StackMath {
+  const f = pkg.features
+  const raw: unknown[] = Array.isArray(f)
+    ? f
+    : f && typeof f === "object"
+      ? Object.entries(f as Record<string, unknown>)
+          .filter(([k]) => !MECHANIC_KEYS.has(k))
+          .flatMap(([, v]) => (Array.isArray(v) ? v : []))
+      : []
+
+  let separately = 0
+  let valued = 0
+  let cost = 0
+  let costed = 0
+
+  for (const c of raw) {
+    if (!c || typeof c !== "object") continue
+    const rec = c as Record<string, unknown>
+    const v = Number(rec.value ?? rec.worth ?? rec.retail ?? rec.msrp)
+    if (Number.isFinite(v) && v > 0) {
+      separately += v
+      valued++
+    }
+    const k = Number(rec.cost ?? rec.cost_to_deliver ?? rec.costToDeliver)
+    if (Number.isFinite(k) && k >= 0) {
+      cost += k
+      costed++
+    }
+  }
+
+  return { components: raw.length, valued, separately, cost: costed ? cost : null, costed }
+}
+
 export function priceOf(pkg: OfferPackage): number | null {
   const raw = pkg.price
   const n = typeof raw === "string" ? Number(raw) : raw
@@ -190,19 +246,77 @@ export function auditOffers(pkgs: OfferPackage[]): Audit {
   // The chapter's mechanism is arithmetic the PROSPECT performs: sum of "if bought separately"
   // against one price. With no per-component value anywhere, that subtraction is unavailable and
   // the price is asked for on trust.
-  const anyValued = pkgs.some((p) => {
-    const f = p.features
-    return !!f && typeof f === "object" && JSON.stringify(f).match(/"(value|worth|retail|separately|msrp)"/i)
-  })
+  const math = pkgs.map((p) => ({ pkg: p, m: stackMath(p) }))
+  const anyValued = math.some((x) => x.m.valued > 0)
+
   if (!anyValued) {
     findings.push({
       code: "no-anchor",
       failureMode: "no 'if bought separately' sum",
       severity: "high",
       what: "No package carries a per-component value, so there is no sum to price against.",
-      fix: "Put a defensible standalone value on each component and show the total beside the price. The steal is the gap, and right now there is nothing to measure the gap from.",
+      fix:
+        "Put a defensible standalone value on each component and show the total beside the price. " +
+        "Components live in the JSON `features` column, so this needs no migration — a component may be " +
+        '{"name":"…","value":400,"cost":25} instead of a bare string.',
       evidence: [],
     })
+  } else {
+    // A PARTIALLY VALUED STACK IS THE DANGEROUS ONE. It sums to a number, the number looks like an
+    // anchor, and it is quietly missing whatever nobody priced — so the gap shown to a prospect is
+    // smaller than the real one and the arithmetic cannot be defended if questioned.
+    const partial = math.filter((x) => x.m.valued > 0 && x.m.valued < x.m.components)
+    if (partial.length) {
+      findings.push({
+        code: "partial-anchor",
+        failureMode: "a sum that is missing components",
+        severity: "medium",
+        what: `${partial.length} package(s) value only some of their components, so the "if bought separately" total understates itself.`,
+        fix: "Value every component or none. A total that silently omits items is not an anchor you can defend in a sales conversation.",
+        evidence: partial.map((x) => `${x.pkg.title}: ${x.m.valued}/${x.m.components} valued`).slice(0, 8),
+      })
+    }
+
+    // The gap IS the offer. A stack summing to less than its own price inverts the mechanism.
+    const inverted = math.filter((x) => {
+      const price = priceOf(x.pkg)
+      return x.m.valued > 0 && price !== null && price > 0 && x.m.separately <= price
+    })
+    if (inverted.length) {
+      findings.push({
+        code: "no-gap",
+        failureMode: "priced at or above its own stack",
+        severity: "high",
+        what: `${inverted.length} package(s) sum to no more than their price — there is no steal for the buyer to feel.`,
+        fix: "Either the components are undervalued or the price is wrong. The bundle is supposed to be a fraction of the summed value; at parity the prospect is just paying retail.",
+        evidence: inverted
+          .map((x) => `${x.pkg.title}: sums to ${x.m.separately} at $${priceOf(x.pkg)}`)
+          .slice(0, 8),
+      })
+    }
+  }
+
+  // Trim needs cost. Where it exists, run the 2x2's margin question for real.
+  const costed = math.filter((x) => x.m.cost !== null)
+  if (costed.length) {
+    const thin = costed.filter((x) => {
+      const price = priceOf(x.pkg)
+      return price !== null && price > 0 && (x.m.cost as number) / price > 0.2
+    })
+    if (thin.length) {
+      findings.push({
+        code: "thin-margin",
+        failureMode: "high-cost delivery in the core offer",
+        severity: "medium",
+        what: `${thin.length} package(s) spend more than 20% of price on delivery.`,
+        fix:
+          "The chapter's compass is roughly 80% gross margin on the core offer after trim. Not a law — but " +
+          "high-cost items belong in a premium tier or as a scarce bonus, not in the thing you sell at volume.",
+        evidence: thin
+          .map((x) => `${x.pkg.title}: cost ${x.m.cost} of $${priceOf(x.pkg)}`)
+          .slice(0, 8),
+      })
+    }
   }
 
   // ── 3. Is there a middle of the ladder? ────────────────────────────────────
@@ -274,16 +388,22 @@ export function auditOffers(pkgs: OfferPackage[]): Audit {
   }
 
   // ── What could not be measured, and why ────────────────────────────────────
-  unmeasured.push({
-    code: "trim-2x2",
-    question: "Which components are high-cost and low-value, and should be cut first?",
-    blockedBy: "no cost_to_deliver on components — the trim 2×2 needs cost to you and value to them, and the catalogue records neither",
-  })
-  unmeasured.push({
-    code: "margin-after-trim",
-    question: "What is gross margin on the core offer after trimming?",
-    blockedBy: "same — without per-component cost there is no margin to compute against the ~80% compass",
-  })
+  // Reported only while still true. A permanent "cannot measure" on something that has since
+  // become measurable is the same lie as a false pass, pointing the other way.
+  const anyCosted = pkgs.some((p) => stackMath(p).cost !== null)
+  if (!anyCosted) {
+    unmeasured.push({
+      code: "trim-2x2",
+      question: "Which components are high-cost and low-value, and should be cut first?",
+      blockedBy:
+        'no cost on components — the trim 2×2 needs cost to you AND value to them. `features` is JSON, so a component can carry {"cost": 25} today',
+    })
+    unmeasured.push({
+      code: "margin-after-trim",
+      question: "What is gross margin on the core offer after trimming?",
+      blockedBy: "same — without per-component cost there is no margin to check against the ~80% compass",
+    })
+  }
   unmeasured.push({
     code: "ratio",
     question: "Is each package delivered 1:1, to a group, or one-to-many?",

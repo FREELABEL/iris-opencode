@@ -1,5 +1,6 @@
 import { cmd } from "./cmd"
 import { OffersGroup } from "./offers"
+import { LicenceGroup } from "./licence"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -274,7 +275,7 @@ export const PlatformOutreachCommand = productCommand({
   name: "reachr",
   aliases: ["outreach", "outreach-strategy", "reachr-strategy"],
   purpose: "Reachr — outreach strategies: list, show, create, update, apply, delete",
-  keywords: ["reachr", "outreach", "strategy", "campaign", "sequence", "prospect", "send", "offer", "offers", "pricing"],
+  keywords: ["reachr", "outreach", "strategy", "campaign", "sequence", "prospect", "send", "offer", "offers", "pricing", "licence", "license", "seat"],
   howtos: ["comms-router", "outreach-campaign"],
   playbooks: ["som-outreach"],
   builder: (yargs) =>
@@ -289,5 +290,6 @@ export const PlatformOutreachCommand = productCommand({
       // The offer is the thing the sequence carries. Mounted here as well as at the top level so
       // neither audience has to know where it "really" lives — see offers.ts.
       .command(OffersGroup)
+      .command(LicenceGroup)
       .demandCommand(),
 })
