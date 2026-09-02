@@ -1477,6 +1477,16 @@
 "service": "fl-api"
 },
 {
+"method": "GET",
+"uri": "/api/v1/atlas/customer-auth/gate-state",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/atlas/customer-auth/request-access",
+"service": "fl-api"
+},
+{
 "method": "POST",
 "uri": "/api/v1/atlas/customer-auth/send-otp",
 "service": "fl-api"
@@ -2039,6 +2049,11 @@
 {
 "method": "POST",
 "uri": "/api/v1/billing/usage/record",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/bloq-items/{}/leads",
 "service": "fl-api"
 },
 {
@@ -4837,6 +4852,21 @@
 "service": "iris-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/genesis/components/{}/rollback",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/genesis/components/{}/usage",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/genesis/components/{}/versions",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/genesis/heartbeat/{}",
 "service": "fl-api"
@@ -5632,6 +5662,11 @@
 "service": "fl-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/leads/{}/attach-item",
+"service": "fl-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/leads/{}/audit-trail",
 "service": "fl-api"
@@ -5693,6 +5728,11 @@
 },
 {
 "method": "POST",
+"uri": "/api/v1/leads/{}/detach-item",
+"service": "fl-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/leads/{}/enrich",
 "service": "fl-api"
 },
@@ -5749,6 +5789,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/leads/{}/invoices",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/leads/{}/items",
 "service": "fl-api"
 },
 {
@@ -6239,6 +6284,36 @@
 {
 "method": "GET",
 "uri": "/api/v1/legacy-checkout/success",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/licences",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/licences",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/licences/claim",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/licences/me",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/licences/{}",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/licences/{}/revoke",
 "service": "fl-api"
 },
 {
@@ -8847,6 +8922,11 @@
 "service": "fl-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/public/pages/{}/actions/{}/{}",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/public/pages/{}/content/articles",
 "service": "iris-api"
@@ -8914,6 +8994,11 @@
 {
 "method": "POST",
 "uri": "/api/v1/public/pages/{}/data/{}",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/public/pages/{}/data/{}/{}",
 "service": "iris-api"
 },
 {
@@ -9219,6 +9304,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/scripts/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/scripts/{}/doctor",
 "service": "iris-api"
 },
 {
@@ -13093,6 +13183,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v6/chat/{}/steps",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/v6/comm-agents",
 "service": "iris-api"
 },
@@ -13124,6 +13219,26 @@
 {
 "method": "POST",
 "uri": "/api/v6/comm-agents/{}/resume",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v6/compute",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/compute",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v6/compute/providers",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v6/compute/{}",
 "service": "iris-api"
 },
 {
@@ -14127,6 +14242,16 @@
 "service": "iris-api"
 },
 {
+"method": "GET",
+"uri": "/desktop/latest",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/desktop/latest.json",
+"service": "iris-api"
+},
+{
 "method": "DELETE",
 "uri": "/desktop/mac",
 "service": "iris-api"
@@ -14187,7 +14312,32 @@
 "service": "iris-api"
 },
 {
+"method": "DELETE",
+"uri": "/desktop/windows",
+"service": "iris-api"
+},
+{
 "method": "GET",
+"uri": "/desktop/windows",
+"service": "iris-api"
+},
+{
+"method": "OPTIONS",
+"uri": "/desktop/windows",
+"service": "iris-api"
+},
+{
+"method": "PATCH",
+"uri": "/desktop/windows",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/desktop/windows",
+"service": "iris-api"
+},
+{
+"method": "PUT",
 "uri": "/desktop/windows",
 "service": "iris-api"
 },
@@ -14284,6 +14434,16 @@
 {
 "method": "PUT",
 "uri": "/docs",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/download/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/downloads",
 "service": "iris-api"
 },
 {
@@ -14778,6 +14938,36 @@
 },
 {
 "method": "DELETE",
+"uri": "/p/iris-downloads",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/p/iris-downloads",
+"service": "iris-api"
+},
+{
+"method": "OPTIONS",
+"uri": "/p/iris-downloads",
+"service": "iris-api"
+},
+{
+"method": "PATCH",
+"uri": "/p/iris-downloads",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/p/iris-downloads",
+"service": "iris-api"
+},
+{
+"method": "PUT",
+"uri": "/p/iris-downloads",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
 "uri": "/p/open-playbooks",
 "service": "iris-api"
 },
@@ -14967,32 +15157,7 @@
 "service": "iris-api"
 },
 {
-"method": "DELETE",
-"uri": "/pricing",
-"service": "iris-api"
-},
-{
 "method": "GET",
-"uri": "/pricing",
-"service": "iris-api"
-},
-{
-"method": "OPTIONS",
-"uri": "/pricing",
-"service": "iris-api"
-},
-{
-"method": "PATCH",
-"uri": "/pricing",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/pricing",
-"service": "iris-api"
-},
-{
-"method": "PUT",
 "uri": "/pricing",
 "service": "iris-api"
 },
