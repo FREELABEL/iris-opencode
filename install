@@ -385,6 +385,43 @@ fi
 INSTALL_DIR=$HOME/.iris/bin
 mkdir -p "$INSTALL_DIR"
 
+# Platform detection runs UNCONDITIONALLY, before the --binary branch.
+#
+# It used to live inside the `else` below — i.e. only on the download path. The desktop app
+# installs the CLI from its BUNDLED sidecar, so it always passes --binary, always took the
+# `if` branch, and never set os/arch. The tmux and Node sections further down then hit
+# `node-v$NODE_VERSION-$os-$arch` under `set -u` and died with:
+#
+#     line 461: os: unbound variable
+#
+# So the app's install path was broken 100% of the time while the curl-pipe path was fine —
+# and a bare-machine test of the curl path passes cleanly right next to it. Detection is
+# cheap, has no side effects, and every later section wants it, so it belongs out here where
+# both branches get it. (Originally 1afe66dc77; re-applied after this file was restored, because
+# a wholesale restore drops it exactly the way the wholesale replacement dropped the funnel.)
+raw_os=$(uname -s)
+os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
+case "$raw_os" in
+  Darwin*) os="darwin" ;;
+  Linux*) os="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) os="windows" ;;
+esac
+
+arch=$(uname -m)
+if [[ "$arch" == "aarch64" ]]; then
+  arch="arm64"
+fi
+if [[ "$arch" == "x86_64" ]]; then
+  arch="x64"
+fi
+
+if [ "$os" = "darwin" ] && [ "$arch" = "x64" ]; then
+  rosetta_flag=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
+  if [ "$rosetta_flag" = "1" ]; then
+    arch="arm64"
+  fi
+fi
+
 # If --binary is provided, skip all download/detection logic
 if [ -n "$binary_path" ]; then
     if [ ! -f "$binary_path" ]; then
@@ -393,29 +430,6 @@ if [ -n "$binary_path" ]; then
     fi
     specific_version="local"
 else
-    raw_os=$(uname -s)
-    os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
-    case "$raw_os" in
-      Darwin*) os="darwin" ;;
-      Linux*) os="linux" ;;
-      MINGW*|MSYS*|CYGWIN*) os="windows" ;;
-    esac
-
-    arch=$(uname -m)
-    if [[ "$arch" == "aarch64" ]]; then
-      arch="arm64"
-    fi
-    if [[ "$arch" == "x86_64" ]]; then
-      arch="x64"
-    fi
-
-    if [ "$os" = "darwin" ] && [ "$arch" = "x64" ]; then
-      rosetta_flag=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
-      if [ "$rosetta_flag" = "1" ]; then
-        arch="arm64"
-      fi
-    fi
-
     combo="$os-$arch"
     case "$combo" in
       linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64)
