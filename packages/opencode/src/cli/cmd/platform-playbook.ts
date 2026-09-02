@@ -13,6 +13,7 @@ import {
   executeSkill,
   resolveArgs,
   splitPlaybookArgv,
+  unknownPlaybookFlags,
   validatePlan,
   listRuns,
   getRun,
@@ -55,7 +56,15 @@ const SkillListCommand = cmd({
   builder: (yargs) =>
     yargs
       .option("json", { type: "boolean", default: false, describe: "JSON output" })
-      .option("v2", { type: "boolean", default: false, describe: "show only v2 skills" }),
+      .option("v2", { type: "boolean", default: false, describe: "show only v2 skills" })
+      // #183406 defect 2. Opt-in, not default: `list` has never touched the network and is the
+      // command everything else shells out to. ONE request for the whole registry, not one per
+      // playbook — 94 lookups to decorate a list is not a trade worth making.
+      .option("scope", {
+        type: "boolean",
+        default: false,
+        describe: "also show each playbook's publish scope (one registry lookup)",
+      }),
   async handler(args) {
     await withInstance(async () => {
       const skills = await Skill.all()
@@ -79,6 +88,15 @@ const SkillListCommand = cmd({
         }
       }
 
+      // name -> scope, from a single registry call. null when we could not measure, which is
+      // rendered as "?" rather than as "not published" (see fetchPublishState).
+      let scopes: Map<string, string> | null = null
+      if (args.scope) {
+        scopes = await fetchRegistryScopes()
+      }
+      const scopeOf = (name: string): string | null =>
+        scopes === null ? null : (scopes.get(name) ?? "unpublished")
+
       if (args.json) {
         await writeJson(plans.map((p) => ({
           name: p.plan.name,
@@ -86,6 +104,7 @@ const SkillListCommand = cmd({
           description: p.plan.description,
           steps: p.plan.steps.length,
           location: p.plan.location,
+          ...(args.scope ? { scope: scopeOf(String(p.plan.name)) ?? "unknown" } : {}),
         })))
         return
       }
@@ -103,11 +122,22 @@ const SkillListCommand = cmd({
       for (const { plan } of plans) {
         const version = plan.version === 2 ? highlight(" v2") : dim(" v1")
         const steps = plan.version === 2 ? dim(` (${plan.steps.length} steps)`) : ""
-        console.log(`  ${bold(plan.name)}${version}${steps}`)
+        const sc = scopeOf(String(plan.name))
+        const scopeTag =
+          !args.scope ? ""
+          : sc === null ? dim("  [scope ?]")
+          : sc === "unpublished" ? dim("  [local — not published]")
+          : `  ${highlight(`[${sc}]`)}`
+        console.log(`  ${bold(plan.name)}${version}${steps}${scopeTag}`)
         console.log(`    ${dim(plan.description)}`)
       }
       printDivider()
       console.log(dim(`  ${plans.length} skill(s) found`))
+      if (!args.scope) {
+        console.log(dim(`  Published or local? ${"iris playbook list --scope"}`))
+      } else if (scopes === null) {
+        console.log(dim(`  Scope could not be measured — the registry did not answer. "?" is not "unpublished".`))
+      }
 
       prompts.outro("Done")
     })
@@ -129,6 +159,11 @@ const SkillShowCommand = cmd({
         type: "boolean",
         default: false,
         describe: "print the whole playbook — step bodies, code and prose, not just the outline",
+      })
+      .option("local", {
+        type: "boolean",
+        default: false,
+        describe: "skip the registry lookup — do not report scope or published-at",
       }),
   async handler(args) {
     await withInstance(async () => {
@@ -140,8 +175,15 @@ const SkillShowCommand = cmd({
 
       const plan = await parsePlan(info)
 
+      // #183406 defect 2 — is this thing published, and to whom? Optional (never fatal,
+      // hard-capped) and skippable with --local, because `show` has always worked offline.
+      const pub: PublishState = args.local
+        ? { state: "unknown", reason: "--local: registry not checked" }
+        : await fetchPublishState(String(plan.name))
+
       if (args.json) {
-        await writeJson(plan)
+        // Additive — every field of `plan` is still at the top level exactly as before.
+        await writeJson({ ...plan, publish: pub })
         return
       }
 
@@ -160,7 +202,29 @@ const SkillShowCommand = cmd({
       // filesystem path, which is useless to anyone but the author on this machine. Printed
       // unconditionally rather than only when published: an unpublished playbook 404s at this
       // URL, and seeing that is a clearer answer than being told nothing.
+      // The URL, then what it is actually worth. #183406 defect 2: this page returns 200 for an
+      // unpublished name as well as a published one, so printing it alone invited exactly the
+      // wrong inference. The next three lines are the answer the URL cannot give.
       printKV("URL", playbookUrl(String(plan.name)))
+
+      if (pub.state === "published") {
+        printKV("Scope", `${pub.scope}${pub.bloq_id ? ` (bloq #${pub.bloq_id})` : ""}`)
+        printKV("Published", pub.published_at ?? dim("registered, but no published-at recorded"))
+        if (pub.access_type) printKV("Access", pub.access_type)
+        printKV("Who can open", audienceNote(pub.scope, pub.bloq_id))
+      } else if (pub.state === "unpublished") {
+        printKV("Scope", `${bold("not published")} ${dim("— local to this machine")}`)
+        printKV("Published", dim("never"))
+        printKV(
+          "Share it",
+          dim(`iris playbook publish ${plan.name} --scope private|project|public`),
+        )
+      } else {
+        // NOT "unpublished". An unreachable registry cannot tell them apart, and guessing the
+        // safe-sounding one is how someone concludes a public playbook is private.
+        printKV("Scope", `${dim("unknown")} — ${pub.reason}`)
+      }
+
       printKV("On Error", plan.onError)
       printKV("Timeout", `${plan.timeout}s`)
 
@@ -257,6 +321,17 @@ const SkillRunCommand = cmd({
   describe: "execute a v2 skill",
   builder: (yargs) =>
     yargs
+      // #183406 defect 4 — `iris playbook run iris-hive "x" --node dev-mini` died with
+      // "Unknown argument: node", and live playbooks document exactly that form. yargs is
+      // constructed before the playbook is read, so it cannot know which `--flags` a given
+      // playbook declares; under strict parsing every one of them is unknown by definition.
+      //
+      // So unknown options fall through to `skillArgs` and are matched against the playbook's
+      // OWN declared args (splitPlaybookArgv). The strictness is not dropped — it moves to
+      // where the declarations are, and `unknownPlaybookFlags` reproduces the same
+      // "Unknown argument" failure below. Declared options (--step, --json, -y, …) are still
+      // parsed by yargs exactly as before, and positional args are untouched.
+      .parserConfiguration({ "unknown-options-as-args": true })
       .positional("name", { type: "string", demandOption: true })
       .positional("skillArgs", { type: "string", array: true })
       .option("step", { type: "string", describe: "run a single step by ID" })
@@ -286,6 +361,23 @@ const SkillRunCommand = cmd({
       const positionalArgs = (args.skillArgs as string[] ?? [])
       // #181577: one shared parser, so `playbook run` and `loop` cannot drift again.
       const { flagArgs, positional: cleanPositional } = splitPlaybookArgv(positionalArgs, plan.args)
+
+      // The strictness yargs can no longer apply (see parserConfiguration above), applied here
+      // where the playbook's declarations are actually known. Without this a mistyped
+      // `--nodee dev-mini` would be swallowed as a boolean and "dev-mini" bound to whichever
+      // positional came first — a wrong run that reports success (#183406, defect 4).
+      const unknown = unknownPlaybookFlags(flagArgs, plan.args)
+      if (unknown.length > 0) {
+        const declared = Object.keys(plan.args)
+        console.error(`Unknown argument${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}`)
+        console.error(
+          declared.length
+            ? `"${plan.name}" declares: ${declared.map((k) => `--${k}`).join(", ")}`
+            : `"${plan.name}" declares no arguments.`,
+        )
+        console.error(`  iris playbook show ${plan.name}`)
+        process.exit(1)
+      }
 
       let resolvedArgs: Record<string, unknown>
       try {
@@ -327,12 +419,19 @@ const SkillRunCommand = cmd({
 
       const sp = prompts.spinner()
 
+      // Collected rather than printed inline: the spinner owns the current line, and a
+      // console.log mid-step overwrites itself. Replayed after the summary.
+      const warnings: Array<{ stepId: string; message: string }> = []
+
       const opts: ExecuteOptions = {
         dryRun: false,
         yes: args.yes as boolean,
         verbose: args.verbose as boolean,
         resume: args.resume as boolean,
         stepFilter: args.step as string | undefined,
+        onWarn(w) {
+          warnings.push(w)
+        },
         onStepStart(step) {
           if (!args.json) sp.start(`  ${step.id}: ${step.title}`)
         },
@@ -370,8 +469,16 @@ const SkillRunCommand = cmd({
         opts.onManualPrompt = async (step) => {
           sp.stop(`  ${bold(step.id)}: ${step.title}`, 0)
           console.log()
-          if (step.body) console.log(`    ${step.body.replace(/\n/g, "\n    ")}`)
-          if (step.code) console.log(`\n    ${dim(step.code.replace(/\n/g, "\n    "))}`)
+          // `instructions` is the step as written — prose and EVERY fenced block, in the order
+          // the author put them. Printing body-then-code dropped every fenced block after the
+          // first and detached the one that survived from the sentence introducing it
+          // (#183406, defect 6).
+          if (step.instructions) {
+            console.log(`    ${step.instructions.replace(/\n/g, "\n    ")}`)
+          } else {
+            if (step.body) console.log(`    ${step.body.replace(/\n/g, "\n    ")}`)
+            if (step.code) console.log(`\n    ${dim(step.code.replace(/\n/g, "\n    "))}`)
+          }
           console.log()
           const result = await prompts.confirm({ message: "Done?" })
           return !prompts.isCancel(result) && result === true
@@ -380,18 +487,57 @@ const SkillRunCommand = cmd({
 
       const result = await executeSkill(plan, resolvedArgs, opts)
 
+      const passedN = Object.values(result.steps).filter((r) => r.status === "success").length
+      const failedN = Object.values(result.steps).filter((r) => r.status === "failed").length
+      const skippedN = Object.values(result.steps).filter((r) => r.status === "skipped").length
+
+      // #183406 defect 5 — "ran nothing" is not success.
+      //
+      //   iris playbook run iris-agreements "Probe" --step issue -y
+      //   ✓ iris-agreements completed · 0 passed, 1 skipped · exit 0
+      //
+      // `issue` depends on a step --step excluded, so it was skipped, and a run of nothing but
+      // skips satisfied `every(success || skipped)` and reported completion. Single-step smoke
+      // testing was therefore worthless: the check that says "this step works" and the check
+      // that says "this step never executed" printed the same thing and returned the same code.
+      //
+      // SCOPED TO --step DELIBERATELY. A full run whose steps are all `if:`-gated off has
+      // legitimately done its job, and 94 playbooks plus whatever CI calls them depend on that
+      // exiting 0. Narrowing to an explicitly-requested single step keeps automation intact and
+      // fixes the case where the exit code is load-bearing.
+      const ranNothing =
+        Boolean(args.step) && result.status === "completed" && passedN === 0 && failedN === 0 && skippedN > 0
+
       if (args.json) {
-        await writeJson(result)
+        // Additive fields — the existing shape is untouched, so anything already parsing this
+        // keeps working, and anything that wants the truth can now read it.
+        await writeJson({ ...result, ran_nothing: ranNothing, warnings })
+        if (ranNothing) process.exitCode = 1
         return
       }
 
       console.log()
       printDivider()
 
-      const passed = Object.values(result.steps).filter((r) => r.status === "success").length
-      const failed = Object.values(result.steps).filter((r) => r.status === "failed").length
-      const skippedCount = Object.values(result.steps).filter((r) => r.status === "skipped").length
+      const passed = passedN
+      const failed = failedN
+      const skippedCount = skippedN
       const totalMs = Object.values(result.steps).reduce((sum, r) => sum + r.duration_ms, 0)
+
+      if (ranNothing) {
+        console.log(`  ⚠  ${bold(result.skill)} — ${bold("NOTHING RAN")}`)
+        for (const [id, sr] of Object.entries(result.steps)) {
+          if (sr.status === "skipped") console.log(`    ○ ${id}: ${sr.output}`)
+        }
+        console.log()
+        console.log(dim(`  --step runs ONE step. Run the chain that leads to it instead:`))
+        console.log(dim(`    iris playbook run ${plan.name}${cleanPositional.length ? " " + cleanPositional.map((a) => JSON.stringify(a)).join(" ") : ""}`))
+        console.log(dim(`  Or resume a run that already satisfied the dependency:  iris playbook resume <run-id>`))
+        printDivider()
+        prompts.outro("Nothing ran")
+        process.exitCode = 1
+        return
+      }
 
       if (result.status === "completed") {
         console.log(`  ${success("✓")} ${bold(result.skill)} completed`)
@@ -418,6 +564,15 @@ const SkillRunCommand = cmd({
             console.log(`    ✗ ${id}: ${sr.output.slice(0, 200)}`)
           }
         }
+      }
+
+      // Things that rendered wrong without failing. Printed after the summary rather than
+      // during the run because the spinner owns the live line — and printed at all because
+      // "the step succeeded" and "the step succeeded with a blank where your value should be"
+      // were previously the same output (#183406, defect 3).
+      if (warnings.length > 0) {
+        console.log()
+        for (const w of warnings) console.log(`  ⚠  ${bold(w.stepId)}: ${w.message}`)
       }
 
       if (args.verbose) {
@@ -708,8 +863,16 @@ const SkillResumeCommand = cmd({
         opts.onManualPrompt = async (step) => {
           sp.stop(`  ${bold(step.id)}: ${step.title}`, 0)
           console.log()
-          if (step.body) console.log(`    ${step.body.replace(/\n/g, "\n    ")}`)
-          if (step.code) console.log(`\n    ${dim(step.code.replace(/\n/g, "\n    "))}`)
+          // `instructions` is the step as written — prose and EVERY fenced block, in the order
+          // the author put them. Printing body-then-code dropped every fenced block after the
+          // first and detached the one that survived from the sentence introducing it
+          // (#183406, defect 6).
+          if (step.instructions) {
+            console.log(`    ${step.instructions.replace(/\n/g, "\n    ")}`)
+          } else {
+            if (step.body) console.log(`    ${step.body.replace(/\n/g, "\n    ")}`)
+            if (step.code) console.log(`\n    ${dim(step.code.replace(/\n/g, "\n    "))}`)
+          }
           console.log()
           const result = await prompts.confirm({ message: "Done?" })
           return !prompts.isCancel(result) && result === true
@@ -1251,11 +1414,36 @@ const PlaybookSyncCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify({ synced, skipped, api_synced: apiSynced }))
+        // Additive fields; the three original keys are unchanged.
+        console.log(JSON.stringify({
+          synced,
+          skipped,
+          api_synced: apiSynced,
+          target: claudeSkillsDir,
+          published: false,
+          scope: "local",
+        }))
       } else {
         printDivider()
         const apiMsg = args.api ? `, ${apiSynced} to API` : ""
         console.log(dim(`  ${synced} synced to .claude/skills/${apiMsg}, ${skipped} skipped`))
+
+        // #183406 defect 1 — "94 synced, 0 skipped" reads like a publish, and nothing said
+        // otherwise. Ten playbooks written in one day were believed shared and were not: sync
+        // writes SKILL.md files into this repo's .claude/skills/ for the agent running on THIS
+        // machine, and stops there. Saying where the files went is not the same as saying who
+        // can see them, and only the second question was the one people thought they had
+        // answered.
+        console.log()
+        console.log(`  ${bold("Local only.")} These are ${highlight("not")} published.`)
+        console.log(dim(`  Written to ${claudeSkillsDir} — read by the agent on this machine, and nowhere else.`))
+        if (!args.api) {
+          console.log(dim(`  Nothing was uploaded${args.api ? "" : " (no --api)"}; teammates and other machines see none of this.`))
+        }
+        console.log()
+        console.log(`  ${dim("Share one:")}  iris playbook publish <name> --scope private|project|public`)
+        console.log(`  ${dim("Check one:")}  iris playbook show <name>    ${dim("— reports its scope and whether it is published")}`)
+
         prompts.outro(success("Done"))
       }
     })
@@ -1471,6 +1659,92 @@ export function playbookUrl(name: string): string {
   // generic viewer page, which is not the address anyone would type, link, or recognise.
   // The docblock above already described /playbooks semantics; only the string was wrong.
   return `${base}/playbooks/${encodeURIComponent(name)}`
+}
+
+/**
+ * Whether a playbook is published, and at what scope (#183406, defect 2).
+ *
+ * There was no way to ask. `show` printed a filesystem path and a URL; `list` printed names.
+ * Neither said published or not, and the URL is not a substitute — it renders 200 for an
+ * UNPUBLISHED name too (a non-public scope comes back with a null prop and the page still
+ * frames), so opening it proves nothing either way. Ten playbooks were believed shared on the
+ * strength of exactly that.
+ *
+ * THREE STATES, NEVER TWO. "Could not reach the registry" is not "unpublished" — this is the
+ * same rule `check-private` states as UNMEASURED IS NOT SAFE, and it points the other way here:
+ * rendering an unreachable registry as "not published" would tell someone their playbook is
+ * private when it may well be public.
+ *
+ * Hard-capped at 3.5s total (irisFetch retries GETs three times, which is right for a command
+ * that needs the answer and wrong for one decorating an otherwise-local view). A timeout is
+ * "unknown", and every caller treats the lookup as optional.
+ */
+export type PublishState =
+  | {
+      state: "published"
+      scope: string
+      published_at: string | null
+      bloq_id: number | null
+      access_type: string | null
+      updated_at: string | null
+    }
+  | { state: "unpublished" }
+  | { state: "unknown"; reason: string }
+
+/**
+ * Every playbook the registry will show us, name -> scope, in ONE request (#183406, defect 2).
+ *
+ * `null` means we could not measure — never an empty map, because an empty map is
+ * indistinguishable from "nothing is published" and that is the wrong half of the ambiguity to
+ * resolve silently.
+ */
+async function fetchRegistryScopes(): Promise<Map<string, string> | null> {
+  const timeout = new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 5000))
+  try {
+    const raced = await Promise.race([irisFetch(`/api/v1/playbooks`, {}, IRIS_API), timeout])
+    if (raced === "timeout") return null
+    const res = raced as Response
+    if (!res.ok) return null
+    const body = (await res.json()) as any
+    const rows: any[] = firstArray(body?.playbooks, Array.isArray(body) ? body : [])
+    const out = new Map<string, string>()
+    for (const p of rows) {
+      if (p?.name) out.set(String(p.name), String(p.scope ?? "unknown"))
+    }
+    return out
+  } catch {
+    return null
+  }
+}
+
+async function fetchPublishState(name: string): Promise<PublishState> {
+  const timeout = new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 3500))
+  try {
+    const raced = await Promise.race([
+      irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`, {}, IRIS_API),
+      timeout,
+    ])
+    if (raced === "timeout") return { state: "unknown", reason: "registry did not answer within 3.5s" }
+    const res = raced as Response
+    if (res.status === 404) return { state: "unpublished" }
+    if (res.status === 401 || res.status === 403) {
+      return { state: "unknown", reason: "not signed in — run `iris auth login` to see publish state" }
+    }
+    if (!res.ok) return { state: "unknown", reason: `registry returned HTTP ${res.status}` }
+    const data = (await res.json()) as any
+    const pb = data?.playbook ?? data
+    if (!pb || !pb.name) return { state: "unpublished" }
+    return {
+      state: "published",
+      scope: String(pb.scope ?? "unknown"),
+      published_at: pb.published_at ?? null,
+      bloq_id: pb.bloq_id ?? null,
+      access_type: pb.access_type ?? null,
+      updated_at: pb.updated_at ?? null,
+    }
+  } catch (e: any) {
+    return { state: "unknown", reason: `could not reach the registry (${e?.message ?? String(e)})` }
+  }
 }
 
 /** What a given scope means for who can open that URL. Said plainly, because "published" does not. */
@@ -2015,7 +2289,14 @@ const PlaybookAvailableCommand = cmd({
   command: "available",
   aliases: ["remote-list"],
   describe: "list published playbooks you can install (scoped to what you can see)",
-  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  builder: (yargs) =>
+    yargs
+      .option("bloq", {
+        type: "number",
+        describe: "only playbooks published to this project (bloq id)",
+      })
+      .option("json", { type: "boolean", default: false })
+      .example("$0 playbook available --bloq 517", "what can be run on the Pathways SOP Library"),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Playbooks — Available to Install")
@@ -2025,12 +2306,26 @@ const PlaybookAvailableCommand = cmd({
     const res = await irisFetch(`/api/v1/playbooks`, {}, IRIS_API)
     const ok = await handleApiError(res, "List playbooks"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const list: any[] = firstArray(data?.playbooks, data?.data)
+    const all: any[] = firstArray(data?.playbooks, data?.data)
+
+    /* A project-scoped playbook carries the bloq it was published to. Filtering
+       here rather than server-side keeps one endpoint; if the list ever outgrows
+       one response this moves to a query param, not a second command. */
+    const bloqId = args.bloq == null ? null : Number(args.bloq)
+    const list = bloqId == null ? all : all.filter((p) => Number(p?.bloq_id) === bloqId)
 
     if (args.json) { await writeJson(list); prompts.outro("Done"); return }
     if (!list.length) {
       printDivider()
-      console.log(`  ${dim("Nothing published that you can see.")}`)
+      console.log(
+        bloqId == null
+          ? `  ${dim("Nothing published that you can see.")}`
+          : `  ${dim(`No playbook is published to bloq #${bloqId}.`)}\n` +
+            `  ${dim(`Publish one with: iris playbook publish <name> --scope project --bloq ${bloqId}`)}`,
+      )
+      if (bloqId != null && all.length) {
+        console.log(`  ${dim(`(${all.length} playbook(s) are visible to you overall — drop --bloq to see them.)`)}`)
+      }
       prompts.outro("Done"); return
     }
 
@@ -2044,7 +2339,11 @@ const PlaybookAvailableCommand = cmd({
       if (p.description) console.log(`      ${dim(String(p.description))}`)
     }
     printDivider()
-    prompts.outro(`${list.length} available — install with: iris playbook install <name>`)
+    prompts.outro(
+      bloqId == null
+        ? `${list.length} available — install with: iris playbook install <name>`
+        : `${list.length} on bloq #${bloqId} (of ${all.length} visible) — install with: iris playbook install <name>`,
+    )
   },
 })
 
