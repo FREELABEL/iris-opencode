@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import { PlaybookContentsCommands } from "./platform-playbook-contents"
 import * as prompts from "./clack"
-import { confirmWiden } from "./exposure-gate"
+// Aliased: `Tier` is already taken in this file by the e2e runner's own unrelated enum.
+import { confirmWiden, type Tier as ExposureTier } from "./exposure-gate"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError, writeJson, IRIS_API } from "./iris-api"
 import { Skill } from "../../skill/skill"
@@ -1470,27 +1471,64 @@ export function playbookUrl(name: string): string {
 /** What a given scope means for who can open that URL. Said plainly, because "published" does not. */
 function audienceNote(scope?: string, bloqId?: number | null): string {
   switch (scope) {
-    case "public":  return "anyone — it is listed in the marketplace"
-    case "project": return `unlisted — anyone in bloq #${bloqId ?? "?"} can open it, nobody else`
-    case "private": return "only you — but stored in the cloud registry, so it can reach another machine you sign into"
-    case "local":   return "nobody but this machine — it is never uploaded, so there is no URL to open"
-    default:        return "whoever the API allows"
+    case "public":   return "anyone — it is listed in the marketplace"
+    case "unlisted": return "anyone with the link — it appears in no listing, and no sign-in is asked for"
+    // Deliberately no longer described as "unlisted". It said that for months, which reads as
+    // "a link will work" — and a link does NOT work: the reader has to be an OTP-proven member
+    // of the bloq. That wording is what sent someone hunting for a share URL that did not exist.
+    case "project":  return `members of bloq #${bloqId ?? "?"} only, and they must be signed in — a bare link will 404`
+    case "private":  return "only you — but stored in the cloud registry, so it can reach another machine you sign into"
+    case "local":    return "nobody but this machine — it is never uploaded, so there is no URL to open"
+    default:         return "whoever the API allows"
+  }
+}
+
+/**
+ * Playbook scope -> exposure-gate tier. The two vocabularies differ on purpose: the ladder in
+ * exposure-gate.ts is shared across pages, notes, datasets and components, so it says "team"
+ * where playbooks say "project".
+ */
+function scopeToTier(scope: string): ExposureTier {
+  switch (scope) {
+    case "public":   return "public"
+    case "unlisted": return "unlisted"
+    case "project":  return "team"
+    default:         return "private"   // private, local
+  }
+}
+
+/**
+ * What scope is this playbook at RIGHT NOW, so the gate compares against reality.
+ *
+ * A lookup that fails answers "private" — the most private thing it could be — because
+ * isWidening() treats an unknown `from` the same way: when we cannot tell, err toward asking
+ * rather than toward silently widening. Never let a network hiccup become consent.
+ */
+async function currentTier(name: string): Promise<ExposureTier> {
+  try {
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`)
+    if (!res.ok) return "private"
+    const body = (await res.json()) as any
+    return scopeToTier(String(body?.playbook?.scope ?? "private"))
+  } catch {
+    return "private"
   }
 }
 
 const PublishCommand = cmd({
   command: "publish <name>",
-  describe: "publish a playbook with a scope: local | private | project | public",
+  describe: "publish a playbook with a scope: local | private | project | unlisted | public",
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", demandOption: true })
       .option("scope", {
         type: "string",
-        choices: ["local", "private", "project", "public"] as const,
+        choices: ["local", "private", "project", "unlisted", "public"] as const,
         demandOption: true,
         describe:
           "association scope: local (this machine only, never uploaded), private (you, via the cloud registry), " +
-          "project (a bloq/team), public (marketplace)",
+          "project (a bloq/team, sign-in required), unlisted (anyone with the link, in no listing), " +
+          "public (marketplace)",
       })
       .option("bloq", { type: "number", describe: "bloq (project) id — required when --scope project" })
       .option("access", {
@@ -1565,17 +1603,33 @@ const PublishCommand = cmd({
     }
 
     // #182344 G-04 — a marketplace publish is the widest thing this CLI can do.
-    // private/project never ask; public always does, and refuses with no terminal.
+    //
+    // `from` is READ, not assumed. It was hardcoded to "private", which made every
+    // re-publish of an already-project playbook look like a widening: the gate demanded
+    // --force for a no-op at the scope the playbook was already at, moments after a
+    // publish had reported that exact scope back. A guard that cries wolf on a no-op
+    // trains people to pass --force reflexively, which is the worst possible outcome for
+    // a guard whose entire job is to make one specific action deliberate.
+    //
+    // Failing to READ the current scope now falls back to "private" for the same reason
+    // isWidening() does — err toward asking. But that is now a fallback for a failed
+    // lookup, not the permanent answer it used to be.
     {
-      const to = args.scope === "public" ? "public" : args.scope === "project" ? "team" : "private"
+      const to = scopeToTier(String(args.scope))
+      const from = await currentTier(String(args.name))
       const verdict = await confirmWiden({
         noun: "playbook",
         name: String(args.name),
-        from: "private",
+        from,
         to: to as any,
         extra: args.scope === "public"
           ? [`It is listed in the marketplace as ${String(args.access ?? "free")} and anyone can install it.`]
-          : [],
+          : args.scope === "unlisted"
+            ? [
+                "Anyone holding the link can read it without signing in.",
+                "It stays out of every listing, but the link is the whole credential — once sent it cannot be recalled.",
+              ]
+            : [],
         force: Boolean(args.force),
       })
       if (!verdict.ok) {
@@ -1694,6 +1748,12 @@ const PublishCommand = cmd({
     // so that is said on its own line rather than by withholding the link.
     const url = String(pb.public_url || playbookUrl(String(args.name)))
     console.log(`  ${bold("URL")}         ${highlight(url)}`)
+    // For an unlisted playbook the two addresses differ and both matter: the uuid is the
+    // unguessable one you send, the slug is the stable one you cite in a doc. Printing only
+    // one of them means somebody pastes the wrong kind into the wrong place.
+    if ((pb.scope ?? args.scope) === "unlisted" && pb.canonical_url && pb.canonical_url !== url) {
+      console.log(`  ${bold("Canonical")}   ${dim(String(pb.canonical_url))}`)
+    }
     console.log(`  ${bold("Who can open")} ${audienceNote(pb.scope ?? String(args.scope), pb.bloq_id ?? args.bloq)}`)
     printDivider()
     prompts.outro(`${success("✓")} Published ${highlight(String(args.name))} as ${bold(String(args.scope))}`)
