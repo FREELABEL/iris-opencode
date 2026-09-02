@@ -1,34 +1,100 @@
 #!/usr/bin/env bash
 set -euo pipefail
-APP=opencode
+APP=iris
 
 MUTED='\033[0;2m'
 RED='\033[0;31m'
 ORANGE='\033[38;5;214m'
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 
 usage() {
     cat <<EOF
-OpenCode Installer
+IRIS Installer — CLI, SDK, Desktop App, Bridge, Docker Sandbox, Remotion
 
-Usage: install.sh [options]
+Usage: install [options]
+
+Installs:
+  1. IRIS CLI    — AI coding agent (terminal)
+  2. IRIS SDK     — CLI tools & PHP SDK
+  3. IRIS App     — Desktop application (macOS)
+  4. MCP Config   — Agent tool integration (scaffolded for future use)
+  5. Agent Bridge — Hive compute node + session bridge
+  6. Docker Sandbox — Sandboxed container for AI agent development
+  7. Remotion     — Video & image generation compositions (lazy-installed)
 
 Options:
     -h, --help              Display this help message
-    -v, --version <version> Install a specific version (e.g., 1.0.180)
-    -b, --binary <path>     Install from a local binary instead of downloading
+    -v, --version <version> Install a specific IRIS CLI version (see the releases page)
+    -b, --binary <path>     Install IRIS CLI from a local binary
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
+        --skip-sdk          Skip SDK/CLI installation
+        --skip-app          Skip desktop app installation
+        --skip-mcp          Skip MCP config scaffolding
+        --skip-bridge       Skip Coding Agent Bridge installation
+        --skip-sandbox      Skip Docker Sandbox installation
+        --skip-remotion     Skip Remotion video framework installation
+        --api-url <url>     Set IRIS API URL (default: https://freelabel.net)
+        --token <token>     Pre-seed SDK token (skip interactive auth)
+        --user-id <id>      Pre-seed user ID (used with --token)
+        --only-code         Only install IRIS CLI (skip SDK, app, MCP, bridge, sandbox)
 
 Examples:
-    curl -fsSL https://opencode.ai/install | bash
-    curl -fsSL https://opencode.ai/install | bash -s -- --version 1.0.180
-    ./install --binary /path/to/opencode
+    curl -fsSL https://heyiris.io/install-code | bash
+    curl -fsSL https://heyiris.io/install-code | bash -s -- --version <version>
+    curl -fsSL https://heyiris.io/install-code | bash -s -- --only-code
+    curl -fsSL https://heyiris.io/install-code | bash -s -- --skip-app
+    curl -fsSL https://heyiris.io/install-code | bash -s -- --api-url https://custom.example.com
+    curl -fsSL https://heyiris.io/install-code | bash -s -- --token api_token_xxx --user-id 42
 EOF
+}
+
+# ─── Install beacon (#179077) ─────────────────────────────────────────────────
+# Anonymous, metadata-only, fire-and-forget. Nothing about an install ATTEMPT
+# reached us before this: the CLI beacon needs a token, and there is no token
+# until after iris-login — which happens after the install. So a failed install
+# looked exactly like nobody trying.
+#
+# Never blocks (3s timeout, backgrounded) and never fails the install — the `||
+# true` is load-bearing under `set -e`. Opt out with IRIS_TELEMETRY=0.
+IRIS_BEACON_URL="https://heyiris.io/api/v6/telemetry/install"
+IRIS_INSTALLER_VERSION="2026-08-06"
+
+send_install_beacon() {
+    case "${IRIS_TELEMETRY:-}" in 0|off|false) return 0 ;; esac
+    command -v curl >/dev/null 2>&1 || return 0
+
+    local event_type="$1" step="${2:-}" reason="${3:-}"
+    local os arch has_git has_node
+    os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    arch=$(uname -m 2>/dev/null)
+    has_git=$(command -v git >/dev/null 2>&1 && echo true || echo false)
+    has_node=$(command -v node >/dev/null 2>&1 && echo true || echo false)
+
+    # Metadata only — no paths, no hostname, no username.
+    local payload
+    payload=$(printf '{"event_type":"%s","os":"%s","arch":"%s","installer_version":"%s","shell":"bash","has_git":%s,"has_node":%s,"step":"%s","reason":"%s"}' \
+        "$event_type" "$os" "$arch" "$IRIS_INSTALLER_VERSION" "$has_git" "$has_node" "$step" "$(printf '%s' "$reason" | tr -d '"\\' | cut -c1-200)")
+
+    (curl -fsS -m 3 -X POST -H 'Content-Type: application/json' -d "$payload" "$IRIS_BEACON_URL" >/dev/null 2>&1 &) || true
+    return 0
 }
 
 requested_version=${VERSION:-}
 no_modify_path=false
 binary_path=""
+skip_sdk=false
+skip_app=false
+skip_mcp=false
+skip_agents_md=false
+only_docs_mode=false
+skip_bridge=false
+skip_sandbox=false
+skip_remotion=false
+iris_api_url="https://freelabel.net"
+pre_token="${IRIS_SDK_TOKEN:-}"
+pre_user_id="${IRIS_USER_ID:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -58,6 +124,84 @@ while [[ $# -gt 0 ]]; do
             no_modify_path=true
             shift
             ;;
+        --skip-sdk)
+            skip_sdk=true
+            shift
+            ;;
+        --skip-app)
+            skip_app=true
+            shift
+            ;;
+        --skip-mcp)
+            skip_mcp=true
+            shift
+            ;;
+        --skip-agents-md)
+            skip_agents_md=true
+            shift
+            ;;
+        --skip-bridge)
+            skip_bridge=true
+            shift
+            ;;
+        --skip-sandbox)
+            skip_sandbox=true
+            shift
+            ;;
+        --skip-remotion)
+            skip_remotion=true
+            shift
+            ;;
+        --api-url)
+            if [[ -n "${2:-}" ]]; then
+                iris_api_url="$2"
+                shift 2
+            else
+                echo -e "${RED}Error: --api-url requires a URL argument${NC}"
+                exit 1
+            fi
+            ;;
+        --token)
+            if [[ -n "${2:-}" ]]; then
+                pre_token="$2"
+                shift 2
+            else
+                echo -e "${RED}Error: --token requires a token argument${NC}"
+                exit 1
+            fi
+            ;;
+        --user-id)
+            if [[ -n "${2:-}" ]]; then
+                pre_user_id="$2"
+                shift 2
+            else
+                echo -e "${RED}Error: --user-id requires an ID argument${NC}"
+                exit 1
+            fi
+            ;;
+        --only-code)
+            skip_sdk=true
+            skip_app=true
+            skip_mcp=true
+            skip_agents_md=true
+            skip_bridge=true
+            skip_sandbox=true
+            skip_remotion=true
+            shift
+            ;;
+        --only-docs)
+            # Re-fetch the IRIS scaffold (AGENTS.md + how-to/ recipes) only.
+            # Use this to update docs without reinstalling the binary.
+            skip_sdk=true
+            skip_app=true
+            skip_mcp=true
+            skip_agents_md=false
+            skip_bridge=true
+            skip_sandbox=true
+            skip_remotion=true
+            only_docs_mode=true
+            shift
+            ;;
         *)
             echo -e "${ORANGE}Warning: Unknown option '$1'${NC}" >&2
             shift
@@ -65,39 +209,183 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-INSTALL_DIR=$HOME/.opencode/bin
+# Validate --api-url is a proper URL (prevents injection into docker-compose YAML)
+if ! [[ "$iris_api_url" =~ ^https?://[a-zA-Z0-9._-]+(:[0-9]+)?(/.*)?$ ]]; then
+    echo -e "${RED}Error: --api-url must be a valid HTTP(S) URL${NC}"
+    exit 1
+fi
+
+# ─── Pre-flight: verify required utilities ────────────────────────────────────
+_missing_required=""
+for _cmd in curl grep sed mktemp chmod mkdir; do
+    command -v "$_cmd" >/dev/null 2>&1 || _missing_required="$_missing_required $_cmd"
+done
+if [ -n "$_missing_required" ]; then
+    echo -e "${RED}Missing required utilities:${NC}$_missing_required"
+    echo -e "${MUTED}These are usually built into your OS. On macOS, try running ${NC}xcode-select --install"
+    echo -e "${MUTED}On Linux: ${NC}sudo apt install coreutils curl"
+    exit 1
+fi
+
+# macOS version check — the IRIS binary is compiled with Bun and uses
+# LC_DYLD_CHAINED_FIXUPS (load command 0x80000034) for faster startup.
+# This load command was introduced in macOS 12 (Monterey). Older macOS
+# versions will install successfully but crash at runtime with:
+#   dyld: cannot load 'iris' (load command 0x80000034 is unknown)
+#   Abort trap: 6
+# Detect this BEFORE downloading so the user gets a clear explanation.
+if [ "$(uname -s)" = "Darwin" ]; then
+    _macos_version=$(sw_vers -productVersion 2>/dev/null || echo "")
+    _macos_major=$(echo "$_macos_version" | cut -d. -f1)
+    if [ -n "$_macos_major" ] && [ "$_macos_major" -lt 12 ] 2>/dev/null; then
+        echo -e "${RED}════════════════════════════════════════════════════════════════${NC}"
+        echo -e "${RED}  ⚠  macOS Version Warning${NC}"
+        echo -e "${RED}════════════════════════════════════════════════════════════════${NC}"
+        echo -e "${ORANGE}Your macOS version:${NC} $_macos_version"
+        echo -e "${ORANGE}IRIS CLI requires:${NC}  macOS 12 (Monterey) or later"
+        echo -e ""
+        echo -e "${MUTED}The binary will install and authenticate, but will fail to${NC}"
+        echo -e "${MUTED}run with this error:${NC}"
+        echo -e "${MUTED}  ${NC}dyld: cannot load 'iris' (load command 0x80000034 is unknown)"
+        echo -e "${MUTED}  ${NC}Abort trap: 6"
+        echo -e ""
+        echo -e "${MUTED}This is because IRIS is compiled with Bun, which uses Mach-O${NC}"
+        echo -e "${MUTED}features only available on macOS 12 and later.${NC}"
+        echo -e ""
+        echo -e "${MUTED}Options:${NC}"
+        echo -e "${MUTED}  1. Upgrade macOS:${NC} https://support.apple.com/macos/upgrade"
+        echo -e "${MUTED}  2. Report the issue:${NC} https://github.com/FREELABEL/iris-opencode/issues"
+        echo -e "${RED}════════════════════════════════════════════════════════════════${NC}"
+        echo -e ""
+        echo -e "${MUTED}Continuing install anyway in 5 seconds (Ctrl-C to abort)...${NC}"
+        sleep 5
+    fi
+fi
+
+# ─── Dependency bootstrap ────────────────────────────────────────────────────
+# MUST run before every dep check below. The unzip pre-flight, the tmux check,
+# install_bridge and install_remotion all branch on `command -v brew|node`, so
+# bootstrapping Homebrew at the END of this script (where it used to live) meant
+# a clean macOS box silently skipped the daemon, the bridge and Remotion.
+
+# Can we reach the terminal even though stdin is the curl pipe?
+IRIS_TTY=false
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    IRIS_TTY=true
+fi
+
+# Pick up an installed-but-unshimmed brew (common on fresh Apple Silicon)
+if ! command -v brew >/dev/null 2>&1; then
+    for _brew_path in /opt/homebrew/bin/brew /usr/local/bin/brew /home/linuxbrew/.linuxbrew/bin/brew; do
+        if [ -x "$_brew_path" ]; then eval "$("$_brew_path" shellenv)" || true; break; fi
+    done
+fi
+
+if [ "$(uname)" = "Darwin" ] && ! command -v brew >/dev/null 2>&1; then
+    echo -e "${CYAN}→${NC} Installing Homebrew (needed for tmux, Node.js and the Hive daemon)..."
+    if [ "$IRIS_TTY" = "true" ]; then
+        # Read the sudo password from the terminal, NOT the curl pipe. Without
+        # this redirect Homebrew aborts with "stdin is not a TTY".
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/tty || true
+    else
+        # No terminal at all — use Homebrew's own non-interactive mode. Needs
+        # passwordless sudo; degrade gracefully rather than aborting the install.
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true
+    fi
+    for _brew_path in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+        if [ -x "$_brew_path" ]; then eval "$("$_brew_path" shellenv)" || true; break; fi
+    done
+    if command -v brew >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Homebrew installed"
+    else
+        echo -e "${ORANGE}⚠${NC} Homebrew install failed — tmux, Node.js and the daemon will be skipped."
+        echo -e "${MUTED}  Install it from https://brew.sh, then re-run this installer.${NC}"
+    fi
+fi
+
+# Node.js — required by install_bridge (Agent Bridge + Hive daemon) and
+# install_remotion, both of which run long before the old end-of-script block.
+if ! command -v node >/dev/null 2>&1; then
+    echo -e "${CYAN}→${NC} Installing Node.js (required by the Agent Bridge and Remotion)..."
+    if command -v brew >/dev/null 2>&1; then
+        brew install node >/dev/null 2>&1 || true
+    elif command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y nodejs npm >/dev/null 2>&1 || true
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y nodejs npm >/dev/null 2>&1 || true
+    fi
+    if command -v node >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Node.js installed: $(node -v 2>/dev/null || echo unknown)"
+    else
+        echo -e "${ORANGE}⚠${NC} Node.js unavailable — Agent Bridge and Remotion will be skipped."
+        echo -e "${MUTED}  Install it from https://nodejs.org, then re-run this installer.${NC}"
+    fi
+fi
+
+# Soft pre-flight: warn (don't exit) about commands the binary install needs
+_missing_soft=""
+for _cmd in unzip; do
+    command -v "$_cmd" >/dev/null 2>&1 || _missing_soft="$_missing_soft $_cmd"
+done
+if [ -n "$_missing_soft" ]; then
+    echo -e "${ORANGE}Warning:${NC} missing soft dependencies:$_missing_soft"
+    echo -e "${MUTED}The IRIS installer needs these to extract the binary. Attempting auto-install...${NC}"
+    if command -v brew >/dev/null 2>&1; then
+        for _pkg in $_missing_soft; do brew install "$_pkg" >/dev/null 2>&1 || true; done
+    elif command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y $_missing_soft >/dev/null 2>&1 || true
+    else
+        echo -e "${ORANGE}Could not auto-install. Please install manually:${NC}$_missing_soft"
+        echo -e "${MUTED}On macOS without Homebrew, first run:${NC}"
+        echo -e "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        echo -e "${MUTED}Then re-run this installer.${NC}"
+        exit 1
+    fi
+    # Re-check
+    for _cmd in $_missing_soft; do
+        if ! command -v "$_cmd" >/dev/null 2>&1; then
+            echo -e "${RED}Auto-install of $_cmd failed.${NC} Please install it manually and re-run."
+            exit 1
+        fi
+    done
+    echo -e "${GREEN}✓${NC} Auto-installed:$_missing_soft"
+fi
+
+# ─── tmux (required for Hive session persistence) ─────────────────────────
+if ! command -v tmux >/dev/null 2>&1; then
+    echo -e "${MUTED}Installing tmux (required for Hive compute sessions)...${NC}"
+    if command -v brew >/dev/null 2>&1; then
+        # `|| true` matters: set -e is on, so a failed brew install would
+        # otherwise abort the whole installer here.
+        brew install tmux >/dev/null 2>&1 || true
+    elif command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y tmux >/dev/null 2>&1 || true
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y tmux >/dev/null 2>&1 || true
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm tmux >/dev/null 2>&1 || true
+    else
+        echo -e "${ORANGE}Could not auto-install tmux.${NC}"
+        echo -e "${MUTED}Install manually: brew install tmux (macOS) or sudo apt install tmux (Linux)${NC}"
+        echo -e "${MUTED}The IRIS Hive daemon requires tmux for session persistence.${NC}"
+    fi
+    if command -v tmux >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} tmux installed: $(tmux -V 2>/dev/null || echo 'unknown version')"
+    fi
+else
+    # Version check — require tmux >= 3.0 for wait-for support
+    _tmux_ver=$(tmux -V 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+    _tmux_major=$(echo "$_tmux_ver" | cut -d. -f1)
+    if [ -n "$_tmux_major" ] && [ "$_tmux_major" -lt 3 ] 2>/dev/null; then
+        echo -e "${ORANGE}tmux $_tmux_ver found but 3.0+ recommended for full Hive features.${NC}"
+        echo -e "${MUTED}Upgrade: brew install tmux (macOS) or sudo apt install tmux (Linux)${NC}"
+    fi
+fi
+
+INSTALL_DIR=$HOME/.iris/bin
 mkdir -p "$INSTALL_DIR"
 
-# Platform detection runs UNCONDITIONALLY, before the --binary branch.
-#
-# It used to live inside the `else` below — i.e. only on the download path. The desktop app
-# installs the CLI from its BUNDLED sidecar, so it always passes --binary, always took the
-# `if` branch, and never set os/arch. The Node section further down then hit
-# `node-v$NODE_VERSION-$os-$arch` under `set -u` and died with:
-#
-#     line 461: os: unbound variable
-#
-# So the app's install path was broken 100% of the time while the curl-pipe path was fine —
-# and a bare-machine test of the curl path passes cleanly right next to it. Detection is
-# cheap, has no side effects, and every later section wants it, so it belongs out here where
-# both branches get it.
-raw_os=$(uname -s)
-os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
-case "$raw_os" in
-  Darwin*) os="darwin" ;;
-  Linux*) os="linux" ;;
-  MINGW*|MSYS*|CYGWIN*) os="windows" ;;
-esac
-
-arch=$(uname -m)
-if [[ "$arch" == "aarch64" ]]; then
-  arch="arm64"
-fi
-if [[ "$arch" == "x86_64" ]]; then
-  arch="x64"
-fi
-
-# If --binary is provided, skip all download logic (but NOT the detection above)
+# If --binary is provided, skip all download/detection logic
 if [ -n "$binary_path" ]; then
     if [ ! -f "$binary_path" ]; then
         echo -e "${RED}Error: Binary not found at ${binary_path}${NC}"
@@ -105,6 +393,21 @@ if [ -n "$binary_path" ]; then
     fi
     specific_version="local"
 else
+    raw_os=$(uname -s)
+    os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
+    case "$raw_os" in
+      Darwin*) os="darwin" ;;
+      Linux*) os="linux" ;;
+      MINGW*|MSYS*|CYGWIN*) os="windows" ;;
+    esac
+
+    arch=$(uname -m)
+    if [[ "$arch" == "aarch64" ]]; then
+      arch="arm64"
+    fi
+    if [[ "$arch" == "x86_64" ]]; then
+      arch="x64"
+    fi
 
     if [ "$os" = "darwin" ] && [ "$arch" = "x64" ]; then
       rosetta_flag=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
@@ -119,6 +422,7 @@ else
         ;;
       *)
         echo -e "${RED}Unsupported OS/Arch: $os/$arch${NC}"
+        echo -e "${MUTED}Supported: linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64${NC}"
         exit 1
         ;;
     esac
@@ -144,28 +448,17 @@ else
     needs_baseline=false
     if [ "$arch" = "x64" ]; then
       if [ "$os" = "linux" ]; then
-        if ! grep -qwi avx2 /proc/cpuinfo 2>/dev/null; then
+        if ! grep -qi avx2 /proc/cpuinfo 2>/dev/null; then
           needs_baseline=true
         fi
       fi
 
       if [ "$os" = "darwin" ]; then
-        avx2=$(sysctl -n hw.optional.avx2_0 2>/dev/null || echo 0)
-        if [ "$avx2" != "1" ]; then
-          needs_baseline=true
-        fi
-      fi
-
-      if [ "$os" = "windows" ]; then
-        ps="(Add-Type -MemberDefinition \"[DllImport(\"\"kernel32.dll\"\")] public static extern bool IsProcessorFeaturePresent(int ProcessorFeature);\" -Name Kernel32 -Namespace Win32 -PassThru)::IsProcessorFeaturePresent(40)"
-        out=""
-        if command -v powershell.exe >/dev/null 2>&1; then
-          out=$(powershell.exe -NoProfile -NonInteractive -Command "$ps" 2>/dev/null || true)
-        elif command -v pwsh >/dev/null 2>&1; then
-          out=$(pwsh -NoProfile -NonInteractive -Command "$ps" 2>/dev/null || true)
-        fi
-        out=$(echo "$out" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-        if [ "$out" != "true" ] && [ "$out" != "1" ]; then
+        # AVX2 sysctl key has changed across macOS versions. Check both
+        # variants and only flag as missing if BOTH return 0/missing.
+        avx2_a=$(sysctl -n hw.optional.avx2_0 2>/dev/null || echo 0)
+        avx2_b=$(sysctl -n hw.optional.avx2 2>/dev/null || echo 0)
+        if [ "$avx2_a" != "1" ] && [ "$avx2_b" != "1" ]; then
           needs_baseline=true
         fi
       fi
@@ -181,38 +474,90 @@ else
 
     filename="$APP-$target$archive_ext"
 
+    # Verify the requested asset actually exists in the GitHub release. If
+    # the baseline build is missing (no baseline artifacts published for this
+    # version), fall back to the standard build with a clear warning. This
+    # protects against asset-name mismatches and macOS AVX2 detection quirks
+    # where a Mac actually supports AVX2 but the sysctl key differs.
+    if [ "$needs_baseline" = "true" ] && [ -z "$requested_version" ]; then
+      _probe_url="https://github.com/FREELABEL/iris-opencode/releases/latest/download/$filename"
+      if ! curl -fsSL --head --max-time 8 "$_probe_url" >/dev/null 2>&1; then
+        _fallback_filename="$APP-$os-$arch$archive_ext"
+        if [ "$is_musl" = "true" ]; then
+          _fallback_filename="$APP-$os-$arch-musl$archive_ext"
+        fi
+        echo -e "${ORANGE}Warning:${NC} baseline build ($filename) not published for this release."
+        echo -e "${MUTED}Falling back to standard build: ${NC}$_fallback_filename"
+        echo -e "${MUTED}If this binary crashes with 'Illegal instruction', your CPU likely lacks AVX2.${NC}"
+        echo -e "${MUTED}In that case, please file an issue: ${NC}https://github.com/FREELABEL/iris-opencode/issues"
+        filename="$_fallback_filename"
+        target="$os-$arch"
+        [ "$is_musl" = "true" ] && target="$target-musl"
+      fi
+    fi
+
 
     if [ "$os" = "linux" ]; then
         if ! command -v tar >/dev/null 2>&1; then
              echo -e "${RED}Error: 'tar' is required but not installed.${NC}"
+             echo -e "${MUTED}Install with: sudo apt install tar${NC}"
              exit 1
         fi
     else
         if ! command -v unzip >/dev/null 2>&1; then
             echo -e "${RED}Error: 'unzip' is required but not installed.${NC}"
+            echo -e "${MUTED}Install with: brew install unzip (macOS) or sudo apt install unzip (Linux)${NC}"
             exit 1
         fi
     fi
 
-    if [ -z "$requested_version" ]; then
-        url="https://github.com/anomalyco/opencode/releases/latest/download/$filename"
-        specific_version=$(curl -s https://api.github.com/repos/anomalyco/opencode/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+    send_install_beacon "install_start"
 
-        if [[ $? -ne 0 || -z "$specific_version" ]]; then
+    if [ -z "$requested_version" ]; then
+        # Do NOT use /releases/latest. TWO release series share this repo — `v*` for this CLI
+        # and `desktop-v*` for the Tauri desktop app — and GitHub's "latest" is simply the most
+        # recently published NON-prerelease of either. On 2026-08-27, promoting
+        # desktop-v1.18.28 made /releases/latest return that tag; it has no bare `v` prefix, so
+        # the parse below produced an empty string and EVERY `curl | bash` install died with
+        # "Failed to fetch version information". The desktop app's release cadence must not be
+        # able to break the CLI installer.
+        #
+        # Ask for the newest release in THIS series instead. The `"v[0-9]` anchor is what
+        # excludes desktop-v*: after `"tag_name": "` that tag begins with `d`, not `v`.
+        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" \
+            | sed -n 's/.*"tag_name": *"v\([0-9][^"]*\)".*/\1/p' | head -1) || true
+
+        if [[ -z "$specific_version" ]]; then
+            # Last resort: the redirect target of /releases/latest/download still resolves by
+            # ASSET NAME, so it can land on a valid CLI release even when the API parse failed.
+            specific_version=$(curl -sI "https://github.com/FREELABEL/iris-opencode/releases/latest/download/$filename" \
+                | sed -n 's|.*/releases/download/v\([0-9][^/]*\)/.*|\1|p' | head -1) || true
+        fi
+
+        url="https://github.com/FREELABEL/iris-opencode/releases/download/v${specific_version}/$filename"
+
+        if [[ -z "$specific_version" ]]; then
             echo -e "${RED}Failed to fetch version information${NC}"
+            echo -e "${MUTED}Check your internet connection or install a specific version:${NC}"
+            # Do NOT name a version here. This line used to say 1.1.6 — an ancient build —
+            # and on 2026-08-27 a client followed it verbatim and installed that, because a
+            # hardcoded example in an error message reads as a recommendation. Point at the
+            # list instead, which cannot go stale.
+            echo -e "${MUTED}  Pick a version from https://github.com/FREELABEL/iris-opencode/releases${NC}"
+            echo -e "${MUTED}  curl -fsSL https://heyiris.io/install-code | bash -s -- --version <version>${NC}"
             exit 1
         fi
     else
         # Strip leading 'v' if present
         requested_version="${requested_version#v}"
-        url="https://github.com/anomalyco/opencode/releases/download/v${requested_version}/$filename"
+        url="https://github.com/FREELABEL/iris-opencode/releases/download/v${requested_version}/$filename"
         specific_version=$requested_version
 
         # Verify the release exists before downloading
-        http_status=$(curl -sI -o /dev/null -w "%{http_code}" "https://github.com/anomalyco/opencode/releases/tag/v${requested_version}")
+        http_status=$(curl -sI -o /dev/null -w "%{http_code}" "https://github.com/FREELABEL/iris-opencode/releases/tag/v${requested_version}")
         if [ "$http_status" = "404" ]; then
             echo -e "${RED}Error: Release v${requested_version} not found${NC}"
-            echo -e "${MUTED}Available releases: https://github.com/anomalyco/opencode/releases${NC}"
+            echo -e "${MUTED}Available releases: https://github.com/FREELABEL/iris-opencode/releases${NC}"
             exit 1
         fi
     fi
@@ -233,18 +578,8 @@ print_message() {
 }
 
 check_version() {
-    if command -v opencode >/dev/null 2>&1; then
-        opencode_path=$(which opencode)
-
-        ## Check the installed version
-        installed_version=$(opencode --version 2>/dev/null || echo "")
-
-        if [[ "$installed_version" != "$specific_version" ]]; then
-            print_message info "${MUTED}Installed version: ${NC}$installed_version."
-        else
-            print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed"
-            exit 0
-        fi
+    if [ -f "$INSTALL_DIR/iris" ]; then
+        print_message info "${MUTED}Updating IRIS CLI to ${NC}$specific_version${MUTED}...${NC}"
     fi
 }
 
@@ -289,7 +624,7 @@ download_with_progress() {
     fi
 
     local tmp_dir=${TMPDIR:-/tmp}
-    local basename="${tmp_dir}/opencode_install_$$"
+    local basename="${tmp_dir}/iris_install_$$"
     local tracefile="${basename}.trace"
 
     rm -f "$tracefile"
@@ -339,13 +674,36 @@ download_with_progress() {
 }
 
 download_and_install() {
-    print_message info "\n${MUTED}Installing ${NC}opencode ${MUTED}version: ${NC}$specific_version"
-    local tmp_dir="${TMPDIR:-/tmp}/opencode_install_$$"
-    mkdir -p "$tmp_dir"
+    print_message info "\n${MUTED}Installing ${NC}IRIS CLI ${MUTED}version: ${NC}$specific_version"
+    local tmp_dir
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/iris_install_XXXXXX")
 
-    if [[ "$os" == "windows" ]] || ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then
-        # Fallback to standard curl on Windows, non-TTY environments, or if custom progress fails
+    if [[ "$os" == "windows" ]] || ! [ -t 2 ]; then
+        # Non-TTY or Windows: use standard curl progress
         curl -# -L -o "$tmp_dir/$filename" "$url"
+    elif ! download_with_progress "$url" "$tmp_dir/$filename"; then
+        # Custom progress failed — only fallback if file wasn't already downloaded
+        if [ ! -s "$tmp_dir/$filename" ]; then
+            curl -# -L -o "$tmp_dir/$filename" "$url"
+        fi
+    fi
+
+    # Verify the download succeeded and isn't an HTML error page
+    if [ ! -s "$tmp_dir/$filename" ]; then
+        echo -e "${RED}Error: Download failed — file is empty${NC}"
+        echo -e "${MUTED}The binary for your platform (${target}) may not be available in this release.${NC}"
+        echo -e "${MUTED}Check available assets: https://github.com/FREELABEL/iris-opencode/releases/tag/v${specific_version}${NC}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    # Check if we got an HTML error page instead of a real binary
+    if head -c 15 "$tmp_dir/$filename" | grep -qi '<!doctype\|<html'; then
+        echo -e "${RED}Error: Download returned an error page instead of the binary${NC}"
+        echo -e "${MUTED}The binary for your platform (${target}) is not available in release v${specific_version}.${NC}"
+        echo -e "${MUTED}Check available assets: https://github.com/FREELABEL/iris-opencode/releases/tag/v${specific_version}${NC}"
+        rm -rf "$tmp_dir"
+        exit 1
     fi
 
     if [ "$os" = "linux" ]; then
@@ -354,18 +712,31 @@ download_and_install() {
         unzip -q "$tmp_dir/$filename" -d "$tmp_dir"
     fi
 
-    mv "$tmp_dir/opencode" "$INSTALL_DIR"
-    chmod 755 "${INSTALL_DIR}/opencode"
+    mv "$tmp_dir/iris" "$INSTALL_DIR"
+    chmod 755 "${INSTALL_DIR}/iris"
+    # Ad-hoc sign on macOS so Gatekeeper doesn't SIGKILL the binary (exit 137)
+    if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+        codesign --force --deep --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
+    fi
     rm -rf "$tmp_dir"
 }
 
 install_from_binary() {
-    print_message info "\n${MUTED}Installing ${NC}opencode ${MUTED}from: ${NC}$binary_path"
-    cp "$binary_path" "${INSTALL_DIR}/opencode"
-    chmod 755 "${INSTALL_DIR}/opencode"
+    print_message info "\n${MUTED}Installing ${NC}IRIS CLI ${MUTED}from: ${NC}$binary_path"
+    cp "$binary_path" "${INSTALL_DIR}/iris"
+    chmod 755 "${INSTALL_DIR}/iris"
+    # Ad-hoc sign on macOS so Gatekeeper doesn't SIGKILL the binary (exit 137)
+    if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+        codesign --force --deep --sign - "${INSTALL_DIR}/iris" 2>/dev/null || true
+    fi
 }
 
-if [ -n "$binary_path" ]; then
+if [ "$only_docs_mode" = "true" ]; then
+    print_message info "${MUTED}Mode: --only-docs (refreshing IRIS docs, skipping binary install)${NC}"
+    # Skip binary install. The --only-docs flag also disables every other
+    # component except 4b (scaffold_iris_docs), so the script flows naturally
+    # through the rest, runs 4b, and exits at the bottom.
+elif [ -n "$binary_path" ]; then
     install_from_binary
 else
     check_version
@@ -373,48 +744,46 @@ else
 fi
 
 
-add_to_path() {
-    local config_file=$1
-    local command=$2
+# ─── PATH setup (env file pattern, like Rust/Bun) ────────────────────────────
+# Create ~/.iris/env — a single sourceable file that sets up PATH.
+# Then add `source ~/.iris/env` to the user's shell config.
 
-    if grep -Fxq "$command" "$config_file"; then
-        print_message info "Command already exists in $config_file, skipping write."
-    elif [[ -w $config_file ]]; then
-        echo -e "\n# opencode" >> "$config_file"
-        echo "$command" >> "$config_file"
-        print_message info "${MUTED}Successfully added ${NC}opencode ${MUTED}to \$PATH in ${NC}$config_file"
-    else
-        print_message warning "Manually add the directory to $config_file (or similar):"
-        print_message info "  $command"
-    fi
-}
-
-XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+IRIS_ENV_FILE="$HOME/.iris/env"
 
 current_shell=$(basename "$SHELL")
-case $current_shell in
-    fish)
-        config_files="$HOME/.config/fish/config.fish"
-    ;;
-    zsh)
-        config_files="${ZDOTDIR:-$HOME}/.zshrc ${ZDOTDIR:-$HOME}/.zshenv $XDG_CONFIG_HOME/zsh/.zshrc $XDG_CONFIG_HOME/zsh/.zshenv"
-    ;;
-    bash)
-        config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile $XDG_CONFIG_HOME/bash/.bashrc $XDG_CONFIG_HOME/bash/.bash_profile"
-    ;;
-    ash)
-        config_files="$HOME/.ashrc $HOME/.profile /etc/profile"
-    ;;
-    sh)
-        config_files="$HOME/.ashrc $HOME/.profile /etc/profile"
-    ;;
-    *)
-        # Default case if none of the above matches
-        config_files="$HOME/.bashrc $HOME/.bash_profile $XDG_CONFIG_HOME/bash/.bashrc $XDG_CONFIG_HOME/bash/.bash_profile"
-    ;;
-esac
 
+if [ "$current_shell" = "fish" ]; then
+    cat > "$IRIS_ENV_FILE" << 'ENVF'
+# IRIS CLI PATH setup (sourced by your shell config)
+if not contains "$HOME/.iris/bin" $PATH
+    set -gx PATH "$HOME/.iris/bin" $PATH
+end
+ENVF
+else
+    cat > "$IRIS_ENV_FILE" << 'ENVF'
+# IRIS CLI PATH setup (sourced by your shell config)
+case ":${PATH}:" in
+    *:"$HOME/.iris/bin":*) ;;
+    *) export PATH="$HOME/.iris/bin:$PATH" ;;
+esac
+ENVF
+fi
+
+# Source it now so iris works in the current session
+. "$IRIS_ENV_FILE"
+
+# Add source line to shell config (if not already there)
 if [[ "$no_modify_path" != "true" ]]; then
+    XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+
+    # Find the right shell config file
+    case $current_shell in
+        fish) config_files="$HOME/.config/fish/config.fish" ;;
+        zsh)  config_files="$HOME/.zshrc $HOME/.zshenv" ;;
+        bash) config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile" ;;
+        *)    config_files="$HOME/.bashrc $HOME/.profile" ;;
+    esac
+
     config_file=""
     for file in $config_files; do
         if [[ -f $file ]]; then
@@ -423,32 +792,28 @@ if [[ "$no_modify_path" != "true" ]]; then
         fi
     done
 
+    # Create default config file if none exists
     if [[ -z $config_file ]]; then
-        print_message warning "No config file found for $current_shell. You may need to manually add to PATH:"
-        print_message info "  export PATH=$INSTALL_DIR:\$PATH"
-    elif [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
         case $current_shell in
-            fish)
-                add_to_path "$config_file" "fish_add_path $INSTALL_DIR"
-            ;;
-            zsh)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
-            ;;
-            bash)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
-            ;;
-            ash)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
-            ;;
-            sh)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
-            ;;
-            *)
-                export PATH=$INSTALL_DIR:$PATH
-                print_message warning "Manually add the directory to $config_file (or similar):"
-                print_message info "  export PATH=$INSTALL_DIR:\$PATH"
-            ;;
+            zsh)  config_file="$HOME/.zshrc" ;;
+            bash) config_file="$HOME/.bashrc" ;;
+            fish) mkdir -p "$HOME/.config/fish" 2>/dev/null; config_file="$HOME/.config/fish/config.fish" ;;
+            *)    config_file="$HOME/.profile" ;;
         esac
+        touch "$config_file" 2>/dev/null || true
+    fi
+
+    # Add source line if not already present
+    if [ "$current_shell" = "fish" ]; then
+        source_line="source \"$IRIS_ENV_FILE\""
+    else
+        source_line=". \"$HOME/.iris/env\""
+    fi
+
+    if [[ -f "$config_file" ]] && ! grep -q "\.iris/env" "$config_file" 2>/dev/null; then
+        echo "" >> "$config_file"
+        echo "# IRIS CLI" >> "$config_file"
+        echo "$source_line" >> "$config_file"
     fi
 fi
 
@@ -513,6 +878,18 @@ install_node() {
     node_ok
 }
 
+if node_ok; then
+    print_message info "${MUTED}Node ${NC}$(node -v)${MUTED} already present${NC}"
+elif install_node; then
+    print_message info "${MUTED}Node ${NC}$(node -v)${MUTED} installed${NC}"
+else
+    # Fail LOUDLY rather than succeeding into a broken bridge. The whole reason this section
+    # exists is that a missing dependency used to be discovered by a later, unrelated error.
+    print_message warning "Node 18+ could not be installed automatically."
+    print_message warning "The Hive bridge/daemon will not work until Node is available."
+    print_message info "  Install it from https://nodejs.org and re-run this installer."
+fi
+
 # tmux — the daemon runs agent sessions inside it (173 references in the bridge).
 # Same failure as Node: never installed, never checked, and the daemon does not test for it
 # either — it simply exits code 1. A client hit this on 2026-08-31 immediately after the Node
@@ -544,35 +921,2077 @@ else
     print_message info "  Linux:  sudo apt-get install tmux"
 fi
 
-if node_ok; then
-    print_message info "${MUTED}Node ${NC}$(node -v)${MUTED} already present${NC}"
-elif install_node; then
-    print_message info "${MUTED}Node ${NC}$(node -v)${MUTED} installed${NC}"
-else
-    # Fail LOUDLY rather than succeeding into a broken bridge. The whole reason this section
-    # exists is that a missing dependency used to be discovered by a later, unrelated error.
-    print_message warning "Node 18+ could not be installed automatically."
-    print_message warning "The Hive bridge/daemon will not work until Node is available."
-    print_message info "  Install it from https://nodejs.org and re-run this installer."
-fi
-
 if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
     echo "$INSTALL_DIR" >> $GITHUB_PATH
     print_message info "Added $INSTALL_DIR to \$GITHUB_PATH"
 fi
 
+# Add to PATH for current session
+export PATH="$INSTALL_DIR:$PATH"
+
+send_install_beacon "install_success" "cli"
+print_message info "\n${GREEN}[1/7]${NC} IRIS CLI ${MUTED}..........................${NC} ${GREEN}installed${NC}"
+
+# ─── Component 2: IRIS SDK / CLI ─────────────────────────────────────────────
+
+install_sdk() {
+    # SDK commands are now built into IRIS CLI (Node.js CLI) — no PHP required.
+    # Preserve any existing .env from previous PHP SDK installs (contains auth tokens).
+    local sdk_dir="$HOME/.iris/sdk"
+    if [ -f "$sdk_dir/.env" ]; then
+        mkdir -p "$sdk_dir"
+    fi
+
+    print_message info "${GREEN}[2/7]${NC} IRIS SDK ${MUTED}...........................${NC} ${GREEN}built-in${NC} ${MUTED}(no PHP required)${NC}"
+}
+
+if [ "$skip_sdk" = "false" ]; then
+    install_sdk
+else
+    print_message info "${MUTED}[2/7] IRIS SDK .............................. skipped${NC}"
+fi
+
+# ─── Component 3: IRIS Desktop App ───────────────────────────────────────────
+
+install_desktop_app() {
+    # Desktop app is macOS only for now (Nativefier produces .app bundles)
+    if [ "${os:-}" != "darwin" ]; then
+        print_message info "${MUTED}[3/7] IRIS App .............................. skipped (macOS only)${NC}"
+        return 0
+    fi
+
+    print_message info "${MUTED}Installing IRIS Desktop App...${NC}"
+
+    local app_dir="$HOME/Applications"
+    local app_path="$app_dir/IRIS.app"
+
+    # Skip if already installed
+    if [ -d "$app_path" ] || [ -d "/Applications/IRIS.app" ]; then
+        print_message info "${GREEN}[3/7]${NC} IRIS App ${MUTED}...........................${NC} ${GREEN}already installed${NC}"
+        return 0
+    fi
+
+    # Download the desktop app zip from GitHub releases
+    local app_url="https://github.com/FREELABEL/iris-opencode/releases/latest/download/IRIS-app-darwin-${arch}.zip"
+    local tmp_dir
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/iris_app_XXXXXX")
+
+    if curl -sL --fail -o "$tmp_dir/IRIS-app.zip" "$app_url" 2>/dev/null; then
+        mkdir -p "$app_dir"
+        unzip -q "$tmp_dir/IRIS-app.zip" -d "$app_dir" 2>/dev/null || true
+        rm -rf "$tmp_dir"
+
+        if [ -d "$app_path" ]; then
+            print_message info "${GREEN}[3/7]${NC} IRIS App ${MUTED}...........................${NC} ${GREEN}installed${NC}"
+            print_message info "${MUTED}      Installed to ${NC}~/Applications/IRIS.app"
+        else
+            print_message info "${MUTED}[3/7] IRIS App .............................. download available at heyiris.io${NC}"
+        fi
+    else
+        rm -rf "$tmp_dir"
+        print_message info "${MUTED}[3/7] IRIS App .............................. download available at ${NC}https://heyiris.io/download"
+    fi
+}
+
+if [ "$skip_app" = "false" ]; then
+    install_desktop_app
+else
+    print_message info "${MUTED}[3/7] IRIS App .............................. skipped${NC}"
+fi
+
+# ─── Component 4: MCP Configuration Scaffold ─────────────────────────────────
+
+scaffold_mcp_config() {
+    local iris_config_dir="$HOME/.iris"
+    local mcp_config="$iris_config_dir/mcp.json"
+    local iris_bin="$HOME/.iris/bin/iris"
+
+    mkdir -p "$iris_config_dir"
+
+    # Reference scaffold (kept for documentation / manual setups). The real
+    # wiring happens below via `iris mcp install`, which registers the server
+    # into the MCP clients that actually consume it.
+    if [ ! -f "$mcp_config" ]; then
+        cat > "$mcp_config" << 'MCPEOF'
+{
+  "mcpServers": {
+    "iris-local": {
+      "_comment": "Local IRIS tools — filesystem, SDK, project setup",
+      "command": "iris",
+      "args": ["mcp", "serve"],
+      "enabled": true
+    },
+    "iris-platform": {
+      "_comment": "Remote IRIS platform — agents, integrations, workflows",
+      "type": "remote",
+      "url": "https://heyiris.io/api/mcp",
+      "enabled": false
+    }
+  }
+}
+MCPEOF
+    fi
+
+    # Bug #150264: actually REGISTER the server into detected MCP clients
+    # (Claude Code, Claude Desktop, Cursor, opencode) with an absolute binary
+    # path, so GUI-launched clients (no login shell) can resolve it. Without
+    # this, ~/.iris/mcp.json is a dead file no client reads.
+    if [ -x "$iris_bin" ]; then
+        if "$iris_bin" mcp install >/dev/null 2>&1; then
+            print_message info "${GREEN}[4/7]${NC} MCP Config ${MUTED}.........................${NC} ${GREEN}registered with clients${NC}"
+            print_message info "${MUTED}      Verify with ${NC}iris mcp list${MUTED} · restart your editor to load IRIS tools${NC}"
+            return 0
+        fi
+    fi
+
+    # Fallback: binary missing or registration failed — scaffold only.
+    print_message info "${GREEN}[4/7]${NC} MCP Config ${MUTED}.........................${NC} ${GREEN}scaffolded${NC}"
+    print_message info "${MUTED}      Run ${NC}iris mcp install${MUTED} to register IRIS with your editor${NC}"
+}
+
+if [ "$skip_mcp" = "false" ]; then
+    scaffold_mcp_config
+else
+    print_message info "${MUTED}[4/7] MCP Config ............................ skipped${NC}"
+fi
+
+# ─── Component 4b: IRIS docs scaffold (AGENTS.md + how-to/ recipes) ─────────
+#
+# Fetches the manifest + scaffold files from the public iris-code repo and
+# writes them under ~/.iris/. The agent reads ~/.iris/AGENTS.md every session
+# (see packages/opencode/src/session/system.ts) and uses ~/.iris/how-to/*.md
+# as on-demand recipes for IRIS-specific workflows.
+#
+# Source of truth: https://github.com/FREELABEL/iris-opencode/tree/dev/scaffold/
+# Updating recipes is a PR against that directory — no binary release needed.
+
+# Base URL for fetching scaffold files. Defaults to GitHub raw (always works
+# since the repo is public). When heyiris.io/docs/scaffold/ is verified to
+# serve these files, flip this single constant to switch to the brand URL.
+IRIS_SCAFFOLD_BASE_URL="${IRIS_SCAFFOLD_BASE_URL:-https://raw.githubusercontent.com/FREELABEL/iris-opencode/main/scaffold}"
+
+# Embedded fallback AGENTS.md — used only when both the network fetch and the
+# heyiris.io fallback fail. Bare-minimum identity so the agent still knows it
+# is IRIS even on an air-gapped install.
+write_embedded_fallback_agents_md() {
+    local dest="$1"
+    cat > "$dest" << 'EMBEDDEDEOF'
+# IRIS CLI (offline fallback)
+
+You are running inside the IRIS CLI — an AI coding assistant from the IRIS
+platform (heyiris.io). The full rule file and how-to recipes could not be
+fetched from GitHub during install (likely a network issue). To get them:
+
+  1. Restore network access
+  2. Run: ~/.iris/bin/iris install --only-docs
+     (or re-run the original install command)
+
+## Commands you can use right now
+
+- `iris-login` — authenticate
+- `iris-daemon start|stop|status` — local Hive daemon
+- `iris hive` — distributed compute mesh
+- `iris platform-*` — chat, agents, leads, workflows, bloqs, pages, contracts
+- `iris mcp serve` — expose IRIS as an MCP server
+- `iris --help` — full command tree
+
+By default, assume the user is working in their own project, not on IRIS
+source code. Read existing code before suggesting changes.
+EMBEDDEDEOF
+}
+
+# Fetch a single file from $IRIS_SCAFFOLD_BASE_URL/$1 to $2.
+# Returns 0 on success, 1 on failure.
+fetch_scaffold_file() {
+    local src="$1"
+    local dest="$2"
+    local url="${IRIS_SCAFFOLD_BASE_URL}/${src}"
+    local tmp
+    tmp=$(mktemp 2>/dev/null) || return 1
+
+    if curl -fsSL --max-time 15 "$url" -o "$tmp" 2>/dev/null; then
+        # sanity-check: file is non-empty
+        if [ -s "$tmp" ]; then
+            mkdir -p "$(dirname "$dest")"
+            mv "$tmp" "$dest"
+            return 0
+        fi
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+# Parse the JSON manifest with a 3-tier fallback chain (jq → python3 → sed).
+# Echoes one "src|dest" pair per line.
+parse_manifest_entries() {
+    local manifest="$1"
+
+    if command -v jq >/dev/null 2>&1; then
+        jq -r '.files[] | "\(.src)|\(.dest)"' "$manifest"
+        return $?
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "
+import json, sys
+with open('$manifest') as f:
+    data = json.load(f)
+for entry in data.get('files', []):
+    print(f\"{entry['src']}|{entry['dest']}\")
+" 2>/dev/null
+        return $?
+    fi
+
+    # Last-resort sed parser. Assumes manifest.json is pretty-printed (it is).
+    # Pulls "src": "..." and "dest": "..." pairs in order.
+    awk '
+        /"src"[[:space:]]*:/ {
+            match($0, /"src"[[:space:]]*:[[:space:]]*"[^"]*"/)
+            s = substr($0, RSTART, RLENGTH)
+            sub(/.*: *"/, "", s); sub(/"$/, "", s)
+            src = s
+        }
+        /"dest"[[:space:]]*:/ {
+            match($0, /"dest"[[:space:]]*:[[:space:]]*"[^"]*"/)
+            d = substr($0, RSTART, RLENGTH)
+            sub(/.*: *"/, "", d); sub(/"$/, "", d)
+            print src "|" d
+        }
+    ' "$manifest"
+}
+
+scaffold_iris_docs() {
+    local iris_dir="$HOME/.iris"
+    local manifest_local="$iris_dir/.manifest.json"
+    mkdir -p "$iris_dir"
+
+    print_message info "${MUTED}      Fetching scaffold from ${NC}${IRIS_SCAFFOLD_BASE_URL}"
+
+    # Step 1: fetch the manifest
+    if ! fetch_scaffold_file "manifest.json" "$manifest_local"; then
+        print_message warning "${ORANGE}[4b]${NC}  IRIS Docs ${MUTED}..........................${NC} ${ORANGE}fetch failed${NC}"
+        print_message info "${MUTED}      Writing embedded fallback AGENTS.md${NC}"
+        write_embedded_fallback_agents_md "$iris_dir/AGENTS.md"
+        bridge_legacy_agents_md "$iris_dir/AGENTS.md"
+        return 0
+    fi
+
+    # Step 2: parse manifest and fetch each file
+    local total=0
+    local fetched=0
+    local failed=0
+
+    while IFS='|' read -r src dest; do
+        [ -z "$src" ] && continue
+        total=$((total + 1))
+        local target="$iris_dir/$dest"
+
+        if fetch_scaffold_file "$src" "$target"; then
+            fetched=$((fetched + 1))
+        else
+            failed=$((failed + 1))
+            print_message warning "${MUTED}      ✗ ${NC}$src${MUTED} → fetch failed${NC}"
+        fi
+    done < <(parse_manifest_entries "$manifest_local")
+
+    if [ "$total" -eq 0 ]; then
+        print_message warning "${ORANGE}[4b]${NC}  IRIS Docs ${MUTED}..........................${NC} ${ORANGE}manifest empty${NC}"
+        write_embedded_fallback_agents_md "$iris_dir/AGENTS.md"
+        bridge_legacy_agents_md "$iris_dir/AGENTS.md"
+        return 0
+    fi
+
+    # Step 3: ensure AGENTS.md exists no matter what (use embedded if fetch failed)
+    if [ ! -f "$iris_dir/AGENTS.md" ]; then
+        write_embedded_fallback_agents_md "$iris_dir/AGENTS.md"
+    fi
+
+    # Step 4: dual-write bridge — also copy AGENTS.md to the legacy opencode XDG
+    # path so binaries that predate the ~/.iris/AGENTS.md reader (system.ts
+    # GLOBAL_RULE_FILES update) still pick up IRIS identity. New binaries prefer
+    # ~/.iris/AGENTS.md and treat this copy as a no-op fallback. Safe to remove
+    # once all clients are on the new binary release.
+    bridge_legacy_agents_md "$iris_dir/AGENTS.md"
+
+    print_message info "${GREEN}[4b]${NC}  IRIS Docs ${MUTED}..........................${NC} ${GREEN}${fetched}/${total} files${NC}"
+    print_message info "${MUTED}      Installed at ${NC}~/.iris/AGENTS.md${MUTED} + ${NC}~/.iris/how-to/"
+}
+
+# Bridge the IRIS AGENTS.md to the legacy opencode XDG location used by older
+# binaries. Only overwrites if the legacy file is missing OR was written by a
+# previous IRIS install (detected by an "IRIS CLI" marker line). NEVER clobbers
+# a user's hand-written customization.
+bridge_legacy_agents_md() {
+    local src="$1"
+    [ -f "$src" ] || return 0
+
+    local legacy_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+    local legacy_file="$legacy_dir/AGENTS.md"
+
+    if [ -f "$legacy_file" ] && ! grep -q "IRIS CLI" "$legacy_file" 2>/dev/null; then
+        # User-customized file (no IRIS marker) — leave it alone
+        print_message info "${MUTED}      Legacy XDG AGENTS.md is user-customized; not overwriting${NC}"
+        return 0
+    fi
+
+    mkdir -p "$legacy_dir"
+    cp "$src" "$legacy_file"
+    print_message info "${MUTED}      Bridged to ${NC}$legacy_file${MUTED} (for legacy binaries)${NC}"
+}
+
+if [ "$skip_agents_md" = "false" ]; then
+    scaffold_iris_docs
+else
+    print_message info "${MUTED}[4b]  IRIS Docs ........................... skipped${NC}"
+fi
+
+# ─── Component 5: Coding Agent Bridge + Hive Daemon ─────────────────────────
+
+install_bridge() {
+    # Requires Node.js
+    if ! command -v node >/dev/null 2>&1; then
+        print_message info "${MUTED}[5/7] Agent Bridge .......................... skipped (Node.js not found)${NC}"
+        print_message info "${MUTED}      Install Node.js to enable: ${NC}https://nodejs.org"
+        return 0
+    fi
+
+    print_message info "${MUTED}Installing IRIS Bridge + Hive Daemon...${NC}"
+
+    local bridge_dir="$HOME/.iris/bridge"
+    local bridge_updated=false
+
+    if [ -d "$bridge_dir" ] && [ -f "$bridge_dir/index.js" ] && [ -f "$bridge_dir/daemon.js" ]; then
+        # Update existing installation
+        print_message info "${MUTED}Bridge already installed, updating...${NC}"
+        if ! (cd "$bridge_dir" && git reset --hard HEAD 2>/dev/null && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null); then
+            # git pull failed (dirty tree, conflicts, detached HEAD) — nuke and re-clone
+            print_message info "${MUTED}Bridge update failed, re-cloning...${NC}"
+            rm -rf "$bridge_dir"
+            git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null && \
+                (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || true
+        fi
+        # Safety check: if daemon.js still has stale DO URL, force re-clone
+        if grep -q 'ondigitalocean\.app' "$bridge_dir/daemon.js" 2>/dev/null; then
+            print_message info "${MUTED}Stale daemon detected, re-cloning...${NC}"
+            rm -rf "$bridge_dir"
+            git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null && \
+                (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || true
+        fi
+        bridge_updated=true
+    else
+        # Fresh clone from public repo
+        if git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null; then
+            (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || {
+                print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
+            }
+            if [ ! -d "$bridge_dir/node_modules/dotenv" ]; then
+                print_message warning "${ORANGE}Bridge dependencies incomplete. Run: cd ~/.iris/bridge && npm install${NC}"
+            fi
+        else
+            print_message info "${MUTED}[5/7] Agent Bridge .......................... could not download${NC}"
+            print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-daemon.git ~/.iris/bridge"
+            return 0
+        fi
+    fi
+
+    # Create bridgectl convenience script
+    cat > "$bridge_dir/bridgectl" << 'BCTL'
+#!/usr/bin/env bash
+BRIDGE_DIR="$(cd "$(dirname "$0")" && pwd)"
+case "${1:-status}" in
+    start)
+        PID=$(lsof -ti :3200 2>/dev/null || true)
+        if [ -n "$PID" ]; then echo "Bridge already running (PID: $PID)"; exit 0; fi
+        nohup node "$BRIDGE_DIR/index.js" > "$BRIDGE_DIR/bridge.log" 2>&1 &
+        sleep 2
+        if curl -s "http://localhost:3200/health" > /dev/null 2>&1; then
+            echo "Bridge started on http://localhost:3200 (PID: $!)"
+        else
+            echo "Failed to start. Check: cat $BRIDGE_DIR/bridge.log"; exit 1
+        fi ;;
+    stop)
+        PID=$(lsof -ti :3200 2>/dev/null || true)
+        if [ -n "$PID" ]; then kill "$PID" 2>/dev/null; echo "Stopped (PID: $PID)"
+        else echo "Not running"; fi ;;
+    restart) "$0" stop; sleep 1; "$0" start ;;
+    status)
+        if curl -s "http://localhost:3200/health" > /dev/null 2>&1; then
+            echo "Running (PID: $(lsof -ti :3200 2>/dev/null || true))"
+        else echo "Not running"; fi ;;
+    logs) tail -f "$BRIDGE_DIR/bridge.log" ;;
+    *) echo "Usage: iris-bridge {start|stop|restart|status|logs}" ;;
+esac
+BCTL
+    chmod 755 "$bridge_dir/bridgectl"
+
+    # Create iris-daemon convenience script for Hive compute
+    cat > "$bridge_dir/daemonctl" << 'DCTL'
+#!/usr/bin/env bash
+REAL_SCRIPT="$0"
+[ -L "$REAL_SCRIPT" ] && REAL_SCRIPT="$(readlink "$REAL_SCRIPT")"
+BRIDGE_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+IRIS_CONFIG="$HOME/.iris/config.json"
+
+# Does this machine have a HIVE NODE key — not "is the user logged in".
+#
+# This used to return true whenever IRIS_API_KEY was set. That is the ACCOUNT key: it proves
+# who you are, and it is what `iris auth whoami` reads. The node key is a DIFFERENT credential,
+# issued per machine by /hive/register-node and stored as node_api_key in ~/.iris/config.json.
+#
+# Conflating them meant that as soon as someone logged in, node registration was skipped — so
+# the daemon came up with no valid node key and reported "HTTP 401 Invalid API key" while
+# `iris auth whoami` happily returned the user's email. A client hit exactly that on
+# 2026-08-27: authenticated, and the daemon offline, with nothing to connect the two.
+#
+# The bridge .env check went the same way: having a bridge configured says nothing about
+# whether THIS machine is a registered node.
+has_node_key() {
+    [ -f "$IRIS_CONFIG" ] && grep -q '"node_api_key"' "$IRIS_CONFIG" 2>/dev/null && return 0
+    return 1
+}
+
+case "${1:-status}" in
+    start)
+        # Auto-update daemon code before starting
+        if [ -d "$BRIDGE_DIR/.git" ]; then
+            (cd "$BRIDGE_DIR" && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null) || true
+        fi
+        # Fix stale API URLs in config (pre-Railway migration)
+        if [ -f "$IRIS_CONFIG" ] && grep -qE 'ondigitalocean\.app|main\.heyiris\.io|apiv2\.heyiris\.io' "$IRIS_CONFIG" 2>/dev/null; then
+            echo "Fixing stale API URL in config..."
+            sed -i.bak \
+                -e 's|https://[^"]*ondigitalocean\.app[^"]*|https://freelabel.net|g' \
+                -e 's|https://main\.heyiris\.io[^"]*|https://freelabel.net|g' \
+                -e 's|https://apiv2\.heyiris\.io[^"]*|https://freelabel.net|g' \
+                "$IRIS_CONFIG" && rm -f "$IRIS_CONFIG.bak"
+        fi
+        if ! has_node_key; then
+            # Self-heal: auto-register if SDK token exists
+            if [ -f "$HOME/.iris/sdk/.env" ]; then
+                _TOKEN=$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
+                _UID=$(grep IRIS_USER_ID "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
+                if [ -n "$_TOKEN" ]; then
+                    echo "No node key found. Auto-registering..."
+                    _HLABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
+                    _HDOCK=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
+                    _RESP=$(curl -sL --max-time 10 \
+                        -H "Authorization: Bearer $_TOKEN" \
+                        -H "Content-Type: application/json" \
+                        -d "{\"name\": \"$_HLABEL\", \"capabilities\": {\"docker\": $_HDOCK}}" \
+                        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+                    _NKEY=$(echo "$_RESP" | jq -r '.node_key // empty' 2>/dev/null || \
+                            echo "$_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
+                            echo "$_RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+                    if [ -n "$_NKEY" ] && [ "$_NKEY" != "null" ]; then
+                        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$_NKEY" "${_UID:-0}" > "$IRIS_CONFIG"
+                        chmod 600 "$IRIS_CONFIG"
+                        echo "Registered! Continuing to start daemon..."
+                    else
+                        echo "Auto-registration failed. Register manually:"
+                        echo "  iris-daemon register"
+                        exit 1
+                    fi
+                fi
+            fi
+            # Re-check after auto-registration attempt
+            if ! has_node_key; then
+                echo "No API key configured."
+                echo "  Authenticate:  iris-login"
+                echo "  Then register: iris-daemon register"
+                exit 1
+            fi
+        fi
+        SOCK="$HOME/.iris/daemon.sock"
+        if [ -S "$SOCK" ] && node -e "require('net').createConnection('$SOCK',()=>{console.log('alive');process.exit(0)}).on('error',()=>process.exit(1))" 2>/dev/null; then
+            echo "Daemon already running"; exit 0
+        fi
+        rm -f "$SOCK"
+        # Prefer the supervisor when one exists. `stop` boots the launchd job out, so a
+        # plain nohup here would bring the daemon back UNSUPERVISED — alive now, gone after
+        # the next crash or reboot, and no longer the thing launchctl reports on. Loading
+        # the job starts it too, so this is a start either way.
+        LBL="io.heyiris.daemon"
+        PLIST="$HOME/Library/LaunchAgents/$LBL.plist"
+        if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
+            if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null \
+               || launchctl load "$PLIST" 2>/dev/null; then
+                sleep 2
+                echo "Daemon started (launchd)"
+                exit 0
+            fi
+        fi
+
+        nohup node "$BRIDGE_DIR/daemon.js" > "$BRIDGE_DIR/daemon.log" 2>&1 &
+        sleep 3
+        if [ -S "$SOCK" ]; then
+            echo "Hive daemon started (PID: $!)"
+            echo "Your machine is now a compute node in IRIS Hive."
+        else
+            echo "Daemon failed to start. Check logs: iris-daemon logs"
+            tail -5 "$BRIDGE_DIR/daemon.log" 2>/dev/null
+            exit 1
+        fi ;;
+    stop)
+        # VERIFY THE STOP. This used to `kill` and immediately print "Daemon stopped",
+        # which is a claim, not an observation. When the process did not die promptly the
+        # next `start` found it alive, printed "Daemon already running", and the operator
+        # was told twice that everything worked while the OLD process kept running with a
+        # stale key — 401ing on every heartbeat. Measured 2026-08-12 after a key rotation.
+        #
+        # Also look for the process by name, not only by whoever holds port 3200. A daemon
+        # that crashed before binding, or bound elsewhere, is invisible to lsof and was
+        # reported as "Not running" while very much running.
+        SOCK="$HOME/.iris/daemon.sock"
+
+        # THE DAEMON IS SUPERVISED. io.heyiris.daemon is a launchd job with KeepAlive, so
+        # killing the pid is whack-a-mole: launchd respawns it within a second and `stop`
+        # looks broken when it worked. Worse, `restart` then hits a live process and prints
+        # "Daemon already running" — reporting success for a daemon still holding whatever
+        # key it booted with. Stop the JOB, not the process.
+        LBL="io.heyiris.daemon"
+        PLIST="$HOME/Library/LaunchAgents/$LBL.plist"
+        if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
+            launchctl bootout "gui/$(id -u)/$LBL" 2>/dev/null \
+              || launchctl unload "$PLIST" 2>/dev/null || true
+            sleep 1
+        fi
+
+        PIDS=$(lsof -ti :3200 2>/dev/null || true)
+        PIDS="$PIDS $(pgrep -f "$BRIDGE_DIR/daemon.js" 2>/dev/null || true)"
+        PIDS=$(echo $PIDS | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ')
+
+        if [ -z "$(echo $PIDS | tr -d ' ')" ]; then
+            if [ -S "$SOCK" ]; then rm -f "$SOCK"; echo "Cleaned stale socket"
+            else echo "Not running"; fi
+            exit 0
+        fi
+
+        for P in $PIDS; do kill "$P" 2>/dev/null || true; done
+
+        # Give it up to 5s to exit cleanly, then stop asking nicely. Polling beats a fixed
+        # sleep in both directions: a fast exit is not punished, a slow one is not missed.
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            STILL=""
+            for P in $PIDS; do kill -0 "$P" 2>/dev/null && STILL="$STILL $P"; done
+            [ -z "$(echo $STILL | tr -d ' ')" ] && break
+            sleep 0.5
+        done
+
+        STILL=""
+        for P in $PIDS; do kill -0 "$P" 2>/dev/null && STILL="$STILL $P"; done
+        if [ -n "$(echo $STILL | tr -d ' ')" ]; then
+            echo "Daemon did not exit on SIGTERM — forcing:$STILL"
+            for P in $STILL; do kill -9 "$P" 2>/dev/null || true; done
+            sleep 1
+        fi
+
+        STILL=""
+        for P in $PIDS; do kill -0 "$P" 2>/dev/null && STILL="$STILL $P"; done
+        rm -f "$SOCK" 2>/dev/null || true
+        if [ -n "$(echo $STILL | tr -d ' ')" ]; then
+            echo "FAILED to stop daemon:$STILL — still running" >&2
+            exit 1
+        fi
+        echo "Daemon stopped (PID:$PIDS)" ;;
+    restart)
+        # Under launchd, `kickstart -k` is the only restart that is guaranteed to replace the
+        # process — it kills and relaunches in one supervised step, so there is no window
+        # where `start` can find a survivor and no-op. This matters after a key rotation:
+        # the running process holds a credential that is now invalid, so it MUST be replaced.
+        LBL="io.heyiris.daemon"
+        PLIST="$HOME/Library/LaunchAgents/$LBL.plist"
+        if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
+            if launchctl kickstart -k "gui/$(id -u)/$LBL" 2>/dev/null; then
+                sleep 2
+                echo "Daemon restarted (launchd)"
+                exit 0
+            fi
+        fi
+
+        # Unsupervised fallback. `stop` exits non-zero if the process survived, so do not
+        # carry on to `start` — it would find the old process and report success for it.
+        if ! "$0" stop; then
+            echo "Not restarting: the old daemon is still running." >&2
+            exit 1
+        fi
+        sleep 1
+        "$0" start ;;
+    status)
+        SOCK="$HOME/.iris/daemon.sock"
+        if [ -S "$SOCK" ]; then
+            node "$BRIDGE_DIR/daemon.js" --status 2>/dev/null || echo "Not running. Start with: iris-daemon start"
+        else echo "Not running. Start with: iris-daemon start"; fi ;;
+    logs) tail -f "$BRIDGE_DIR/daemon.log" ;;
+    register)
+        if [ ! -f "$HOME/.iris/sdk/.env" ] || [ -z "$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)" ]; then
+            if command -v iris-login >/dev/null 2>&1; then
+                echo "Not authenticated. Running iris-login..."
+                iris-login
+                # Re-check after login
+                if [ ! -f "$HOME/.iris/sdk/.env" ]; then echo "Auth failed."; exit 1; fi
+            else
+                echo "Not authenticated. Run 'iris-login' first."
+                exit 1
+            fi
+        fi
+        SDK_TOKEN=$(grep IRIS_API_KEY "$HOME/.iris/sdk/.env" | cut -d= -f2)
+        if [ -z "$SDK_TOKEN" ]; then
+            echo "SDK token not found. Run 'iris-login' first."
+            exit 1
+        fi
+        HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My Machine")
+        HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
+        USER_ID=$(grep IRIS_USER_ID "$HOME/.iris/sdk/.env" 2>/dev/null | cut -d= -f2)
+        echo "Registering $(hostname -s) as Hive compute node..."
+        REG_TMP=$(mktemp 2>/dev/null || echo "/tmp/iris-reg-$$")
+        HTTP_CODE=$(curl -sL --max-time 10 -o "$REG_TMP" -w "%{http_code}" \
+            -H "Authorization: Bearer $SDK_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"$HOSTNAME_LABEL\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo "000")
+        RESP=$(cat "$REG_TMP" 2>/dev/null || echo '{}'); rm -f "$REG_TMP"
+        NODE_KEY=$(echo "$RESP" | jq -r '.node_key // empty' 2>/dev/null || \
+                   echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('node_key',''))" 2>/dev/null || \
+                   echo "$RESP" | sed -n 's/.*"node_key"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
+            mkdir -p "$HOME/.iris"
+            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "${USER_ID:-0}" > "$IRIS_CONFIG"
+            chmod 600 "$IRIS_CONFIG"
+            echo "Registered! Node key saved to ~/.iris/config.json"
+            echo "Start with: iris-daemon start"
+        else
+            case "$HTTP_CODE" in
+                000) echo "Registration failed: network unreachable." ;;
+                401) echo "Registration failed: token not authorized."
+                     echo "  Your SDK token may be expired. Run: iris-login" ;;
+                5*)  echo "Registration failed: server error ($HTTP_CODE). Try again later." ;;
+                *)   echo "Registration failed (HTTP $HTTP_CODE)."
+                     echo "$RESP" | head -c 200 ;;
+            esac
+            echo "  Manual setup: https://web.heyiris.io/dashboard/hive"
+        fi ;;
+    *) echo "Usage: iris-daemon {start|stop|restart|status|register|logs}" ;;
+esac
+DCTL
+    chmod 755 "$bridge_dir/daemonctl"
+
+    # Symlink both CLIs into the iris bin directory
+    ln -sf "$bridge_dir/bridgectl" "$INSTALL_DIR/iris-bridge"
+    ln -sf "$bridge_dir/daemonctl" "$INSTALL_DIR/iris-daemon"
+
+    # ── macOS LaunchAgent: auto-start daemon on login ──
+    if [ "$(uname)" = "Darwin" ]; then
+        local plist_name="io.heyiris.daemon.plist"
+        local plist_src="$bridge_dir/installers/macos/$plist_name"
+        local plist_dest="$HOME/Library/LaunchAgents/$plist_name"
+        local wrapper_src="$bridge_dir/installers/macos/iris-daemon-wrapper.sh"
+        local wrapper_dest="$HOME/.iris/iris-daemon-wrapper.sh"
+
+        # Copy and configure wrapper script
+        if [ -f "$wrapper_src" ]; then
+            cp "$wrapper_src" "$wrapper_dest"
+            # Point wrapper to ~/.iris/bridge (where main installer puts daemon)
+            sed -i '' "s|DAEMON_DIR=\"\${IRIS_DIR}/daemon\"|DAEMON_DIR=\"\${IRIS_DIR}/bridge\"|g" "$wrapper_dest" 2>/dev/null || true
+            chmod 755 "$wrapper_dest"
+        fi
+
+        # Install plist with HOME path substitution
+        if [ -f "$plist_src" ]; then
+            sed "s|__HOME__|$HOME|g" "$plist_src" > "$plist_dest"
+            # Also fix daemon path to bridge
+            sed -i '' "s|/.iris/daemon|/.iris/bridge|g" "$plist_dest" 2>/dev/null || true
+
+            # Load (unload first if already loaded)
+            launchctl unload "$plist_dest" 2>/dev/null || true
+            launchctl load "$plist_dest" 2>/dev/null || true
+        fi
+    fi
+
+    # ── Install Playwright browser for SOM automation ──
+    if command -v npx >/dev/null 2>&1; then
+        print_message info "${MUTED}      Installing browser automation runtime...${NC}"
+        (cd "$bridge_dir" && npx playwright install chromium 2>/dev/null) || {
+            print_message info "${MUTED}      Playwright browser install deferred — run: cd ~/.iris/bridge && npx playwright install chromium${NC}"
+        }
+    fi
+
+    if [ "$bridge_updated" = "true" ]; then
+        print_message info "${GREEN}[5/7]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}updated${NC}"
+    else
+        print_message info "${GREEN}[5/7]${NC} Agent Bridge ${MUTED}.......................${NC} ${GREEN}installed${NC}"
+    fi
+    print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
+    print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status|register${MUTED} (Hive compute node)${NC}"
+    if [ "$(uname)" = "Darwin" ]; then
+        print_message info "${MUTED}      Auto-start: ${NC}enabled${MUTED} (starts on login)${NC}"
+    fi
+}
+
+if [ "$skip_bridge" = "false" ]; then
+    install_bridge
+else
+    print_message info "${MUTED}[5/7] Agent Bridge .......................... skipped${NC}"
+fi
+
+# ─── iris-login: standalone auth command (always installed) ───────────────────
+cat > "$INSTALL_DIR/iris-login" << 'IRISLOGIN'
+#!/usr/bin/env bash
+set -euo pipefail
+CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; MUTED='\033[0;2m'; NC='\033[0m'
+IRIS_DIR="$HOME/.iris"
+SDK_ENV="$IRIS_DIR/sdk/.env"
+CONFIG_JSON="$IRIS_DIR/config.json"
+API_BASE="https://raichu.heyiris.io"
+
+# JSON helpers — must be defined before whoami/token blocks that use them
+json_field() {
+    local json="$1" field="$2"
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r "(.\"$field\" // .data.\"$field\") // empty" 2>/dev/null || echo ""
+    elif command -v python3 >/dev/null 2>&1; then
+        echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$field', d.get('data',{}).get('$field','')))" 2>/dev/null || echo ""
+    else
+        echo "$json" | sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",$}]*\)\"\{0,1\}.*/\1/p" | head -1
+    fi
+}
+
+json_nested() {
+    local json="$1" path="$2"
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r ".$path // empty" 2>/dev/null || echo ""
+    elif command -v python3 >/dev/null 2>&1; then
+        echo "$json" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for k in '$path'.split('.'):
+    d=d.get(k,'') if isinstance(d,dict) else ''
+print(d)" 2>/dev/null || echo ""
+    else echo ""; fi
+}
+
+register_hive() {
+    local token="$1" user_id="$2"
+    local hostname_label; hostname_label=$(hostname -s 2>/dev/null || echo "My-Machine")
+    local has_docker; has_docker=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
+    local tmpfile; tmpfile=$(mktemp 2>/dev/null || echo "/tmp/iris-reg-$$")
+    local http_code; http_code=$(curl -sL --max-time 10 -o "$tmpfile" -w "%{http_code}" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -d "{\"name\": \"$(echo "$hostname_label" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $has_docker}}" \
+        "$API_BASE/api/v1/hive/register-node" 2>/dev/null || echo "000")
+    local resp; resp=$(cat "$tmpfile" 2>/dev/null || echo '{}'); rm -f "$tmpfile"
+    local node_key; node_key=$(json_field "$resp" "node_key")
+    if [ -n "$node_key" ] && [ "$node_key" != "null" ]; then
+        mkdir -p "$IRIS_DIR"
+        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$node_key" "${user_id:-0}" > "$CONFIG_JSON"
+        chmod 600 "$CONFIG_JSON"
+        echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
+        return 0
+    fi
+    # Registration failed — show why
+    case "$http_code" in
+        000) echo -e "  ${MUTED}Hive registration skipped (network unreachable).${NC}" ;;
+        401) echo -e "  ${MUTED}Hive registration skipped (token not authorized). Re-run ${NC}iris-login${MUTED} to refresh.${NC}" ;;
+        404) echo -e "  ${MUTED}Hive registration endpoint not found. The API may be updating.${NC}" ;;
+        5*) echo -e "  ${MUTED}Hive registration skipped (server error $http_code). Try later: ${NC}iris-daemon register" ;;
+        *)  echo -e "  ${MUTED}Hive registration skipped (HTTP $http_code). Try later: ${NC}iris-daemon register" ;;
+    esac
+    return 1
+}
+
+# Parse flags
+PRE_TOKEN="" ; PRE_USER_ID="" ; ACTION=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --token)  PRE_TOKEN="$2"; shift 2 ;;
+        --user-id) PRE_USER_ID="$2"; shift 2 ;;
+        --help|-h) echo "Usage: iris-login [whoami|--token TOKEN --user-id ID]"; exit 0 ;;
+        whoami|status) ACTION="whoami"; shift ;;
+        *) shift ;;
+    esac
+done
+
+# ─── whoami subcommand ────────────────────────────────────────────────────
+if [ "$ACTION" = "whoami" ]; then
+    if [ ! -f "$SDK_ENV" ]; then
+        echo -e "${RED}Not authenticated.${NC} Run ${CYAN}iris-login${NC} to log in."
+        exit 1
+    fi
+    TOKEN=$(grep IRIS_API_KEY "$SDK_ENV" 2>/dev/null | cut -d= -f2)
+    USERID=$(grep IRIS_USER_ID "$SDK_ENV" 2>/dev/null | cut -d= -f2)
+    if [ -z "$TOKEN" ]; then
+        echo -e "${RED}No token found.${NC} Run ${CYAN}iris-login${NC} to authenticate."
+        exit 1
+    fi
+    # Fetch user info from API
+    ME_RESP=$(curl -s --max-time 10 -H "Authorization: Bearer $TOKEN" -H "Accept: application/json" \
+        "$API_BASE/api/v1/me" 2>/dev/null || echo '{}')
+    ME_NAME=$(json_nested "$ME_RESP" "data.full_name")
+    ME_EMAIL=$(json_nested "$ME_RESP" "data.email")
+    ME_ID=$(json_nested "$ME_RESP" "data.id")
+    if [ -z "$ME_ID" ] || [ "$ME_ID" = "" ]; then
+        ME_ID="$USERID"
+    fi
+    echo -e ""
+    echo -e "${GREEN}Authenticated${NC}"
+    [ -n "$ME_NAME" ] && echo -e "  ${MUTED}Name:${NC}   $ME_NAME"
+    [ -n "$ME_EMAIL" ] && echo -e "  ${MUTED}Email:${NC}  $ME_EMAIL"
+    [ -n "$ME_ID" ] && echo -e "  ${MUTED}ID:${NC}     $ME_ID"
+    echo -e "  ${MUTED}Token:${NC}  ${TOKEN:0:12}..."
+    exit 0
+fi
+
+# ─── Scripted auth (--token flag) ──────────────────────────────────────────
+if [ -n "$PRE_TOKEN" ]; then
+    # Validate token format (must be non-empty, at least 20 chars)
+    if [ ${#PRE_TOKEN} -lt 20 ]; then
+        echo -e "${RED}Invalid token — must be at least 20 characters.${NC}"
+        echo -e "${MUTED}Get your token from: ${NC}${CYAN}https://web.heyiris.io/settings/api-keys${NC}"
+        exit 1
+    fi
+    # Validate token against API
+    echo -e "${MUTED}  Validating token...${NC}"
+    VALIDATE_RESP=$(curl -s --max-time 10 -H "Authorization: Bearer $PRE_TOKEN" -H "Accept: application/json" \
+        "$API_BASE/api/v1/me" 2>/dev/null || echo '{}')
+    VALIDATE_ID=$(json_nested "$VALIDATE_RESP" "data.id")
+    if [ -z "$VALIDATE_ID" ] || [ "$VALIDATE_ID" = "" ] || [ "$VALIDATE_ID" = "null" ]; then
+        echo -e "${RED}Token validation failed — API rejected the token.${NC}"
+        echo -e "${MUTED}Check that the token is correct and not expired.${NC}"
+        exit 1
+    fi
+    # Auto-resolve user ID from API if not provided
+    if [ -z "$PRE_USER_ID" ] || [ "$PRE_USER_ID" = "0" ]; then
+        PRE_USER_ID="$VALIDATE_ID"
+    fi
+    mkdir -p "$IRIS_DIR/sdk"
+    cat > "$SDK_ENV" << ENVFILE
+IRIS_ENV=production
+IRIS_API_KEY=$PRE_TOKEN
+IRIS_USER_ID=${PRE_USER_ID:-0}
+IRIS_DEFAULT_MODEL=gpt-4o-mini
+ENVFILE
+    chmod 600 "$SDK_ENV"
+    echo -e "${GREEN}Authenticated via token.${NC}"
+    register_hive "$PRE_TOKEN" "${PRE_USER_ID:-0}" || true
+    exit 0
+fi
+
+# ─── Already authenticated? ───────────────────────────────────────────────
+if [ -f "$SDK_ENV" ]; then
+    existing=$(grep IRIS_API_KEY "$SDK_ENV" 2>/dev/null | cut -d= -f2)
+    if [ -n "$existing" ]; then
+        echo -e "${GREEN}Already authenticated.${NC}"
+        echo -e "${MUTED}Token:${NC} ${existing:0:12}..."
+        echo -e "${MUTED}To re-authenticate, delete ~/.iris/sdk/.env and run ${NC}iris-login${MUTED} again.${NC}"
+        exit 0
+    fi
+fi
+
+# ─── Interactive email→code flow ──────────────────────────────────────────
 echo -e ""
-echo -e "${MUTED}                    ${NC}             ▄     "
-echo -e "${MUTED}█▀▀█ █▀▀█ █▀▀█ █▀▀▄ ${NC}█▀▀▀ █▀▀█ █▀▀█ █▀▀█"
-echo -e "${MUTED}█░░█ █░░█ █▀▀▀ █░░█ ${NC}█░░░ █░░█ █░░█ █▀▀▀"
-echo -e "${MUTED}▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ ${NC}▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"
+echo -e "${CYAN}IRIS Login${NC}"
 echo -e ""
+echo -n "  Email: "
+# Prefer the terminal over stdin — stdin is the script itself when this is
+# reached via a pipe (curl | bash), which made the prompt unanswerable.
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    read -r USER_EMAIL < /dev/tty || USER_EMAIL=""
+else
+    read -r USER_EMAIL || USER_EMAIL=""
+fi
+if [ -z "$USER_EMAIL" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
+if ! echo "$USER_EMAIL" | grep -qE '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'; then
+    echo -e "${RED}  Invalid email format.${NC}"
+    exit 1
+fi
+
+echo -e "${MUTED}  Sending verification code...${NC}"
+SEND_RESP=$(curl -s --max-time 15 -X POST "$API_BASE/api/v1/auth/send-login-code" \
+    -H "Content-Type: application/json" -H "Accept: application/json" \
+    --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false,"error":"Network error — check your connection"}')
+SEND_OK=$(json_field "$SEND_RESP" "success")
+if [ "$SEND_OK" != "True" ] && [ "$SEND_OK" != "true" ]; then
+    SEND_ERR=$(json_field "$SEND_RESP" "error")
+    [ -z "$SEND_ERR" ] && SEND_ERR="Unknown error"
+    echo -e "${RED}  Failed to send code:${NC} $SEND_ERR"
+    echo -e "  ${MUTED}Sign up at:${NC} ${CYAN}https://web.heyiris.io/login/register${NC}"
+    exit 1
+fi
+IS_NEW=$(json_nested "$SEND_RESP" "data.new_account")
+if [ "$IS_NEW" = "True" ] || [ "$IS_NEW" = "true" ]; then
+    echo -e "${GREEN}  Account created!${NC} Check your inbox."
+else
+    echo -e "${GREEN}  Code sent!${NC} Check your inbox."
+fi
+echo -n "  Enter the 6-digit code: "
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    read -r CODE < /dev/tty || CODE=""
+else
+    read -r CODE || CODE=""
+fi
+# Strip all whitespace (spaces, tabs, non-breaking spaces from email copy-paste)
+CODE=$(echo "$CODE" | tr -d '[:space:]')
+if [ -z "$CODE" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
+
+echo -e "${MUTED}  Verifying...${NC}"
+LOGIN_RESP=$(curl -s --max-time 15 -w '\n{"_http_status":%{http_code}}' -X POST "$API_BASE/api/v1/auth/login-with-code" \
+    -H "Content-Type: application/json" -H "Accept: application/json" \
+    --data-raw "{
+        \"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\",
+        \"login_code\": \"$CODE\",
+        \"generate_sdk_token\": true,
+        \"sdk_token_name\": \"IRIS CLI\",
+        \"sdk_token_expires_days\": 365,
+        \"generate_dashboard_url\": true
+    }" 2>/dev/null || echo '{"success":false,"error":"Network error — check your connection"}')
+LOGIN_OK=$(json_field "$LOGIN_RESP" "success")
+if [ "$LOGIN_OK" != "True" ] && [ "$LOGIN_OK" != "true" ]; then
+    LOGIN_ERR=$(json_field "$LOGIN_RESP" "error")
+    [ -z "$LOGIN_ERR" ] && LOGIN_ERR="Code may have expired"
+    echo -e "${RED}  Login failed:${NC} $LOGIN_ERR"
+    echo -e "  ${MUTED}Run ${NC}${CYAN}iris-login${NC}${MUTED} to try again.${NC}"
+    exit 1
+fi
+
+SDK_TOKEN=$(json_nested "$LOGIN_RESP" "data.sdk_token.key")
+USER_ID=$(json_nested "$LOGIN_RESP" "data.user.id")
+DASHBOARD=$(json_nested "$LOGIN_RESP" "data.dashboard_url")
+
+if [ -z "$SDK_TOKEN" ] || [ -z "$USER_ID" ]; then
+    echo -e "${RED}  Auth succeeded but token wasn't generated. Try again or visit ${CYAN}https://web.heyiris.io${NC}"
+    exit 1
+fi
+
+mkdir -p "$IRIS_DIR/sdk"
+cat > "$SDK_ENV" << ENVFILE
+IRIS_ENV=production
+IRIS_API_KEY=$SDK_TOKEN
+IRIS_USER_ID=$USER_ID
+IRIS_DEFAULT_MODEL=gpt-4o-mini
+ENVFILE
+chmod 600 "$SDK_ENV"
+
+echo -e "${GREEN}  Authenticated!${NC}"
+[ -n "$DASHBOARD" ] && echo -e "  ${MUTED}Dashboard:${NC} ${CYAN}${DASHBOARD}${NC}"
+
+register_hive "$SDK_TOKEN" "$USER_ID" || true
+
 echo -e ""
-echo -e "${MUTED}OpenCode includes free models, to start:${NC}"
+echo -e "${MUTED}Next: ${NC}iris-daemon start${MUTED} to join the Hive compute network${NC}"
+echo -e "${MUTED}  Or: ${NC}iris-onboard${MUTED} to start the AI assistant${NC}"
+IRISLOGIN
+chmod 755 "$INSTALL_DIR/iris-login"
+
+# ─── iris-deps: lazy installer for IRIS ecosystem dependencies ────────────────
+# Standalone command at ~/.iris/bin/iris-deps that installs system dependencies
+# (brew, node, php, git, docker, unzip, jq, iterm, chrome, vscode, etc.) on
+# demand. Auto-bootstraps Homebrew first if missing. Idempotent: every operation
+# checks if the dep is already installed and skips with a green check.
+#
+# USAGE:
+#   iris-deps brew node php          # install specific deps
+#   iris-deps all                    # install full IRIS ecosystem
+#   iris-deps --list                 # list available packages
+#   iris-deps --help
+
+cat > "$INSTALL_DIR/iris-deps" << 'IRISDEPS'
+#!/usr/bin/env bash
+# iris-deps — install IRIS ecosystem dependencies on demand
+# Part of the IRIS CLI install. See: https://heyiris.io/docs
+
+set -e
+
+# ── Colors ────────────────────────────────────────────────────────────────────
+if [ -t 1 ]; then
+    GREEN='\033[0;32m'; RED='\033[0;31m'; ORANGE='\033[0;33m'
+    CYAN='\033[0;36m';  MUTED='\033[0;2m'; NC='\033[0m'
+else
+    GREEN=''; RED=''; ORANGE=''; CYAN=''; MUTED=''; NC=''
+fi
+
+OS=$(uname -s)
+ARCH=$(uname -m)
+
+print_help() {
+    cat <<HELP
+${CYAN}iris-deps${NC} — install IRIS ecosystem dependencies
+
+USAGE:
+  iris-deps <pkg> [<pkg>...]    Install one or more packages
+  iris-deps all                 Install full IRIS ecosystem (brew + git + node + php + unzip + jq + python3 + docker)
+  iris-deps --list              Show all available packages
+  iris-deps --help              Show this help
+
+PACKAGES:
+  ${GREEN}Required:${NC}
+    brew       Homebrew package manager (bootstraps everything else)
+    git        Git version control
+    unzip      Archive extractor (needed by IRIS installer)
+    jq         JSON parser (used by manifest fetch)
+    python3    Python 3 (manifest parser fallback)
+
+  ${GREEN}Recommended:${NC}
+    node       Node.js + npm (latest LTS)
+    php        PHP 8.3 (legacy CLI commands)
+    docker     Docker Desktop (for sandboxes & local services)
+
+  ${GREEN}macOS-only apps:${NC}
+    iterm      iTerm2
+    chrome     Google Chrome
+    vscode     Visual Studio Code
+
+EXAMPLES:
+  iris-deps brew                Install Homebrew (if missing)
+  iris-deps node php git        Install Node, PHP, and Git
+  iris-deps all                 Install the full IRIS ecosystem
+HELP
+}
+
+# ── Detection helpers ─────────────────────────────────────────────────────────
+is_installed() {
+    case "$1" in
+        brew)    command -v brew >/dev/null 2>&1 ;;
+        node)    command -v node >/dev/null 2>&1 ;;
+        npm)     command -v npm >/dev/null 2>&1 ;;
+        php)     command -v php >/dev/null 2>&1 ;;
+        git)     command -v git >/dev/null 2>&1 ;;
+        docker)  command -v docker >/dev/null 2>&1 ;;
+        unzip)   command -v unzip >/dev/null 2>&1 ;;
+        jq)      command -v jq >/dev/null 2>&1 ;;
+        python3) command -v python3 >/dev/null 2>&1 ;;
+        iterm)   [ -d "/Applications/iTerm.app" ] ;;
+        chrome)  [ -d "/Applications/Google Chrome.app" ] ;;
+        vscode)  [ -d "/Applications/Visual Studio Code.app" ] || command -v code >/dev/null 2>&1 ;;
+        *)       return 1 ;;
+    esac
+}
+
+show_version() {
+    case "$1" in
+        brew)    brew --version 2>/dev/null | head -1 ;;
+        node)    echo "node $(node --version 2>/dev/null)" ;;
+        npm)     echo "npm $(npm --version 2>/dev/null)" ;;
+        php)     php --version 2>/dev/null | head -1 ;;
+        git)     git --version 2>/dev/null ;;
+        docker)  docker --version 2>/dev/null ;;
+        unzip)   unzip -v 2>/dev/null | head -1 ;;
+        jq)      echo "jq $(jq --version 2>/dev/null)" ;;
+        python3) python3 --version 2>/dev/null ;;
+        *)       echo "(installed)" ;;
+    esac
+}
+
+# ── Brew bootstrap (the foundation for everything else on macOS) ─────────────
+install_brew() {
+    if [ "$OS" != "Darwin" ] && [ "$OS" != "Linux" ]; then
+        echo -e "${RED}✗${NC} Homebrew install not supported on $OS"
+        return 1
+    fi
+    echo -e "${CYAN}→${NC} Installing Homebrew (you may be prompted for your password)..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || {
+        echo -e "${RED}✗${NC} Homebrew install failed. See https://brew.sh for manual instructions."
+        return 1
+    }
+
+    # Add brew to PATH for the current session (Apple Silicon vs Intel)
+    if [ -f /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [ -f /usr/local/bin/brew ]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    elif [ -f /home/linuxbrew/.linuxbrew/bin/brew ]; then
+        eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+    fi
+}
+
+ensure_brew() {
+    is_installed brew && return 0
+    install_brew
+}
+
+# ── Per-package install ───────────────────────────────────────────────────────
+install_pkg() {
+    local pkg="$1"
+
+    if is_installed "$pkg"; then
+        echo -e "${GREEN}✓${NC} $pkg already installed ${MUTED}($(show_version "$pkg"))${NC}"
+        return 0
+    fi
+
+    echo -e "${CYAN}→${NC} Installing $pkg..."
+
+    case "$pkg" in
+        brew)
+            install_brew
+            ;;
+        node|npm)
+            ensure_brew && brew install node
+            ;;
+        php)
+            ensure_brew && brew install php
+            ;;
+        git)
+            ensure_brew && brew install git
+            ;;
+        docker)
+            if [ "$OS" = "Darwin" ]; then
+                ensure_brew && brew install --cask docker
+            elif [ "$OS" = "Linux" ]; then
+                curl -fsSL https://get.docker.com | sh
+            fi
+            ;;
+        unzip)
+            if [ "$OS" = "Darwin" ]; then
+                ensure_brew && brew install unzip
+            elif [ "$OS" = "Linux" ] && command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get install -y unzip
+            fi
+            ;;
+        jq)
+            ensure_brew && brew install jq
+            ;;
+        python3)
+            ensure_brew && brew install python3
+            ;;
+        iterm)
+            [ "$OS" != "Darwin" ] && { echo -e "${RED}✗${NC} iTerm is macOS-only"; return 1; }
+            ensure_brew && brew install --cask iterm2
+            ;;
+        chrome)
+            [ "$OS" != "Darwin" ] && { echo -e "${RED}✗${NC} chrome cask is macOS-only"; return 1; }
+            ensure_brew && brew install --cask google-chrome
+            ;;
+        vscode)
+            ensure_brew && brew install --cask visual-studio-code
+            ;;
+        *)
+            echo -e "${RED}✗${NC} Unknown package: $pkg"
+            echo -e "${MUTED}Run ${NC}iris-deps --list${MUTED} to see available packages.${NC}"
+            return 1
+            ;;
+    esac
+
+    if is_installed "$pkg"; then
+        echo -e "${GREEN}✓${NC} $pkg installed ${MUTED}($(show_version "$pkg"))${NC}"
+    else
+        echo -e "${RED}✗${NC} $pkg install failed"
+        return 1
+    fi
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+ALL_PKGS="brew git unzip jq python3 node php docker"
+LIST_PKGS="brew git unzip jq python3 node php docker iterm chrome vscode"
+
+case "${1:-}" in
+    ""|--help|-h)
+        print_help
+        exit 0
+        ;;
+    --list)
+        echo "$LIST_PKGS"
+        exit 0
+        ;;
+    all)
+        echo -e "${CYAN}Installing the full IRIS ecosystem...${NC}"
+        for p in $ALL_PKGS; do install_pkg "$p" || true; done
+        echo
+        echo -e "${GREEN}✓ Done.${NC} Run ${CYAN}iris-deps --list${NC} to see optional macOS apps (iterm, chrome, vscode)."
+        ;;
+    *)
+        for p in "$@"; do install_pkg "$p"; done
+        ;;
+esac
+IRISDEPS
+chmod 755 "$INSTALL_DIR/iris-deps"
+
+# ─── Component 6: Docker Agent Sandbox ────────────────────────────────────────
+
+install_docker_sandbox() {
+    # Check if Docker is installed
+    if ! command -v docker >/dev/null 2>&1; then
+        print_message info "${MUTED}[6/7] Docker Sandbox ........................ skipped (Docker not found)${NC}"
+        print_message info "${MUTED}      Install Docker to enable: ${NC}https://docs.docker.com/get-docker/"
+        return 0
+    fi
+
+    # Check if Docker daemon is running
+    if ! docker info >/dev/null 2>&1; then
+        print_message info "${MUTED}[6/7] Docker Sandbox ........................ skipped (Docker not running)${NC}"
+        print_message info "${MUTED}      Start Docker Desktop and re-run the installer${NC}"
+        return 0
+    fi
+
+    print_message info "${MUTED}Setting up Docker Agent Sandbox...${NC}"
+
+    local sandbox_dir="$HOME/.iris/sandbox"
+    local workspace_dir="$sandbox_dir/workspace"
+    local key_file="$sandbox_dir/.api-key"
+
+    mkdir -p "$workspace_dir"
+
+    # Generate API key if not already present
+    local api_key
+    if [ -f "$key_file" ]; then
+        api_key=$(cat "$key_file")
+    else
+        api_key=$(openssl rand -hex 16 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || head -c 32 /dev/urandom | xxd -p | head -c 32)
+        echo -n "$api_key" > "$key_file"
+        chmod 600 "$key_file"
+    fi
+
+    # Pull the pre-built Docker image (show progress)
+    print_message info "${MUTED}  Pulling agent sandbox image...${NC}"
+    if ! docker pull ghcr.io/freelabel/iris-agent:latest; then
+        print_message info "${MUTED}[6/7] Docker Sandbox ........................ image not yet available${NC}"
+        print_message info "${MUTED}      Image will be available soon at ${NC}ghcr.io/freelabel/iris-agent:latest"
+        return 0
+    fi
+
+    # Write docker-compose.yml for the sandbox (localhost-only port binding)
+    cat > "$sandbox_dir/docker-compose.yml" << COMPOSEEOF
+services:
+  iris-agent:
+    image: ghcr.io/freelabel/iris-agent:latest
+    container_name: iris-sandbox
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3201:3200"
+    volumes:
+      - ./workspace:/data/workspace
+      - iris-sandbox-data:/data
+    environment:
+      - BRIDGE_API_KEY=${api_key}
+      - IRIS_API_URL=${iris_api_url}
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  iris-sandbox-data:
+COMPOSEEOF
+    chmod 600 "$sandbox_dir/docker-compose.yml"
+
+    # Create iris-sandbox CLI
+    cat > "$INSTALL_DIR/iris-sandbox" << 'SANDBOXEOF'
+#!/usr/bin/env bash
+SANDBOX_DIR="$HOME/.iris/sandbox"
+COMPOSE_FILE="$SANDBOX_DIR/docker-compose.yml"
+
+if [ ! -f "$COMPOSE_FILE" ]; then
+    echo "Sandbox not installed. Run the IRIS installer first:"
+    echo "  curl -fsSL https://heyiris.io/install-code | bash"
+    exit 1
+fi
+
+case "${1:-help}" in
+    start)
+        echo "Starting IRIS Agent Sandbox..."
+        docker compose -f "$COMPOSE_FILE" up -d
+        sleep 3
+        if curl -s "http://localhost:3201/health" > /dev/null 2>&1; then
+            echo "Sandbox running at http://localhost:3201"
+            echo "Workspace mounted at ~/.iris/sandbox/workspace/"
+        else
+            echo "Container started but health check pending. Check: iris-sandbox logs"
+        fi
+        ;;
+    stop)
+        echo "Stopping IRIS Agent Sandbox..."
+        docker compose -f "$COMPOSE_FILE" down
+        echo "Stopped."
+        ;;
+    restart)
+        docker compose -f "$COMPOSE_FILE" restart
+        echo "Restarted."
+        ;;
+    status)
+        if docker compose -f "$COMPOSE_FILE" ps --status running 2>/dev/null | grep -q iris-sandbox; then
+            echo "Running"
+            if curl -s "http://localhost:3201/health" > /dev/null 2>&1; then
+                curl -s "http://localhost:3201/health" | python3 -m json.tool 2>/dev/null || curl -s "http://localhost:3201/health"
+            fi
+        else
+            echo "Not running. Start with: iris-sandbox start"
+        fi
+        ;;
+    logs)
+        docker compose -f "$COMPOSE_FILE" logs -f
+        ;;
+    shell)
+        echo "Entering sandbox container..."
+        docker compose -f "$COMPOSE_FILE" exec iris-agent /bin/bash
+        ;;
+    api-key)
+        if [ -f "$SANDBOX_DIR/.api-key" ]; then
+            cat "$SANDBOX_DIR/.api-key"
+            echo ""
+        else
+            echo "No API key found."
+        fi
+        ;;
+    update)
+        echo "Pulling latest sandbox image..."
+        docker pull ghcr.io/freelabel/iris-agent:latest
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate
+        echo "Updated and restarted."
+        ;;
+    reset)
+        echo "This will delete all sandbox data (workspace files are preserved)."
+        echo -n "Are you sure? [y/N] "
+        read -r confirm
+        if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+            docker compose -f "$COMPOSE_FILE" down -v
+            echo "Sandbox data reset. Workspace files in ~/.iris/sandbox/workspace/ are preserved."
+        else
+            echo "Cancelled."
+        fi
+        ;;
+    help|*)
+        echo "IRIS Agent Sandbox"
+        echo ""
+        echo "Usage: iris-sandbox <command>"
+        echo ""
+        echo "Commands:"
+        echo "  start     Start the sandbox container"
+        echo "  stop      Stop the sandbox container"
+        echo "  restart   Restart the sandbox container"
+        echo "  status    Show sandbox status and health"
+        echo "  logs      Follow sandbox logs"
+        echo "  shell     Open a shell inside the sandbox"
+        echo "  api-key   Display the bridge API key"
+        echo "  update    Pull latest image and restart"
+        echo "  reset     Delete sandbox data (preserves workspace files)"
+        echo ""
+        echo "Workspace: ~/.iris/sandbox/workspace/"
+        echo "Config:    ~/.iris/sandbox/docker-compose.yml"
+        ;;
+esac
+SANDBOXEOF
+    chmod 755 "$INSTALL_DIR/iris-sandbox"
+
+    print_message info "${GREEN}[6/7]${NC} Docker Sandbox ${MUTED}.....................${NC} ${GREEN}installed${NC}"
+    print_message info "${MUTED}      Start with: ${NC}iris-sandbox start"
+    print_message info "${MUTED}      Workspace:  ${NC}~/.iris/sandbox/workspace/"
+    print_message info "${MUTED}      Commands:   ${NC}iris-sandbox start|stop|shell|logs|status|update"
+}
+
+if [ "$skip_sandbox" = "false" ]; then
+    install_docker_sandbox
+else
+    print_message info "${MUTED}[6/7] Docker Sandbox ........................ skipped${NC}"
+fi
+
+# ─── Component 7: Remotion Video Framework (Lazy-Installed) ─────────────────
+
+install_remotion() {
+    # Requires Node.js (for npx remotion)
+    if ! command -v node >/dev/null 2>&1; then
+        print_message info "${MUTED}[7/7] Remotion ............................. skipped (Node.js not found)${NC}"
+        return 0
+    fi
+
+    local remotion_dir="$HOME/.iris/remotion"
+
+    if [ -d "$remotion_dir/.git" ]; then
+        # Update existing installation
+        (cd "$remotion_dir" && git pull --quiet 2>/dev/null) || true
+        print_message info "${MUTED}      Compositions updated from upstream${NC}"
+    else
+        # Fresh clone (source only — NO npm install, that's lazy)
+        if git clone --quiet --depth 1 https://github.com/FREELABEL/iris-remotion.git "$remotion_dir" 2>/dev/null; then
+            : # success
+        else
+            print_message info "${MUTED}[7/7] Remotion ............................. could not download${NC}"
+            print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-remotion.git ~/.iris/remotion"
+            return 0
+        fi
+    fi
+
+    # FFmpeg advisory (not a blocker — stills work without it)
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        print_message info "${MUTED}      Note: FFmpeg not found — video renders need it (brew install ffmpeg)${NC}"
+    fi
+
+    # Create iris-remotion wrapper script with lazy npm install
+    cat > "$INSTALL_DIR/iris-remotion" << 'REMOTIONEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+REMOTION_DIR="$HOME/.iris/remotion"
+
+# Verify source exists
+if [ ! -f "$REMOTION_DIR/package.json" ]; then
+    echo "Remotion not found. Run: curl -fsSL https://heyiris.io/install-code | bash"
+    exit 1
+fi
+
+# LAZY INSTALL: first-use npm install (~700MB, one-time)
+if [ ! -d "$REMOTION_DIR/node_modules" ]; then
+    echo "First run — installing Remotion dependencies (~2 min, one-time)..."
+    echo ""
+    (cd "$REMOTION_DIR" && npm install 2>&1) || {
+        echo "npm install failed. Try manually: cd ~/.iris/remotion && npm install"
+        exit 1
+    }
+    echo ""
+    echo "Remotion ready."
+fi
+
+# FFmpeg warning for video renders
+case "${1:-}" in
+    render)
+        if ! command -v ffmpeg >/dev/null 2>&1; then
+            echo "Warning: FFmpeg not found — video rendering requires it."
+            echo "  macOS:  brew install ffmpeg"
+            echo "  Linux:  sudo apt install ffmpeg"
+            echo ""
+        fi
+        ;;
+esac
+
+# Dispatch subcommand
+case "${1:-help}" in
+    render)
+        shift
+        cd "$REMOTION_DIR" && npx remotion render "$@"
+        ;;
+    still)
+        shift
+        cd "$REMOTION_DIR" && npx remotion still "$@"
+        ;;
+    preview|studio)
+        shift
+        cd "$REMOTION_DIR" && npx remotion studio "$@"
+        ;;
+    list|compositions)
+        cd "$REMOTION_DIR" && npx remotion compositions
+        ;;
+    init)
+        echo "Installing/repairing Remotion dependencies..."
+        cd "$REMOTION_DIR" && npm install
+        echo "Done."
+        ;;
+    update)
+        echo "Updating Remotion compositions..."
+        OLD_HASH=""
+        if [ -f "$REMOTION_DIR/package.json" ]; then
+            OLD_HASH=$(md5 -q "$REMOTION_DIR/package.json" 2>/dev/null || md5sum "$REMOTION_DIR/package.json" 2>/dev/null | cut -d' ' -f1 || echo "")
+        fi
+        (cd "$REMOTION_DIR" && git pull 2>&1) || {
+            echo "git pull failed. Try manually: cd ~/.iris/remotion && git pull"
+            exit 1
+        }
+        NEW_HASH=$(md5 -q "$REMOTION_DIR/package.json" 2>/dev/null || md5sum "$REMOTION_DIR/package.json" 2>/dev/null | cut -d' ' -f1 || echo "")
+        if [ -d "$REMOTION_DIR/node_modules" ] && [ "$OLD_HASH" != "$NEW_HASH" ]; then
+            echo "Dependencies changed — reinstalling..."
+            (cd "$REMOTION_DIR" && npm install)
+        fi
+        echo "Compositions updated."
+        ;;
+    carousel)
+        shift
+        # Usage: iris-remotion carousel <props.json> [output-dir]
+        PROPS_FILE="$1"
+        OUTPUT_DIR="${2:-./carousel-$(date +%Y%m%d-%H%M%S)}"
+        if [ -z "$PROPS_FILE" ] || [ ! -f "$PROPS_FILE" ]; then
+            echo "Usage: iris-remotion carousel <props.json> [output-dir]"
+            echo "  props.json must contain { \"brand\": ..., \"slides\": [ ... 9 slide objects ... ] }"
+            exit 1
+        fi
+        mkdir -p "$OUTPUT_DIR"
+        PROPS_JSON=$(cat "$PROPS_FILE")
+        for i in 0 1 2 3 4 5 6 7 8; do
+            echo "Rendering CarouselSlide$i..."
+            SLIDE_PROPS=$(printf '%s' "$PROPS_JSON" | node -e "let p=JSON.parse(require('fs').readFileSync(0,'utf8'));p.slideIndex=$i;process.stdout.write(JSON.stringify(p))")
+            (cd "$REMOTION_DIR" && npx remotion still "CarouselSlide$i" "$OUTPUT_DIR/slide-$i.png" --props "$SLIDE_PROPS") || exit 1
+        done
+        echo "Done. 9 slides saved to: $OUTPUT_DIR"
+        ;;
+    help|--help|-h|*)
+        echo "IRIS Remotion — Video & image generation"
+        echo ""
+        echo "Usage: iris-remotion <command> [options]"
+        echo ""
+        echo "Commands:"
+        echo "  render <comp> [output] [--props '{}']  Render a video (MP4)"
+        echo "  still  <comp> [output] [--props '{}']  Render a still image (PNG)"
+        echo "  carousel <props.json> [output-dir]      Batch-render 9 carousel slides"
+        echo "  preview                                 Open Remotion Studio in browser"
+        echo "  list                                    List available compositions"
+        echo "  init                                    (Re)install dependencies"
+        echo "  update                                  Update compositions from upstream"
+        echo ""
+        echo "Examples:"
+        echo "  iris-remotion still SocialPostStill out.png --props '{\"brand\":\"freelabel\"}'"
+        echo "  iris-remotion render BrandIntro out.mp4 --props '{\"brand\":\"beatbox\"}'"
+        echo "  iris-remotion carousel ./client.json ./out/client-carousel"
+        echo "  iris-remotion preview"
+        echo "  iris-remotion list"
+        ;;
+esac
+REMOTIONEOF
+    chmod 755 "$INSTALL_DIR/iris-remotion"
+
+    print_message info "${GREEN}[7/7]${NC} Remotion ${MUTED}............................${NC} ${GREEN}registered${NC} ${MUTED}(deps install on first use)${NC}"
+    print_message info "${MUTED}      Render:   ${NC}iris-remotion render|still|preview|list"
+    print_message info "${MUTED}      Update:   ${NC}iris-remotion update"
+}
+
+if [ "$skip_remotion" = "false" ]; then
+    install_remotion
+else
+    print_message info "${MUTED}[7/7] Remotion ............................. skipped${NC}"
+fi
+
+# ─── Download onboarding docs for the AI agent ───────────────────────────────
+
+install_docs() {
+    local docs_dir="$HOME/.iris/docs"
+    mkdir -p "$docs_dir"
+
+    if curl -sL --fail -o "$docs_dir/onboarding.md" "https://heyiris.io/docs/onboarding.md" 2>/dev/null; then
+        print_message info "${GREEN}  +  ${NC} Docs ${MUTED}..................................${NC} ${GREEN}downloaded${NC}"
+    else
+        # Write a fallback stub so references to this file don't break
+        cat > "$docs_dir/onboarding.md" << 'DOCEOF'
+# IRIS Onboarding
+
+For full documentation visit: https://heyiris.io/developer
+
+## Quick Commands
+- `iris agent:create` — Create an AI agent
+- `iris automation` — Build a multi-agent workflow
+- `iris pages create` — Create a web page
+- `iris chat` — Chat with an agent
+- `iris leads` — Manage leads & CRM
+- `iris articles` — Generate content
+- `iris recruit` — Recruitment tools
+- `iris schedule` — Schedule recurring jobs
+- `iris integrations` — Manage integrations
+DOCEOF
+        print_message info "${MUTED}  +   Docs ...................................... ${NC}offline fallback created"
+    fi
+}
+
+install_docs
+
+# ─── Summary Banner ──────────────────────────────────────────────────────────
+
 echo -e ""
-echo -e "cd <project>  ${MUTED}# Open directory${NC}"
-echo -e "opencode      ${MUTED}# Run command${NC}"
+echo -e "${CYAN}██╗██████╗ ██╗███████╗${NC}    ${MUTED} ██████╗██╗     ██╗${NC}"
+echo -e "${CYAN}██║██╔══██╗██║██╔════╝${NC}    ${MUTED}██╔════╝██║     ██║${NC}"
+echo -e "${CYAN}██║██████╔╝██║███████╗${NC}    ${MUTED}██║     ██║     ██║${NC}"
+echo -e "${CYAN}██║██╔══██╗██║╚════██║${NC}    ${MUTED}██║     ██║     ██║${NC}"
+echo -e "${CYAN}██║██║  ██║██║███████║${NC}    ${MUTED}╚██████╗███████╗██║${NC}"
+echo -e "${CYAN}╚═╝╚═╝  ╚═╝╚═╝╚══════╝${NC}    ${MUTED} ╚═════╝╚══════╝╚═╝${NC}"
 echo -e ""
-echo -e "${MUTED}For more information visit ${NC}https://opencode.ai/docs"
+echo -e "${MUTED}IRIS CLI includes free AI models.${NC}"
 echo -e ""
+echo -e "${MUTED}Installed to:${NC}   ~/.iris/"
+echo -e "${MUTED}  bin/iris       ${NC}IRIS CLI (AI coding agent)"
+echo -e "${MUTED}  sdk/            ${NC}SDK commands built-in (no PHP required)"
+if [ "$skip_mcp" = "false" ] && [ -f "$HOME/.iris/mcp.json" ]; then
+echo -e "${MUTED}  mcp.json        ${NC}MCP server config (ready for setup)"
+fi
+if [ "$skip_bridge" = "false" ] && [ -f "$HOME/.iris/bridge/index.js" ]; then
+echo -e "${MUTED}  bridge/          ${NC}Hive Compute Node + Session Bridge"
+fi
+if [ "$skip_sandbox" = "false" ] && [ -f "$HOME/.iris/sandbox/docker-compose.yml" ]; then
+echo -e "${MUTED}  sandbox/         ${NC}Docker Agent Sandbox (iris-sandbox start|stop|shell)"
+fi
+if [ "$skip_remotion" = "false" ] && [ -f "$HOME/.iris/remotion/package.json" ]; then
+echo -e "${MUTED}  remotion/        ${NC}Video & graphics (iris-remotion render|still|preview)"
+fi
 echo -e ""
+echo -e "${MUTED}For more information visit ${NC}https://heyiris.io/developer"
+echo -e ""
+
+# ─── macOS: Homebrew + iTerm2 ────────────────────────────────────────────────
+# IRIS renders best in iTerm2. Auto-install the full terminal stack so new
+# users get a great experience without multiple prompts.
+if [ "$(uname)" = "Darwin" ] && [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    _needs_brew=false
+    _needs_iterm=false
+    if ! command -v brew >/dev/null 2>&1; then _needs_brew=true; fi
+    if ! [ -d "/Applications/iTerm.app" ]; then _needs_iterm=true; fi
+
+    if [ "$_needs_brew" = "true" ] || [ "$_needs_iterm" = "true" ]; then
+        echo -e "${CYAN}→${NC} Setting up the recommended terminal environment..."
+        if [ "$_needs_brew" = "true" ] && [ "$_needs_iterm" = "true" ]; then
+            echo -e "${MUTED}  This will install Homebrew + iTerm2 for the best IRIS experience.${NC}"
+        elif [ "$_needs_brew" = "true" ]; then
+            echo -e "${MUTED}  This will install Homebrew (package manager for macOS tools).${NC}"
+        else
+            echo -e "${MUTED}  This will install iTerm2 (Apple Terminal has rendering issues with IRIS).${NC}"
+        fi
+        echo -n "  Continue? [Y/n] "
+        read -r _env_answer < /dev/tty || _env_answer=""
+
+        if [ "$_env_answer" != "n" ] && [ "$_env_answer" != "N" ]; then
+            # Step 1: Homebrew
+            if [ "$_needs_brew" = "true" ]; then
+                # Normally already handled by the bootstrap at the top; this is
+                # the fallback path. Redirect stdin to the terminal so Homebrew
+                # can prompt for sudo instead of failing on the curl pipe.
+                echo -e "${CYAN}→${NC} Installing Homebrew..."
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/tty || true
+                if [ -f /opt/homebrew/bin/brew ]; then
+                    eval "$(/opt/homebrew/bin/brew shellenv)"
+                elif [ -f /usr/local/bin/brew ]; then
+                    eval "$(/usr/local/bin/brew shellenv)"
+                fi
+            fi
+
+            # Step 2: iTerm2
+            if [ "$_needs_iterm" = "true" ] && command -v brew >/dev/null 2>&1; then
+                echo -e "${CYAN}→${NC} Installing iTerm2..."
+                brew install --cask iterm2 2>/dev/null && \
+                    echo -e "${GREEN}✓${NC} iTerm2 installed — launch it from Applications for the best experience" || \
+                    echo -e "${ORANGE}⚠${NC} iTerm2 install failed — install later: brew install --cask iterm2"
+            fi
+        fi
+    fi
+fi
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+# Handle ALL auth in bash (where keyboard works via /dev/tty).
+# Then force-launch the agent post-auth — no user input needed in the TUI.
+
+AUTH_SUCCESS=false
+USER_ID=""
+SDK_TOKEN=""
+DASHBOARD_URL=""
+USER_EMAIL=""
+
+# Helper: parse JSON (jq → python3 → sed fallback)
+json_field() {
+    local json="$1" field="$2"
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r "(.\"$field\" // .data.\"$field\") // empty" 2>/dev/null || echo ""
+    elif command -v python3 >/dev/null 2>&1; then
+        echo "$json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$field', d.get('data',{}).get('$field','')))" 2>/dev/null || echo ""
+    else
+        echo "$json" | sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",$}]*\)\"\{0,1\}.*/\1/p" | head -1
+    fi
+}
+
+json_nested() {
+    local json="$1" path="$2"
+    if command -v jq >/dev/null 2>&1; then
+        echo "$json" | jq -r ".$path // empty" 2>/dev/null || echo ""
+    elif command -v python3 >/dev/null 2>&1; then
+        echo "$json" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+keys='$path'.split('.')
+for k in keys:
+    if isinstance(d,dict): d=d.get(k,'')
+    else: d=''
+print(d)" 2>/dev/null || echo ""
+    else
+        echo ""
+    fi
+}
+
+# ─── Pre-seeded token (non-interactive auth) ────────────────────────────────
+if [ -n "$pre_token" ]; then
+    mkdir -p "$HOME/.iris/sdk"
+    cat > "$HOME/.iris/sdk/.env" << ENVFILE
+# IRIS SDK Configuration
+# Pre-seeded by installer
+# Date: $(date '+%Y-%m-%d %H:%M:%S')
+
+IRIS_ENV=production
+IRIS_API_KEY=$pre_token
+IRIS_USER_ID=${pre_user_id:-0}
+IRIS_DEFAULT_MODEL=gpt-4o-mini
+ENVFILE
+    chmod 600 "$HOME/.iris/sdk/.env"
+    SDK_TOKEN="$pre_token"
+    USER_ID="${pre_user_id:-0}"
+    AUTH_SUCCESS=true
+    echo -e "  ${GREEN}Authenticated via pre-seeded token${NC}"
+
+    # Auto-register this machine as a Hive compute node
+    HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
+    HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
+    NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
+        -H "Authorization: Bearer $SDK_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+        "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+    NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
+    if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
+        mkdir -p "$HOME/.iris"
+        printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
+        chmod 600 "$HOME/.iris/config.json"
+        echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
+    else
+        echo -e "  ${MUTED}Hive auto-registration skipped. Register later: ${NC}iris-daemon register"
+    fi
+fi
+
+tty_available=false
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    tty_available=true
+fi
+
+if [ "$tty_available" = "true" ] && [ -z "$pre_token" ] && [ "$AUTH_SUCCESS" != "true" ]; then
+    echo -e ""
+    echo -e "${CYAN}Let's get you set up!${NC}"
+    echo -e ""
+    echo -n "  Enter your email (or press Enter to skip): "
+    read -r USER_EMAIL < /dev/tty || USER_EMAIL=""
+
+    if [ -z "$USER_EMAIL" ]; then
+        echo -e "${MUTED}  Skipping authentication. Run ${NC}iris-login${MUTED} later to connect your account.${NC}"
+    elif ! [[ "$USER_EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        echo -e "${RED}  Invalid email format.${NC} Run ${NC}iris-login${MUTED} later to authenticate.${NC}"
+        USER_EMAIL=""
+    fi
+
+    if [ -n "$USER_EMAIL" ]; then
+        echo -e ""
+        echo -e "${MUTED}  Sending verification code to ${NC}${USER_EMAIL}${MUTED}...${NC}"
+
+        SEND_RESPONSE=$(curl -s --max-time 15 -X POST https://raichu.heyiris.io/api/v1/auth/send-login-code \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            --data-raw "{\"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\", \"method\": \"with_login_code\", \"expiration_minutes\": 30, \"auto_create\": true}" 2>/dev/null || echo '{"success":false,"error":"Network error"}')
+
+        SEND_SUCCESS=$(json_field "$SEND_RESPONSE" "success")
+        IS_NEW_ACCOUNT=$(json_nested "$SEND_RESPONSE" "data.new_account")
+
+        if [ "$SEND_SUCCESS" = "True" ] || [ "$SEND_SUCCESS" = "true" ]; then
+            if [ "$IS_NEW_ACCOUNT" = "True" ] || [ "$IS_NEW_ACCOUNT" = "true" ]; then
+                echo -e "${GREEN}  Account created!${NC} Verification code sent to your inbox."
+            else
+                echo -e "${GREEN}  Code sent!${NC} Check your inbox (valid for 30 minutes)."
+            fi
+            echo -e ""
+            echo -n "  Enter the 6-digit code: "
+            read -r VERIFY_CODE < /dev/tty || VERIFY_CODE=""
+            # Strip all whitespace (spaces, tabs, non-breaking spaces from email copy-paste)
+            VERIFY_CODE=$(echo "$VERIFY_CODE" | tr -d '[:space:]')
+
+            # Validate code format
+            if [ -n "$VERIFY_CODE" ] && ! [[ "$VERIFY_CODE" =~ ^[0-9]{4,8}$ ]]; then
+                echo -e "${RED}  Invalid code format. Must be 4-8 digits.${NC}"
+                VERIFY_CODE=""
+            fi
+
+            if [ -n "$VERIFY_CODE" ]; then
+                echo -e ""
+                echo -e "${MUTED}  Verifying...${NC}"
+
+                LOGIN_RESPONSE=$(curl -s --max-time 15 -X POST https://raichu.heyiris.io/api/v1/auth/login-with-code \
+                    -H "Content-Type: application/json" \
+                    -H "Accept: application/json" \
+                    --data-raw "{
+                        \"email\": \"$(echo "$USER_EMAIL" | sed 's/[\"\\]/\\&/g')\",
+                        \"login_code\": \"$VERIFY_CODE\",
+                        \"generate_sdk_token\": true,
+                        \"sdk_token_name\": \"IRIS CLI\",
+                        \"sdk_token_expires_days\": 365,
+                        \"generate_dashboard_url\": true
+                    }" 2>/dev/null || echo '{"success":false,"error":"Network error"}')
+
+                LOGIN_SUCCESS=$(json_field "$LOGIN_RESPONSE" "success")
+
+                if [ "$LOGIN_SUCCESS" = "True" ] || [ "$LOGIN_SUCCESS" = "true" ]; then
+                    SDK_TOKEN=$(json_nested "$LOGIN_RESPONSE" "data.sdk_token.key")
+                    USER_ID=$(json_nested "$LOGIN_RESPONSE" "data.user.id")
+                    DASHBOARD_URL=$(json_nested "$LOGIN_RESPONSE" "data.dashboard_url")
+
+                    if [ -n "$SDK_TOKEN" ] && [ -n "$USER_ID" ]; then
+                        # Write SDK credentials
+                        mkdir -p "$HOME/.iris/sdk"
+                        cat > "$HOME/.iris/sdk/.env" << ENVFILE
+# IRIS SDK Configuration
+# Generated by IRIS CLI installer
+# Date: $(date '+%Y-%m-%d %H:%M:%S')
+
+IRIS_ENV=production
+IRIS_API_KEY=$SDK_TOKEN
+IRIS_USER_ID=$USER_ID
+IRIS_DEFAULT_MODEL=gpt-4o-mini
+ENVFILE
+                        chmod 600 "$HOME/.iris/sdk/.env"
+                        AUTH_SUCCESS=true
+                        echo -e "${GREEN}  Authenticated!${NC}"
+                        if [ -n "$DASHBOARD_URL" ]; then
+                            echo -e "  ${MUTED}Dashboard:${NC} ${CYAN}${DASHBOARD_URL}${NC}"
+                        fi
+
+                        # Auto-register this machine as a Hive compute node
+                        HOSTNAME_LABEL=$(hostname -s 2>/dev/null || echo "My-Machine")
+                        HAS_DOCKER=$(command -v docker >/dev/null 2>&1 && echo "true" || echo "false")
+                        NODE_RESPONSE=$(curl -sL --fail --max-time 10 \
+                            -H "Authorization: Bearer $SDK_TOKEN" \
+                            -H "Content-Type: application/json" \
+                            --data-raw "{\"name\": \"$(echo "$HOSTNAME_LABEL" | sed 's/[\"\\]/\\&/g')\", \"capabilities\": {\"docker\": $HAS_DOCKER}}" \
+                            "https://raichu.heyiris.io/api/v1/hive/register-node" 2>/dev/null || echo '{}')
+                        NODE_KEY=$(json_field "$NODE_RESPONSE" "node_key")
+                        if [ -n "$NODE_KEY" ] && [ "$NODE_KEY" != "null" ]; then
+                            mkdir -p "$HOME/.iris"
+                            printf '{"node_api_key":"%s","user_id":%s,"api_url":"https://freelabel.net"}\n' "$NODE_KEY" "$USER_ID" > "$HOME/.iris/config.json"
+                            chmod 600 "$HOME/.iris/config.json"
+                            echo -e "  ${GREEN}Machine registered as Hive compute node${NC}"
+                        else
+                            echo -e "  ${MUTED}Hive auto-registration skipped. Register later: ${NC}iris-daemon register"
+                        fi
+                    else
+                        # Login succeeded but SDK token wasn't generated
+                        AUTH_SUCCESS=true
+                        echo -e "${GREEN}  Authenticated!${NC}"
+                        echo -e "${MUTED}  SDK token will be configured on first run.${NC}"
+                    fi
+                else
+                    ERROR_MSG=$(json_field "$LOGIN_RESPONSE" "error")
+                    echo -e "${RED}  Login failed: ${ERROR_MSG:-Invalid code or network error}${NC}"
+                    echo -e "${MUTED}  The code may have expired. Run ${NC}iris-login${MUTED} to try again.${NC}"
+                fi
+            fi
+        else
+            ERROR_MSG=$(json_field "$SEND_RESPONSE" "error")
+            echo -e "${RED}  Could not send code: ${ERROR_MSG:-Unknown error}${NC}"
+            echo -e "${MUTED}  If this persists, sign up at: ${NC}${CYAN}https://web.heyiris.io/login/register${NC}"
+        fi
+    fi
+    echo -e ""
+fi
+
+# ─── Subscription gate (Stripe paywall for un-subscribed users) ─────────────
+# After identity is established (email/code or pre-seeded), check whether the
+# user has an active subscription. If not, route them through Stripe checkout
+# via the device-code flow. Existing customers skip this entirely — they're
+# done in ~10 seconds.
+if [ "$AUTH_SUCCESS" = "true" ] && [ -n "$SDK_TOKEN" ] && [ "$tty_available" = "true" ]; then
+    SUB_RESPONSE=$(curl -s --max-time 10 -w '\n%{http_code}' \
+        -H "Authorization: Bearer $SDK_TOKEN" \
+        "https://raichu.heyiris.io/api/v1/cli/auth/me" 2>/dev/null || printf '\n0')
+    SUB_STATUS=$(printf '%s' "$SUB_RESPONSE" | tail -n1)
+    SUB_BODY=$(printf '%s' "$SUB_RESPONSE" | sed '$d')
+
+    SUB_ACTIVE="unknown"
+    if [ "$SUB_STATUS" = "200" ]; then
+        # subscription_active is a JSON boolean. Don't use json_field — its jq
+        # path uses `// empty` which treats `false` as missing and returns "".
+        # Extract directly so we get the literal "true"/"false" string.
+        if command -v jq >/dev/null 2>&1; then
+            SUB_ACTIVE=$(echo "$SUB_BODY" | jq -r '.subscription_active' 2>/dev/null)
+        elif command -v python3 >/dev/null 2>&1; then
+            SUB_ACTIVE=$(echo "$SUB_BODY" | python3 -c 'import sys,json;print(str(json.load(sys.stdin).get("subscription_active","unknown")).lower())' 2>/dev/null)
+        else
+            SUB_ACTIVE=$(echo "$SUB_BODY" | grep -oE '"subscription_active"[[:space:]]*:[[:space:]]*(true|false)' | grep -oE 'true|false' | head -1)
+        fi
+    fi
+
+    # Only paywall if we got a definitive "no". Network errors / unknown state
+    # let the user through (don't block on infra issues).
+    if [ "$SUB_ACTIVE" = "false" ] || [ "$SUB_ACTIVE" = "False" ] || [ "$SUB_ACTIVE" = "0" ]; then
+        if command -v uuidgen >/dev/null 2>&1; then
+            DEVICE_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+        elif [ -r /proc/sys/kernel/random/uuid ]; then
+            DEVICE_ID=$(cat /proc/sys/kernel/random/uuid)
+        elif command -v python3 >/dev/null 2>&1; then
+            DEVICE_ID=$(python3 -c 'import uuid;print(uuid.uuid4())')
+        else
+            DEVICE_ID=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' | sed 's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/')
+        fi
+
+        if [ -n "$DEVICE_ID" ]; then
+            PRICING_URL="https://web.heyiris.io/pricing?source=cli&device_id=$DEVICE_ID"
+
+            echo -e ""
+            echo -e "${CYAN}One more step — pick a plan${NC}"
+            echo -e "  ${MUTED}You're authenticated as${NC} ${USER_EMAIL:-your account}${MUTED}, but you don't have an active subscription yet.${NC}"
+            echo -e "  ${MUTED}Visit:${NC} ${CYAN}${PRICING_URL}${NC}"
+            echo -e ""
+        fi
+    elif [ "$SUB_ACTIVE" = "true" ] || [ "$SUB_ACTIVE" = "True" ] || [ "$SUB_ACTIVE" = "1" ]; then
+        echo -e "  ${MUTED}Active subscription detected — skipping payment step.${NC}"
+    fi
+fi
+
+# ─── Build post-auth prompt ──────────────────────────────────────────────────
+
+DASHBOARD="${DASHBOARD_URL:-https://web.heyiris.io}"
+
+if [ "$AUTH_SUCCESS" = "true" ]; then
+    ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user is authenticated as $USER_EMAIL (user ID: $USER_ID). Auth is DONE -- do NOT run auth steps, do NOT read .env files, do NOT use curl. Use the IRIS CLI (the 'iris' command).
+
+RULES:
+- NEVER use curl or call APIs directly. Only CLI commands.
+- NEVER guess or hallucinate URLs. Page URLs follow the format: https://heyiris.io/p/{slug} (NOT subdomains). Always read the URL from CLI output.
+- When a CLI command produces output, READ it carefully and use the exact values shown. Do not make up IDs, URLs, or status values.
+- At the END of EVERY response, always include these links in a clean ASCII table like this:
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Dashboard   $DASHBOARD
+  │  Discover    https://web.heyiris.io/discover
+  │  Discord     https://discord.com/invite/Vmfrqmdkps
+  │  Docs        https://heyiris.io/developer
+  │  Desktop     ~/Applications/IRIS.app (run: open ~/Applications/IRIS.app)
+  └──────────────────────────────────────────────────────────────┘
+
+- After building something, tell them they can also manage it from the web dashboard or the IRIS Desktop App.
+
+FIRST, run these quick commands to understand the user's environment:
+   git config --global user.name 2>/dev/null; git config --global user.email 2>/dev/null
+   ls -d ~/Sites/*/ ~/Projects/*/ ~/Code/*/ ~/Developer/*/ 2>/dev/null | head -15
+   which node python3 docker 2>/dev/null
+Use what you learn to personalize your greeting. If the scan finds nothing, proceed with the standard greeting.
+
+THEN present these choices:
+
+Welcome to IRIS! Here's what you can build:
+
+1. An AI Agent
+   - Chat-powered assistant with 17+ integrations (Gmail, Slack, Google Drive, Calendar, and more)
+   - Attach files (PDF, CSV, DOCX) for automatic knowledge retrieval (RAG) — your agent learns your content
+   - Connect to voice AI (VAPI) for phone calls, schedule recurring tasks, and share publicly via URL
+
+2. A Multi-Agent Workflow
+   - Chain multiple AI agents into automated pipelines with human approval steps
+   - Generate content at scale: articles from YouTube videos, newsletters from research, legal demand packages
+   - Real-time progress tracking with background queue processing — set it and let it run
+
+3. A Web Page
+   - Design and publish a landing page using the drag-and-drop page composer
+   - AI-assisted layout suggestions and content generation
+   - Publish instantly to a public URL — no hosting setup required
+
+4. Something else — here's what else IRIS can do:
+   - Lead management & CRM: track leads, tasks, deliverables, invoices with Stripe payments
+   - Knowledge bases (Bloqs): intelligent containers that auto-vectorize your content for semantic search
+   - KB management: create lists, add items, move items between lists (Kanban), search content
+   - Sync with cloud: import from Google Drive / Dropbox, export content to cloud storage
+   - Recruitment tools: parse job descriptions, generate boolean search queries, score candidates with AI
+   - Content generation: articles from 6 source types (video, topic, webpage, RSS, notes, draft)
+   - 17+ integrations: Google Suite, Slack, Discord, Mailjet, YouTube, ElevenLabs, Servis.ai, and more
+
+Tell me what you'd like to build!
+
+Wait for their answer. Based on what they pick, IMMEDIATELY run the corresponding command on the NEXT turn:
+
+- Agent: Ask what it should do in one sentence, then run: iris agents create
+- Multi-Agent Workflow: Ask what to automate in one sentence, then run: iris workflows list
+- Web Page: Ask what the page is for, then run: iris pages create --slug SLUG --title 'TITLE' --template landing
+  After creation, the public URL is shown in CLI output (freelabel.net/p/SLUG). Auto-publishes on create.
+  To add more components: iris pages pull SLUG, edit pages/SLUG.json, iris pages push SLUG.
+  Run: iris pages component-registry — to see ALL available component types.
+  VALID component types (use ONLY these exact names): Hero, SiteNavigation, SiteFooter, AnnouncementBanner, TestimonialsSection, TeamSection, ContactSection, LogoMarquee, FeatureShowcase, ComparisonMatrix, ClientGrid, CareersListing, PortfolioGallery, ProductGrid, ServiceMenu, EventGrid, FundingTiers, BeforeAfter, MapSection, NewsletterSignup, StepWizard, FileUpload, ShoppingCart, OrderConfirmation.
+  NEVER invent component types. If unsure, run: iris pages component-registry
+- Knowledge base / RAG: Run: iris bloqs create
+- List knowledge bases: Run: iris bloqs list
+- Add content to KB: Run: iris bloqs ingest BLOQ_ID FILE_PATH
+- Add text to KB: Run: iris bloqs add-item BLOQ_ID LIST_ID 'content'
+- Lead management / CRM: Run: iris leads list
+- Chat with an agent: Run: iris chat 'your message' --agent AGENT_ID
+- Schedule a job: Run: iris schedules list
+- Something else: Check iris --help for all available commands
+- If the user asks about a specific project you found during scanning, help them set up IRIS for that project
+
+After it is created, show:
+- What was built and how to use it
+- The exact CLI command to interact with it next
+- Their dashboard: $DASHBOARD (they can manage everything from the web UI too)
+- One suggested next step"
+else
+    ONBOARDING_PROMPT="You are the IRIS onboarding assistant. The user installed IRIS but is NOT authenticated yet.
+
+IMPORTANT: You CANNOT run iris-login for the user — it requires interactive keyboard input. Instead, tell them to run it themselves.
+
+RULES:
+- NEVER use curl or call APIs directly.
+- NEVER try to run iris-login — it needs interactive input you can't provide.
+
+FIRST, run these quick commands to understand the user:
+   git config --global user.name 2>/dev/null; git config --global user.email 2>/dev/null
+   ls -d ~/Sites/*/ ~/Projects/*/ ~/Code/*/ ~/Developer/*/ 2>/dev/null | head -15
+   which node python3 php docker 2>/dev/null
+Use what you learn to personalize the greeting.
+
+Then show this message:
+
+Welcome to IRIS! Before we build anything, you need to authenticate.
+
+Run this command (I can't do it for you — it needs your keyboard input):
+
+    iris-login
+
+This will:
+  1. Ask for your email
+  2. Send a verification code
+  3. Save your API token locally
+  4. Register this machine as a Hive compute node
+
+Once you've run iris-login, come back here and tell me what you'd like to build:
+
+  1. An AI Agent — chat assistant with 17+ integrations
+  2. A Multi-Agent Workflow — automated pipelines with human approval
+  3. A Web Page — drag-and-drop page composer, publish instantly
+  4. Something else — CRM, knowledge bases, recruitment, content generation
+
+Already have a token? You can also run: iris-login --token YOUR_TOKEN --user-id YOUR_ID
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Dashboard   https://web.heyiris.io                         │
+  │  Discover    https://web.heyiris.io/discover                │
+  │  Discord     https://discord.com/invite/Vmfrqmdkps          │
+  │  Docs        https://heyiris.io/developer                   │
+  │  Desktop     ~/Applications/IRIS.app                        │
+  └──────────────────────────────────────────────────────────────┘"
+fi
+
+# ─── Create iris-onboard launcher script ─────────────────────────────────────
+# Write prompt to a file (keeps tokens out of ps output), then launch from file.
+
+PROMPT_FILE="$HOME/.iris/.onboarding-prompt"
+printf '%s' "$ONBOARDING_PROMPT" > "$PROMPT_FILE"
+chmod 600 "$PROMPT_FILE"
+
+cat > "$INSTALL_DIR/iris-onboard" << 'ONBOARD'
+#!/usr/bin/env bash
+cd "$HOME"
+PROMPT_FILE="$HOME/.iris/.onboarding-prompt"
+if [ -f "$PROMPT_FILE" ]; then
+    exec "$HOME/.iris/bin/iris" -m opencode/big-pickle --prompt "$(cat "$PROMPT_FILE")"
+else
+    exec "$HOME/.iris/bin/iris" -m opencode/big-pickle
+fi
+ONBOARD
+chmod 755 "$INSTALL_DIR/iris-onboard"
+
+# ─── Next Steps ───────────────────────────────────────────────────────────────
+# Direct run: exec iris. Piped from curl: copy to clipboard + instructions.
+
+if [ -t 0 ]; then
+    echo -e "${MUTED}Starting IRIS CLI...${NC}"
+    echo -e ""
+    cd "$HOME"
+    exec "$INSTALL_DIR/iris" -m opencode/big-pickle --prompt "$(cat "$PROMPT_FILE")"
+else
+    echo -e ""
+    if [ "$AUTH_SUCCESS" = "true" ] || ([ -f "$HOME/.iris/sdk/.env" ] && grep -q "IRIS_API_KEY=." "$HOME/.iris/sdk/.env" 2>/dev/null); then
+        echo -e "  ${GREEN}Ready to go!${NC} To get started, run:"
+        echo -e ""
+        echo -e "    ${CYAN}source ~/.iris/env && iris-onboard${NC}"
+        echo -e ""
+        if command -v pbcopy &>/dev/null; then
+            printf "%s" "source ~/.iris/env && iris-onboard" | pbcopy
+            echo -e "  ${MUTED}(command copied to clipboard)${NC}"
+            echo -e ""
+        fi
+    else
+        echo -e "  ${GREEN}To get started, run:${NC}"
+        echo -e ""
+        echo -e "    ${CYAN}source ~/.iris/env && iris-login${NC}"
+        echo -e ""
+        if command -v pbcopy &>/dev/null; then
+            printf "%s" "source ~/.iris/env && iris-login" | pbcopy
+            echo -e "  ${MUTED}(command copied to clipboard)${NC}"
+            echo -e ""
+        fi
+    fi
+fi
