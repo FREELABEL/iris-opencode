@@ -772,6 +772,109 @@ const BoardsLeadsCommand = cmd({
   },
 })
 
+
+// ============================================================================
+// Item <-> item typed relations (the item-level twin of `iris bloqs relate`)
+// ============================================================================
+
+const ITEM_RELATION_TYPES = ["parent","feeds_into","blocks","duplicates","sibling","relates_to"]
+const SYMMETRIC_ITEM_TYPES = ["sibling", "relates_to"]
+
+const BoardsRelateCommand = cmd({
+  command: "relate <from-id> <to-id>",
+  describe: "link two items — parent, blocks, duplicates, sibling, relates_to, feeds_into",
+  builder: (yargs) =>
+    yargs
+      .positional("from-id", { describe: "item the relation starts from", type: "number", demandOption: true })
+      .positional("to-id", { describe: "item it points at", type: "number", demandOption: true })
+      .option("type", { describe: `relation type (${ITEM_RELATION_TYPES.join(", ")})`, type: "string", demandOption: true })
+      .example("$0 boards relate 183178 182398 --type=parent", "183178 is the parent of 182398")
+      .example("$0 boards relate 183180 183179 --type=blocks", "183180 blocks 183179"),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Relate #${args["from-id"]} → #${args["to-id"]}`)
+    if (!ITEM_RELATION_TYPES.includes(String(args.type))) {
+      prompts.log.error(`unknown type "${args.type}" — one of: ${ITEM_RELATION_TYPES.join(", ")}`)
+      prompts.outro("Done"); return
+    }
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner(); spinner.start("Relating…")
+    try {
+      const res = await irisFetch(`/api/v1/bloq-items/${args["from-id"]}/relate`, {
+        method: "POST", body: JSON.stringify({ to_item_id: args["to-id"], type: args.type }),
+      })
+      const ok = await handleApiError(res, "Relate"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const sym = SYMMETRIC_ITEM_TYPES.includes(String(args.type))
+      spinner.stop(`${success("✓")} ${args.type}${sym ? dim("  (reciprocal link written too)") : ""}`)
+      prompts.outro(dim(`iris boards relations ${args["from-id"]}`))
+    } catch (err) {
+      spinner.stop("Error", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done")
+    }
+  },
+})
+
+const BoardsUnrelateCommand = cmd({
+  command: "unrelate <from-id> <to-id>",
+  describe: "remove a relation between two items",
+  builder: (yargs) =>
+    yargs
+      .positional("from-id", { describe: "item the relation starts from", type: "number", demandOption: true })
+      .positional("to-id", { describe: "item it points at", type: "number", demandOption: true })
+      .option("type", { describe: "relation type to remove", type: "string", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Unrelate #${args["from-id"]} ✗ #${args["to-id"]}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const spinner = prompts.spinner(); spinner.start("Removing…")
+    try {
+      const res = await irisFetch(`/api/v1/bloq-items/${args["from-id"]}/unrelate`, {
+        method: "POST", body: JSON.stringify({ to_item_id: args["to-id"], type: args.type }),
+      })
+      const ok = await handleApiError(res, "Unrelate"); if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const body = (await res.json()) as any
+      spinner.stop(`${success("✓")} removed ${body?.data?.removed ?? 0} row(s)`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner.stop("Error", 1); prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done")
+    }
+  },
+})
+
+const BoardsRelationsCommand = cmd({
+  command: "relations <id>",
+  describe: "show every item related to this one, both directions",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "item ID", type: "number", demandOption: true })
+      .option("json", { describe: "output JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Relations of item #${args.id}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    try {
+      const res = await irisFetch(`/api/v1/bloq-items/${args.id}/relations`)
+      const ok = await handleApiError(res, "Relations"); if (!ok) { prompts.outro("Done"); return }
+      const body = (await res.json()) as any
+      const rows: any[] = firstArray(body?.data, body)
+      if (args.json) { await writeJson(rows); prompts.outro("Done"); return }
+      printDivider()
+      if (!rows.length) console.log(dim("  No relations.  iris boards relate <from> <to> --type=parent"))
+      const groups: Record<string, any[]> = {}
+      for (const r of rows) (groups[String(r.reads_as ?? r.type)] ||= []).push(r)
+      for (const [label, items] of Object.entries(groups)) {
+        console.log(`  ${bold(label)}`)
+        for (const r of items) {
+          console.log(`    ${String(r.title ?? "Untitled")}  ${dim(`#${r.item_id}`)}${r.status ? dim(` · ${r.status}`) : ""}`)
+        }
+      }
+      printDivider()
+      prompts.outro("Done")
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done")
+    }
+  },
+})
+
 // ============================================================================
 // Root command
 // ============================================================================
@@ -792,6 +895,9 @@ export const PlatformBoardsCommand = cmd({
       .command(BoardsLinkLeadCommand)
       .command(BoardsUnlinkLeadCommand)
       .command(BoardsLeadsCommand)
+      .command(BoardsRelateCommand)
+      .command(BoardsUnrelateCommand)
+      .command(BoardsRelationsCommand)
       .demandCommand(),
   async handler() {},
 })

@@ -99,3 +99,79 @@ iris bloqs unrelate 546 547 --type=sibling
 - Set `IRIS_USER_ID` (or pass `--user-id`) if acting on behalf of a specific user.
 - Relations are bloq-to-bloq only. Linking leads/items/agents across bloqs is a
   separate (planned) capability, not these commands.
+
+---
+
+# Relating ITEMS — the same idea, one level down
+
+Everything above connects whole **bloqs**. Since v1.3.232 the same thing works between
+individual **items** — an epic can point at its tickets, a bug can say what it blocks.
+
+```bash
+iris boards relate <from-id> <to-id> --type=<type>
+iris boards relations <id>
+iris boards unrelate <from-id> <to-id> --type=<type>
+```
+
+## Item relation types
+
+| Type | Reads from the other end | Directional? |
+|---|---|---|
+| `parent` | child of | one-way |
+| `blocks` | blocked by | one-way |
+| `duplicates` | duplicated by | one-way |
+| `feeds_into` | fed by | one-way |
+| `sibling` | sibling | two-way |
+| `relates_to` | relates to | two-way |
+
+`parent`, `feeds_into` and `sibling` mean exactly what they mean between bloqs.
+`blocks`, `duplicates` and `relates_to` are the ones tickets need and whole projects
+do not.
+
+**Two-way types write the reciprocal row**, same as bloqs — relate A→B as `sibling`
+and B already lists A. **One-way types write a single row**, and the far end reads it
+with its inverse label: if 183180 `blocks` 183179, then `iris boards relations 183179`
+shows 183180 under **blocked by**. The edge is stored once and never silently inverted.
+
+Re-relating the same pair and type is a safe no-op. An item cannot relate to itself.
+
+## Examples
+
+```bash
+# an epic and its tickets
+iris boards relate 182398 183178 --type=parent
+iris boards relate 182398 183179 --type=parent
+
+# a blocker
+iris boards relate 183180 183179 --type=blocks
+
+# two tickets that keep coming up together
+iris boards relate 183178 183181 --type=sibling
+```
+
+```bash
+iris boards relations 183179
+#   blocked by
+#     ⚖️ LOP name-match — decide how far it can go   #183180 · active
+#   child of
+#     🎯 EPIC — Intake Risk-Score Engine             #182398 · active
+```
+
+## Linking a CRM lead to an item
+
+Separate from item↔item edges: an item can also point at a **person** in the CRM —
+who reported it, who it is about.
+
+```bash
+iris boards link-lead <item-id> <lead-id> --relation reported-by
+iris boards leads <item-id>       # who is on this ticket
+iris leads items <lead-id>        # what tickets mention this person
+```
+
+`--relation` is free text (`reported-by`, `about`, `stakeholder`), so the link records
+why the person is on the item rather than merely that they are.
+
+> **Note — attribution is a different thing.** `iris bug report --reporter-lead` writes a
+> *server-composed* attribution into the item's own metadata, and bug-bounty payouts
+> resolve against it. `link-lead` is a plain relationship for context and lookup; it
+> confers no credit and no payout. If you want someone paid, use the reporter field.
