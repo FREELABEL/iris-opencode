@@ -87,6 +87,12 @@
       "purpose": "Turn an opportunity into a crowdfunded pitch page \u2014 roles with pay/equity, pitch sections, board members, milestones, payouts ledger, filled-vs-open tracking."
     },
     {
+      "src": "how-to/dashboards.md",
+      "dest": "how-to/dashboards.md",
+      "managed": true,
+      "purpose": "Build a working console on Genesis, Atlas and Hive \u2014 rail, sub-tabs, list, stage and status bar composed from existing components rather than hand-built."
+    },
+    {
       "src": "how-to/deals.md",
       "dest": "how-to/deals.md",
       "managed": true,
