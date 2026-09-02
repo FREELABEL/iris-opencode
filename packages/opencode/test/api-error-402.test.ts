@@ -21,18 +21,22 @@ const render = (body: unknown) => {
 
 describe("formatPaymentRequired", () => {
   test("RequireActiveSubscription: the sentence, the command, and where to pay", () => {
-    // Verbatim shape from fl-api RequireActiveSubscription.php:58-65
+    // Verbatim shape from fl-api RequireActiveSubscription.php.
+    // The fixture said `iris billing` — a command that did not exist. The test was right about
+    // what it checked (the CLI renders cli_command faithfully) and wrong about what it showed:
+    // a passthrough test whose fixture is a dead end teaches the dead end. fl-api now sends
+    // `iris pricing`, and `billing` is an alias of it, so both of these are real commands.
     const out = render({
       success: false,
       error: "subscription_required",
       message: "An active subscription is required to run agents and workflows.",
       checkout_url: "https://freelabel.net/magic/abc/pricing",
       onboarding_url: "https://freelabel.net/magic/abc/onboarding",
-      cli_command: "iris billing",
+      cli_command: "iris pricing",
     })
 
     expect(out).toContain("An active subscription is required")
-    expect(out).toContain("iris billing")
+    expect(out).toContain("iris pricing")
     expect(out).toContain("https://freelabel.net/magic/abc/pricing")
     expect(out).toContain("https://freelabel.net/magic/abc/onboarding")
   })
@@ -41,7 +45,7 @@ describe("formatPaymentRequired", () => {
     const { message } = formatPaymentRequired({
       error: "subscription_required",
       message: "An active subscription is required to run agents and workflows.",
-      cli_command: "iris billing",
+      cli_command: "iris pricing",
     })
 
     // The old behaviour was `${action} failed: subscription_required`.
@@ -86,7 +90,7 @@ describe("formatPaymentRequired", () => {
     const out = render({
       error: "subscription_required",
       message: "Subscribe to continue.",
-      cli_command: "iris billing",
+      cli_command: "iris pricing",
     })
 
     expect(out).not.toContain("balance")

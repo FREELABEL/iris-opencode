@@ -170,7 +170,17 @@ const ListCmd = cmd({
 
 export const PricingCommand = cmd({
   command: "pricing",
-  aliases: ["plans"],
+  /**
+   * `billing` and `subscribe` are here because THE PRODUCT ALREADY TOLD PEOPLE TO TYPE THEM.
+   *
+   * fl-api's RequireActiveSubscription returned 402 with `cli_command: "iris billing"`, and the
+   * CLI renders that field verbatim — so the one instruction between a user with paying intent
+   * and a checkout page named a verb that did not exist. The API now says `iris pricing`, but
+   * anyone who hit the paywall before that, or who reasons about what a billing command would
+   * be called, still types `billing`. A guessable name that errors out is a dead end; a
+   * guessable name that works is the whole point of an alias.
+   */
+  aliases: ["plans", "billing", "subscribe"],
   describe: "plans and where to sign up — works signed out",
   builder: (y: any) => y.command(ListCmd).help(),
   async handler() {},
