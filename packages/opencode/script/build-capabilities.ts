@@ -401,6 +401,21 @@ function collectCommands(): Entry[] {
 }
 
 // ── markdown-backed sources (how-to, playbooks, skills) ─────────────────────
+/**
+ * Searchable prose from a markdown document.
+ *
+ * Fenced code and URLs are removed rather than kept: they are a third of the bytes and
+ * approximately none of the search intent. Whitespace is collapsed LAST, so the patterns
+ * above still see real line structure when they run.
+ */
+function prose(src: string): string {
+  return src
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 function frontmatter(src: string): Record<string, string> {
   if (!src.startsWith("---")) return {}
   const end = src.indexOf("\n---", 3)
@@ -448,9 +463,24 @@ function collectMarkdown(
       describe,
       aliases: [],
       run: run(fm.name ?? name),
-      // Include a slice of BODY text: the words someone searches for ("custom HTML",
-      // "artifact") usually appear in prose, not in a title.
-      haystack: [name, describe, src.slice(0, 4000)].join(" ").toLowerCase(),
+      // The WHOLE body, as prose. The words someone searches for ("custom HTML", "artifact",
+      // "reporter-lead") usually appear in the text, not in a title.
+      //
+      // This was `src.slice(0, 4000)`, and a fixed window on documents that average 10KB
+      // meant 165 of 209 how-tos, playbooks and skills were truncated — 65% of the corpus
+      // unsearchable, silently. The section explaining that a feature request earns and needs
+      // --reporter-lead sits at line 141 of bounty-os-hunter-journey, so `iris find "feature
+      // request"` returned nothing while the answer was written down and committed. A cap
+      // that hides two thirds of the haystack is the same defect as a command that is
+      // registered but unreachable, one layer down: the knowledge exists, the path to it does
+      // not.
+      //
+      // Stripping fenced code and URLs first is what makes indexing everything affordable AND
+      // more precise: it cuts the corpus by a third (2.17MB -> 1.45MB, so +678KB against the
+      // old cap rather than +1.4MB) while removing the tokens that only ever produce false
+      // matches — a search for "atlas" should not hit every curl example whose URL contains
+      // the word.
+      haystack: [name, describe, prose(src)].join(" ").toLowerCase(),
     })
   }
   return out
