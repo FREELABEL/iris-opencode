@@ -237,6 +237,71 @@ function collectCommands(): Entry[] {
    * `seen` is per-path, so a command reachable from two groups is indexed under both, while
    * a cycle still terminates.
    */
+  /**
+   * Subcommands written as an inline object literal instead of a named constant.
+   *
+   * Brace-matched rather than regexed to the closing brace, because these literals contain
+   * nested objects (`builder`, `.option({...})`) and a lazy regex stops at the first `}` —
+   * which would truncate the body and lose exactly the option descriptions that make a
+   * command findable by what it DOES rather than what it is called.
+   */
+  function inlineChildren(body: string): Array<{
+    token: string
+    rest: string
+    describe: string
+    aliases: string[]
+    options: string[]
+  }> {
+    const found: Array<{ token: string; rest: string; describe: string; aliases: string[]; options: string[] }> = []
+
+    for (const m of body.matchAll(/\.command\(\s*\{/g)) {
+      const open = m.index! + m[0].length - 1
+      let depth = 0
+      let end = -1
+      let quote: string | null = null
+      for (let i = open; i < body.length; i++) {
+        const c = body[i]
+        const prev = body[i - 1]
+        if (quote) {
+          if (c === quote && prev !== "\\") quote = null
+          continue
+        }
+        if (c === '"' || c === "'" || c === "`") { quote = c; continue }
+        if (c === "{") depth++
+        else if (c === "}") { depth--; if (depth === 0) { end = i; break } }
+      }
+      if (end === -1) continue
+
+      const lit = body.slice(open, end + 1)
+      const cm = lit.match(/command\s*:\s*["'`]([^"'`]+)["'`]/)
+      if (!cm) continue
+
+      const full = cm[1].trim()
+      const token = full.split(/\s+/)[0]
+      if (!token || token === "*" || token === "$0") continue
+
+      const dm = lit.match(/describe\s*:\s*["'`]([^"'`]+)["'`]/)
+      const am = lit.match(/aliases\s*:\s*\[([^\]]*)\]/)
+
+      const options: string[] = []
+      for (const om of lit.matchAll(/\.option\(\s*["'`]([A-Za-z0-9_-]+)["'`]\s*,\s*\{([\s\S]{0,400}?)\}\s*\)/g)) {
+        options.push(om[1])
+        const od = om[2].match(/describ(?:e|tion)\s*:\s*["'`]([^"'`]+)["'`]/)
+        if (od) options.push(od[1])
+      }
+
+      found.push({
+        token,
+        rest: full.slice(token.length).trim(),
+        describe: dm ? dm[1] : "",
+        aliases: am ? am[1].split(",").map((a) => a.replace(/["'`\s]/g, "")).filter(Boolean) : [],
+        options,
+      })
+    }
+
+    return found
+  }
+
   function walk(constName: string, prefix: string[], seen: Set<string>, depth: number, fromFile: string | null): string[] {
     const b = resolveBlock(blocks, constName, fromFile)
     if (!b || depth > 4 || seen.has(`${b.file}::${constName}`)) return []
@@ -253,6 +318,34 @@ function collectCommands(): Entry[] {
     const childTokens: string[] = []
     for (const child of childNames) {
       childTokens.push(...walk(child, path, nextSeen, depth + 1, b.file))
+    }
+
+    // INLINE children — `.command({ command: "report [title..]", ... })` written as a literal
+    // rather than a named `XCommand` constant.
+    //
+    // The regex above only matches an identifier ending in Command or Group, so five files
+    // that declare their subcommands inline had every one of them silently dropped: `feature
+    // report`, `identity link`, `permissions grant`, and the whole of `how-to`. Fifteen verbs
+    // that exist, are registered, and appear in --help, but could not be FOUND — which is the
+    // exact failure this index was built to end, surviving in the one shape its author's own
+    // regex could not see.
+    //
+    // Handled as leaves. Nothing in the codebase nests a named group inside an inline literal,
+    // and guessing at deeper recursion here would invent paths rather than read them.
+    for (const child of inlineChildren(b.body)) {
+      const childPath = [...path, child.token]
+      COMMAND_SOURCE.set(`command:${childPath.join(" ")}`, b.file)
+      out.push({
+        kind: "command",
+        name: childPath.join(" "),
+        describe: child.describe,
+        aliases: [],
+        run: `iris ${childPath.join(" ")}${child.rest ? " " + child.rest : ""}`,
+        haystack: [...childPath, ...child.aliases, child.describe, ...child.options]
+          .join(" ")
+          .toLowerCase(),
+      })
+      childTokens.push(child.token)
     }
 
     // Where this command is DEFINED. The check uses it to tell a command that is missing
