@@ -145,22 +145,81 @@ const CompleteCmd = cmd({
 
 const SendCmd = cmd({
   command: "send <lead-id>",
-  describe: "send email/SMS for a step (not yet available)",
+  describe: "send this step through the comms router — the ledger completes the step",
   builder: (yargs) =>
     yargs
       .positional("lead-id", { describe: "lead ID", type: "number", demandOption: true })
       .option("step", { describe: "step number (1-based)", type: "number", demandOption: true })
-      .option("subject", { describe: "email subject override", type: "string" }),
-  async handler() {
-    // No per-step send pipeline exists on the server (only lead-level reminders),
-    // so this used to leak a raw HTTP 404. Fail clearly instead. (#137539)
-    prompts.log.warn(
-      `${bold("outreach-send send")} is not available yet — per-step email/SMS sending is not implemented on the server.`,
-    )
-    prompts.log.info(
-      dim(`Tracked in bug #137539 (also gated on the outreach compliance layer #137534). After sending manually, mark the step done with ${highlight("iris outreach-send complete <lead-id> --step N")}.`),
-    )
-    process.exitCode = 2
+      .option("message", { describe: "override the step's copy for this send only", type: "string" })
+      .option("channel", { describe: "email | sms | imessage | linkedin | instagram", type: "string" })
+      .option("dry-run", { describe: "resolve the channel and show what would go — sends nothing", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  /**
+   * THIS USED TO REFUSE, and the refusal outlived its reason.
+   *
+   * It printed "not implemented on the server" and exited 2, citing #137539. By then the server
+   * had CommsRouter (caps, suppression, channel resolution, the lead_comms write) and
+   * OutreachProgress::onCommLogged() to complete a step from a logged comm — everything except a
+   * door. So Reachr told you who was owed what and a person retyped it into `iris mail`, which
+   * meant the ledger and the step's completion depended on somebody remembering to do both.
+   *
+   * COMPLETION IS NOT SENT AS A FLAG. The step completes because the comm was logged carrying its
+   * id, so a completed step can point at the comm that completed it. `--complete` is deliberately
+   * absent; asserting a send is what this replaces.
+   */
+  async handler(args: any) {
+    if (!(await requireAuth())) return
+
+    const steps = await fetchSteps(args.leadId)
+    const step = steps[args.step - 1]
+    if (!step) {
+      prompts.log.error(`Step ${args.step} not found on lead ${args.leadId} — the lead has ${steps.length}.`)
+      process.exitCode = 1
+      return
+    }
+
+    const res = await irisFetch(`/api/v1/reachr/steps/${step.id}/send`, {
+      method: "POST",
+      body: JSON.stringify({
+        message: args.message ?? null,
+        channel: args.channel ?? null,
+        dry_run: !!args["dry-run"],
+      }),
+    })
+    const body = (await res.json().catch(() => ({}))) as any
+
+    if (args.json) return writeJson(body)
+
+    if (!res.ok) {
+      // A refusal is an ANSWER — no reachable channel, suppressed, capped, empty copy. Render the
+      // reason, because "send failed" sends someone to re-check a message that was fine.
+      prompts.log.warn(body?.reason ?? body?.message ?? body?.error ?? `Not sent (HTTP ${res.status})`)
+      process.exitCode = 1
+      return
+    }
+
+    if (body?.dry_run) {
+      prompts.log.info(`${bold("dry run")} — nothing sent, nothing logged`)
+      prompts.log.info(dim(`  channel: ${body?.data?.channel ?? "—"}`))
+      prompts.log.info(dim(`  ${String(body?.data?.message_preview ?? "").slice(0, 200)}`))
+      return
+    }
+
+    if (body?.already_sent) {
+      // Not an error and not a fresh send. Saying "sent" here would be a lie the ledger contradicts.
+      prompts.log.info(`Step ${args.step} was already sent — comm #${body?.data?.comm_id}. Nothing sent again.`)
+      return
+    }
+
+    const d = body?.data ?? {}
+    prompts.log.success(`${success("✓")} Sent via ${d.channel} — comm #${d.comm_id}`)
+    // Reported, not assumed. A comm that logged without advancing the step is worth seeing now
+    // rather than discovering later on a sequence that never moves.
+    if (d.step_completed) {
+      prompts.log.info(dim(`  step ${args.step} completed by the ledger`))
+    } else {
+      prompts.log.warn(`  sent, but step ${args.step} did NOT complete — the comm logged without advancing it.`)
+    }
   },
 })
 
