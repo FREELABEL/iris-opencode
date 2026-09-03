@@ -127,4 +127,99 @@ const SessionsCommand = cmd({
   },
 })
 
+/**
+ * `iris hive send-input` — put a message into a session that is already running, on whichever
+ * machine holds it.
+ *
+ * Every layer of this existed except the door. The cloud has a `session_message` task type,
+ * the bridge has POST /api/sessions/<provider>/:id/message, and MCP exposes `hive_send_input`.
+ * So an agent could type into your sessions and you could not — the same asymmetry as
+ * `hive sessions` itself.
+ *
+ * You do not name the machine. The session id is looked up across the fleet and the task is
+ * pinned to the node that actually holds it, because "which machine is that session on" is
+ * exactly the bookkeeping a person should not be doing.
+ */
+const SendInputCommand = cmd({
+  command: "send-input <session-id> <message>",
+  describe: "send a message into a running session on any node in your Hive",
+  builder: (yargs) =>
+    yargs
+      .positional("session-id", { describe: "from `iris hive sessions`", type: "string", demandOption: true })
+      .positional("message", { describe: "what to send", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID", type: "number" }),
+  async handler(argv) {
+    await requireAuth()
+    const userId = await requireUserId(argv["user-id"] as number | undefined)
+    if (!userId) process.exit(1)
+
+    const wanted = String(argv["session-id"])
+
+    const res = await hiveFetch(`/api/v6/nodes/?user_id=${userId}&detailed=1`)
+    const body = (await res.json().catch(() => ({}))) as any
+    const nodes = (body.nodes || body.data || []) as any[]
+
+    // Match the FULL id, or an unambiguous suffix. Never a prefix: session ids share leading
+    // characters, and a truncated match is how a wrong diagnosis got filed on this project
+    // once already (#182312).
+    const hits: Array<{ node: any; s: Session }> = []
+    for (const n of nodes) {
+      for (const s of (n.active_sessions || []) as Session[]) {
+        if (s.session_id === wanted || (wanted.length >= 6 && s.session_id.endsWith(wanted))) {
+          hits.push({ node: n, s })
+        }
+      }
+    }
+
+    if (hits.length === 0) {
+      console.error(`No session matching "${wanted}".`)
+      console.error(dim("  List them:  iris hive sessions --all"))
+      process.exit(1)
+    }
+    if (hits.length > 1) {
+      // Refuse rather than guess which machine to type into.
+      console.error(`"${wanted}" matches ${hits.length} sessions — use the full id:`)
+      for (const h of hits) console.error(dim(`  ${h.s.session_id}  on ${h.node.name}`))
+      process.exit(1)
+    }
+
+    const { node, s } = hits[0]
+    if (s.status === "stale") {
+      console.error(`That session is stale (last active ${age(s.updated_at)} ago) — it is unlikely to answer.`)
+      console.error(dim("  Check with:  iris hive sessions --all"))
+      process.exit(1)
+    }
+
+    const create = await hiveFetch(`/api/v6/nodes/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: userId,
+        node_id: node.id,
+        type: "session_message",
+        title: `send-input to ${label(s)}`,
+        prompt: String(argv.message),
+        config: { session_id: s.session_id, provider: s.provider, message: String(argv.message) },
+      }),
+    })
+
+    if (!create.ok) {
+      const t = await create.text()
+      console.error(`Could not send: HTTP ${create.status} ${t.slice(0, 200)}`)
+      process.exit(1)
+    }
+
+    const created = (await create.json()) as any
+    if (argv.json) return void (await writeJson(created))
+
+    console.log()
+    console.log(success(`✓ sent to ${bold(label(s))}`) + dim(`  on ${node.name} · ${s.provider}`))
+    console.log(dim(`  task ${created?.task?.id ?? "?"}`))
+    console.log(dim(`  The session answers in its own terminal — this delivers the message, it does not read the reply.`))
+    console.log()
+  },
+})
+
 export const HiveSessionsCommand = SessionsCommand
+export const HiveSendInputCommand = SendInputCommand
