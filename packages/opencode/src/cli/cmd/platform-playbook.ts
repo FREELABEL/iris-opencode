@@ -1270,6 +1270,7 @@ const PlaybookSyncCommand = cmd({
     await withInstance(async () => {
       const allPlaybooks = await Skill.all()
       const { mkdirSync, writeFileSync, existsSync, statSync } = await import("fs")
+      const skillSyncFailures: string[] = []
       const { join, dirname } = await import("path")
 
       // Find project root (where .iris/ or .claude/ lives)
@@ -1351,14 +1352,29 @@ const PlaybookSyncCommand = cmd({
         const output = fmLines.join("\n") + "\n" + usageBlock.join("\n") + body.trim() + "\n"
 
         // Write to .claude/skills/{name}/SKILL.md
+        //
+        // ONE BAD DIRECTORY MUST NOT KILL THE INSTALL. Reported 2026-09-03:
+        // `playbook install iris-lexicon` fetched its metadata and then aborted
+        // with EEXIST creating `.claude/skills/work-the-epic` — a directory
+        // belonging to a DIFFERENT skill. Every legal playbook failed the same
+        // way, so an entire workflow was unusable because one unrelated path
+        // could not be made. (OneDrive-backed Desktop, where a synced
+        // placeholder can defeat even recursive: true.)
+        //
+        // Skill sync is a convenience layered on the install; the playbook is
+        // already on disk here. A failure is reported and counted, never fatal.
         const targetDir = join(claudeSkillsDir, plan.name)
         const targetFile = join(targetDir, "SKILL.md")
-        mkdirSync(targetDir, { recursive: true })
-        writeFileSync(targetFile, output)
-        synced++
-
-        if (!args.json) {
-          console.log(`  ${success("✓")} ${plan.name}`)
+        try {
+          mkdirSync(targetDir, { recursive: true })
+          writeFileSync(targetFile, output)
+          synced++
+          if (!args.json) console.log(`  ${success("✓")} ${plan.name}`)
+        } catch (e: any) {
+          skillSyncFailures.push(plan.name)
+          if (!args.json) {
+            console.log(`  ${dim("·")} ${plan.name} ${dim("— skill sync skipped:")} ${dim(String(e?.code ?? e?.message ?? e))}`)
+          }
         }
       }
 
@@ -1427,6 +1443,10 @@ const PlaybookSyncCommand = cmd({
         printDivider()
         const apiMsg = args.api ? `, ${apiSynced} to API` : ""
         console.log(dim(`  ${synced} synced to .claude/skills/${apiMsg}, ${skipped} skipped`))
+        if (skillSyncFailures.length > 0) {
+          console.log(dim(`  ${skillSyncFailures.length} could not be written: ${skillSyncFailures.join(", ")}`))
+          console.log(dim(`  The playbooks themselves are installed in .iris/playbooks/ and still run.`))
+        }
 
         // #183406 defect 1 — "94 synced, 0 skipped" reads like a publish, and nothing said
         // otherwise. Ten playbooks written in one day were believed shared and were not: sync
@@ -2405,7 +2425,16 @@ const PlaybookInstallCommand = cmd({
     if (args.sync) {
       // Reuse the existing writer rather than reimplementing the SKILL.md transform
       // (frontmatter rebuild, step-block stripping, usage hint) — one copy, one behaviour.
-      await (PlaybookSyncCommand as any).handler({ json: false, api: false })
+      //
+      // The playbook is ALREADY on disk above. Sync regenerates SKILL.md for every
+      // playbook, including ones installed long ago, so a fault in an unrelated
+      // playbook used to escape here and make a successful install read as a failure.
+      try {
+        await (PlaybookSyncCommand as any).handler({ json: false, api: false })
+      } catch (e: any) {
+        console.error(`  ${dim("Skill sync did not finish:")} ${dim(String(e?.message ?? e))}`)
+        console.error(`  ${dim(`${name} is installed at ${file} and will run.`)}`)
+      }
     }
 
     prompts.outro(`${success("✓")} Installed ${highlight(name)}${args.sync ? " and synced to .claude/skills/" : ""}`)
