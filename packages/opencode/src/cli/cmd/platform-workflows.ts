@@ -1,9 +1,19 @@
 import { cmd } from "./cmd"
+import { WorkflowsExportCommand } from "./platform-workflows-export"
+import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, writeJson, failNoOp} from "./iris-api"
+import {
+  normalizeInputSchema,
+  promptForInputs,
+  resolveInputsNonInteractive,
+  renderInputsAsText,
+} from "./input-form"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { PlatformAutomationCommand } from "./platform-automation"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -128,7 +138,7 @@ const WorkflowsListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const raw = await res.json()
-      const workflows: any[] = Array.isArray(raw) ? raw : (raw as any)?.data ?? []
+      const workflows: any[] = firstArray(raw, (raw as any)?.data)
 
       // Optionally merge campaign templates from IRIS_API
       let templates: any[] = []
@@ -152,7 +162,14 @@ const WorkflowsListCommand = cmd({
       spinner.stop(`${workflows.length} workflow(s)${templates.length > 0 ? ` + ${templates.length} template(s)` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify(all, null, 2))
+        // `all` concatenates workflows + templates and is not paginated, so it IS
+        // the complete set — total equals what we hold, and truncated is false.
+        await writeJson(
+          buildListEnvelope(projectFields(all, LIST_FIELDS.workflows), {
+            total: all.length,
+            resource: "workflows",
+          }),
+        )
         return
       }
 
@@ -198,6 +215,8 @@ const WorkflowsRunCommand = cmd({
     yargs
       .positional("id", { describe: "workflow ID", type: "number", demandOption: true })
       .option("query", { alias: "q", describe: "input query for the workflow", type: "string" })
+      .option("input", { describe: "structured inputs as a JSON object, e.g. --input '{\"topic\":\"AI\"}'", type: "string" })
+      .option("set", { describe: "set one input field: --set key=value (repeatable)", type: "array", string: true, default: [] as string[] })
       .option("wait", { describe: "wait for completion", type: "boolean", default: true })
       .option("timeout", { describe: "max seconds to wait", type: "number", default: 300 })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -211,8 +230,53 @@ const WorkflowsRunCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
 
+    const setFlags = (args.set as string[]) ?? []
+    const hasNonInteractiveInputs = Boolean(args.input) || setFlags.length > 0
+
+    // Read the workflow's declared input_schema (if any) so we can render a form
+    let fields: ReturnType<typeof normalizeInputSchema> = []
+    try {
+      const detailRes = await irisFetch(`/api/v1/users/${userId}/bloqs/workflows/${args.id}`)
+      if (detailRes.ok) {
+        const detail = (await detailRes.json()) as { data?: any }
+        const wf = detail?.data ?? detail
+        fields = normalizeInputSchema(wf?.input_schema)
+      }
+    } catch {
+      // Non-fatal: fall back to free-text query mode below
+    }
+
     let query = args.query
-    if (!query) {
+    let inputs: Record<string, unknown> | undefined
+
+    // Schema-driven inputs: collect when the workflow declares fields and the
+    // user either passed structured flags or is interactive without a raw query.
+    if (fields.length > 0 && (hasNonInteractiveInputs || (process.stdin.isTTY && !query))) {
+      if (hasNonInteractiveInputs || !process.stdin.isTTY) {
+        const { inputs: resolved, errors } = resolveInputsNonInteractive(fields, args.input, setFlags)
+        if (errors.length > 0) {
+          prompts.log.error(errors.join("\n"))
+          prompts.log.info(dim(`Provide inputs with --input '{...}' or --set key=value`))
+          const required = fields.filter((f) => f.required).map((f) => f.name)
+          if (required.length) prompts.log.info(dim(`Required: ${required.join(", ")}`))
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+        inputs = resolved
+      } else {
+        prompts.log.info(`This workflow needs ${fields.length} input${fields.length === 1 ? "" : "s"}:`)
+        const collected = await promptForInputs(fields)
+        if (!collected) { prompts.outro("Cancelled"); return }
+        inputs = collected
+      }
+      // Readable query fallback for endpoints that still only read `query`
+      // (full server-side `inputs` consumption lands in Phase 0).
+      if (!query) query = renderInputsAsText(inputs)
+    }
+
+    // Legacy free-text path (no schema, or schema not triggered)
+    if (!inputs && !query) {
       // Bail in non-TTY mode instead of hanging
       if (!process.stdin.isTTY) {
         prompts.log.error("--query is required in non-interactive mode")
@@ -234,6 +298,7 @@ const WorkflowsRunCommand = cmd({
     try {
       const payload: Record<string, unknown> = {}
       if (query) payload.query = query
+      if (inputs && Object.keys(inputs).length > 0) payload.inputs = inputs
 
       const res = await irisFetch(`/api/v1/workflows/${args.id}/execute/v6`, {
         method: "POST",
@@ -398,7 +463,7 @@ const WorkflowsRunsCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[] }
-      const runs: any[] = data?.data ?? []
+      const runs: any[] = firstArray(data?.data)
       spinner.stop(`${runs.length} run(s)`)
 
       if (runs.length === 0) {
@@ -594,8 +659,6 @@ const WorkflowsUpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Workflow #${args.id}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
@@ -606,10 +669,10 @@ const WorkflowsUpdateCommand = cmd({
     if (args.type) payload.type = args.type
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --name, --description, or --type")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --name, --description, or --type")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")
@@ -959,13 +1022,13 @@ const WorkflowsHubListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const raw = (await res.json()) as { templates?: any[]; grouped?: Record<string, any[]> }
-      const templates: any[] = raw?.templates ?? []
+      const templates: any[] = firstArray(raw?.templates)
       const grouped: Record<string, any[]> = raw?.grouped ?? {}
 
       spinner.stop(`${templates.length} template(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(raw, null, 2))
+        await writeJson(raw)
         return
       }
 
@@ -1282,7 +1345,7 @@ const WorkflowsGenerateCommand = cmd({
 
       if (args.json) {
         spinner.stop("Done")
-        console.log(JSON.stringify(workflow, null, 2))
+        await writeJson(workflow)
         prompts.outro("Done")
         return
       }
@@ -1356,12 +1419,12 @@ const WorkflowsEvalListCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const w = data?.data ?? data
-      const tests: any[] = w?.settings?.eval_suite?.tests ?? []
+      const tests: any[] = firstArray(w?.settings?.eval_suite?.tests)
 
       spinner.stop(`${tests.length} test case(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(tests, null, 2))
+        await writeJson(tests)
         return
       }
 
@@ -1428,7 +1491,7 @@ const WorkflowsEvalAddCommand = cmd({
       const w = data?.data ?? data
       const settings = w?.settings ?? {}
       const evalSuite = settings.eval_suite ?? { name: `Eval Suite for Workflow #${args.workflowId}`, tests: [] }
-      const tests: any[] = evalSuite.tests ?? []
+      const tests: any[] = firstArray(evalSuite.tests)
 
       // Parse input JSON
       let inputData: Record<string, unknown> = {}
@@ -1524,7 +1587,7 @@ const WorkflowsEvalRunCommand = cmd({
 
       const wData = (await wRes.json()) as { data?: any }
       const w = wData?.data ?? wData
-      const tests: any[] = w?.settings?.eval_suite?.tests ?? []
+      const tests: any[] = firstArray(w?.settings?.eval_suite?.tests)
       const suiteName = w?.settings?.eval_suite?.name ?? `Eval Suite`
 
       if (tests.length === 0) {
@@ -1553,16 +1616,16 @@ const WorkflowsEvalRunCommand = cmd({
       evalSpinner.stop("Results loaded")
 
       if (args.json) {
-        console.log(JSON.stringify(evaluation, null, 2))
+        await writeJson(evaluation)
         if (args["exit-code"]) {
-          const results: any[] = evaluation?.results ?? []
+          const results: any[] = firstArray(evaluation?.results)
           const anyFailed = results.some((r: any) => r.passed === false || r.status === "failed")
           if (anyFailed) process.exitCode = 1
         }
         return
       }
 
-      const results: any[] = evaluation?.results ?? []
+      const results: any[] = firstArray(evaluation?.results)
       const score = evaluation?.score ?? 0
       const badge = badgeFor(score)
 
@@ -1630,12 +1693,12 @@ const WorkflowsEvalHistoryCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any[] }
-      const runs: any[] = Array.isArray(data) ? data : (data?.data ?? [])
+      const runs: any[] = firstArray(data, data?.data)
 
       spinner.stop(`${runs.length} evaluation(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(runs, null, 2))
+        await writeJson(runs)
         return
       }
 
@@ -1744,7 +1807,7 @@ const WorkflowsHubRunCommand = cmd({
     }
 
     const out = (await res.json()) as { task?: any; dispatched?: boolean; message?: string }
-    if (args.json) { console.log(JSON.stringify(out, null, 2)); return }
+    if (args.json) { await writeJson(out); return }
 
     const t = out?.task ?? {}
     console.log(success(out?.message ?? "Dispatched"))
@@ -1787,6 +1850,7 @@ export const PlatformWorkflowsCommand = cmd({
       .command(WorkflowsCreateCommand)
       .command(WorkflowsGenerateCommand)
       .command(WorkflowsUpdateCommand)
+      .command(WorkflowsExportCommand)
       .command(WorkflowsPullCommand)
       .command(WorkflowsPushCommand)
       .command(WorkflowsDiffCommand)
@@ -1796,6 +1860,13 @@ export const PlatformWorkflowsCommand = cmd({
       .command(WorkflowsRunsCommand)
       .command(WorkflowsEvalCommand)
       .command(WorkflowsHubCommand)
+      // `automation` lives HERE now, not beside `workflows` (P0b). Both verbs already
+      // called the same /v1/workflows family — /runs, /templates, /{id} — so a user had
+      // two trees and no way to tell which one to reach for. Nested rather than flattened
+      // because the two subcommand sets collide on create/list/delete/runs/status, and a
+      // merge that silently changes what `create` means is worse than two trees.
+      // `iris automation …` still works.
+      .command(PlatformAutomationCommand)
       .demandCommand(),
   async handler() {},
 })

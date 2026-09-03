@@ -1,5 +1,5 @@
 import { cmd } from "./cmd"
-import { irisFetch, requireAuth, requireUserId, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { join } from "path"
 import { homedir } from "os"
@@ -87,7 +87,7 @@ function sshExec(target: string, remoteCmd: string, timeoutSec = 15): { ok: bool
     "ssh",
     [
       "-o", "ConnectTimeout=5",
-      "-o", "StrictHostKeyChecking=no",
+      "-o", "StrictHostKeyChecking=accept-new",
       "-o", "BatchMode=yes",
       target,
       remoteCmd,
@@ -144,7 +144,7 @@ function sshCopyId(target: string, pubkey: string): boolean {
   // Inherit stdio so the prompt is visible.
   const r = spawnSync(
     "ssh-copy-id",
-    ["-i", pubkey, "-o", "StrictHostKeyChecking=no", target],
+    ["-i", pubkey, "-o", "StrictHostKeyChecking=accept-new", target],
     { stdio: "inherit" },
   )
   return r.status === 0
@@ -156,7 +156,7 @@ function verifyKeyAuth(target: string): boolean {
     [
       "-o", "BatchMode=yes",
       "-o", "ConnectTimeout=5",
-      "-o", "StrictHostKeyChecking=no",
+      "-o", "StrictHostKeyChecking=accept-new",
       "-o", "PreferredAuthentications=publickey",
       target,
       "echo OK",
@@ -329,7 +329,7 @@ const HiveDiscoverCommand = cmd({
     const d = discover(target)
 
     if (argv.json) {
-      console.log(JSON.stringify(d, null, 2))
+      await writeJson(d)
       return
     }
 
@@ -428,7 +428,7 @@ const HiveEnrollCommand = cmd({
         "ssh",
         [
           "-o", "ConnectTimeout=10",
-          "-o", "StrictHostKeyChecking=no",
+          "-o", "StrictHostKeyChecking=accept-new",
           target,
           installCmd,
         ],

@@ -1,8 +1,8 @@
 [package]
 name = "opencode-desktop"
 version = "0.0.0"
-description = "The open source AI coding agent"
-authors = ["Anomaly Innovations"]
+description = "IRIS — AI Business OS Copilot"
+authors = ["Freelabel"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

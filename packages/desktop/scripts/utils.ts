@@ -1,5 +1,14 @@
 import { $ } from "bun"
 
+// These `ocBinary` values MUST match packages/opencode/script/build.ts's own local dist
+// DIRECTORY naming (pkg.name + os + arch, e.g. "opencode-darwin-arm64") -- that part is
+// pkg.name-based and unrelated to how release.yml later renames the packaged .zip/.tar.gz
+// for distribution (iris-<target>). The compiled binary FILE inside that directory, though,
+// is genuinely named "iris" (packages/opencode/package.json's `"bin": {"iris": "./bin/iris"}`
+// wins over build.ts's literal outfile string once Bun's `--compile` step reads it via
+// `autoloadPackageJson: true`) -- see prepare.ts/predev.ts, which reference `bin/iris`.
+// Verified live via desktop-test-build.yml CI output (2026-08-24). Don't "fix" either half
+// of this without re-confirming what a real build actually produces.
 export const SIDECAR_BINARIES: Array<{ rustTarget: string; ocBinary: string; assetExt: string }> = [
   {
     rustTarget: "aarch64-apple-darwin",
@@ -41,7 +50,7 @@ export function getCurrentSidecar(target = RUST_TARGET) {
 
 export async function copyBinaryToSidecarFolder(source: string, target = RUST_TARGET) {
   await $`mkdir -p src-tauri/sidecars`
-  const dest = `src-tauri/sidecars/opencode-cli-${target}${process.platform === "win32" ? ".exe" : ""}`
+  const dest = `src-tauri/sidecars/iris-cli-${target}${process.platform === "win32" ? ".exe" : ""}`
   await $`cp ${source} ${dest}`
 
   console.log(`Copied ${source} to ${dest}`)

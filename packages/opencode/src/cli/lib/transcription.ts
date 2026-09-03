@@ -1,8 +1,16 @@
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync } from "fs"
-import { homedir, tmpdir } from "os"
-import { join, basename, extname, resolve } from "path"
+import { homedir } from "os"
+import { join, basename, resolve } from "path"
 import { irisFetch, FL_API } from "../cmd/iris-api"
+import {
+  auditTranscription,
+  clampProvider,
+  discardDir,
+  resolveSttPolicy,
+  sha256File,
+  secureTempDir,
+} from "./stt-policy"
 
 // ============================================================================
 // Transcription lib — the single client-side seam (Layer 2).
@@ -12,7 +20,17 @@ import { irisFetch, FL_API } from "../cmd/iris-api"
 //                      provider POSTs to the unified /api/v1/transcribe endpoint.
 // Every consumer (the `transcribe` command, `ideas capture`, …) calls
 // transcribeAudio() so providers are swappable behind one normalized return.
+//
+// Provider choice is CLAMPED by ./stt-policy (epic #182784). Local-first used to
+// be a default here, which meant `--provider openai` could still upload audio and
+// no setting could stop it. The clamp lives at this seam, not in the callers,
+// because a policy each caller has to remember to apply is not a policy.
 // ============================================================================
+
+/** Hard ceiling on a single local transcription, so a wedged process can't hang the CLI. */
+const LOCAL_TIMEOUT_MS = Number(process.env.IRIS_TRANSCRIPTION_TIMEOUT_MS ?? 10 * 60 * 1000)
+/** Hard ceiling on the cloud upload leg. */
+const CLOUD_TIMEOUT_MS = Number(process.env.IRIS_TRANSCRIPTION_TIMEOUT_MS ?? 5 * 60 * 1000)
 
 const WHISPER_MODEL_URL =
   "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
@@ -39,7 +57,10 @@ export interface TranscriptionResult {
  * Throws on missing deps / conversion / transcription failure. Writes only to
  * a tmp dir and cleans up (callers decide where, if anywhere, to persist).
  */
-export async function transcribeLocal(audioPath: string, opts: { language?: string } = {}): Promise<string> {
+export async function transcribeLocal(
+  audioPath: string,
+  opts: { language?: string; prompt?: string } = {},
+): Promise<string> {
   const abs = resolve(audioPath)
   if (!existsSync(abs)) throw new Error(`File not found: ${abs}`)
 
@@ -57,24 +78,61 @@ export async function transcribeLocal(audioPath: string, opts: { language?: stri
     if (dl.status !== 0) throw new Error("Whisper model download failed")
   }
 
-  // Convert → 16kHz mono WAV
-  const wavPath = join(tmpdir(), `iris-transcribe-${Date.now()}-${basename(abs, extname(abs))}.wav`)
-  const conv = spawnSync(ffmpeg, ["-y", "-i", abs, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wavPath], { stdio: "ignore" })
-  if (conv.status !== 0 || !existsSync(wavPath)) throw new Error("ffmpeg conversion failed")
+  const started = Date.now()
+  const { sha256: digest, bytes } = await sha256File(abs)
 
-  // Run whisper.cpp
-  const outBase = join(tmpdir(), `iris-transcript-${Date.now()}-${basename(abs, extname(abs))}`)
-  const args = ["-m", modelPath, "-otxt", "-of", outBase]
-  if (opts.language) args.push("-l", opts.language)
-  args.push(wavPath)
-  const res = spawnSync(whisper, args, { encoding: "utf8" })
-  spawnSync("rm", ["-f", wavPath])
-  if (res.status !== 0) throw new Error(res.stderr?.slice(-500) || "whisper-cli failed")
+  // One 0700 scratch dir for BOTH the converted WAV and whisper's .txt, removed in
+  // `finally`. Previously these were loose files in tmpdir cleaned on the happy path
+  // only, so a whisper crash left a 16kHz copy of the audio behind (epic #182784, B1).
+  const work = secureTempDir("iris-stt-local-")
+  try {
+    const wavPath = join(work, "audio.wav")
+    const conv = spawnSync(
+      ffmpeg,
+      ["-y", "-i", abs, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wavPath],
+      { stdio: "ignore", timeout: LOCAL_TIMEOUT_MS },
+    )
+    if (conv.status !== 0 || !existsSync(wavPath)) throw new Error("ffmpeg conversion failed")
 
-  const txtPath = `${outBase}.txt`
-  const text = existsSync(txtPath) ? readFileSync(txtPath, "utf8") : ""
-  spawnSync("rm", ["-f", txtPath])
-  return text.trim()
+    const outBase = join(work, "transcript")
+    const args = ["-m", modelPath, "-otxt", "-of", outBase]
+    if (opts.language) args.push("-l", opts.language)
+    // Domain vocabulary. whisper.cpp caps the initial prompt at n_text_ctx/2 tokens and silently
+    // truncates past that, so keep it to the same 2000 chars the server leg allows rather than
+    // letting a long glossary quietly lose its tail.
+    if (opts.prompt) args.push("--prompt", opts.prompt.slice(0, 2000))
+    args.push(wavPath)
+    const res = spawnSync(whisper, args, { encoding: "utf8", timeout: LOCAL_TIMEOUT_MS })
+    if (res.error && (res.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+      throw new Error(`whisper-cli exceeded ${Math.round(LOCAL_TIMEOUT_MS / 1000)}s and was killed`)
+    }
+    if (res.status !== 0) throw new Error(res.stderr?.slice(-500) || "whisper-cli failed")
+
+    const txtPath = `${outBase}.txt`
+    const text = existsSync(txtPath) ? readFileSync(txtPath, "utf8") : ""
+    auditTranscription({
+      provider: "whisper-local",
+      policy: resolveSttPolicy(),
+      bytes,
+      sha256: digest,
+      ms: Date.now() - started,
+      ok: true,
+    })
+    return text.trim()
+  } catch (err) {
+    auditTranscription({
+      provider: "whisper-local",
+      policy: resolveSttPolicy(),
+      bytes,
+      sha256: digest,
+      ms: Date.now() - started,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    throw err
+  } finally {
+    discardDir(work)
+  }
 }
 
 /**
@@ -82,7 +140,13 @@ export async function transcribeLocal(audioPath: string, opts: { language?: stri
  * IRIS_TRANSCRIPTION_PROVIDER → default "whisper-local".
  */
 export async function transcribeAudio(audioPath: string, opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
-  const provider = opts.provider || process.env.IRIS_TRANSCRIPTION_PROVIDER || "whisper-local"
+  // `explicit` distinguishes a flag the user typed from an env var they inherited.
+  // The first is refused loudly; the second is clamped with a warning. Silently
+  // ignoring a typed flag would leave `provider: whisper-local` in the output as
+  // the only clue, which nobody reads until after they assumed it uploaded.
+  const explicit = Boolean(opts.provider)
+  const requested = opts.provider || process.env.IRIS_TRANSCRIPTION_PROVIDER || "whisper-local"
+  const provider = clampProvider(requested, { explicit })
 
   if (provider === "whisper-local") {
     const text = await transcribeLocal(audioPath, { language: opts.language })
@@ -92,21 +156,40 @@ export async function transcribeAudio(audioPath: string, opts: TranscribeOptions
   // Cloud provider → unified backend endpoint (multipart upload).
   const abs = resolve(audioPath)
   if (!existsSync(abs)) throw new Error(`File not found: ${abs}`)
+  const started = Date.now()
+  const { sha256: digest, bytes } = await sha256File(abs)
   const form = new FormData()
   form.append("audio_file", new Blob([new Uint8Array(readFileSync(abs))]), basename(abs))
   form.append("provider", provider)
   if (opts.language) form.append("language", opts.language)
 
-  const res = await irisFetch("/api/v1/transcribe", { method: "POST", body: form }, FL_API)
-  if (!res.ok) {
-    const body = await res.text().catch(() => "")
-    throw new Error(`Transcription failed (HTTP ${res.status}): ${body.slice(0, 200)}`)
-  }
-  const data = (await res.json()) as any
-  const d = data?.data ?? {}
-  return {
-    text: d.text ?? "",
-    provider: d.provider ?? provider,
-    meta: { duration: d.duration ?? null, language: d.language_code ?? null, speakers: d.speakers ?? [] },
+  const audit = (ok: boolean, error?: string) =>
+    auditTranscription({ provider, policy: resolveSttPolicy(), bytes, sha256: digest, ms: Date.now() - started, ok, error })
+
+  try {
+    const res = await irisFetch(
+      "/api/v1/transcribe",
+      { method: "POST", body: form, signal: AbortSignal.timeout(CLOUD_TIMEOUT_MS) },
+      FL_API,
+    )
+    if (!res.ok) {
+      const body = await res.text().catch(() => "")
+      audit(false, `HTTP ${res.status}`)
+      throw new Error(`Transcription failed (HTTP ${res.status}): ${body.slice(0, 200)}`)
+    }
+    const data = (await res.json()) as any
+    const d = data?.data ?? {}
+    audit(true)
+    return {
+      text: d.text ?? "",
+      provider: d.provider ?? provider,
+      meta: { duration: d.duration ?? null, language: d.language_code ?? null, speakers: d.speakers ?? [] },
+    }
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      audit(false, "timeout")
+      throw new Error(`Transcription upload exceeded ${Math.round(CLOUD_TIMEOUT_MS / 1000)}s and was aborted`)
+    }
+    throw err
   }
 }

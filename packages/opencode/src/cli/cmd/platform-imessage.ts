@@ -1,10 +1,13 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, dim, bold, success } from "./iris-api"
+import { printDivider, dim, bold, success, writeJson } from "./iris-api"
 import { execSync, execFileSync } from "child_process"
 import { isAvailable, diagnoseAccess, query as queryMessages, normalizeHandle, getContactCards, queryMessagesWithBody, listGroupChats, getGroupParticipants, readGroupMessages, resolveGroupChat, searchByHandle, isSelfAlias, resolveSelfHandle, readSelfConfig, writeSelfConfig, clearSelfConfig, detectSelfHandle } from "../lib/imessage"
 import { resolveContactName, resolveContactNames, resolveHandleByName } from "../lib/contacts"
+import { routerSend, describeSend } from "./comms-send"
+import { ImessagePaymentsCommand } from "./imessage-payments"
+import { firstArray } from "../../util/array"
 
 const ImessageSearchCommand = cmd({
   command: "search <query>",
@@ -96,7 +99,7 @@ const ImessageSearchCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(messages, null, 2))
+        await writeJson(messages)
         return
       }
 
@@ -217,7 +220,7 @@ const ImessageReadCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(messages, null, 2))
+        await writeJson(messages)
         return
       }
 
@@ -292,21 +295,74 @@ const ImessageChatsCommand = cmd({
 
       // Resolve handles → contact names in bulk (Contacts first, then CRM) (#58888).
       // Done before the JSON branch so programmatic consumers (MCP) get names too.
-      const phones = chats.filter(c => /^\+?\d{10,}$/.test(c.identifier.replace(/[^+\d]/g, "")) || c.identifier.includes("@"))
+      // One definition of "this handle is a person we could have named", used by the resolver, the
+      // JSON output and the display alike — three copies of this predicate would drift.
+      //
+      // The `chat…` guard matters: a GROUP chat id is a long digit run once punctuation is
+      // stripped, so a naive /\d{10,}/ test classifies it as a phone number. My first pass at the
+      // #58896 flag did exactly that and reported group threads as "unknown contact", which would
+      // have made the new warning noisy enough to ignore — the fate of every false-positive alert.
+      const isPersonHandle = (identifier: string): boolean => {
+        if (/^chat\d+$/i.test(identifier)) return false
+        if (identifier.includes("@")) return true
+        return /^\+?\d{10,15}$/.test(identifier.replace(/[^+\d]/g, ""))
+      }
+
+      const phones = chats.filter(c => isPersonHandle(c.identifier))
       const phoneMap = await resolveContactNames(phones.map(c => c.identifier))
 
       if (args.json) {
-        console.log(JSON.stringify(chats.map(c => ({ ...c, name: phoneMap.get(c.identifier) ?? null })), null, 2))
+        // `unresolved` is emitted explicitly rather than left implicit in `name: null` (#58896),
+        // so an automated consumer can act on a resolution gap instead of having to infer one.
+        console.log(
+          JSON.stringify(
+            chats.map((c) => {
+              const name = phoneMap.get(c.identifier) ?? null
+              return { ...c, name, unresolved: !name && isPersonHandle(c.identifier) }
+            }),
+            null,
+            2,
+          ),
+        )
         return
       }
 
       printDivider()
+
+      // #58896: an unresolved handle used to render as a bare phone number with no hint that it
+      // might be someone we already know. Richard Delgado had been a lead since April 3 with no
+      // phone on his record; when he texted, his thread showed as an anonymous number and nobody
+      // had any reason to connect the two. The resolution gap was invisible, so it stayed open.
+      //
+      // A number we cannot name is not noise — it is usually either a lead missing a phone, or a
+      // real person nobody has captured yet. Say so, and say how many.
+      let unresolved = 0
       for (const chat of chats) {
         const name = phoneMap.get(chat.identifier)
-        const label = name ? `${bold(name)} ${dim(chat.identifier)}` : bold(chat.identifier)
+        const looksLikeAPerson = isPersonHandle(chat.identifier)
+        if (!name && looksLikeAPerson) unresolved++
+
+        const label = name
+          ? `${bold(name)} ${dim(chat.identifier)}`
+          : looksLikeAPerson
+            ? `${bold(chat.identifier)} ${dim("· unknown contact")}`
+            : bold(chat.identifier)
         console.log(`  ${label}  ${dim(`${chat.message_count} msgs`)}  ${dim(chat.last_message)}`)
       }
       printDivider()
+
+      if (unresolved > 0) {
+        // Deliberately actionable rather than decorative — the original complaint was that the
+        // system failed silently, not that it lacked a label.
+        console.log(
+          `  ${dim(`${unresolved} unresolved — these may be existing leads with no phone on record.`)}`,
+        )
+        console.log(
+          `  ${dim(`Check with: iris leads list --search "<name>"   ·   link with: iris leads update <id> --phone <number>`)}`,
+        )
+        printDivider()
+      }
+
       prompts.outro(`${success("✓")} ${chats.length} conversation${chats.length === 1 ? "" : "s"}`)
     } catch (err: any) {
       prompts.log.error(`Query failed: ${err.message?.slice(0, 200)}`)
@@ -318,7 +374,7 @@ const ImessageChatsCommand = cmd({
 const ImessageSendCommand = cmd({
   command: "send <handle> <message>",
   aliases: ["text", "msg"],
-  describe: "send an iMessage to a phone number or contact",
+  describe: "send an iMessage (routed through the comms router so it is logged)",
   builder: (yargs) =>
     yargs
       .positional("handle", { type: "string", demandOption: true, describe: "phone number, lead ID, contact name, or 'me'/'self'" })
@@ -361,6 +417,9 @@ const ImessageSendCommand = cmd({
 
     // Local Contacts first — text a personal contact by name (not just leads).
     let sendResolved = false
+    // Captured so the router can attribute the send to the CRM lead rather than logging a
+    // bare handle. Stays undefined for personal contacts, which is the correct outcome.
+    let resolvedLeadId: number | undefined
     if (!isLeadId && !isPhone && !handle.includes("@")) {
       const c = resolveHandleByName(handle)
       if (c) {
@@ -382,6 +441,7 @@ const ImessageSendCommand = cmd({
             if (lead?.phone) {
               const name = lead.name || lead.nickname || `Lead #${handle}`
               prompts.log.info(`Resolved lead #${handle} → ${name} (${lead.phone})`)
+              resolvedLeadId = Number(lead.id ?? handle)
               handle = lead.phone
             } else {
               prompts.log.error(`Lead #${handle} has no phone number`)
@@ -403,6 +463,7 @@ const ImessageSendCommand = cmd({
             if (withPhone) {
               const name = withPhone.name || withPhone.nickname || handle
               prompts.log.info(`Resolved "${handle}" → ${name} (${withPhone.phone})`)
+              resolvedLeadId = Number(withPhone.id) || undefined
               handle = withPhone.phone
             } else {
               prompts.log.error(`No lead with phone found for "${handle}"`)
@@ -424,6 +485,36 @@ const ImessageSendCommand = cmd({
     const escapedMessage = cleanMessage
       .replace(/\\/g, "\\\\")
       .replace(/"/g, '\\"')
+
+    // ROUTE THROUGH THE COMMS ROUTER (CR-8). This command used to shell straight out to
+    // osascript, so the message went out and nothing recorded it — the reason 27 of 28 leads
+    // with iMessage history were more than a week stale in production (#178647).
+    //
+    // The handle was already resolved above (macOS Contacts first, then the CRM), which the API
+    // cannot do — so the CLI keeps owning resolution and hands the router a resolved target.
+    // resolvedLeadId is set when resolution went through the CRM, which is what earns the send
+    // full outreach attribution instead of a bare handle row.
+    {
+      const routed = await routerSend({
+        toLeadId: resolvedLeadId,
+        toHandle: resolvedLeadId ? undefined : handle,
+        channel: "imessage",
+        message: cleanMessage,
+        origin: "cli.reachr",
+      })
+
+      if (routed.ok && routed.sent) {
+        prompts.log.info(describeSend(routed))
+        console.log(`  ${dim(cleanMessage.length > 100 ? cleanMessage.slice(0, 100) + "…" : cleanMessage)}`)
+        prompts.outro("Done")
+        return
+      }
+
+      // Falling back to the local AppleScript path keeps the operator able to send when the API
+      // is unreachable — but it is announced, because an unlogged send is a real gap and the
+      // person sending is the only one who can decide whether to accept it.
+      prompts.log.warn(`Comms router unavailable (${routed.error ?? "unknown"}) — sending locally, NOT logged.`)
+    }
 
     const script = `
 tell application "Messages"
@@ -483,7 +574,7 @@ const ImessageContactsCommand = cmd({
     sp.stop(`${cards.length} contact card(s)`)
 
     if (args.json) {
-      console.log(JSON.stringify(cards, null, 2))
+      await writeJson(cards)
       return
     }
 
@@ -729,7 +820,7 @@ const MentionsDraftsCommand = cmd({
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     const rows = mrLoadQueue().filter((r) => args.all || r.status === "pending")
-    if (args.json) { console.log(JSON.stringify(rows, null, 2)); return }
+    if (args.json) { await writeJson(rows); return }
     UI.empty(); prompts.intro("◈  Mention Drafts")
     if (!rows.length) { prompts.log.info(args.all ? "Queue is empty" : "No pending drafts (use --all)"); prompts.outro("Done"); return }
     printDivider()
@@ -821,6 +912,8 @@ const ImessageMentionsCommand = cmd({
       .option("days", { type: "number", default: 30, describe: "look back N days" })
       .option("sender", { type: "string", describe: "filter by sender phone or name" })
       .option("lead", { type: "number", describe: "filter by lead ID" })
+      .option("node", { type: "string", describe: "filter by node name or id substring (cross-machine mode only)" })
+      .option("local", { type: "boolean", default: false, describe: "read only THIS machine's local log — skips the cross-machine Atlas dataset (#182119)" })
       .option("limit", { type: "number", default: 50, describe: "max mentions" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -828,51 +921,88 @@ const ImessageMentionsCommand = cmd({
     // already and this default handler is skipped. Reaching here = bare `mentions`.
     if (!args.json) { UI.empty(); prompts.intro("◈  @heyiris Mentions") }
 
-    const mentionsDir = `${require("os").homedir()}/.iris/mentions`
-    const { existsSync, readdirSync, readFileSync } = require("fs")
-
-    if (!existsSync(mentionsDir)) {
-      prompts.log.error(`Mentions directory not found: ${mentionsDir}`)
-      prompts.outro("Done")
-      return
-    }
-
-    // Read all JSONL files within date range
     const cutoff = new Date(Date.now() - (args.days as number) * 86400 * 1000)
-    const files = readdirSync(mentionsDir)
-      .filter((f: string) => f.endsWith(".jsonl"))
-      .sort()
-      .filter((f: string) => {
-        const dateStr = f.replace(".jsonl", "")
-        return new Date(dateStr) >= cutoff
-      })
-
-    if (!files.length) {
-      prompts.log.info(`No mention logs in the last ${args.days} days`)
-      prompts.outro("Done")
-      return
-    }
-
-    // Parse all mentions
     let mentions: any[] = []
-    for (const file of files) {
-      const lines = readFileSync(`${mentionsDir}/${file}`, "utf-8").split("\n").filter(Boolean)
-      for (const line of lines) {
-        try {
-          mentions.push(JSON.parse(line))
-        } catch {}
+    let source: "atlas" | "local" = args.local ? "local" : "atlas"
+
+    // Cross-machine (default): the Atlas 'mentions' dataset (#182118/#182119) — every
+    // node that has ever seen an @heyiris mention pushes here, so this reads history
+    // regardless of which machine captured it, including a node that's asleep right
+    // now. Falls back to the local file automatically if the dataset can't be reached
+    // (offline, no token, dataset not provisioned yet) rather than reporting nothing —
+    // --local skips straight to that path on purpose.
+    if (source === "atlas") {
+      try {
+        const { irisFetch: _fetch } = await import("./iris-api")
+        const p = new URLSearchParams({ per_page: String(Math.max(args.limit as number, 200)), sort: "created_at" })
+        const res = await _fetch(`/api/v1/atlas/datasets/mentions?${p}`)
+        if (res.ok) {
+          const body = (await res.json()) as any
+          const records: any[] = firstArray(body?.data?.records?.data, body?.data?.records)
+          mentions = records.map((r: any) => r.data ?? {})
+        } else if (res.status !== 404) {
+          // 404 = dataset not provisioned yet on this account (no mention ever pushed) —
+          // that is a real "nothing yet", not a reason to fall back. Anything else
+          // (network, auth) IS a reason to fall back rather than report a false empty.
+          throw new Error(`Atlas dataset fetch failed: HTTP ${res.status}`)
+        }
+      } catch (err) {
+        if (!args.json) {
+          prompts.log.warn(`Cross-machine dataset unreachable (${err instanceof Error ? err.message : String(err)}) — falling back to this machine's local log.`)
+        }
+        source = "local"
       }
     }
 
-    // Apply filters
+    if (source === "local") {
+      const mentionsDir = `${require("os").homedir()}/.iris/mentions`
+      const { existsSync, readdirSync, readFileSync } = require("fs")
+
+      if (!existsSync(mentionsDir)) {
+        prompts.log.error(`Mentions directory not found: ${mentionsDir}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const files = readdirSync(mentionsDir)
+        .filter((f: string) => f.endsWith(".jsonl"))
+        .sort()
+        .filter((f: string) => new Date(f.replace(".jsonl", "")) >= cutoff)
+
+      for (const file of files) {
+        const lines = readFileSync(`${mentionsDir}/${file}`, "utf-8").split("\n").filter(Boolean)
+        for (const line of lines) {
+          try { mentions.push(JSON.parse(line)) } catch {}
+        }
+      }
+    }
+
+    // Apply filters — same semantics regardless of source, so switching between
+    // --local and the default never changes what a filter means.
+    mentions = mentions.filter((m: any) => new Date(m.ts).getTime() >= cutoff.getTime())
     if (args.sender) {
       const s = String(args.sender).toLowerCase()
       mentions = mentions.filter((m: any) =>
-        m.sender?.includes(s) || m.lead_name?.toLowerCase().includes(s)
+        m.sender?.toLowerCase().includes(s) || m.lead_name?.toLowerCase().includes(s)
       )
     }
     if (args.lead) {
       mentions = mentions.filter((m: any) => m.lead_id === args.lead)
+    }
+    if (args.node) {
+      // Alphanumeric-only comparison, not a raw substring match. node_name is the OS
+      // hostname (e.g. "Alexs-MacBook-Pro-11711.local"), but the thing people actually
+      // type is the registered Hive display name from `iris hive nodes list`
+      // ("MacBookPro") — no hyphens, no ".local". A literal .includes() never matches
+      // between those two forms (caught live: --node MacBookPro silently matched zero
+      // rows against a real "Alexs-MacBook-Pro-11711.local" node_name, on a filter that
+      // shipped moments earlier). Strip everything but letters/digits on both sides so
+      // "MacBookPro" and "Alexs-MacBook-Pro-11711.local" share a comparable form.
+      const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "")
+      const n = squash(String(args.node))
+      mentions = mentions.filter((m: any) =>
+        (m.node_id && squash(m.node_id).includes(n)) || (m.node_name && squash(m.node_name).includes(n))
+      )
     }
 
     // Sort newest first, apply limit
@@ -880,13 +1010,13 @@ const ImessageMentionsCommand = cmd({
     mentions = mentions.slice(0, args.limit as number)
 
     if (!mentions.length) {
-      prompts.log.info("No mentions found matching filters")
+      prompts.log.info(source === "atlas" ? "No mentions found matching filters (cross-machine)" : "No mentions found matching filters (this machine only)")
       prompts.outro("Done")
       return
     }
 
     if (args.json) {
-      console.log(JSON.stringify(mentions, null, 2))
+      await writeJson(mentions)
       return
     }
 
@@ -897,7 +1027,8 @@ const ImessageMentionsCommand = cmd({
       bySender.set(key, (bySender.get(key) || 0) + 1)
     }
 
-    prompts.log.info(bold(`${mentions.length} mention${mentions.length === 1 ? "" : "s"} from ${bySender.size} sender${bySender.size === 1 ? "" : "s"}`))
+    const sourceTag = source === "atlas" ? dim(" (cross-machine)") : dim(" (this machine only — --local)")
+    prompts.log.info(bold(`${mentions.length} mention${mentions.length === 1 ? "" : "s"} from ${bySender.size} sender${bySender.size === 1 ? "" : "s"}`) + sourceTag)
     for (const [sender, count] of bySender) {
       console.log(`    ${dim(`${count}x`)} ${sender}`)
     }
@@ -909,7 +1040,11 @@ const ImessageMentionsCommand = cmd({
       const leadTag = m.lead_id ? dim(` #${m.lead_id}`) : ""
       const date = dim(new Date(m.ts).toLocaleString())
       const groupTag = m.is_group ? dim(" [group]") : ""
-      console.log(`  ${date}  ${sender}${leadTag}${groupTag}`)
+      // node_name is the whole point of #182119 — a mention with no node attribution
+      // (--local, or an older row from before #182118 shipped) shows nothing extra
+      // rather than a misleading "unknown node".
+      const nodeTag = m.node_name ? dim(` · ${m.node_name}`) : ""
+      console.log(`  ${date}  ${sender}${leadTag}${groupTag}${nodeTag}`)
       console.log(`    ${m.text}`)
       console.log()
     }
@@ -985,7 +1120,7 @@ const ImessageGroupsCommand = cmd({
         display_name: realName(g.display_name) ?? synthName(g.guid),
         members: memberInfo(g.guid),
       }))
-      console.log(JSON.stringify(enriched, null, 2))
+      await writeJson(enriched)
       return
     }
 
@@ -1059,7 +1194,7 @@ const ImessageReadGroupCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ group, messages }, null, 2))
+      await writeJson({ group, messages })
       return
     }
 
@@ -1196,7 +1331,7 @@ const ImessageMeCommand = cmd({
 export const PlatformImessageCommand = cmd({
   command: "imessage",
   aliases: ["sms", "messages"],
-  describe: "read and send iMessages via macOS Messages.app (requires Full Disk Access)",
+  describe: "read + send iMessages (macOS Messages.app; sends are logged to the comms ledger)",
   builder: (yargs) =>
     yargs
       .command(ImessageMeCommand)
@@ -1209,6 +1344,7 @@ export const PlatformImessageCommand = cmd({
       .command(ImessageGroupsCommand)
       .command(ImessageReadGroupCommand)
       .command(ImessageSendGroupCommand)
+      .command(ImessagePaymentsCommand)
       .demandCommand(),
   async handler() {},
 })

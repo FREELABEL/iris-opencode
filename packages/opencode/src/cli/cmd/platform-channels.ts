@@ -11,8 +11,7 @@ import {
   success,
   highlight,
   getBridgeToken,
-  PLATFORM_URLS,
-} from "./iris-api"
+  PLATFORM_URLS, writeJson } from "./iris-api"
 
 const BRIDGE_URL = "http://localhost:3200"
 
@@ -557,7 +556,7 @@ const ChannelsStatusCommand = cmd({
 
     // ── JSON output ──
     if (jsonOut) {
-      console.log(JSON.stringify(checks.map(c => ({ name: c.name, ok: c.ok, detail: c.detail, connect: c.connect || undefined })), null, 2))
+      await writeJson(checks.map(c => ({ name: c.name, ok: c.ok, detail: c.detail, connect: c.connect || undefined })))
       return
     }
 

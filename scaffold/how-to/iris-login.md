@@ -1,3 +1,9 @@
+---
+category: Getting Started
+level: beginner
+tags: [cli, auth, setup]
+duration_min: 5
+---
 # How to: Authenticate the IRIS CLI (iris-login)
 
 ## What this does

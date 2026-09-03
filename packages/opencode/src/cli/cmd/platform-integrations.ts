@@ -1,8 +1,9 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, IRIS_API, writeJson } from "./iris-api"
 import { PathwaysCommand } from "./platform-integrations-pathways"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Helpers
@@ -47,22 +48,50 @@ const IntegrationsListCommand = cmd({
       const params = new URLSearchParams()
       if (args.bloq) params.set("bloq_id", String(args.bloq))
 
-      const res = await irisFetch(`/api/v1/users/${userId}/integrations?${params}`)
-      const ok = await handleApiError(res, "List integrations")
-      if (!ok) { if (spinner) spinner.stop("Failed", 1); return }
+      // THERE ARE TWO INTEGRATION STORES. fl-api and iris-api each keep their own
+      // `integrations` table, and BOTH expose /api/v1/users/{id}/integrations. irisFetch
+      // defaults to FL_API despite its name, so this command only ever showed fl-api's rows
+      // — while e.g. the Vagaro connection lived in iris-api's. That produced a confident
+      // "not connected" for a credential that had been stored for eight months (#181228).
+      // Read both, label every row with the store that holds it, and never report a bare
+      // negative.
+      const stores: Array<{ label: string; base: string }> = [
+        { label: "fl-api", base: FL_API },
+        { label: "iris-api", base: IRIS_API },
+      ]
 
-      const raw = (await res.json()) as Record<string, any>
-      const integrations: any[] = raw?.connections ?? raw?.data ?? raw ?? []
+      const integrations: any[] = []
+      const unreachable: string[] = []
+      for (const store of stores) {
+        try {
+          const r = await irisFetch(`/api/v1/users/${userId}/integrations?${params}`, {}, store.base)
+          if (!r.ok) { unreachable.push(`${store.label} (HTTP ${r.status})`); continue }
+          const body = (await r.json()) as Record<string, any>
+          const rows: any[] = firstArray(body?.connections, body?.data, (Array.isArray(body) ? body : []))
+          for (const row of rows) integrations.push({ ...row, store: store.label })
+        } catch (e) {
+          unreachable.push(`${store.label} (${e instanceof Error ? e.message : String(e)})`)
+        }
+      }
+
+      if (unreachable.length === stores.length) {
+        if (spinner) spinner.stop("Failed", 1)
+        prompts.log.error(`Could not reach any integration store: ${unreachable.join(", ")}`)
+        return
+      }
+      if (unreachable.length > 0) {
+        prompts.log.warn(`Only searched ${stores.length - unreachable.length} of ${stores.length} stores — could not reach ${unreachable.join(", ")}`)
+      }
 
       if (spinner) spinner.stop(`${integrations.length} integration(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(integrations, null, 2))
+        await writeJson(integrations)
         return
       }
 
       if (integrations.length === 0) {
-        prompts.log.warn("No integrations connected")
+        prompts.log.warn(`No integrations connected (searched: ${stores.map((s) => s.label).join(", ")})`)
         prompts.outro(dim("iris integrations connect <type>"))
         return
       }
@@ -77,7 +106,8 @@ const IntegrationsListCommand = cmd({
         const accountLabel = account ? `  ${dim("→")} ${bold(String(account))}` : ""
         const provider = i.provider && i.provider !== "native" ? dim(` via ${i.provider}`) : ""
         const tail = suffix ? `  ${dim(suffix)}` : ""
-        console.log(`  ${bold(String(i.type))}  ${idLabel}  ${statusBadge(i.status)}${accountLabel}${provider}${tail}`)
+        const store = i.store ? dim(` [${i.store}]`) : ""
+        console.log(`  ${bold(String(i.type))}  ${idLabel}${store}  ${statusBadge(i.status)}${accountLabel}${provider}${tail}`)
       }
 
       if (personal.length > 0) {
@@ -189,7 +219,7 @@ const IntegrationsConnectCommand = cmd({
       const integration = data?.data ?? data
 
       if (args.json) {
-        console.log(JSON.stringify(integration, null, 2))
+        await writeJson(integration)
         return
       }
 
@@ -212,7 +242,7 @@ const IntegrationsConnectCommand = cmd({
   },
 })
 
-const IntegrationsShareCommand = cmd({
+export const IntegrationsShareCommand = cmd({
   command: "share <id> <bloq-id>",
   describe: "share an existing integration with a bloq",
   builder: (yargs) =>
@@ -252,7 +282,7 @@ const IntegrationsShareCommand = cmd({
   },
 })
 
-const IntegrationsUnshareCommand = cmd({
+export const IntegrationsUnshareCommand = cmd({
   command: "unshare <id>",
   describe: "remove bloq sharing from an integration (make personal again)",
   builder: (yargs) =>
@@ -290,7 +320,7 @@ const IntegrationsUnshareCommand = cmd({
   },
 })
 
-const IntegrationsDisconnectCommand = cmd({
+export const IntegrationsDisconnectCommand = cmd({
   command: "disconnect <id>",
   aliases: ["rm", "delete"],
   describe: "disconnect an integration",
@@ -334,7 +364,7 @@ const IntegrationsDisconnectCommand = cmd({
   },
 })
 
-const IntegrationsSetupNativeCommand = cmd({
+export const IntegrationsSetupNativeCommand = cmd({
   command: "setup-native <type>",
   describe: "create a native API-key integration (mailjet, slack, smtp-email, …)",
   builder: (yargs) =>
@@ -449,7 +479,7 @@ const IntegrationsExecCommand = cmd({
         const listRes = await irisFetch(`/api/v1/users/${userId}/integrations`)
         if (listRes.ok) {
           const listData = (await listRes.json()) as any
-          const items: any[] = listData?.connections ?? listData?.data ?? listData ?? []
+          const items: any[] = firstArray(listData?.connections, listData?.data, listData)
           const match = items.find((i: any) => {
             if (String(i.type ?? "").toLowerCase() !== String(args.type).toLowerCase()) return false
             const email = String(i.account_email ?? "").toLowerCase()
@@ -493,7 +523,7 @@ const IntegrationsExecCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
         return
       }
 
@@ -552,7 +582,7 @@ const IntegrationsExecCommand = cmd({
       } else {
         // Generic output
         console.log()
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
       }
 
       // Report bundle attachment (shown after any of the above)

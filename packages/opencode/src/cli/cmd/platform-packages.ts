@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, success, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
 
@@ -59,7 +59,7 @@ const ListCmd = cmd({
     const pkgs = await listPackages(args.platform)
     sp.stop(`${pkgs.length} package(s)`)
     if (args.json) {
-      console.log(JSON.stringify(pkgs, null, 2))
+      await writeJson(pkgs)
       prompts.outro("Done")
       return
     }
@@ -86,7 +86,7 @@ const GetCmd = cmd({
     const pkg = await getPackage(args.slug)
     if (!pkg) { console.error(`Package not found: ${args.slug}`); process.exit(1) }
     if (!args.path) {
-      console.log(JSON.stringify(pkg, null, 2))
+      await writeJson(pkg)
       return
     }
     const parts = args.path.split(".")
@@ -99,7 +99,7 @@ const GetCmd = cmd({
       }
       cur = cur[k]
     }
-    if (typeof cur === "object") console.log(JSON.stringify(cur, null, 2))
+    if (typeof cur === "object") await writeJson(cur)
     else console.log(String(cur))
   },
 })
@@ -136,7 +136,36 @@ const SetCmd = cmd({
           }),
         })
         if (!(await handleApiError(res, "Sync"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
+        // #181608. The server used to drop unlisted fields (brand, description) and answer
+        // 200, so "Updated brand" was printed three times over a value that never changed.
+        // A 200 is now the start of the check, not the end of it.
+        const syncBody = (await res.json()) as { data?: any }
+        const syncErrors = (syncBody?.data ?? syncBody)?.errors ?? []
+        if (syncErrors.length) {
+          sp.stop("Failed", 1)
+          for (const e of syncErrors) prompts.log.error(String(e))
+          prompts.outro("Done")
+          return
+        }
       }
+
+      // READ IT BACK. This is the whole point: a write is not done because the server said
+      // so, it is done because the value is there. Costs one GET and turns the entire
+      // "reported success and did nothing" class into a visible failure.
+      if (!args.field.includes(".")) {
+        const after = await getPackage(args.slug)
+        const actual = after?.[args.field]
+        const expected = parseValue(args.value)
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+          sp.stop("Failed", 1)
+          prompts.log.error(
+            `${args.field} did not persist — sent ${JSON.stringify(expected)}, read back ${JSON.stringify(actual)}`,
+          )
+          prompts.outro("Done")
+          return
+        }
+      }
+
       sp.stop(success(`Updated ${args.field}`))
       prompts.outro("Done")
     } catch (err) {
@@ -199,6 +228,15 @@ const PushCmd = cmd({
       if (!(await handleApiError(res, "Push"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const data = (await res.json()) as { data?: any }
       const d = data?.data ?? data
+      const pushErrors = d?.errors ?? []
+      if (pushErrors.length) {
+        // A partial sync used to print "0 created, 23 updated" with the failures sitting
+        // unread in the same payload (#181608).
+        sp.stop(`${d?.created ?? 0} created, ${d?.updated ?? 0} updated, ${pushErrors.length} failed`, 1)
+        for (const e of pushErrors) prompts.log.error(String(e))
+        prompts.outro("Done")
+        return
+      }
       sp.stop(success(`${d?.created ?? 0} created, ${d?.updated ?? 0} updated`))
       prompts.outro("Done")
     } catch (err) {

@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, success, highlight, writeJson } from "./iris-api"
 
 const IRIS_API = process.env.IRIS_API_URL ?? "https://freelabel.net"
 
@@ -45,7 +45,7 @@ const MsgNodesCommand = cmd({
       spinner.stop(`${nodes.length} node(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(nodes, null, 2))
+        await writeJson(nodes)
         prompts.outro("Done")
         return
       }
@@ -220,7 +220,7 @@ const MsgListCommand = cmd({
       spinner.stop(`${messages.length} message(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(messages, null, 2))
+        await writeJson(messages)
         prompts.outro("Done")
         return
       }

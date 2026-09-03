@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { itemTitle, itemContentPreview } from "./bloq-item-format"
+import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 
 // =============================================================================
 // Bloq item rendering — regression for the `[object Object]` bug (IRIS bug)
@@ -50,5 +50,100 @@ describe("itemTitle", () => {
 
   test("falls back to (untitled) only when nothing usable exists", () => {
     expect(itemTitle({ content: { vin: "X" } })).toBe("(untitled)")
+  })
+})
+
+// =============================================================================
+// Bloq search matching — regression for IRIS bug #162208. A raw substring match
+// treated the query as one contiguous string, so "Mayo Life Atlas" never matched
+// the stored "MAYO — Life Atlas" (the em-dash broke the run). Tokenized AND fixes it.
+// =============================================================================
+
+describe("matchesSearchQuery", () => {
+  test("natural name matches across a separator the DB stores (#162208)", () => {
+    expect(matchesSearchQuery("MAYO — Life Atlas", "Mayo Life Atlas")).toBe(true)
+  })
+
+  test("is case-insensitive", () => {
+    expect(matchesSearchQuery("MAYO — Life Atlas", "mayo")).toBe(true)
+  })
+
+  test("is word-order independent", () => {
+    expect(matchesSearchQuery("MAYO — Life Atlas", "atlas mayo")).toBe(true)
+  })
+
+  test("requires ALL tokens to be present (AND, not OR)", () => {
+    expect(matchesSearchQuery("MAYO — Life Atlas", "mayo spaceship")).toBe(false)
+  })
+
+  test("non-matching query returns false", () => {
+    expect(matchesSearchQuery("MAYO — Life Atlas", "zzzznope")).toBe(false)
+  })
+
+  test("empty/whitespace query matches everything (no filter)", () => {
+    expect(matchesSearchQuery("anything", "")).toBe(true)
+    expect(matchesSearchQuery("anything", "   ")).toBe(true)
+  })
+
+  test("tolerates null/undefined haystack and query", () => {
+    expect(matchesSearchQuery(undefined as any, "x")).toBe(false)
+    expect(matchesSearchQuery("x", undefined as any)).toBe(true)
+  })
+
+  test("collapses runs of whitespace in the query", () => {
+    expect(matchesSearchQuery("MAYO — Life Atlas", "  mayo   atlas  ")).toBe(true)
+  })
+
+  test("query characters are matched literally, not as a regex", () => {
+    expect(matchesSearchQuery("C++ Runtime (v2)", "c++ v2")).toBe(true)
+    expect(matchesSearchQuery("C++ Runtime (v2)", "c\\+\\+")).toBe(false)
+  })
+
+  test("matches across whitespace variants in the haystack (tab/newline)", () => {
+    expect(matchesSearchQuery("Tab\tSeparated", "separated")).toBe(true)
+    expect(matchesSearchQuery("Newline\nName", "newline name")).toBe(true)
+  })
+
+  test("NFC-normalizes so visually identical accents match regardless of composition", () => {
+    const nfc = "café" // é as one codepoint
+    const nfd = "café" // e + combining acute — looks identical
+    expect(matchesSearchQuery(nfd, nfc)).toBe(true)
+    expect(matchesSearchQuery(nfc, nfd)).toBe(true)
+  })
+
+  test("does NOT accent-fold (typo tolerance is Typesense's job, #162213)", () => {
+    expect(matchesSearchQuery("café menu", "cafe")).toBe(false)
+  })
+})
+
+// =============================================================================
+// Due-date normalization — for the --due flag (#162211). The API stores a plain
+// date, so reject nonsense up front instead of sending garbage the DB nulls.
+// =============================================================================
+
+describe("normalizeDueDate", () => {
+  test("accepts a plain YYYY-MM-DD", () => {
+    expect(normalizeDueDate("2026-07-22")).toBe("2026-07-22")
+  })
+
+  test("keeps the date part of a full ISO timestamp", () => {
+    expect(normalizeDueDate("2026-07-22T15:30:00Z")).toBe("2026-07-22")
+    expect(normalizeDueDate("2026-07-22 15:30")).toBe("2026-07-22")
+  })
+
+  test("trims surrounding whitespace", () => {
+    expect(normalizeDueDate("  2026-07-22  ")).toBe("2026-07-22")
+  })
+
+  test("rejects impossible calendar dates", () => {
+    expect(normalizeDueDate("2026-13-01")).toBeNull() // month 13
+    expect(normalizeDueDate("2026-02-30")).toBeNull() // Feb 30
+    expect(normalizeDueDate("2026-04-31")).toBeNull() // Apr 31
+  })
+
+  test("rejects non-ISO or free-text input", () => {
+    expect(normalizeDueDate("tomorrow")).toBeNull()
+    expect(normalizeDueDate("07/22/2026")).toBeNull()
+    expect(normalizeDueDate("")).toBeNull()
   })
 })

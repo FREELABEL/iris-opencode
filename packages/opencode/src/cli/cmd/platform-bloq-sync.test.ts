@@ -18,6 +18,8 @@ test("normalizeProvider: friendly aliases map to canonical", () => {
   expect(normalizeProvider("GoogleDrive")).toBe("google-drive")
   expect(normalizeProvider("DB")).toBe("dropbox")
   expect(normalizeProvider(" Dropbox ")).toBe("dropbox")
+  expect(normalizeProvider("obsidian")).toBe("obsidian") // push-only provider (#162666)
+  expect(normalizeProvider("obs")).toBe("obsidian")
 })
 
 test("normalizeProvider: unknown / empty → null (caller fails loudly, no 422)", () => {
@@ -32,8 +34,8 @@ test("normalizeProvider: 'all' only when allowAll is set (trigger)", () => {
   expect(normalizeProvider("dropbox", true)).toBe("dropbox")
 })
 
-test("CANONICAL_PROVIDERS matches the BloqSyncController validation set", () => {
-  expect([...CANONICAL_PROVIDERS]).toEqual(["google-drive", "dropbox"])
+test("CANONICAL_PROVIDERS matches the BloqSyncController EXPORT_PROVIDERS set", () => {
+  expect([...CANONICAL_PROVIDERS]).toEqual(["google-drive", "dropbox", "obsidian"])
 })
 
 // ---------------------------------------------------------------------------

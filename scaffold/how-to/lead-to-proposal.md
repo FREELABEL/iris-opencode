@@ -1,3 +1,9 @@
+---
+category: CRM & Sales
+level: beginner
+tags: [crm, leads, proposals, payments]
+duration_min: 15
+---
 # How to: Lead → Deal → Proposal → Contract → Payment (Atlas OS)
 
 ## What this does

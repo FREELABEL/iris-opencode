@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
 
 // ============================================================================
 // Copycat CLI — Phase 6
@@ -56,7 +57,7 @@ async function runAction(args: any, action: string, params: Record<string, unkno
     spinner.stop("Done")
 
     if (args.json) {
-      console.log(JSON.stringify(data, null, 2))
+      await writeJson(data)
     } else {
       const payload = data?.data ?? data
       if (typeof payload === "object" && payload !== null) {
@@ -449,10 +450,14 @@ const GenerateArticleCommand = cmd({
 // Root command
 // ============================================================================
 
-export const PlatformCopycatCommand = cmd({
-  command: "copycat",
+export const PlatformCopycatCommand = productCommand({
+  name: "copycat",
   aliases: ["cc"],
-  describe: "Copycat AI — clip, transcribe, publish, generate (20 actions)",
+  purpose:
+    "Copycat — clip, transcribe, publish and generate content (20 actions)",
+  keywords: ["copycat", "clip", "transcribe", "publish", "caption", "video", "generate", "content"],
+  howtos: ["multi-persona-content-engine"],
+  playbooks: ["demo-video"],
   builder: (yargs) =>
     yargs
       .command(TranscribeCommand)
@@ -476,5 +481,4 @@ export const PlatformCopycatCommand = cmd({
       .command(CalendarCommand)
       .command(DiscoverProfilesCommand)
       .demandCommand(),
-  async handler() {},
 })

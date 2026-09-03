@@ -4,7 +4,7 @@
  * Used by: platform-imessage.ts, platform-atlas-comms.ts, platform-customer.ts, platform-doctor.ts
  */
 
-import { execSync } from "child_process"
+import { execSync, execFileSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
@@ -541,4 +541,132 @@ export function getContactCards(options: { days?: number; limit?: number; chat?:
   } catch {
     return []
   }
+}
+
+// ── Attachments ─────────────────────────────────────────────────────────────
+
+/**
+ * Files people actually sent you.
+ *
+ * This table was already being read — but only ever through a vcard filter, to
+ * harvest contact cards. Nothing exposed it as "what documents do I have from
+ * this person", so a 1.4MB `RevOps-SaveLifeAI.pdf` sat on the disk for a day
+ * while every search surface reported the topic had left no trail. The bytes
+ * were never missing; there was simply no verb that looked at them.
+ */
+export interface Attachment {
+  /** Name as sent — what a person would call the file. */
+  name: string
+  /** Absolute path on this Mac, or "" when Messages never stored one. */
+  path: string
+  /** Whether the bytes are on disk RIGHT NOW. A row here is not a file there. */
+  onDisk: boolean
+  mime: string
+  bytes: number
+  /** ISO timestamp of the message that carried it. */
+  date: string
+  from_me: boolean
+  /** The other party's handle — phone or Apple ID. */
+  handle: string
+}
+
+/**
+ * Apple's rich-link previews are rows in this table too. They are plumbing —
+ * an opaque UUID payload for a URL that is already in the message text — and
+ * including them buries the real documents under noise, so they are off by
+ * default and behind a flag rather than silently dropped.
+ */
+const PLUGIN_PAYLOAD = "%.pluginPayloadAttachment"
+
+/** Shell-safe query: SQL over stdin, because callers pass user input. */
+function queryStdin(sql: string, maxBuffer = 16 * 1024 * 1024): string {
+  return execFileSync("sqlite3", [MESSAGES_DB], {
+    input: sql,
+    encoding: "utf-8",
+    timeout: 20000,
+    maxBuffer,
+    stdio: ["pipe", "pipe", "pipe"],
+  }).trim()
+}
+
+export function listAttachments(
+  options: {
+    days?: number
+    limit?: number
+    /** Substring match on the sent filename, case-insensitive. */
+    search?: string
+    /** Restrict to one correspondent (phone or Apple ID); matched loosely. */
+    handle?: string
+    /** Include Apple's rich-link payload rows. */
+    includePluginPayloads?: boolean
+  } = {},
+): Attachment[] {
+  if (!isAvailable()) return []
+  const days = options.days ?? 90
+  const limit = Math.min(options.limit ?? 100, 2000)
+  const SEP = String.fromCharCode(31)
+  const lit = (v: string) => "'" + v.replace(/'/g, "''") + "'"
+  const like = (v: string) => "'%" + v.replace(/'/g, "''").replace(/[%_\\]/g, (c) => "\\" + c) + "%'"
+
+  const where = [`(m.date/1000000000 + 978307200) > unixepoch('now') - ${days * 86400}`]
+  if (!options.includePluginPayloads)
+    where.push(`COALESCE(a.transfer_name,'') NOT LIKE ${lit(PLUGIN_PAYLOAD)}`)
+  if (options.search)
+    where.push(
+      `(lower(COALESCE(a.transfer_name,'')) LIKE ${like(options.search.toLowerCase())} ESCAPE '\\'` +
+        ` OR lower(COALESCE(a.filename,'')) LIKE ${like(options.search.toLowerCase())} ESCAPE '\\')`,
+    )
+  if (options.handle) {
+    // Phones are stored in several shapes; the last ten digits are the stable part.
+    const digits = options.handle.replace(/\D/g, "")
+    where.push(
+      digits.length >= 10
+        ? `REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(h.id,''),'+',''),'-',''),' ',''),'()','') LIKE ${like(digits.slice(-10))} ESCAPE '\\'`
+        : `lower(COALESCE(h.id,'')) LIKE ${like(options.handle.toLowerCase())} ESCAPE '\\'`,
+    )
+  }
+
+  const clean = (x: string) => `REPLACE(REPLACE(REPLACE(${x}, char(31),' '), char(10),' '), char(13),' ')`
+  const sql = `SELECT (m.date/1000000000 + 978307200) || '${SEP}' || COALESCE(h.id,'unknown') || '${SEP}' || m.is_from_me || '${SEP}'
+    || ${clean("COALESCE(a.transfer_name,'')")} || '${SEP}'
+    || ${clean("COALESCE(a.filename,'')")} || '${SEP}'
+    || COALESCE(a.mime_type,'') || '${SEP}' || COALESCE(a.total_bytes,0)
+  FROM attachment a
+  JOIN message_attachment_join maj ON a.ROWID = maj.attachment_id
+  JOIN message m ON maj.message_id = m.ROWID
+  LEFT JOIN handle h ON m.handle_id = h.ROWID
+  WHERE ${where.join(" AND ")}
+  ORDER BY m.date DESC LIMIT ${limit};`
+
+  let raw: string
+  try {
+    raw = queryStdin(sql)
+  } catch {
+    return []
+  }
+  if (!raw) return []
+
+  return raw
+    .split("\n")
+    .filter(Boolean)
+    .map((line): Attachment | null => {
+      const [ts, handle, fromMe, name, filename, mime, bytes] = line.split(SEP)
+      const at = Number(ts)
+      if (!Number.isFinite(at)) return null
+      const path = (filename ?? "").trim().replace(/^~/, homedir())
+      return {
+        name: (name ?? "").trim() || (path ? path.split("/").pop()! : "(unnamed)"),
+        path,
+        // Checked, not assumed: a purged or iCloud-offloaded attachment still
+        // has its row, and telling someone a file is there when it is not is
+        // the same failure as telling them it is not there when it is.
+        onDisk: path ? existsSync(path) : false,
+        mime: (mime ?? "").trim(),
+        bytes: Number(bytes) || 0,
+        date: new Date(at * 1000).toISOString(),
+        from_me: fromMe === "1",
+        handle: (handle ?? "unknown").trim(),
+      }
+    })
+    .filter((a): a is Attachment => a !== null)
 }

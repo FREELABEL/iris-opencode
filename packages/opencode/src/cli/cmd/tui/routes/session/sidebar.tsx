@@ -10,13 +10,13 @@ import { useDirectory } from "../../context/directory"
 import { useKV } from "../../context/kv"
 import { TodoItem } from "../../component/todo-item"
 import { useIrisData } from "../../iris/api"
-import type { IrisAgent, IrisWorkflow, IrisWorkflowDetail, AtlasItem, IrisContact, IrisPage } from "../../iris/types"
+import type { IrisAgent, AtlasItem, IrisContact, IrisPage } from "../../iris/types"
 
-type SidebarTab = "agents" | "workflows" | "contacts" | "pages" | "atlas" | "session" | "hive"
+type SidebarTab = "agents" | "playbooks" | "contacts" | "pages" | "atlas" | "session" | "hive"
 
 const TAB_LABELS: Record<SidebarTab, string> = {
   agents: "Agents",
-  workflows: "Flows",
+  playbooks: "Playbooks",
   contacts: "Contacts",
   pages: "Pages",
   atlas: "Atlas",
@@ -24,7 +24,7 @@ const TAB_LABELS: Record<SidebarTab, string> = {
   hive: "Hive",
 }
 
-const TABS: SidebarTab[] = ["atlas", "agents", "hive", "contacts", "workflows", "pages", "session"]
+const TABS: SidebarTab[] = ["atlas", "agents", "hive", "contacts", "playbooks", "pages", "session"]
 
 export function Sidebar(props: { sessionID: string }) {
   const sync = useSync()
@@ -67,8 +67,6 @@ export function Sidebar(props: { sessionID: string }) {
     setExpandedLists(new Set<number>())
     setActiveDoc(null)
     setActiveContact(null)
-    setActiveWorkflow(null)
-    setWorkflowImported(false)
   }
 
   const selectedBloqName = createMemo(() => {
@@ -89,8 +87,8 @@ export function Sidebar(props: { sessionID: string }) {
   const standardAgents = createMemo(() =>
     iris.data.agents.filter((a) => a.type === "standard" && matchesSearch(a.name))
   )
-  const filteredWorkflows = createMemo(() =>
-    iris.data.workflows.filter((w) => matchesSearch(w.name))
+  const filteredPlaybooks = createMemo(() =>
+    iris.data.playbooks.filter((p) => matchesSearch(p.name) || matchesSearch(p.description))
   )
   const filteredAtlas = createMemo(() => {
     const q = searchQuery().toLowerCase()
@@ -112,9 +110,6 @@ export function Sidebar(props: { sessionID: string }) {
     iris.data.bloqList.filter((b) => matchesSearch(b.name))
   )
   const [activeContact, setActiveContact] = createSignal<IrisContact | null>(null)
-  const [activeWorkflow, setActiveWorkflow] = createSignal<IrisWorkflowDetail | null>(null)
-  const [workflowLoading, setWorkflowLoading] = createSignal(false)
-  const [workflowImported, setWorkflowImported] = createSignal(false)
   const cost = createMemo(() => {
     const total = messages().reduce((sum, x) => sum + (x.role === "assistant" ? x.cost : 0), 0)
     return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(total)
@@ -139,11 +134,7 @@ export function Sidebar(props: { sessionID: string }) {
     ({ active: theme.success, idle: theme.textMuted, paused: theme.warning, error: theme.error })[status] ??
     theme.textMuted
 
-  const workflowIcon = (status: IrisWorkflow["status"]) =>
-    ({ idle: "○", running: "◎", success: "✓", error: "✗" })[status] ?? "○"
 
-  const workflowColor = (status: IrisWorkflow["status"]) =>
-    ({ idle: theme.textMuted, running: theme.info, success: theme.success, error: theme.error })[status] ??
     theme.textMuted
 
   return (
@@ -361,7 +352,7 @@ export function Sidebar(props: { sessionID: string }) {
               </Match>
 
               {/* ── WORKFLOWS ── */}
-              <Match when={activeTab() === "workflows"}>
+              <Match when={activeTab() === "playbooks"}>
                 <Show when={iris.data.status === "loading"}>
                   <text fg={theme.textMuted}>Loading...</text>
                 </Show>
@@ -371,123 +362,48 @@ export function Sidebar(props: { sessionID: string }) {
                     <text fg={theme.textMuted}>Run: iris auth login</text>
                   </box>
                 </Show>
-                <Show when={iris.data.status === "loaded" && iris.data.workflows.length === 0}>
-                  <text fg={theme.textMuted}>No workflows found</text>
+                <Show when={iris.data.status === "loaded" && iris.data.playbooks.length === 0}>
+                  <text fg={theme.textMuted}>No playbooks found</text>
                 </Show>
-                <Show when={searchQuery() && filteredWorkflows().length === 0 && iris.data.workflows.length > 0}>
+                <Show when={searchQuery() && filteredPlaybooks().length === 0 && iris.data.playbooks.length > 0}>
                   <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
                 </Show>
 
-                {/* Workflow detail view */}
-                <Show when={activeWorkflow()}>
-                  {(wf) => (
-                    <box gap={1}>
-                      <text fg={theme.accent} onMouseDown={() => { setActiveWorkflow(null); setWorkflowImported(false) }}>
-                        ← Back
-                      </text>
-                      <text fg={theme.text}>
-                        <b>{wf().name}</b> <span style={{ fg: theme.textMuted }}>#{wf().id}</span>
-                      </text>
-                      <Show when={wf().description}>
-                        <text fg={theme.textMuted} wrapMode="word">{wf().description}</text>
-                      </Show>
-                      <box paddingTop={1} gap={1}>
-                        <Show when={wf().execution_mode}>
-                          <text fg={theme.textMuted}>Mode: {wf().execution_mode}</text>
-                        </Show>
-                        <Show when={wf().category}>
-                          <text fg={theme.textMuted}>Category: {wf().category}</text>
-                        </Show>
-                        <text fg={theme.textMuted}>
-                          Status: {wf().status} · {wf().triggerCount} runs
-                          {wf().lastRun ? ` · last ${wf().lastRun}` : ""}
-                        </text>
-                        <Show when={wf().steps?.length}>
-                          <text fg={theme.text}>{wf().steps!.length} steps</text>
-                        </Show>
-                        <Show when={wf().allowed_tools?.length}>
-                          <text fg={theme.textMuted}>Tools: {wf().allowed_tools!.join(", ")}</text>
-                        </Show>
-                        <Show when={wf().dependencies?.length}>
-                          <text fg={theme.textMuted}>Deps: {wf().dependencies!.join(", ")}</text>
-                        </Show>
-                        <Show when={wf().require_human_approval}>
-                          <text fg={theme.warning}>Requires human approval</text>
-                        </Show>
-                        <Show when={wf().max_iterations}>
-                          <text fg={theme.textMuted}>Max iterations: {wf().max_iterations}</text>
-                        </Show>
-                      </box>
-
-                      {/* Import button */}
-                      <box paddingTop={1}>
-                        <Show when={!workflowImported()} fallback={
-                          <text fg={theme.success}>✓ Imported to context</text>
-                        }>
-                          <box
-                            backgroundColor={theme.accent}
-                            paddingLeft={2}
-                            paddingRight={2}
-                            onMouseDown={() => {
-                              iris.importWorkflowToContext(wf())
-                              setWorkflowImported(true)
-                            }}
-                          >
-                            <text fg={theme.backgroundPanel}>
-                              <b>▶ Import Schema</b>
-                            </text>
-                          </box>
-                        </Show>
-                        <text fg={theme.textMuted}>
-                          Loads workflow steps + schema into agent context
-                        </text>
-                      </box>
-                    </box>
-                  )}
+                {/* SAY WHICH LIST THIS IS. When nothing is attached to the selected project we
+                    fall back to the available set, and a project-scoped panel silently listing
+                    everything is the exact bug just fixed for Pages. This makes the difference
+                    visible rather than implied. */}
+                <Show when={iris.data.playbooks.length > 0 && !iris.data.playbooks[0].attached}>
+                  <text fg={theme.textMuted}>Available — none attached to this project</text>
                 </Show>
 
-                {/* Workflow list */}
-                <Show when={!activeWorkflow()}>
-                  <Show when={workflowLoading()}>
-                    <text fg={theme.textMuted}>Loading workflow...</text>
-                  </Show>
-                  <box gap={1}>
-                    <For each={filteredWorkflows()}>
-                      {(wf) => {
-                        const key = `wf-${wf.id}`
-                        const hovered = () => hoveredRowId() === key
-                        return (
-                          <box
-                            backgroundColor={hovered() ? theme.backgroundElement : undefined}
-                            onMouseOver={() => setHoveredRowId(key)}
-                            onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
-                            onMouseDown={async () => {
-                              setWorkflowLoading(true)
-                              setWorkflowImported(false)
-                              const detail = await iris.fetchWorkflowDetail(wf.id)
-                              setWorkflowLoading(false)
-                              if (detail) setActiveWorkflow(detail)
-                            }}
-                          >
-                            <box flexDirection="row" gap={1}>
-                              <text flexShrink={0} fg={workflowColor(wf.status)}>
-                                {workflowIcon(wf.status)}
-                              </text>
-                              <text fg={hovered() ? theme.accent : theme.text} wrapMode="word">
-                                {wf.name}
-                              </text>
-                            </box>
-                            <text fg={theme.textMuted}>
-                              {"   "}
-                              {wf.status === "running" ? "running now" : wf.lastRun ? `last ran ${wf.lastRun}` : "never ran"}
-                              {wf.triggerCount > 0 ? `  ·  ${wf.triggerCount} runs` : ""}
+                <box gap={1}>
+                  <For each={filteredPlaybooks()}>
+                    {(pb) => {
+                      const key = `pb-${pb.name}`
+                      const hovered = () => hoveredRowId() === key
+                      return (
+                        <box
+                          backgroundColor={hovered() ? theme.backgroundElement : undefined}
+                          onMouseOver={() => setHoveredRowId(key)}
+                          onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+                        >
+                          <box flexDirection="row" gap={1}>
+                            <text flexShrink={0} fg={pb.attached ? theme.accent : theme.textMuted}>
+                              {pb.attached ? "*" : "-"}
+                            </text>
+                            <text fg={hovered() ? theme.accent : theme.text} wrapMode="word">
+                              {pb.name}
                             </text>
                           </box>
-                        )
-                      }}
-                    </For>
-                  </box>
-                </Show>
+                          <Show when={pb.description}>
+                            <text fg={theme.textMuted} wrapMode="word">{pb.description}</text>
+                          </Show>
+                        </box>
+                      )
+                    }}
+                  </For>
+                </box>
               </Match>
 
               {/* ── CONTACTS ── */}

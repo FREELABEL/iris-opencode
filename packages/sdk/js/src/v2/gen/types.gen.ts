@@ -1012,6 +1012,10 @@ export type KeybindsConfig = {
    */
   input_paste?: string
   /**
+   * Dictate: record voice into the prompt
+   */
+  input_dictate?: string
+  /**
    * Submit input
    */
   input_submit?: string

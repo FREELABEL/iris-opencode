@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, isNonInteractive, bridgeFetch } from "./iris-api"
+import { irisFetch, IRIS_API, requireAuth, requireUserId, handleApiError, printDivider, dim, bold, isNonInteractive, bridgeFetch, writeJson } from "./iris-api"
 
 // Shared Helpers
 
@@ -146,20 +146,42 @@ const ScanCommand: any = cmd({
 
     prompts.intro(`${bold("iris inbox scan")} — ${displayName}`)
 
-    // Resolve board: use flag, or try to detect user's default board
+    // Resolve board: use flag, or detect the user's first board.
+    //
+    // This used to call GET /api/v1/me, which fl-api has never served. The 404 was eaten by
+    // the catch below and every user without --board was told "Could not detect your default
+    // board" — a dead endpoint rendered as a fact about THEIR account. /api/v1/user/me does
+    // exist, but returns only id/name/email, so swapping the path would have fixed the 404
+    // and left this failing identically. The board list is its own endpoint. (#181136)
     let resolvedBoard = boardId
+    let boardLookupFailed = false
     if (!resolvedBoard) {
-      try {
-        const meRes = await irisFetch("/api/v1/me", {}, RAICHU)
-        if (meRes.ok) {
-          const me = (await meRes.json()) as any
-          resolvedBoard = me?.data?.default_bloq_id ?? me?.data?.bloqs?.[0]?.id
+      const userId = await requireUserId()
+      if (userId) {
+        try {
+          const bloqRes = await irisFetch(`/api/v1/user/${userId}/bloqs?per_page=1`, {}, RAICHU)
+          if (bloqRes.ok) {
+            const body = (await bloqRes.json()) as any
+            const bloqs = body?.data?.data ?? body?.data ?? []
+            resolvedBoard = Array.isArray(bloqs) ? bloqs[0]?.id : undefined
+          } else {
+            boardLookupFailed = true
+          }
+        } catch {
+          boardLookupFailed = true
         }
-      } catch {}
+      }
     }
     if (!resolvedBoard) {
-      prompts.log.error("Could not detect your default board. Use --board <id> to specify one.")
-      prompts.log.info(`${dim("Find your boards:")} iris leads boards`)
+      // Say which of the two it is. "You have no boards" and "we could not reach the board
+      // service" are different problems and only one of them is the user's to solve.
+      if (boardLookupFailed) {
+        prompts.log.error("Could not reach the board service — this is on our side, not yours.")
+        prompts.log.info(`${dim("Retry, or name a board directly:")} --board <id>`)
+      } else {
+        prompts.log.error("No boards found on your account. Use --board <id> to specify one.")
+        prompts.log.info(`${dim("Find your boards:")} iris leads boards`)
+      }
       return
     }
 
@@ -192,7 +214,7 @@ const ScanCommand: any = cmd({
       const taskId = result.task.id
 
       if (jsonOut) {
-        console.log(JSON.stringify({ task_id: taskId, platform, board: resolvedBoard, status: "dispatched" }, null, 2))
+        await writeJson({ task_id: taskId, platform, board: resolvedBoard, status: "dispatched" })
       } else {
         console.log(`  Task: ${bold(taskId)}`)
         console.log(`  ${dim("Your Hive node will scan the inbox and tag leads with replies.")}`)
@@ -318,7 +340,7 @@ const StatusCommand: any = cmd({
             replied_at: l.replied_at,
             status: l.status,
           }))
-          console.log(JSON.stringify(output, null, 2))
+          await writeJson(output)
         } else if (replied.length > 0) {
           printDivider()
           for (const l of replied.slice(0, 20)) {
@@ -716,7 +738,7 @@ async function inboxViewHandler(args: any) {
 
     // JSON output
     if (args.json) {
-      console.log(JSON.stringify({ total: entries.length, source, entries }, null, 2))
+      await writeJson({ total: entries.length, source, entries })
       prompts.outro("Done")
       return
     }

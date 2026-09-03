@@ -614,6 +614,63 @@ export namespace MCP {
     return result
   }
 
+  /**
+   * Invoke a tool on a connected MCP server.
+   *
+   * THROWS on every failure rather than returning undefined — deliberately, and
+   * unlike getPrompt/readResource above. This is the path a playbook or script
+   * calls, and a silent empty success there is indistinguishable from a call that
+   * did the work. That ambiguity is the whole reason MCP-backed steps had to be
+   * written as `mode: human` (#182089).
+   *
+   * Note `isError` is checked separately: an MCP server can return a perfectly
+   * well-formed response whose payload IS an error. Protocol success is not tool
+   * success, and conflating them is the same defect one layer down.
+   */
+  export async function callTool(clientName: string, toolName: string, args?: Record<string, any>) {
+    const clientsSnapshot = await clients()
+    const client = clientsSnapshot[clientName]
+
+    if (!client) {
+      const available = Object.keys(clientsSnapshot)
+      throw new Error(
+        `MCP server "${clientName}" is not connected. Connected: ${available.length ? available.join(", ") : "(none)"}`,
+      )
+    }
+
+    const result = await client.callTool({ name: toolName, arguments: args ?? {} })
+
+    if ((result as any)?.isError) {
+      const text = extractText(result)
+      throw new Error(`MCP tool "${toolName}" returned an error: ${text || JSON.stringify(result)}`)
+    }
+    return result
+  }
+
+  /** Tool definitions for ONE server, with their input schemas. */
+  export async function listToolsFor(clientName: string) {
+    const clientsSnapshot = await clients()
+    const client = clientsSnapshot[clientName]
+    if (!client) {
+      const available = Object.keys(clientsSnapshot)
+      throw new Error(
+        `MCP server "${clientName}" is not connected. Connected: ${available.length ? available.join(", ") : "(none)"}`,
+      )
+    }
+    const res = await client.listTools()
+    return res.tools ?? []
+  }
+
+  /** Pull the text payload out of an MCP tool result, whatever shape it came in. */
+  export function extractText(result: any): string {
+    const content = result?.content
+    if (!Array.isArray(content)) return ""
+    return content
+      .filter((c: any) => c?.type === "text" && typeof c.text === "string")
+      .map((c: any) => c.text)
+      .join("\n")
+  }
+
   export async function getPrompt(clientName: string, name: string, args?: Record<string, string>) {
     const clientsSnapshot = await clients()
     const client = clientsSnapshot[clientName]

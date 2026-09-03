@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -59,7 +60,9 @@ const ListCommand = cmd({
   describe: "list marketplace opportunities",
   builder: (yargs) =>
     yargs
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("limit", { describe: "max results per page (API caps at 50)", type: "number", default: 20 })
+      .option("page", { describe: "page number", type: "number", default: 1 })
+      .option("all", { describe: "fetch every page, not just the first", type: "boolean", default: false })
       .option("profile-id", { describe: "filter by profile PK", type: "number" })
       .option("bounties", { describe: "show only clip campaigns (bounties)", type: "boolean" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
@@ -74,19 +77,57 @@ const ListCommand = cmd({
     if (spinner) spinner.start("Loading…")
 
     try {
-      const params = new URLSearchParams({ per_page: String(args.limit) })
-      if (args["profile-id"]) params.set("profile_id", String(args["profile-id"]))
-      if (args.bounties) params.set("bounty_type", "video_views")
-      const res = await irisFetch(`/api/v1/marketplace/opportunities?${params}`)
-      const ok = await handleApiError(res, "List opportunities")
-      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+      // The API reads `limit` (OpportunityController::index), NOT `per_page`. Sending only
+      // per_page silently fell back to the default 12, so --limit did nothing and pages 2..N
+      // were unreachable — the bug bounty opportunity looked like it was missing from the
+      // marketplace when it was just on page 2. Send both; keep per_page for compatibility.
+      const fetchPage = async (page: number) => {
+        const params = new URLSearchParams({
+          limit: String(args.limit),
+          per_page: String(args.limit),
+          page: String(page),
+        })
+        if (args["profile-id"]) params.set("profile_id", String(args["profile-id"]))
+        if (args.bounties) params.set("bounty_type", "video_views")
+        const res = await irisFetch(`/api/v1/marketplace/opportunities?${params}`)
+        const ok = await handleApiError(res, "List opportunities")
+        if (!ok) return null
+        const raw = (await res.json()) as any
+        return {
+          items: (raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])) as any[],
+          pagination: raw?.data?.pagination ?? raw?.pagination ?? null,
+        }
+      }
 
-      const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
+      const first = await fetchPage(Number(args.page))
+      if (!first) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
 
-      if (args.json) { console.log(JSON.stringify(items, null, 2)); return }
+      const items: any[] = [...first.items]
+      let pagination = first.pagination
+      if (args.all && pagination?.last_page) {
+        for (let p = Number(args.page) + 1; p <= Number(pagination.last_page); p++) {
+          const next = await fetchPage(p)
+          if (!next) break
+          items.push(...next.items)
+          pagination = next.pagination ?? pagination
+        }
+      }
 
-      spinner!.stop(`${items.length} opportunity(ies)`)
+      // #180735: writeJson, NOT console.log. This list is the payload that exposed the bug —
+      // past the ~64KiB pipe buffer, process.exit() at the end of index.ts discards whatever
+      // stdout has not flushed, cutting the JSON mid-value with exit 0 and nothing on stderr.
+      // console.log cannot be made safe from the outside: in bun it does NOT route through
+      // process.stdout.write, so no wrapper or exit-site drain can see the bytes (both were
+      // tried and measured). writeJson writes through the stream and awaits the callback,
+      // which is the only mechanism that actually waits for the flush.
+      if (args.json) { await writeJson(items); return }
+
+      const total = pagination?.total
+      spinner!.stop(
+        total != null && total > items.length
+          ? `${items.length} of ${total} opportunity(ies) — page ${pagination?.current_page ?? args.page}/${pagination?.last_page ?? "?"}`
+          : `${items.length} opportunity(ies)`,
+      )
 
       if (items.length === 0) { prompts.log.warn("No opportunities found"); prompts.outro("Done"); return }
 
@@ -94,7 +135,14 @@ const ListCommand = cmd({
       for (const o of items) { printOpportunity(o); console.log() }
       printDivider()
 
-      prompts.outro(dim("iris opportunities get <id>  |  iris opportunities pull <id>"))
+      const more = pagination?.last_page && Number(pagination.current_page) < Number(pagination.last_page)
+      prompts.outro(
+        dim(
+          more
+            ? `iris opportunities list --page ${Number(pagination.current_page) + 1}  |  --all  |  get <id>`
+            : "iris opportunities get <id>  |  iris opportunities pull <id>",
+        ),
+      )
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -128,7 +176,7 @@ const GetCommand = cmd({
       const data = (await res.json()) as { data?: any }
       const o = data?.data ?? data
 
-      if (args.json) { console.log(JSON.stringify(o, null, 2)); return }
+      if (args.json) { await writeJson(o); return }
 
       spinner!.stop(String(o.title ?? `#${o.id}`))
 
@@ -171,33 +219,49 @@ const CreateCommand = cmd({
       .option("preview", { describe: "create in preview mode (banner shown, applications/investments disabled)", type: "boolean" })
       .option("profile-id", { describe: "attach to a profile (PK)", type: "number" })
       .option("profile", { describe: "attach to a profile (slug — resolves to PK)", type: "string" })
+      // Membership gate — restrict applications to a program's confirmed members. #166095.
+      .option("program-id", { describe: "gate applications to a program's confirmed members (membership gate)", type: "number" })
       // Bounty / Clip Campaign fields
       .option("bounty", { describe: "create as a clip campaign (bounty)", type: "boolean" })
       .option("bounty-type", { describe: "bounty type (video_views, audio_streams, social_impressions, ugc_views)", type: "string", default: "video_views", choices: ["video_views", "audio_streams", "social_impressions", "ugc_views"] })
       .option("rate-per-mille", { describe: "pay rate per 1K views in cents (e.g. 500 = $5)", type: "number" })
       .option("budget", { describe: "total campaign budget in dollars (e.g. 10000)", type: "number" })
-      .option("per-creator-cap", { describe: "max payout per creator in dollars (e.g. 500)", type: "number" }),
+      .option("per-creator-cap", { describe: "max payout per creator in dollars (e.g. 500)", type: "number" })
+      .option("json", { describe: "JSON output (implies non-interactive)", type: "boolean", default: false }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Create Opportunity")
-
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
+    // Headless-safe: title/description are the only required fields. Prompt for them in a
+    // TTY, but fail loud (don't hang, don't half-prompt) when --json or non-interactive
+    // and they're missing. #165986 — previously the skills prompt fired even when
+    // title/description came from flags.
     let title = args.title
+    let description = args.description
+    const headless = args.json || isNonInteractive()
+    if ((!title || !description) && headless) {
+      const missing = !title ? "--title" : "--description"
+      const msg = `${missing} is required in non-interactive mode.`
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro("◈  Create Opportunity") }
+
     if (!title) {
       title = (await prompts.text({ message: "Title", validate: (x) => (x && x.length > 0 ? undefined : "Required") })) as string
       if (prompts.isCancel(title)) { prompts.outro("Cancelled"); return }
     }
-
-    let description = args.description
     if (!description) {
       description = (await prompts.text({ message: "Description", validate: (x) => (x && x.length > 0 ? undefined : "Required") })) as string
       if (prompts.isCancel(description)) { prompts.outro("Cancelled"); return }
     }
 
+    // Skills are optional — only prompt in an interactive session, never headless. #165986.
     let skills = args.skills
-    if (!skills) {
+    if (!skills && !headless) {
       const skillsInput = (await prompts.text({ message: "Skills (comma-separated, or leave empty)", defaultValue: "" })) as string
       if (prompts.isCancel(skillsInput)) { prompts.outro("Cancelled"); return }
       skills = skillsInput || undefined
@@ -211,17 +275,24 @@ const CreateCommand = cmd({
         const pd = (await profileRes.json()) as any
         const p = pd?.data ?? pd
         profilePk = p?.pk
-        if (profilePk) prompts.log.info(`Profile: ${p.name} (pk ${profilePk})`)
+        if (profilePk && !args.json) prompts.log.info(`Profile: ${p.name} (pk ${profilePk})`)
       }
-      if (!profilePk) { prompts.log.error(`Profile '${args.profile}' not found`); prompts.outro("Done"); return }
+      if (!profilePk) {
+        const msg = `Profile '${args.profile}' not found`
+        if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+        else { prompts.log.error(msg); prompts.outro("Done") }
+        process.exitCode = 1
+        return
+      }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Creating…")
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Creating…")
 
     try {
       const payload: Record<string, unknown> = { title, description }
       if (profilePk) payload.profile_id = profilePk
+      if (args["program-id"]) payload.program_id = Number(args["program-id"])
       if (skills) payload.skills_required = skills.split(",").map((s: string) => s.trim())
       if (args["min-budget"]) payload.price_min = args["min-budget"]
       if (args["max-budget"]) payload.price_max = args["max-budget"]
@@ -230,19 +301,19 @@ const CreateCommand = cmd({
       if (args["equity-pool-pct"] !== undefined) payload.equity_pool_bps = Math.round(Number(args["equity-pool-pct"]) * 100)
       if (args["roles-file"]) {
         const rolesPath = String(args["roles-file"])
-        if (!existsSync(rolesPath)) { spinner.stop("Failed", 1); prompts.log.error(`Roles file not found: ${rolesPath}`); prompts.outro("Done"); return }
+        if (!existsSync(rolesPath)) { if (spinner) spinner.stop("Failed", 1); prompts.log.error(`Roles file not found: ${rolesPath}`); if (!args.json) prompts.outro("Done"); process.exitCode = 1; return }
         payload.roles = JSON.parse(readFileSync(rolesPath, "utf-8"))
       }
       if (args["pitch-file"]) {
         const pitchPath = String(args["pitch-file"])
-        if (!existsSync(pitchPath)) { spinner.stop("Failed", 1); prompts.log.error(`Pitch file not found: ${pitchPath}`); prompts.outro("Done"); return }
+        if (!existsSync(pitchPath)) { if (spinner) spinner.stop("Failed", 1); prompts.log.error(`Pitch file not found: ${pitchPath}`); if (!args.json) prompts.outro("Done"); process.exitCode = 1; return }
         payload.pitch_sections = JSON.parse(readFileSync(pitchPath, "utf-8"))
       }
       if (args.preview) payload.preview_mode = true
 
       // Bounty / Clip Campaign fields
       if (args.bounty) {
-        payload.bounty_type = args["bounty-type"] || "video_submission"
+        payload.bounty_type = args["bounty-type"] || "video_views"
         payload.is_public = true
         if (args["rate-per-mille"]) payload.rate_per_mille_cents = Number(args["rate-per-mille"])
         if (args.budget) payload.budget_pool_cents = Math.round(Number(args.budget) * 100)
@@ -251,22 +322,156 @@ const CreateCommand = cmd({
 
       const res = await irisFetch("/api/v1/marketplace/opportunities", { method: "POST", body: JSON.stringify(payload) })
       const ok = await handleApiError(res, "Create opportunity")
-      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); process.exitCode = 1; return }
 
       const data = (await res.json()) as any
       const o = data?.data?.opportunity ?? data?.opportunity ?? data?.data ?? data
-      spinner.stop(`${success("✓")} Created: ${bold(String(o.title ?? o.id ?? "opportunity"))}`)
+
+      if (args.json) { await writeJson(data); return }
+
+      spinner!.stop(`${success("✓")} Created: ${bold(String(o.title ?? o.id ?? "opportunity"))}`)
 
       printDivider()
       printKV("ID", o.id)
       printKV("Title", o.title)
+      if (o.program_id) printKV("Gated to program", o.program_id)
       printDivider()
 
       prompts.outro(dim(`iris opportunities get ${o.id}`))
     } catch (err) {
-      spinner.stop("Error", 1)
+      if (spinner) spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      if (!args.json) prompts.outro("Done")
+      process.exitCode = 1
+    }
+  },
+})
+
+// #176521 — single source of truth for what pull/diff/push agree on.
+//
+// These lists used to be inline and divergent, and BOTH omitted every money and
+// linkage field. Result: edit a contest's prize table locally → `diff` reports
+// "No differences" → `push` reports "Pushed" → nothing was sent, leaving a
+// placement bounty with no reward_tiers, i.e. one that pays every winner $0.
+const SYNC_FIELDS = [
+  "title", "description", "status",
+  "price_min", "price_max", "application_deadline",
+  "funding_goal_cents", "equity_pool_bps", "roles", "pitch_sections",
+  "preview_mode", "is_public", "lead_id",
+  // money / payout — omitting these is how prize tables got silently dropped
+  "bounty_type", "reward_tiers", "rate_per_mille_cents",
+  "per_creator_cap_cents", "budget_pool_cents",
+  // linkage
+  "event_id", "program_id", "profile_id",
+] as const
+
+// The API serializes reward_tiers as a {rank: amount_cents} map (toPublicArray →
+// rewardTiers()), while the local file may hold the authoring shape
+// [{rank, amount_cents}, …] or a bare [amount_cents, …]. Compare on the
+// normalized map so we don't report a false difference.
+function normalizeForCompare(field: string, value: unknown): string {
+  if (field === "reward_tiers" && value != null) {
+    const map: Record<string, number> = {}
+    if (Array.isArray(value)) {
+      value.forEach((t: any, i: number) => {
+        const rank = Number(t?.rank ?? i + 1)
+        const amount = Number(t?.amount_cents ?? (typeof t === "number" ? t : 0))
+        if (rank >= 1 && amount > 0) map[String(rank)] = amount
+      })
+    } else if (typeof value === "object") {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        const rank = Number(k)
+        const amount = Number(v)
+        if (rank >= 1 && amount > 0) map[String(rank)] = amount
+      }
+    }
+    return JSON.stringify(map)
+  }
+  return JSON.stringify(value ?? null)
+}
+
+// #166095: previously the only way to change an opportunity's content was the
+// file-based `push` (pull → edit JSON → push). This gives a direct, flag-driven,
+// headless-safe update path — only the flags you pass are sent (PATCH-like PUT).
+const UpdateCommand = cmd({
+  command: "update <id>",
+  aliases: ["edit"],
+  describe: "update an opportunity's fields directly (only the flags you pass are changed)",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "opportunity ID", type: "number", demandOption: true })
+      .option("title", { describe: "title", type: "string" })
+      .option("description", { describe: "description", type: "string" })
+      .option("skills", { describe: "required skills (comma-separated; empty string clears)", type: "string" })
+      .option("min-budget", { describe: "minimum budget", type: "number" })
+      .option("max-budget", { describe: "maximum budget", type: "number" })
+      .option("deadline", { describe: "application deadline (YYYY-MM-DD)", type: "string" })
+      .option("funding-goal", { describe: "crowdfunding goal in dollars", type: "number" })
+      .option("equity-pool-pct", { describe: "equity pool percentage (e.g. 5 for 5%)", type: "number" })
+      .option("program-id", { describe: "gate applications to a program's members (0 to un-gate)", type: "number" })
+      .option("public", { describe: "make the opportunity public", type: "boolean" })
+      .option("private", { describe: "make the opportunity private (hidden)", type: "boolean" })
+      .option("preview", { describe: "toggle preview mode on/off", type: "boolean" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    // Build the payload from only the flags actually provided (yargs sets the key
+    // when a flag is passed, even for empty strings, via hasOwnProperty).
+    const payload: Record<string, unknown> = {}
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(args, k)
+
+    if (args.title !== undefined) payload.title = args.title
+    if (args.description !== undefined) payload.description = args.description
+    if (has("skills")) {
+      const s = String(args.skills ?? "").trim()
+      payload.skills_required = s ? s.split(",").map((x) => x.trim()).filter(Boolean) : []
+    }
+    if (args["min-budget"] !== undefined) payload.price_min = args["min-budget"]
+    if (args["max-budget"] !== undefined) payload.price_max = args["max-budget"]
+    if (args.deadline !== undefined) payload.application_deadline = args.deadline
+    if (args["funding-goal"] !== undefined) payload.funding_goal_cents = Math.round(Number(args["funding-goal"]) * 100)
+    if (args["equity-pool-pct"] !== undefined) payload.equity_pool_bps = Math.round(Number(args["equity-pool-pct"]) * 100)
+    if (args["program-id"] !== undefined) payload.program_id = Number(args["program-id"]) === 0 ? null : Number(args["program-id"])
+    if (args.preview !== undefined) payload.preview_mode = args.preview
+    if (args.public) payload.is_public = true
+    if (args.private) payload.is_public = false
+
+    if (Object.keys(payload).length === 0) {
+      const msg = "Nothing to update — pass at least one field flag (e.g. --title, --description, --program-id)."
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Update Opportunity #${args.id}`) }
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Updating…")
+
+    try {
+      const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
+      const ok = await handleApiError(res, "Update opportunity")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); process.exitCode = 1; return }
+
+      const data = (await res.json()) as any
+      const o = data?.data?.opportunity ?? data?.opportunity ?? data?.data ?? data
+
+      if (args.json) { await writeJson(data); return }
+
+      spinner!.stop(`${success("✓")} Updated`)
+      printDivider()
+      printKV("ID", o.id ?? args.id)
+      printKV("Title", o.title)
+      printKV("Changed", Object.keys(payload).join(", "))
+      printDivider()
+      prompts.outro(dim(`iris opportunities get ${args.id}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+      process.exitCode = 1
     }
   },
 })
@@ -362,14 +567,17 @@ const PushCommand = cmd({
         return
       }
 
-      const payload: Record<string, unknown> = {
-        title: entity.title, description: entity.description, skills_required: skills,
-        price_min: entity.price_min ?? entity.min_budget, price_max: entity.price_max ?? entity.max_budget, application_deadline: entity.application_deadline ?? entity.deadline,
-        funding_goal_cents: entity.funding_goal_cents, equity_pool_bps: entity.equity_pool_bps,
-        roles: entity.roles, pitch_sections: entity.pitch_sections,
-        preview_mode: entity.preview_mode, is_public: entity.is_public,
-        lead_id: entity.lead_id,
+      // #176521 — build from SYNC_FIELDS so money/linkage fields can never be
+      // silently omitted again (the old inline list dropped reward_tiers et al).
+      const payload: Record<string, unknown> = {}
+      for (const f of SYNC_FIELDS) {
+        if (entity[f] !== undefined) payload[f] = entity[f]
       }
+      // Legacy aliases from older pulled files.
+      payload.skills_required = skills
+      if (payload.price_min === undefined && entity.min_budget !== undefined) payload.price_min = entity.min_budget
+      if (payload.price_max === undefined && entity.max_budget !== undefined) payload.price_max = entity.max_budget
+      if (payload.application_deadline === undefined && entity.deadline !== undefined) payload.application_deadline = entity.deadline
       for (const k of Object.keys(payload)) { if (payload[k] === undefined) delete payload[k] }
 
       const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`, { method: "PUT", body: JSON.stringify(payload) })
@@ -378,12 +586,54 @@ const PushCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const result = data?.data ?? data
+
+      // WRITE-CONFIRMATION (#176521): a 200 is not proof of persistence. The API has
+      // silently dropped fields that weren't mass-assignable (reward_tiers, #176520)
+      // while still returning success. Re-read and assert, so "Pushed" means
+      // "verified persisted" — and fail loudly (exit 1) when it doesn't.
+      spinner.message?.("Verifying…")
+      const unpersisted: { field: string; sent: unknown; live: unknown }[] = []
+      try {
+        const verifyRes = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`)
+        if (verifyRes.ok) {
+          const vJson = (await verifyRes.json()) as { data?: any }
+          const liveNow = vJson?.data?.opportunity ?? vJson?.data ?? vJson
+          for (const f of Object.keys(payload)) {
+            if (f === "skills_required") continue // server may normalize/rename
+            if (normalizeForCompare(f, liveNow?.[f]) !== normalizeForCompare(f, payload[f])) {
+              unpersisted.push({ field: f, sent: payload[f], live: liveNow?.[f] })
+            }
+          }
+        }
+      } catch {
+        // verification is best-effort; never mask a successful write with a network blip
+      }
+
+      if (unpersisted.length > 0) {
+        spinner.stop("Pushed, but some fields did NOT persist", 1)
+        printDivider()
+        printKV("ID", args.id)
+        for (const u of unpersisted) {
+          console.log(`  ${UI.Style.TEXT_DANGER}✗ ${u.field}${UI.Style.TEXT_NORMAL}`)
+          console.log(`    sent: ${String(JSON.stringify(u.sent)).slice(0, 120)}`)
+          console.log(`    live: ${String(JSON.stringify(u.live ?? null)).slice(0, 120)}`)
+        }
+        console.log()
+        console.log(`  ${UI.Style.TEXT_WARNING}The API accepted the request but did not store these fields.${UI.Style.TEXT_NORMAL}`)
+        console.log(`  ${dim("Likely a server-side mass-assignment ($fillable) gap — see #176520.")}`)
+        printDivider()
+        prompts.outro("Done")
+        process.exitCode = 1
+        return
+      }
+
       spinner.stop(success("Pushed"))
 
       printDivider()
       printKV("Title", result.title)
       printKV("ID", args.id)
       printKV("From", filepath)
+      printKV("Verified", `${Object.keys(payload).length} field(s) persisted`)
       printDivider()
 
       prompts.outro(dim(`iris opportunities diff ${args.id}`))
@@ -433,16 +683,10 @@ const DiffCommand = cmd({
 
       const local = JSON.parse(readFileSync(filepath, "utf-8"))
 
-      const fields = [
-        "title", "description", "status",
-        "price_min", "price_max", "application_deadline",
-        "funding_goal_cents", "equity_pool_bps", "roles", "pitch_sections",
-        "preview_mode", "is_public", "lead_id",
-      ]
       const changes: { field: string; live: unknown; local: unknown }[] = []
 
-      for (const f of fields) {
-        if (JSON.stringify(live[f] ?? null) !== JSON.stringify(local[f] ?? null)) {
+      for (const f of SYNC_FIELDS) {
+        if (normalizeForCompare(f, live[f]) !== normalizeForCompare(f, local[f])) {
           changes.push({ field: f, live: live[f], local: local[f] })
         }
       }
@@ -507,6 +751,42 @@ const LinkLeadCommand = cmd({
 
       spinner.stop(`${success("✓")} ${args.leadId === 0 ? "Unlinked" : `Linked to lead #${args.leadId}`}`)
       prompts.outro(dim(`iris leads get ${args.leadId}  |  iris opportunities get ${args.id}`))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const LinkEventCommand = cmd({
+  command: "link-event <id> <eventId>",
+  describe: "link an opportunity/bounty to an event (sets opportunity.event_id) — the job listing a role was hired under",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "opportunity ID", type: "number", demandOption: true })
+      .positional("eventId", { describe: "event ID to link (use 0 to unlink)", type: "number", demandOption: true }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Link Opportunity #${args.id} → Event #${args.eventId}`)
+
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start(args.eventId === 0 ? "Unlinking…" : `Linking to event ${args.eventId}…`)
+
+    try {
+      const body: Record<string, unknown> = { event_id: args.eventId === 0 ? null : args.eventId }
+      const res = await irisFetch(`/api/v1/marketplace/opportunities/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      })
+      const ok = await handleApiError(res, "Update opportunity")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      spinner.stop(`${success("✓")} ${args.eventId === 0 ? "Unlinked" : `Linked to event #${args.eventId}`}`)
+      prompts.outro(dim(`iris events show ${args.eventId}  |  iris opportunities get ${args.id}`))
     } catch (err) {
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -706,7 +986,7 @@ const InterestListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? []
+      const items: any[] = firstArray(raw?.data?.data, raw?.data)
       const meta: any = raw?.data?.meta ?? raw?.meta ?? {}
       const total: number = meta.total ?? items.length
       const totalAmount: number | undefined = meta.total_amount_usd
@@ -749,7 +1029,7 @@ const InterestShowCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? []
+      const items: any[] = firstArray(raw?.data?.data, raw?.data)
       const interest = items.find((i) => Number(i.id) === Number(args.id))
 
       if (!interest) { spinner.stop("Not found", 1); prompts.log.error(`Interest #${args.id} not found`); prompts.outro("Done"); return }
@@ -797,17 +1077,19 @@ const InterestCommand = cmd({
 export const PlatformOpportunitiesCommand = cmd({
   command: "opportunities",
   aliases: ["opps"],
-  describe: "manage marketplace opportunities — pull, push, diff, CRUD",
+  describe: "Bounty OS records — the opportunity a bounty runs on. CRUD, pull/push/diff, links",
   builder: (yargs) =>
     yargs
       .command(ListCommand)
       .command(GetCommand)
       .command(CreateCommand)
+      .command(UpdateCommand)
       .command(PullCommand)
       .command(PushCommand)
       .command(DiffCommand)
       .command(PreviewCommand)
       .command(LinkLeadCommand)
+      .command(LinkEventCommand)
       .command(LinkProfileCommand)
       .command(DeleteCommand)
       .command(InterestCommand)

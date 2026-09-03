@@ -1,7 +1,9 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, printDivider, printKV, dim, bold, success, FL_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, printDivider, printKV, dim, bold, success, FL_API, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Helpers
@@ -42,10 +44,14 @@ function bandLabel(band: string): string {
 // Main command — `iris heartbeat`
 // ============================================================================
 
-const HeartbeatCommand = cmd({
-  command: "heartbeat",
+const HeartbeatCommand = productCommand({
+  name: "heartbeat",
   aliases: ["hb", "health"],
-  describe: "your platform health dashboard — see how your IRIS setup is performing",
+  purpose:
+    "Heartbeat — platform health: whether your IRIS setup is actually performing",
+  keywords: ["heartbeat", "health", "signal", "monitor", "uptime", "diagnostics", "dashboard"],
+  howtos: ["debug-an-agent-run"],
+  playbooks: ["heartbeat-debug", "health-check"],
   builder: (yargs) =>
     yargs
       .option("json", { type: "boolean", default: false, describe: "JSON output" })
@@ -79,7 +85,7 @@ const HeartbeatCommand = cmd({
       const data = raw?.data ?? raw
 
       if (args.json) {
-        console.log(JSON.stringify(data, null, 2))
+        await writeJson(data)
         return
       }
 
@@ -90,7 +96,7 @@ const HeartbeatCommand = cmd({
       const signals = data.signals ?? {}
       const weights = data.weights_applied ?? {}
       const clientLabels = data.client_labels ?? {}
-      const history: any[] = data.history ?? []
+      const history: any[] = firstArray(data.history)
       const onboarding = data.onboarding ?? null
 
       // Onboarding checklist mode — for new users or users with < 50% setup
@@ -250,7 +256,7 @@ const HeartbeatSignalsCommand = cmd({
       const registry = await res.json() as Record<string, any>
 
       if (args.json) {
-        console.log(JSON.stringify(registry, null, 2))
+        await writeJson(registry)
         return
       }
 

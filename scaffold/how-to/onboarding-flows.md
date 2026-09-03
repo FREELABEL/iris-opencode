@@ -1,3 +1,9 @@
+---
+category: Agents & Automation
+level: intermediate
+tags: [onboarding, schema, flows]
+duration_min: 12
+---
 # How to: Create Schema-Driven Onboarding Flows
 
 Build multi-step onboarding wizards for any client using Atlas schemas. No code required — just define schemas and configure the flow.

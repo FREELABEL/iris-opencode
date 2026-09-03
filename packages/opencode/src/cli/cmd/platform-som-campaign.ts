@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
-import { irisFetch, requireAuth, bold, dim } from "./iris-api"
+import { irisFetch, requireAuth, bold, dim, writeJson, failNoOp} from "./iris-api"
 
 // ─── iris som campaign — DB-backed registry CRUD ─────────────────────────────
 //
@@ -56,7 +56,7 @@ const ListCmd = cmd({
     const body = await res.json() as { data?: { campaigns?: Campaign[] } }
     const list = body.data?.campaigns ?? []
 
-    if (args.json) { console.log(JSON.stringify(list, null, 2)); return }
+    if (args.json) { await writeJson(list); return }
 
     console.log("")
     console.log(bold(`SOM Campaigns ${dim("(" + list.length + ")")}`))
@@ -165,7 +165,6 @@ const UpdateCmd = cmd({
      .option("ends", { type: "string" })
      .option("geo", { type: "string" }),
   async handler(args) {
-    await requireAuth()
     const ref = args["id-or-name"] as string
     const body: Record<string, unknown> = {}
     if (args.active !== undefined) body.active = args.active
@@ -177,7 +176,8 @@ const UpdateCmd = cmd({
     if (args.ends !== undefined) body.ends_at = args.ends
     if (args.geo !== undefined) body.geo_tag = args.geo
 
-    if (Object.keys(body).length === 0) { prompts.log.warn("Nothing to update — provide at least one flag"); return }
+    if (Object.keys(body).length === 0) { failNoOp("update", "provide at least one flag") }
+    await requireAuth()
 
     const res = await irisFetch(`/api/v1/som/campaigns/${encodeURIComponent(ref)}`, {
       method: "PUT",

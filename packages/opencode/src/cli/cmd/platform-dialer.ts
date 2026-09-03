@@ -12,8 +12,7 @@ import {
   success,
   highlight,
   resolveUserId,
-  FL_API,
-} from "./iris-api"
+  FL_API, writeJson } from "./iris-api"
 
 // ============================================================================
 // iris dialer start
@@ -166,7 +165,7 @@ const DialerStatsCommand = cmd({
       spinner.stop(success(`${dials} dials today`))
 
       if (args.json) {
-        console.log(JSON.stringify({ dials, connected, meetings, callbacks, voicemails, notInterested, avgDuration, totalDuration }, null, 2))
+        await writeJson({ dials, connected, meetings, callbacks, voicemails, notInterested, avgDuration, totalDuration })
         return
       }
 
@@ -240,13 +239,13 @@ const DialerQueueCommand = cmd({
       spinner.stop(`${highlight(String(dialable.length))} dialable leads`)
 
       if (args.json) {
-        console.log(JSON.stringify(dialable.map((l: any) => ({
+        await writeJson(dialable.map((l: any) => ({
           id: l.id,
           name: l.name || l.nickname || l.business_name,
           phone: l.phone || l.phone_number,
           company: l.company,
           status: l.status,
-        })), null, 2))
+        })))
         return
       }
 

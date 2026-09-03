@@ -41,7 +41,7 @@ export const WebCommand = cmd({
     if (opts.hostname === "0.0.0.0") {
       // Show localhost for local access
       const localhostUrl = `http://localhost:${server.port}`
-      UI.println(UI.Style.TEXT_INFO_BOLD + "  Local access:      ", UI.Style.TEXT_NORMAL, localhostUrl)
+      UI.println(UI.Style.TEXT_INFO_BOLD + "  Local access:      ", UI.Style.TEXT_NORMAL, `${localhostUrl}/iris`)
 
       // Show network IPs for remote access
       const networkIPs = getNetworkIPs()
@@ -59,12 +59,16 @@ export const WebCommand = cmd({
         UI.println(UI.Style.TEXT_INFO_BOLD + "  mDNS:              ", UI.Style.TEXT_NORMAL, "opencode.local")
       }
 
-      // Open localhost in browser
-      open(localhostUrl.toString()).catch(() => {})
+      // Open the IRIS front door, not `/` (#181991). `/` is proxied to
+      // app.opencode.ai — upstream's hosted workspace, titled "OpenCode", and blank
+      // when the network is down. `/iris` is served locally in about a millisecond
+      // and is the page that still answers "is my server up" when nothing else does.
+      // The workspace is one click away from it, and untouched.
+      open(`${localhostUrl}/iris`).catch(() => {})
     } else {
-      const displayUrl = server.url.toString()
-      UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, displayUrl)
-      open(displayUrl).catch(() => {})
+      const displayUrl = server.url.toString().replace(/\/$/, "")
+      UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, `${displayUrl}/iris`)
+      open(`${displayUrl}/iris`).catch(() => {})
     }
 
     await new Promise(() => {})

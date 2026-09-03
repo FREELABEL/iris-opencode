@@ -29,6 +29,50 @@ function Write-Muted {
     Write-Host "      $Message" -ForegroundColor DarkGray
 }
 
+# ─── Install beacon (#179077) ─────────────────────────────────────────────────
+# Anonymous, metadata-only, fire-and-forget. Nothing about an install attempt
+# reached us before this: the CLI beacon needs a token, and you have no token
+# until after iris-login — which is after the install. So a failed install was
+# indistinguishable from someone who never tried, and the only reason we knew
+# Windows onboarding was broken at all is that a user typed a bug report by hand.
+#
+# NEVER blocks and NEVER throws. Telemetry that can break an install is worse
+# than no telemetry. Opt out entirely with IRIS_TELEMETRY=0.
+$script:BeaconUrl = "https://heyiris.io/api/v6/telemetry/install"
+$script:InstallerVersion = "2026-08-06"
+
+function Send-InstallBeacon {
+    param(
+        [string]$EventType,
+        [string]$Step = $null,
+        [string]$Reason = $null
+    )
+
+    if ($env:IRIS_TELEMETRY -in @("0", "off", "false")) { return }
+
+    try {
+        $body = @{
+            event_type        = $EventType
+            os                = "windows"
+            arch              = $(if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" })
+            installer_version = $script:InstallerVersion
+            shell             = "powershell"
+            has_git           = [bool](Get-Command git -ErrorAction SilentlyContinue)
+            has_node          = [bool](Get-Command node -ErrorAction SilentlyContinue)
+        }
+        if ($Step)   { $body.step = $Step }
+        if ($Reason) { $body.reason = $Reason }
+
+        Invoke-RestMethod -Uri $script:BeaconUrl -Method Post `
+            -Body ($body | ConvertTo-Json -Compress) `
+            -ContentType "application/json" `
+            -TimeoutSec 3 -ErrorAction SilentlyContinue | Out-Null
+    } catch {
+        # Deliberately silent. A user installing IRIS should never see, or be
+        # stopped by, a telemetry failure.
+    }
+}
+
 # ─── Step 1: Download and install IRIS Code binary ────────────────────────────
 
 Write-Host ""
@@ -45,6 +89,8 @@ $Arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else {
 $Target = "windows-$Arch"
 $Filename = "$APP-$Target.zip"
 
+Send-InstallBeacon -EventType "install_start"
+
 # Determine version and download URL
 if ($RequestedVersion) {
     $RequestedVersion = $RequestedVersion -replace "^v", ""
@@ -60,15 +106,43 @@ if ($RequestedVersion) {
         exit 1
     }
 } else {
-    $Url = "https://github.com/FREELABEL/iris-opencode/releases/latest/download/$Filename"
-
+    # Do NOT use /releases/latest. Two problems, both observed in production:
+    #
+    #  1. It is REPO-WIDE. This repo publishes two series — v1.3.x (this CLI) and
+    #     desktop-v1.18.x (the Tauri app). When a desktop release held the "latest" flag,
+    #     /releases/latest returned a tag with zero iris-* binaries and `iris update` broke
+    #     for the whole fleet (#182694). The bash installer was fixed for this; this file
+    #     was not, so Windows kept the bug.
+    #
+    #  2. It does not check the release actually CONTAINS the asset. A release is created
+    #     before its assets finish uploading, so hitting it mid-publish 404s. A client saw
+    #     exactly that today: "iris upgrade 1.3.222 -> 404 Not Found".
+    #
+    # So: enumerate releases, keep bare vX.Y.Z tags (desktop-v* are excluded by the anchor),
+    # skip drafts, and take the newest one that actually HAS this platform's asset.
     try {
-        $LatestResp = Invoke-RestMethod -Uri "https://api.github.com/repos/FREELABEL/iris-opencode/releases/latest" -UseBasicParsing -ErrorAction Stop
-        $SpecificVersion = $LatestResp.tag_name -replace "^v", ""
+        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" -UseBasicParsing -ErrorAction Stop
+        $Chosen = $null
+        foreach ($r in $Releases) {
+            if ($r.draft) { continue }
+            if ($r.tag_name -notmatch '^v\d+\.\d+\.\d+$') { continue }
+            if (-not ($r.assets | Where-Object { $_.name -eq $Filename })) { continue }
+            $Chosen = $r
+            break
+        }
+        if (-not $Chosen) {
+            Write-Host "No published release contains $Filename yet." -ForegroundColor Red
+            Write-Host "A release may still be uploading — try again shortly." -ForegroundColor DarkGray
+            exit 1
+        }
+        $SpecificVersion = $Chosen.tag_name -replace "^v", ""
+        # Pin the URL to the resolved tag rather than /latest/, so the version we announce and
+        # the bytes we download can never come from two different releases.
+        $Url = "https://github.com/FREELABEL/iris-opencode/releases/download/$($Chosen.tag_name)/$Filename"
     } catch {
         Write-Host "Failed to fetch version information." -ForegroundColor Red
         Write-Host "Check your internet connection or install a specific version:" -ForegroundColor DarkGray
-        Write-Host '  $env:VERSION="1.1.6"; irm https://heyiris.io/install-code.ps1 | iex' -ForegroundColor DarkGray
+        Write-Host '  $env:VERSION="1.3.223"; irm https://heyiris.io/install-code.ps1 | iex' -ForegroundColor DarkGray
         exit 1
     }
 }
@@ -93,6 +167,7 @@ try {
     Write-Host " done." -ForegroundColor Green
 } catch {
     Write-Host " failed." -ForegroundColor Red
+    Send-InstallBeacon -EventType "install_failed" -Step "download" -Reason "$_"
     Write-Host "Download URL: $Url" -ForegroundColor DarkGray
     Write-Host "Error: $_" -ForegroundColor Red
     Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
@@ -111,8 +186,40 @@ try {
         exit 1
     }
 
-    Copy-Item -Path $Binary.FullName -Destination "$INSTALL_DIR\iris.exe" -Force
+    # Windows LOCKS a running executable: it cannot be deleted or overwritten. `iris upgrade`
+    # shells out to this script FROM iris.exe, so the destination is ALWAYS in use during a
+    # self-update and this Copy-Item failed with "being used by another process" — every
+    # time, for every Windows user. The upgrade reported failure and left them pinned to
+    # whatever version they first installed. Found on a client's machine 2026-08-28, stuck on
+    # v1.3.207 while v1.3.220 was current (#182741).
+    #
+    # The Unix path a few files over already handles this with `rm -f` before the move, which
+    # works because unlinking a running binary is legal on POSIX. It is not on Windows.
+    # Windows DOES allow RENAMING a running image — the process keeps executing from the
+    # renamed file — which frees the name so a fresh binary can be written.
+    $Dest = Join-Path $INSTALL_DIR "iris.exe"
+
+    # Sweep leftovers from previous upgrades. These are only deletable once the process that
+    # held them has exited, so failures here are expected and must never abort an install.
+    Get-ChildItem -Path $INSTALL_DIR -Filter "iris.exe.old-*" -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue }
+
+    if (Test-Path $Dest) {
+        $StaleName = "iris.exe.old-$(Get-Random)"
+        try {
+            Rename-Item -Path $Dest -NewName $StaleName -Force -ErrorAction Stop
+        } catch {
+            Write-Host "Error: could not move the running iris.exe aside: $_" -ForegroundColor Red
+            Write-Host "Close any open IRIS windows and run the upgrade again." -ForegroundColor Yellow
+            Send-InstallBeacon -EventType "install_failed" -Step "rename_locked_binary" -Reason "$_"
+            Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
+            exit 1
+        }
+    }
+
+    Copy-Item -Path $Binary.FullName -Destination $Dest -Force
 } catch {
+    Send-InstallBeacon -EventType "install_failed" -Step "extract" -Reason "$_"
     Write-Host "Error extracting archive: $_" -ForegroundColor Red
     Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
     exit 1
@@ -152,7 +259,7 @@ if (Test-Path $McpConfig) {
     "iris-platform": {
       "_comment": "Remote IRIS platform - agents, integrations, workflows",
       "type": "remote",
-      "url": "https://heyiris.io/mcp",
+      "url": "https://heyiris.io/api/mcp",
       "enabled": false
     }
   }
@@ -171,9 +278,11 @@ $BridgeDir = "$IRIS_DIR\bridge"
 
 if (-not $HasNode) {
     Write-StepSkipped "5/5" "Agent Bridge" "skipped (Node.js not found)"
+    Send-InstallBeacon -EventType "install_step_skipped" -Step "agent_bridge" -Reason "node_missing"
     Write-Muted "Install Node.js to enable: https://nodejs.org"
 } elseif (-not $HasGit) {
     Write-StepSkipped "5/5" "Agent Bridge" "skipped (Git not found)"
+    Send-InstallBeacon -EventType "install_step_skipped" -Step "agent_bridge" -Reason "git_missing"
     Write-Muted "Install Git to enable: https://git-scm.com"
 } else {
     $BridgeUpdated = $false
@@ -476,12 +585,30 @@ Write-Host "Next: iris-daemon start to join the Hive compute network" -Foregroun
 Write-Host "  Or: iris to start the AI coding agent" -ForegroundColor DarkGray
 '@
 
-Set-Content -Path "$INSTALL_DIR\iris-login.ps1" -Value $LoginScript -Encoding UTF8
+# The login implementation lives OUTSIDE the PATH directory, and only the .cmd
+# shim is named `iris-login` on PATH. This is deliberate (#179080).
+#
+# We used to ship BOTH iris-login.ps1 and iris-login.cmd in $INSTALL_DIR. That
+# looks redundant-but-harmless and is not: PowerShell resolves .ps1 BEFORE .cmd,
+# so `iris-login` always hit the raw script and died under the default execution
+# policy ("cannot be loaded because running scripts is disabled on this system")
+# — while the .cmd shim that exists precisely to pass -ExecutionPolicy Bypass was
+# never reached. The same command worked in cmd.exe, which made it look flaky.
+# Keeping the .ps1 off PATH means nothing can shadow the shim.
+$LibDir = "$IRIS_DIR\lib"
+New-Item -ItemType Directory -Force -Path $LibDir | Out-Null
+Set-Content -Path "$LibDir\iris-login.ps1" -Value $LoginScript -Encoding UTF8
 
-# Also create a .cmd shim so iris-login works from cmd.exe
+# Remove the shadowing copy left by older installers, or the upgrade silently
+# keeps the bug: the stale $INSTALL_DIR\iris-login.ps1 still wins name resolution.
+if (Test-Path "$INSTALL_DIR\iris-login.ps1") {
+    Remove-Item -Force "$INSTALL_DIR\iris-login.ps1" -ErrorAction SilentlyContinue
+}
+
+# The only `iris-login` on PATH. Works from both PowerShell and cmd.exe.
 $LoginCmdShim = @"
 @echo off
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.iris\bin\iris-login.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\.iris\lib\iris-login.ps1" %*
 "@
 Set-Content -Path "$INSTALL_DIR\iris-login.cmd" -Value $LoginCmdShim -Encoding ASCII
 
@@ -506,6 +633,8 @@ if ($UserPath -notlike "*$INSTALL_DIR*") {
 # ─── Final output ────────────────────────────────────────────────────────────
 
 Write-Host ""
+Send-InstallBeacon -EventType "install_success"
+
 Write-Host "IRIS Code installed successfully!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Binary:  $INSTALL_DIR\iris.exe" -ForegroundColor DarkGray

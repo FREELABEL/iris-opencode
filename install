@@ -26,7 +26,7 @@ Installs:
 
 Options:
     -h, --help              Display this help message
-    -v, --version <version> Install a specific IRIS CLI version (e.g., 1.0.180)
+    -v, --version <version> Install a specific IRIS CLI version (see the releases page)
     -b, --binary <path>     Install IRIS CLI from a local binary
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
         --skip-sdk          Skip SDK/CLI installation
@@ -42,12 +42,43 @@ Options:
 
 Examples:
     curl -fsSL https://heyiris.io/install-code | bash
-    curl -fsSL https://heyiris.io/install-code | bash -s -- --version 1.0.180
+    curl -fsSL https://heyiris.io/install-code | bash -s -- --version <version>
     curl -fsSL https://heyiris.io/install-code | bash -s -- --only-code
     curl -fsSL https://heyiris.io/install-code | bash -s -- --skip-app
     curl -fsSL https://heyiris.io/install-code | bash -s -- --api-url https://custom.example.com
     curl -fsSL https://heyiris.io/install-code | bash -s -- --token api_token_xxx --user-id 42
 EOF
+}
+
+# ─── Install beacon (#179077) ─────────────────────────────────────────────────
+# Anonymous, metadata-only, fire-and-forget. Nothing about an install ATTEMPT
+# reached us before this: the CLI beacon needs a token, and there is no token
+# until after iris-login — which happens after the install. So a failed install
+# looked exactly like nobody trying.
+#
+# Never blocks (3s timeout, backgrounded) and never fails the install — the `||
+# true` is load-bearing under `set -e`. Opt out with IRIS_TELEMETRY=0.
+IRIS_BEACON_URL="https://heyiris.io/api/v6/telemetry/install"
+IRIS_INSTALLER_VERSION="2026-08-06"
+
+send_install_beacon() {
+    case "${IRIS_TELEMETRY:-}" in 0|off|false) return 0 ;; esac
+    command -v curl >/dev/null 2>&1 || return 0
+
+    local event_type="$1" step="${2:-}" reason="${3:-}"
+    local os arch has_git has_node
+    os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    arch=$(uname -m 2>/dev/null)
+    has_git=$(command -v git >/dev/null 2>&1 && echo true || echo false)
+    has_node=$(command -v node >/dev/null 2>&1 && echo true || echo false)
+
+    # Metadata only — no paths, no hostname, no username.
+    local payload
+    payload=$(printf '{"event_type":"%s","os":"%s","arch":"%s","installer_version":"%s","shell":"bash","has_git":%s,"has_node":%s,"step":"%s","reason":"%s"}' \
+        "$event_type" "$os" "$arch" "$IRIS_INSTALLER_VERSION" "$has_git" "$has_node" "$step" "$(printf '%s' "$reason" | tr -d '"\\' | cut -c1-200)")
+
+    (curl -fsS -m 3 -X POST -H 'Content-Type: application/json' -d "$payload" "$IRIS_BEACON_URL" >/dev/null 2>&1 &) || true
+    return 0
 }
 
 requested_version=${VERSION:-}
@@ -231,6 +262,66 @@ if [ "$(uname -s)" = "Darwin" ]; then
     fi
 fi
 
+# ─── Dependency bootstrap ────────────────────────────────────────────────────
+# MUST run before every dep check below. The unzip pre-flight, the tmux check,
+# install_bridge and install_remotion all branch on `command -v brew|node`, so
+# bootstrapping Homebrew at the END of this script (where it used to live) meant
+# a clean macOS box silently skipped the daemon, the bridge and Remotion.
+
+# Can we reach the terminal even though stdin is the curl pipe?
+IRIS_TTY=false
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    IRIS_TTY=true
+fi
+
+# Pick up an installed-but-unshimmed brew (common on fresh Apple Silicon)
+if ! command -v brew >/dev/null 2>&1; then
+    for _brew_path in /opt/homebrew/bin/brew /usr/local/bin/brew /home/linuxbrew/.linuxbrew/bin/brew; do
+        if [ -x "$_brew_path" ]; then eval "$("$_brew_path" shellenv)" || true; break; fi
+    done
+fi
+
+if [ "$(uname)" = "Darwin" ] && ! command -v brew >/dev/null 2>&1; then
+    echo -e "${CYAN}→${NC} Installing Homebrew (needed for tmux, Node.js and the Hive daemon)..."
+    if [ "$IRIS_TTY" = "true" ]; then
+        # Read the sudo password from the terminal, NOT the curl pipe. Without
+        # this redirect Homebrew aborts with "stdin is not a TTY".
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/tty || true
+    else
+        # No terminal at all — use Homebrew's own non-interactive mode. Needs
+        # passwordless sudo; degrade gracefully rather than aborting the install.
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true
+    fi
+    for _brew_path in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+        if [ -x "$_brew_path" ]; then eval "$("$_brew_path" shellenv)" || true; break; fi
+    done
+    if command -v brew >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Homebrew installed"
+    else
+        echo -e "${ORANGE}⚠${NC} Homebrew install failed — tmux, Node.js and the daemon will be skipped."
+        echo -e "${MUTED}  Install it from https://brew.sh, then re-run this installer.${NC}"
+    fi
+fi
+
+# Node.js — required by install_bridge (Agent Bridge + Hive daemon) and
+# install_remotion, both of which run long before the old end-of-script block.
+if ! command -v node >/dev/null 2>&1; then
+    echo -e "${CYAN}→${NC} Installing Node.js (required by the Agent Bridge and Remotion)..."
+    if command -v brew >/dev/null 2>&1; then
+        brew install node >/dev/null 2>&1 || true
+    elif command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y nodejs npm >/dev/null 2>&1 || true
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y nodejs npm >/dev/null 2>&1 || true
+    fi
+    if command -v node >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Node.js installed: $(node -v 2>/dev/null || echo unknown)"
+    else
+        echo -e "${ORANGE}⚠${NC} Node.js unavailable — Agent Bridge and Remotion will be skipped."
+        echo -e "${MUTED}  Install it from https://nodejs.org, then re-run this installer.${NC}"
+    fi
+fi
+
 # Soft pre-flight: warn (don't exit) about commands the binary install needs
 _missing_soft=""
 for _cmd in unzip; do
@@ -264,7 +355,9 @@ fi
 if ! command -v tmux >/dev/null 2>&1; then
     echo -e "${MUTED}Installing tmux (required for Hive compute sessions)...${NC}"
     if command -v brew >/dev/null 2>&1; then
-        brew install tmux >/dev/null 2>&1
+        # `|| true` matters: set -e is on, so a failed brew install would
+        # otherwise abort the whole installer here.
+        brew install tmux >/dev/null 2>&1 || true
     elif command -v apt-get >/dev/null 2>&1; then
         sudo apt-get install -y tmux >/dev/null 2>&1 || true
     elif command -v dnf >/dev/null 2>&1; then
@@ -292,6 +385,43 @@ fi
 INSTALL_DIR=$HOME/.iris/bin
 mkdir -p "$INSTALL_DIR"
 
+# Platform detection runs UNCONDITIONALLY, before the --binary branch.
+#
+# It used to live inside the `else` below — i.e. only on the download path. The desktop app
+# installs the CLI from its BUNDLED sidecar, so it always passes --binary, always took the
+# `if` branch, and never set os/arch. The tmux and Node sections further down then hit
+# `node-v$NODE_VERSION-$os-$arch` under `set -u` and died with:
+#
+#     line 461: os: unbound variable
+#
+# So the app's install path was broken 100% of the time while the curl-pipe path was fine —
+# and a bare-machine test of the curl path passes cleanly right next to it. Detection is
+# cheap, has no side effects, and every later section wants it, so it belongs out here where
+# both branches get it. (Originally 1afe66dc77; re-applied after this file was restored, because
+# a wholesale restore drops it exactly the way the wholesale replacement dropped the funnel.)
+raw_os=$(uname -s)
+os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
+case "$raw_os" in
+  Darwin*) os="darwin" ;;
+  Linux*) os="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) os="windows" ;;
+esac
+
+arch=$(uname -m)
+if [[ "$arch" == "aarch64" ]]; then
+  arch="arm64"
+fi
+if [[ "$arch" == "x86_64" ]]; then
+  arch="x64"
+fi
+
+if [ "$os" = "darwin" ] && [ "$arch" = "x64" ]; then
+  rosetta_flag=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
+  if [ "$rosetta_flag" = "1" ]; then
+    arch="arm64"
+  fi
+fi
+
 # If --binary is provided, skip all download/detection logic
 if [ -n "$binary_path" ]; then
     if [ ! -f "$binary_path" ]; then
@@ -300,29 +430,6 @@ if [ -n "$binary_path" ]; then
     fi
     specific_version="local"
 else
-    raw_os=$(uname -s)
-    os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
-    case "$raw_os" in
-      Darwin*) os="darwin" ;;
-      Linux*) os="linux" ;;
-      MINGW*|MSYS*|CYGWIN*) os="windows" ;;
-    esac
-
-    arch=$(uname -m)
-    if [[ "$arch" == "aarch64" ]]; then
-      arch="arm64"
-    fi
-    if [[ "$arch" == "x86_64" ]]; then
-      arch="x64"
-    fi
-
-    if [ "$os" = "darwin" ] && [ "$arch" = "x64" ]; then
-      rosetta_flag=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
-      if [ "$rosetta_flag" = "1" ]; then
-        arch="arm64"
-      fi
-    fi
-
     combo="$os-$arch"
     case "$combo" in
       linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64)
@@ -418,14 +525,40 @@ else
         fi
     fi
 
+    send_install_beacon "install_start"
+
     if [ -z "$requested_version" ]; then
-        url="https://github.com/FREELABEL/iris-opencode/releases/latest/download/$filename"
-        specific_version=$(curl -s https://api.github.com/repos/FREELABEL/iris-opencode/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p') || true
+        # Do NOT use /releases/latest. TWO release series share this repo — `v*` for this CLI
+        # and `desktop-v*` for the Tauri desktop app — and GitHub's "latest" is simply the most
+        # recently published NON-prerelease of either. On 2026-08-27, promoting
+        # desktop-v1.18.28 made /releases/latest return that tag; it has no bare `v` prefix, so
+        # the parse below produced an empty string and EVERY `curl | bash` install died with
+        # "Failed to fetch version information". The desktop app's release cadence must not be
+        # able to break the CLI installer.
+        #
+        # Ask for the newest release in THIS series instead. The `"v[0-9]` anchor is what
+        # excludes desktop-v*: after `"tag_name": "` that tag begins with `d`, not `v`.
+        specific_version=$(curl -s "https://api.github.com/repos/FREELABEL/iris-opencode/releases?per_page=30" \
+            | sed -n 's/.*"tag_name": *"v\([0-9][^"]*\)".*/\1/p' | head -1) || true
+
+        if [[ -z "$specific_version" ]]; then
+            # Last resort: the redirect target of /releases/latest/download still resolves by
+            # ASSET NAME, so it can land on a valid CLI release even when the API parse failed.
+            specific_version=$(curl -sI "https://github.com/FREELABEL/iris-opencode/releases/latest/download/$filename" \
+                | sed -n 's|.*/releases/download/v\([0-9][^/]*\)/.*|\1|p' | head -1) || true
+        fi
+
+        url="https://github.com/FREELABEL/iris-opencode/releases/download/v${specific_version}/$filename"
 
         if [[ -z "$specific_version" ]]; then
             echo -e "${RED}Failed to fetch version information${NC}"
             echo -e "${MUTED}Check your internet connection or install a specific version:${NC}"
-            echo -e "${MUTED}  curl -fsSL https://heyiris.io/install-code | bash -s -- --version 1.1.6${NC}"
+            # Do NOT name a version here. This line used to say 1.1.6 — an ancient build —
+            # and on 2026-08-27 a client followed it verbatim and installed that, because a
+            # hardcoded example in an error message reads as a recommendation. Point at the
+            # list instead, which cannot go stale.
+            echo -e "${MUTED}  Pick a version from https://github.com/FREELABEL/iris-opencode/releases${NC}"
+            echo -e "${MUTED}  curl -fsSL https://heyiris.io/install-code | bash -s -- --version <version>${NC}"
             exit 1
         fi
     else
@@ -698,6 +831,110 @@ if [[ "$no_modify_path" != "true" ]]; then
     fi
 fi
 
+# ─── Node.js ──────────────────────────────────────────────────────────────────
+#
+# The Hive bridge/daemon needs Node. This script never installed it, never checked for it,
+# and never mentioned it — `grep -ic node install` returned 0 — so the dependency surfaced
+# later, from a different component, as "bridge daemon still needs installing" with no hint
+# that Node was the reason.
+#
+# What a client actually did on a new Mac, 2026-08-30, after this script said SUCCESS:
+#   try brew -> "no pre-built node for this setup" -> download the official binary by hand
+#   -> permission error writing under /usr/local -> node finally detected -> re-run installer
+# Six improvised steps on a paid product, for a dependency we know we need.
+#
+# Deliberately NOT brew: it is absent on plenty of Macs, and "no pre-built bottle for this
+# setup" is precisely what sent that user to a manual download. The official tarball works
+# everywhere and pins the version.
+#
+# Deliberately into $HOME: the permission error above came from targeting a system path.
+# Nothing here needs sudo, and an installer that asks for it on first run is one people quit.
+NODE_VERSION="22.11.0"
+NODE_ROOT="$HOME/.iris/runtime"
+NODE_HOME="$NODE_ROOT/node-v$NODE_VERSION-$os-$arch"
+
+node_ok() {
+    command -v node >/dev/null 2>&1 || return 1
+    # v18 is the floor the bridge needs; an ancient node is worse than none because it fails
+    # deep inside npm rather than here.
+    node_major=$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)
+    [ "$node_major" -ge 18 ] 2>/dev/null
+}
+
+install_node() {
+    case "$os" in
+        darwin|linux) ;;
+        *) print_message warning "Skipping Node install on $os — install Node 18+ manually."; return 1 ;;
+    esac
+
+    if [ -x "$NODE_HOME/bin/node" ]; then
+        export PATH="$NODE_HOME/bin:$PATH"
+        node_ok && return 0
+    fi
+
+    node_url="https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$os-$arch.tar.gz"
+    print_message info "${MUTED}Installing Node ${NC}v$NODE_VERSION${MUTED} (needed by the Hive bridge)${NC}"
+
+    mkdir -p "$NODE_ROOT" || { print_message warning "Could not create $NODE_ROOT"; return 1; }
+    node_tmp=$(mktemp -d) || return 1
+    if ! curl -fsSL "$node_url" -o "$node_tmp/node.tar.gz"; then
+        print_message warning "Could not download Node from $node_url"
+        rm -rf "$node_tmp"; return 1
+    fi
+    if ! tar -xzf "$node_tmp/node.tar.gz" -C "$NODE_ROOT"; then
+        print_message warning "Could not unpack Node"
+        rm -rf "$node_tmp"; return 1
+    fi
+    rm -rf "$node_tmp"
+
+    export PATH="$NODE_HOME/bin:$PATH"
+    add_to_path "$config_file" "export PATH=$NODE_HOME/bin:\$PATH" 2>/dev/null || true
+    node_ok
+}
+
+if node_ok; then
+    print_message info "${MUTED}Node ${NC}$(node -v)${MUTED} already present${NC}"
+elif install_node; then
+    print_message info "${MUTED}Node ${NC}$(node -v)${MUTED} installed${NC}"
+else
+    # Fail LOUDLY rather than succeeding into a broken bridge. The whole reason this section
+    # exists is that a missing dependency used to be discovered by a later, unrelated error.
+    print_message warning "Node 18+ could not be installed automatically."
+    print_message warning "The Hive bridge/daemon will not work until Node is available."
+    print_message info "  Install it from https://nodejs.org and re-run this installer."
+fi
+
+# tmux — the daemon runs agent sessions inside it (173 references in the bridge).
+# Same failure as Node: never installed, never checked, and the daemon does not test for it
+# either — it simply exits code 1. A client hit this on 2026-08-31 immediately after the Node
+# fix and had to read daemon logs to discover the cause.
+#
+# Unlike Node there is no official static tarball, so brew is the only sane automatic route.
+# When brew is absent we FAIL LOUDLY naming tmux, rather than leaving a daemon that exits 1
+# with no reason given.
+ensure_tmux() {
+    command -v tmux >/dev/null 2>&1 && return 0
+    case "$os" in darwin|linux) ;; *) return 1 ;; esac
+    if command -v brew >/dev/null 2>&1; then
+        print_message info "${MUTED}Installing ${NC}tmux${MUTED} (needed by the Hive daemon)${NC}"
+        brew install tmux >/dev/null 2>&1 || true
+        command -v tmux >/dev/null 2>&1 && return 0
+    fi
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y tmux >/dev/null 2>&1 || true
+        command -v tmux >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+if ensure_tmux; then
+    print_message info "${MUTED}tmux ${NC}$(tmux -V 2>/dev/null | awk '{print $2}')${MUTED} present${NC}"
+else
+    print_message warning "tmux is not installed — the Hive daemon will exit immediately without it."
+    print_message info "  macOS:  brew install tmux"
+    print_message info "  Linux:  sudo apt-get install tmux"
+fi
+
 if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
     echo "$INSTALL_DIR" >> $GITHUB_PATH
     print_message info "Added $INSTALL_DIR to \$GITHUB_PATH"
@@ -706,6 +943,7 @@ fi
 # Add to PATH for current session
 export PATH="$INSTALL_DIR:$PATH"
 
+send_install_beacon "install_success" "cli"
 print_message info "\n${GREEN}[1/7]${NC} IRIS CLI ${MUTED}..........................${NC} ${GREEN}installed${NC}"
 
 # ─── Component 2: IRIS SDK / CLI ─────────────────────────────────────────────
@@ -800,7 +1038,7 @@ scaffold_mcp_config() {
     "iris-platform": {
       "_comment": "Remote IRIS platform — agents, integrations, workflows",
       "type": "remote",
-      "url": "https://heyiris.io/mcp",
+      "url": "https://heyiris.io/api/mcp",
       "enabled": false
     }
   }
@@ -1108,9 +1346,20 @@ REAL_SCRIPT="$0"
 BRIDGE_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 IRIS_CONFIG="$HOME/.iris/config.json"
 
+# Does this machine have a HIVE NODE key — not "is the user logged in".
+#
+# This used to return true whenever IRIS_API_KEY was set. That is the ACCOUNT key: it proves
+# who you are, and it is what `iris auth whoami` reads. The node key is a DIFFERENT credential,
+# issued per machine by /hive/register-node and stored as node_api_key in ~/.iris/config.json.
+#
+# Conflating them meant that as soon as someone logged in, node registration was skipped — so
+# the daemon came up with no valid node key and reported "HTTP 401 Invalid API key" while
+# `iris auth whoami` happily returned the user's email. A client hit exactly that on
+# 2026-08-27: authenticated, and the daemon offline, with nothing to connect the two.
+#
+# The bridge .env check went the same way: having a bridge configured says nothing about
+# whether THIS machine is a registered node.
 has_node_key() {
-    [ -n "${IRIS_API_KEY:-}" ] && return 0
-    [ -f "$BRIDGE_DIR/.env" ] && return 0
     [ -f "$IRIS_CONFIG" ] && grep -q '"node_api_key"' "$IRIS_CONFIG" 2>/dev/null && return 0
     return 1
 }
@@ -1171,6 +1420,21 @@ case "${1:-status}" in
             echo "Daemon already running"; exit 0
         fi
         rm -f "$SOCK"
+        # Prefer the supervisor when one exists. `stop` boots the launchd job out, so a
+        # plain nohup here would bring the daemon back UNSUPERVISED — alive now, gone after
+        # the next crash or reboot, and no longer the thing launchctl reports on. Loading
+        # the job starts it too, so this is a start either way.
+        LBL="io.heyiris.daemon"
+        PLIST="$HOME/Library/LaunchAgents/$LBL.plist"
+        if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
+            if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null \
+               || launchctl load "$PLIST" 2>/dev/null; then
+                sleep 2
+                echo "Daemon started (launchd)"
+                exit 0
+            fi
+        fi
+
         nohup node "$BRIDGE_DIR/daemon.js" > "$BRIDGE_DIR/daemon.log" 2>&1 &
         sleep 3
         if [ -S "$SOCK" ]; then
@@ -1182,12 +1446,90 @@ case "${1:-status}" in
             exit 1
         fi ;;
     stop)
+        # VERIFY THE STOP. This used to `kill` and immediately print "Daemon stopped",
+        # which is a claim, not an observation. When the process did not die promptly the
+        # next `start` found it alive, printed "Daemon already running", and the operator
+        # was told twice that everything worked while the OLD process kept running with a
+        # stale key — 401ing on every heartbeat. Measured 2026-08-12 after a key rotation.
+        #
+        # Also look for the process by name, not only by whoever holds port 3200. A daemon
+        # that crashed before binding, or bound elsewhere, is invisible to lsof and was
+        # reported as "Not running" while very much running.
         SOCK="$HOME/.iris/daemon.sock"
-        PID=$(lsof -ti :3200 2>/dev/null || true)
-        if [ -n "$PID" ]; then kill "$PID" 2>/dev/null; echo "Daemon stopped (PID: $PID)"
-        elif [ -S "$SOCK" ]; then rm -f "$SOCK"; echo "Cleaned stale socket"
-        else echo "Not running"; fi ;;
-    restart) "$0" stop; sleep 1; "$0" start ;;
+
+        # THE DAEMON IS SUPERVISED. io.heyiris.daemon is a launchd job with KeepAlive, so
+        # killing the pid is whack-a-mole: launchd respawns it within a second and `stop`
+        # looks broken when it worked. Worse, `restart` then hits a live process and prints
+        # "Daemon already running" — reporting success for a daemon still holding whatever
+        # key it booted with. Stop the JOB, not the process.
+        LBL="io.heyiris.daemon"
+        PLIST="$HOME/Library/LaunchAgents/$LBL.plist"
+        if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
+            launchctl bootout "gui/$(id -u)/$LBL" 2>/dev/null \
+              || launchctl unload "$PLIST" 2>/dev/null || true
+            sleep 1
+        fi
+
+        PIDS=$(lsof -ti :3200 2>/dev/null || true)
+        PIDS="$PIDS $(pgrep -f "$BRIDGE_DIR/daemon.js" 2>/dev/null || true)"
+        PIDS=$(echo $PIDS | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ')
+
+        if [ -z "$(echo $PIDS | tr -d ' ')" ]; then
+            if [ -S "$SOCK" ]; then rm -f "$SOCK"; echo "Cleaned stale socket"
+            else echo "Not running"; fi
+            exit 0
+        fi
+
+        for P in $PIDS; do kill "$P" 2>/dev/null || true; done
+
+        # Give it up to 5s to exit cleanly, then stop asking nicely. Polling beats a fixed
+        # sleep in both directions: a fast exit is not punished, a slow one is not missed.
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            STILL=""
+            for P in $PIDS; do kill -0 "$P" 2>/dev/null && STILL="$STILL $P"; done
+            [ -z "$(echo $STILL | tr -d ' ')" ] && break
+            sleep 0.5
+        done
+
+        STILL=""
+        for P in $PIDS; do kill -0 "$P" 2>/dev/null && STILL="$STILL $P"; done
+        if [ -n "$(echo $STILL | tr -d ' ')" ]; then
+            echo "Daemon did not exit on SIGTERM — forcing:$STILL"
+            for P in $STILL; do kill -9 "$P" 2>/dev/null || true; done
+            sleep 1
+        fi
+
+        STILL=""
+        for P in $PIDS; do kill -0 "$P" 2>/dev/null && STILL="$STILL $P"; done
+        rm -f "$SOCK" 2>/dev/null || true
+        if [ -n "$(echo $STILL | tr -d ' ')" ]; then
+            echo "FAILED to stop daemon:$STILL — still running" >&2
+            exit 1
+        fi
+        echo "Daemon stopped (PID:$PIDS)" ;;
+    restart)
+        # Under launchd, `kickstart -k` is the only restart that is guaranteed to replace the
+        # process — it kills and relaunches in one supervised step, so there is no window
+        # where `start` can find a survivor and no-op. This matters after a key rotation:
+        # the running process holds a credential that is now invalid, so it MUST be replaced.
+        LBL="io.heyiris.daemon"
+        PLIST="$HOME/Library/LaunchAgents/$LBL.plist"
+        if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
+            if launchctl kickstart -k "gui/$(id -u)/$LBL" 2>/dev/null; then
+                sleep 2
+                echo "Daemon restarted (launchd)"
+                exit 0
+            fi
+        fi
+
+        # Unsupervised fallback. `stop` exits non-zero if the process survived, so do not
+        # carry on to `start` — it would find the old process and report success for it.
+        if ! "$0" stop; then
+            echo "Not restarting: the old daemon is still running." >&2
+            exit 1
+        fi
+        sleep 1
+        "$0" start ;;
     status)
         SOCK="$HOME/.iris/daemon.sock"
         if [ -S "$SOCK" ]; then
@@ -1464,7 +1806,13 @@ echo -e ""
 echo -e "${CYAN}IRIS Login${NC}"
 echo -e ""
 echo -n "  Email: "
-read -r USER_EMAIL || USER_EMAIL=""
+# Prefer the terminal over stdin — stdin is the script itself when this is
+# reached via a pipe (curl | bash), which made the prompt unanswerable.
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    read -r USER_EMAIL < /dev/tty || USER_EMAIL=""
+else
+    read -r USER_EMAIL || USER_EMAIL=""
+fi
 if [ -z "$USER_EMAIL" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
 if ! echo "$USER_EMAIL" | grep -qE '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'; then
     echo -e "${RED}  Invalid email format.${NC}"
@@ -1490,7 +1838,11 @@ else
     echo -e "${GREEN}  Code sent!${NC} Check your inbox."
 fi
 echo -n "  Enter the 6-digit code: "
-read -r CODE || CODE=""
+if [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/null; then
+    read -r CODE < /dev/tty || CODE=""
+else
+    read -r CODE || CODE=""
+fi
 # Strip all whitespace (spaces, tabs, non-breaking spaces from email copy-paste)
 CODE=$(echo "$CODE" | tr -d '[:space:]')
 if [ -z "$CODE" ]; then echo -e "${MUTED}Cancelled.${NC}"; exit 0; fi
@@ -2191,8 +2543,11 @@ if [ "$(uname)" = "Darwin" ] && [ -e /dev/tty ] && (echo "" > /dev/tty) 2>/dev/n
         if [ "$_env_answer" != "n" ] && [ "$_env_answer" != "N" ]; then
             # Step 1: Homebrew
             if [ "$_needs_brew" = "true" ]; then
+                # Normally already handled by the bootstrap at the top; this is
+                # the fallback path. Redirect stdin to the terminal so Homebrew
+                # can prompt for sudo instead of failing on the curl pipe.
                 echo -e "${CYAN}→${NC} Installing Homebrew..."
-                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/tty || true
                 if [ -f /opt/homebrew/bin/brew ]; then
                     eval "$(/opt/homebrew/bin/brew shellenv)"
                 elif [ -f /usr/local/bin/brew ]; then

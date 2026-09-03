@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Good Deals CLI — Andrew "Esher" Usher's Chief-of-Staff financial engine
@@ -250,7 +251,7 @@ async function runArtifactCommand(
 
     const payload = result?.data ?? result
     if (args.json) {
-      console.log(JSON.stringify(payload, null, 2))
+      await writeJson(payload)
     } else {
       printer(payload)
     }
@@ -326,11 +327,11 @@ const ListCommand = cmd({
     try {
       const result = await callGoodDeals("list_artifacts", { bloq_id: args.bloqId }, userId)
       if (result == null) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
-      const items: any[] = result?.data ?? []
+      const items: any[] = firstArray(result?.data)
       spinner.stop(`${items.length} artifact(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
       } else if (items.length === 0) {
         prompts.log.warn("No artifacts yet — generate one:")
         console.log("  " + dim("iris good-deals lean-canvas " + args.bloqId))
@@ -376,7 +377,7 @@ const GetCommand = cmd({
       spinner.stop("Done")
 
       if (args.json) {
-        console.log(JSON.stringify(payload, null, 2))
+        await writeJson(payload)
       } else if (args.kind === "lean_canvas") {
         printLeanCanvas(payload)
       } else if (args.kind === "three_statement") {
@@ -384,7 +385,7 @@ const GetCommand = cmd({
       } else if (args.kind === "operational_hq") {
         printOperationalHq(payload)
       } else {
-        console.log(JSON.stringify(payload, null, 2))
+        await writeJson(payload)
       }
       prompts.outro("Done")
     } catch (err) {

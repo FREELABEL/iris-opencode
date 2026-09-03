@@ -18,6 +18,8 @@
 
 ### Installation
 
+**macOS & Linux**
+
 ```bash
 # One-line install (recommended)
 curl -fsSL https://raw.githubusercontent.com/FREELABEL/iris-opencode/main/install | bash
@@ -25,6 +27,19 @@ curl -fsSL https://raw.githubusercontent.com/FREELABEL/iris-opencode/main/instal
 # Or as part of the full IRIS SDK
 curl -fsSL https://heyiris.io/install-iris.sh | bash
 ```
+
+**Windows** (PowerShell)
+
+```powershell
+irm https://heyiris.io/install-code.ps1 | iex
+```
+
+Then restart your terminal — the installer adds `%USERPROFILE%\.iris\bin` to your
+user PATH, and an already-open shell won't see it. Authenticate with `iris-login`.
+
+> [!NOTE]
+> On Windows the Agent Bridge step is skipped unless **Git** and **Node.js** are
+> installed, and the desktop app is not available yet. Neither blocks the CLI.
 
 > [!NOTE]
 > IRIS Code is a customized fork of [OpenCode](https://github.com/anomalyco/opencode), optimized for the IRIS platform.

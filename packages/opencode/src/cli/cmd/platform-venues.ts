@@ -1,9 +1,10 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, IRIS_API, writeJson, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Sync helpers
@@ -86,11 +87,11 @@ const ListCommand = cmd({
       if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
 
       const raw = (await res.json()) as any
-      const items: any[] = raw?.data?.data ?? raw?.data ?? (Array.isArray(raw) ? raw : [])
+      const items: any[] = firstArray(raw?.data?.data, raw?.data, (Array.isArray(raw) ? raw : []))
       if (spinner) spinner.stop(`${items.length} venue(s)`)
 
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
         return
       }
 
@@ -250,8 +251,6 @@ const UpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Venue #${args.id}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const payload: Record<string, unknown> = {}
     if (args.name) payload.name = args.name
@@ -262,10 +261,10 @@ const UpdateCommand = cmd({
     if (args["hourly-rate"]) payload.hourly_rate = args["hourly-rate"]
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --name, --type, --city, etc.")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --name, --type, --city, etc.")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")
@@ -538,244 +537,71 @@ export async function findOnlineHiveNode(): Promise<{ id: string; name: string }
 export async function dispatchHiveSearch(node: { id: string; name: string }, query: string, limit: number): Promise<any[]> {
   const userId = await resolveUserId()
 
-  // Self-contained Node.js script sent inline — no file dependencies on the node.
-  // Uses Playwright (baked into the Hive daemon environment).
-  // Strategy: Bing Maps (headless-friendly) → Google Maps fallback → DuckDuckGo fallback.
-  const nodeScript = `
-const { chromium } = require('playwright');
-(async () => {
-  const QUERY = ${JSON.stringify(query)};
-  const LIMIT = ${limit};
-  const log = (...a) => process.stderr.write('[venue-search] ' + a.join(' ') + '\\n');
-  let browser;
-  try {
-    browser = await chromium.launch({ headless: true, args: ['--no-sandbox','--disable-setuid-sandbox','--disable-gpu'] });
-    const ctx = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      locale: 'en-US', viewport: { width: 1280, height: 900 }
-    });
-    const page = await ctx.newPage();
-    let venues = [];
-
-    // ── Strategy 1: Google Maps ──
-    log('Trying Google Maps...');
-    try {
-      await page.goto('https://www.google.com/maps/search/' + encodeURIComponent(QUERY), { waitUntil: 'networkidle', timeout: 25000 });
-      await page.waitForTimeout(2000);
-      // Dismiss consent
-      try {
-        const cb = page.locator('button:has-text("Accept all"), button:has-text("Reject all")');
-        if (await cb.first().isVisible({ timeout: 1500 })) { await cb.first().click(); await page.waitForTimeout(1500); }
-      } catch {}
-      // Wait for feed
-      try { await page.waitForSelector('div[role="feed"]', { timeout: 8000 }); } catch {}
-      // Scroll
-      for (let i = 0; i < Math.ceil(LIMIT/4)+1; i++) {
-        try { await page.locator('div[role="feed"]').evaluate(el => el.scrollBy(0, 600)); await page.waitForTimeout(1200); } catch {}
-      }
-      venues = await page.evaluate((max) => {
-        const items = [];
-        for (const card of document.querySelectorAll('div[role="feed"] > div > div[jsaction]')) {
-          if (items.length >= max) break;
-          try {
-            const a = card.querySelector('a[aria-label]');
-            const title = a?.getAttribute('aria-label') || '';
-            if (!title || title.length < 2) continue;
-            const txt = card.textContent || '';
-            const rm = (card.querySelector('span[role="img"]')?.getAttribute('aria-label')||'').match(/([\\d.]+)\\s*star/);
-            const cm = (card.querySelector('span[role="img"]')?.getAttribute('aria-label')||'').match(/(\\d[\\d,]*)\\s*review/);
-            const am = txt.match(/(\\d+\\s+[\\w\\s]+(?:St|Ave|Blvd|Dr|Rd|Ln|Way|Ct|Pkwy|Hwy|Loop|Cir|Pl)[^\\n]*)/i);
-            const pm = txt.match(/\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}/);
-            let website = '';
-            for (const l of card.querySelectorAll('a[href]')) {
-              if (l.href && !l.href.includes('google.com') && l.href.startsWith('http')) { website = l.href; break; }
-            }
-            items.push({ title, address: am?am[1].trim():'', rating: rm?parseFloat(rm[1]):null, ratingCount: cm?parseInt(cm[1].replace(/,/g,'')):null, phone: pm?pm[0]:'', website, photo: null, mapsUrl: a?.href||'' });
-          } catch {}
-        }
-        return items;
-      }, LIMIT);
-      log('Google Maps: ' + venues.length + ' result(s)');
-    } catch(e) { log('Google Maps error: ' + e.message); }
-
-    // ── Strategy 2: Bing Maps ──
-    if (venues.length === 0) {
-      log('Trying Bing...');
-      try {
-        await page.goto('https://www.bing.com/maps?q=' + encodeURIComponent(QUERY), { waitUntil: 'domcontentloaded', timeout: 20000 });
-        await page.waitForTimeout(4000);
-        venues = await page.evaluate((max) => {
-          const items = [];
-          for (const card of document.querySelectorAll('.entity-listing-row, .b_scard, .b_algo')) {
-            if (items.length >= max) break;
-            const title = card.querySelector('.entity_listing_name, .lc_content h2, a')?.textContent?.trim() || '';
-            if (!title) continue;
-            const address = card.querySelector('.entity_listing_address, .b_factrow')?.textContent?.trim() || '';
-            const phone = card.querySelector('.entity_listing_phone')?.textContent?.trim() || '';
-            const rm = card.querySelector('.entity_listing_rating, .csrc')?.textContent?.match(/([\\d.]+)/);
-            items.push({ title, address, rating: rm?parseFloat(rm[1]):null, ratingCount: null, phone, website: '', photo: null, mapsUrl: '' });
-          }
-          return items;
-        }, LIMIT);
-        log('Bing: ' + venues.length + ' result(s)');
-      } catch(e) { log('Bing error: ' + e.message); }
-    }
-
-    // ── Strategy 3: Bing web search (most reliable headless) ──
-    if (venues.length === 0) {
-      log('Trying Bing web search...');
-      try {
-        await page.goto('https://www.bing.com/search?q=' + encodeURIComponent(QUERY), { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await page.waitForTimeout(3000);
-        venues = await page.evaluate((max) => {
-          const items = [];
-          // Bing local pack results
-          for (const card of document.querySelectorAll('.b_scard, .b_ans .b_factrow, .local-results .b_algo, [data-tag="LocalResults.Places"] li, .b_localList li')) {
-            if (items.length >= max) break;
-            const title = card.querySelector('h2, a, .b_prominentFocusLabel, .lc_content h2')?.textContent?.trim() || '';
-            if (!title || title.length < 3) continue;
-            const text = card.textContent || '';
-            const am = text.match(/(\\d+\\s+[\\w\\s]+(?:St|Ave|Blvd|Dr|Rd|Ln|Way|Ct|Pkwy|Hwy)[^\\n]*)/i);
-            const pm = text.match(/\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}/);
-            const rm = text.match(/(\\d\\.\\d)\\s*(?:\\/\\s*5|star)/i);
-            if (!items.find(i => i.title === title)) {
-              items.push({ title, address: am?am[1].trim():'', rating: rm?parseFloat(rm[1]):null, ratingCount: null, phone: pm?pm[0]:'', website: '', photo: null, mapsUrl: '' });
-            }
-          }
-          return items;
-        }, LIMIT);
-        log('Bing web: ' + venues.length + ' result(s)');
-      } catch(e) { log('Bing web error: ' + e.message); }
-    }
-
-    // ── Strategy 4: DuckDuckGo ──
-    if (venues.length === 0) {
-      log('Trying DuckDuckGo...');
-      try {
-        await page.goto('https://duckduckgo.com/?q=' + encodeURIComponent(QUERY) + '&ia=places', { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await page.waitForTimeout(3000);
-        venues = await page.evaluate((max) => {
-          const items = [];
-          for (const card of document.querySelectorAll('.module--places__item, [data-testid="place"]')) {
-            if (items.length >= max) break;
-            const title = card.querySelector('h3, .module--places__name')?.textContent?.trim() || '';
-            if (!title) continue;
-            items.push({ title, address: card.querySelector('.module--places__address')?.textContent?.trim()||'', rating: null, ratingCount: null, phone: card.querySelector('.module--places__phone')?.textContent?.trim()||'', website: '', photo: null, mapsUrl: '' });
-          }
-          return items;
-        }, LIMIT);
-        log('DuckDuckGo: ' + venues.length + ' result(s)');
-      } catch(e) { log('DuckDuckGo error: ' + e.message); }
-    }
-
-    // ── Email enrichment: visit each venue's website to find contact emails ──
-    if (venues.length > 0) {
-      log('Enriching ' + venues.length + ' venues with emails...');
-      for (let i = 0; i < venues.length; i++) {
-        const v = venues[i];
-        // Skip if no website or already has email
-        if (v.email || !v.website) continue;
-        try {
-          log('  Checking website: ' + v.website);
-          await page.goto(v.website, { waitUntil: 'domcontentloaded', timeout: 10000 });
-          await page.waitForTimeout(1500);
-          const contactInfo = await page.evaluate(() => {
-            const text = document.body?.innerText || '';
-            const html = document.body?.innerHTML || '';
-            // Find email addresses
-            const emailRx = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/g;
-            const emails = [...new Set((text.match(emailRx) || []).concat(html.match(emailRx) || []))];
-            // Filter out common junk emails
-            const validEmails = emails.filter(e =>
-              !e.includes('example.com') && !e.includes('sentry') &&
-              !e.includes('wixpress') && !e.includes('squarespace') &&
-              !e.includes('.png') && !e.includes('.jpg') &&
-              !e.endsWith('.js') && !e.endsWith('.css')
-            );
-            // Also grab social links
-            const socials = {};
-            for (const a of document.querySelectorAll('a[href]')) {
-              const h = a.href || '';
-              if (h.includes('instagram.com/') && !socials.instagram) socials.instagram = h;
-              if (h.includes('facebook.com/') && !socials.facebook) socials.facebook = h;
-              if ((h.includes('twitter.com/') || h.includes('x.com/')) && !socials.twitter) socials.twitter = h;
-            }
-            return { emails: validEmails.slice(0, 3), socials };
-          });
-          if (contactInfo.emails.length > 0) {
-            v.email = contactInfo.emails[0];
-            v.emails = contactInfo.emails;
-            log('    Found email: ' + v.email);
-          }
-          if (Object.keys(contactInfo.socials).length > 0) {
-            v.socials = contactInfo.socials;
-          }
-        } catch(e) { log('  Skip ' + v.title + ': ' + e.message); }
-      }
-    }
-
-    // Also try contact/about pages for venues missing emails
-    for (let i = 0; i < venues.length; i++) {
-      const v = venues[i];
-      if (v.email || !v.website) continue;
-      const contactPaths = ['/contact', '/about', '/contact-us', '/about-us'];
-      for (const cp of contactPaths) {
-        try {
-          const base = new URL(v.website).origin;
-          await page.goto(base + cp, { waitUntil: 'domcontentloaded', timeout: 8000 });
-          await page.waitForTimeout(1000);
-          const emails = await page.evaluate(() => {
-            const rx = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/g;
-            return [...new Set((document.body?.innerText||'').match(rx)||[])].filter(e =>
-              !e.includes('example') && !e.includes('sentry') && !e.endsWith('.png') && !e.endsWith('.js')
-            );
-          });
-          if (emails.length > 0) {
-            v.email = emails[0];
-            v.emails = emails.slice(0, 3);
-            log('    Found email on ' + cp + ': ' + v.email);
-            break;
-          }
-        } catch {}
-      }
-    }
-
-    console.log(JSON.stringify(venues, null, 2));
-    const withEmail = venues.filter(v => v.email).length;
-    log('Total: ' + venues.length + ' venue(s), ' + withEmail + ' with email');
-  } catch(e) {
-    log('Fatal: ' + e.message);
-    console.log('[]');
-  } finally {
-    if (browser) await browser.close();
-  }
-})();
-`.trim()
-
-  // Use heredoc to avoid single-quote escaping hell.
-  // Set NODE_PATH so require('playwright') resolves from the daemon's node_modules
-  // regardless of which workspace dir the script runs from.
+  // Browser work runs through agent-browser (CDP + accessibility snapshots), invoked
+  // with `npx --yes` so the node needs no pre-installed engine. This replaced a
+  // Playwright script that also had to hunt for node_modules/playwright to set
+  // NODE_PATH — that resolution hack is gone with it.
+  //
+  // Strategy is Google Maps only, and deliberately so: the previous Bing-local-pack
+  // and DuckDuckGo fallbacks were returning nothing and could not be verified, and
+  // Bing web results yield listicles ("The 16 Best Coffee Shops in Austin") rather
+  // than venue records — plausible output that is worse than an empty one.
+  const q = encodeURIComponent(query)
   const script = `#!/bin/bash
-set -e
+set -o pipefail
+AB="npx --yes agent-browser"
 
-# Resolve daemon's node_modules for playwright
-DAEMON_DIR=""
-for d in ~/.iris/daemon ~/Sites/freelabel/fl-docker-dev/coding-agent-bridge; do
-  [ -d "$d/node_modules/playwright" ] && DAEMON_DIR="$d" && break
-done
+# The agent-browser daemon PERSISTS the browser between invocations, so a stale
+# session plus a blind sleep will happily scrape the PREVIOUS query's feed and
+# return confident, well-formed, wrong venues. Start clean, then wait on the
+# thing we are about to read rather than on a timer.
+$AB close --all >/dev/null 2>&1 || true
+$AB open "https://www.google.com/maps/search/${q}" >/dev/null 2>&1 || true
+$AB wait --load networkidle >/dev/null 2>&1 || true
+$AB wait "[role=feed] a[href*='/maps/place/']" >/dev/null 2>&1 || true
 
-if [ -n "$DAEMON_DIR" ]; then
-  export NODE_PATH="$DAEMON_DIR/node_modules:$NODE_PATH"
-fi
+$AB eval --stdin --json <<'VENUE_EVAL_EOF' | node -e '
+let s=""; process.stdin.on("data",d=>s+=d).on("end",()=>{
+  let r={};
+  try { r = JSON.parse(s); } catch (e) { process.stderr.write("[venue-search] unparseable eval output\n"); process.stdout.write("[]"); return; }
+  const d = (r && r.data && r.data.result) || {};
+  const rows = d.rows || [];
+  // The denominator. A page that rendered results while our selectors matched none
+  // is a STALE SELECTOR, not an empty result set, and it must not read as "no venues".
+  if (d.feed > 0 && rows.length === 0) {
+    process.stderr.write("[venue-search] SELECTORS STALE: page rendered " + d.feed + " feed item(s), extractor matched 0\n");
+  } else {
+    process.stderr.write("[venue-search] feed=" + d.feed + " extracted=" + rows.length + "\n");
+  }
+  process.stdout.write(JSON.stringify(rows));
+});
+'
+(() => {
+  const feed = document.querySelectorAll('[role=feed] > div').length;
+  const rows = [];
+  for (const el of document.querySelectorAll('[role=feed] > div')) {
+    const a = el.querySelector('a[href*="/maps/place/"]');
+    if (!a) continue;
+    const lines = el.innerText.split('\n').map(x => x.trim()).filter(Boolean);
+    const name = a.getAttribute('aria-label') || lines[0];
+    if (!name) continue;
+    const meta = lines.find(x => x.includes('·')) || '';
+    const parts = meta.split('·').map(x => x.trim()).filter(Boolean);
+    rows.push({
+      name,
+      rating: lines.find(x => /^[0-9](\.[0-9])?$/.test(x)) || null,
+      type: parts[0] || null,
+      address: parts.length > 1 ? parts[parts.length - 1] : null,
+      source_url: a.href,
+      source: 'google-maps',
+    });
+    if (rows.length >= ${limit}) break;
+  }
+  return { feed, rows };
+})()
+VENUE_EVAL_EOF
 
-SCRIPT_FILE=$(mktemp /tmp/iris-venue-search-XXXXXX.js)
-cat > "$SCRIPT_FILE" << 'VENUE_SEARCH_EOF'
-${nodeScript}
-VENUE_SEARCH_EOF
-node "$SCRIPT_FILE"
-EXIT_CODE=$?
-rm -f "$SCRIPT_FILE"
-exit $EXIT_CODE`
+$AB close --all >/dev/null 2>&1 || true`
 
   const createRes = await irisFetch(`/api/v6/nodes/tasks`, {
     method: "POST",
@@ -833,7 +659,7 @@ exit $EXIT_CODE`
 
 const SearchCommand = cmd({
   command: "search <query>",
-  describe: "search for venues via Hive browser (Google Maps). Falls back to Serper API if no nodes online.",
+  describe: "search YOUR venues. Use --web to search the open web instead (Hive browser / Serper).",
   aliases: ["find", "scrape"],
   builder: (yargs) =>
     yargs
@@ -841,13 +667,61 @@ const SearchCommand = cmd({
       .option("limit", { describe: "max results", type: "number", default: 10 })
       .option("save", { describe: "auto-create venues from results", type: "boolean", default: false })
       .option("type", { describe: "venue type to assign on save", type: "string", default: "venue" })
-      .option("serper", { describe: "force Serper API instead of Hive browser", type: "boolean", default: false })
+      .option("web", { describe: "search the open web (Google Maps via Hive, Serper fallback) instead of your venues", type: "boolean", default: false })
+      .option("serper", { describe: "force Serper API instead of Hive browser (implies --web)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro("◈  Venue Search") }
 
     const token = await requireAuth()
     if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    // #180716: `search` means "search MY data" on every other command in this CLI. Here it
+    // meant "scrape Google Maps", so `venues search "day care"` answered with Care.com, a Yelp
+    // page for Honolulu and a Baltimore directory — none of them the caller's venues, and
+    // nothing in the output saying the source was the open web.
+    //
+    // The web lookup is a real capability and is NOT removed — it moves behind --web (and the
+    // existing `scrape` alias). Default is now the venue list you actually own.
+    const wantsWeb = Boolean(args.web) || String(args.$0 ?? "").endsWith("scrape")
+    if (!wantsWeb) {
+      const spinner0 = args.json ? null : prompts.spinner()
+      spinner0?.start("Searching your venues…")
+      try {
+        // The venues index reads `query`, NOT `search` — `venues list` proves it. Sending the
+        // wrong name here would have returned every venue and looked like a working search.
+        const params = new URLSearchParams({ query: String(args.query), limit: String(args.limit) })
+        const res = await irisFetch(`/api/v1/venues?${params}`)
+        const ok = await handleApiError(res, "Search venues")
+        if (!ok) { spinner0?.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+        const raw = (await res.json()) as any
+        const rows: any[] = firstArray(raw?.data?.data, raw?.data, (Array.isArray(raw) ? raw : []))
+        spinner0?.stop(`${rows.length} of your venue(s)`)
+
+        if (args.json) { await writeJson({ query: args.query, source: "your-venues", venues: rows }); return }
+
+        printDivider()
+        if (!rows.length) {
+          console.log(`  ${dim(`No venue of yours matches "${args.query}"`)}`)
+        } else {
+          for (const v of rows) {
+            console.log(`  ${dim(`#${v.id}`)} ${bold(String(v.name ?? "(unnamed)"))}`)
+            const where = [v.city, v.state].filter(Boolean).join(", ")
+            if (where) console.log(`      ${dim(where)}`)
+          }
+        }
+        printDivider()
+        // Name the other capability rather than silently owning the noun.
+        console.log(`  ${dim("Search the open web instead:")} iris venues search "${args.query}" --web`)
+        prompts.outro("Done")
+        return
+      } catch (err) {
+        spinner0?.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+    }
 
     const spinner = args.json ? null : prompts.spinner()
     let places: any[] = []
@@ -904,7 +778,7 @@ const SearchCommand = cmd({
         if (spinner) spinner.stop(`${places.length} venue(s) found via Serper`)
       }
 
-      if (args.json && !args.save) { console.log(JSON.stringify(places, null, 2)); return }
+      if (args.json && !args.save) { await writeJson(places); return }
 
       if (places.length === 0) {
         if (!args.json) prompts.log.warn("No venues found for that query")
@@ -928,7 +802,7 @@ const SearchCommand = cmd({
             const checkRes = await irisFetch(`/api/v1/venues?query=${encodeURIComponent(searchName)}&limit=5`)
             if (checkRes.ok) {
               const checkRaw = (await checkRes.json()) as any
-              const candidates: any[] = checkRaw?.data?.data ?? checkRaw?.data ?? []
+              const candidates: any[] = firstArray(checkRaw?.data?.data, checkRaw?.data)
               existing = candidates.find((c: any) =>
                 (placeId && c.google_place_id === placeId) ||
                 (c.name && searchName && c.name.toLowerCase() === searchName.toLowerCase())
@@ -1011,7 +885,7 @@ const SearchCommand = cmd({
       saveSpinner.stop(`${success("✓")} ${summary || "No changes"}`)
 
       if (args.json) {
-        console.log(JSON.stringify({ created, touched, total: places.length, method: searchMethod, places }, null, 2))
+        await writeJson({ created, touched, total: places.length, method: searchMethod, places })
       }
 
       prompts.outro(dim("iris venues list --sort trending"))
@@ -1049,7 +923,7 @@ const EnrichCommand = cmd({
       const listRes = await irisFetch("/api/v1/venues?limit=100")
       if (!listRes.ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
       const listRaw = (await listRes.json()) as any
-      const allVenues: any[] = listRaw?.data?.data ?? listRaw?.data ?? (Array.isArray(listRaw) ? listRaw : [])
+      const allVenues: any[] = firstArray(listRaw?.data?.data, listRaw?.data, (Array.isArray(listRaw) ? listRaw : []))
       venueIds = allVenues
         .filter((v: any) => !v.google_place_id || !v.photo || !v.description)
         .map((v: any) => Number(v.id))
@@ -1088,7 +962,7 @@ const EnrichCommand = cmd({
       if (!searchRes.ok) { if (spinner) spinner.stop(`#${vid}: search failed`, 1); continue }
       const searchRaw = (await searchRes.json()) as any
       const searchResult = searchRaw?.result ?? searchRaw?.data ?? searchRaw
-      const places: any[] = searchResult?.results ?? searchResult?.places ?? []
+      const places: any[] = firstArray(searchResult?.results, searchResult?.places)
       const match = places[0]
 
       if (!match) {
@@ -1121,7 +995,7 @@ const EnrichCommand = cmd({
       }
     }
 
-    if (args.json) { console.log(JSON.stringify(results, null, 2)); return }
+    if (args.json) { await writeJson(results); return }
     prompts.outro(dim("iris venues list"))
   },
 })

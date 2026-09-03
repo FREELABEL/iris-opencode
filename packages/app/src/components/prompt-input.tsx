@@ -28,11 +28,13 @@ import {
 } from "@/context/prompt"
 import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
+import { createDictation } from "@/hooks/dictation"
 import { useNavigate, useParams } from "@solidjs/router"
 import { useSync } from "@/context/sync"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Button } from "@opencode-ai/ui/button"
 import { Icon } from "@opencode-ai/ui/icon"
+import { Spinner } from "@opencode-ai/ui/spinner"
 import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Select } from "@opencode-ai/ui/select"
@@ -769,6 +771,31 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     handleInput()
     setStore("popover", null)
   }
+
+  // Dictation. Records in the webview and transcribes on the LOCAL server (POST /transcribe),
+  // which runs whisper.cpp on this machine — the audio goes to 127.0.0.1 and nowhere else.
+  const [dictationError, setDictationError] = createSignal<string>()
+  const dictation = createDictation({
+    url: () => sdk.url,
+    onError: setDictationError,
+    onTranscript: (text) => {
+      if (!editorRef) return
+      setDictationError(undefined)
+      // Append into the DOM and re-parse, rather than replacing the prompt with one text
+      // part — a whole-prompt set would silently drop file attachments and pills.
+      const existing = editorRef.textContent ?? ""
+      const gap = existing.length > 0 && !/\s$/.test(existing) ? " " : ""
+      editorRef.appendChild(createTextFragment(gap + text))
+      handleInput()
+      editorRef.focus()
+      const range = document.createRange()
+      range.selectNodeContents(editorRef)
+      range.collapse(false)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    },
+  })
 
   const abort = () =>
     sdk.client.session
@@ -1582,6 +1609,56 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     </Button>
                   </TooltipKeybind>
                 </Show>
+                <Tooltip
+                  placement="top"
+                  value={
+                    dictationError() ??
+                    (dictation.phase() === "recording"
+                      ? "Stop and transcribe"
+                      : dictation.phase() === "transcribing"
+                        ? "Transcribing on-device…"
+                        : "Dictate (on-device)")
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    aria-label="Dictate"
+                    disabled={dictation.phase() === "transcribing"}
+                    onClick={() => dictation.toggle()}
+                    classList={{
+                      "size-6 items-center justify-center": true,
+                      // Hover-to-reveal ONLY while idle. Recording and transcribing must stay
+                      // on screen: the first version kept `_hidden` applied in every state and
+                      // tried to win it back with `flex`, so an active microphone vanished the
+                      // moment the pointer left the prompt. A mic you cannot see is the exact
+                      // failure this indicator exists to prevent.
+                      "_hidden group-hover/prompt-input:flex": dictation.phase() === "idle",
+                      "text-text-base": dictation.phase() === "idle",
+                      "!flex w-auto gap-1 px-1 text-text-danger-base": dictation.phase() === "recording",
+                      "!flex w-auto gap-1 px-1 text-text-base": dictation.phase() === "transcribing",
+                    }}
+                  >
+                    <Show
+                      when={dictation.phase() !== "transcribing"}
+                      fallback={<Spinner class="size-3.5" />}
+                    >
+                      <Icon
+                        name="microphone"
+                        classList={{ "animate-pulse": dictation.phase() === "recording" }}
+                      />
+                    </Show>
+                    {/* A moving number is the difference between "recording" and "hung". */}
+                    <Show when={dictation.phase() === "recording"}>
+                      <span class="font-mono text-2xs tabular-nums">
+                        {Math.floor(dictation.seconds() / 60)}:
+                        {String(dictation.seconds() % 60).padStart(2, "0")}
+                      </span>
+                    </Show>
+                    <Show when={dictation.phase() === "transcribing"}>
+                      <span class="text-2xs">transcribing…</span>
+                    </Show>
+                  </Button>
+                </Tooltip>
                 <Show when={permission.permissionsEnabled() && params.id}>
                   <TooltipKeybind
                     placement="top"

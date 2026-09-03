@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, dim, bold, success, getBridgeToken, BRIDGE_URL } from "./iris-api"
+import { printDivider, dim, bold, success, getBridgeToken, BRIDGE_URL, writeJson } from "./iris-api"
 
 const BRIDGE_BASE = BRIDGE_URL
 
@@ -62,7 +62,7 @@ const DiscordListCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(guilds, null, 2)); return }
+      if (args.json) { await writeJson(guilds); return }
 
       printDivider()
       for (const g of guilds) {
@@ -105,7 +105,7 @@ const DiscordChannelsCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       if (!args.json) prompts.log.info(bold(guildName))
 
@@ -159,7 +159,7 @@ const DiscordReadCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       prompts.log.info(`#${bold(channelName)}${guildName ? dim(guildName) : ""}`)
 
@@ -223,7 +223,7 @@ const DiscordSearchCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(data, null, 2)); return }
+      if (args.json) { await writeJson(data); return }
 
       printDivider()
       for (const msg of messages) {

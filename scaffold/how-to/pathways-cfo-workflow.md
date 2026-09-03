@@ -1,3 +1,10 @@
+---
+category: Finance
+level: advanced
+tags: [finance, quickbooks, client-work, integration]
+duration_min: 20
+prerequisites: [track-finances-atlas-ledger]
+---
 # How to: Run the Pathways CFO Workflow (Service AI → Atlas → QuickBooks)
 
 ## What this does

@@ -1,3 +1,9 @@
+---
+category: Content & Media
+level: beginner
+tags: [discover, curation, content]
+duration_min: 10
+---
 # How to: Curate the Discover page
 
 ## What this does

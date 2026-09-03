@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 // Endpoints (SkillsResource):
 //   GET    /api/v6/bloqs/agents/{agentId}/skills
@@ -26,8 +27,8 @@ const SkillsListCommand = cmd({
     const ok = await handleApiError(res, "List skills")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const skills: any[] = data?.data ?? data?.skills ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(skills, null, 2)); prompts.outro("Done"); return }
+    const skills: any[] = firstArray(data?.data, data?.skills, (Array.isArray(data) ? data : []))
+    if (args.json) { await writeJson(skills); prompts.outro("Done"); return }
     printDivider()
     if (skills.length === 0) console.log(`  ${dim("(no skills)")}`)
     else for (const s of skills) {
@@ -133,8 +134,8 @@ const SkillsReviewListCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/auto-generated/pending`)
     const ok = await handleApiError(res, "List pending drafts"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const drafts: any[] = data?.data ?? []
-    if (args.json) { console.log(JSON.stringify(drafts, null, 2)); prompts.outro("Done"); return }
+    const drafts: any[] = firstArray(data?.data)
+    if (args.json) { await writeJson(drafts); prompts.outro("Done"); return }
     if (drafts.length === 0) {
       printDivider()
       console.log(`  ${dim("No drafts pending review.")}`)
@@ -169,7 +170,7 @@ const SkillsReviewApproveCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/${args.id}/approve`, { method: "POST", body: JSON.stringify({}) })
     const ok = await handleApiError(res, "Approve skill"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     console.log(`  ${success("✓")} ${data?.message ?? "Approved"}`)
     if (data?.data?.installation_id) console.log(`  ${dim(`Installation ID: ${data.data.installation_id}`)}`)
@@ -195,7 +196,7 @@ const SkillsReviewRejectCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/${args.id}/reject`, { method: "POST", body: JSON.stringify(body) })
     const ok = await handleApiError(res, "Reject skill"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     console.log(`  ${success("✓")} ${data?.message ?? "Rejected"}`)
     printDivider()

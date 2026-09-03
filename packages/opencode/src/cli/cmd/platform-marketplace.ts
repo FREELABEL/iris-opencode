@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 
 // ============================================================================
 // Helpers
@@ -49,7 +49,7 @@ const SearchCmd = cmd({
       const items = data?.data ?? []
       sp.stop(`${items.length} result(s)`)
       if (args.json) {
-        console.log(JSON.stringify(items, null, 2))
+        await writeJson(items)
         prompts.outro("Done")
         return
       }
@@ -88,7 +88,7 @@ const InfoCmd = cmd({
     if (!skill) { sp.stop("Not found", 1); prompts.outro("Done"); return }
     sp.stop(String(skill.name ?? skill.slug))
     if (args.json) {
-      console.log(JSON.stringify(skill, null, 2))
+      await writeJson(skill)
       prompts.outro("Done")
       return
     }
@@ -219,7 +219,18 @@ const PublishedCmd = cmd({
 export const PlatformMarketplaceCommand = cmd({
   command: "platform-marketplace",
   aliases: ["iris-marketplace"],
-  describe: "browse, install, and manage IRIS marketplace skills",
+  // HIDDEN, NOT REMOVED (#182938).
+  //
+  // Two surfaces both called a marketplace, both holding things both called skills, backed by
+  // different stores: `playbook` (IRIS-native) and this one (Claude Code skills). Someone who
+  // publishes a playbook and then does not find it here reasonably concludes publishing failed.
+  // The decision is that playbooks are IRIS's and skills are Claude Code's, so only one of these
+  // is advertised.
+  //
+  // `describe: false` is yargs' convention for runnable-but-unlisted, and registerCommand now
+  // honours the same flag, so this disappears from `--help` AND from the grouped listing without
+  // breaking a single existing invocation or script.
+  describe: false as unknown as string,
   builder: (y) =>
     y
       .command(SearchCmd)

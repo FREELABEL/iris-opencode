@@ -12,8 +12,7 @@ import {
   success,
   highlight,
   resolveUserId,
-  FL_API,
-} from "./iris-api"
+  FL_API, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
@@ -400,7 +399,7 @@ const STEPS: StepDef[] = [
       const sp = prompts.spinner()
       sp.start("Fetching billing info...")
 
-      const res = await irisFetch(`/api/v1/users/${userId}/subscription`)
+      const res = await irisFetch(`/api/v1/user/${userId}/subscriptions`)
       if (res.ok) {
         const data = await res.json().catch(() => ({}))
         const sub = data?.data ?? data
@@ -615,11 +614,11 @@ export const PlatformInitCommand = cmd({
     const completedCount = stepStates.filter((s) => s.completed).length
 
     if (args.json) {
-      console.log(JSON.stringify({
+      await writeJson({
         completed: completedCount,
         total: STEPS.length,
         steps: stepStates.map((s) => ({ key: s.key, label: s.label, completed: s.completed, summary: s.summary })),
-      }, null, 2))
+      })
       return
     }
 

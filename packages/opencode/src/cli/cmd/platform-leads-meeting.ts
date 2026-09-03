@@ -9,7 +9,7 @@ import {
   dim,
   bold,
   success,
-} from "./iris-api"
+  streamAgentChat, writeJson } from "./iris-api"
 import { existsSync, readFileSync } from "fs"
 import { extname, isAbsolute, join } from "path"
 
@@ -87,31 +87,29 @@ function readTranscript(filePath: string): string | null {
   return readFileSync(path, "utf-8")
 }
 
+/**
+ * Run the extraction through the SAME faithful V6 ReactLoop path as `iris agents chat`.
+ *
+ * This used to POST /api/chat/start and poll /api/workflows/{id}. That route is DEAD —
+ * it 404s on every call, which is the identical failure platform-eval.ts already hit and
+ * fixed (#146509, "the old harness POSTed to the dead raichu.heyiris.io/api/chat/start
+ * route → 404 on every test → false 0/7"). leads:meeting never got the same fix, so a
+ * command whose entire purpose is turning a transcript into lead intel has been failing
+ * at the last step — after reading the file and printing "Analyzing transcript with AI…",
+ * which makes it look supported right up until it produces nothing.
+ *
+ * streamAgentChat owns host + endpoint, so this cannot drift again.
+ */
 async function runAgent(prompt: string, agentId: string, timeoutSecs = 300): Promise<string | null> {
-  const startRes = await irisFetch("/api/chat/start", {
-    method: "POST",
-    body: JSON.stringify({
-      query: prompt,
-      agentId,
-      conversationHistory: [{ role: "user", content: prompt }],
-      enableRAG: false,
-      contextPayload: { source: "iris-cli-leads-meeting" },
-    }),
+  const result = await streamAgentChat({
+    agentId: Number(agentId),
+    message: prompt,
+    timeoutSecs,
   })
-  if (!startRes.ok) throw new Error(`chat/start HTTP ${startRes.status}`)
-  const { workflow_id } = (await startRes.json()) as { workflow_id?: string }
-  if (!workflow_id) throw new Error("no workflow_id returned")
-
-  const start = Date.now()
-  while ((Date.now() - start) / 1000 < timeoutSecs) {
-    await Bun.sleep(800)
-    const res = await irisFetch(`/api/workflows/${workflow_id}`)
-    if (!res.ok) continue
-    const run = (await res.json()) as any
-    if (run.status === "completed") return run.summary ?? run.response ?? run.output ?? null
-    if (run.status === "failed") throw new Error(run.error ?? run.summary ?? "AI failed")
+  if (!result.ok) {
+    throw new Error(result.timedOut ? "AI extraction timed out" : (result.error ?? "AI extraction failed"))
   }
-  throw new Error("AI extraction timed out")
+  return result.content || null
 }
 
 export const PlatformLeadsMeetingCommand = cmd({
@@ -121,7 +119,7 @@ export const PlatformLeadsMeetingCommand = cmd({
     y
       .positional("lead_id", { type: "number", demandOption: true })
       .positional("file_path", { type: "string", demandOption: true })
-      .option("agent", { alias: "a", type: "string", default: "11" })
+      .option("agent", { alias: "a", type: "string", default: "420", describe: "agent id used for extraction" })
       .option("create-tasks", { type: "boolean" })
       .option("raw", { type: "boolean", describe: "Skip AI extraction" })
       .option("dry-run", { type: "boolean" })
@@ -172,12 +170,12 @@ export const PlatformLeadsMeetingCommand = cmd({
 
       if (args["dry-run"]) {
         if (args.json) {
-          console.log(JSON.stringify({
+          await writeJson({
             dry_run: true,
             lead_id: args.lead_id,
             extracted_content: extracted,
             action_items: actionItems,
-          }, null, 2))
+          })
         } else {
           prompts.log.warn("DRY RUN — nothing will be saved")
           console.log(extracted)
@@ -223,13 +221,13 @@ export const PlatformLeadsMeetingCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           lead_id: args.lead_id,
           note_id: noteId,
           extracted_content: extracted,
           tasks_created: createdTasks,
           file: filePath,
-        }, null, 2))
+        })
       } else {
         console.log(`  ${success("✓")} Meeting intel saved to lead #${args.lead_id}`)
         if (noteId) console.log(`  ${dim("Note ID:")} #${noteId}`)

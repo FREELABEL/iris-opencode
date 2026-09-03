@@ -1,3 +1,9 @@
+---
+category: Pages & Design
+level: beginner
+tags: [genesis, pages, cli]
+duration_min: 10
+---
 # Genesis Pages — How-To
 
 Build and manage composable landing pages from the CLI.

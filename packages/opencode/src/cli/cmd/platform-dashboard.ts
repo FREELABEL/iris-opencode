@@ -1,7 +1,9 @@
 import { cmd } from "./cmd"
+import { DashboardRulesListCommand, DashboardRuleGetCommand } from "./platform-dashboard-rules"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
+import { firstArray } from "../../util/array"
 
 function dashFetch(path: string, options?: RequestInit): Promise<Response> {
   return irisFetch(path, options ?? {}, IRIS_API)
@@ -366,7 +368,7 @@ const AddAssistantCmd = cmd({
       try {
         const res = await dashFetch(`/api/v1/users/${userId}/bloqs/agents?bloq_id=${bloqId}`)
         const body = (await res.json()) as any
-        const agents: any[] = (Array.isArray(body) ? body : body?.data) ?? []
+        const agents: any[] = firstArray((Array.isArray(body) ? body : body?.data))
         const scoped = agents.filter((a) => Number(a.bloq_id) === Number(bloqId))
         const active = scoped.filter((a) => a.active)
         const pick = active.length ? active : scoped
@@ -482,12 +484,15 @@ const AddAssistantCmd = cmd({
 
 export const PlatformDashboardCommand = cmd({
   command: "dashboard",
-  describe: "manage client dashboards — create, status, add-assistant",
+  describe: "manage client dashboards — create, status, add-assistant, rules",
   builder: (y) =>
     y
       .command(CreateCmd)
       .command(StatusCmd)
       .command(AddAssistantCmd)
+      // Query the Atlas rule surface behind a dashboard. See platform-dashboard-rules.ts.
+      .command(DashboardRulesListCommand)
+      .command(DashboardRuleGetCommand)
       .demandCommand(1, "Run iris dashboard <command> --help"),
   handler() {},
 })

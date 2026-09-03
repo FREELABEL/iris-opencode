@@ -1,14 +1,22 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { printDivider, dim, bold, success } from "./iris-api"
-import { getToken, getLabels, listMessages, searchMessages, getThread } from "../lib/gmail"
+import { printDivider, dim, bold, success, writeJson } from "./iris-api"
+import { getToken, getLabels, listMessages, searchMessages, getThread, lastError } from "../lib/gmail"
 
 async function requireToken(): Promise<string | null> {
   const token = await getToken()
   if (!token) {
-    prompts.log.error("No Gmail connected. Connect via: iris channels connect gmail")
-    prompts.log.info(dim("Or set GMAIL_ACCESS_TOKEN env var for manual testing"))
+    // Report the ACTUAL reason. This used to be a hardcoded "No Gmail connected"
+    // regardless of state — it was printed even when the account was connected and
+    // merely expired, and even when the credential endpoint did not exist (#178282).
+    prompts.log.error(lastError())
+    // GMAIL_ACCESS_TOKEN is no longer read — auth lives on the backend now, so
+    // advertising it would send people down a path that does nothing.
+    // NOT list-connected: it reads a store that cannot see Composio-backed connections, so
+    // it will happily confirm "nothing connected" for a working account and send people into
+    // a reconnect loop. Point at the call that proves it either way.
+    prompts.log.info(dim("Verify by using it:  iris integrations exec gmail fetch_emails max_results=5"))
   }
   return token
 }
@@ -55,7 +63,7 @@ const GmailInboxCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(messages, null, 2)); return }
+      if (args.json) { await writeJson(messages); return }
 
       printDivider()
       for (const msg of messages) {
@@ -97,7 +105,7 @@ const GmailReadCommand = cmd({
           return
         }
 
-        if (args.json) { console.log(JSON.stringify(thread, null, 2)); return }
+        if (args.json) { await writeJson(thread); return }
 
         prompts.log.info(`Thread: ${thread.messages[0]?.subject || thread.snippet}`)
         printDivider()
@@ -120,7 +128,7 @@ const GmailReadCommand = cmd({
           return
         }
 
-        if (args.json) { console.log(JSON.stringify(msg, null, 2)); return }
+        if (args.json) { await writeJson(msg); return }
 
         printDivider()
         console.log(`  ${bold("From:")}    ${msg.from}`)
@@ -171,7 +179,7 @@ const GmailSearchCommand = cmd({
         return
       }
 
-      if (args.json) { console.log(JSON.stringify(messages, null, 2)); return }
+      if (args.json) { await writeJson(messages); return }
 
       printDivider()
       for (const msg of messages) {
@@ -207,7 +215,7 @@ const GmailLabelsCommand = cmd({
     try {
       const labels = await getLabels(token)
 
-      if (args.json) { console.log(JSON.stringify(labels, null, 2)); return }
+      if (args.json) { await writeJson(labels); return }
 
       // Sort: system labels first, then user labels
       const system = labels.filter(l => l.type === "system").sort((a, b) => a.name.localeCompare(b.name))
@@ -215,10 +223,14 @@ const GmailLabelsCommand = cmd({
 
       printDivider()
       for (const l of [...system, ...user]) {
+        // GMAIL_LIST_LABELS returns only id/name/type/visibility — no messagesTotal or
+        // messagesUnread. Printing "0 msgs" for every label was a FABRICATED number: it
+        // looked like an empty mailbox rather than an absent field. Show counts only when
+        // the API actually supplies them (#178282).
         const unread = l.messages_unread > 0 ? success(` (${l.messages_unread} unread)`) : ""
-        const total = dim(`${l.messages_total} msgs`)
+        const total = l.messages_total > 0 ? dim(`  ${l.messages_total} msgs`) : ""
         const isUser = l.type !== "system" ? dim(" [custom]") : ""
-        console.log(`  ${bold(l.name)}  ${total}${unread}${isUser}`)
+        console.log(`  ${bold(l.name)}${total}${unread}${isUser}`)
       }
       printDivider()
       prompts.outro(`${success("✓")} ${labels.length} label${labels.length === 1 ? "" : "s"}`)

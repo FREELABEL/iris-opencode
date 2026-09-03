@@ -1,10 +1,15 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, FL_API, IRIS_API } from "./iris-api"
 import { spawnSync } from "child_process"
-import { existsSync, mkdirSync, writeFileSync } from "fs"
-import { join } from "path"
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+
+/** iris-api exports dim/bold/success but no warning; a partial render has to be loud. */
+function warning(t: string): string {
+  return `${UI.Style.TEXT_WARNING}${t}${UI.Style.TEXT_NORMAL}`
+}
+import { join, basename, resolve } from "path"
 import { homedir } from "os"
 
 // ============================================================================
@@ -147,9 +152,52 @@ const CarouselCommand = cmd({
         describe: "Output directory (default: ./carousel-<timestamp>)",
       }),
   async handler(args) {
-    const cmdArgs = ["carousel", args.props as string]
-    if (args.output) cmdArgs.push(args.output as string)
-    runIrisRemotion(cmdArgs)
+    /*
+     * Rendered here rather than through the `iris-remotion` shell wrapper, which had TWO bugs
+     * that combined into a silent wrong answer:
+     *
+     *  1. It passed props as an INLINE STRING (`--props "$JSON"`). Remotion did not parse it and
+     *     fell back to the composition's demo content, so every slide rendered "5 Ways to Grow
+     *     Your Brand on Social Media" while reporting success. Passing a FILE binds correctly —
+     *     verified against the same props.
+     *  2. A relative output dir was resolved against the remotion package, not the caller's cwd,
+     *     so the files landed somewhere nobody was told about.
+     *
+     * Both paths are absolute here, props go via a temp file per slide, and the count is taken
+     * from disk instead of from the child's exit code.
+     */
+    const propsPath = resolve(args.props as string)
+    if (!existsSync(propsPath)) {
+      UI.error(`No such props file: ${propsPath}`)
+      process.exit(1)
+    }
+    const outDir = resolve((args.output as string) || join(process.cwd(), `carousel-${Date.now()}`))
+    mkdirSync(outDir, { recursive: true })
+
+    const base = JSON.parse(readFileSync(propsPath, "utf-8"))
+    const rDir = resolveRemotionDir()
+
+    for (let i = 0; i < 9; i++) {
+      const slideProps = { ...base, slideIndex: i }
+      const tmp = join(outDir, `_props-${i}.json`)
+      writeFileSync(tmp, JSON.stringify(slideProps))
+      const r = spawnSync(
+        "npx",
+        ["remotion", "still", `CarouselSlide${i}`, join(outDir, `slide-${i}.png`), `--props=${tmp}`],
+        { stdio: "pipe", env: process.env, cwd: rDir },
+      )
+      if (r.status !== 0) {
+        UI.error(`Slide ${i}: ${(r.stderr?.toString() ?? "").slice(0, 240)}`)
+        break
+      }
+    }
+    for (let i = 0; i < 9; i++) {
+      try { require("fs").unlinkSync(join(outDir, `_props-${i}.json`)) } catch {}
+    }
+
+    const written = Array.from({ length: 9 }, (_, i) => join(outDir, `slide-${i}.png`)).filter(existsSync)
+    if (written.length === 9) console.log(success(`  ✓ 9 slides in ${outDir}`))
+    else console.log(`  ${warning(`⚠ ${written.length}/9 slides written`)} ${dim(outDir)}`)
   },
 })
 
@@ -257,11 +305,8 @@ const MODE_RULES: Record<CarouselMode, string> = {
 }
 
 export async function aiGenerateCarouselProps(context: string, brand: string, mode: CarouselMode = "recruit"): Promise<Record<string, unknown> | null> {
-  const apiKey = await resolveOpenAIKey()
-  if (!apiKey) {
-    prompts.log.error("No OpenAI API key. Set OPENAI_API_KEY in env or ~/.iris/sdk/.env")
-    return null
-  }
+  // No OpenAI key needed — routed through the IRIS model proxy on the existing IRIS token
+  // (#178794). Keeping the old guard would refuse work the proxy can serve.
 
   const systemPrompt = `You generate Instagram carousel content from source material.
 Return ONLY valid JSON — no markdown fences, no commentary.
@@ -271,9 +316,11 @@ ${CAROUSEL_SCHEMA}
 
 ${MODE_RULES[mode]}`
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  // #178794 — through the IRIS model proxy, not api.openai.com directly. See the note in
+  // platform-article-qa.ts: a direct call skips every server-side gate and needs a raw
+  // platform key on the operator's disk. Auth is the existing IRIS token.
+  const res = await irisFetch("/api/v6/openai/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: "gpt-4o-mini",
       temperature: 0.7,
@@ -282,10 +329,10 @@ ${MODE_RULES[mode]}`
         { role: "user", content: `Brand: ${brand}\n\nSource material:\n${context}` },
       ],
     }),
-  })
+  }, IRIS_API)
 
   if (!res.ok) {
-    prompts.log.error(`OpenAI error: ${res.status} ${res.statusText}`)
+    prompts.log.error(`IRIS model proxy error: ${res.status} ${res.statusText}`)
     return null
   }
 
@@ -336,6 +383,15 @@ const AutoCarouselCommand = cmd({
         type: "string",
         describe: 'Source: "opportunity:519", "lead:16388", "diary:2026-05-14", or a freeform prompt',
         demandOption: true,
+      })
+      .option("register", {
+        type: "boolean",
+        default: false,
+        describe: "After rendering, register the carousel into Review Studio (needs --board)",
+      })
+      .option("board", {
+        type: "number",
+        describe: "Board ID to register into when --register is set (its Creative tab)",
       })
       .option("brand", {
         type: "string",
@@ -470,7 +526,11 @@ const AutoCarouselCommand = cmd({
 
     // ── Step 4: Write props and render ──
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)
-    const outDir = (args.output as string) || join(process.cwd(), `carousel-${timestamp}`)
+    // MUST be absolute. The renderer is spawned with `cwd: remotionDir`, so a relative -o is
+    // resolved against THAT directory, not the user's — the files land somewhere nobody is told
+    // about while the command still prints "9 slides saved". Rendering was never broken; the path
+    // was. `resolve()` on an already-absolute path is a no-op, so this is safe either way.
+    const outDir = resolve((args.output as string) || join(process.cwd(), `carousel-${timestamp}`))
     mkdirSync(outDir, { recursive: true })
 
     const propsPath = join(outDir, "props.json")
@@ -514,7 +574,16 @@ const AutoCarouselCommand = cmd({
         break
       }
     }
-    if (!failed) spinner.stop(success("9 slides rendered"))
+    if (!failed) {
+      // Count the files, do not trust the loop. A renderer that exits 0 having written nothing
+      // is exactly how this shipped a "9 slides saved" message over an empty directory.
+      const written = Array.from({ length: 9 }, (_, i) => join(outDir, `slide-${i}.png`)).filter(existsSync).length
+      if (written === 9) spinner.stop(success("9 slides rendered"))
+      else {
+        spinner.stop(`${written}/9 slides written to ${outDir}`, 1)
+        failed = true
+      }
+    }
     // Cleanup temp props files
     for (let i = 0; i < 9; i++) { try { require("fs").unlinkSync(join(outDir, `_props-${i}.json`)) } catch {} }
 
@@ -557,10 +626,117 @@ const AutoCarouselCommand = cmd({
     const slides = Array.from({ length: 9 }, (_, i) => join(outDir, `slide-${i}.png`)).filter(existsSync)
     console.log(`  ${dim("Slides:")} ${slides.length} images`)
 
+    // ── Optional: register into Review Studio (one command: generate → in the UI) ──
+    if (args.register && !failed && slides.length > 0) {
+      if (!args.board) {
+        prompts.log.warn("--register needs --board <id> — skipping registration.")
+      } else {
+        const userId = await requireUserId(undefined)
+        if (userId) {
+          spinner.start(`Registering ${slides.length}-slide carousel into board ${args.board}…`)
+          const id = await registerCreativeFiles(slides, {
+            board: args.board as number,
+            userId,
+            title: String(props.headline ?? `${brand} carousel`),
+            caption: String(props.subtitle ?? props.headline ?? ""),
+            platform: "instagram",
+          })
+          if (id == null) {
+            spinner.stop("Registration failed", 1)
+          } else {
+            spinner.stop(success(`Registered → item #${id} (pending review)`))
+            console.log(`  ${dim("View:")} https://web.heyiris.io/iris/bloq/${args.board}?tab=creative`)
+          }
+        }
+      }
+    }
+
     if (args.open) {
       spawnSync("open", [outDir], { stdio: "ignore" })
     }
 
+    prompts.outro("Done")
+  },
+})
+
+// ============================================================================
+// Register rendered creatives into Review Studio (the local↔R2 wire)
+// ============================================================================
+
+/**
+ * Upload local render file(s) into a board's Review Studio as a Pending creative.
+ * The server hosts them to R2 and creates the type=content BloqItem, so the client
+ * only needs its auth token — no prod R2 creds. 1 image → image, many images →
+ * carousel, a video file → video. Returns the new item id, or null on failure.
+ */
+export async function registerCreativeFiles(
+  files: string[],
+  opts: { board: number; userId: number; title?: string; caption?: string; platform?: string },
+): Promise<number | null> {
+  const existing = files.filter(existsSync)
+  if (existing.length === 0) {
+    UI.error("No files found to register.")
+    return null
+  }
+  const form = new FormData()
+  for (const f of existing) {
+    form.append("files[]", new Blob([new Uint8Array(readFileSync(f))]), basename(f))
+  }
+  if (opts.title) form.append("title", opts.title)
+  if (opts.caption) form.append("caption", opts.caption)
+  form.append("platform", opts.platform ?? "instagram")
+
+  const res = await irisFetch(
+    `/api/v1/user/${opts.userId}/bloqs/${opts.board}/creatives`,
+    { method: "POST", body: form },
+    FL_API,
+  )
+  if (!res.ok) {
+    await handleApiError(res, "register creative")
+    return null
+  }
+  const data = (await res.json().catch(() => ({}))) as any
+  return data?.data?.id ?? null
+}
+
+const RegisterCommand = cmd({
+  command: "register <files..>",
+  describe: "Upload rendered file(s) into a board's Review Studio (hosts to cloud, creates a Pending creative)",
+  builder: (yargs: any) =>
+    yargs
+      .positional("files", {
+        type: "string",
+        array: true,
+        describe: "Local render file(s): one image/video, or several images = one carousel",
+      })
+      .option("board", { type: "number", demandOption: true, describe: "Board ID to register into (its Creative tab / Review Studio)" })
+      .option("user-id", { type: "number", describe: "Owner user id (defaults to your account)" })
+      .option("title", { type: "string", describe: "Item title" })
+      .option("caption", { type: "string", describe: "Caption shown on the card" })
+      .option("platform", { type: "string", default: "instagram", describe: "Platform tag" }),
+  async handler(args: any) {
+    const token = await requireAuth()
+    if (!token) return
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) return
+
+    const files = (args.files as string[]) ?? []
+    const spinner = prompts.spinner()
+    spinner.start(`Hosting ${files.filter(existsSync).length} file(s) + registering…`)
+    const id = await registerCreativeFiles(files, {
+      board: args.board as number,
+      userId,
+      title: args.title as string | undefined,
+      caption: args.caption as string | undefined,
+      platform: (args.platform as string) ?? "instagram",
+    })
+    if (id == null) {
+      spinner.stop("Registration failed", 1)
+      prompts.outro("Done")
+      return
+    }
+    spinner.stop(success(`Registered → item #${id} on board ${args.board} (pending review)`))
+    console.log(`  ${dim("View:")} https://web.heyiris.io/iris/bloq/${args.board}?tab=creative`)
     prompts.outro("Done")
   },
 })
@@ -578,11 +754,12 @@ export const PlatformRemotionCommand = cmd({
       .command(StillCommand)
       .command(CarouselCommand)
       .command(AutoCarouselCommand)
+      .command(RegisterCommand)
       .command(PreviewCommand)
       .command(ListCommand)
       .command(InitCommand)
       .command(UpdateCommand)
-      .demandCommand(1, "Specify a subcommand: render, still, carousel, auto-carousel, preview, list, init, update"),
+      .demandCommand(1, "Specify a subcommand: render, still, carousel, auto-carousel, register, preview, list, init, update"),
   async handler() {
     // handled by subcommands
   },

@@ -166,7 +166,7 @@ const platform: Platform = {
       .then(() => {
         const notification = new Notification(title, {
           body: description ?? "",
-          icon: "https://opencode.ai/favicon-96x96.png",
+          icon: "https://heyiris.io/apple-touch-icon.png",
         })
         notification.onclick = () => {
           const win = getCurrentWindow()

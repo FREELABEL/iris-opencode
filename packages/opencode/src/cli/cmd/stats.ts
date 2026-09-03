@@ -1,5 +1,6 @@
 import type { Argv } from "yargs"
 import { cmd } from "./cmd"
+import { writeJson } from "./iris-api"
 import { Session } from "../../session"
 import { bootstrap } from "../bootstrap"
 import { Storage } from "../../storage/storage"
@@ -71,6 +72,11 @@ export const StatsCommand = cmd({
     type: "boolean",
     default: false
   })
+  .option("json", {
+    describe: "emit machine-readable JSON instead of the formatted boxes",
+    type: "boolean",
+    default: false,
+  })
   },
   handler: async (args) => {
     try {
@@ -82,6 +88,11 @@ export const StatsCommand = cmd({
           modelLimit = Infinity
         } else if (typeof args.models === "number") {
           modelLimit = args.models
+        }
+
+        if (args.json) {
+          await writeJson(buildStatsJson(stats, args.admin, args.period, toolLimitFor(args.tools), modelLimit))
+          return
         }
 
         if (args.admin) {
@@ -322,6 +333,82 @@ export async function aggregateSessionStats(days?: number, projectFilter?: strin
         : sessionTotalTokens[mid]
 
   return stats
+}
+
+function toolLimitFor(tools?: number): number | undefined {
+  return tools === undefined ? undefined : tools
+}
+
+function buildStatsJson(
+  stats: SessionStats,
+  admin: boolean,
+  period: string,
+  toolLimit: number | undefined,
+  modelLimit: number | undefined,
+) {
+  const sortedModels = Object.entries(stats.modelUsage).sort(([, a], [, b]) =>
+    admin ? b.cost - a.cost : b.messages - a.messages,
+  )
+  const modelsToDisplay =
+    modelLimit === undefined ? [] : modelLimit === Infinity ? sortedModels : sortedModels.slice(0, modelLimit)
+  const sortedTools = Object.entries(stats.toolUsage).sort(([, a], [, b]) => b - a)
+  const toolsToDisplay = toolLimit ? sortedTools.slice(0, toolLimit) : sortedTools
+
+  const models = modelsToDisplay.map(([name, usage]) => ({
+    name,
+    messages: usage.messages,
+    inputTokens: usage.tokens.input,
+    outputTokens: usage.tokens.output,
+    cost: usage.cost,
+  }))
+
+  const tools = toolsToDisplay.map(([name, count]) => ({ name, count }))
+
+  const cost = isNaN(stats.totalCost) ? 0 : stats.totalCost
+  const costPerDay = isNaN(stats.costPerDay) ? 0 : stats.costPerDay
+  const tokensPerSession = isNaN(stats.tokensPerSession) ? 0 : stats.tokensPerSession
+  const medianTokensPerSession = isNaN(stats.medianTokensPerSession) ? 0 : stats.medianTokensPerSession
+  const totalTokens = stats.totalTokens.input + stats.totalTokens.output + stats.totalTokens.reasoning
+
+  const base = {
+    totalSessions: stats.totalSessions,
+    totalMessages: stats.totalMessages,
+    days: stats.days,
+    cost: { total: cost, perDay: costPerDay },
+    tokens: {
+      input: stats.totalTokens.input,
+      output: stats.totalTokens.output,
+      reasoning: stats.totalTokens.reasoning,
+      cacheRead: stats.totalTokens.cache.read,
+      cacheWrite: stats.totalTokens.cache.write,
+      perSession: tokensPerSession,
+      medianPerSession: medianTokensPerSession,
+    },
+    models,
+    tools,
+    dateRange: stats.dateRange,
+  }
+
+  if (!admin) {
+    return base
+  }
+
+  const cacheHitRate = totalTokens > 0 ? (stats.totalTokens.cache.read / totalTokens) * 100 : 0
+  return {
+    ...base,
+    admin: {
+      period,
+      avgSessionsPerDay: Math.round(stats.totalSessions / Math.max(1, stats.days)),
+      avgMessagesPerSession: Math.round(stats.totalMessages / Math.max(1, stats.totalSessions)),
+      costPerSession: stats.totalSessions > 0 ? cost / stats.totalSessions : 0,
+      cacheHitRate,
+      efficiencyScore: calculateEfficiencyScore(stats),
+      utilizationRate: calculateUtilizationRate(stats),
+      costEfficiency: calculateCostEfficiency(stats),
+      healthStatus: getHealthStatus(stats),
+      insights: generateInsights(stats),
+    },
+  }
 }
 
 export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit?: number) {

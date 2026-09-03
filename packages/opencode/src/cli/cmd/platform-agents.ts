@@ -1,10 +1,47 @@
 import { cmd } from "./cmd"
+import { AgentsProveCommand } from "./agent-prove"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight } from "./iris-api"
+import { buildListEnvelope, projectFields, LIST_FIELDS } from "./list-envelope"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, highlight, isNonInteractive, IRIS_API, writeJson, failNoOp} from "./iris-api"
+import { matchesSearchQuery } from "./bloq-item-format"
 import { executeChat } from "./platform-chat"
+import { AgentsBenchCommand } from "./platform-agents-bench"
+import { AgentsExportCommand } from "./platform-agents-export"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join } from "path"
+import { firstArray } from "../../util/array"
+
+/**
+ * Resolve a mission argument to its text.
+ *
+ * Accepts a literal string or `@path/to/file` — a real mission is multi-line and
+ * shell-quoting 1700 characters is miserable enough that people give up and put the
+ * mission in the wrong field instead.
+ *
+ * Warns past 2000 chars because heartbeat silently truncates there
+ * (HeartbeatExecutorService, Str::limit($agentMission, 2000)) while the chat path allows
+ * 50K on the same column — so an author has every reason to assume there is room, and the
+ * cut lands mid-sentence with no signal anywhere.
+ */
+const HEARTBEAT_MISSION_LIMIT = 2000
+
+function readPromptArg(raw: string): string {
+  let text = raw
+  if (raw.startsWith("@")) {
+    const path = raw.slice(1)
+    if (!existsSync(path)) {
+      throw new Error(`Mission file not found: ${path}`)
+    }
+    text = readFileSync(path, "utf8")
+  }
+  if (text.length > HEARTBEAT_MISSION_LIMIT) {
+    prompts.log.warn(
+      `Mission is ${text.length} chars — heartbeat uses only the first ${HEARTBEAT_MISSION_LIMIT} and truncates the rest silently. Trim it, or the agent runs on half an instruction.`,
+    )
+  }
+  return text
+}
 
 // ============================================================================
 // Sync helpers
@@ -46,9 +83,28 @@ function printAgent(a: Record<string, unknown>): void {
   const name = bold(String(a.name ?? `Agent #${a.id}`))
   const id = dim(`#${a.id}`)
   const model = a.model ? `  ${UI.Style.TEXT_HIGHLIGHT}${a.model}${UI.Style.TEXT_NORMAL}` : ""
-  console.log(`  ${name}  ${id}${model}`)
+  // Workspace (team) badge — makes the diagram's "Orphan, no workspace attached" state
+  // visible without parsing --json (#162671). google-synced = mapped to a Google user.
+  const wsBadge = a.workspace_id
+    ? `  ${dim("· ws#" + a.workspace_id)}${a.google_workspace_match_state === "matched" ? dim(" · google-synced") : ""}`
+    : `  ${dim("· no workspace")}`
+  console.log(`  ${name}  ${id}${model}${wsBadge}`)
   if (a.description) {
     console.log(`    ${dim(String(a.description).slice(0, 100))}`)
+  }
+  // Last run (#179799). A list that shows only name and model cannot distinguish a working
+  // agent from one that has been dead for a fortnight, which is how NCMA Newsletter Agent
+  // #528 stayed invisible while a client's content engine produced nothing. Only printed for
+  // agents that have ever run or are active — an inert draft agent showing "NEVER" in red is
+  // the noise that gets a signal ignored.
+  const lastRun = a.last_run_at ? new Date(String(a.last_run_at)) : null
+  if (lastRun && !Number.isNaN(lastRun.getTime())) {
+    const days = (Date.now() - lastRun.getTime()) / 86_400_000
+    const ago = days >= 1 ? `${Math.round(days)}d ago` : `${Math.max(1, Math.round(days * 24))}h ago`
+    const stale = days >= 2 && a.active
+    console.log(`    ${dim("last run")} ${stale ? `${ago}  ⚠` : ago}`)
+  } else if (a.active && a.last_run_at === null) {
+    console.log(`    ${dim("last run  never")}`)
   }
 }
 
@@ -64,6 +120,8 @@ const AgentsListCommand = cmd({
     yargs
       .option("search", { alias: "s", describe: "search by name/description", type: "string" })
       .option("bloq", { alias: "b", describe: "filter by bloq ID", type: "number" })
+      .option("workspace", { alias: "w", describe: "filter by workspace (team) ID", type: "number" })
+      .option("workspace-orphaned", { describe: "show agents with no workspace (no team scoping)", type: "boolean" })
       .option("active", { describe: "show only active agents", type: "boolean" })
       .option("orphaned", { describe: "show agents with no bloq", type: "boolean" })
       .option("limit", { describe: "results per page", type: "number", default: 30 })
@@ -94,7 +152,7 @@ const AgentsListCommand = cmd({
       if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
 
       const raw = (await res.json()) as Record<string, any>
-      let agents: any[] = raw?.data ?? []
+      let agents: any[] = firstArray(raw?.data)
       const total = raw?.total ?? raw?.meta?.total ?? agents.length
       const currentPage = args.page
       const lastPage = Math.ceil(total / args.limit)
@@ -102,11 +160,23 @@ const AgentsListCommand = cmd({
       // Client-side filters (for fields the API may not support)
       if (args.orphaned) agents = agents.filter((a: any) => !a.bloq_id)
       if (args.bloq && !params.has("bloq_id")) agents = agents.filter((a: any) => a.bloq_id === args.bloq)
+      if (args.workspace) agents = agents.filter((a: any) => a.workspace_id === args.workspace)
+      if (args["workspace-orphaned"]) agents = agents.filter((a: any) => !a.workspace_id)
 
       if (spinner) spinner.stop(`${agents.length} agent(s)${total > agents.length ? ` (${total} total — page ${currentPage}/${lastPage})` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify({ agents, page: currentPage, total, last_page: lastPage }, null, 2))
+        // Identity, not everything. This listing was 30 records x 72 fields =
+        // 145,395 bytes, which overflowed the MCP every time and forced a
+        // spill -> jq -> narrow round-trip to answer "what agents do I have".
+        // `agents get <id>` still returns the full record.
+        await writeJson(
+          buildListEnvelope(projectFields(agents, LIST_FIELDS.agents), {
+            total,
+            limit: agents.length,
+            resource: "agents",
+          }),
+        )
         return
       }
 
@@ -122,6 +192,8 @@ const AgentsListCommand = cmd({
       if (args.bloq) filters.push(`bloq=${args.bloq}`)
       if (args.active) filters.push("active")
       if (args.orphaned) filters.push("orphaned")
+      if (args.workspace) filters.push(`workspace=${args.workspace}`)
+      if (args["workspace-orphaned"]) filters.push("workspace-orphaned")
       if (filters.length > 0) console.log(`  ${dim(`Filters: ${filters.join(", ")}`)}`)
 
       if (args.group) {
@@ -168,22 +240,72 @@ const AgentsListCommand = cmd({
   },
 })
 
+/**
+ * Resolve an agent ID from a numeric ID or a name (#162334). Mirrors the leads /
+ * bloqs `get <name-or-id>` resolvers so a user who knows an agent's name but not
+ * its ID has a path in. Filters the agents list client-side with the same
+ * tokenized matcher used elsewhere. Returns the numeric ID, or null (having
+ * printed the reason) on no/ambiguous match.
+ */
+async function resolveAgentId(idOrQuery: string | number, userId: number, json: boolean): Promise<number | null> {
+  const numeric = Number(idOrQuery)
+  if (Number.isInteger(numeric) && String(idOrQuery).trim() !== "") return numeric
+
+  const query = String(idOrQuery)
+  const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents?per_page=500`)
+  if (!res.ok) {
+    if (!json) prompts.log.error("Could not look up agents by name")
+    process.exitCode = 1
+    return null
+  }
+  const raw = (await res.json()) as { data?: any[] }
+  const matches = (raw?.data ?? []).filter((a) => matchesSearchQuery(String(a.name ?? ""), query))
+
+  if (matches.length === 0) {
+    if (json) await writeJson({ error: `No agent matched "${query}"` })
+    else prompts.log.warn(`No agent matched "${query}" — try ${dim("iris agents list")}`)
+    process.exitCode = 1
+    return null
+  }
+  if (matches.length === 1) return matches[0].id
+  if (json || isNonInteractive()) {
+    if (json) await writeJson({ error: "ambiguous", matches: matches.map((m) => ({ id: m.id, name: m.name })) })
+    else {
+      prompts.log.warn(`${matches.length} agents match "${query}" — specify by ID:`)
+      for (const m of matches) prompts.log.info(`  #${m.id}  ${m.name ?? "Unknown"}`)
+    }
+    process.exitCode = 1
+    return null
+  }
+  const choice = await prompts.select({
+    message: "Which agent?",
+    options: matches.map((m) => ({ value: m.id, label: `#${m.id}  ${m.name ?? "Unknown"}` })),
+  })
+  if (prompts.isCancel(choice)) return null
+  return choice as number
+}
+
 const AgentsGetCommand = cmd({
   command: "get <id>",
-  describe: "show agent details",
+  describe: "show agent details (accepts an agent ID or name)",
   builder: (yargs) =>
     yargs
-      .positional("id", { describe: "agent ID", type: "number", demandOption: true })
+      .positional("id", { describe: "agent ID or name", type: "string", demandOption: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    if (!args.json) { UI.empty(); prompts.intro(`◈  Agent #${args.id}`) }
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Agent ${args.id}`) }
 
     const token = await requireAuth()
     if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Resolve name → numeric ID (#162334). Numeric IDs pass straight through.
+    const resolvedId = await resolveAgentId(args.id as any, userId, Boolean(args.json))
+    if (resolvedId === null) { if (!args.json) prompts.outro("Done"); return }
+    args.id = resolvedId as any
 
     const spinner = args.json ? null : prompts.spinner()
     if (spinner) spinner.start("Loading…")
@@ -199,7 +321,7 @@ const AgentsGetCommand = cmd({
       if (!a || !a.id) { if (spinner) spinner.stop("Agent not found", 1); process.exitCode = 1; return }
 
       if (args.json) {
-        console.log(JSON.stringify(a, null, 2))
+        await writeJson(a)
         return
       }
 
@@ -214,6 +336,31 @@ const AgentsGetCommand = cmd({
       printKV("Heartbeat", a.heartbeat_mode)
       printKV("Active", a.active)
       printKV("Created", a.created_at)
+
+      // HEALTH (#179799). `Active: true` was the only signal this screen showed, and an agent
+      // that had been circuit-broken for fifteen days showed exactly that. The status column
+      // describes intent; last run describes reality, and only the second one would have
+      // caught it. Silence is printed in days because that is the scale the failure occurs at.
+      const h = a.health as Record<string, any> | undefined
+      if (h) {
+        console.log()
+        const hours = typeof h.silent_for_hours === "number" ? h.silent_for_hours : null
+        const quiet = hours !== null && hours >= 24
+        const status = String(h.status ?? "healthy")
+        printKV("Health", status === "healthy" ? status : `${status}  (${h.consecutive_failures ?? 0} consecutive failures)`)
+        printKV(
+          "Last run",
+          h.last_run_at
+            ? `${h.last_run_at}${hours !== null ? `  (${hours >= 48 ? `${Math.round(hours / 24)}d` : `${hours}h`} ago)` : ""}`
+            : "NEVER",
+        )
+        // An agent that is active, healthy, and silent for days is the exact shape of the
+        // failure — call it out rather than leaving the reader to do the subtraction.
+        if (quiet && a.active) {
+          console.log(`  ${dim("⚠  active but producing nothing for")} ${Math.round(hours / 24)}d`)
+        }
+        if (h.last_error) printKV("Last error", String(h.last_error).slice(0, 160))
+      }
       console.log()
       printDivider()
 
@@ -238,7 +385,7 @@ const AgentsCreateCommand = cmd({
       .option("description", { alias: "d", describe: "agent description", type: "string" })
       .option("prompt", { alias: "p", describe: "system prompt / instructions", type: "string" })
       .option("system-prompt", { describe: "system prompt (alias of --prompt)", type: "string" })
-      .option("initial-prompt", { describe: "initial prompt sent on first heartbeat", type: "string" })
+      .option("initial-prompt", { alias: "mission", describe: "the agent's recurring MISSION — injected into every heartbeat, not just the first (heartbeat truncates at 2000 chars). Accepts a string or @path/to/file", type: "string" })
       .option("model", { alias: "m", describe: "AI model (e.g. gpt-4o-mini)", type: "string" })
       .option("type", { describe: "agent type (content, chat, assistant, support)", type: "string", default: "content" })
       .option("bloq-id", { alias: "b", describe: "knowledge base bloq ID", type: "number" })
@@ -298,7 +445,7 @@ const AgentsCreateCommand = cmd({
     try {
       const payload: Record<string, unknown> = { name, description: description ?? "", initial_prompt: prompt, model, type: args.type ?? "content" }
       if (args["bloq-id"]) payload.bloq_id = args["bloq-id"]
-      if (args["initial-prompt"]) payload.initial_prompt = args["initial-prompt"]
+      if (args["initial-prompt"]) payload.initial_prompt = readPromptArg(args["initial-prompt"])
       if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
       // These three persist under settings.*, NOT top-level — top-level model /
       // system_prompt / heartbeat_tools are silently dropped by the API (#146506).
@@ -312,6 +459,15 @@ const AgentsCreateCommand = cmd({
       }
       payload.settings = settings
 
+      // The V6 runtime reads the system prompt from config.system_prompt ONLY —
+      // ReactLoopService::buildInitialMessages does
+      //   $config['systemPrompt'] ?? $config['system_prompt'] ?? getDefaultSystemPrompt()
+      // so settings.system_prompt / initial_prompt alone leave the agent falling back
+      // to the name+description persona and behaving like a generic assistant (#178763).
+      const config: Record<string, unknown> = { model, modelName: model }
+      if (settings.system_prompt) config.system_prompt = settings.system_prompt
+      payload.config = config
+
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents`, {
         method: "POST",
         body: JSON.stringify(payload),
@@ -323,7 +479,7 @@ const AgentsCreateCommand = cmd({
       const a = data?.data ?? data
 
       if (args.json) {
-        console.log(JSON.stringify(a, null, 2))
+        await writeJson(a)
         return
       }
 
@@ -332,7 +488,7 @@ const AgentsCreateCommand = cmd({
       printDivider()
       printKV("ID", a.id)
       printKV("Name", a.name)
-      printKV("Model", a.model ?? (a.settings as Record<string, unknown>)?.model)
+      printKV("Model", (a.config as any)?.model ?? (a.settings as Record<string, unknown>)?.model ?? a.model)
       if (a.bloq_id) printKV("Bloq", a.bloq_id)
       if (args["heartbeat-mode"]) printKV("Heartbeat", args["heartbeat-mode"])
       printDivider()
@@ -365,6 +521,20 @@ const AgentsChatCommand = cmd({
       .option("max-iterations", { describe: "cap ReactLoop iterations", type: "number" })
       .option("timeout", { describe: "max seconds to wait for response", type: "number", default: 300 })
       .option("no-rag", { describe: "disable RAG/knowledge base lookup", type: "boolean", default: false })
+      .option("thread", {
+        describe: "conversation thread id — pin a specific conversation instead of the agent's default shared one",
+        type: "string",
+      })
+      .option("fresh", {
+        describe: "isolate this turn in a brand-new thread — the agent starts with no prior conversation",
+        type: "boolean",
+        default: false,
+      })
+      .option("verbose", {
+        alias: "V",
+        describe: "trace the run: -V shows iterations, tool calls and results; -VV adds the payloads",
+        type: "count",
+      })
       .option("json", { describe: "output response as JSON", type: "boolean", default: false }),
   async handler(args) {
     await executeChat({
@@ -373,9 +543,12 @@ const AgentsChatCommand = cmd({
       bloq: args.bloq,
       timeout: args.timeout,
       "no-rag": args["no-rag"],
+      thread: args.thread as string | undefined,
+      fresh: args.fresh as boolean | undefined,
       json: args.json,
       model: args.model,
       "max-iterations": args["max-iterations"],
+      verbose: args.verbose as number | undefined,
     })
   },
 })
@@ -389,8 +562,13 @@ const AgentsUpdateCommand = cmd({
       .option("name", { describe: "new name", type: "string" })
       .option("description", { describe: "new description", type: "string" })
       .option("bloq", { alias: "b", describe: "repoint the agent's persistent knowledge-base bloq (#146918)", type: "number" })
-      .option("model", { describe: "new model", type: "string" })
-      .option("system-prompt", { describe: "new system prompt (persists to settings.system_prompt)", type: "string" })
+      // -m matches `agents create`, which has had the alias since day one. Without
+      // it here, `agents update <id> -m <model>` is rejected by yargs and prints
+      // the help block — which reads as a silent no-op if the caller is piping
+      // output, and cost a debugging cycle exactly that way.
+      .option("model", { alias: "m", describe: "new model", type: "string" })
+      .option("system-prompt", { describe: "the agent's IDENTITY — who it is (settings.system_prompt; used as the LLM system message)", type: "string" })
+      .option("initial-prompt", { alias: "mission", describe: "the agent's MISSION — what it does every heartbeat (initial_prompt). Accepts a string or @path/to/file", type: "string" })
       .option("heartbeat-tools", { describe: "comma-separated heartbeat tool names (settings.heartbeat_tools)", type: "string" })
       .option("heartbeat-mode", { describe: "heartbeat mode: off, passive, reactive, autonomous, briefing", type: "string", choices: ["off", "passive", "reactive", "autonomous", "briefing"] })
       .option("reset-health", { describe: "reset health_status to healthy and clear consecutive_failures", type: "boolean", default: false })
@@ -403,8 +581,6 @@ const AgentsUpdateCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Update Agent #${args.id}`)
 
-    const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { prompts.outro("Done"); return }
@@ -414,6 +590,11 @@ const AgentsUpdateCommand = cmd({
     if (args.description) payload.description = args.description
     if (args.bloq !== undefined) payload.bloq_id = args.bloq
     if (args["heartbeat-mode"]) payload.heartbeat_mode = args["heartbeat-mode"]
+    // MISSION. Top-level column, NOT settings.* — heartbeat reads $agent->initial_prompt.
+    // --system-prompt writes settings.system_prompt, which is the agent's IDENTITY (the LLM
+    // system message). Both are real and both are used, in different slots; until now only
+    // identity was editable from the CLI, so "change what this agent does" meant a raw PATCH.
+    if (args["initial-prompt"]) payload.initial_prompt = readPromptArg(args["initial-prompt"])
     if (args["reset-health"]) {
       payload.health_status = "healthy"
       payload.consecutive_failures = 0
@@ -430,10 +611,10 @@ const AgentsUpdateCommand = cmd({
     const needsCurrent = wantsSettings || wantsIntegration || wantsTools
 
     if (Object.keys(payload).length === 0 && !needsCurrent) {
-      prompts.log.warn("Nothing to update. Use --name, --description, --bloq, --model, --system-prompt, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, or --reset-health")
-      prompts.outro("Done")
-      return
+      failNoOp("update", "Use --name, --description, --bloq, --model, --system-prompt, --initial-prompt/--mission, --heartbeat-tools, --heartbeat-mode, --enable-integration, --disable-integration, --add-tools, --remove-tools, or --reset-health")
     }
+    const token = await requireAuth()
+    if (!token) { prompts.outro("Done"); return }
 
     const spinner = prompts.spinner()
     spinner.start("Updating…")
@@ -475,25 +656,39 @@ const AgentsUpdateCommand = cmd({
             payload.settings = settings
           }
 
-          // ── config.tools allowlist (add/remove). config can be a list OR a dict in the
-          // wild (#); coerce to a dict so $agent->config['tools'] resolves server-side.
-          if (wantsTools) {
+          // ── config.* — the system prompt, the model and the tools allowlist all live
+          // here. config can be a list OR a dict in the wild (#); coerce to a dict so
+          // $agent->config['system_prompt'] / ['tools'] resolve server-side.
+          if (wantsTools || wantsSettings) {
             const curConfig: any = a?.config
             const baseConfig: Record<string, unknown> =
               curConfig && !Array.isArray(curConfig) && typeof curConfig === "object" ? { ...curConfig } : {}
-            const curTools: string[] = Array.isArray(curConfig?.tools)
-              ? curConfig.tools
-              : (Array.isArray(curConfig) ? curConfig.filter((x: any) => typeof x === "string") : [])
-            let nextTools = [...new Set(curTools)]
-            if (args["add-tools"]) {
-              const add = args["add-tools"].split(",").map((t: string) => t.trim()).filter(Boolean)
-              nextTools = [...new Set([...nextTools, ...add])]
+
+            // V6 reads the system prompt from config.system_prompt ONLY — writing it to
+            // settings.system_prompt alone leaves the agent on the name+description
+            // fallback persona and it ignores every instruction it was given (#178763).
+            if (args["system-prompt"]) baseConfig.system_prompt = args["system-prompt"]
+            if (args.model) {
+              baseConfig.model = args.model
+              baseConfig.modelName = args.model
             }
-            if (args["remove-tools"]) {
-              const rm = new Set(args["remove-tools"].split(",").map((t: string) => t.trim()))
-              nextTools = nextTools.filter((t) => !rm.has(t))
+
+            if (wantsTools) {
+              const curTools: string[] = Array.isArray(curConfig?.tools)
+                ? curConfig.tools
+                : (Array.isArray(curConfig) ? curConfig.filter((x: any) => typeof x === "string") : [])
+              let nextTools = [...new Set(curTools)]
+              if (args["add-tools"]) {
+                const add = args["add-tools"].split(",").map((t: string) => t.trim()).filter(Boolean)
+                nextTools = [...new Set([...nextTools, ...add])]
+              }
+              if (args["remove-tools"]) {
+                const rm = new Set(args["remove-tools"].split(",").map((t: string) => t.trim()))
+                nextTools = nextTools.filter((t) => !rm.has(t))
+              }
+              baseConfig.tools = nextTools
             }
-            payload.config = { ...baseConfig, tools: nextTools }
+            payload.config = baseConfig
           }
         } else {
           // Fall back to top-level if we can't read current settings
@@ -508,13 +703,47 @@ const AgentsUpdateCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
 
       const data = (await res.json()) as { data?: any }
-      const a = data?.data ?? data
+      let a = data?.data ?? data
+
+      // VERIFY THE WRITE LANDED (#179802). The response echoes the payload, so printing
+      // `a.model` proved only that we asked — not that anything persisted. The model lives in
+      // config.model / config.modelName / settings.model, and there is a fallback path above
+      // that sends a TOP-LEVEL `model` the API does not read; that combination printed
+      // "Model: <new>" while the agent stayed on its old one. Re-read and compare.
+      if (args.model) {
+        let landed: string | null = null
+        try {
+          const check = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`)
+          const body = (await check.json()) as any
+          const fresh = body?.data ?? body
+          landed =
+            fresh?.config?.model ?? fresh?.settings?.model ?? fresh?.model ?? null
+          if (fresh) a = fresh
+        } catch {
+          landed = null
+        }
+
+        if (landed !== null && landed !== args.model) {
+          spinner.stop("Not applied", 1)
+          prompts.log.error(
+            `The API accepted the request but the agent is still on '${landed}', not '${args.model}'.\n` +
+              `Nothing was changed. Re-run, or check: iris agents get ${args.id}`,
+          )
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
+        if (landed === null) {
+          prompts.log.warn(`Could not read the agent back to confirm. Check: iris agents get ${args.id}`)
+        }
+      }
+
       spinner.stop(`${success("✓")} Updated: ${bold(String(a.name ?? a.id))}`)
 
       printDivider()
       printKV("ID", a.id)
       printKV("Name", a.name)
-      printKV("Model", a.model ?? (a.settings as Record<string, unknown>)?.model)
+      printKV("Model", (a.config as any)?.model ?? (a.settings as Record<string, unknown>)?.model ?? a.model)
       if (wantsIntegration) {
         const ints = (a.settings as Record<string, unknown>)?.integrations
         const names = Array.isArray(ints) ? ints.map((it: any) => (typeof it === "string" ? it : (it?.type ?? it?.name))).filter(Boolean) : []
@@ -802,39 +1031,55 @@ const AgentsDeleteCommand = cmd({
     yargs
       .positional("id", { describe: "agent ID", type: "number", demandOption: true })
       .option("force", { alias: "f", describe: "skip confirmation", type: "boolean", default: false })
+      .option("json", { describe: "JSON output (implies non-interactive)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Delete Agent #${args.id}`)
+    // JSON mode = scripting: no prompts/spinner (they'd corrupt stdout), emit one
+    // JSON object, and treat it as non-interactive (skip the confirm). (#177914)
+    const json = !!args.json
+    const emit = (obj: any) => console.log(JSON.stringify(obj))
+
+    if (!json) {
+      UI.empty()
+      prompts.intro(`◈  Delete Agent #${args.id}`)
+    }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (json) { emit({ success: false, error: "not authenticated" }) } else { prompts.outro("Done") } ; return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (json) { emit({ success: false, error: "no user id" }) } else { prompts.outro("Done") } ; return }
 
-    if (!args.force) {
+    // --json is non-interactive, so it never blocks on a confirm prompt.
+    if (!args.force && !json) {
       const confirmed = await prompts.confirm({ message: `Delete agent #${args.id}? This cannot be undone.` })
       if (!confirmed || prompts.isCancel(confirmed)) { prompts.outro("Cancelled"); return }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Deleting…")
+    const spinner = json ? null : prompts.spinner()
+    if (spinner) { spinner.start("Deleting…") }
 
     try {
       const res = await irisFetch(`/api/v1/users/${userId}/bloqs/agents/${args.id}`, {
         method: "DELETE",
       })
       const ok = await handleApiError(res, "Delete agent")
-      if (!ok) { spinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+      if (!ok) {
+        process.exitCode = 1
+        if (json) { emit({ success: false, id: args.id, error: `HTTP ${res.status}` }) } else { spinner!.stop("Failed", 1); prompts.outro("Done") }
+        return
+      }
 
-      spinner.stop(`${success("✓")} Agent #${args.id} deleted`)
-      prompts.outro(dim("iris agents list"))
+      if (json) {
+        emit({ success: true, deleted: true, id: args.id })
+      } else {
+        spinner!.stop(`${success("✓")} Agent #${args.id} deleted`)
+        prompts.outro(dim("iris agents list"))
+      }
     } catch (err) {
-      spinner.stop("Error", 1)
       process.exitCode = 1
-      prompts.log.error(err instanceof Error ? err.message : String(err))
-      prompts.outro("Done")
+      const msg = err instanceof Error ? err.message : String(err)
+      if (json) { emit({ success: false, id: args.id, error: msg }) } else { spinner!.stop("Error", 1); prompts.log.error(msg); prompts.outro("Done") }
     }
   },
 })
@@ -887,7 +1132,7 @@ const AgentsBulkDeleteCommand = cmd({
         if (!ok) { spinner.stop("Failed", 1); return }
 
         const raw = (await res.json()) as Record<string, any>
-        let agents: any[] = raw?.data ?? []
+        let agents: any[] = firstArray(raw?.data)
 
         if (args.bloq) agents = agents.filter((a: any) => a.bloq_id === args.bloq)
         if (args.orphaned) agents = agents.filter((a: any) => !a.bloq_id)
@@ -965,12 +1210,13 @@ const AgentsAssignCommand = cmd({
     yargs
       .positional("agent-id", { type: "number", demandOption: true, describe: "agent ID to assign" })
       .option("bloq", { type: "number", describe: "set as heartbeat agent on bloq" })
+      .option("workspace", { type: "number", describe: "assign to a Workspace (team scoping); 0 to orphan" })
       .option("task", { type: "number", describe: "assign to a BloqItemTask by ID" })
       .option("lead-task", { type: "number", describe: "assign to a LeadTask by ID (requires --lead-id)" })
       .option("lead-id", { type: "number", describe: "lead ID (required with --lead-task)" })
       .check((argv) => {
-        if (!argv.bloq && !argv.task && !argv["lead-task"]) {
-          throw new Error("Specify at least one target: --bloq, --task, or --lead-task")
+        if (!argv.bloq && argv.workspace === undefined && !argv.task && !argv["lead-task"]) {
+          throw new Error("Specify at least one target: --bloq, --workspace, --task, or --lead-task")
         }
         if (argv["lead-task"] && !argv["lead-id"]) {
           throw new Error("--lead-task requires --lead-id")
@@ -990,13 +1236,37 @@ const AgentsAssignCommand = cmd({
     if (args.bloq) {
       spinner.start(`Assigning agent #${agentId} to bloq #${args.bloq}…`)
       try {
-        const res = await irisFetch(`/api/v1/user/bloqs/${args.bloq}`, {
+        // Use the purpose-built heartbeat-agent endpoint (#157963). The generic
+        // bloq-update route only accepts PATCH, so PUTting to it 405s; this
+        // dedicated route takes { agent_id } and also auto-enables heartbeat.
+        const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/heartbeat`, {
           method: "PUT",
-          body: JSON.stringify({ heartbeat_agent_id: agentId }),
+          body: JSON.stringify({ agent_id: agentId }),
         })
         const ok = await handleApiError(res, "Assign to bloq")
         if (ok) {
           spinner.stop(success(`✓ Agent #${agentId} set as heartbeat agent on bloq #${args.bloq}`))
+        } else {
+          spinner.stop("Failed", 1)
+        }
+      } catch (err) {
+        spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    // Assign to a Workspace (team scoping). 0 → orphan (null).
+    if (args.workspace !== undefined) {
+      const wsId = (args.workspace as number) || null
+      spinner.start(wsId ? `Assigning agent #${agentId} to workspace #${wsId}…` : `Removing agent #${agentId} from its workspace…`)
+      try {
+        const res = await irisFetch(`/api/v1/agents/${agentId}/workspace`, {
+          method: "POST",
+          body: JSON.stringify({ workspace_id: wsId }),
+        })
+        const ok = await handleApiError(res, "Assign to workspace")
+        if (ok) {
+          spinner.stop(success(wsId ? `✓ Agent #${agentId} assigned to workspace #${wsId}` : `✓ Agent #${agentId} orphaned (no workspace)`))
         } else {
           spinner.stop("Failed", 1)
         }
@@ -1054,6 +1324,300 @@ const AgentsAssignCommand = cmd({
   },
 })
 
+// ============================================================================
+// Multi-agent threads (rooms) — message / inbox / thread   (#165979)
+//
+// Backend: fl-iris-api /api/threads/* — pass IRIS_API as the base (these do NOT
+// live on fl-api). The keystone `as_agent_id` override lets an internal agent
+// post as sender_type=agent, so an agent can speak into a room and other agents
+// can reply. `trigger_responses:false` posts without inviting a reply round.
+// ============================================================================
+
+/**
+ * Build the POST /threads/{id}/messages request body.
+ * Pure + exported for unit tests.
+ */
+export function buildThreadMessageBody(opts: {
+  content: string
+  asAgentId?: number | string | null
+  triggerResponses?: boolean
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = { content: opts.content }
+  if (opts.asAgentId != null && String(opts.asAgentId).trim() !== "") {
+    body.as_agent_id = String(opts.asAgentId)
+  }
+  // Only send the flag when suppressing — server defaults to true.
+  if (opts.triggerResponses === false) body.trigger_responses = false
+  return body
+}
+
+type ThreadParticipant = { agent_id?: number | string; agent_type?: string }
+type ThreadRow = {
+  id: string
+  name?: string | null
+  status?: string | null
+  messages_count?: number
+  agents?: Array<Record<string, unknown>>
+  participants?: ThreadParticipant[]
+  updated_at?: string | null
+}
+
+function printThreadRow(t: ThreadRow): void {
+  const name = bold(String(t.name ?? `Thread ${String(t.id).slice(0, 8)}`))
+  const agentCount = Array.isArray(t.agents) ? t.agents.length : (t.participants?.length ?? 0)
+  const msgs = t.messages_count ?? 0
+  console.log(`  ${name}  ${dim(String(t.id))}`)
+  console.log(`    ${dim(`${agentCount} agents · ${msgs} messages · ${String(t.status ?? "active")}`)}`)
+}
+
+/** True if the agent is already an internal participant of the thread. */
+function isParticipant(participants: ThreadParticipant[] | undefined, agentId: number): boolean {
+  return (participants ?? []).some(
+    (p) => String(p.agent_id) === String(agentId) && (p.agent_type ?? "internal") === "internal",
+  )
+}
+
+/**
+ * Ensure `agentId` is an internal participant of `threadId` (idempotent-ish):
+ * fetches the thread, adds the agent only if missing. Returns false on a hard
+ * API error. `autoRespond` makes the agent reply to new messages.
+ */
+async function ensureParticipant(
+  threadId: string,
+  agentId: number,
+  autoRespond: boolean,
+  action: string,
+): Promise<boolean> {
+  const showRes = await irisFetch(`/api/threads/${threadId}`, {}, IRIS_API)
+  const ok = await handleApiError(showRes, action)
+  if (!ok) return false
+  const body = (await showRes.json()) as { thread?: { participants?: ThreadParticipant[] } }
+  if (isParticipant(body?.thread?.participants, agentId)) return true
+
+  const addRes = await irisFetch(
+    `/api/threads/${threadId}/agents`,
+    { method: "POST", body: JSON.stringify({ agent_id: String(agentId), role: "participant", auto_respond: autoRespond }) },
+    IRIS_API,
+  )
+  return handleApiError(addRes, action)
+}
+
+const AgentsMessageCommand = cmd({
+  command: "message <agent> <content>",
+  describe: "post a message into a thread AS an internal agent (agent-to-agent)",
+  builder: (yargs) =>
+    yargs
+      .positional("agent", { describe: "sender agent ID or name", type: "string", demandOption: true })
+      .positional("content", { describe: "message text", type: "string", demandOption: true })
+      .option("thread", { describe: "existing thread ID to post into", type: "string" })
+      .option("to", { describe: "recipient agent ID/name — opens a new thread if --thread is omitted", type: "string" })
+      .option("trigger", { describe: "let other agents auto-respond (use --no-trigger to suppress)", type: "boolean", default: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro("◈  Agent message") }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    if (!args.thread && !args.to) {
+      if (args.json) await writeJson({ error: "Pass --thread <id> or --to <agent>" })
+      else prompts.log.error(`Pass ${dim("--thread <id>")} to post into a room, or ${dim("--to <agent>")} to open a new one`)
+      process.exitCode = 1
+      if (!args.json) prompts.outro("Done")
+      return
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Sending…")
+
+    try {
+      const fromId = await resolveAgentId(args.agent as string, userId, Boolean(args.json))
+      if (fromId === null) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      let threadId = args.thread as string | undefined
+      let toId: number | null = null
+      if (args.to) {
+        toId = await resolveAgentId(args.to as string, userId, Boolean(args.json))
+        if (toId === null) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+      }
+
+      if (!threadId) {
+        // Open a fresh thread with both agents; the recipient auto-responds.
+        const createRes = await irisFetch(
+          `/api/threads`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              name: `DM: #${fromId} ↔ #${toId}`,
+              agent_ids: [String(fromId), String(toId)],
+              agent_roles: ["participant", "participant"],
+              auto_respond: [false, true],
+            }),
+          },
+          IRIS_API,
+        )
+        const okc = await handleApiError(createRes, "Create thread")
+        if (!okc) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+        const created = (await createRes.json()) as { thread?: { id?: string } }
+        threadId = created?.thread?.id
+        if (!threadId) { if (spinner) spinner.stop("No thread id returned", 1); process.exitCode = 1; if (!args.json) prompts.outro("Done"); return }
+      } else {
+        // Posting into an existing thread — make sure the sender (and recipient)
+        // are participants, else the server rejects the agent-as-sender post.
+        if (!(await ensureParticipant(threadId, fromId, false, "Add sender"))) {
+          if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return
+        }
+        if (toId !== null && !(await ensureParticipant(threadId, toId, true, "Add recipient"))) {
+          if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return
+        }
+      }
+
+      const res = await irisFetch(
+        `/api/threads/${threadId}/messages`,
+        { method: "POST", body: JSON.stringify(buildThreadMessageBody({ content: args.content as string, asAgentId: fromId, triggerResponses: args.trigger as boolean })) },
+        IRIS_API,
+      )
+      const ok = await handleApiError(res, "Send message")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const data = (await res.json()) as {
+        message?: { sender_name?: string; content?: string }
+        agent_responses?: Array<{ sender_name?: string; content?: string }>
+        response_count?: number
+      }
+
+      if (args.json) { await writeJson({ thread_id: threadId, ...data }); return }
+
+      spinner!.stop(success(`Sent to thread ${dim(String(threadId))}`))
+      printDivider()
+      console.log(`  ${bold(String(data.message?.sender_name ?? `#${fromId}`))}: ${String(data.message?.content ?? args.content)}`)
+      for (const r of data.agent_responses ?? []) {
+        console.log(`    ${dim("↳")} ${bold(String(r.sender_name ?? "agent"))}: ${dim(String(r.content ?? "").slice(0, 200))}`)
+      }
+      printDivider()
+      prompts.outro(`${dim("iris agents thread " + threadId)}  Read the room`)
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+const AgentsThreadCommand = cmd({
+  command: "thread [id]",
+  describe: "list multi-agent threads, or show one thread's messages",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "thread ID (omit to list all threads)", type: "string" })
+      .option("limit", { describe: "messages to show", type: "number", default: 30 })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(args.id ? `◈  Thread ${args.id}` : "◈  Threads") }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
+
+    try {
+      if (!args.id) {
+        const res = await irisFetch(`/api/threads`, {}, IRIS_API)
+        const ok = await handleApiError(res, "List threads")
+        if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
+        const paginator = (await res.json()) as { data?: ThreadRow[] }
+        const threads = paginator?.data ?? []
+        if (args.json) { await writeJson(threads); return }
+        spinner!.stop(`${threads.length} thread${threads.length === 1 ? "" : "s"}`)
+        printDivider()
+        if (threads.length === 0) console.log(`  ${dim("No threads yet — open one with")} ${dim("iris agents message <from> <content> --to <agent>")}`)
+        for (const t of threads) printThreadRow(t)
+        printDivider()
+        prompts.outro(`${dim("iris agents thread <id>")}  Read a room`)
+        return
+      }
+
+      const res = await irisFetch(`/api/threads/${args.id}`, {}, IRIS_API)
+      const ok = await handleApiError(res, "Show thread")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
+      const body = (await res.json()) as {
+        thread?: { name?: string | null; status?: string | null; agents?: Array<Record<string, unknown>> }
+        messages?: Array<{ sender_name?: string; sender_type?: string; content?: string }>
+      }
+      if (args.json) { await writeJson(body); return }
+
+      const msgs = (body.messages ?? []).slice(-Number(args.limit))
+      spinner!.stop(String(body.thread?.name ?? `Thread ${args.id}`))
+      printDivider()
+      printKV("Agents", (body.thread?.agents ?? []).map((a) => String(a.name ?? `#${a.id}`)).join(", "))
+      printKV("Status", body.thread?.status ?? "active")
+      printDivider()
+      for (const m of msgs) {
+        console.log(`  ${bold(String(m.sender_name ?? m.sender_type ?? "?"))}: ${String(m.content ?? "")}`)
+      }
+      if (msgs.length === 0) console.log(`  ${dim("No messages yet")}`)
+      printDivider()
+      prompts.outro("Done")
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+const AgentsInboxCommand = cmd({
+  command: "inbox <agent>",
+  describe: "list threads (rooms) an agent participates in",
+  builder: (yargs) =>
+    yargs
+      .positional("agent", { describe: "agent ID or name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Inbox — ${args.agent}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Loading…")
+
+    try {
+      const agentId = await resolveAgentId(args.agent as string, userId, Boolean(args.json))
+      if (agentId === null) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const res = await irisFetch(`/api/threads`, {}, IRIS_API)
+      const ok = await handleApiError(res, "List inbox")
+      if (!ok) { if (spinner) spinner.stop("Failed", 1); process.exitCode = 1; return }
+      const paginator = (await res.json()) as { data?: ThreadRow[] }
+      const mine = (paginator?.data ?? []).filter((t) => isParticipant(t.participants, agentId))
+
+      if (args.json) { await writeJson(mine); return }
+      spinner!.stop(`${mine.length} thread${mine.length === 1 ? "" : "s"} for #${agentId}`)
+      printDivider()
+      if (mine.length === 0) console.log(`  ${dim("This agent is in no threads yet")}`)
+      for (const t of mine) printThreadRow(t)
+      printDivider()
+      prompts.outro(`${dim("iris agents thread <id>")}  Read a room`)
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
 export const PlatformAgentsCommand = cmd({
   command: "agents",
   describe: "manage IRIS platform agents — pull, push, diff, CRUD, assign",
@@ -1069,7 +1633,13 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsDeleteCommand)
       .command(AgentsBulkDeleteCommand)
       .command(AgentsChatCommand)
+      .command(AgentsProveCommand)
       .command(AgentsAssignCommand)
+      .command(AgentsMessageCommand)
+      .command(AgentsInboxCommand)
+      .command(AgentsThreadCommand)
+      .command(AgentsExportCommand)
+      .command(AgentsBenchCommand)
       .demandCommand(),
   async handler() {},
 })

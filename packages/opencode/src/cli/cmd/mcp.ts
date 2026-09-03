@@ -11,11 +11,13 @@ import { McpOAuthProvider } from "../../mcp/oauth-provider"
 import { Config } from "../../config/config"
 import { Instance } from "../../project/instance"
 import { Installation } from "../../installation"
+import fs from "fs"
 import path from "path"
 import { Global } from "../../global"
 import { McpServeCommand } from "./mcp-serve"
 import { McpInstallCommand } from "./mcp-install"
 import { McpClients } from "../../mcp/clients"
+import { firstArray } from "../../util/array"
 
 function getAuthStatusIcon(status: MCP.AuthStatus): string {
   switch (status) {
@@ -51,12 +53,146 @@ function isMcpRemote(config: McpEntry): config is McpRemote {
   return isMcpConfigured(config) && config.type === "remote"
 }
 
+
+// ── call / tools (#182089) ───────────────────────────────────────────────────
+//
+// Before these existed, an MCP server was reachable by a human in an MCP client
+// and by nothing else — not a playbook, not an agent, not a script. IRIS was
+// already an MCP client (transport + OAuth below); it simply had no verb that
+// invoked a tool.
+
+const McpToolsCommand = cmd({
+  command: "tools <server>",
+  describe: "list the tools an MCP server exposes, with their input schemas",
+  builder: (y) =>
+    y
+      .positional("server", { type: "string", describe: "MCP server name (see: iris mcp list)" })
+      .option("json", { type: "boolean", default: false, describe: "raw JSON — pipeable" }),
+  async handler(args) {
+    // instance-wrapped: MCP.clients() resolves servers from the project instance,
+    // so every command that touches it must run inside Instance.provide — the
+    // same shape as `mcp list` and `mcp auth`. Without it the call fails with
+    // "No context found for instance", which reads like a server problem.
+    await Instance.provide({
+      directory: process.cwd(),
+      async fn() {
+    const server = String(args.server)
+    let tools
+    try {
+      tools = await MCP.listToolsFor(server)
+    } catch (e: any) {
+      // Non-zero exit, never an empty success. A script cannot tell "no tools"
+      // from "server unreachable" if both print nothing and exit 0.
+      if (!args.json) {
+        UI.empty()
+        prompts.log.error(e?.message ?? String(e))
+      } else {
+        console.log(JSON.stringify({ ok: false, error: e?.message ?? String(e) }))
+      }
+      process.exitCode = 1
+      return
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify({ ok: true, server, tools }, null, 2))
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  MCP tools — ${server}`)
+    if (tools.length === 0) prompts.log.warn("Server is connected but exposes no tools.")
+    for (const t of tools) {
+      const req: string[] = firstArray((t.inputSchema as any)?.required)
+      const props = Object.keys(((t.inputSchema as any)?.properties ?? {}) as Record<string, unknown>)
+      console.log(`  ${t.name}`)
+      if (t.description) console.log(`    ${String(t.description).split("\n")[0].slice(0, 100)}`)
+      if (props.length) {
+        const shown = props.map((k) => (req.includes(k) ? `${k}*` : k)).join(", ")
+        console.log(`    params: ${shown}${req.length ? "   (* required)" : ""}`)
+      }
+    }
+    prompts.outro(`${tools.length} tool(s)  ·  iris mcp call ${server} <tool> --params-json '{...}'`)
+      },
+    })
+  },
+})
+
+const McpCallCommand = cmd({
+  command: "call <server> <tool>",
+  describe: "invoke a tool on an MCP server — the verb that makes MCP scriptable",
+  builder: (y) =>
+    y
+      .positional("server", { type: "string", describe: "MCP server name (see: iris mcp list)" })
+      .positional("tool", { type: "string", describe: "tool name (see: iris mcp tools <server>)" })
+      .option("params-json", { type: "string", describe: "arguments as a JSON object string" })
+      .option("params-file", { type: "string", describe: "path to a .json file of arguments" })
+      .option("json", { type: "boolean", default: false, describe: "raw JSON result — pipeable" })
+      .option("text", { type: "boolean", default: false, describe: "print only the text payload" }),
+  async handler(args) {
+    // instance-wrapped — see McpToolsCommand above.
+    await Instance.provide({
+      directory: process.cwd(),
+      async fn() {
+    const server = String(args.server)
+    const tool = String(args.tool)
+
+    const fail = (msg: string) => {
+      if (args.json) console.log(JSON.stringify({ ok: false, server, tool, error: msg }))
+      else {
+        UI.empty()
+        prompts.log.error(msg)
+      }
+      process.exitCode = 1
+    }
+
+    // Parse arguments BEFORE connecting — a JSON typo should not look like a
+    // server problem.
+    let params: Record<string, any> = {}
+    try {
+      if (args["params-file"]) {
+        params = JSON.parse(fs.readFileSync(String(args["params-file"]), "utf8"))
+      } else if (args["params-json"]) {
+        params = JSON.parse(String(args["params-json"]))
+      }
+    } catch (e: any) {
+      return fail(`Could not parse params: ${e?.message ?? String(e)}`)
+    }
+    if (params === null || typeof params !== "object" || Array.isArray(params)) {
+      return fail("Params must be a JSON OBJECT, e.g. --params-json '{\"account_id\":\"gueorv\"}'")
+    }
+
+    let result: any
+    try {
+      result = await MCP.callTool(server, tool, params)
+    } catch (e: any) {
+      return fail(e?.message ?? String(e))
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
+    // Default prints the text payload, because that is what MCP tools actually
+    // return and what a caller wants to pipe.
+    const text = MCP.extractText(result)
+    if (args.text || text) {
+      console.log(text || JSON.stringify(result, null, 2))
+      return
+    }
+    console.log(JSON.stringify(result, null, 2))
+      },
+    })
+  },
+})
+
 export const McpCommand = cmd({
   command: "mcp",
   describe: "manage MCP (Model Context Protocol) servers",
   builder: (yargs) =>
     yargs
       .command(McpServeCommand)
+      .command(McpCallCommand)
+      .command(McpToolsCommand)
       .command(McpInstallCommand)
       .command(McpAddCommand)
       .command(McpListCommand)

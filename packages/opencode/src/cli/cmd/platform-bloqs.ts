@@ -1,10 +1,21 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
+import { AtlasUseCommand } from "./platform-atlas-use"
+import { buildListEnvelope } from "./list-envelope"
+import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli } from "./iris-api"
-import { itemTitle, itemContentPreview } from "./bloq-item-format"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
+import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
+import { confirmWiden } from "./exposure-gate"
+import { detectKind, parseDelimited, parseXlsx, parseDocx, parsePlain, titleFromHtml, inferSchema, type TableData, type ColumnSchema } from "./ingest-formats"
+import { RELATION_TYPES, isValidRelationType, formatRelationsGrouped, type RelationRow } from "./bloq-relation-format"
+import { createPageFromJson } from "./platform-pages"
+import { BloqsExportCommand } from "./platform-bloq-export"
+import { AtlasFilesCommandExport } from "./platform-atlas-files"
 import path from "path"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // Display helpers
@@ -33,7 +44,15 @@ function inviteWebUrl(token: string): string {
 async function mintShareLink(
   bloqId: number,
   userId: number,
-  opts: { permission?: string; expiresAt?: string | null; maxUses?: number | null } = {},
+  opts: {
+    permission?: string
+    expiresAt?: string | null
+    maxUses?: number | null
+    // #179082 — address the link to a person, and/or narrow what it grants.
+    email?: string | null
+    scopeType?: string | null
+    scopeId?: number | null
+  } = {},
 ): Promise<{ token: string; permission: string; expires_at: string | null; max_uses: number | null }> {
   const res = await irisFetch(`/api/v1/user/bloqs/${bloqId}/share-link`, {
     method: "POST",
@@ -42,6 +61,9 @@ async function mintShareLink(
       expires_at: opts.expiresAt ?? null,
       max_uses: opts.maxUses ?? null,
       user_id: userId,
+      email: opts.email ?? null,
+      scope_type: opts.scopeType ?? null,
+      scope_id: opts.scopeId ?? null,
     }),
   })
   if (!res.ok) {
@@ -103,6 +125,15 @@ const BloqsListCommand = cmd({
       .option("limit", { describe: "max results", type: "number", default: 20 })
       .option("search", { alias: "s", describe: "search bloqs by name", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      // #180633: the default listing excludes system bloqs — agent workspaces and `app:*`
+      // client dashboards. That default is fine; being unable to see them at all was not.
+      // On this account thirteen were withheld with nothing in the output to say so.
+      .option("all", {
+        describe: "include system bloqs (agent workspaces, app: dashboards)",
+        type: "boolean",
+        default: false,
+      })
+      .option("type", { describe: "filter by type: user or system", type: "string" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     cli.empty()
@@ -120,6 +151,8 @@ const BloqsListCommand = cmd({
     try {
       const params = new URLSearchParams({ per_page: String(args.limit), simplified: "1" })
       if (args.search) params.set("search", args.search)
+      if (args.all) params.set("include_system", "1")
+      if (args.type) params.set("type", String(args.type))
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs?${params}`)
       if (!res.ok) {
         spinner.stop("Failed", 1)
@@ -128,27 +161,54 @@ const BloqsListCommand = cmd({
         return
       }
 
-      const data = (await res.json()) as { data?: any[] }
-      let bloqs: any[] = data?.data ?? []
-      // Client-side filter fallback if API doesn't support search param
+      const data = (await res.json()) as { data?: any[]; total?: number; meta?: { total?: number } }
+      let bloqs: any[] = firstArray(data?.data)
+      // The index endpoint reports how many exist. Capture it — dropping it is what
+      // made `bloqs list` look complete while withholding 117 of 137 boards.
+      const serverTotal = data?.total ?? data?.meta?.total
+      // Client-side filter (the API index endpoint returns all bloqs and ignores
+      // the search param). Tokenize + AND the terms so a natural name like
+      // "Mayo Life Atlas" matches a stored "MAYO — Life Atlas" — a raw substring
+      // match can't span the separator the DB stores.
       if (args.search && bloqs.length > 0) {
-        const q = args.search.toLowerCase()
-        bloqs = bloqs.filter((b) => {
-          const name = String(b.name ?? "").toLowerCase()
-          const desc = String(b.description ?? "").toLowerCase()
-          return name.includes(q) || desc.includes(q)
-        })
+        bloqs = bloqs.filter((b) =>
+          matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, args.search as string),
+        )
       }
       spinner.stop(`${bloqs.length} bloq(s)${args.search ? ` matching "${args.search}"` : ""}`)
 
       if (args.json) {
-        console.log(JSON.stringify(bloqs, null, 2))
+        // Envelope, not a bare array: an agent must be able to see that it is
+        // holding a page rather than an inventory. Client-side search filtering
+        // above changes the count, so a filtered result reports its own size and
+        // is never labelled truncated against the server total.
+        await writeJson(
+          buildListEnvelope(bloqs, {
+            total: args.search ? bloqs.length : serverTotal,
+            limit: args.search ? undefined : Number(args.limit),
+            resource: "bloqs",
+          }),
+        )
         return
       }
 
+      // #180633: say that the list is filtered. Previously a board you could open by ID was
+      // simply absent here, which is indistinguishable from not having access to it — that is
+      // how a working grant on bloq #600 read as a failed one. The hint is unconditional rather
+      // than a count: the index endpoint does not report how many it withheld, and inventing a
+      // number the server did not send would be worse than naming the flag.
+      if (!args.all && !args.type) {
+        cli.log.info(dim("system bloqs hidden (agent workspaces, app: dashboards) — see --all"))
+      }
+
       if (bloqs.length === 0) {
-        cli.log.warn("No bloqs found")
-        cli.outro(`Create one: ${dim("iris bloqs create")}`)
+        if (args.search) {
+          cli.log.warn(`No bloqs matched "${args.search}"`)
+          cli.outro(`Try fewer words or ${dim("iris bloqs list")}`)
+        } else {
+          cli.log.warn("No bloqs found")
+          cli.outro(`Create one: ${dim("iris bloqs create")}`)
+        }
         return
       }
 
@@ -170,12 +230,58 @@ const BloqsListCommand = cmd({
   },
 })
 
+/**
+ * Resolve a bloq ID from a numeric ID or a name (#162334). Mirrors the leads
+ * `get <name-or-id>` resolver so users who know a bloq's name but not its ID
+ * have a path in. The bloqs index returns all of a user's bloqs, so we filter
+ * client-side with the same tokenized matcher `bloqs search` uses. Returns the
+ * numeric ID, or null (already having printed the reason) on no/ambiguous match.
+ */
+export async function resolveBloqId(idOrQuery: string | number, userId: number, json: boolean): Promise<number | null> {
+  const numeric = Number(idOrQuery)
+  if (Number.isInteger(numeric) && String(idOrQuery).trim() !== "") return numeric
+
+  const query = String(idOrQuery)
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs?simplified=1&per_page=500`)
+  if (!res.ok) {
+    if (!json) prompts.log.error("Could not look up bloqs by name")
+    process.exitCode = 1
+    return null
+  }
+  const data = (await res.json()) as { data?: any[] }
+  const matches = (data?.data ?? []).filter((b) => matchesSearchQuery(String(b.name ?? ""), query))
+
+  if (matches.length === 0) {
+    if (json) await writeJson({ error: `No bloq matched "${query}"` })
+    else prompts.log.warn(`No bloq matched "${query}" — try ${dim("iris bloqs list")}`)
+    process.exitCode = 1
+    return null
+  }
+  if (matches.length === 1) return matches[0].id
+  // Ambiguous — never guess. List candidates (non-interactive) or prompt.
+  if (json || isNonInteractive()) {
+    if (json) await writeJson({ error: "ambiguous", matches: matches.map((m) => ({ id: m.id, name: m.name })) })
+    else {
+      prompts.log.warn(`${matches.length} bloqs match "${query}" — specify by ID:`)
+      for (const m of matches) prompts.log.info(`  #${m.id}  ${m.name ?? "Unknown"}`)
+    }
+    process.exitCode = 1
+    return null
+  }
+  const choice = await prompts.select({
+    message: "Which bloq?",
+    options: matches.map((m) => ({ value: m.id, label: `#${m.id}  ${m.name ?? "Unknown"}` })),
+  })
+  if (prompts.isCancel(choice)) return null
+  return choice as number
+}
+
 const BloqsGetCommand = cmd({
   command: "get <id>",
-  describe: "show bloq details and lists",
+  describe: "show bloq details and lists (accepts a bloq ID or name)",
   builder: (yargs) =>
     yargs
-      .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .positional("id", { describe: "bloq ID or name", type: "string", demandOption: true })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("files", { describe: "list files attached to this bloq", type: "boolean", default: false })
       .option("items", { describe: "show recent items across all lists", type: "boolean", default: false })
@@ -183,13 +289,18 @@ const BloqsGetCommand = cmd({
       .option("limit", { describe: "max items to show (default 10)", type: "number", default: 10 })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq #${args.id}`) }
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Bloq ${args.id}`) }
 
     const token = await requireAuth()
     if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Resolve name → numeric ID (#162334). Numeric IDs pass straight through.
+    const resolvedId = await resolveBloqId(args.id as any, userId, Boolean(args.json))
+    if (resolvedId === null) { if (!args.json) prompts.outro("Done"); return }
+    args.id = resolvedId as any
 
     const spinner = args.json ? null : prompts.spinner()
     if (spinner) spinner.start("Loading…")
@@ -219,8 +330,32 @@ const BloqsGetCommand = cmd({
         lists = listsData?.data ?? []
       }
 
+      // #181260 — a board's RELATIONS belong in `get`, not behind a command nobody runs.
+      //
+      // relate/relations already worked and the data was real: #571 carried six edges (a parent
+      // company, a feeds_into, and three client projects hanging off it) and NOT ONE of them
+      // appeared here. The graph was visible only to someone who already knew it existed, which
+      // defeats the point of building it — you discover a board's neighbours by looking at the
+      // board. Same shape as the capability index and the scaffold manifest: a thing that is
+      // correct, present, and reaches nobody.
+      //
+      // Non-fatal by design. A board with no relations, or an endpoint that 404s, must not turn
+      // `bloqs get` into an error — this is a decoration on the answer, not the answer.
+      let relations: RelationRow[] = []
+      try {
+        const relRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/relations`)
+        if (relRes.ok) {
+          const relBody = (await relRes.json().catch(() => ({}))) as { data?: RelationRow[] }
+          relations = relBody.data ?? []
+        }
+      } catch {
+        // leave empty — see above
+      }
+
       if (args.json) {
-        console.log(JSON.stringify({ ...b, web_url: bloqWebUrl(b.id), lists }, null, 2))
+        // Included so an agent reading a board gets its neighbours in the SAME call. Having to
+        // know to make a second request is the machine-readable version of the same bug.
+        await writeJson({ ...b, web_url: bloqWebUrl(b.id), lists, relations })
         return
       }
 
@@ -339,7 +474,7 @@ const BloqsGetCommand = cmd({
         const filesRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/files`)
         if (filesRes.ok) {
           const filesData = (await filesRes.json()) as { data?: any[] }
-          const files: any[] = filesData?.data ?? []
+          const files: any[] = firstArray(filesData?.data)
           if (files.length > 0) {
             console.log(`  ${dim("Files:")}`)
             for (const f of files) {
@@ -376,6 +511,15 @@ const BloqsGetCommand = cmd({
         console.log()
       }
 
+      // Printed AFTER lists/agents/contacts and before the divider: the board's own contents
+      // come first, then what it connects to. Reuses the exact grouping `bloqs relations` uses,
+      // so the two commands can never drift into describing the same edges differently.
+      if (relations.length > 0) {
+        console.log(`  ${dim("Related projects:")} ${dim(`(${relations.length})`)}`)
+        console.log(formatRelationsGrouped(relations))
+        console.log()
+      }
+
       printDivider()
 
       const getOutro = (args.items || args.list)
@@ -397,19 +541,19 @@ const BloqsCreateCommand = cmd({
     yargs
       .option("name", { describe: "bloq name", type: "string" })
       .option("description", { describe: "bloq description", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro("◈  Create Bloq")
+    if (!args.json) { UI.empty(); prompts.intro("◈  Create Bloq") }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
     let name = args.name
-    if (!name) {
+    if (!name && !args.slug) {
       try {
         name = (await promptOrFail("name", () =>
           prompts.text({
@@ -419,8 +563,8 @@ const BloqsCreateCommand = cmd({
         )) as string
       } catch (err) {
         if (err instanceof MissingFlagError) {
-          prompts.log.error(err.message)
-          prompts.outro("Done")
+          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          else { prompts.log.error(err.message); prompts.outro("Done") }
           process.exitCode = 2
           return
         }
@@ -434,7 +578,7 @@ const BloqsCreateCommand = cmd({
     // hanging.
     let description = args.description
     if (description === undefined) {
-      if (isNonInteractive()) {
+      if (isNonInteractive() || args.json) {
         description = ""
       } else {
         description = (await prompts.text({
@@ -445,8 +589,8 @@ const BloqsCreateCommand = cmd({
       }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Creating bloq…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Creating bloq…")
 
     try {
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs`, {
@@ -454,7 +598,8 @@ const BloqsCreateCommand = cmd({
         body: JSON.stringify({ name, description }),
       })
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Create bloq")
         prompts.outro("Done")
         return
@@ -462,7 +607,8 @@ const BloqsCreateCommand = cmd({
 
       const data = (await res.json()) as { data?: { bloq?: any } }
       const b = data?.data?.bloq ?? data?.data ?? data
-      spinner.stop(`${success("✓")} Bloq created: ${bold(String(b.name ?? b.id))}`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: b.id, name: b.name })); return }
+      spinner?.stop(`${success("✓")} Bloq created: ${bold(String(b.name ?? b.id))}`)
 
       printDivider()
       printKV("ID", b.id)
@@ -473,7 +619,117 @@ const BloqsCreateCommand = cmd({
         `${dim("iris bloqs ingest " + b.id + " ./document.pdf")}  Add knowledge`,
       )
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+/**
+ * Rename a bloq.
+ *
+ * There was no way to do this from the CLI: `create` existed, `delete` existed, and a bloq
+ * created with a name you later regretted could only be fixed in the web UI or by deleting and
+ * recreating it — which loses the id every item, lead and agent already points at.
+ *
+ * The API accepts `name` only (BloqController@update validates exactly that), so this does not
+ * pretend to edit anything else.
+ */
+const BloqsUpdateCommand = cmd({
+  command: "update <id>",
+  aliases: ["rename"],
+  describe: "rename a bloq, or set its slug",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("name", { describe: "new bloq name", type: "string" })
+      .option("slug", {
+        describe: "URL slug — required for a booking page (lowercase-with-hyphens)",
+        type: "string",
+      })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Update Bloq ${args.id}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    let name = args.name
+    if (!name) {
+      try {
+        name = (await promptOrFail("name", () =>
+          prompts.text({
+            message: "New bloq name",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          }),
+        )) as string
+      } catch (err) {
+        if (err instanceof MissingFlagError) {
+          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          else { prompts.log.error(err.message); prompts.outro("Done") }
+          process.exitCode = 2
+          return
+        }
+        throw err
+      }
+      if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Updating bloq…")
+
+    try {
+      // Send only what was asked for. `slug` is what gives a bloq a booking page —
+      // PublicBookingController resolves it with Bloq::where('slug', $slug), and until
+      // fl-api validated the field this endpoint accepted it and silently dropped it (#181099).
+      const payload: Record<string, unknown> = {}
+      if (name) payload.name = name
+      if (args.slug !== undefined) payload.slug = args.slug
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Update bloq")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = (await res.json()) as { data?: any }
+      const b = data?.data?.bloq ?? data?.data ?? data
+      // Confirm against the RETURNED record, not the request. This endpoint used to answer
+      // 200 with the full bloq while having written nothing.
+      if (args.slug !== undefined && b && b.slug !== args.slug) {
+        spinner?.stop("Not applied", 1)
+        const msg = `The API accepted the request but the slug reads back as ${JSON.stringify(b.slug)}, not ${JSON.stringify(args.slug)}.`
+        if (args.json) { console.log(JSON.stringify({ success: false, error: msg })); process.exitCode = 1; return }
+        prompts.log.error(msg)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: b?.id ?? args.id, name: b?.name ?? name, slug: b?.slug ?? args.slug })); return }
+      spinner?.stop(`${success("✓")} Updated: ${bold(String(b?.name ?? name ?? b?.slug ?? args.slug))}`)
+
+      printDivider()
+      printKV("ID", b?.id ?? args.id)
+      if (b?.name ?? name) printKV("Name", b?.name ?? name)
+      if (b?.slug ?? args.slug) printKV("Slug", b?.slug ?? args.slug)
+      printDivider()
+
+      prompts.outro(`${dim("iris bloqs get " + (b?.id ?? args.id))}  View it`)
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -539,9 +795,58 @@ function parseCsv(text: string): { headers: string[]; rows: Record<string, strin
   return { headers, rows }
 }
 
+
+function truncate(v: string, n: number): string {
+  return v.length > n ? v.slice(0, n - 1) + "…" : v
+}
+
+/**
+ * The list an ingested item lands in.
+ *
+ * ASKING FOR A LIST AND SILENTLY GETTING A DIFFERENT ONE IS THE WORST OUTCOME HERE. The
+ * previous resolution fell back to `lists[0]` whenever the name did not match, so
+ * `--list "Ingest test"` quietly dropped a dataset into "Generated Content" and reported
+ * success — measured, not hypothetical: item #181317 landed there during this command's
+ * own test run. The data is not lost, but it is somewhere nobody will look for it, and the
+ * output said it worked.
+ *
+ * So: a list you NAMED must exist, or this fails and tells you what does exist. The
+ * first-list default applies only when you named nothing at all.
+ */
+async function resolveIngestList(
+  userId: number,
+  bloqId: number,
+  want?: string,
+): Promise<{ id: number } | { error: string }> {
+  const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists`)
+  if (!res.ok) return { error: `Could not read the lists on bloq ${bloqId} (HTTP ${res.status}).` }
+  const data = (await res.json()) as { data?: any[] }
+  const lists: any[] = firstArray(data?.data)
+  if (!lists.length) return { error: `Bloq ${bloqId} has no lists to ingest into.` }
+
+  if (want !== undefined && String(want).trim() !== "") {
+    const w = String(want).trim()
+    // An id is unambiguous; a name is matched exactly, then case-insensitively.
+    const byId = /^\d+$/.test(w) ? lists.find((l: any) => String(l.id) === w) : null
+    const exact = lists.find((l: any) => String(l.name ?? "") === w)
+    const loose = lists.find((l: any) => String(l.name ?? "").toLowerCase() === w.toLowerCase())
+    const hit = byId ?? exact ?? loose
+    if (!hit) {
+      return {
+        error:
+          `No list "${w}" on bloq ${bloqId}. Nothing was written.\n  Lists here: ` +
+          lists.slice(0, 12).map((l: any) => `${l.name} (${l.id})`).join(", ") +
+          (lists.length > 12 ? `, …${lists.length - 12} more` : ""),
+      }
+    }
+    return { id: hit.id }
+  }
+  return { id: lists[0].id }
+}
+
 const BloqsIngestCommand = cmd({
   command: "ingest <id> <file>",
-  describe: "upload a file into a bloq (CSV files are parsed into a dataset item)",
+  describe: "ingest a file into a bloq — CSV/Excel become datasets, MD/TXT/DOCX become documents, HTML becomes an artifact",
   builder: (yargs) =>
     yargs
       .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
@@ -550,6 +855,10 @@ const BloqsIngestCommand = cmd({
       .option("as", { describe: "CSV mode: dataset (single item, default) or items (one item per row)", type: "string", choices: ["dataset", "items"], default: "dataset" })
       .option("key", { describe: "column name for upsert dedup on re-import (--as items only)", type: "string" })
       .option("title-column", { describe: "column to use as item title (auto-detected if omitted)", type: "string" })
+      .option("title", { describe: "item title for a document/artifact (derived from the file if omitted)", type: "string" })
+      .option("sheet", { describe: "which worksheet to read (.xlsx; default: the first)", type: "string" })
+      .option("schema-only", { describe: "print the inferred schema and write nothing", type: "boolean", default: false })
+      .option("yes", { describe: "accept the inferred schema without prompting", type: "boolean", default: false, alias: "y" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     UI.empty()
@@ -575,45 +884,107 @@ const BloqsIngestCommand = cmd({
         return
       }
 
-      // CSV files: parse rows into a structured dataset bloq item
-      if (ext === ".csv") {
-        spinner.start(`Parsing ${dim(filename)}…`)
-        const text = await file.text()
-        const { headers, rows } = parseCsv(text)
+      const kind = detectKind(args.file)
+
+      // TABULAR — csv/tsv/xlsx all become the same {headers, rows}, so everything
+      // downstream (dataset item, --as items, --key upsert) is shared rather than
+      // reimplemented per format.
+      if (kind === "table") {
+        spinner.start(`Reading ${dim(filename)}…`)
+        let table: TableData
+        try {
+          if (ext === ".xlsx" || ext === ".xlsm" || ext === ".xls") {
+            table = await parseXlsx(args.file, args.sheet)
+          } else {
+            table = parseDelimited(await file.text(), ext === ".tsv" ? "\t" : ",")
+          }
+        } catch (e) {
+          spinner.stop("Could not read the file", 1)
+          prompts.log.error(e instanceof Error ? e.message : String(e))
+          prompts.outro("Done")
+          return
+        }
+        const { headers, rows } = table
 
         if (rows.length === 0) {
-          spinner.stop("Empty CSV", 1)
-          prompts.log.error("No data rows found in CSV")
+          spinner.stop("No rows", 1)
+          prompts.log.error(`No data rows found in ${filename}. A header row alone is not a dataset.`)
           prompts.outro("Done")
           return
         }
 
-        spinner.stop(`${success("✓")} Parsed ${rows.length} rows × ${headers.length} columns`)
+        spinner.stop(`${success("✓")} Read ${rows.length} rows × ${headers.length} columns`)
 
-        // Preview first 3 rows
-        for (const row of rows.slice(0, 3)) {
-          const preview = headers.slice(0, 4).map((h) => `${dim(h)}=${row[h] ?? ""}`).join("  ")
-          console.log(`    ${preview}`)
+        // A workbook with several sheets: say which one was read. Importing sheet 1 and
+        // reporting success would let the other sheets disappear without a word.
+        if (table.sheets && table.sheets.length > 1) {
+          console.log(`    ${dim(`sheet "${table.sheetUsed}" of ${table.sheets.length}: ${table.sheets.join(", ")}`)}`)
+          console.log(`    ${dim(`only this sheet was read — re-run with --sheet "<name>" for another`)}`)
         }
-        if (rows.length > 3) console.log(`    ${dim(`…and ${rows.length - 3} more`)}`)
         console.log()
 
-        // Resolve target list
-        let listId: number | null = null
-        const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists`)
-        if (listsRes.ok) {
-          const listsData = (await listsRes.json()) as { data?: any[] }
-          const lists: any[] = listsData?.data ?? []
-          if (args.list) {
-            const match = lists.find((l: any) => (l.name ?? "").toLowerCase() === args.list!.toLowerCase())
-            if (match) listId = match.id
-          }
-          if (!listId && lists.length > 0) listId = lists[0].id
+        // ── STEP ONE: the schema, before anything is written ──────────────────
+        // The old preview printed three rows, which shows the DATA and hides the SHAPE.
+        // A column that is 80% blank, or a date column Excel handed over as a number,
+        // is invisible in three rows and obvious in a schema.
+        const schema: ColumnSchema[] = inferSchema(headers, rows)
+        console.log(`  ${bold("Schema")} ${dim(`— inferred from ${Math.min(rows.length, 500)} rows`)}`)
+        console.log(`  ${dim("─".repeat(58))}`)
+        for (const c of schema) {
+          const flags: string[] = []
+          if (c.blank) flags.push(`${Math.round((c.blank / Math.min(rows.length, 500)) * 100)}% blank`)
+          if (c.type !== "empty" && c.distinct <= 12 && rows.length > 20) flags.push(`${c.distinct} values`)
+          const name = c.name.length > 24 ? c.name.slice(0, 23) + "…" : c.name
+          // Pad on the PLAIN strings; padEnd counts ANSI escape bytes as width and the
+          // columns drift apart by however many colour codes each row happens to carry.
+          const flagText = flags.join(", ")
+          console.log(
+            `  ${name.padEnd(24)} ${c.type.padEnd(9)}${" ".repeat(Math.max(1, 22 - flagText.length))}` +
+            `${dim(flagText)}  ${dim(c.sample ? "e.g. " + truncate(c.sample, 22) : "")}`,
+          )
+        }
+        console.log(`  ${dim("─".repeat(58))}`)
+        const emptyCols = schema.filter((c) => c.type === "empty")
+        if (emptyCols.length) {
+          console.log(`  ${dim(`${emptyCols.length} column(s) are entirely empty: ${emptyCols.map((c) => c.name).join(", ")}`)}`)
+        }
+        console.log()
+
+        // --schema-only stops here: read the shape, fix the file, run it again. Nothing
+        // was written, so there is nothing to undo.
+        if (args["schema-only"]) {
+          prompts.log.info("Schema only — nothing was written.")
+          prompts.outro(dim(`ingest for real: iris atlas ingest ${args.id} ${JSON.stringify(args.file)}`))
+          return
         }
 
+        // ── STEP TWO: confirm, then write ────────────────────────────────────
+        if (!args.yes) {
+          if (isNonInteractive()) {
+            prompts.log.error("Refusing to import unconfirmed in a non-interactive shell.")
+            prompts.log.info("Re-run with --yes to accept this schema, or --schema-only to inspect it.")
+            prompts.outro("Done")
+            process.exitCode = 1
+            return
+          }
+          const ok = await prompts.confirm({ message: `Import ${rows.length} rows with this schema?` })
+          if (!ok || typeof ok === "symbol") {
+            prompts.log.info("Nothing was written.")
+            prompts.outro("Done")
+            return
+          }
+        }
+
+        // Resolve target list
+        // Same resolution the document path uses — a named list that does not exist is an
+        // error here too, not a quiet redirect into whichever list happens to be first.
+        const resolvedList = await resolveIngestList(userId, args.id, args.list)
+        const listId: number | null = "error" in resolvedList ? null : resolvedList.id
+
         if (!listId) {
-          spinner.stop("No list found", 1)
-          prompts.log.error("Bloq has no lists. Create one first.")
+          spinner.stop("No list", 1)
+          prompts.log.error("error" in resolvedList ? resolvedList.error : "Bloq has no lists. Create one first.")
+          process.exitCode = 1
           prompts.outro("Done")
           return
         }
@@ -722,13 +1093,19 @@ const BloqsIngestCommand = cmd({
           rows,
         }
 
-        const itemRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/items`, {
+        // POSTED TO THE LIST, not to the bloq with the list in the body.
+        //
+        // `/bloqs/{id}/items` with `bloq_list_id` in the payload does not honour it: the
+        // dataset lands in whatever list the server picks (observed: "Generated Content")
+        // while the CLI reports the list you asked for. The list-scoped route puts the item
+        // where the path says, and is the same one the document/artifact path uses — one
+        // create route for every kind of ingest, so this cannot drift again.
+        const itemRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists/${listId}/items`, {
           method: "POST",
           body: JSON.stringify({
-            title: filename.replace(/\.csv$/i, ""),
+            title: (args.title as string) || filename.replace(/\.(csv|tsv|xlsx|xlsm|xls)$/i, ""),
             content: JSON.stringify(dataset),
             type: "default",
-            bloq_list_id: listId,
           }),
         })
 
@@ -754,7 +1131,89 @@ const BloqsIngestCommand = cmd({
         return
       }
 
-      // Non-CSV files: upload as cloud file attachment (existing behavior)
+      // DOCUMENT / ARTIFACT — becomes a real Atlas item with a body, not a blob.
+      //
+      // Previously a .md, .docx or .html file uploaded as an attachment: it existed in the
+      // bloq, and was unsearchable, unreadable by an agent, and impossible to share as a
+      // page. The content is right there in the file; storing it as an opaque upload was a
+      // decision not to read it.
+      if (kind === "document" || kind === "artifact") {
+        spinner.start(`Reading ${dim(filename)}…`)
+        let content = ""
+        let derivedTitle: string | null = null
+        let contentFormat: "html" | undefined
+
+        try {
+          if (kind === "artifact") {
+            content = await file.text()
+            derivedTitle = titleFromHtml(content, args.file)
+            contentFormat = "html"
+          } else if (ext === ".docx") {
+            const d = await parseDocx(args.file)
+            content = d.markdown
+            derivedTitle = d.title
+          } else {
+            const d = parsePlain(args.file)
+            content = d.markdown
+            derivedTitle = d.title
+          }
+        } catch (e) {
+          spinner.stop("Could not read the file", 1)
+          prompts.log.error(e instanceof Error ? e.message : String(e))
+          prompts.log.info("If this is not really that format, ingest it as an attachment by renaming it.")
+          prompts.outro("Done")
+          return
+        }
+
+        if (!content.trim()) {
+          spinner.stop("Nothing to store", 1)
+          prompts.log.error(`${filename} has no readable text content.`)
+          prompts.outro("Done")
+          return
+        }
+
+        const title = (args.title as string) || derivedTitle || path.basename(args.file, ext)
+        spinner.stop(`${success("✓")} Read ${content.length.toLocaleString()} characters`)
+        console.log(`    ${dim("title:")} ${title}`)
+        console.log(`    ${dim("stored as:")} ${contentFormat === "html" ? "HTML artifact" : "document (markdown)"}`)
+        console.log()
+
+        const resolved = await resolveIngestList(userId, args.id, args.list)
+        if ("error" in resolved) {
+          prompts.log.error(resolved.error)
+          prompts.outro("Done")
+          process.exitCode = 1
+          return
+        }
+        const listId = resolved.id
+
+        spinner.start("Creating item…")
+        const payload: Record<string, unknown> = { title, content }
+        if (contentFormat) payload.content_format = contentFormat
+        const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/lists/${listId}/items`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        })
+        if (!res.ok) {
+          spinner.stop("Failed", 1)
+          await handleApiError(res, "Create item")
+          prompts.outro("Done")
+          return
+        }
+        const body = (await res.json()) as { data?: any }
+        const item = body?.data?.data ?? body?.data ?? body
+        spinner.stop(`${success("✓")} ${filename} ingested`)
+
+        printDivider()
+        printKV("Item ID", item?.id ?? "(unknown)")
+        printKV("Type", contentFormat === "html" ? "artifact (html)" : "document")
+        printKV("Characters", content.length.toLocaleString())
+        printDivider()
+        prompts.outro(dim(item?.id ? `iris atlas make-public ${item.id}` : `iris bloqs get ${args.id}`))
+        return
+      }
+
+      // Anything else: upload as a cloud file attachment (existing behaviour).
       spinner.start(`Uploading ${dim(filename)}…`)
 
       const blob = await file.arrayBuffer()
@@ -802,16 +1261,35 @@ const BloqsAddItemCommand = cmd({
       .positional("content", { describe: "item content", type: "string" })
       .option("title", { describe: "item title", type: "string" })
       .option("text", { describe: "item content (alternative to positional)", type: "string" })
+      .option("due", { describe: "due date (ISO, e.g. 2026-07-22)", type: "string" })
+      .option("reporter-lead", {
+        describe: "lead ID of the person who reported this, for bounty attribution",
+        type: "number",
+      })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Add Item — Bloq #${args["bloq-id"]}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Add Item — Bloq #${args["bloq-id"]}`) }
+
+    // Validate --due up front so we fail fast with a clear message.
+    let dueDate: string | undefined
+    if (args.due !== undefined && args.due !== "") {
+      const normalized = normalizeDueDate(args.due as string)
+      if (!normalized) {
+        const emsg = `Invalid --due date "${args.due}" — use YYYY-MM-DD (e.g. 2026-07-22)`
+        if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+        else { prompts.log.error(emsg); prompts.outro("Done") }
+        process.exitCode = 2
+        return
+      }
+      dueDate = normalized
+    }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
     let content = args.content ?? args.text
     if (!content) {
@@ -824,8 +1302,8 @@ const BloqsAddItemCommand = cmd({
         )) as string
       } catch (err) {
         if (err instanceof MissingFlagError) {
-          prompts.log.error(err.message)
-          prompts.outro("Done")
+          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          else { prompts.log.error(err.message); prompts.outro("Done") }
           process.exitCode = 2
           return
         }
@@ -836,7 +1314,7 @@ const BloqsAddItemCommand = cmd({
 
     let title = args.title
     if (title === undefined) {
-      if (isNonInteractive()) {
+      if (isNonInteractive() || args.json) {
         title = ""
       } else {
         title = (await prompts.text({
@@ -847,65 +1325,168 @@ const BloqsAddItemCommand = cmd({
       }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Adding item…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Adding item…")
 
     try {
       const payload: Record<string, unknown> = { content }
       if (title) payload.title = title
+      if (dueDate) payload.due_date = dueDate
+      // Credit follows the work, not the board it lands on.
+      //
+      // Attribution used to be a property of `bug report` alone: anything filed through this
+      // command carried none, so an epic or a feature ticket could not be credited to whoever
+      // reported it. The server composes the metadata from this id — the client cannot set
+      // reporter_verified or machine_id, which is what stops a caller minting a verified
+      // attribution on somebody else's work.
+      if (args["reporter-lead"]) payload.reporter_lead_id = args["reporter-lead"]
 
+      // ROUTE: the list id goes in the BODY, not the path.
+      //
+      // This used to POST to /user/{u}/bloqs/{b}/lists/{l}/items, which resolved to a route
+      // defined as a CLOSURE. Closure routes are serialized into the route cache and signed with
+      // APP_KEY, so once that signature stopped verifying every call returned a bare 500 —
+      // "SerializableClosure: might have been modified or unsafe to unserialize" in fl-api's log,
+      // with nothing in the response to say so. The path is also gone from routes/api.php now and
+      // survived only in a stale cache, so it was one `route:cache` away from becoming a 404.
+      //
+      // BloqItemController@storeForBloq is a real controller method and takes list_id in the
+      // body. `type` is required by its validator; 'default' is the ordinary note.
       const res = await irisFetch(
-        `/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists/${args["list-id"]}/items`,
-        { method: "POST", body: JSON.stringify(payload) },
+        `/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items`,
+        {
+          method: "POST",
+          body: JSON.stringify({ ...payload, list_id: args["list-id"], type: "default" }),
+        },
       )
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Add item")
         prompts.outro("Done")
         return
       }
 
       const addBody = (await res.json().catch(() => null)) as { data?: any; id?: any } | null
-      const newItemId = addBody?.data?.id ?? addBody?.id
-      spinner.stop(`${success("✓")} Item added${newItemId ? ` (#${newItemId})` : ""}`)
+      // Bug #178531: the create endpoint historically double-nested its envelope
+      // ({ data: { data: { id } } }) while every sibling create returns { data: { id } },
+      // so add-item reported `id: null`. fl-api now single-nests; keep the deep path as a
+      // fallback so the CLI still reports the id against an un-deployed API.
+      const newItemId = addBody?.data?.id ?? addBody?.data?.data?.id ?? addBody?.id
+      if (args.json) { console.log(JSON.stringify({ success: true, id: newItemId ?? null, bloq_id: args["bloq-id"], list_id: args["list-id"] })); return }
+      spinner?.stop(`${success("✓")} Item added${newItemId ? ` (#${newItemId})` : ""}`)
       const hint = newItemId
         ? `iris bloqs get ${args["bloq-id"]}  |  iris bloqs share ${newItemId}  (publish + get a shareable link)`
         : `iris bloqs get ${args["bloq-id"]}`
       prompts.outro(dim(hint))
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
   },
 })
 
+/**
+ * Read ONE item by id (#183481).
+ *
+ * Item ids are what the rest of the CLI hands you — `bug report` returns one, `atlas publish`
+ * returns one, search lists them — and until now nothing could read one back. `atlas get`
+ * takes a BLOQ id, so passing an item id there suggested `edit-item`. The workaround was
+ * fetching up to 500 items from a board you had to already know and filtering client-side.
+ *
+ * The endpoint existed the whole time; only the verb was missing.
+ */
+const BloqsGetItemCommand = cmd({
+  command: "get-item <item-id>",
+  aliases: ["item", "show-item"],
+  describe: "show one bloq item by id — title, list, and full content",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID to read", type: "number", demandOption: true })
+      .option("content-only", { describe: "print just the content, for piping", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    await requireAuth()
+
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args["item-id"]}`)
+    if (!res.ok) {
+      // 404 here means "no item with that id that you can see" — which is not the same as
+      // "no such item". Say the version that is true.
+      const msg =
+        res.status === 404
+          ? `No item ${args["item-id"]} visible to this account. Check the id, or whether the board is shared with you.`
+          : `HTTP ${res.status}`
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    const body = (await res.json()) as any
+    const item = body?.data ?? body
+
+    if (args.json) {
+      console.log(JSON.stringify(item, null, 2))
+      return
+    }
+    if (args["content-only"]) {
+      console.log(String(item.content ?? ""))
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  Item ${item.id}`)
+    printKV("Title", String(item.title ?? ""))
+    if (item.list_name) printKV("List", `${item.list_name}${item.bloq_list_id ? ` (#${item.bloq_list_id})` : ""}`)
+    if (item.status) printKV("Status", String(item.status))
+    if (item.created_at) printKV("Created", String(item.created_at).slice(0, 16).replace("T", " "))
+    if (item.public_url) printKV("Public", String(item.public_url))
+    printDivider()
+    console.log(String(item.content ?? "").trimEnd())
+    printDivider()
+  },
+})
+
 const BloqsDeleteItemCommand = cmd({
   command: "delete-item <item-id>",
   aliases: ["rm-item", "remove-item"],
-  describe: "delete an item from a bloq list (soft delete, recoverable)",
+  describe: "delete an item from a bloq list (soft delete — restore with: iris bloqs restore-item <id>)",
   builder: (yargs) =>
     yargs
       .positional("item-id", { describe: "item ID to delete", type: "number", demandOption: true })
-      .option("force", { describe: "skip confirmation", type: "boolean", default: false })
+      .option("force", { describe: "skip confirmation (required in a non-interactive shell)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Delete Item #${args["item-id"]}`)
+    // Bug #162343: a destructive command must NOT proceed silently when there is
+    // no TTY to confirm at. Mirror add-item's non-interactive guard: refuse unless
+    // --force is explicitly passed.
+    if (!args.force && isNonInteractive()) {
+      const msg = "Refusing to delete without --force in a non-interactive shell. Re-run with --force."
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Delete Item #${args["item-id"]}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
     if (!args.force && !isNonInteractive()) {
       const confirmed = await prompts.confirm({ message: "Delete this item? (soft delete — recoverable)" })
       if (prompts.isCancel(confirmed) || !confirmed) { prompts.outro("Cancelled"); return }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Deleting item…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Deleting item…")
 
     try {
       const res = await irisFetch(
@@ -913,16 +1494,128 @@ const BloqsDeleteItemCommand = cmd({
         { method: "DELETE" },
       )
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Delete item")
         prompts.outro("Done")
         return
       }
 
-      spinner.stop(`${success("✓")} Item deleted`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["item-id"], deleted: true })); return }
+      spinner?.stop(`${success("✓")} Item deleted`)
+      prompts.outro(dim(`iris bloqs restore-item ${args["item-id"]}  (undo)`))
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// Restore a soft-deleted item — the recovery path promised by delete-item (#162346).
+const BloqsRestoreItemCommand = cmd({
+  command: "restore-item <item-id>",
+  aliases: ["undelete-item"],
+  describe: "restore a soft-deleted bloq item",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID to restore", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Restore Item #${args["item-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Restoring item…")
+
+    try {
+      const res = await irisFetch(
+        `/api/v1/user/bloqs/list/item/${args["item-id"]}/restore`,
+        { method: "POST", body: "{}" },
+      )
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Restore item")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["item-id"], restored: true })); return }
+      spinner?.stop(`${success("✓")} Item #${args["item-id"]} restored`)
       prompts.outro("Done")
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// Delete a whole bloq/board (#162347). Soft delete — data preserved server-side.
+const BloqsDeleteCommand = cmd({
+  command: "delete <bloq-id>",
+  aliases: ["rm", "delete-bloq"],
+  describe: "delete a bloq/board (soft delete — data preserved server-side)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID to delete", type: "number", demandOption: true })
+      .option("force", { describe: "skip confirmation (required in a non-interactive shell)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    // Bug #162343/#162347: same non-interactive safety guard as delete-item.
+    if (!args.force && isNonInteractive()) {
+      const msg = "Refusing to delete a bloq without --force in a non-interactive shell. Re-run with --force."
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Delete Bloq #${args["bloq-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    if (!args.force && !isNonInteractive()) {
+      const confirmed = await prompts.confirm({ message: `Delete bloq #${args["bloq-id"]} and all its lists/items? (soft delete)` })
+      if (prompts.isCancel(confirmed) || !confirmed) { prompts.outro("Cancelled"); return }
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Deleting bloq…")
+
+    try {
+      const res = await irisFetch(
+        `/api/v1/user/${userId}/bloqs/${args["bloq-id"]}`,
+        { method: "DELETE" },
+      )
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Delete bloq")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["bloq-id"], deleted: true })); return }
+      spinner?.stop(`${success("✓")} Bloq #${args["bloq-id"]} deleted`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -932,15 +1625,22 @@ const BloqsDeleteItemCommand = cmd({
 const BloqsPublishCommand = cmd({
   command: "publish <file>",
   aliases: ["publish-md"],
-  describe: "publish a markdown file as a public bloq item (returns a shareable URL; re-run to sync)",
+  describe: "publish a markdown file or HTML artifact as a bloq item (private by default — add --public for a shareable URL; re-run to sync)",
   builder: (yargs) =>
     yargs
       .positional("file", { describe: "path to a markdown (.md) file", type: "string", demandOption: true })
       .option("bloq", { describe: "target bloq ID (default: prompt, or auto 'Published Docs')", type: "number" })
       .option("list", { describe: "target list (ID or name; created if missing)", type: "string" })
       .option("title", { describe: "override the item title", type: "string" })
+      .option("public", { describe: "make the item publicly shareable (private by default)", type: "boolean", default: false })
+      .option("password", { describe: "share behind a password (implies --public)", type: "string" })
+      .option("expires", { describe: "expiring link — ISO date/time, e.g. 2026-12-31 (implies --public)", type: "string" })
       .option("private", { describe: "create/update without making it public", type: "boolean", default: false })
+      .option("new", { describe: "publish a SECOND item even though one with this title already exists in the list", type: "boolean", default: false })
+      .option("update", { describe: "sync into this existing item ID instead of creating a new one", type: "number" })
       .option("force", { describe: "overwrite even if the item was edited in the UI after the last publish", type: "boolean", default: false })
+      .option("force-public", { describe: "consent to making it PUBLIC — REQUIRED when there is no terminal", type: "boolean", default: false })
+      .option("format", { describe: "content format: html or markdown (default: from the file extension)", type: "string", choices: ["html", "markdown"] })
       .option("no-frontmatter", { describe: "don't write iris_item_id/iris_public_url back into the file", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -958,6 +1658,7 @@ const BloqsMakePublicCommand = cmd({
       .positional("item-id", { describe: "item ID to share", type: "number", demandOption: true })
       .option("password", { describe: "gate the public link behind a password (min 6 chars)", type: "string" })
       .option("expires", { describe: "expiry as an ISO date/time (e.g. 2026-12-31)", type: "string" })
+      .option("force", { describe: "consent to widening exposure — REQUIRED when there is no terminal", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -966,11 +1667,36 @@ const BloqsMakePublicCommand = cmd({
       prompts.intro(`◈  Share Item #${args["item-id"]}`)
     }
 
+    // Enforce the documented password minimum client-side (#162350) so a weak
+    // share-link password fails fast with a clear message, matching the server's
+    // min:6 — validate before auth/network since it's purely input validation.
+    if (args.password !== undefined && String(args.password).length < 6) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: "Password must be at least 6 characters" })); return }
+      prompts.log.error("Password must be at least 6 characters")
+      prompts.outro("Done")
+      return
+    }
+
     const token = await requireAuth()
     if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // #182344 G-04 — widening confirms, and refuses without a terminal.
+    const verdict = await confirmWiden({
+      noun: "note",
+      name: `#${args["item-id"]}`,
+      from: "private",
+      to: args.password ? "gated" : "public",
+      force: Boolean(args.force),
+    })
+    if (!verdict.ok) {
+      process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+      if (args.json) console.log(JSON.stringify({ success: false, refused: verdict.reason }))
+      else prompts.outro(verdict.reason === "needs-force" ? "Refused — nothing changed" : "Cancelled — nothing changed")
+      return
+    }
 
     const spinner = args.json ? null : prompts.spinner()
     spinner?.start("Making item public…")
@@ -1078,19 +1804,19 @@ const BloqsCreateListCommand = cmd({
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
       .positional("name", { describe: "list name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Create List on Bloq #${args["bloq-id"]}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Create List on Bloq #${args["bloq-id"]}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Creating list…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Creating list…")
 
     try {
       const res = await irisFetch(
@@ -1101,7 +1827,8 @@ const BloqsCreateListCommand = cmd({
         },
       )
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Create list")
         prompts.outro("Done")
         return
@@ -1109,10 +1836,155 @@ const BloqsCreateListCommand = cmd({
 
       const data = (await res.json()) as { data?: any }
       const list = data?.data ?? data
-      spinner.stop(`${success("✓")} List created: ${bold(args.name)} (ID: ${list.id})`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: list.id, name: args.name, bloq_id: args["bloq-id"] })); return }
+      spinner?.stop(`${success("✓")} List created: ${bold(args.name)} (ID: ${list.id})`)
       prompts.outro("Done")
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+/**
+ * Rename a list (#180584).
+ *
+ * There was create-list and nothing else, so a typo or a duplicate was permanent from the CLI —
+ * while ITEMS had delete-item and restore-item. The endpoints existed the whole time; only the
+ * surface was missing.
+ */
+const BloqsRenameListCommand = cmd({
+  command: "rename-list <list-id> <name>",
+  aliases: ["update-list"],
+  describe: "rename a list on a bloq",
+  builder: (yargs) =>
+    yargs
+      .positional("list-id", { describe: "list ID", type: "number", demandOption: true })
+      .positional("name", { describe: "new list name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Rename List #${args["list-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Renaming…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/list/${args["list-id"]}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: args.name, title: args.name }),
+      })
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Rename list")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["list-id"], name: args.name })); return }
+      spinner?.stop(`${success("✓")} Renamed to ${bold(args.name)}`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+/**
+ * Delete a list (#180584).
+ *
+ * Deliberately more careful than create-list, because the two are not mirror images: creating a
+ * list costs nothing, and deleting one takes ITS ITEMS WITH IT. So this refuses a non-empty list
+ * unless --force, and says how many items it would take — a count is the one thing that turns
+ * "delete list 1964" from a guess into a decision.
+ */
+const BloqsDeleteListCommand = cmd({
+  command: "delete-list <list-id>",
+  aliases: ["rm-list", "remove-list"],
+  describe: "delete a list from a bloq (refuses a non-empty list without --force)",
+  builder: (yargs) =>
+    yargs
+      .positional("list-id", { describe: "list ID", type: "number", demandOption: true })
+      .option("bloq-id", { describe: "bloq ID — enables the item-count safety check", type: "number" })
+      .option("force", { describe: "delete even if the list has items", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Delete List #${args["list-id"]}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    // Count first, when we can. Without a bloq id there is no cheap way to enumerate the list,
+    // so say that rather than implying the check passed — a silent skip of a safety check reads
+    // exactly like the check succeeding.
+    let itemCount: number | null = null
+    if (args["bloq-id"]) {
+      try {
+        const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists`)
+        if (listsRes.ok) {
+          const body = (await listsRes.json()) as any
+          const lists = body?.data?.data ?? body?.data ?? body ?? []
+          const match = (Array.isArray(lists) ? lists : []).find(
+            (l: any) => Number(l.id) === Number(args["list-id"]),
+          )
+          if (match) itemCount = (match.items?.length ?? match.items_count ?? 0) as number
+        }
+      } catch {
+        // Leave itemCount null — reported as unknown below, never as zero.
+      }
+    }
+
+    if (itemCount !== null && itemCount > 0 && !args.force) {
+      const msg = `List #${args["list-id"]} has ${itemCount} item(s). Re-run with --force to delete it and them.`
+      if (args.json) { console.log(JSON.stringify({ success: false, error: msg, items: itemCount })); return }
+      prompts.log.error(msg)
+      prompts.outro("Done")
+      return
+    }
+
+    if (!args.json && itemCount === null) {
+      prompts.log.warn(
+        args["bloq-id"]
+          ? "Could not read the item count — deleting without that check."
+          : "No --bloq-id given, so the item count was NOT checked. Items in this list go with it.",
+      )
+    }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Deleting…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/bloqs/list/${args["list-id"]}`, { method: "DELETE" })
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Delete list")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["list-id"], items_removed: itemCount })); return }
+      spinner?.stop(`${success("✓")} List #${args["list-id"]} deleted`)
+      prompts.outro("Done")
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1126,19 +1998,19 @@ const BloqsMoveItemCommand = cmd({
     yargs
       .positional("item-id", { describe: "item ID to move", type: "number", demandOption: true })
       .positional("target-list-id", { describe: "destination list ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Move Item #${args["item-id"]} → List #${args["target-list-id"]}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Move Item #${args["item-id"]} → List #${args["target-list-id"]}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
-    const spinner = prompts.spinner()
-    spinner.start("Moving item…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Moving item…")
 
     try {
       const res = await irisFetch(
@@ -1146,18 +2018,111 @@ const BloqsMoveItemCommand = cmd({
         { method: "PUT", body: JSON.stringify({ bloq_list_id: args["target-list-id"] }) },
       )
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Move item")
         prompts.outro("Done")
         return
       }
 
-      spinner.stop(`${success("✓")} Item moved to list #${args["target-list-id"]}`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["item-id"], list_id: args["target-list-id"] })); return }
+      spinner?.stop(`${success("✓")} Item moved to list #${args["target-list-id"]}`)
       prompts.outro("Done")
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsReorderItemCommand = cmd({
+  command: "reorder-item <item-id>",
+  aliases: ["pin-item"],
+  describe: "reorder an item within its list (0 = top). Use --top to pin it first.",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID to reorder", type: "number", demandOption: true })
+      .option("position", { alias: "p", describe: "new 0-based position within the list", type: "number" })
+      .option("top", { alias: "pin", describe: "pin the item to the top of its list (position 0)", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    // Resolve the target position: --top wins, else --position (must be >= 0).
+    const position = args.top ? 0 : args.position
+    if (position === undefined || position === null) {
+      if (!args.json) {
+        prompts.log.error("Specify a target: --position <n> (0 = top) or --top")
+      } else {
+        await writeJson({ error: "Specify --position <n> or --top" })
+      }
+      process.exitCode = 2
+      return
+    }
+    if (position < 0) {
+      if (!args.json) prompts.log.error("--position must be 0 or greater")
+      else await writeJson({ error: "--position must be 0 or greater" })
+      process.exitCode = 2
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Reorder Item #${args["item-id"]} → position ${position}`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Reordering item…")
+
+    try {
+      // The position endpoint requires the item's list_id in the body, so first
+      // resolve the item's current list. This also keeps the item in its own list
+      // (a pure reorder, never a cross-list move).
+      const itemRes = await irisFetch(`/api/v1/user/bloqs/list/item/${args["item-id"]}`)
+      if (!itemRes.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        await handleApiError(itemRes, "Reorder item")
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+      const itemData = (await itemRes.json()) as { data?: any }
+      const item = itemData?.data ?? itemData
+      const listId = item?.bloq_list_id ?? item?.list_id
+      if (!listId) {
+        if (spinner) spinner.stop("Failed", 1)
+        if (!args.json) prompts.log.error("Could not determine the item's list")
+        else await writeJson({ error: "Could not determine the item's list" })
+        if (!args.json) prompts.outro("Done")
+        process.exitCode = 1
+        return
+      }
+
+      const res = await irisFetch(
+        `/api/v1/user/${userId}/bloqs/list/item/${args["item-id"]}/position`,
+        { method: "PATCH", body: JSON.stringify({ list_id: listId, position }) },
+      )
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        await handleApiError(res, "Reorder item")
+        if (!args.json) prompts.outro("Done")
+        return
+      }
+
+      if (args.json) {
+        await writeJson({ id: args["item-id"], list_id: listId, position })
+        return
+      }
+      spinner!.stop(`${success("✓")} Item #${args["item-id"]} ${args.top ? "pinned to top" : `moved to position ${position}`} of list #${listId}`)
+      prompts.outro("Done")
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (!args.json) prompts.log.error(err instanceof Error ? err.message : String(err))
+      else await writeJson({ error: err instanceof Error ? err.message : String(err) })
+      if (!args.json) prompts.outro("Done")
     }
   },
 })
@@ -1290,19 +2255,196 @@ const BloqsComposeCommand = cmd({
   },
 })
 
-const BloqsSearchCommand = cmd({
+/**
+ * Search boards AND the writing inside them.
+ *
+ * This used to search board NAMES only — it forwarded to `bloqs list --search`. That is
+ * almost never the question being asked: you type `iris bloqs search "denial risk"` because
+ * you want the note, not the board it happens to live on. Cross-board content search already
+ * existed server-side (`GET user/{id}/bloqs/content-items?search=` matches title + content
+ * across every board you own) but it was named for the Review Studio feed that shipped first,
+ * so nothing pointed at it and nobody could find it.
+ *
+ * Both halves are reported, always, even at zero — an empty section is information ("that
+ * phrase is nowhere in your items"), whereas a silently-omitted section reads as "no such
+ * capability". Same rule federated-search.ts states for skipped sources.
+ */
+export const BloqsSearchCommand = cmd({
   command: "search <query>",
   aliases: ["find", "q"],
-  describe: "search bloqs by name or description",
+  describe: "search across every board — item titles, item content, and board names",
   builder: (yargs) =>
     yargs
       .positional("query", { describe: "search term", type: "string", demandOption: true })
-      .option("limit", { describe: "max results", type: "number", default: 20 })
+      .option("limit", { describe: "max results per section", type: "number", default: 20 })
+      .option("boards-only", { describe: "only match board names/descriptions (the old behaviour)", type: "boolean", default: false })
+      .option("items-only", { describe: "only match item titles/content", type: "boolean", default: false })
+      .option("bloq", { describe: "restrict item matches to one board ID", type: "number" })
+      // #180715: the multi-source fan-out was only reachable from `bloqs items <bloq-id>
+      // --include-all`, which needs an ID you do not have when you are searching FOR something.
+      // It is the same engine; it just had no front door at the top level.
+      //
+      // DEFAULT TRUE, which is the half of #180715 that opt-in did not deliver. This verb's
+      // stated contract is "search everything you have written", and a default that quietly
+      // omits Obsidian and Drive contradicts it in the direction nobody checks: you get
+      // results, so you believe you searched. An empty-handed user does not think to add a
+      // flag they have never heard of — that is precisely how the old `bloqs items
+      // --include-all` stayed invisible.
+      //
+      // The cost is latency on every search, and it is bounded: Obsidian is a local bridge,
+      // Drive is one API call, both run concurrently with the bloq query rather than after it,
+      // and a source that is down is REPORTED in source_outcomes rather than silently dropping
+      // to zero results. `--local-only` opts out for a fast bloqs-only lookup.
+      //
+      // The opt-out is a NAMED FLAG rather than yargs' automatic `--no-include-all`, because
+      // this CLI runs yargs in strict mode and strict rejects the negated form outright
+      // ("Unknown arguments: no-include-all"). Documenting a flag that errors would be its own
+      // small version of the bug this ticket is about.
+      .option("include-all", { describe: "also search Obsidian, Drive, iMessage and Gmail (on by default)", type: "boolean", default: true })
+      .option("local-only", { describe: "skip everything but bloqs (faster)", type: "boolean", default: false })
+      .option("source", { describe: "sources to search: bloq, obsidian, drive, imessage, gmail (comma-separated)", type: "string" })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
-    // Delegate to list with --search flag
-    await BloqsListCommand.handler({ ...args, search: args.query } as any)
+    const query = String(args.query)
+    const limit = Number(args.limit) || 20
+    const wantItems = !args["boards-only"]
+    const wantBoards = !args["items-only"]
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Search — "${query}"`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Searching…")
+
+    // ── boards (name + description) ──
+    // The index endpoint ACCEPTS ?search= and ignores it, returning every board — so the
+    // filter has to happen here or every board would report as a match. Same tokenized
+    // AND-match `bloqs list --search` uses, so the two agree.
+    let boards: any[] = []
+    if (wantBoards) {
+      try {
+        const res = await irisFetch(`/api/v1/user/${userId}/bloqs`)
+        if (res.ok) {
+          const data = (await res.json()) as any
+          const rows: any[] = firstArray(data?.data)
+          boards = (Array.isArray(rows) ? rows : [])
+            .filter((b) => matchesSearchQuery(`${b.name ?? ""} ${b.description ?? ""}`, query))
+            .slice(0, limit)
+        }
+      } catch { /* reported as 0 below — never silently narrowed */ }
+    }
+
+    // ── items (title + content, every board) ──
+    let items: any[] = []
+    if (wantItems) {
+      try {
+        const params = new URLSearchParams({ search: query, per_page: String(limit) })
+        // A board-scoped item search has its own endpoint; reuse it so --bloq is exact.
+        const url = args.bloq
+          ? `/api/v1/user/${userId}/bloqs/${args.bloq}/items?${params}`
+          : `/api/v1/user/${userId}/bloqs/content-items?${params}`
+        const res = await irisFetch(url)
+        if (res.ok) {
+          const data = (await res.json()) as any
+          const rows = data?.data?.items ?? data?.items ?? data?.data ?? []
+          items = Array.isArray(rows) ? rows.slice(0, limit) : []
+        }
+      } catch { /* same */ }
+    }
+
+    // ── external sources (Obsidian, Drive) ──
+    // Only when asked. `bloq` is excluded from the fan-out here because the cross-board item
+    // search above already covers it WITHOUT a board id — that requirement was the whole
+    // reason this engine was unreachable from the top level.
+    let external: any[] = []
+    let outcomes: any[] = []
+    // --local-only wins over everything: it is the explicit "just the boards, quickly" request,
+    // and an explicit narrowing should never be overridden by a default that is merely on.
+    const fanOut = !args["local-only"] && Boolean(args["include-all"] || args.source)
+    if (fanOut) {
+      const sources = resolveSources({ source: args.source as string, includeAll: Boolean(args["include-all"]) })
+        .filter((s) => s !== "bloq")
+      if (sources.length) {
+        const r = await federatedSearch(query, { sources, userId, limit })
+        external = r.results
+        outcomes = r.outcomes
+      }
+    }
+
+    spinner?.stop(
+      `${boards.length} board(s), ${items.length} item(s)` + (fanOut ? `, ${external.length} external` : ""),
+    )
+
+    if (args.json) {
+      await writeJson({
+        query,
+        boards,
+        items,
+        external,
+        // Report every source's outcome, including failures — a source that errored must not
+        // be indistinguishable from a source that found nothing.
+        source_outcomes: outcomes,
+        counts: { boards: boards.length, items: items.length, external: external.length },
+      })
+      return
+    }
+
+    if (wantItems) {
+      printDivider()
+      console.log(`  ${bold("Items")} ${dim(`(${items.length})`)}`)
+      if (!items.length) console.log(`  ${dim(`No item matches for "${query}"`)}`)
+      for (const i of items) {
+        const where = [i.bloq_name, i.list_name].filter(Boolean).join(" › ")
+        console.log(`  ${dim(`#${i.id}`)} ${bold(itemTitle(i))}`)
+        if (where) console.log(`      ${dim(where)}${i.bloq_id ? dim(`  ·  bloq #${i.bloq_id}`) : ""}`)
+        const preview = itemContentPreview(i)
+        if (preview) console.log(`      ${dim(preview.replace(/\s+/g, " ").slice(0, 110))}`)
+      }
+    }
+
+    if (wantBoards) {
+      printDivider()
+      console.log(`  ${bold("Boards")} ${dim(`(${boards.length})`)}`)
+      if (!boards.length) console.log(`  ${dim(`No board-name matches for "${query}"`)}`)
+      for (const b of boards) {
+        console.log(`  ${dim(`#${b.id}`)} ${bold(b.name ?? "(untitled)")}`)
+        if (b.description) console.log(`      ${dim(String(b.description).slice(0, 110))}`)
+      }
+    }
+
+    if (fanOut) {
+      printDivider()
+      console.log(`  ${bold("Other sources")} ${dim(`(${external.length})`)}`)
+      if (!external.length) console.log(`  ${dim(`No matches for "${query}" outside your boards`)}`)
+      for (const r of external.slice(0, limit)) {
+        const when = r.when ? dim(` ${String(r.when).slice(0, 10)}`) : ""
+        console.log(`  ${dim(`[${r.source}]`)}${when} ${bold(String(r.title ?? "(untitled)"))}`)
+        if (r.location) console.log(`      ${dim(String(r.location).slice(0, 110))}`)
+        if (r.snippet) console.log(`      ${dim(String(r.snippet).replace(/\s+/g, " ").slice(0, 110))}`)
+      }
+      // Per-source health, always — a skipped or failed source is information.
+      if (outcomes.length) console.log(`  ${dim(formatOutcomes(outcomes))}`)
+    }
+
+    printDivider()
+    console.log(`  ${dim("Open an item:")}  iris bloqs get <bloq-id>`)
+    if (!fanOut) {
+      // #180715: point at THIS command, not at a different one that needs an id. The old hint
+      // sent people to `bloqs items <bloq-id> --include-all` — which is unusable at exactly the
+      // moment it was offered, because you are searching in order to find the id.
+      //
+      // Only reachable via --local-only now that the fan-out is the default, so it is a
+      // genuine "you narrowed this yourself" reminder rather than a nudge toward a flag the
+      // product should have been using all along.
+      console.log(`  ${dim("Widen the net:")} iris search "${query}"  ${dim("(drop --local-only for Obsidian + Drive)")}`)
+    }
+    prompts.outro("Done")
   },
 })
 
@@ -1315,16 +2457,16 @@ const BloqsRenameCommand = cmd({
       .positional("type", { describe: "what to rename", choices: ["bloq", "list", "item"] as const, demandOption: true })
       .positional("id", { describe: "ID of the bloq/list/item", type: "number", demandOption: true })
       .positional("name", { describe: "new name", type: "string" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
-    UI.empty()
-    prompts.intro(`◈  Rename ${args.type} #${args.id}`)
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Rename ${args.type} #${args.id}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const userId = await requireUserId(args["user-id"])
-    if (!userId) { prompts.outro("Done"); return }
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
     let name = args.name as string | undefined
     if (!name) {
@@ -1337,8 +2479,8 @@ const BloqsRenameCommand = cmd({
         )) as string
       } catch (err) {
         if (err instanceof MissingFlagError) {
-          prompts.log.error(err.message)
-          prompts.outro("Done")
+          if (args.json) console.log(JSON.stringify({ success: false, error: err.message }))
+          else { prompts.log.error(err.message); prompts.outro("Done") }
           process.exitCode = 2
           return
         }
@@ -1347,8 +2489,8 @@ const BloqsRenameCommand = cmd({
       if (prompts.isCancel(name)) { prompts.outro("Cancelled"); return }
     }
 
-    const spinner = prompts.spinner()
-    spinner.start(`Renaming ${args.type}…`)
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start(`Renaming ${args.type}…`)
 
     try {
       let res: Response
@@ -1373,22 +2515,26 @@ const BloqsRenameCommand = cmd({
           })
           break
         default:
-          spinner.stop("Invalid type", 1)
-          prompts.outro("Done")
+          spinner?.stop("Invalid type", 1)
+          if (args.json) console.log(JSON.stringify({ success: false, error: "Invalid type" }))
+          else prompts.outro("Done")
           return
       }
 
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, `Rename ${args.type}`)
         prompts.outro("Done")
         return
       }
 
-      spinner.stop(`${success("✓")} Renamed to: ${bold(name!)}`)
+      if (args.json) { console.log(JSON.stringify({ success: true, type: args.type, id: args.id, name })); return }
+      spinner?.stop(`${success("✓")} Renamed to: ${bold(name!)}`)
       prompts.outro("Done")
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1585,6 +2731,171 @@ const BloqsDetachPlaybookCommand = cmd({
   },
 })
 
+// ============================================================================
+// Bloq relations (bug #158309) — parent/sibling/affiliated/partner/feeds_into/mirrors
+// ============================================================================
+
+const BloqsRelateCommand = cmd({
+  command: "relate <from-id> <to-id>",
+  describe: "link two bloqs with a typed relation",
+  builder: (yargs) =>
+    yargs
+      .positional("from-id", { describe: "bloq ID this relation is created from (needs write access)", type: "number", demandOption: true })
+      .positional("to-id", { describe: "the related bloq ID", type: "number", demandOption: true })
+      .option("type", { describe: `relation type (${RELATION_TYPES.join("|")})`, type: "string", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const type = String(args.type)
+    if (!isValidRelationType(type)) {
+      const msg = `Invalid --type "${type}". Must be one of: ${RELATION_TYPES.join(", ")}`
+      if (args.json) { console.log(JSON.stringify({ success: false, error: msg })); return }
+      prompts.log.error(msg)
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Relate Bloq #${args["from-id"]} → #${args["to-id"]} (${type})`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Relating…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["from-id"]}/relate`, {
+        method: "POST",
+        body: JSON.stringify({ to_bloq_id: args["to-id"], type }),
+      })
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Relate bloqs")
+        prompts.outro("Done")
+        return
+      }
+
+      const data = await res.json().catch(() => ({})) as Record<string, unknown>
+      if (args.json) { console.log(JSON.stringify({ success: true, from_bloq_id: args["from-id"], to_bloq_id: args["to-id"], type, ...data })); return }
+
+      if (spinner) spinner.stop(`${success("✓")} Bloq #${args["from-id"]} related to #${args["to-id"]} (${type})`)
+      prompts.outro(dim(`iris bloqs relations ${args["from-id"]}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsUnrelateCommand = cmd({
+  command: "unrelate <from-id> <to-id>",
+  describe: "remove a typed relation between two bloqs",
+  builder: (yargs) =>
+    yargs
+      .positional("from-id", { describe: "bloq ID the relation was created from", type: "number", demandOption: true })
+      .positional("to-id", { describe: "the related bloq ID", type: "number", demandOption: true })
+      .option("type", { describe: `relation type (${RELATION_TYPES.join("|")})`, type: "string", demandOption: true })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const type = String(args.type)
+    if (!isValidRelationType(type)) {
+      const msg = `Invalid --type "${type}". Must be one of: ${RELATION_TYPES.join(", ")}`
+      if (args.json) { console.log(JSON.stringify({ success: false, error: msg })); return }
+      prompts.log.error(msg)
+      return
+    }
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Unrelate Bloq #${args["from-id"]} → #${args["to-id"]} (${type})`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Removing…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["from-id"]}/unrelate`, {
+        method: "POST",
+        body: JSON.stringify({ to_bloq_id: args["to-id"], type }),
+      })
+      if (!res.ok) {
+        if (spinner) spinner.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Unrelate bloqs")
+        prompts.outro("Done")
+        return
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, from_bloq_id: args["from-id"], to_bloq_id: args["to-id"], type })); return }
+
+      if (spinner) spinner.stop(`${success("✓")} Relation removed (Bloq #${args["from-id"]} → #${args["to-id"]}, ${type})`)
+      prompts.outro(dim(`iris bloqs relations ${args["from-id"]}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsRelationsCommand = cmd({
+  command: "relations <id>",
+  describe: "list a bloq's relations to other bloqs",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("type", { describe: `filter by relation type (${RELATION_TYPES.join("|")})`, type: "string" })
+      .option("direction", { describe: "from|to|both", type: "string", default: "both", choices: ["from", "to", "both"] as const })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) return
+
+    try {
+      const params = new URLSearchParams()
+      if (args.type) params.set("type", String(args.type))
+      if (args.direction) params.set("direction", String(args.direction))
+      const qs = params.toString()
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args.id}/relations${qs ? `?${qs}` : ""}`)
+      if (!res.ok) {
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "List bloq relations")
+        return
+      }
+
+      const body = (await res.json().catch(() => ({}))) as { data?: RelationRow[] }
+      const relations = body.data ?? []
+      if (args.json) { console.log(JSON.stringify({ success: true, bloq_id: args.id, relations })); return }
+
+      if (relations.length === 0) {
+        console.log(dim(`No relations for Bloq #${args.id}.`))
+        console.log(dim(`Link one: iris bloqs relate ${args.id} <to-id> --type=<type>`))
+        return
+      }
+
+      console.log(bold(`Relations for Bloq #${args.id}:`))
+      console.log(formatRelationsGrouped(relations))
+    } catch (err) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
 const BloqsPlaybooksCommand = cmd({
   command: "playbooks <bloq-id>",
   aliases: ["list-playbooks"],
@@ -1662,9 +2973,9 @@ const BloqsContributorsCommand = cmd({
       }
 
       const data = await res.json() as Record<string, unknown>
-      const leads: any[] = (data as any)?.data ?? (data as any)?.leads ?? (Array.isArray(data) ? data : [])
+      const leads: any[] = firstArray((data as any)?.data, (data as any)?.leads, (Array.isArray(data) ? data : []))
 
-      if (args.json) { console.log(JSON.stringify(leads, null, 2)); return }
+      if (args.json) { await writeJson(leads); return }
 
       if (spinner) spinner.stop(`${leads.length} contributor(s)`)
 
@@ -1699,16 +3010,77 @@ const BloqsContributorsCommand = cmd({
 // Items — list items in a bloq (with optional search)
 // ============================================================================
 
+/**
+ * Page through a bloq's items collecting only those in one list (#180303).
+ *
+ * The items endpoint is scoped to the whole bloq and paginated, with no
+ * server-side list filter — so a client-side filter applied to a single page
+ * answers "nothing here" for any list whose items sit further in. That is a wrong
+ * answer wearing the costume of a definitive one: bloq #503 has 558 items, and
+ * `-l 1449` reported "No items found" for a list with six.
+ *
+ * Walks pages until `limit` matches are collected or the bloq runs out, capped at
+ * `maxPages` so a pathological board cannot spin forever. `exhausted` reports
+ * whether the whole bloq was actually seen — the caller must not present an
+ * incomplete scan as a complete one.
+ */
+export async function collectListFiltered(
+  fetchPage: (page: number, perPage: number) => Promise<{ items: any[]; pagination: any }>,
+  listId: number,
+  limit: number,
+  maxPages = 25,
+): Promise<{ items: any[]; total: number; exhausted: boolean; pagesScanned: number }> {
+  const inList = (i: any) => i?.bloq_list_id === listId || i?.list_id === listId
+  const perPage = 200 // scan wide; `limit` governs what we return, not what we read
+  const collected: any[] = []
+  let page = 1
+  let total = 0
+  let lastPage = 1
+  let pagesScanned = 0
+
+  while (page <= lastPage && pagesScanned < maxPages) {
+    const { items, pagination } = await fetchPage(page, perPage)
+    pagesScanned++
+    total = pagination?.total ?? total
+    lastPage = pagination?.last_page ?? 1
+
+    for (const item of items) {
+      if (inList(item)) collected.push(item)
+    }
+    if (collected.length >= limit) {
+      return { items: collected.slice(0, limit), total, exhausted: true, pagesScanned }
+    }
+    if (!items.length) break
+    page++
+  }
+
+  return {
+    items: collected.slice(0, limit),
+    total,
+    // The whole bloq was seen only if we ran off the end rather than hit the cap.
+    exhausted: page > lastPage || pagesScanned < maxPages,
+    pagesScanned,
+  }
+}
+
 const BloqsItemsCommand = cmd({
   command: "items <bloq-id>",
-  describe: "list items in a bloq (optionally filter by list or search)",
+  // There is no `get-item`/`show-item` — every other item verb mutates. This is the only
+  // way to READ one, so say so here rather than leaving people to guess a verb that does
+  // not exist. `--search <term> --fields id,title,content` is the "show me this one item".
+  describe: "list AND read items in a bloq — this is the read path; there is no separate get-item",
   builder: (yargs) =>
     yargs
       .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
-      .option("list", { alias: "l", describe: "filter by list ID", type: "number" })
-      .option("search", { alias: "s", describe: "search items by keyword", type: "string" })
+      .option("list", { alias: "l", describe: "filter by list ID (scans across pages; warns if it stops early)", type: "number" })
+      .option("search", { alias: "s", describe: "search items by keyword — pair with --fields content to read one item's body", type: "string" })
+      .option("source", { describe: "also search these sources: obsidian, drive, imessage, gmail (repeatable)", type: "string", array: true })
+      .option("include-all", { describe: "search every available source", type: "boolean", default: false })
       .option("status", { describe: "filter by status", type: "string" })
-      .option("limit", { describe: "max items to return", type: "number", default: 50 })
+      .option("limit", { describe: "items per page (max 200)", type: "number", default: 50 })
+      .option("page", { describe: "page number (1-based)", type: "number", default: 1 })
+      .option("fields", { describe: "comma-separated fields for --json (default: id,title,status,list_name)", type: "string" })
+      .option("compact", { describe: "drop null/empty fields in --json output", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -1720,71 +3092,186 @@ const BloqsItemsCommand = cmd({
     const userId = await requireUserId(args["user-id"])
     if (!userId) { if (!args.json) prompts.outro("Done"); return }
 
+    // FEDERATED SEARCH (#178646). Only when --source/--include-all is given, so the
+    // meaning of an existing `--search` never changes underneath anyone. Content is not
+    // copied into bloq items — each source stays the owner of its own data and is queried
+    // live, because a second copy is a second truth that drifts.
+    const federationRequested = Boolean(args["include-all"] || (args.source && (args.source as string[]).length))
+    if (args.search && federationRequested) {
+      // On `bloqs items` the bloq is the context, so --source ADDS sources rather than
+      // replacing them. Anything else would make `--source obsidian` silently stop
+      // searching the board you explicitly named.
+      const sources = [...new Set(["bloq" as const, ...resolveSources({ source: args.source as string[], includeAll: args["include-all"] as boolean })])]
+      const fedSpinner = args.json ? null : prompts.spinner()
+      if (fedSpinner) fedSpinner.start(`Searching ${sources.join(", ")}…`)
+
+      const { results, outcomes } = await federatedSearch(String(args.search), {
+        sources,
+        bloqId: Number(args["bloq-id"]),
+        userId,
+        limit: Number(args.limit) || 25,
+      })
+
+      if (fedSpinner) fedSpinner.stop(`${results.length} result(s)`)
+
+      if (args.json) {
+        // outcomes ride along in --json too: a machine caller must be able to tell a
+        // genuinely empty result from a source that never ran.
+        await writeJson({ query: args.search, sources, results, outcomes })
+        return
+      }
+
+      printDivider()
+      if (!results.length) console.log(`  ${dim(`No results for "${args.search}"`)}`)
+      for (const r of results) {
+        const where = r.location ? dim(`  ${r.location}`) : ""
+        console.log(`  ${dim(`[${r.source}]`)} ${bold(r.title)}${where}`)
+        if (r.snippet) console.log(`      ${dim(r.snippet.slice(0, 110))}`)
+      }
+      printDivider()
+      // Always print outcomes. A source that was skipped or errored MUST be named —
+      // silently returning fewer results is how a dead dependency passes for "no matches".
+      console.log(`  ${dim(formatOutcomes(outcomes))}`)
+      const degraded = outcomes.filter((o) => o.state !== "ok")
+      prompts.outro(
+        degraded.length
+          ? `${results.length} result(s) — ${degraded.length} source(s) unavailable`
+          : `${success("✓")} ${results.length} result(s)`,
+      )
+      return
+    }
+
     const spinner = args.json ? null : prompts.spinner()
     if (spinner) spinner.start("Loading…")
 
-    try {
-      // Get items via bloq get endpoint (includes all lists with items)
-      {
-        const fallbackRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}`)
-        if (fallbackRes.ok) {
-          const bloq = await fallbackRes.json() as Record<string, any>
-          const lists = bloq?.data?.lists ?? bloq?.lists ?? []
-          let allItems: any[] = []
-          for (const list of lists) {
-            const listItems = list.items ?? []
-            for (const item of listItems) {
-              allItems.push({ ...item, list_id: list.id, list_name: list.name })
-            }
-          }
-
-          // Apply client-side filtering
-          if (args.search) {
-            const q = String(args.search).toLowerCase()
-            allItems = allItems.filter((i: any) =>
-              (i.title ?? "").toLowerCase().includes(q) ||
-              (i.content ?? "").toLowerCase().includes(q)
-            )
-          }
-          if (args.status) {
-            allItems = allItems.filter((i: any) => i.status === args.status)
-          }
-          if (args.list) {
-            allItems = allItems.filter((i: any) => i.list_id === args.list || i.bloq_list_id === args.list)
-          }
-          allItems = allItems.slice(0, args.limit as number)
-
-          if (args.json) { console.log(JSON.stringify(allItems, null, 2)); return }
-
-          if (spinner) spinner.stop(`${allItems.length} item(s)`)
-
-          if (allItems.length === 0) {
-            prompts.log.warn(args.search ? `No items matching "${args.search}"` : "No items found")
-            prompts.outro("Done")
-            return
-          }
-
-          console.log()
-          for (const item of allItems) {
-            const title = (item.title ?? item.content ?? "").slice(0, 80)
-            const statusLabel = item.status && item.status !== "active" ? `  ${dim(`[${item.status}]`)}` : ""
-            const listLabel = item.list_name ? dim(` (${item.list_name})`) : ""
-            console.log(`  ${dim(`#${item.id}`)}  ${title}${statusLabel}${listLabel}`)
-            if (item.is_public && (item.public_url || item.public_uuid)) {
-              console.log(`      ${dim("public:")} ${item.public_url ?? item.public_uuid}`)
-            }
-          }
-          console.log()
-          prompts.outro(dim("iris bloqs share <id>  (publish + shareable link)  |  iris bloqs update-item <id> --status <status>"))
-          return
+    // Lean default projection (#164357) — the fields an agent actually needs to
+    // scan a board. --fields overrides; --compact drops empties.
+    const DEFAULT_FIELDS = ["id", "title", "status", "list_name"]
+    const selectedFields = args.fields
+      ? String(args.fields).split(",").map((f) => f.trim()).filter(Boolean)
+      : DEFAULT_FIELDS
+    const project = (item: Record<string, any>) => {
+      const out: Record<string, any> = {}
+      for (const f of selectedFields) out[f] = item[f] ?? null
+      if (args.compact) {
+        for (const k of Object.keys(out)) {
+          if (out[k] === null || out[k] === undefined || out[k] === "") delete out[k]
         }
+      }
+      return out
+    }
 
+    try {
+      // Use the lean, server-paginated items endpoint (#164357/#164358). It returns
+      // a curated per-row projection + a pagination envelope (total/last_page), so we
+      // no longer dump the whole bloq's fat item models and slice client-side at 50.
+      const perPage = Math.min(Math.max(Number(args.limit) || 50, 1), 200)
+      const page = Math.max(Number(args.page) || 1, 1)
+      const params = new URLSearchParams()
+      params.set("per_page", String(perPage))
+      params.set("page", String(page))
+      if (args.search) params.set("search", String(args.search))
+      if (args.status) params.set("status", String(args.status))
+
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items?${params}`)
+      if (!res.ok) {
         if (spinner) spinner.stop("Failed", 1)
-        if (args.json) { console.log(JSON.stringify({ success: false, error: "Failed to load bloq" })); return }
-        prompts.log.error("Failed to load bloq items")
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "List items")
         prompts.outro("Done")
         return
       }
+
+      const body = (await res.json()) as { data?: any }
+      const data = body?.data ?? body
+      let items: any[] = Array.isArray(data?.items) ? data.items : []
+      const pg = data?.pagination ?? {}
+      let listScanIncomplete = false
+
+      // --list used to be a client-side post-filter on whichever single page came
+      // back (#180303). The endpoint paginates over the WHOLE bloq, so on bloq #503
+      // — 558 items — filtering page 1 of 50 reported "No items found" for a list
+      // that has six. Now we keep pulling pages until the limit is satisfied, and
+      // if we stop early we say so instead of presenting a short list as the whole
+      // truth.
+      if (args.list !== undefined) {
+        const collected = await collectListFiltered(
+          async (p, per) => {
+            const pageParams = new URLSearchParams(params)
+            pageParams.set("page", String(p))
+            pageParams.set("per_page", String(per))
+            const r = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items?${pageParams}`)
+            if (!r.ok) throw new Error(`HTTP ${r.status}`)
+            const b = (await r.json()) as { data?: any }
+            const d = b?.data ?? b
+            return { items: Array.isArray(d?.items) ? d.items : [], pagination: d?.pagination ?? {} }
+          },
+          Number(args.list),
+          perPage,
+        )
+        items = collected.items
+        listScanIncomplete = !collected.exhausted
+        if (collected.total) pg.total = collected.total
+      }
+
+      const total = pg.total ?? items.length
+      const lastPage = pg.last_page ?? 1
+      const currentPage = pg.current_page ?? page
+      const hasMore = currentPage < lastPage
+
+      if (args.json) {
+        await writeJson({
+          items: items.map(project),
+          pagination: {
+            total,
+            returned: items.length,
+            per_page: pg.per_page ?? perPage,
+            page: currentPage,
+            last_page: lastPage,
+            has_more: hasMore,
+            // A machine caller must be able to tell "this list has 2 items" from
+            // "we stopped looking after 25 pages" (#180303).
+            ...(args.list !== undefined ? { list_scan_complete: !listScanIncomplete } : {}),
+          },
+        })
+        return
+      }
+
+      if (spinner) spinner.stop(`${items.length} of ${total} item(s)`)
+
+      if (items.length === 0) {
+        // "Nothing here" and "I stopped looking" are different answers (#180303).
+        if (listScanIncomplete) {
+          prompts.log.warn(
+            `No items found in list ${args.list} within the first pages scanned — the bloq is large and the scan was capped, so this is NOT proof the list is empty.`,
+          )
+        } else {
+          prompts.log.warn(args.search ? `No items matching "${args.search}"` : "No items found")
+        }
+        prompts.outro("Done")
+        return
+      }
+      if (listScanIncomplete) {
+        prompts.log.warn(`Scan capped before the end of the bloq — there may be more items in list ${args.list}.`)
+      }
+
+      console.log()
+      for (const item of items) {
+        const title = (item.title ?? item.content ?? "").toString().slice(0, 80)
+        const statusLabel = item.status && item.status !== "active" ? `  ${dim(`[${item.status}]`)}` : ""
+        const listLabel = item.list_name ? dim(` (${item.list_name})`) : ""
+        console.log(`  ${dim(`#${item.id}`)}  ${title}${statusLabel}${listLabel}`)
+        if (item.is_public && (item.public_url || item.public_uuid)) {
+          console.log(`      ${dim("public:")} ${item.public_url ?? item.public_uuid}`)
+        }
+      }
+      console.log()
+      const pageInfo = `Showing ${items.length} of ${total} (page ${currentPage}/${lastPage})`
+      const moreHint = hasMore ? dim(`  —  --page ${currentPage + 1} for more`) : ""
+      console.log(`  ${dim(pageInfo)}${moreHint}`)
+      console.log()
+      prompts.outro(dim("iris bloqs share <id>  (publish + shareable link)  |  iris bloqs update-item <id> --status <status>"))
+      return
     } catch (err) {
       if (spinner) spinner.stop("Error", 1)
       if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
@@ -1798,6 +3285,14 @@ const BloqsItemsCommand = cmd({
 // Update item (status, title, content)
 // ============================================================================
 
+// Canonical bloq item statuses (mirrors BloqItemController::VALID_ITEM_STATUSES).
+// The board/UI shows hyphenated "in-progress"; the API persists "in_progress".
+// Bug #162344 — reject anything outside this set instead of writing garbage.
+const BLOQ_ITEM_STATUS_CHOICES = ["active", "pending", "approved", "rejected", "todo", "in-progress", "done"] as const
+function normalizeItemStatus(s: string): string {
+  return s === "in-progress" ? "in_progress" : s
+}
+
 const BloqsUpdateItemCommand = cmd({
   command: "update-item <item-id>",
   aliases: ["edit-item"],
@@ -1805,31 +3300,92 @@ const BloqsUpdateItemCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("item-id", { describe: "item ID", type: "number", demandOption: true })
-      .option("status", { describe: "set item status (active, pending, approved, rejected, todo, in-progress, done)", type: "string" })
+      .option("status", { describe: "set item status", type: "string", choices: BLOQ_ITEM_STATUS_CHOICES })
       .option("title", { describe: "new title", type: "string" })
-      .option("content", { describe: "new content", type: "string" })
+      // `add-item` names this field --text, so muscle memory brings --text here too and
+      // strict mode rejects it ("Unknown argument: text") without naming the right flag.
+      // Same field, one name. #180234
+      .option("content", { describe: "replace content wholesale", type: "string", alias: "text" })
+      .option("merge", {
+        describe: "merge key=value into content, preserving other fields (repeatable; dotted keys nest; e.g. --merge rate_cents=7900)",
+        type: "array",
+      })
+      .option("due", { describe: "due date (ISO, e.g. 2026-07-22; 'none' to clear)", type: "string" })
+      // MOVE. The API has accepted `bloq_id` and `bloq_list_id` on this endpoint for a while —
+      // its own comment says there was no way to move an item "at any layer, not the CLI, not
+      // the API", so the only way to file something in the right place after the fact was to
+      // RECREATE it. That changes the item id, which breaks every cross-reference and every
+      // public share URL pointing at it. The capability existed; only these two flags were
+      // missing.
+      .option("to-bloq", { describe: "move the item to this bloq (keeps its id, and its public URL)", type: "number" })
+      .option("to-list", { describe: "move the item to this list (id)", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
     if (!args.json) { UI.empty(); prompts.intro(`◈  Update Item #${args["item-id"]}`) }
 
     const token = await requireAuth()
-    if (!token) { prompts.outro("Done"); return }
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
 
     const payload: Record<string, unknown> = {}
-    if (args.status) payload.status = args.status
+    // Bug #162344: map the display value "in-progress" to the persisted "in_progress".
+    if (args.status) payload.status = normalizeItemStatus(args.status)
     if (args.title) payload.title = args.title
     if (args.content) payload.content = args.content
+    // A move keeps the item id, so its /n/<uuid> public URL keeps working — which is the whole
+    // reason to move rather than recreate.
+    if (args["to-bloq"] !== undefined) payload.bloq_id = Number(args["to-bloq"])
+    if (args["to-list"] !== undefined) payload.bloq_list_id = Number(args["to-list"])
+    if (args.due !== undefined && args.due !== "") {
+      // Allow clearing the due date explicitly.
+      if (String(args.due).toLowerCase() === "none" || String(args.due).toLowerCase() === "null") {
+        payload.due_date = null
+      } else {
+        const normalized = normalizeDueDate(args.due as string)
+        if (!normalized) {
+          const emsg = `Invalid --due date "${args.due}" — use YYYY-MM-DD (e.g. 2026-07-22) or 'none' to clear`
+          if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+          else { prompts.log.error(emsg); prompts.outro("Done") }
+          process.exitCode = 2
+          return
+        }
+        payload.due_date = normalized
+      }
+    }
+
+    // #169753: --merge sends a partial content object the backend deep-merges onto the
+    // stored content (BloqItemController::update -> content_merge), so one field can
+    // change without resending — and clobbering — the rest. Mutually exclusive with
+    // --content (full replace); the backend also 422s if both arrive.
+    if (args.content !== undefined && args.merge) {
+      const emsg = "Use either --content (full replace) or --merge (partial), not both"
+      if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+      else { prompts.log.error(emsg); prompts.outro("Done") }
+      process.exitCode = 2
+      return
+    }
+    if (args.merge) {
+      try {
+        payload.content_merge = parseMergePairs((args.merge as unknown[]).map(String))
+      } catch (e) {
+        const emsg = e instanceof Error ? e.message : String(e)
+        if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+        else { prompts.log.error(emsg); prompts.outro("Done") }
+        process.exitCode = 2
+        return
+      }
+    }
 
     if (Object.keys(payload).length === 0) {
-      prompts.log.error("Provide at least one of: --status, --title, --content")
-      prompts.outro("Done")
+      const emsg = "Provide at least one of: --status, --title, --content, --merge, --due"
+      if (args.json) console.log(JSON.stringify({ success: false, error: emsg }))
+      else { prompts.log.error(emsg); prompts.outro("Done") }
       process.exitCode = 2
       return
     }
 
-    const spinner = prompts.spinner()
-    spinner.start("Updating…")
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Updating…")
 
     try {
       const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args["item-id"]}`, {
@@ -1837,21 +3393,27 @@ const BloqsUpdateItemCommand = cmd({
         body: JSON.stringify(payload),
       })
       if (!res.ok) {
-        spinner.stop("Failed", 1)
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
         await handleApiError(res, "Update item")
         prompts.outro("Done")
         return
       }
 
-      const parts: string[] = []
-      if (args.status) parts.push(`status → ${args.status}`)
-      if (args.title) parts.push(`title updated`)
-      if (args.content) parts.push(`content updated`)
+      if (args.json) { console.log(JSON.stringify({ success: true, id: args["item-id"], ...payload })); return }
 
-      spinner.stop(`${success("✓")} Item #${args["item-id"]} updated (${parts.join(", ")})`)
+      const parts: string[] = []
+      if (args.status) parts.push(`status → ${payload.status}`)
+      if (args.title) parts.push(`title updated`)
+      if (args.content) parts.push(`content replaced`)
+      if (args.merge) parts.push(`content merged (${Object.keys(payload.content_merge as object).length} field(s))`)
+      if (payload.due_date !== undefined) parts.push(payload.due_date === null ? `due cleared` : `due → ${payload.due_date}`)
+
+      spinner?.stop(`${success("✓")} Item #${args["item-id"]} updated (${parts.join(", ")})`)
       prompts.outro("Done")
     } catch (err) {
-      spinner.stop("Error", 1)
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
@@ -1861,6 +3423,35 @@ const BloqsUpdateItemCommand = cmd({
 // ============================================================================
 // Helpers
 // ============================================================================
+
+// #169753: parse repeatable `--merge key=value` pairs into a partial content object
+// for the backend's content_merge deep-merge. Values are JSON-parsed when possible
+// (7900 → number, true → bool, {"seats":7} → object) and otherwise kept as a raw
+// string, so `rate_cents=7900` sets a number while `make=Toyota` sets a string. A
+// dotted key nests (`features.seats=7` → {features:{seats:7}}) to match the backend's
+// recursive merge. The value is split on the FIRST `=` so values may contain `=`.
+function parseMergePairs(pairs: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const raw of pairs) {
+    const eq = raw.indexOf("=")
+    if (eq < 0) throw new Error(`--merge expects key=value, got "${raw}"`)
+    const key = raw.slice(0, eq).trim()
+    if (!key) throw new Error(`--merge has an empty key in "${raw}"`)
+    const valStr = raw.slice(eq + 1)
+    let value: unknown
+    try { value = JSON.parse(valStr) } catch { value = valStr }
+    const path = key.split(".")
+    let node = out
+    for (let i = 0; i < path.length - 1; i++) {
+      const seg = path[i]
+      const next = node[seg]
+      if (typeof next !== "object" || next === null || Array.isArray(next)) node[seg] = {}
+      node = node[seg] as Record<string, unknown>
+    }
+    node[path[path.length - 1]] = value
+  }
+  return out
+}
 
 function generateListSuggestions(name: string, description: string, count: number): string[] {
   const topic = (description || name).toLowerCase()
@@ -1933,6 +3524,209 @@ const BloqsOpenCommand = cmd({
   },
 })
 
+// ============================================================================
+// Board MEMBERSHIP (#180537-era gap, found the hard way on 2026-08-19)
+//
+// `bloqs invite` mints a tokenized LINK. `attach-lead` attaches a CRM contact. Neither one
+// adds a MEMBER — a row in fl-api's `user_bloq_users` with a permission, which is what
+// `is_owner` in `bloqs list` reads back and what actually grants a real account access to a
+// board. That verb simply did not exist, so granting five people-facing boards to one address
+// meant reading the endpoint out of the Laravel controller and curling it with a credential
+// pulled from ~/.iris/sdk/.env. These three close it.
+//
+// The endpoint takes a user_id, never an email, so the email→id resolution lives here rather
+// than in the caller's head.
+// ============================================================================
+
+/** Resolve --email to a user id, or pass --user-id straight through. */
+async function resolveMemberId(
+  args: { email?: unknown; "user-id"?: unknown },
+): Promise<{ id: number; email?: string } | { error: string }> {
+  const explicit = args["user-id"]
+  if (explicit) return { id: Number(explicit) }
+
+  const email = String(args.email ?? "").trim()
+  if (!email) return { error: "Pass --email <address> or --user-id <id>." }
+
+  const res = await irisFetch(`/api/v1/users/search?${new URLSearchParams({ q: email })}`, {}, FL_API)
+  if (!res.ok) return { error: `User lookup failed (HTTP ${res.status}).` }
+
+  const body = (await res.json().catch(() => null)) as any
+  const rows: any[] = firstArray(body, body?.data)
+
+  // Exact address only. A substring match here would grant board access to the wrong person,
+  // which is not the kind of thing to be approximately right about.
+  const hit = rows.find((r) => String(r?.email ?? "").toLowerCase() === email.toLowerCase())
+  if (!hit) {
+    return {
+      error: rows.length
+        ? `No account with the exact address ${email} (search returned ${rows.length} near match(es)).`
+        : `No account found for ${email}.`,
+    }
+  }
+  return { id: Number(hit.id), email: String(hit.email) }
+}
+
+const BloqsMembersCommand = cmd({
+  command: "members <bloq-id>",
+  aliases: ["shared-users", "who"],
+  describe: "list the accounts a bloq board is shared with (membership, not invite links)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Members of Bloq #${args["bloq-id"]}`) }
+
+    try {
+      const res = await irisFetch(`/api/v1/user/bloqs/${args["bloq-id"]}/shared-users`)
+      if (!(await handleApiError(res, "List members"))) { if (!args.json) prompts.outro("Done"); return }
+
+      const body = (await res.json().catch(() => ({}))) as any
+      const members: any[] = firstArray(body?.data?.shared_users, body?.shared_users)
+
+      if (args.json) { await writeJson(members); return }
+
+      if (!members.length) {
+        prompts.log.info("Not shared with anyone. Add someone with: iris bloqs add-member <id> --email <address>")
+      } else {
+        printDivider()
+        for (const m of members) {
+          console.log(`  ${bold(String(m.email ?? m.name ?? m.id))}  ${dim(`#${m.id}`)}  [${String(m.permission ?? "?")}]`)
+        }
+        printDivider()
+      }
+      prompts.outro(dim(`iris bloqs add-member ${args["bloq-id"]} --email <address>`))
+    } catch (err) {
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      if (!args.json) prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsAddMemberCommand = cmd({
+  command: "add-member <bloq-id>",
+  aliases: ["grant", "share-with"],
+  describe: "give an account access to a bloq board (by email or user id)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("email", { describe: "the account's email address (resolved to a user id)", type: "string" })
+      .option("user-id", { describe: "the account's user id, if you already know it", type: "number" })
+      .option("permission", {
+        describe: "access level",
+        type: "string",
+        default: "editor",
+        choices: ["viewer", "editor", "owner"],
+      })
+      // fl-api's send_notification_email defaults to TRUE — sharing a board emails the person
+      // unless you say otherwise. Inverted here so the CLI never sends mail you did not ask for.
+      // It is also ONE-SHOT upstream: the mail fires only on a NEW share, so re-running later to
+      // "notify after the fact" silently does nothing but update the permission.
+      .option("notify", { describe: "email the person that they were added (default: no email)", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const who = await resolveMemberId(args as any)
+    if ("error" in who) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: who.error })) }
+      else { UI.empty(); prompts.log.error(who.error) }
+      process.exitCode = 2
+      return
+    }
+
+    const label = who.email ?? `user #${who.id}`
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Add ${label} → Bloq #${args["bloq-id"]}`) }
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Granting…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/bloqs/${args["bloq-id"]}/share`, {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: who.id,
+          permission: args.permission,
+          send_notification_email: Boolean(args.notify),
+        }),
+      })
+      if (!(await handleApiError(res, "Add member"))) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      const body = (await res.json().catch(() => ({}))) as any
+      // fl-api distinguishes a first grant from a permission change; pass that through rather
+      // than reporting both as "shared", because only the first one can have sent mail.
+      const message = String(body?.data?.message ?? body?.message ?? "Shared")
+
+      if (args.json) {
+        await writeJson({ success: true, bloq_id: Number(args["bloq-id"]), user_id: who.id, email: who.email, permission: args.permission, notified: Boolean(args.notify), message })
+        return
+      }
+
+      if (spinner) spinner.stop(`${success("✓")} ${message}`)
+      printDivider()
+      printKV("Board", `#${args["bloq-id"]}`)
+      printKV("Account", `${label}  (#${who.id})`)
+      printKV("Permission", String(args.permission))
+      printKV("Emailed", args.notify ? "yes" : "no")
+      printDivider()
+      prompts.outro(dim(`iris bloqs members ${args["bloq-id"]}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+const BloqsRemoveMemberCommand = cmd({
+  command: "remove-member <bloq-id>",
+  aliases: ["revoke-member", "ungrant"],
+  describe: "remove an account's access to a bloq board",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID", type: "number", demandOption: true })
+      .option("email", { describe: "the account's email address", type: "string" })
+      .option("user-id", { describe: "the account's user id", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const token = await requireAuth()
+    if (!token) return
+
+    const who = await resolveMemberId(args as any)
+    if ("error" in who) {
+      if (args.json) { console.log(JSON.stringify({ success: false, error: who.error })) }
+      else { UI.empty(); prompts.log.error(who.error) }
+      process.exitCode = 2
+      return
+    }
+
+    const label = who.email ?? `user #${who.id}`
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Remove ${label} from Bloq #${args["bloq-id"]}`) }
+    const spinner = args.json ? null : prompts.spinner()
+    if (spinner) spinner.start("Revoking…")
+
+    try {
+      const res = await irisFetch(`/api/v1/user/bloqs/${args["bloq-id"]}/share/${who.id}`, { method: "DELETE" })
+      if (!(await handleApiError(res, "Remove member"))) { if (spinner) spinner.stop("Failed", 1); if (!args.json) prompts.outro("Done"); return }
+
+      if (args.json) { await writeJson({ success: true, bloq_id: Number(args["bloq-id"]), user_id: who.id, email: who.email, removed: true }); return }
+
+      if (spinner) spinner.stop(`${success("✓")} ${label} removed from Bloq #${args["bloq-id"]}`)
+      prompts.outro(dim(`iris bloqs members ${args["bloq-id"]}`))
+    } catch (err) {
+      if (spinner) spinner.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 const BloqsShareCommand = cmd({
   // NB: `share` is already an alias of `make-public` (item-level). Board-level
   // passwordless links live under `invite` / `share-link` to avoid collision.
@@ -1945,6 +3739,13 @@ const BloqsShareCommand = cmd({
       .option("permission", { describe: "access granted to the link (viewer|editor)", type: "string", default: "viewer", choices: ["viewer", "editor"] })
       .option("expires", { describe: "expiry as an ISO date/time (e.g. 2026-12-31)", type: "string" })
       .option("max-uses", { describe: "max number of redemptions", type: "number" })
+      // #179082 — address the link to a person, and narrow what it grants.
+      // Naming the invitee does NOT email them; it records who the link is for.
+      // Use `iris bloq-members invite --send-email` to actually notify someone.
+      .option("email", { describe: "address the invite to this person (does not send mail)", type: "string" })
+      .option("scope-list", { describe: "grant access to ONE list only", type: "number" })
+      .option("scope-item", { describe: "grant access to ONE item only", type: "number" })
+      .option("scope-own", { describe: "grant access only to rows this person authored", type: "boolean", default: false })
       .option("open", { describe: "also open the link in a browser", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -1955,11 +3756,25 @@ const BloqsShareCommand = cmd({
     if (!userId) return
 
     let link: { token: string; permission: string; expires_at: string | null; max_uses: number | null }
+    // Hoisted out of the try: the post-mint summary and the board-wide warning
+    // both need to know what was actually granted.
+    const scopeType =
+      args["scope-list"] != null ? "list" : args["scope-item"] != null ? "item" : args["scope-own"] ? "own" : null
+    const scopeId = args["scope-list"] ?? args["scope-item"] ?? null
     try {
+      const picked = [args["scope-list"] != null, args["scope-item"] != null, args["scope-own"]].filter(Boolean)
+      if (picked.length > 1) {
+        prompts.log.error("Pick at most one of --scope-list, --scope-item, --scope-own")
+        return
+      }
+
       link = await mintShareLink(args.id, userId, {
         permission: args.permission,
         expiresAt: args.expires ?? null,
         maxUses: args["max-uses"] ?? null,
+        email: args.email ?? null,
+        scopeType,
+        scopeId,
       })
     } catch (err) {
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -1969,15 +3784,30 @@ const BloqsShareCommand = cmd({
     const url = inviteWebUrl(link.token)
 
     if (args.json) {
-      console.log(JSON.stringify({ ...link, url, board_url: bloqWebUrl(args.id) }, null, 2))
+      await writeJson({ ...link, url, board_url: bloqWebUrl(args.id) })
       return
     }
 
     console.log(url)
-    const meta: string[] = [`${link.permission} access`]
+    const meta: string[] = [`${link.permission} access`, describeScope(scopeType, scopeId)]
     if (link.expires_at) meta.push(`expires ${link.expires_at}`)
     if (link.max_uses) meta.push(`max ${link.max_uses} uses`)
     console.log(dim(`  ${meta.join("  ·  ")}`))
+
+    // #179337 — the widest possible grant was the one you got by typing the
+    // obvious command, with nothing said about it. Say it. Printed AFTER the
+    // URL so the happy path still starts with the thing you came for.
+    //
+    // Only unscoped links warn: since #179373 a scoped member reaches neither
+    // the rest of the board nor its attached CRM leads, so there is nothing
+    // left to caution them about. Warning on every mint would train people to
+    // ignore it, which is how the next real warning gets missed.
+    if (!scopeType) {
+      prompts.log.warn(
+        `This link grants EVERY list and item on bloq ${args.id}, and the CRM notes on any lead attached to it.\n` +
+          `  Narrow it with --scope-list <listId> / --scope-item <itemId> / --scope-own.`,
+      )
+    }
 
     if (args.open) {
       const opened = openBrowser(url)
@@ -1985,6 +3815,26 @@ const BloqsShareCommand = cmd({
     }
   },
 })
+
+/**
+ * Render a link's scope for humans (#179342).
+ *
+ * A NULL scope_type is a pre-#179082 row and has always meant the whole board,
+ * so it reads the same as an explicit `bloq` — the distinction is a storage
+ * detail, and showing "unknown" would imply doubt that does not exist.
+ */
+function describeScope(scopeType?: string | null, scopeId?: number | null): string {
+  switch (scopeType) {
+    case "list":
+      return `list #${scopeId}`
+    case "item":
+      return `item #${scopeId}`
+    case "own":
+      return "own rows only"
+    default:
+      return "WHOLE BOARD"
+  }
+}
 
 const BloqsLinksCommand = cmd({
   command: "links <id>",
@@ -2003,7 +3853,7 @@ const BloqsLinksCommand = cmd({
     const links = json?.data ?? []
 
     if (args.json) {
-      console.log(JSON.stringify(links.map((l) => ({ ...l, url: inviteWebUrl(l.token) })), null, 2))
+      await writeJson(links.map((l) => ({ ...l, url: inviteWebUrl(l.token) })))
       return
     }
 
@@ -2016,6 +3866,10 @@ const BloqsLinksCommand = cmd({
       const active = l.is_usable ?? l.is_active
       const flag = active ? success("●") : dim("○")
       const meta: string[] = [String(l.permission)]
+      // #179342 — scope is the ONLY field that says whether this link hands over
+      // one list or the entire board. Omitting it made this listing look
+      // complete while being unable to show the risk it exists to surface.
+      meta.push(describeScope(l.scope_type, l.scope_id))
       if (l.expires_at) meta.push(`exp ${String(l.expires_at).slice(0, 10)}`)
       meta.push(`${l.use_count ?? 0}${l.max_uses ? `/${l.max_uses}` : ""} uses`)
       console.log(`  ${flag} ${dim(`#${l.id}`)}  ${inviteWebUrl(l.token)}`)
@@ -2043,27 +3897,158 @@ const BloqsRevokeLinkCommand = cmd({
   },
 })
 
-export const PlatformBloqsCommand = cmd({
-  command: "bloqs",
-  aliases: ["kb", "knowledge", "memory", "projects", "atlas"],
-  describe: "manage knowledge bases (bloqs)",
+// Publish a bloq's items as individual Genesis pages — the reusable "doc library
+// → pages" capability. An SOP bloq becomes one clean login-gated page per SOP,
+// each with its own /p/<slug> the index can link to. Auth-gated by default
+// (requires_auth) so internal docs never land on anyone-with-link public URLs;
+// pass --public to opt out. Reuses createPageFromJson (create + publish + purge).
+const BloqsPublishPagesCommand = cmd({
+  command: "publish-pages <bloq-id>",
+  aliases: ["items-to-pages"],
+  describe: "publish a bloq's items as individual auth-gated pages (doc library → pages)",
+  builder: (yargs) =>
+    yargs
+      .positional("bloq-id", { describe: "bloq ID whose items become pages", type: "number", demandOption: true })
+      .option("list", { alias: "l", describe: "only publish items in this list ID", type: "number" })
+      .option("prefix", { describe: "slug prefix for created pages (default: bloq-<id>)", type: "string" })
+      .option("public", { describe: "make pages public (no login gate); default is auth-gated", type: "boolean", default: false })
+      .option("owner-id", { describe: "owner bloq ID for the pages (default: the source bloq)", type: "number" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro(`◈  Publish Bloq #${args["bloq-id"]} items → pages`) }
+
+    const token = await requireAuth()
+    if (!token) { if (!args.json) prompts.outro("Done"); return }
+    const userId = await requireUserId(args["user-id"])
+    if (!userId) { if (!args.json) prompts.outro("Done"); return }
+
+    const spinner = args.json ? null : prompts.spinner()
+    spinner?.start("Loading items…")
+    try {
+      const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}`)
+      if (!res.ok) {
+        spinner?.stop("Failed", 1)
+        if (args.json) { console.log(JSON.stringify({ success: false, error: `HTTP ${res.status}` })); return }
+        await handleApiError(res, "Load bloq"); prompts.outro("Done"); return
+      }
+      const bloq = (await res.json()) as Record<string, any>
+      const lists = bloq?.data?.lists ?? bloq?.lists ?? []
+      let items: any[] = []
+      for (const list of lists) for (const it of (list.items ?? [])) items.push({ ...it, list_id: list.id })
+      if (args.list) items = items.filter((i) => i.list_id === args.list || i.bloq_list_id === args.list)
+      items = items.filter((i) => String(i.content ?? "").trim().length > 0) // skip empty/stub items
+
+      if (items.length === 0) {
+        spinner?.stop("No items", 1)
+        if (args.json) { console.log(JSON.stringify({ success: true, pages: [] })); return }
+        prompts.log.warn("No non-empty items to publish"); prompts.outro("Done"); return
+      }
+
+      const prefix = (args.prefix as string) || `bloq-${args["bloq-id"]}`
+      const ownerId = (args["owner-id"] as number) ?? Number(args["bloq-id"])
+      const used = new Set<string>()
+      const slugify = (s: string): string => {
+        let base = s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "item"
+        let slug = `${prefix}-${base}`
+        let n = 2
+        while (used.has(slug)) slug = `${prefix}-${base}-${n++}`
+        used.add(slug)
+        return slug
+      }
+
+      const created: Array<{ item_id: number; title: string; slug: string; url: string }> = []
+      let i = 0
+      for (const item of items) {
+        i++
+        const title = String(item.title ?? `Item ${item.id}`)
+        spinner?.message(`Publishing ${i}/${items.length}: ${title.slice(0, 40)}…`)
+        const slug = slugify(title)
+        const json_content = {
+          version: "2.0",
+          type: "page",
+          components: [
+            { type: "WidgetWorkspaceBanner", id: "doc-banner", props: { title, subtitle: "Standard Operating Procedure", showDate: false, themeMode: "light" } },
+            { type: "TextBlock", id: "doc-body", props: { content: String(item.content ?? ""), maxWidth: "48rem", themeMode: "light" } },
+          ],
+        }
+        const page = await createPageFromJson({ slug, title, json_content, owner_type: "bloq", owner_id: ownerId, publish: true, requires_auth: !args.public })
+        if (page?.id) created.push({ item_id: Number(item.id), title, slug, url: `https://freelabel.net/p/${slug}` })
+      }
+
+      if (args.json) { console.log(JSON.stringify({ success: true, gated: !args.public, pages: created })); return }
+      spinner?.stop(`${success("✓")} Published ${created.length} page(s) ${args.public ? "(public)" : "(auth-gated)"}`)
+      console.log()
+      for (const p of created) console.log(`  ${dim(`#${p.item_id}`)}  ${p.title.slice(0, 48)}  ${dim("→")}  ${p.url}`)
+      console.log()
+      prompts.outro("Done")
+    } catch (err) {
+      spinner?.stop("Error", 1)
+      if (args.json) { console.log(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) })); return }
+      prompts.log.error(err instanceof Error ? err.message : String(err)); prompts.outro("Done")
+    }
+  },
+})
+
+/**
+ * Top-level `iris search <query>` — the same command as `iris bloqs search`, promoted.
+ *
+ * Discoverability was the whole point of the request. A search buried three tokens deep
+ * under a noun you have to already know ("bloqs") is a search nobody runs. `iris search`
+ * is the form people actually try first, so it is the form that has to work.
+ */
+export const PlatformSearchCommand = cmd({
+  ...BloqsSearchCommand,
+  command: "search <query>",
+  // NOT aliased to `find`. `find` is its own command (platform-find) searching the CLI's
+  // verbs, and yargs already resolved `iris find` to that one — so this alias did nothing
+  // except make the help attribute `find` to content search, hiding the real command
+  // (#183479). Two commands cannot both own a name; the loser should not advertise it.
+  aliases: [],
+  describe: "search everything you have written — item titles, item content, and board names",
+})
+
+// `atlas` was an ALIAS here, so `iris atlas --help` printed "iris bloqs" and the brand
+// name vanished from the output (#181888 PROD-4). Atlas is one of the twelve products;
+// bloqs is the container inside it. The product name is therefore canonical and every
+// former name stays an alias, so all existing `iris atlas use|invite|ingest` and
+// `iris bloqs ...` invocations keep working unchanged.
+export const PlatformBloqsCommand = productCommand({
+  name: "atlas",
+  aliases: ["bloqs", "kb", "knowledge", "memory", "projects"],
+  purpose: "Atlas — your records: knowledge bases, boards, items, and the context agents read",
+  keywords: ["atlas", "bloq", "board", "item", "knowledge", "records", "memory", "context", "notes"],
+  howtos: ["bloq-access-control", "bloq-relations", "atlas-datasets", "expose-dataset-api"],
+  playbooks: ["iris-memory"],
   builder: (yargs) =>
     yargs
       .command(BloqsListCommand)
       .command(BloqsGetCommand)
+      .command(BloqsExportCommand)
+      .command(AtlasFilesCommandExport)
       .command(BloqsOpenCommand)
       .command(BloqsShareCommand)
+      .command(BloqsMembersCommand)
+      .command(BloqsAddMemberCommand)
+      .command(BloqsRemoveMemberCommand)
       .command(BloqsLinksCommand)
       .command(BloqsRevokeLinkCommand)
       .command(BloqsCreateCommand)
+      .command(BloqsUpdateCommand)
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
+      .command(BloqsGetItemCommand)
       .command(BloqsDeleteItemCommand)
+      .command(BloqsRestoreItemCommand)
+      .command(BloqsDeleteCommand)
       .command(BloqsPublishCommand)
       .command(BloqsMakePublicCommand)
       .command(BloqsMakePrivateCommand)
       .command(BloqsCreateListCommand)
+      .command(BloqsRenameListCommand)
+      .command(BloqsDeleteListCommand)
       .command(BloqsMoveItemCommand)
+      .command(BloqsReorderItemCommand)
       .command(BloqsComposeCommand)
       .command(BloqsRenameCommand)
       .command(BloqsSearchCommand)
@@ -2075,6 +4060,10 @@ export const PlatformBloqsCommand = cmd({
       .command(BloqsUpdateItemCommand)
       .command(BloqsContributorsCommand)
       .command(BloqsItemsCommand)
+      .command(BloqsPublishPagesCommand)
+      .command(BloqsRelateCommand)
+      .command(BloqsUnrelateCommand)
+      .command(BloqsRelationsCommand)
+      .command(AtlasUseCommand)
       .demandCommand(),
-  async handler() {},
 })

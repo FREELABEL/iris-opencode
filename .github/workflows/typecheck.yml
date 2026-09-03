@@ -1,13 +1,33 @@
 name: typecheck
 
+# Work ships from `main` by direct push — `dev` is a decoy default branch — so a
+# pull_request-only trigger meant typecheck never ran on the code that was released.
+# v1.3.163 (iris traces / iris usage) shipped with no CI behind it at all; the only thing
+# standing between a type error and a release was the local pre-push hook.
+#
+# Typecheck specifically, and not the full suite: `bun test` is currently 1422 pass / 214 fail,
+# and a permanently-red gate is how boot-check in fl-iris-api sat broken for four days without
+# anyone reading it. Gate on what is green; add the suite when it is.
 on:
+  push:
+    branches: [main]
   pull_request:
-    branches: [dev]
+    branches: [dev, main]
   workflow_dispatch:
 
 jobs:
   typecheck:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # GitHub-hosted, NOT blacksmith-4vcpu-ubuntu-2404 (#180527). Those runners are not being
+    # picked up: 11 typecheck runs sat "queued" for up to 12 hours and the last five that
+    # reached "completed" all concluded CANCELLED — never success, never failure. So this gate,
+    # added specifically because typecheck never ran on released code, still never ran on
+    # released code. A queued job and a passing job look identical on a branch nobody is
+    # watching, and "cancelled" reads as somebody's decision rather than missing infrastructure.
+    #
+    # release.yml is the only part of CI that has been working, and the only reason is that it
+    # uses GitHub-hosted runners. A workflow whose entire purpose is to return a verdict must
+    # not sit on a runner class that may not exist.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -17,3 +37,15 @@ jobs:
 
       - name: Run typecheck
         run: bun typecheck
+
+      # `iris find` does NOT scan commands at runtime — it reads capabilities.json, embedded
+      # at build time. A new command or how-to is therefore INVISIBLE to find until the index
+      # is regenerated, and nothing catches that: the command works, it just cannot be found.
+      # This check already existed and was wired to nothing.
+      - name: Check capability index is current
+        working-directory: packages/opencode
+        run: |
+          bun run capabilities:check || {
+            echo "::error::capabilities.json is stale. Run 'bun run capabilities' in packages/opencode and commit the result."
+            exit 1
+          }

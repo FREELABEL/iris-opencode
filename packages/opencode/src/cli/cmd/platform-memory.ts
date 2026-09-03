@@ -1,10 +1,11 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
 import { existsSync, readFileSync, statSync } from "fs"
 import { basename } from "path"
 import { Glob } from "bun"
+import { firstArray } from "../../util/array"
 
 // ============================================================================
 // memory list — GET /api/v1/user/{userId}/bloqs
@@ -34,10 +35,10 @@ const MemoryListCommand = cmd({
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
       const data = (await res.json()) as any
-      const bloqs: any[] = data?.data ?? data?.bloqs ?? (Array.isArray(data) ? data : [])
+      const bloqs: any[] = firstArray(data?.data, data?.bloqs, (Array.isArray(data) ? data : []))
       spinner.stop(`${bloqs.length} bloq(s)`)
 
-      if (args.json) { console.log(JSON.stringify(bloqs, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson(bloqs); prompts.outro("Done"); return }
       if (bloqs.length === 0) { prompts.log.warn("No knowledge bases found"); prompts.outro(dim("iris memory compose")); return }
 
       printDivider()
@@ -83,12 +84,12 @@ const MemoryShowCommand = cmd({
       ])
 
       const bloq = ((await bloqRes.json()) as any)?.data ?? {}
-      const content: any[] = ((await contentRes.json().catch(() => ({}))) as any)?.data ?? []
-      const files: any[] = ((await filesRes.json().catch(() => ({}))) as any)?.data ?? []
+      const content: any[] = firstArray(((await contentRes.json().catch(() => ({}))) as any)?.data)
+      const files: any[] = firstArray(((await filesRes.json().catch(() => ({}))) as any)?.data)
 
       spinner.stop(String(bloq.title ?? `#${args.id}`))
 
-      if (args.json) { console.log(JSON.stringify({ bloq, content, files }, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson({ bloq, content, files }); prompts.outro("Done"); return }
 
       if (args.files) {
         printDivider()
@@ -257,7 +258,12 @@ const MemoryComposeCommand = cmd({
 
 export const PlatformMemoryCommand = cmd({
   command: "memory",
-  describe: "manage knowledge bases (bloqs) — list, show, add, compose",
+  // #180717 asked for the word ALIAS specifically, and it earns its place: `memory list`
+  // returns byte-identical output to `bloqs list`, so anyone told this is "memory" reasonably
+  // infers a durable agent memory store that can be written to and queried. There isn't one —
+  // facts are stored as bloq items. Naming the relationship here is what stops an agent
+  // assuming a persistence layer exists and skipping its own.
+  describe: "manage knowledge bases — ALIAS of bloqs (list, show, add, compose); no separate memory store",
   builder: (yargs) =>
     yargs
       .command(MemoryListCommand)

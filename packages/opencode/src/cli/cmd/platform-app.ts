@@ -13,8 +13,7 @@ import {
   highlight,
   promptOrFail,
   MissingFlagError,
-  isNonInteractive,
-} from "./iris-api"
+  isNonInteractive, writeJson } from "./iris-api"
 import {
   existsSync,
   mkdirSync,
@@ -471,7 +470,7 @@ const ListCommand = cmd({
       const apps = body?.data ?? []
 
       if (args.json) {
-        console.log(JSON.stringify(apps, null, 2))
+        await writeJson(apps)
         return
       }
 

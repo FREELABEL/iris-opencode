@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, resolveUserId, writeJson, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 
@@ -154,7 +154,7 @@ const BoardsGetCommand = cmd({
       const item = data?.data ?? data
 
       if (args.json) {
-        console.log(JSON.stringify(item, null, 2))
+        await writeJson(item)
         return
       }
 
@@ -167,6 +167,10 @@ const BoardsGetCommand = cmd({
       printKV("Status", item.status)
       printKV("List ID", item.bloq_list_id)
       printKV("Created", item.created_at)
+      // #158272: the public URL used to be printed once by `make-public` and then
+      // unrecoverable from the CLI — `get` already fetched the field, it just never
+      // showed it.
+      printKV("Public", item.is_public ? (item.public_url ?? "yes") : "no")
 
       if (item.description) {
         console.log()
@@ -200,7 +204,13 @@ const BoardsCreateCommand = cmd({
       .option("bloq-id", { describe: "bloq ID (required)", type: "number", demandOption: true })
       .option("title", { describe: "item title", type: "string" })
       .option("description", { describe: "item description", type: "string" })
-      .option("type", { describe: "item type", type: "string", choices: ["default", "research", "content"], default: "default" }),
+      // Mirrors BloqItemController::VALID_ITEM_TYPES (bug #177261). Previously this
+      // list omitted diary/vehicle, which the API accepts.
+      .option("type", { describe: "item type", type: "string", choices: ["default", "research", "content", "diary", "vehicle", "task"], default: "default" })
+      // Without this the API drops every new item into the bloq's default list.
+      // `iris boards list <bloq>` shows the real list per item, so an item filed
+      // "into a project" would silently land somewhere else and read as filed.
+      .option("list-id", { describe: "target list ID within the bloq (default: the bloq's default list)", type: "number" }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Create Board Item")
@@ -224,7 +234,24 @@ const BoardsCreateCommand = cmd({
       const userId = await resolveUserId()
       if (!userId) { spinner.stop("Failed — no user ID", 1); prompts.outro("Done"); return }
 
-      const payload: Record<string, unknown> = { title, content: args.description || title, type: args.type || "task" }
+      // `|| "task"` here defaulted to a value the API's create validator rejected
+      // outright (bug #177261). yargs already defaults this to "default".
+      const payload: Record<string, unknown> = { title, content: args.description || title, type: args.type || "default" }
+      // The API's create validator reads `list_id`, NOT `bloq_list_id`. Since the field was
+      // not in its validation rules, Laravel discarded it silently, $listId came out null, and
+      // every item fell through to the auto-created "Generated Content" list — while the
+      // command printed an item ID and a success line.
+      //
+      // Measured 2026-08-28: `--list-id 1029` (Todo) left Todo at 0 items and took Generated
+      // Content from 12 to 13. Found by a client's agent, which then could not file its own
+      // bug reports into the right list.
+      //
+      // Both keys are sent: `list_id` is what the endpoint reads today, `bloq_list_id` is what
+      // the update endpoint (which works) uses, so this stays correct if they converge.
+      if (args["list-id"] != null) {
+        payload.list_id = args["list-id"]
+        payload.bloq_list_id = args["list-id"]
+      }
 
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/items`, {
         method: "POST",
@@ -258,9 +285,22 @@ const BoardsUpdateCommand = cmd({
     yargs
       .positional("id", { describe: "item ID", type: "number", demandOption: true })
       .option("title", { describe: "new title", type: "string" })
-      .option("description", { describe: "new description", type: "string" })
+      .option("content", { describe: "new item body (alias of --description)", type: "string" })
+      .option("content-file", { describe: "read the item body from a file (use - for stdin)", type: "string" })
+      .option("description", { describe: "new item body (writes `content`)", type: "string" })
       .option("status", { describe: "new status", type: "string" })
-      .option("type", { describe: "new type", type: "string" }),
+      .option("type", { describe: "new type", type: "string" })
+      // `boards push` diffs only title/content/status/type, so an edited
+      // bloq_list_id in a pulled file reports "Already in sync" and the item
+      // never moves. This is the only way to relist an item from the CLI.
+      .option("list-id", { describe: "move the item to this list ID", type: "number" })
+      // Filing something in the wrong project is the normal case, not the exceptional one.
+      // Before this the only remedy was to recreate the item, which changes its id and
+      // breaks every cross-reference and public share URL pointing at it.
+      .option("bloq-id", {
+        describe: "move the item to this bloq (project) — refused if it would drop a PHI/sensitive boundary",
+        type: "number",
+      }),
   async handler(args) {
     UI.empty()
     prompts.intro(`◈  Update Item #${args.id}`)
@@ -268,18 +308,50 @@ const BoardsUpdateCommand = cmd({
     const token = await requireAuth()
     if (!token) { prompts.outro("Done"); return }
 
-    const payload: Record<string, unknown> = {}
-    if (args.title) payload.title = args.title
     // The board item body lives in `content` (this is what `create` writes to).
-    // Writing to `description` here was a silent no-op (#157528).
-    if (args.description) payload.content = args.description
-    if (args.status) payload.status = args.status
-    if (args.type) payload.type = args.type
-
-    if (Object.keys(payload).length === 0) {
-      prompts.log.warn("Nothing to update. Use --title, --description, --status, or --type")
+    // Writing to `description` here was a silent no-op (#157528). --description
+    // is kept as the historical spelling; --content is the honest name, and
+    // --content-file avoids argv limits + shell escaping for long bodies (#178191).
+    let body: string | undefined
+    const bodyFlags = [args.content, args["content-file"], args.description].filter((v) => v != null)
+    if (bodyFlags.length > 1) {
+      prompts.log.error("Use only one of --content, --content-file, or --description.")
       prompts.outro("Done")
       return
+    }
+    if (args["content-file"]) {
+      const path = String(args["content-file"])
+      try {
+        body = path === "-"
+          ? readFileSync(0, "utf-8")
+          : readFileSync(path, "utf-8")
+      } catch (err) {
+        prompts.log.error(`Could not read ${path}: ${err instanceof Error ? err.message : String(err)}`)
+        prompts.outro("Done")
+        return
+      }
+      // An empty file would silently blank the item body — make that explicit.
+      if (!body.trim()) {
+        prompts.log.error(`${path} is empty — refusing to blank the item body.`)
+        prompts.outro("Done")
+        return
+      }
+    } else if (args.content != null) {
+      body = String(args.content)
+    } else if (args.description != null) {
+      body = String(args.description)
+    }
+
+    const payload: Record<string, unknown> = {}
+    if (args.title) payload.title = args.title
+    if (body != null) payload.content = body
+    if (args.status) payload.status = args.status
+    if (args.type) payload.type = args.type
+    if (args["list-id"] != null) payload.bloq_list_id = args["list-id"]
+    if (args["bloq-id"] != null) payload.bloq_id = args["bloq-id"]
+
+    if (Object.keys(payload).length === 0) {
+      failNoOp("update", "Use --title, --content, --content-file, --status, --type, or --list-id")
     }
 
     const spinner = prompts.spinner()
@@ -411,15 +483,34 @@ const BoardsPushCommand = cmd({
       spinner.start(`Pushing ${basename(filepath)}…`)
 
       const item = JSON.parse(readFileSync(filepath, "utf-8"))
-      const payload: Record<string, unknown> = {
-        title: item.title,
-        description: item.description,
-        content: item.content,
-        type: item.type,
-        status: item.status,
+
+      // Send ONLY fields the caller actually changed. Echoing back every field from
+      // `pull` meant re-submitting values the user never touched — and if the API's
+      // write validator has drifted from what the read path emits (e.g. type "task",
+      // created by BugReportController but absent from the update enum), an unmodified
+      // round-trip is rejected outright. See bug #177261.
+      const liveRes = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`)
+      const liveOk = await handleApiError(liveRes, "Fetch item")
+      if (!liveOk) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+      const liveData = (await liveRes.json()) as { data?: any }
+      const live = liveData?.data ?? liveData
+
+      const payload: Record<string, unknown> = {}
+      for (const f of ["title", "description", "content", "type", "status"]) {
+        if (item[f] === undefined) continue
+        if (JSON.stringify(item[f] ?? null) !== JSON.stringify(live?.[f] ?? null)) {
+          payload[f] = item[f]
+        }
       }
-      for (const k of Object.keys(payload)) {
-        if (payload[k] === undefined) delete payload[k]
+
+      if (Object.keys(payload).length === 0) {
+        spinner.stop(success("Already in sync"))
+        printDivider()
+        printKV("Title", live?.title ?? `#${args.id}`)
+        printKV("ID", args.id)
+        printDivider()
+        prompts.outro("Done")
+        return
       }
 
       const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args.id}`, {

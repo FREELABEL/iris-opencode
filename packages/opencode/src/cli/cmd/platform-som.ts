@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
+import { productCommand } from "./product-command"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, resolveUserId, IRIS_API, bold, dim, success, highlight } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, resolveUserId, IRIS_API, bold, dim, success, highlight, writeJson } from "./iris-api"
 import { SomCampaignCommand } from "./platform-som-campaign"
 import * as fs from "fs"
 import * as os from "os"
@@ -115,7 +116,7 @@ const SomOverviewCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify(allData, null, 2))
+      await writeJson(allData)
       return
     }
 
@@ -710,7 +711,7 @@ const SomLedgerCommand = cmd({
     if (args.failures) entries = entries.filter(e => e.result !== "dm_sent")
 
     if (args.json) {
-      console.log(JSON.stringify(entries, null, 2))
+      await writeJson(entries)
       return
     }
 
@@ -884,7 +885,7 @@ const SomSyncCommand = cmd({
     }
 
     if (args.json) {
-      console.log(JSON.stringify({ synced: count, source: body?.source ?? "database", written }, null, 2))
+      await writeJson({ synced: count, source: body?.source ?? "database", written })
       return
     }
 
@@ -967,7 +968,7 @@ const SomPushSessionsCommand = cmd({
       results.push({ account: c.igAccount, board: c.boardId, status: res.ok ? "uploaded" : `failed (${res.status})` })
     }
 
-    if (args.json) { console.log(JSON.stringify({ results }, null, 2)); return }
+    if (args.json) { await writeJson({ results }); return }
     const ok = results.filter((r) => r.status === "uploaded").length
     console.log(success(`Pushed ${ok}/${results.length} IG session${results.length === 1 ? "" : "s"} to the cloud`))
     for (const r of results) {
@@ -1012,7 +1013,7 @@ const SomPullSessionsCommand = cmd({
       results.push({ account: c.igAccount, board: c.boardId, status: wrote ? "pulled" : "no writable som dir" })
     }
 
-    if (args.json) { console.log(JSON.stringify({ results }, null, 2)); return }
+    if (args.json) { await writeJson({ results }); return }
     const ok = results.filter((r) => r.status === "pulled").length
     console.log(success(`Pulled ${ok}/${results.length} IG session${results.length === 1 ? "" : "s"} from the cloud`))
     for (const r of results) {
@@ -1025,9 +1026,13 @@ const SomPullSessionsCommand = cmd({
 
 // ── Parent command ──
 
-export const PlatformSomCommand = cmd({
-  command: "som",
-  describe: "SOM outreach dashboard — view and edit all campaigns at a glance",
+export const PlatformSomCommand = productCommand({
+  name: "som",
+  purpose:
+    "SOM — the outreach dashboard: every campaign at a glance, editable in place",
+  keywords: ["som", "outreach", "campaign", "dashboard", "pipeline", "sequence", "prospect"],
+  howtos: ["outreach-campaign"],
+  playbooks: ["som-outreach"],
   builder: (yargs) =>
     yargs
       .command(SomOverviewCommand)

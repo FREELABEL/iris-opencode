@@ -10,11 +10,14 @@ import {
   dim,
   bold,
   success,
-  highlight,
-} from "./iris-api"
+  highlight, writeJson } from "./iris-api"
 import { executeIntegrationCall } from "./platform-run"
+import { firstArray } from "../../util/array"
 
-const COMPOSIO_KEY = "ak_c2m5Q0Av7lOHYK9NPTCn"
+// No hardcoded fallback: a stale key silently 401s every Composio call (bug
+// #165864/#164644). Read from env; empty key degrades gracefully (helpers below
+// swallow the failed fetch and return null / an error result).
+const COMPOSIO_KEY = process.env.COMPOSIO_API_KEY ?? ""
 
 const EXTRACTION_PROMPT = `Analyze this meeting transcript and extract structured intelligence. Return your analysis in the following format with clear section headers:
 
@@ -245,10 +248,10 @@ const ScanCommand = cmd({
 
     try {
       const result = await executeIntegrationCall("gmail", "search_emails", { query, maxResults: 20 })
-      const messages: any[] = result?.messages ?? result?.data ?? result?.emails ?? []
+      const messages: any[] = firstArray(result?.messages, result?.data, result?.emails)
       spinner.stop(`${messages.length} meeting note(s) found`)
 
-      if (args.json) { console.log(JSON.stringify({ meetings: messages, count: messages.length, query, days }, null, 2)); prompts.outro("Done"); return }
+      if (args.json) { await writeJson({ meetings: messages, count: messages.length, query, days }); prompts.outro("Done"); return }
 
       if (messages.length === 0) {
         prompts.log.warn(`No meeting notes in the last ${days} days.`)
@@ -374,12 +377,12 @@ const IngestCommand = cmd({
 
       if (dryRun) {
         if (json) {
-          console.log(JSON.stringify({
+          await writeJson({
             dry_run: true,
             destination: leadId ? `lead:${leadId}` : `bloq:${bloqId}`,
             extracted_content: extracted,
             action_items: actionItems,
-          }, null, 2))
+          })
         } else {
           prompts.log.warn("DRY RUN — nothing saved")
           console.log(extracted)
@@ -421,14 +424,15 @@ const IngestCommand = cmd({
         }
 
         if (json) {
-          console.log(JSON.stringify({ lead_id: leadId, note_id: noteId, tasks_created: tasksCreated }, null, 2))
+          await writeJson({ lead_id: leadId, note_id: noteId, tasks_created: tasksCreated })
         } else {
           console.log(`  ${success("✓")} Meeting intel saved to lead #${leadId}`)
           if (noteId) console.log(`  ${dim("Note ID:")} #${noteId}`)
           if (tasksCreated) console.log(`  ${dim("Tasks created:")} ${tasksCreated}`)
         }
       } else if (bloqId) {
-        const res = await irisFetch(`/api/v1/bloqs/${bloqId}/items`, {
+        const userId = (await requireUserId()) ?? 193
+        const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items`, {
           method: "POST",
           body: JSON.stringify({
             title: `Meeting Intel — ${new Date().toLocaleDateString()}`,
@@ -440,7 +444,7 @@ const IngestCommand = cmd({
         if (!ok) { prompts.outro("Done"); return }
         const data = (await res.json()) as any
         const itemId = data?.data?.id ?? data?.id
-        if (json) console.log(JSON.stringify({ bloq_id: bloqId, item_id: itemId }, null, 2))
+        if (json) await writeJson({ bloq_id: bloqId, item_id: itemId })
         else console.log(`  ${success("✓")} Saved to bloq #${bloqId}${itemId ? " (item #" + itemId + ")" : ""}`)
       }
 

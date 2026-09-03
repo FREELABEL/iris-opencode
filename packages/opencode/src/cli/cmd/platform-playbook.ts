@@ -1,27 +1,47 @@
 import { cmd } from "./cmd"
+import { PlaybookContentsCommands } from "./platform-playbook-contents"
 import * as prompts from "./clack"
+// Aliased: `Tier` is already taken in this file by the e2e runner's own unrelated enum.
+import { confirmWiden, type Tier as ExposureTier } from "./exposure-gate"
 import { UI } from "../ui"
-import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError } from "./iris-api"
+import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError, writeJson, IRIS_API } from "./iris-api"
 import { Skill } from "../../skill/skill"
 import { Instance } from "../../project/instance"
 import {
   parsePlan,
+  parseSteps,
   executeSkill,
   resolveArgs,
+  splitPlaybookArgv,
   validatePlan,
   listRuns,
   getRun,
   pruneRuns,
+  playbookPaths,
   type SkillPlan,
   type StepDef,
   type StepResult,
   type ExecuteOptions,
 } from "../../skill/executor"
+import { existsSync, readdirSync, readFileSync } from "fs"
+import { join as pathJoin } from "path"
 import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCoverage } from "../../skill/e2e/runner"
+import { PlaybookDraftCommand } from "./playbook-draft"
+import { PlaybookSopDraftCommand } from "./sop-draft"
+import { firstArray } from "../../util/array"
 
 // Wrap callback in Instance.provide so Skill.all()/get() can find .claude/skills/
 async function withInstance<T>(fn: () => Promise<T>): Promise<T> {
   return Instance.provide({ directory: process.cwd(), fn })
+}
+
+/**
+ * Can we actually ask a human a question right now?
+ * False for --json and for non-interactive stdin (pipes, CI, scheduled jobs) —
+ * those runs pause at human steps instead of blocking on a prompt nobody sees.
+ */
+function canPromptHuman(json: boolean): boolean {
+  return !json && Boolean(process.stdin.isTTY)
 }
 
 // ============================================================================
@@ -60,13 +80,13 @@ const SkillListCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(plans.map((p) => ({
+        await writeJson(plans.map((p) => ({
           name: p.plan.name,
           version: p.plan.version,
           description: p.plan.description,
           steps: p.plan.steps.length,
           location: p.plan.location,
-        })), null, 2))
+        })))
         return
       }
 
@@ -104,7 +124,12 @@ const SkillShowCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", demandOption: true })
-      .option("json", { type: "boolean", default: false }),
+      .option("json", { type: "boolean", default: false })
+      .option("full", {
+        type: "boolean",
+        default: false,
+        describe: "print the whole playbook — step bodies, code and prose, not just the outline",
+      }),
   async handler(args) {
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
@@ -116,7 +141,7 @@ const SkillShowCommand = cmd({
       const plan = await parsePlan(info)
 
       if (args.json) {
-        console.log(JSON.stringify(plan, null, 2))
+        await writeJson(plan)
         return
       }
 
@@ -126,9 +151,30 @@ const SkillShowCommand = cmd({
       printDivider()
       printKV("Version", plan.version)
       printKV("Description", plan.description)
+      // What a model routes on. Printed next to the description because the two are
+      // easy to conflate: description is WHAT this does, triggers are WHEN to reach
+      // for it (#182840 / CTX-2).
+      if (plan.triggers?.length) printKV("Triggers", plan.triggers.join(", "))
       printKV("Location", plan.location)
+      // The shareable link, next to the local path (#182116). `show` used to give ONLY a
+      // filesystem path, which is useless to anyone but the author on this machine. Printed
+      // unconditionally rather than only when published: an unpublished playbook 404s at this
+      // URL, and seeing that is a clearer answer than being told nothing.
+      printKV("URL", playbookUrl(String(plan.name)))
       printKV("On Error", plan.onError)
       printKV("Timeout", `${plan.timeout}s`)
+
+      // The container. Show what ${{playbook.root}} and ${{playbook.assets}}
+      // actually resolve to here — a path convention nobody can see is one
+      // nobody uses, and the SOP prose and the steps have to agree on it.
+      const paths = playbookPaths(plan.location)
+      printKV("Container", paths.root)
+      printKV(
+        "Assets",
+        existsSync(paths.assets)
+          ? `${paths.assets} ${dim(`(${readdirSync(paths.assets).length} files)`)}`
+          : dim("none — ${{playbook.assets}} would point at " + paths.assets),
+      )
 
       if (Object.keys(plan.args).length > 0) {
         console.log()
@@ -150,6 +196,45 @@ const SkillShowCommand = cmd({
           const deps = step.depends ? dim(` (after: ${step.depends})`) : ""
           const cond = step.condition ? dim(` (if: ${step.condition})`) : ""
           console.log(`    ${bold(step.id)} — ${step.title}  ${mode}${confirm}${deps}${cond}`)
+        }
+      }
+
+      // The outline above is not the playbook. The step bodies, the step code, and any prose
+      // after the last step ARE the procedure — and `show` printed none of it (#182906).
+      // Silently, which is what made it a bug rather than a preference: a model that ran
+      // `show` had no way to tell it was holding 57% of the document. work-the-epic made it
+      // concrete — its step 02 tells the reader to "read 'Writing it well' at the bottom of
+      // this playbook", and `show` never printed that section. The instruction was not
+      // followable through the surface that delivered it.
+      // `--json` always carried the whole text; only this path dropped it.
+      const rawDoc = existsSync(plan.location) ? readFileSync(plan.location, "utf8") : ""
+      const docBody = rawDoc.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trimEnd()
+
+      if (docBody) {
+        if (args.full) {
+          console.log()
+          console.log(bold("  Playbook:"))
+          console.log()
+          for (const line of docBody.split("\n")) console.log(`  ${line}`)
+        } else {
+          // Never truncate silently. Report how much is withheld and how to get it: someone
+          // told "310 lines, the outline omits them" goes and reads them, where someone shown
+          // only an outline reasonably concludes the outline was the whole thing.
+          const lines = docBody.split("\n").length
+          const chars = plan.steps.reduce((n, s) => n + (s.body?.length ?? 0) + (s.code?.length ?? 0), 0)
+          // `plan.guidance` was read here and does not exist on SkillPlan — never has. The
+          // branch it gated could not fire, so this line has always rendered "and any prose"
+          // while appearing to offer a character count. Surfaced when a later change let the
+          // compiler see the property access; removed rather than typed away, because the
+          // count it promised was never available to give.
+          console.log()
+          console.log(
+            `  ${bold("Body:")} ${lines} lines. The outline above omits the step bodies` +
+              (chars ? ` (${chars.toLocaleString()} chars)` : "") +
+              ` and any prose.`,
+          )
+          console.log(`        ${dim("full text:")} iris playbook show ${plan.name} --full`)
+          console.log(`        ${dim("json:     ")} iris playbook show ${plan.name} --json`)
         }
       }
 
@@ -199,20 +284,8 @@ const SkillRunCommand = cmd({
 
       // Resolve arguments
       const positionalArgs = (args.skillArgs as string[] ?? [])
-      const flagArgs: Record<string, unknown> = {}
-      const cleanPositional: string[] = []
-      for (const a of positionalArgs) {
-        if (a.startsWith("--")) {
-          const eqIdx = a.indexOf("=")
-          if (eqIdx > 2) {
-            flagArgs[a.slice(2, eqIdx)] = a.slice(eqIdx + 1)
-          } else {
-            flagArgs[a.slice(2)] = true
-          }
-        } else {
-          cleanPositional.push(a)
-        }
-      }
+      // #181577: one shared parser, so `playbook run` and `loop` cannot drift again.
+      const { flagArgs, positional: cleanPositional } = splitPlaybookArgv(positionalArgs, plan.args)
 
       let resolvedArgs: Record<string, unknown>
       try {
@@ -231,12 +304,12 @@ const SkillRunCommand = cmd({
       // Dry run
       if (args["dry-run"]) {
         if (args.json) {
-          console.log(JSON.stringify({
+          await writeJson({
             skill: plan.name,
             version: plan.version,
             args: resolvedArgs,
-            steps: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode })),
-          }, null, 2))
+            steps: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode, integrations: s.integrations })),
+          })
           return
         }
 
@@ -265,7 +338,11 @@ const SkillRunCommand = cmd({
         },
         onStepEnd(step, result) {
           if (args.json) return
-          const icon = result.status === "success" ? success("✓") : result.status === "skipped" ? dim("○") : "✗"
+          const icon =
+            result.status === "success" ? success("✓")
+            : result.status === "skipped" ? dim("○")
+            : result.status === "paused" ? "⏸"
+            : "✗"
           const dur = result.duration_ms > 0 ? dim(` (${(result.duration_ms / 1000).toFixed(1)}s)`) : ""
           sp.stop(`  ${icon} ${step.id}: ${step.title}${dur}`, result.status === "success" ? 0 : 1)
 
@@ -285,8 +362,12 @@ const SkillRunCommand = cmd({
           })
           return !prompts.isCancel(result) && result === true
         },
-        async onManualPrompt(step) {
-          if (args.json) return true
+      }
+
+      // Only offer an interactive "Done?" prompt when a human is actually watching.
+      // Unattended runs (--json, piped, scheduled) fall through to a persisted pause.
+      if (canPromptHuman(args.json as boolean)) {
+        opts.onManualPrompt = async (step) => {
           sp.stop(`  ${bold(step.id)}: ${step.title}`, 0)
           console.log()
           if (step.body) console.log(`    ${step.body.replace(/\n/g, "\n    ")}`)
@@ -294,13 +375,13 @@ const SkillRunCommand = cmd({
           console.log()
           const result = await prompts.confirm({ message: "Done?" })
           return !prompts.isCancel(result) && result === true
-        },
+        }
       }
 
       const result = await executeSkill(plan, resolvedArgs, opts)
 
       if (args.json) {
-        console.log(JSON.stringify(result, null, 2))
+        await writeJson(result)
         return
       }
 
@@ -315,6 +396,19 @@ const SkillRunCommand = cmd({
       if (result.status === "completed") {
         console.log(`  ${success("✓")} ${bold(result.skill)} completed`)
         console.log(dim(`  ${passed} passed${skippedCount ? `, ${skippedCount} skipped` : ""} in ${(totalMs / 1000).toFixed(1)}s`))
+      } else if (result.status === "paused") {
+        console.log(`  ⏸  ${bold(result.skill)} paused — waiting on a human`)
+        console.log(dim(`  ${passed} passed in ${(totalMs / 1000).toFixed(1)}s`))
+        if (result.paused_on) {
+          console.log()
+          console.log(`  ${bold(result.paused_on.id)}: ${result.paused_on.title}`)
+          if (result.paused_on.instructions) {
+            console.log()
+            console.log(`    ${result.paused_on.instructions.replace(/\n/g, "\n    ")}`)
+          }
+        }
+        console.log()
+        console.log(dim(`  Continue when done:  iris playbook resume ${result.run_id}`))
       } else {
         console.log(`  ✗ ${bold(result.skill)} ${result.status}`)
         console.log(`  ${passed} passed, ${failed} failed${skippedCount ? `, ${skippedCount} skipped` : ""} in ${(totalMs / 1000).toFixed(1)}s`)
@@ -331,8 +425,15 @@ const SkillRunCommand = cmd({
       }
 
       printDivider()
-      prompts.outro(result.status === "completed" ? success("Done") : "Done (with errors)")
-      if (result.status !== "completed") process.exitCode = 1
+      prompts.outro(
+        result.status === "completed" ? success("Done")
+        : result.status === "paused" ? "Paused"
+        : "Done (with errors)",
+      )
+      // 0 = done, 2 = paused on a human step, 1 = failed. Paused is not a failure,
+      // but it is not success either — callers must be able to tell the difference.
+      if (result.status === "paused") process.exitCode = 2
+      else if (result.status !== "completed") process.exitCode = 1
     })
   },
 })
@@ -361,7 +462,7 @@ const SkillTestCommand = cmd({
         plan = await parsePlan(info)
       } catch (e: any) {
         if (args.json) {
-          console.log(JSON.stringify({ valid: false, errors: [e.message] }, null, 2))
+          await writeJson({ valid: false, errors: [e.message] })
         } else {
           console.error(`Parse error: ${e.message}`)
         }
@@ -372,13 +473,13 @@ const SkillTestCommand = cmd({
       const issues = validatePlan(plan)
 
       if (args.json) {
-        console.log(JSON.stringify({
+        await writeJson({
           valid: !issues.some((i) => i.level === "error"),
           version: plan.version,
           steps: plan.steps.length,
           args: Object.keys(plan.args).length,
           issues,
-        }, null, 2))
+        })
         return
       }
 
@@ -454,7 +555,7 @@ const SkillHistoryCommand = cmd({
       }
 
       if (args.json) {
-        console.log(JSON.stringify(run, null, 2))
+        await writeJson(run)
         return
       }
 
@@ -470,14 +571,21 @@ const SkillHistoryCommand = cmd({
       console.log()
       console.log(bold("  Steps:"))
       for (const [id, sr] of Object.entries(run.steps)) {
-        const icon = sr.status === "success" ? success("✓") : sr.status === "skipped" ? dim("○") : "✗"
+        const icon =
+          sr.status === "success" ? success("✓")
+          : sr.status === "skipped" ? dim("○")
+          : sr.status === "paused" ? "⏸"
+          : "✗"
         const dur = sr.duration_ms > 0 ? dim(` (${(sr.duration_ms / 1000).toFixed(1)}s)`) : ""
         console.log(`    ${icon} ${bold(id)} — ${sr.status}${dur}`)
-        if (sr.output && sr.status === "failed") {
+        if (sr.output && (sr.status === "failed" || sr.status === "paused")) {
           console.log(dim(`      ${sr.output.slice(0, 200)}`))
         }
       }
       printDivider()
+      if (run.status === "paused") {
+        console.log(dim(`  Waiting on a human. Continue with: iris playbook resume ${run.run_id}`))
+      }
       prompts.outro("Done")
       return
     }
@@ -486,7 +594,7 @@ const SkillHistoryCommand = cmd({
     const runs = listRuns(args.limit as number)
 
     if (args.json) {
-      console.log(JSON.stringify(runs, null, 2))
+      await writeJson(runs)
       return
     }
 
@@ -501,7 +609,11 @@ const SkillHistoryCommand = cmd({
 
     printDivider()
     for (const run of runs) {
-      const icon = run.status === "completed" ? success("✓") : run.status === "running" ? "◌" : "✗"
+      const icon =
+        run.status === "completed" ? success("✓")
+        : run.status === "running" ? "◌"
+        : run.status === "paused" ? "⏸"
+        : "✗"
       const stepCount = Object.keys(run.steps).length
       const time = dim(run.updated_at.replace("T", " ").slice(0, 19))
       console.log(`  ${icon} ${bold(run.run_id)} ${run.skill} — ${run.status} (${stepCount} steps) ${time}`)
@@ -509,6 +621,141 @@ const SkillHistoryCommand = cmd({
     printDivider()
     console.log(dim(`  ${runs.length} run(s). Use "iris skill history <run-id>" for details.`))
     prompts.outro("Done")
+  },
+})
+
+// ============================================================================
+// iris playbook resume <run-id>
+// ============================================================================
+
+const SkillResumeCommand = cmd({
+  command: "resume <runId>",
+  describe: "resume a paused run after the human step is done",
+  builder: (yargs) =>
+    yargs
+      .positional("runId", { type: "string", demandOption: true })
+      .option("skip", {
+        type: "boolean",
+        default: false,
+        describe: "mark the paused human step as NOT done (dependent steps are skipped)",
+      })
+      .option("yes", { type: "boolean", default: false, describe: "skip confirmation prompts", alias: "y" })
+      .option("verbose", { type: "boolean", default: false })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    await withInstance(async () => {
+      const runId = args.runId as string
+      const run = getRun(runId)
+      if (!run) {
+        console.error(`Run "${runId}" not found`)
+        process.exit(1)
+      }
+      if (run.status !== "paused") {
+        console.error(`Run "${runId}" is ${run.status}, not paused — nothing to resume.`)
+        process.exit(1)
+      }
+
+      const info = await Skill.get(run.skill)
+      if (!info) {
+        console.error(`Skill "${run.skill}" not found — it may have been renamed or removed since this run started.`)
+        process.exit(1)
+      }
+      const plan = await parsePlan(info)
+
+      if (!args.json) {
+        UI.empty()
+        prompts.intro(`◈  Resuming: ${run.skill}`)
+        console.log(dim(`  Run ${run.run_id}, paused at "${run.current_step}"`))
+        console.log()
+      }
+
+      const sp = prompts.spinner()
+
+      const opts: ExecuteOptions = {
+        resumeRunId: runId,
+        resolvePaused: args.skip ? "skip" : "done",
+        yes: args.yes as boolean,
+        verbose: args.verbose as boolean,
+        onStepStart(step) {
+          if (!args.json) sp.start(`  ${step.id}: ${step.title}`)
+        },
+        onStepEnd(step, result) {
+          if (args.json) return
+          const icon =
+            result.status === "success" ? success("✓")
+            : result.status === "skipped" ? dim("○")
+            : result.status === "paused" ? "⏸"
+            : "✗"
+          const dur = result.duration_ms > 0 ? dim(` (${(result.duration_ms / 1000).toFixed(1)}s)`) : ""
+          sp.stop(`  ${icon} ${step.id}: ${step.title}${dur}`, result.status === "success" ? 0 : 1)
+          if (result.status === "failed" && result.output) {
+            console.log(`    ${result.output.slice(0, 300)}`)
+          }
+        },
+        async onConfirm(stepId, command) {
+          if (!canPromptHuman(args.json as boolean)) return true
+          const preview = command.length > 200 ? command.slice(0, 200) + "..." : command
+          const result = await prompts.confirm({
+            message: `Step "${stepId}" will execute:\n\n    ${preview}\n\n  Continue?`,
+          })
+          return !prompts.isCancel(result) && result === true
+        },
+      }
+
+      // Same rule as `run`: only prompt when a human is actually watching,
+      // so a resume can itself pause again at the next human step.
+      if (canPromptHuman(args.json as boolean)) {
+        opts.onManualPrompt = async (step) => {
+          sp.stop(`  ${bold(step.id)}: ${step.title}`, 0)
+          console.log()
+          if (step.body) console.log(`    ${step.body.replace(/\n/g, "\n    ")}`)
+          if (step.code) console.log(`\n    ${dim(step.code.replace(/\n/g, "\n    "))}`)
+          console.log()
+          const result = await prompts.confirm({ message: "Done?" })
+          return !prompts.isCancel(result) && result === true
+        }
+      }
+
+      const result = await executeSkill(plan, run.args, opts)
+
+      if (args.json) {
+        await writeJson(result)
+        if (result.status === "paused") process.exitCode = 2
+        else if (result.status !== "completed") process.exitCode = 1
+        return
+      }
+
+      console.log()
+      printDivider()
+      if (result.status === "completed") {
+        console.log(`  ${success("✓")} ${bold(result.skill)} completed`)
+      } else if (result.status === "paused") {
+        console.log(`  ⏸  ${bold(result.skill)} paused again — waiting on a human`)
+        if (result.paused_on) {
+          console.log()
+          console.log(`  ${bold(result.paused_on.id)}: ${result.paused_on.title}`)
+          if (result.paused_on.instructions) {
+            console.log()
+            console.log(`    ${result.paused_on.instructions.replace(/\n/g, "\n    ")}`)
+          }
+        }
+        console.log()
+        console.log(dim(`  Continue when done:  iris playbook resume ${result.run_id}`))
+      } else {
+        console.log(`  ✗ ${bold(result.skill)} ${result.status}`)
+        for (const [id, sr] of Object.entries(result.steps)) {
+          if (sr.status === "failed") console.log(`    ✗ ${id}: ${sr.output.slice(0, 200)}`)
+        }
+      }
+      printDivider()
+      prompts.outro(
+        result.status === "completed" ? success("Done")
+        : result.status === "paused" ? "Paused"
+        : "Done (with errors)",
+      )
+      if (result.status === "paused") process.exitCode = 2
+      else if (result.status !== "completed") process.exitCode = 1
+    })
   },
 })
 
@@ -550,7 +797,7 @@ const SkillE2ECommand = cmd({
     sp?.stop("  Services probed", 0)
 
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      await writeJson(result)
       if (result.failed > 0) process.exitCode = 1
       return
     }
@@ -616,6 +863,7 @@ function modeLabel(mode: string): string {
     case "n8n": return highlight("n8n")
     case "langgraph": return highlight("langgraph")
     case "schedule": return highlight("schedule")
+    case "agent": return dim("agent")
     case "human":
     case "manual": return dim("human")
     default: return dim(mode)
@@ -642,8 +890,8 @@ const RemoteListCommand = cmd({
     const ok = await handleApiError(res, "List skills")
     if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const skills: any[] = data?.data ?? data?.skills ?? (Array.isArray(data) ? data : [])
-    if (args.json) { console.log(JSON.stringify(skills, null, 2)); prompts.outro("Done"); return }
+    const skills: any[] = firstArray(data?.data, data?.skills, (Array.isArray(data) ? data : []))
+    if (args.json) { await writeJson(skills); prompts.outro("Done"); return }
     printDivider()
     if (skills.length === 0) console.log(`  ${dim("(no skills)")}`)
     else for (const s of skills) {
@@ -762,8 +1010,8 @@ const ReviewListCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/auto-generated/pending`)
     const ok = await handleApiError(res, "List pending drafts"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    const drafts: any[] = data?.data ?? []
-    if (args.json) { console.log(JSON.stringify(drafts, null, 2)); prompts.outro("Done"); return }
+    const drafts: any[] = firstArray(data?.data)
+    if (args.json) { await writeJson(drafts); prompts.outro("Done"); return }
     if (drafts.length === 0) {
       printDivider()
       console.log(`  ${dim("No drafts pending review.")}`)
@@ -798,7 +1046,7 @@ const ReviewApproveCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/${args.id}/approve`, { method: "POST", body: JSON.stringify({}) })
     const ok = await handleApiError(res, "Approve skill"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     console.log(`  ${success("✓")} ${data?.message ?? "Approved"}`)
     if (data?.data?.installation_id) console.log(`  ${dim(`Installation ID: ${data.data.installation_id}`)}`)
@@ -824,7 +1072,7 @@ const ReviewRejectCommand = cmd({
     const res = await irisFetch(`/api/v1/skills/${args.id}/reject`, { method: "POST", body: JSON.stringify(body) })
     const ok = await handleApiError(res, "Reject skill"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
-    if (args.json) { console.log(JSON.stringify(data, null, 2)); prompts.outro("Done"); return }
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
     printDivider()
     console.log(`  ${success("✓")} ${data?.message ?? "Rejected"}`)
     printDivider()
@@ -963,14 +1211,29 @@ const PlaybookSyncCommand = cmd({
             let plan
             try { plan = await parsePlan(info) } catch { continue }
 
+            // `content` is the SOP body, and without it this sync uploads a
+            // catalogue: the API knows a playbook NAMED deploy exists, and
+            // nothing about what it says. That is why the cloud connector could
+            // list playbooks but never show one — the bodies were never sent.
+            // The server only overwrites content when it is non-null, so
+            // sending it here cannot wipe anything.
+            let content: string | undefined
+            try {
+              content = await Bun.file(info.location).text()
+            } catch {
+              // Unreadable file — still register the metadata rather than skip.
+            }
+
             const payload = {
               name: plan.name,
               description: plan.description,
+              industries: plan.industries ?? [],
+              triggers: plan.triggers ?? [],
               args_schema: plan.args,
-              steps_summary: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode })),
+              steps_summary: plan.steps.map((s) => ({ id: s.id, title: s.title, mode: s.mode, integrations: s.integrations })),
               version: plan.version,
+              ...(content ? { content } : {}),
             }
-
             const { IRIS_API } = await import("./iris-api")
             const res = await irisFetch("/api/v1/playbooks", {
               method: "POST",
@@ -1002,22 +1265,914 @@ const PlaybookSyncCommand = cmd({
 // ============================================================================
 // Parent commands: iris playbook + iris skill (alias)
 // ============================================================================
+// iris playbook attach / detach / attached — bloq ↔ playbook attachment
+// Parity with the Bloq builder's Playbooks tab. Hits the fl-api bloq
+// endpoints that store attachments in bloq.config['playbooks'].
+// ============================================================================
+
+const AttachedCommand = cmd({
+  command: "attached",
+  describe: "list playbooks attached to a bloq",
+  builder: (yargs) =>
+    yargs
+      .option("bloq", { type: "number", demandOption: true, describe: "bloq (project) id" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Attached Playbooks — Bloq #${args.bloq}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/playbooks`)
+    const ok = await handleApiError(res, "List attached playbooks")
+    if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    const attached: any[] = firstArray(data?.data, (Array.isArray(data) ? data : []))
+    if (args.json) { await writeJson(attached); prompts.outro("Done"); return }
+    printDivider()
+    if (attached.length === 0) console.log(`  ${dim("(no playbooks attached)")}`)
+    else for (const p of attached) {
+      console.log(`  ${bold(String(p.name ?? "unknown"))}  ${p.attached_at ? dim(String(p.attached_at)) : ""}`)
+    }
+    printDivider()
+    prompts.outro("Done")
+  },
+})
+
+const AttachCommand = cmd({
+  command: "attach <playbookName>",
+  describe: "attach a playbook to a bloq",
+  builder: (yargs) =>
+    yargs
+      .positional("playbookName", { type: "string", demandOption: true })
+      .option("bloq", { type: "number", demandOption: true, describe: "bloq (project) id" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Attach Playbook — Bloq #${args.bloq}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/attach-playbook`, {
+      method: "POST",
+      body: JSON.stringify({ playbook_name: args.playbookName }),
+    })
+    const ok = await handleApiError(res, "Attach playbook")
+    if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    prompts.outro(`${success("✓")} ${data?.message ?? `Attached ${highlight(String(args.playbookName))}`}`)
+  },
+})
+
+const DetachCommand = cmd({
+  command: "detach <playbookName>",
+  describe: "detach a playbook from a bloq",
+  builder: (yargs) =>
+    yargs
+      .positional("playbookName", { type: "string", demandOption: true })
+      .option("bloq", { type: "number", demandOption: true, describe: "bloq (project) id" }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Detach Playbook — Bloq #${args.bloq}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const res = await irisFetch(`/api/v1/bloqs/${args.bloq}/detach-playbook`, {
+      method: "POST",
+      body: JSON.stringify({ playbook_name: args.playbookName }),
+    })
+    const ok = await handleApiError(res, "Detach playbook")
+    if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    prompts.outro(`${success("✓")} ${data?.message ?? `Detached ${highlight(String(args.playbookName))}`}`)
+  },
+})
+
+// ============================================================================
+// iris playbook publish — set an association scope and push to the cloud (#167269)
+// ============================================================================
+
+/**
+ * The verdict, as a pure function so it can be tested without a network.
+ *
+ * The rule worth pinning: UNMEASURED IS NOT SAFE. If the public list could not be
+ * reached we do not know whether the playbook is listed, and "we could not check"
+ * must never render as "it is private" — that is the same false-green this whole
+ * epic exists to remove.
+ */
+export function privacyVerdict(o: { directStatus: number; listed: boolean | null }): {
+  private: boolean
+  readable: boolean
+  measured: boolean
+} {
+  const readable = o.directStatus === 200
+  const measured = o.listed !== null
+  return { readable, measured, private: !readable && o.listed === false }
+}
+
+const PlaybookCheckPrivateCommand = cmd({
+  command: "check-private <name>",
+  aliases: ["check-scope", "verify-private"],
+  describe: "fetch a playbook as a stranger would and report whether it is actually private",
+  builder: (y) =>
+    y
+      .positional("name", { describe: "playbook name", type: "string", demandOption: true })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    // #182344 G-11 — `--scope private` was an ASSERTED privacy claim with nothing behind it.
+    //
+    // The failure is asymmetric in the worst direction. If publishing breaks, the author sees
+    // an error. If PRIVACY breaks, the author sees exactly what success looks like: the command
+    // succeeds, no URL is printed, and the content is on the internet. People make disclosure
+    // decisions on the strength of that word, so it has to be measured rather than trusted.
+    //
+    // BOTH probes are unauthenticated ON PURPOSE. requireAuth() is deliberately not called —
+    // the question is what an anonymous caller gets, and answering it with a credential
+    // attached is the exact mistake this command exists to prevent.
+    const name = String(args.name)
+    const base = IRIS_API.replace(/\/$/, "")
+    const UA = { "User-Agent": "iris-playbook-check-private" }
+
+    let directStatus = 0
+    let directBody = ""
+    try {
+      const res = await fetch(`${base}/api/v1/playbooks/${encodeURIComponent(name)}`, { headers: UA })
+      directStatus = res.status
+      directBody = await res.text()
+    } catch (err) {
+      directStatus = -1
+      directBody = String(err)
+    }
+
+    let listed: boolean | null = null
+    let listCount = 0
+    try {
+      const res = await fetch(`${base}/api/v1/playbooks`, { headers: UA })
+      if (res.ok) {
+        const body: any = await res.json()
+        const rows: any[] = firstArray(body?.playbooks, (Array.isArray(body) ? body : []))
+        listCount = rows.length
+        listed = rows.some((p) => String(p?.name) === name)
+      }
+    } catch {
+      listed = null // could not measure — say so rather than call it a pass
+    }
+
+    const verdict = privacyVerdict({ directStatus, listed })
+    const readable = verdict.readable
+    const isPrivate = verdict.private
+
+    if (args.json) {
+      await writeJson({
+        name,
+        private: isPrivate,
+        direct_status: directStatus,
+        readable_anonymously: readable,
+        listed_anonymously: listed,
+        anonymous_list_size: listCount,
+      })
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  Check private — ${name}`)
+    printDivider()
+    printKV("Direct fetch", `${directStatus}${readable ? "  ← READABLE" : "  (withheld)"}`)
+    printKV("In public list", listed === null ? "could not measure" : listed ? "YES  ← LISTED" : `no  (${listCount} public playbooks returned)`)
+    printDivider()
+
+    if (isPrivate) {
+      prompts.log.success("A stranger can neither read this playbook nor see that it exists.")
+    } else if (listed === null) {
+      process.exitCode = 1
+      prompts.log.warn("Could not reach the public list — privacy is UNMEASURED, which is not the same as safe.")
+    } else {
+      process.exitCode = 1
+      prompts.log.error(
+        `This playbook is NOT private.\n` +
+        (readable ? `  Its body is served to anonymous callers (HTTP ${directStatus}, ${directBody.length} bytes).\n` : "") +
+        (listed ? `  It is listed to anonymous callers.\n` : "") +
+        `  Narrow it:  iris playbook publish ${name} --scope private`,
+      )
+    }
+    prompts.outro("Done")
+  },
+})
+
+/**
+ * The web URL for a published playbook (#182116).
+ *
+ * publish used to succeed and hand back nothing shareable — `show` returns a filesystem path —
+ * so a playbook could be published to a team and reach nobody. The page resolves by name and
+ * inherits the API's visibility exactly: public to anyone, project to the bloq, private to the
+ * owner, and a 404 for everyone else.
+ *
+ * Built from IRIS_API rather than hardcoded, so a staging or self-hosted install prints its own
+ * host instead of confidently sending somebody to production.
+ */
+export function playbookUrl(name: string): string {
+  const base = String(IRIS_API).replace(/\/+$/, "")
+
+  // /playbooks/{name} — the real detail route (web.php: playbooks.show), serving a
+  // Playbooks/Show page. This used to build /p/playbook?name=… : a query string against a
+  // generic viewer page, which is not the address anyone would type, link, or recognise.
+  // The docblock above already described /playbooks semantics; only the string was wrong.
+  return `${base}/playbooks/${encodeURIComponent(name)}`
+}
+
+/** What a given scope means for who can open that URL. Said plainly, because "published" does not. */
+function audienceNote(scope?: string, bloqId?: number | null): string {
+  switch (scope) {
+    case "public":   return "anyone — it is listed in the marketplace"
+    case "unlisted": return "anyone with the link — it appears in no listing, and no sign-in is asked for"
+    // Deliberately no longer described as "unlisted". It said that for months, which reads as
+    // "a link will work" — and a link does NOT work: the reader has to be an OTP-proven member
+    // of the bloq. That wording is what sent someone hunting for a share URL that did not exist.
+    case "project":  return `members of bloq #${bloqId ?? "?"} only, and they must be signed in — a bare link will 404`
+    case "private":  return "only you — but stored in the cloud registry, so it can reach another machine you sign into"
+    case "local":    return "nobody but this machine — it is never uploaded, so there is no URL to open"
+    default:         return "whoever the API allows"
+  }
+}
+
+/**
+ * Playbook scope -> exposure-gate tier. The two vocabularies differ on purpose: the ladder in
+ * exposure-gate.ts is shared across pages, notes, datasets and components, so it says "team"
+ * where playbooks say "project".
+ */
+function scopeToTier(scope: string): ExposureTier {
+  switch (scope) {
+    case "public":   return "public"
+    case "unlisted": return "unlisted"
+    case "project":  return "team"
+    default:         return "private"   // private, local
+  }
+}
+
+/**
+ * What scope is this playbook at RIGHT NOW, so the gate compares against reality.
+ *
+ * A lookup that fails answers "private" — the most private thing it could be — because
+ * isWidening() treats an unknown `from` the same way: when we cannot tell, err toward asking
+ * rather than toward silently widening. Never let a network hiccup become consent.
+ */
+async function currentTier(name: string): Promise<ExposureTier> {
+  try {
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`)
+    if (!res.ok) return "private"
+    const body = (await res.json()) as any
+    return scopeToTier(String(body?.playbook?.scope ?? "private"))
+  } catch {
+    return "private"
+  }
+}
+
+const PublishCommand = cmd({
+  command: "publish <name>",
+  describe: "publish a playbook with a scope: local | private | project | unlisted | public",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { type: "string", demandOption: true })
+      .option("scope", {
+        type: "string",
+        choices: ["local", "private", "project", "unlisted", "public"] as const,
+        demandOption: true,
+        describe:
+          "association scope: local (this machine only, never uploaded), private (you, via the cloud registry), " +
+          "project (a bloq/team, sign-in required), unlisted (anyone with the link, in no listing), " +
+          "public (marketplace)",
+      })
+      .option("bloq", { type: "number", describe: "bloq (project) id — required when --scope project" })
+      .option("access", {
+        type: "string",
+        choices: ["free", "paid"] as const,
+        default: "free",
+        describe: "access level for a public/marketplace publish",
+      })
+      .option("force", { type: "boolean", default: false, describe: "consent to a PUBLIC publish — REQUIRED when there is no terminal" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro(`◈  Publish Playbook — ${highlight(String(args.name))}`)
+
+    // #182937 — `local` returns HERE, above everything.
+    //
+    // "private" was read as "stays on my machine". It does not: it is a cloud-backed,
+    // you-only association — `playbook verify` compares the local file against the API
+    // registry, and `check-private` fetches the URL "as a stranger would", both of which
+    // require the thing to have been uploaded. That is the right primitive for reaching a
+    // second machine you sign into, and the wrong one for "no cloud footprint".
+    //
+    // So this branch sits ABOVE the consent prompt, ABOVE requireAuth, and above every
+    // irisFetch in this handler. Not as an optimisation — as the guarantee. There is no
+    // ordering of the code below that can be reached with scope=local, which is what makes
+    // "never written to the API registry" a property of the control flow rather than a promise
+    // in a docstring.
+    if (args.scope === "local") {
+      const resolved = await withInstance(async () => {
+        const info = await Skill.get(String(args.name))
+        if (!info) return null
+        const plan = await parsePlan(info)
+        return { location: info.location, version: plan.version ?? undefined }
+      })
+
+      if (!resolved) {
+        console.error(`  No playbook named '${args.name}' resolves on this machine.`)
+        console.error(`  ${dim("`iris playbook list` shows the exact names.")}`)
+        process.exitCode = 1
+        prompts.outro("Done"); return
+      }
+
+      if (args.json) {
+        await writeJson({
+          ok: true,
+          name: String(args.name),
+          scope: "local",
+          location: resolved.location,
+          version: resolved.version ?? null,
+          uploaded: false,
+          audience: audienceNote("local"),
+        })
+        return
+      }
+
+      console.log()
+      console.log(`  ${success(">")} ${bold(String(args.name))} is registered locally — nothing was uploaded.`)
+      console.log(`    ${dim("on disk")}    ${resolved.location}`)
+      if (resolved.version) console.log(`    ${dim("version")}   ${resolved.version}`)
+      console.log(`    ${dim("audience")}  ${audienceNote("local")}`)
+      console.log()
+      console.log(`  ${dim(`Run it:   iris playbook run ${args.name}`)}`)
+      console.log(`  ${dim(`List it:  iris playbook list`)}`)
+      console.log(`  ${dim(`Later, to put it in the cloud registry: iris playbook publish ${args.name} --scope private`)}`)
+      prompts.outro("Done")
+      return
+    }
+
+    if (args.scope === "project" && !args.bloq) {
+      console.error("  --bloq <id> is required when --scope project")
+      prompts.outro("Done"); return
+    }
+
+    // #182344 G-04 — a marketplace publish is the widest thing this CLI can do.
+    //
+    // `from` is READ, not assumed. It was hardcoded to "private", which made every
+    // re-publish of an already-project playbook look like a widening: the gate demanded
+    // --force for a no-op at the scope the playbook was already at, moments after a
+    // publish had reported that exact scope back. A guard that cries wolf on a no-op
+    // trains people to pass --force reflexively, which is the worst possible outcome for
+    // a guard whose entire job is to make one specific action deliberate.
+    //
+    // Failing to READ the current scope now falls back to "private" for the same reason
+    // isWidening() does — err toward asking. But that is now a fallback for a failed
+    // lookup, not the permanent answer it used to be.
+    {
+      const to = scopeToTier(String(args.scope))
+      const from = await currentTier(String(args.name))
+      const verdict = await confirmWiden({
+        noun: "playbook",
+        name: String(args.name),
+        from,
+        to: to as any,
+        extra: args.scope === "public"
+          ? [`It is listed in the marketplace as ${String(args.access ?? "free")} and anyone can install it.`]
+          : args.scope === "unlisted"
+            ? [
+                "Anyone holding the link can read it without signing in.",
+                "It stays out of every listing, but the link is the whole credential — once sent it cannot be recalled.",
+              ]
+            : [],
+        force: Boolean(args.force),
+      })
+      if (!verdict.ok) {
+        process.exitCode = verdict.reason === "needs-force" ? 1 : 0
+        prompts.outro(verdict.reason === "needs-force" ? "Refused — nothing published" : "Cancelled — nothing published")
+        return
+      }
+    }
+
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const { IRIS_API } = await import("./iris-api")
+
+    // 0. Upload the local playbook first (#180423).
+    //
+    // publish used to POST straight to /publish, which only ever succeeds for a playbook
+    // the SERVER already knows. A playbook authored locally has never been uploaded, so
+    // publish answered `not found` for something `list`, `show`, `test` and `sync` all
+    // resolved happily — and since `.iris/` is gitignored, publish is the only way it can
+    // leave the machine at all. The result was an author holding a working playbook with
+    // no path to anyone else.
+    //
+    // So resolve it the same way every other verb does and upsert it before publishing.
+    // Same endpoint and payload as `sync --api`; the server only overwrites content when
+    // it is non-null, so this cannot blank an existing body.
+    let foundLocally = false
+    try {
+      const local = await withInstance(async () => {
+        const info = await Skill.get(String(args.name))
+        if (!info) return null
+        const plan = await parsePlan(info)
+        let content: string | undefined
+        try { content = await Bun.file(info.location).text() } catch { /* register metadata anyway */ }
+        return { plan, content }
+      })
+
+      if (local) {
+        foundLocally = true
+        const upRes = await irisFetch("/api/v1/playbooks", {
+          method: "POST",
+          body: JSON.stringify({
+            name: local.plan.name,
+            description: local.plan.description,
+            industries: local.plan.industries ?? [],
+            triggers: local.plan.triggers ?? [],
+            args_schema: local.plan.args,
+            steps_summary: local.plan.steps.map((s: any) => ({ id: s.id, title: s.title, mode: s.mode, integrations: s.integrations ?? [] })),
+            version: local.plan.version,
+            ...(local.content ? { content: local.content } : {}),
+          }),
+        }, IRIS_API)
+
+        if (!upRes.ok) {
+          // Don't stop — the playbook may already exist server-side and still be publishable.
+          // But say so, because publishing a stale body silently is its own bug.
+          console.log(dim(`  ! Could not upload the local copy (${upRes.status}) — publishing whatever the server already holds.`))
+        } else if (!args.json) {
+          console.log(`  ${success(">")} Uploaded local copy`)
+        }
+      }
+    } catch {
+      // Local resolution is best-effort. A server-side-only playbook must still publish.
+    }
+
+    // 1. Set the association + route: iris-api records scope and upserts the marketplace row on public.
+    // NOTE: playbooks live on IRIS_API (freelabel.net), not the default FL_API base — without this
+    // the request hits fl-api, which has no publish route, and 404s.
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(String(args.name))}/publish`, {
+      method: "POST",
+      body: JSON.stringify({
+        scope: args.scope,
+        bloq_id: args.bloq ?? null,
+        access_type: args.access,
+      }),
+    }, IRIS_API)
+    const ok = await handleApiError(res, "Publish playbook")
+    if (!ok) {
+      if (!foundLocally) {
+        // The old failure mode, now explained rather than just reported: nothing named
+        // this exists on the server AND nothing resolves locally, so there was nothing
+        // to upload on the way through.
+        console.error(`  ${dim(`No playbook named '${args.name}' was found locally either — check \`iris playbook list\` for the exact name.`)}`)
+      }
+      prompts.outro("Done"); return
+    }
+    const data = (await res.json()) as any
+
+    // 2. Project scope: also attach to the bloq so the team sees it (config.playbooks[], #157174).
+    if (args.scope === "project" && args.bloq) {
+      const attachRes = await irisFetch(`/api/v1/bloqs/${args.bloq}/attach-playbook`, {
+        method: "POST",
+        body: JSON.stringify({ playbook_name: args.name }),
+      })
+      await handleApiError(attachRes, "Attach to bloq")
+    }
+
+    if (args.json) { await writeJson(data); prompts.outro("Done"); return }
+
+    printDivider()
+    const pb = data?.playbook ?? {}
+    console.log(`  ${bold("Scope")}       ${pb.scope ?? args.scope}`)
+    if (pb.bloq_id) console.log(`  ${bold("Bloq")}        #${pb.bloq_id}`)
+    console.log(`  ${bold("Access")}      ${pb.access_type ?? args.access}`)
+    // The address, or why there is not one. /playbooks/{name} has worked all along; nothing ever
+    // returned it, so publish reported success and left the caller to guess — or to conclude that
+    // playbooks had no web surface at all.
+    if (data?.marketplace) {
+      console.log(`  ${bold("Marketplace")} ${highlight(String(data.marketplace.slug))} ${dim(`(${data.marketplace.status})`)}`)
+    }
+
+    // ONE url line. This printed two: "none — only a public playbook gets one", immediately
+    // followed by an actual URL. Both were labelled URL, so the output contradicted itself
+    // and the reader had to guess which half to believe.
+    //
+    // The address is the same whatever the scope — /playbooks/{name} resolves by name and
+    // inherits the API's visibility. Scope decides who can OPEN it, not whether it exists,
+    // so that is said on its own line rather than by withholding the link.
+    const url = String(pb.public_url || playbookUrl(String(args.name)))
+    console.log(`  ${bold("URL")}         ${highlight(url)}`)
+    // For an unlisted playbook the two addresses differ and both matter: the uuid is the
+    // unguessable one you send, the slug is the stable one you cite in a doc. Printing only
+    // one of them means somebody pastes the wrong kind into the wrong place.
+    if ((pb.scope ?? args.scope) === "unlisted" && pb.canonical_url && pb.canonical_url !== url) {
+      console.log(`  ${bold("Canonical")}   ${dim(String(pb.canonical_url))}`)
+    }
+    console.log(`  ${bold("Who can open")} ${audienceNote(pb.scope ?? String(args.scope), pb.bloq_id ?? args.bloq)}`)
+    printDivider()
+    prompts.outro(`${success("✓")} Published ${highlight(String(args.name))} as ${bold(String(args.scope))}`)
+  },
+})
+
+
+// ============================================================================
+// iris playbook doctor [name] — diagnose common playbook problems
+// ============================================================================
+// Every one of these was found by hand, once, the slow way: a version:1
+// playbook with `### step:` blocks in the body silently falls back to a raw
+// text dump instead of running (parsePlan only calls parseSteps when
+// version===2), and a stray second copy of a playbook (a global install, an
+// old clone) silently shadows the project one with no signal that it
+// happened. Both are invisible from `run`/`test` alone. `doctor` surfaces
+// them directly instead of a multi-hour bisection with python heredocs.
+
+const PlaybookDoctorCommand = cmd({
+  command: "doctor [name]",
+  describe: "diagnose common playbook problems: version/step mismatches, shadow copies, validation issues",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { type: "string", describe: "check a single playbook (default: check all)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    await withInstance(async () => {
+      const name = args.name as string | undefined
+
+      if (name) {
+        const info = await Skill.get(name)
+        if (!info) {
+          console.error(`Skill "${name}" not found`)
+          process.exit(1)
+        }
+      }
+
+      const targets = name ? [(await Skill.get(name))!] : await Skill.all()
+
+      type Problem = { level: "error" | "warning"; message: string }
+      type Report = { name: string; location: string; problems: Problem[] }
+      const reports: Report[] = []
+
+      for (const info of targets) {
+        const problems: Problem[] = []
+
+        // Shadow copies — every location this name resolves to, not just the winner.
+        const locs = await Skill.locations(info.name)
+        if (locs.length > 1) {
+          problems.push({
+            level: "warning",
+            message: `${locs.length} copies found on disk — using ${locs[0].location}; ignoring: ${locs.slice(1).map((l) => l.location).join(", ")}`,
+          })
+        }
+
+        let plan: SkillPlan
+        try {
+          plan = await parsePlan(info)
+        } catch (e: any) {
+          problems.push({ level: "error", message: `Failed to parse: ${e.message}` })
+          reports.push({ name: info.name, location: info.location, problems })
+          continue
+        }
+
+        // The version/steps trap (frontmatter `version` not EXACTLY 2 silently
+        // degrades the plan to v1, which parses zero steps and executes nothing)
+        // now lives in validatePlan, so `doctor`, `test`, `e2e` and the MCP
+        // listing all report it identically. It used to be implemented here and
+        // ONLY here — which is why `iris playbook test` passed a playbook that
+        // `doctor` failed, and why a mis-versioned playbook could ship green.
+        for (const issue of validatePlan(plan)) {
+          problems.push({
+            level: issue.level,
+            message: issue.stepId ? `[${issue.stepId}] ${issue.message}` : issue.message,
+          })
+        }
+
+        reports.push({ name: info.name, location: info.location, problems })
+      }
+
+      const unhealthy = reports.filter((r) => r.problems.length > 0)
+
+      if (args.json) {
+        await writeJson({ checked: reports.length, unhealthy: unhealthy.length, reports: unhealthy })
+        if (unhealthy.some((r) => r.problems.some((p) => p.level === "error"))) process.exitCode = 1
+        return
+      }
+
+      UI.empty()
+      prompts.intro(name ? `◈  Doctor: ${name}` : `◈  Doctor — ${reports.length} playbook(s)`)
+      printDivider()
+
+      if (unhealthy.length === 0) {
+        console.log(success(`  ✓ No problems found${name ? "" : ` across ${reports.length} playbook(s)`}`))
+      } else {
+        for (const r of unhealthy) {
+          console.log(`  ${bold(r.name)}  ${dim(r.location)}`)
+          for (const p of r.problems) {
+            const icon = p.level === "error" ? "✗" : "⚠"
+            console.log(p.level === "error" ? `    ${icon} ${p.message}` : dim(`    ${icon} ${p.message}`))
+          }
+          console.log()
+        }
+      }
+
+      printDivider()
+      const hasErrors = unhealthy.some((r) => r.problems.some((p) => p.level === "error"))
+      prompts.outro(unhealthy.length === 0 ? success("Healthy") : hasErrors ? "Problems found" : "Warnings found")
+      if (hasErrors) process.exitCode = 1
+    })
+  },
+})
+
+// ============================================================================
+// iris playbook verify <name> — confirm a publish actually landed
+// ============================================================================
+// Replaces the manual dance done by hand after every publish today: curl the
+// registry, grep the public page, python-parse the JSON, compare by eye.
+// One command, three layers — local file, API registry, live public page —
+// so "it published" (a checkmark) and "it's actually live and current"
+// (this) can no longer be silently different things (see the empty-404-body
+// and grep-for-a-symbol traps in PRODUCTION_DEBUGGING_GUIDE.md — same shape).
+
+const PlaybookVerifyCommand = cmd({
+  command: "verify <name>",
+  describe: "confirm a publish actually landed — checks local file vs API registry vs the live public page",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { type: "string", demandOption: true })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const name = String(args.name)
+    const json = args.json as boolean
+    if (!json) {
+      UI.empty()
+      prompts.intro(`◈  Verify — ${highlight(name)}`)
+    }
+
+    const token = await requireAuth()
+    if (!token) {
+      if (json) { await writeJson({ name, ok: false, checks: [], error: "not authenticated" }); process.exitCode = 1; return }
+      prompts.outro("Done"); return
+    }
+
+    type Check = { label: string; ok: boolean; detail: string }
+    const checks: Check[] = []
+
+    // 1. Local file
+    const local = await withInstance(async () => {
+      const info = await Skill.get(name)
+      if (!info) return null
+      try {
+        const plan = await parsePlan(info)
+        const content = await Bun.file(info.location).text()
+        return { plan, content, location: info.location }
+      } catch (e: any) {
+        return { error: e.message as string, location: info.location }
+      }
+    })
+    checks.push({
+      label: "Local file",
+      ok: Boolean(local && !("error" in local)),
+      detail: !local ? "not found locally" : "error" in local ? `parse error: ${local.error}` : local.location,
+    })
+
+    // 2. API registry
+    const { IRIS_API } = await import("./iris-api")
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`, {}, IRIS_API)
+    let pb: any = null
+    if (res.ok) {
+      const data = (await res.json()) as any
+      pb = data?.playbook ?? data
+    }
+    checks.push({
+      label: "API registry",
+      ok: Boolean(pb),
+      detail: pb ? `scope=${pb.scope}, version=${pb.version}, updated ${pb.updated_at ?? "?"}` : `not registered (HTTP ${res.status})`,
+    })
+
+    // 3. Content drift — does what's registered actually match the local file?
+    // A green publish checkmark says the request succeeded, not that the body sent was current.
+    if (local && !("error" in local) && pb?.content != null) {
+      const same = local.content.trim() === String(pb.content).trim()
+      checks.push({
+        label: "Content matches API",
+        ok: same,
+        detail: same ? "identical" : `local file differs from what's registered — re-run "iris playbook sync --api" or "publish"`,
+      })
+    }
+
+    // 4. Live public page — only meaningful once scope is public.
+    if (pb?.public_url) {
+      let pageOk = false
+      let pageDetail: string
+      try {
+        const pageRes = await fetch(pb.public_url)
+        pageOk = pageRes.ok
+        pageDetail = pageOk ? `HTTP ${pageRes.status}` : `HTTP ${pageRes.status} — page not live`
+      } catch (e: any) {
+        pageDetail = `fetch failed: ${e.message}`
+      }
+      checks.push({ label: "Public page", ok: pageOk, detail: `${pb.public_url} (${pageDetail})` })
+    } else if (pb) {
+      const expectedPublic = pb.scope === "public"
+      checks.push({
+        label: "Public page",
+        ok: !expectedPublic,
+        detail: expectedPublic
+          ? "scope is public but the API returned no public_url — inconsistent state"
+          : `scope is "${pb.scope}" — no public page expected`,
+      })
+    }
+
+    if (json) {
+      const allOk = checks.every((c) => c.ok)
+      await writeJson({ name, ok: allOk, checks })
+      if (!allOk) process.exitCode = 1
+      return
+    }
+
+    printDivider()
+    for (const c of checks) {
+      console.log(`  ${c.ok ? success("✓") : "✗"} ${bold(c.label)}  ${dim(c.detail)}`)
+    }
+    printDivider()
+    const allOk = checks.every((c) => c.ok)
+    prompts.outro(allOk ? success("Verified") : "Problems found")
+    if (!allOk) process.exitCode = 1
+  },
+})
+
+// ============================================================================
+// iris playbook available / install — the PULL half
+// ============================================================================
+// publish/attach/sync covered author → server → the author's own .claude/skills.
+// Nothing brought a PUBLISHED playbook DOWN to somebody else's machine, so an
+// operator could install the CLI, wire MCP, open Claude Code — and receive zero
+// procedures. `sync` is local → local; it only rewrites playbooks already on disk.
+//
+// GET /api/v1/playbooks is already scope-filtered server-side (visibleTo), and
+// GET /api/v1/playbooks/{name} returns the full markdown body under the same
+// filter — so this is a client change only. An unknown or invisible name 404s
+// rather than 403s, deliberately: telling someone a private playbook EXISTS is
+// itself a disclosure.
+
+/** Where an installed playbook lands. `sync` only picks up .iris/playbooks/. */
+function installTarget(name: string): { dir: string; file: string } {
+  const dir = pathJoin(process.cwd(), ".iris", "playbooks", name)
+  return { dir, file: pathJoin(dir, "PLAYBOOK.md") }
+}
+
+const PlaybookAvailableCommand = cmd({
+  command: "available",
+  aliases: ["remote-list"],
+  describe: "list published playbooks you can install (scoped to what you can see)",
+  builder: (yargs) => yargs.option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Playbooks — Available to Install")
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const { IRIS_API } = await import("./iris-api")
+    const res = await irisFetch(`/api/v1/playbooks`, {}, IRIS_API)
+    const ok = await handleApiError(res, "List playbooks"); if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    const list: any[] = firstArray(data?.playbooks, data?.data)
+
+    if (args.json) { await writeJson(list); prompts.outro("Done"); return }
+    if (!list.length) {
+      printDivider()
+      console.log(`  ${dim("Nothing published that you can see.")}`)
+      prompts.outro("Done"); return
+    }
+
+    printDivider()
+    const { existsSync } = await import("fs")
+    for (const p of list) {
+      const installed = existsSync(installTarget(String(p.name)).file)
+      const mark = installed ? success("✓") : dim("·")
+      const scope = p.scope ? dim(`[${p.scope}]`) : ""
+      console.log(`  ${mark} ${highlight(String(p.name))} ${scope}`)
+      if (p.description) console.log(`      ${dim(String(p.description))}`)
+    }
+    printDivider()
+    prompts.outro(`${list.length} available — install with: iris playbook install <name>`)
+  },
+})
+
+const PlaybookInstallCommand = cmd({
+  command: "install <name>",
+  aliases: ["pull"],
+  describe: "download a published playbook into .iris/playbooks/ and sync it to .claude/skills/",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { type: "string", demandOption: true })
+      .option("force", { type: "boolean", default: false, describe: "overwrite a local copy (discards local edits)" })
+      .option("sync", { type: "boolean", default: true, describe: "also regenerate .claude/skills/ (--no-sync to skip)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const name = String(args.name)
+    UI.empty()
+    prompts.intro(`◈  Install Playbook — ${highlight(name)}`)
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+
+    const { IRIS_API } = await import("./iris-api")
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`, {}, IRIS_API)
+    const ok = await handleApiError(res, "Fetch playbook"); if (!ok) { prompts.outro("Done"); return }
+    const data = (await res.json()) as any
+    const pb = data?.playbook ?? {}
+    const content: string = pb.content ?? ""
+
+    // A playbook row with no body is a publish that never uploaded one — say so
+    // rather than writing an empty file that then fails to parse later.
+    if (!content.trim()) {
+      console.error(`  ${bold("No content")} — '${name}' is published but has no markdown body stored.`)
+      console.error(`  ${dim("The author needs to run: iris playbook sync --api")}`)
+      prompts.outro("Done"); return
+    }
+
+    const { dir, file } = installTarget(name)
+    const { existsSync, mkdirSync, writeFileSync } = await import("fs")
+
+    if (existsSync(file) && !args.force) {
+      console.error(`  ${bold("Already installed")} ${dim(file)}`)
+      console.error(`  ${dim("Re-download and discard local edits with: --force")}`)
+      prompts.outro("Done"); return
+    }
+
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(file, content, "utf8")
+
+    if (args.json) {
+      await writeJson({ installed: name, path: file, scope: pb.scope ?? null })
+      prompts.outro("Done"); return
+    }
+
+    printDivider()
+    printKV("Name", name)
+    if (pb.scope) printKV("Scope", String(pb.scope))
+    if (pb.version) printKV("Version", String(pb.version))
+    printKV("Path", file)
+    printDivider()
+
+    if (args.sync) {
+      // Reuse the existing writer rather than reimplementing the SKILL.md transform
+      // (frontmatter rebuild, step-block stripping, usage hint) — one copy, one behaviour.
+      await (PlaybookSyncCommand as any).handler({ json: false, api: false })
+    }
+
+    prompts.outro(`${success("✓")} Installed ${highlight(name)}${args.sync ? " and synced to .claude/skills/" : ""}`)
+  },
+})
+
+// ============================================================================
 
 export const PlatformPlaybookCommand = cmd({
   command: "playbook <subcommand>",
   describe: "playbooks — orchestrate workflows across all engines (shell, AI, Hive, n8n, Neuron)",
   builder: (yargs) =>
     yargs
+      .command(PlaybookDraftCommand)
+      // One walkthrough, three readers: `draft` for an agent, `sop` for a person,
+      // `sync` for Claude. #P0b — moved off the `sop` verb, which owns service requests.
+      .command(PlaybookSopDraftCommand)
       .command(SkillListCommand)
       .command(SkillShowCommand)
       .command(SkillRunCommand)
+      .command(SkillResumeCommand)
       .command(SkillTestCommand)
       .command(SkillHistoryCommand)
       .command(SkillE2ECommand)
       .command(PlaybookSyncCommand)
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
-      .demandCommand(1, ""),
+      .command(PublishCommand)
+      .command(PlaybookCheckPrivateCommand)
+      .command(PlaybookDoctorCommand)
+      .command(PlaybookVerifyCommand)
+      .command(PlaybookAvailableCommand)
+      .command(PlaybookInstallCommand)
+      .command(AttachCommand)
+      .command(DetachCommand)
+      .command(AttachedCommand)
+      // A playbook CONTAINS procedures, skills and an org chart (#180756), so they live under
+      // it rather than beside it. `iris sop` keeps working for plain document SOPs.
+      .command(PlaybookContentsCommands.items)
+      .command(PlaybookContentsCommands.roles)
+      .command(PlaybookContentsCommands.require)
+      .command(PlaybookContentsCommands.ack)
+      .demandCommand(1, "")
+      // Playbooks COMPOSE — a step can run another playbook. That has worked since the
+      // executor shipped and no playbook in the registry uses it, because nothing anywhere
+      // said it was possible. Stating it here is most of the fix (#182309).
+      .epilogue(
+        [
+          "Playbooks compose. A step can hand off to another playbook:",
+          "",
+          "    ### step:s2 Capture the process as an SOP",
+          "",
+          "    ```yaml",
+          "    mode: playbook",
+          "    playbook: capture-sops-and-process-maps",
+          "    args: <passed positionally to the child's declared args>",
+          "    ```",
+          "",
+          "The child runs inline, its steps appear nested in the run output, and its",
+          "combined output becomes this step's result. A failing child fails the parent",
+          "step. Nesting is capped at 3 deep, and a playbook may not call itself.",
+          "",
+          "Use it to keep one procedure per playbook and chain them, rather than writing",
+          "\"now go run X\" as an instruction a person has to notice and follow.",
+        ].join("\n"),
+      ),
   handler() {},
 })
 
@@ -1028,15 +2183,25 @@ export const PlatformSkillCommand = cmd({
   describe: false as any, // hidden from help (playbook is the primary)
   builder: (yargs) =>
     yargs
+      .command(PlaybookDraftCommand)
+      .command(PlaybookSopDraftCommand)
       .command(SkillListCommand)
       .command(SkillShowCommand)
       .command(SkillRunCommand)
+      .command(SkillResumeCommand)
       .command(SkillTestCommand)
       .command(SkillHistoryCommand)
       .command(SkillE2ECommand)
       .command(PlaybookSyncCommand)
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
+      .command(PublishCommand)
+      .command(PlaybookCheckPrivateCommand)
+      .command(PlaybookAvailableCommand)
+      .command(PlaybookInstallCommand)
+      .command(AttachCommand)
+      .command(DetachCommand)
+      .command(AttachedCommand)
       .demandCommand(1, ""),
   handler() {},
 })

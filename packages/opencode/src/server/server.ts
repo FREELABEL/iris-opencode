@@ -4,6 +4,9 @@ import { GlobalBus } from "@/bus/global"
 import { Log } from "../util/log"
 import { describeRoute, generateSpecs, validator, resolver, openAPIRouteHandler } from "hono-openapi"
 import { Hono } from "hono"
+import { join } from "path"
+import { transcribeLocal } from "../cli/lib/transcription"
+import { discardDir, secureTempDir } from "../cli/lib/stt-policy"
 import { cors } from "hono/cors"
 import { stream, streamSSE } from "hono/streaming"
 import { proxy } from "hono/proxy"
@@ -60,6 +63,11 @@ export namespace Server {
 
   let _url: URL | undefined
   let _corsWhitelist: string[] = []
+  // The hostname the server actually bound to. /transcribe refuses unless this is loopback:
+  // --mdns flips the bind to 0.0.0.0, and an audio endpoint reachable from the LAN is a
+  // microphone reachable from the LAN. Recorded at listen() rather than checked per-request
+  // because Bun's per-connection IP is not threaded through Hono's fetch here.
+  let _boundHostname = "127.0.0.1"
 
   export function url(): URL {
     return _url ?? new URL("http://localhost:4096")
@@ -71,6 +79,132 @@ export namespace Server {
   }
 
   const app = new Hono()
+
+/**
+ * THE FRONT DOOR (#181991).
+ *
+ * `iris web` used to open the browser straight at `/`, which the catch-all below
+ * proxies to https://app.opencode.ai — upstream's hosted workspace, titled
+ * "OpenCode". One command to a working browser UI, and not one byte of it ours,
+ * offline, or IRIS. Measured on a cold HOME: 3.1s to listening, 2.66s to first
+ * byte, no auth required — the ergonomics were never the problem, the ownership
+ * was.
+ *
+ * So this is what `iris web` opens now. It is served LOCALLY and inlines
+ * everything: no CDN, no webfont, no network. It is the one page that must render
+ * when the machine is offline, because "is my server up" is exactly the question
+ * you ask when something is down.
+ *
+ * The workspace UI is untouched and one click away at `/`. Taking `/` itself would
+ * have meant serving an SPA shell from a path it was not built for, which trades a
+ * branding problem for a broken app.
+ */
+app.get("/iris", async (c) => {
+        const url = new URL(c.req.url)
+        const origin = `${url.protocol}//${url.host}`
+
+        // Never throw from the front door. Every value below degrades to "unknown"
+        // rather than 500ing — a status page that cannot render when things are broken
+        // is a status page for the case you do not have.
+        let providers: string[] = []
+        try {
+          providers = Object.keys(await Auth.all())
+        } catch { /* unreadable auth store — reported as signed out */ }
+
+        let cwd = ""
+        try {
+          cwd = process.cwd()
+        } catch { /* not fatal */ }
+
+        const esc = (v: string) =>
+          v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+
+        const signedIn = providers.length > 0
+        const authLine = signedIn
+          ? `signed in &middot; ${esc(providers.sort().join(", "))}`
+          : "not signed in"
+
+        const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IRIS &middot; local server</title>
+<style>
+  :root{
+    --bg:#faf9f7; --panel:#ffffff; --line:#e5e2dd; --tx:#1a1917; --tx-2:#6b665e;
+    --ok:#0f7a5a; --warn:#9a6b00; --accent:#3b3a37;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#131211; --panel:#1b1a18; --line:#2e2c29; --tx:#f2f0ed; --tx-2:#9b958c;
+           --ok:#4ade80; --warn:#fbbf24; --accent:#e8e6e2; }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--bg);color:var(--tx);font-family:var(--sans);line-height:1.5;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:640px;margin:0 auto;padding:clamp(32px,7vh,84px) 22px 64px}
+  .mark{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;
+        color:var(--tx-2);margin:0 0 22px}
+  h1{font-size:clamp(26px,5vw,36px);letter-spacing:-.02em;margin:0 0 10px;font-weight:650}
+  .dek{color:var(--tx-2);margin:0 0 30px;font-size:15px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+         padding:4px 18px;margin:0 0 22px}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
+       padding:13px 0;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+     color:var(--tx-2);white-space:nowrap}
+  .v{font-family:var(--mono);font-size:13px;text-align:right;word-break:break-all}
+  .ok{color:var(--ok)} .warn{color:var(--warn)}
+  a.cta{display:block;background:var(--accent);color:var(--bg);text-decoration:none;
+        padding:14px 18px;border-radius:10px;font-weight:600;font-size:15px;
+        display:flex;justify-content:space-between;align-items:center;margin:0 0 26px}
+  a.cta span{font-family:var(--mono);font-size:12px;opacity:.7}
+  h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+     color:var(--tx-2);margin:0 0 12px;font-weight:500}
+  pre{font-family:var(--mono);font-size:12.5px;background:var(--panel);
+      border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:0 0 10px;
+      overflow-x:auto;color:var(--tx)}
+  .note{color:var(--tx-2);font-size:12.5px;margin:22px 0 0}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="mark">IRIS &middot; local server</p>
+    <h1>Your machine is serving IRIS.</h1>
+    <p class="dek">This page is served locally and works with the network down. It is the
+    first thing to check when something else will not load.</p>
+
+    <div class="panel">
+      <div class="row"><span class="k">Status</span><span class="v ok">listening</span></div>
+      <div class="row"><span class="k">Address</span><span class="v">${esc(origin)}</span></div>
+      <div class="row"><span class="k">Version</span><span class="v">${esc(Installation.VERSION)}</span></div>
+      <div class="row"><span class="k">Account</span><span class="v ${signedIn ? "ok" : "warn"}">${authLine}</span></div>
+      ${cwd ? `<div class="row"><span class="k">Directory</span><span class="v">${esc(cwd)}</span></div>` : ""}
+    </div>
+
+    <a class="cta" href="/">Open the workspace <span>&rarr;</span></a>
+
+    ${signedIn ? "" : `<h2>Sign in first</h2>
+    <pre>iris auth login</pre>`}
+
+    <h2>From here</h2>
+    <pre>iris --help          every command
+iris run "&hellip;"       one-shot task
+iris traces          what your agents did</pre>
+
+    <p class="note">The workspace UI is fetched from the network. This page is not &mdash; if
+    the workspace is blank and this is not, you are offline rather than broken.</p>
+  </div>
+</body>
+</html>`
+
+        return c.html(html)
+      })
+
   export const App = lazy(() =>
     app
       .onError((err, c) => {
@@ -243,6 +377,66 @@ export namespace Server {
             },
           })
           return c.json(true)
+        },
+      )
+      .post(
+        "/transcribe",
+        describeRoute({
+          summary: "Transcribe audio on-device",
+          description:
+            "Transcribe an audio file using local whisper.cpp. Audio never leaves the machine: this route " +
+            "always uses the on-device engine and has no cloud path, regardless of IRIS_TRANSCRIPTION_PROVIDER. " +
+            "Available only when the server is bound to loopback.",
+          operationId: "transcribe",
+          responses: {
+            200: {
+              description: "Transcript",
+              content: {
+                "application/json": {
+                  schema: resolver(z.object({ text: z.string(), provider: z.string(), ms: z.number() })),
+                },
+              },
+            },
+          },
+        }),
+        async (c) => {
+          // A microphone endpoint on 0.0.0.0 is a microphone the network can reach.
+          if (!["127.0.0.1", "localhost", "::1"].includes(_boundHostname)) {
+            return c.json(
+              { error: `Refused: /transcribe is loopback-only and this server is bound to ${_boundHostname}.` },
+              403,
+            )
+          }
+
+          const form = await c.req.formData().catch(() => null)
+          const entry = form?.get("audio")
+          // Blob, not File: this tsconfig has no DOM lib, so `File` is not a value here.
+          if (!entry || typeof entry === "string") {
+            return c.json({ error: "audio file is required (multipart field 'audio')" }, 400)
+          }
+          const file = entry as Blob & { name?: string }
+
+          // whisper.cpp has no size limit, but an unbounded body on a local daemon is still a
+          // way to fill someone's disk. 200MB is hours of speech.
+          const MAX_BYTES = 200 * 1024 * 1024
+          if (file.size > MAX_BYTES) return c.json({ error: `audio exceeds ${MAX_BYTES} bytes` }, 413)
+
+          const started = Date.now()
+          // 0700 dir, removed in finally — the recording must not outlive the request that
+          // produced it (epic #182784, B1).
+          const work = secureTempDir("iris-serve-stt-")
+          try {
+            const name = (file.name || "audio.webm").replace(/[^\w.-]/g, "_")
+            const dest = join(work, name)
+            await Bun.write(dest, file)
+            // transcribeLocal, never transcribeAudio: this route has no cloud branch to reach.
+            const text = await transcribeLocal(dest, { language: c.req.query("language") || undefined })
+            return c.json({ text, provider: "whisper-local", ms: Date.now() - started })
+          } catch (err) {
+            return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+          } finally {
+            discardDir(work)
+          }
         },
       )
       .use(async (c, next) => {
@@ -2831,6 +3025,7 @@ export namespace Server {
 
   export function listen(opts: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
     _corsWhitelist = opts.cors ?? []
+    _boundHostname = opts.hostname
 
     const args = {
       hostname: opts.hostname,
