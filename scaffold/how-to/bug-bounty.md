@@ -135,5 +135,9 @@ widening which boards *can* pay did not turn paying on.
 Kept as a worked example of the states above, not as current state. Figures move; re-read
 them with the commands in this doc rather than quoting the numbers below.
 
-Real disbursed **$24** (Rashad, Apple Pay) · Accrued **$0** (the fake $35 was voided) · Stripe **$0** ·
-Owed **~$49** (Rashad $19 + Flo $30). Full audit page: `heyiris.io/p/bounty-audit-581`.
+Real disbursed **$24** (one hunter, Apple Pay) · Accrued **$0** (a mistaken $35 accrual was
+voided) · Stripe **$0** · Owed **~$49** across two hunters.
+
+Individual hunters and the amounts owed to each are deliberately not named here. This page is
+public, and who is owed what is between us and them — read the live figures with the commands
+above, which are scoped to the caller.

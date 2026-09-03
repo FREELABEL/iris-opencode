@@ -15,7 +15,7 @@ Add staff members (employees, contractors, vendors, volunteers), set hourly rate
 ```bash
 # Employee
 iris atlas:staff add \
-  --name="Jordan Rivera" \
+  --name="A. Whitfield" \
   --role="CFO" \
   --email="jordan@example.com" \
   --department="Finance" \

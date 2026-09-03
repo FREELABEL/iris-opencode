@@ -49,7 +49,7 @@ $ iris deals list --json
 ### 2. Check a specific deal
 
 ```bash
-$ iris deals status 15336
+$ iris deals status 10021
 ```
 
 Shows full detail: contract signed/pending, payment received/pending, reminders sent/total, auto-send on/off, and all URLs (proposal, contract, Stripe checkout).
@@ -75,7 +75,7 @@ Aliases: `iris deals gate`, `iris deals invoice`.
 ### 4. Send a reminder
 
 ```bash
-$ iris deals remind 15336
+$ iris deals remind 10021
 ```
 
 Triggers the next pending D+1/D+3/D+7 reminder step immediately. The reminder is marked `automation_status = scheduled` and picked up by the queue worker. A note is logged on the lead timeline.
@@ -118,42 +118,42 @@ Or approve in the web UI: Board → Outreach → Pending tab.
 $ iris deals list
 Active Deals — 3 total | Pipeline: $7,750.00
   ────────────────────────────────────────────────────────────
-  #15336  CatoDrive @ Maxx Shoaib
+  #10021  Northwind Studios @ J. Okafor
        PENDING  $250.00  21d open  reminders: 0/3
-       https://heyiris.io/proposal/3469b42b...
+       https://heyiris.io/proposal/<token>...
 
-  #15400  Tiron Aero @ Jerome Williams
+  #10044  Meridian Aero @ R. Castellanos
        AWAITING PAYMENT  $6,000.00  14d open  reminders: 2/3
-       https://heyiris.io/proposal/a1b2c3d4...
+       https://heyiris.io/proposal/<token>...
 
-  #15422  Cottonwood Creek Brewery
+  #10052  Blue Harbor Brewing
        AWAITING CONTRACT  $1,500.00  3d open  reminders: 0/3
   ────────────────────────────────────────────────────────────
 
-$ iris deals status 15336
-Deal Status — Lead #15336
+$ iris deals status 10021
+Deal Status — Lead #10021
   ────────────────────────────────────────────────────────────
   Status:     PENDING
   Amount:     $250.00
-  Scope:      CatoDrive — Phase 1 Website Launch...
+  Scope:      Northwind Studios — Phase 1 Website Launch...
   Contract:   Pending
   Payment:    Pending
   Reminders:  0/3 sent
   Auto-send:  Yes
 
-  Proposal URL:  https://heyiris.io/proposal/3469b42b...
-  Contract URL:  https://heyiris.io/sign/3ffe4062...
+  Proposal URL:  https://heyiris.io/proposal/<token>...
+  Contract URL:  https://heyiris.io/sign/<token>...
   ────────────────────────────────────────────────────────────
 
-$ iris deals remind 15336
+$ iris deals remind 10021
 ✓ Reminder "Day 1 — Friendly follow-up" scheduled for immediate send
   Step:  Day 1 — Friendly follow-up
-  Lead:  CatoDrive (#15336)
+  Lead:  Northwind Studios (#10021)
 
-$ iris deals recover 15400
+$ iris deals recover 10044
 ✓ Reminder 1: Day 7 — Final notice sent
-Recovery sequence triggered: 1 reminder(s) scheduled for lead #15400
-Track progress: iris deals status 15400
+Recovery sequence triggered: 1 reminder(s) scheduled for lead #10044
+Track progress: iris deals status 10044
 ```
 
 ## Deal status values
