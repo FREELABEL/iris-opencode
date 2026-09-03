@@ -646,6 +646,77 @@ const CommsIngestCommand = cmd({
 
 // ── log (manual entry) ──
 
+const CommsDeleteCommand = cmd({
+  command: "delete <lead>",
+  aliases: ["remove", "purge"],
+  describe: "remove comms from a lead — the undo for a bad ingest",
+  builder: (y) =>
+    y
+      .positional("lead", { type: "string", describe: "lead ID or name", demandOption: true })
+      .option("channel", { type: "string", choices: CHANNELS as unknown as string[], describe: "only this channel" })
+      .option("since", { type: "string", describe: "YYYY-MM-DD (or with time)" })
+      .option("until", { type: "string", describe: "YYYY-MM-DD (or with time)" })
+      .option("id", { type: "array", describe: "specific comm id(s)" })
+      .option("yes", { alias: "y", type: "boolean", default: false, describe: "skip the confirmation" })
+      .example("$0 comms delete 28363 --channel whatsapp --since 2026-06-25 --until 2026-06-27",
+               "remove a mis-attributed WhatsApp thread"),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Delete Comms")
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    if (!args.channel && !args.since && !args.until && !args.id) {
+      prompts.log.error("Narrow it first — --channel, --since/--until, or --id.")
+      prompts.log.info(dim("Deleting every comm on a lead is not something this command will do in one step."))
+      prompts.outro("Done"); return
+    }
+
+    const sp = prompts.spinner(); sp.start("Resolving lead…")
+    const resolved = await resolveLead(String(args.lead))
+    if (!resolved) { sp.stop("Lead not found"); prompts.outro("Done"); return }
+
+    const filters: Record<string, unknown> = { lead_id: resolved.id }
+    if (args.channel) filters.channel = args.channel
+    if (args.since) filters.since = args.since
+    if (args.until) filters.until = args.until
+    if (args.id) filters.ids = args.id
+
+    // Always ask the server what MATCHES before deleting anything. A count is the
+    // only thing that separates "matched nothing" from "deleted nothing".
+    sp.start("Checking what matches…")
+    const dry = await irisFetch("/api/v1/atlas/comms/purge", {
+      method: "POST", body: JSON.stringify(filters),
+    })
+    if (!dry.ok) { await handleApiError(dry, "Purge check"); sp.stop("Failed", 1); prompts.outro("Done"); return }
+    const dryBody = (await dry.json()) as any
+    const matched = Number(dryBody?.data?.matched ?? 0)
+    sp.stop(`${matched} comm(s) match`)
+
+    if (!matched) { prompts.log.info(dim("Nothing to delete — the filter matched no rows.")); prompts.outro("Done"); return }
+
+    printDivider()
+    for (const r of firstArray(dryBody?.data?.sample)) {
+      console.log(`  ${dim(String(r.id))}  ${channelIcon(String(r.channel))} ${String(r.channel)}  ${dim(String(r.sent_at ?? ""))}`)
+    }
+    if (matched > 5) console.log(`  ${dim(`… and ${matched - 5} more`)}`)
+    printDivider()
+
+    if (!args.yes) {
+      const ok = await prompts.confirm({ message: `Delete ${matched} comm(s) from ${resolved.lead?.name ?? `lead #${resolved.id}`}? This cannot be undone.` })
+      if (!ok || prompts.isCancel(ok)) { prompts.outro("Cancelled"); return }
+    }
+
+    sp.start("Deleting…")
+    const res = await irisFetch("/api/v1/atlas/comms/purge", {
+      method: "POST", body: JSON.stringify({ ...filters, confirm: true }),
+    })
+    if (!res.ok) { await handleApiError(res, "Purge"); sp.stop("Failed", 1); prompts.outro("Done"); return }
+    const body = (await res.json()) as any
+    sp.stop(`${success("✓")} deleted ${body?.data?.deleted ?? 0} comm(s)`)
+    prompts.outro(dim(`iris comms list ${resolved.id}`))
+  },
+})
+
 const CommsLogCommand = cmd({
   command: "log <id>",
   aliases: ["add", "record"],
@@ -653,7 +724,12 @@ const CommsLogCommand = cmd({
   builder: (y) =>
     y
       .positional("id", { type: "string", describe: "lead ID or name", demandOption: true })
-      .option("channel", { type: "string", describe: "phone|in_person|sms|other", demandOption: true })
+      .option("channel", {
+          type: "string",
+          choices: CHANNELS as unknown as string[],
+          describe: `channel (${CHANNELS.join("|")})`,
+          demandOption: true,
+        })
       .option("message", { type: "string", aliases: ["m", "body"], describe: "what happened", demandOption: true })
       .option("direction", { type: "string", default: "outbound", describe: "inbound|outbound" })
       .option("subject", { type: "string" })
@@ -870,6 +946,7 @@ export const PlatformAtlasCommsCommand = cmd({
       .command(CommsListCommand)
       .command(CommsIngestCommand)
       .command(CommsLogCommand)
+      .command(CommsDeleteCommand)
       .command(CommsSummaryCommand)
       .command(CommsAttachmentsCommand)
       .demandCommand(1, "specify a subcommand: list, ingest, attachments, log, summary"),
