@@ -14,6 +14,7 @@ import {
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs"
 import { join } from "path"
 import { homedir, tmpdir } from "os"
+import { createHash } from "crypto"
 import {
   listRabbitMeetings,
   getRabbitMeeting,
@@ -152,6 +153,25 @@ function renderSession(session: Session, speakerNames: Record<string, string>): 
  * It goes in the item CONTENT: titles get edited by people, ids do not.
  */
 const ingestMarker = (session: Session) => `<!-- iris-meeting: ${session.source}/${session.id} -->`
+
+/**
+ * A CONTENT fingerprint, because the id alone is not enough (#183460).
+ *
+ * rabbit RE-SENDS a recording as a NEW email with a NEW message id, so the id marker above
+ * says "never seen this" about a meeting already sitting on the board. That filed
+ * 'Trial Licensing and Agent Sandbox Architecture' twice on bloq 639.
+ *
+ * mtime is deliberately excluded — it is the mail's arrival time, the one thing that DOES
+ * change on a re-send. Everything here comes from the recording itself, so the same meeting
+ * fingerprints the same however many times it is mailed.
+ */
+export const contentFingerprint = (session: Session) =>
+  createHash("sha1")
+    .update([session.title ?? "", session.segments, session.duration, session.preview].join("\u0000"))
+    .digest("hex")
+    .slice(0, 16)
+
+const fingerprintMarker = (session: Session) => `<!-- iris-meeting-fp: ${contentFingerprint(session)} -->`
 
 /**
  * WHERE A MEETING LANDS.
@@ -313,17 +333,20 @@ function defaultTitle(session: Session, stamp: string): string {
 }
 
 /** Existing markers on the target bloq, so an ingest can tell new from already-filed. */
-async function filedMarkers(userId: number, bloqId: number): Promise<Set<string>> {
+async function filedMarkers(userId: number, bloqId: number): Promise<{ ids: Set<string>; fingerprints: Set<string> }> {
   const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/items?per_page=500&fields=id,title,content`)
-  if (!res.ok) return new Set()
+  if (!res.ok) return { ids: new Set(), fingerprints: new Set() }
   const j = (await res.json()) as any
   const raw = j?.data
   const items: any[] = Array.isArray(raw) ? raw : (raw?.items ?? [])
-  const out = new Set<string>()
+  const ids = new Set<string>()
+  const fingerprints = new Set<string>()
   for (const it of items) {
-    for (const m of String(it?.content ?? "").matchAll(/<!--\s*iris-meeting:\s*([^\s>]+)\s*-->/g)) out.add(m[1])
+    const content = String(it?.content ?? "")
+    for (const m of content.matchAll(/<!--\s*iris-meeting:\s*([^\s>]+)\s*-->/g)) ids.add(m[1])
+    for (const m of content.matchAll(/<!--\s*iris-meeting-fp:\s*([^\s>]+)\s*-->/g)) fingerprints.add(m[1])
   }
-  return out
+  return { ids, fingerprints }
 }
 
 /**
@@ -390,7 +413,10 @@ async function runIngest(args: any) {
   // it is absent. So a dry run has to finish before that, or "show me what would happen"
   // leaves a new list behind — which is exactly the thing a dry run promises not to do.
   const already = await filedMarkers(userId, Number(bloqId))
-  const pending = sessions.filter((s) => !already.has(`${s.source}/${s.id}`))
+  // Either signal is enough: the id catches a re-run, the fingerprint catches a re-send.
+  const pending = sessions.filter(
+    (s) => !already.ids.has(`${s.source}/${s.id}`) && !already.fingerprints.has(contentFingerprint(s)),
+  )
   const dryRun = Boolean(args["dry-run"] ?? args.dryRun)
 
   printDivider()
@@ -432,7 +458,7 @@ async function runIngest(args: any) {
         method: "POST",
         body: JSON.stringify({
           title: defaultTitle(s, stamp),
-          content: `${body}\n\n${ingestMarker(s)}`,
+          content: `${body}\n\n${ingestMarker(s)}\n${fingerprintMarker(s)}`,
         }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -607,7 +633,7 @@ export const PlatformMeetingsCommand = cmd({
 
     const stamp = session.mtime.toISOString().slice(0, 10)
     const title = String(args.title ?? defaultTitle(session, stamp))
-    body = `${body}\n\n${ingestMarker(session)}`
+    body = `${body}\n\n${ingestMarker(session)}\n${fingerprintMarker(session)}`
 
     // ── file it on the bloq ──────────────────────────────────────────────────
     if (bloqId) {
