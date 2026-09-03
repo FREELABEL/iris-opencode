@@ -28,7 +28,7 @@
  *    by name (--speaker Arthur=Arturo) as well as by diarisation id.
  */
 
-import { readBody, searchBySender, availability, type MailMessage } from "../lib/apple-mail"
+import { readBody, searchBySender, availability, stalenessNote, type MailMessage } from "../lib/apple-mail"
 
 export const RABBIT_SENDER = "rabbit@r1.rabbit.tech"
 
@@ -122,7 +122,7 @@ function toMeeting(msg: MailMessage): RabbitMeeting | null {
   }
 }
 
-export type RabbitListResult = { meetings: RabbitMeeting[]; unavailable?: string }
+export type RabbitListResult = { meetings: RabbitMeeting[]; unavailable?: string; staleness?: string }
 
 /**
  * Recent rabbit meetings, newest first.
@@ -159,7 +159,7 @@ export function listRabbitMeetings(opts: { days?: number; limit?: number } = {})
     out.push(meeting)
     if (out.length >= (opts.limit ?? 15)) break
   }
-  return { meetings: out }
+  return { meetings: out, staleness: stalenessNote() ?? undefined }
 }
 
 /** One meeting by session id (`r380098`) or bare ROWID. */

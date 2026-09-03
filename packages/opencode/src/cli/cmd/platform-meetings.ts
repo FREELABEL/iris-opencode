@@ -134,6 +134,9 @@ function listSessions(
   if (want === "all" || want === "rabbit") {
     const r = listRabbitMeetings({ limit, days: opts.days ?? 30 })
     if (r.unavailable) warnings.push(`rabbit: ${r.unavailable}`)
+    // Not an error — the read worked. It says the CACHE may be behind, so that "no new
+    // meetings" is never mistaken for a fact about the recordings (#183477).
+    if (r.staleness) warnings.push(r.staleness)
     out.push(...r.meetings.map(rabbitToSession))
   }
 
@@ -147,6 +150,18 @@ function renderSession(session: Session, speakerNames: Record<string, string>): 
     ? renderRabbitTranscript(session.rabbit, speakerNames)
     : renderTranscript(session.id, speakerNames)
 }
+
+/**
+ * Display timestamps in LOCAL time (#183472).
+ *
+ * These were rendered with toISOString(), so a meeting recorded at 20:03 printed as
+ * "2026-09-02 01:03" — a different DAY. Tonight's recordings appeared dated tomorrow.
+ * Only display changes: the ingest marker and any comparison stay on the stable value.
+ */
+const localStamp = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+
+const localWhen = (d: Date) => `${localStamp(d)} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
 
 /**
  * A stable marker so re-running an ingest does not file the same meeting twice.
@@ -453,7 +468,7 @@ async function runIngest(args: any) {
     spin.start(`${s.title ?? s.id.slice(0, 10)}…`)
     try {
       const { body, segments } = await composeBody(s, args, userId)
-      const stamp = s.mtime.toISOString().slice(0, 10)
+      const stamp = localStamp(s.mtime)
       const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}/lists/${listId}/items`, {
         method: "POST",
         body: JSON.stringify({
@@ -542,7 +557,7 @@ export const PlatformMeetingsCommand = cmd({
       for (const s of sessions) {
         const tag = s.source === "rabbit" ? "rabbit" : "wispr "
         console.log(
-          `  ${dim(tag)} ${bold(s.id.slice(0, 10).padEnd(10))} ${dim(s.mtime.toISOString().slice(0, 16).replace("T", " "))}  ` +
+          `  ${dim(tag)} ${bold(s.id.slice(0, 10).padEnd(10))} ${dim(localWhen(s.mtime))}  ` +
             `${dim(`${s.duration} · ${s.segments} segs`)}`,
         )
         console.log(`    ${s.title ? s.title + " " : ""}${dim(s.preview)}`)
@@ -600,7 +615,7 @@ export const PlatformMeetingsCommand = cmd({
     printKV("Session", session.id)
     printKV("Source", session.source === "rabbit" ? "rabbit R1 (mailed note)" : "Wispr Flow (system audio)")
     if (session.title) printKV("Title", session.title)
-    printKV("Recorded", session.mtime.toISOString().slice(0, 16).replace("T", " "))
+    printKV("Recorded", localWhen(session.mtime))
     printKV("Segments", `${segments} · ${session.duration}`)
     printDivider()
 
@@ -631,7 +646,7 @@ export const PlatformMeetingsCommand = cmd({
       }
     }
 
-    const stamp = session.mtime.toISOString().slice(0, 10)
+    const stamp = localStamp(session.mtime)
     const title = String(args.title ?? defaultTitle(session, stamp))
     body = `${body}\n\n${ingestMarker(session)}\n${fingerprintMarker(session)}`
 

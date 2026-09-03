@@ -69,7 +69,27 @@ echo "→ typecheck"
 
 # ── Work out the next version ───────────────────────────────────────────────────────────────
 
-CURRENT=$(grep -m1 '"version"' "$PKG" | sed 's/.*"version": "\([^"]*\)".*/\1/')
+# The RELEASE LINE is the tags, not package.json (#183470).
+#
+# This used to read package.json alone. That file had drifted to 1.3.233 while the tags were
+# already at v1.3.235, so the "next" patch was v1.3.234 — long taken — and the collision only
+# surfaced at push time, after the bump commit had been pushed. A local tag check is not enough
+# either: a fresh worktree has no tags until it fetches them, so the check passes and lies.
+#
+# Fetch tags, take the highest EXISTING release tag, and refuse if package.json is behind it —
+# a drifted package.json is itself worth knowing about rather than silently routing around.
+git fetch -q --tags origin || true
+
+PKG_VERSION=$(grep -m1 '"version"' "$PKG" | sed 's/.*"version": "\([^"]*\)".*/\1/')
+# Only the CLI line: 'v1.2.3'. Excludes desktop-v* and vscode-v*, which also start with v.
+LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+CURRENT="${LATEST_TAG:-$PKG_VERSION}"
+
+if [ -n "$LATEST_TAG" ] && [ "$PKG_VERSION" != "$LATEST_TAG" ]; then
+  echo "note: package.json says ${PKG_VERSION}, latest release tag is v${LATEST_TAG}."
+  echo "      Versioning from the TAG. package.json will be set to the new version."
+fi
+
 IFS=. read -r MA MI PA <<< "$CURRENT"
 case "$BUMP_TYPE" in
   major) NEXT="$((MA + 1)).0.0" ;;

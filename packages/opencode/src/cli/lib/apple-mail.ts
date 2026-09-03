@@ -76,6 +76,54 @@ export function availability(): Availability {
   return { ok: true }
 }
 
+/**
+ * How fresh the local mail index is (#183477).
+ *
+ * The index is a CACHE. Mail.app fills it, and when Mail is quit new messages sit on the
+ * server and never appear here — so a reader gets fewer results with no indication that
+ * anything is missing. That is indistinguishable from a genuinely quiet week, and it is
+ * the difference between "you have no new meetings" and "I cannot see your new meetings".
+ *
+ * Observed: 5 meetings listed while 8 sat unsynced, Mail having been quit for seven hours
+ * after receiving 3-11 messages an hour all morning.
+ */
+export function syncStatus(): { newest: Date | null; staleHours: number | null; mailRunning: boolean } {
+  let mailRunning = false
+  try {
+    execFileSync("/usr/bin/pgrep", ["-x", "Mail"], { stdio: ["ignore", "pipe", "ignore"] })
+    mailRunning = true
+  } catch {
+    mailRunning = false
+  }
+
+  try {
+    const rows = query("SELECT MAX(date_received) AS newest FROM messages;")
+    const raw = rows?.[0]?.newest
+    if (!raw) return { newest: null, staleHours: null, mailRunning }
+    const newest = new Date(Number(raw) * 1000)
+    return { newest, staleHours: (Date.now() - newest.getTime()) / 3_600_000, mailRunning }
+  } catch {
+    return { newest: null, staleHours: null, mailRunning }
+  }
+}
+
+/**
+ * One sentence when the index may be behind, or null when there is nothing to say.
+ * Deliberately does NOT claim meetings are missing — only that we cannot rule it out.
+ */
+export function stalenessNote(thresholdHours = 3): string | null {
+  const { staleHours, mailRunning } = syncStatus()
+  if (staleHours === null) return null
+  const h = staleHours < 1 ? `${Math.round(staleHours * 60)}m` : `${staleHours.toFixed(1)}h`
+  if (!mailRunning && staleHours >= 0.5) {
+    return `Mail.app is not running and the local index is ${h} old — newer messages may not be here yet.`
+  }
+  if (staleHours >= thresholdHours) {
+    return `Mail last synced ${h} ago — newer messages may not be here yet.`
+  }
+  return null
+}
+
 function query(sql: string): any[] {
   const db = indexPath()
   if (!db) throw new Error("No Apple Mail index on this Mac")
