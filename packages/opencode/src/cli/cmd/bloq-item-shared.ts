@@ -424,7 +424,22 @@ export async function executePublish(args: PublishArgs): Promise<void> {
   if (!userId) { if (!json) prompts.outro("Done"); return }
 
   if (!existsSync(args.file)) {
-    const msg = `File not found: ${args.file}`
+    // `publish` takes a FILE and creates a new item. `make-public` takes an
+    // EXISTING item id and gives it a URL. Asked to "publish this as a public
+    // URL", an agent reaches for `publish`, passes the item id, and gets
+    // "File not found: 180288" — which names neither the confusion nor the
+    // command that does what was asked. It then improvises: copy the content to
+    // a temp file, publish into another board, strip the classification. That is
+    // how a PHI-classified SOP ended up world-readable (#183518).
+    const looksLikeAnItemId = /^\d{3,}$/.test(String(args.file ?? ""))
+    const msg = looksLikeAnItemId
+      ? `"${args.file}" is not a file — it looks like an ITEM ID.\n` +
+        `  To give an existing item a shareable URL:\n` +
+        `    iris bloqs make-public ${args.file}\n` +
+        `  A PHI-classified item refuses an open link — share it to named people instead:\n` +
+        `    iris bloqs make-public ${args.file} --allowed-emails someone@example.com\n` +
+        `  publish is for turning a local markdown FILE into a new item.`
+      : `File not found: ${args.file}`
     if (json) console.log(JSON.stringify({ success: false, error: msg }))
     else { prompts.log.error(msg); prompts.outro("Done") }
     process.exitCode = 2
@@ -810,7 +825,22 @@ export async function executeUnpublish(args: UnpublishArgs): Promise<void> {
   if (!userId) { if (!json) prompts.outro("Done"); return }
 
   if (!existsSync(args.file)) {
-    const msg = `File not found: ${args.file}`
+    // `publish` takes a FILE and creates a new item. `make-public` takes an
+    // EXISTING item id and gives it a URL. Asked to "publish this as a public
+    // URL", an agent reaches for `publish`, passes the item id, and gets
+    // "File not found: 180288" — which names neither the confusion nor the
+    // command that does what was asked. It then improvises: copy the content to
+    // a temp file, publish into another board, strip the classification. That is
+    // how a PHI-classified SOP ended up world-readable (#183518).
+    const looksLikeAnItemId = /^\d{3,}$/.test(String(args.file ?? ""))
+    const msg = looksLikeAnItemId
+      ? `"${args.file}" is not a file — it looks like an ITEM ID.\n` +
+        `  To give an existing item a shareable URL:\n` +
+        `    iris bloqs make-public ${args.file}\n` +
+        `  A PHI-classified item refuses an open link — share it to named people instead:\n` +
+        `    iris bloqs make-public ${args.file} --allowed-emails someone@example.com\n` +
+        `  publish is for turning a local markdown FILE into a new item.`
+      : `File not found: ${args.file}`
     if (json) console.log(JSON.stringify({ success: false, error: msg }))
     else { prompts.log.error(msg); prompts.outro("Done") }
     process.exitCode = 2
