@@ -17,6 +17,7 @@ import { AtlasFilesCommandExport } from "./platform-atlas-files"
 import path from "path"
 import { firstArray } from "../../util/array"
 import { openBrowser } from "../../util/browser"
+import { AtlasDocCommand } from "./platform-atlas-item"
 
 // ============================================================================
 // Display helpers
@@ -4071,6 +4072,7 @@ export const PlatformBloqsCommand = productCommand({
       .command(BloqsContributorsCommand)
       .command(BloqsItemsCommand)
       .command(BloqsPublishPagesCommand)
+      .command(AtlasDocCommand)
       .command(BloqsRelateCommand)
       .command(BloqsUnrelateCommand)
       .command(BloqsRelationsCommand)

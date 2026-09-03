@@ -101,17 +101,40 @@ const AtlasItemUnshareCommand = cmd({
   },
 })
 
+/** The subcommand set, mounted identically wherever this group appears. */
+const mountItemVerbs = (y: any) =>
+  y
+    .command(AtlasItemPublishCommand)
+    .command(AtlasItemUnpublishCommand)
+    .command(AtlasItemListCommand)
+    .command(AtlasItemShareCommand)
+    .command(AtlasItemUnshareCommand)
+    .demandCommand()
+
 export const PlatformAtlasItemCommand = cmd({
   command: "atlas:item",
   aliases: ["atlas-item"],
   describe: "publish & share Atlas items (markdown → public URL)",
-  builder: (y) =>
-    y
-      .command(AtlasItemPublishCommand)
-      .command(AtlasItemUnpublishCommand)
-      .command(AtlasItemListCommand)
-      .command(AtlasItemShareCommand)
-      .command(AtlasItemUnshareCommand)
-      .demandCommand(),
+  builder: mountItemVerbs,
+  async handler() {},
+})
+
+/**
+ * `iris atlas doc publish <id>` / `iris atlas note publish <id>`.
+ *
+ * People reach for the word for the THING — a doc, a note — not for the word the schema uses.
+ * Both were being typed and both failed, and a command that does not exist fails the same way
+ * as one that is broken.
+ *
+ * Deliberately an ALIAS, not a second implementation: it mounts the exact command objects
+ * `atlas:item` mounts, so `doc publish` and `atlas:item publish` cannot drift into meaning
+ * different things. Two commands that are supposed to be the same are only the same until
+ * someone edits one of them.
+ */
+export const AtlasDocCommand = cmd({
+  command: "doc",
+  aliases: ["note", "document", "docs", "notes"],
+  describe: "alias for atlas:item — publish & share a doc/note (e.g. iris atlas doc publish 180288)",
+  builder: mountItemVerbs,
   async handler() {},
 })
