@@ -27,6 +27,22 @@ export interface StepDef {
   mode: "shell" | "prompt" | "ai" | "hive" | "hive-script" | "skill" | "playbook" | "human" | "agent" | "manual" | "cloud-workflow" | "cloud-agentic" | "n8n" | "langgraph" | "schedule"
   body: string
   code: string | null
+  /**
+   * The step section EXACTLY as written, minus only its ```yaml header — prose and every
+   * fenced block, in the order the author put them (#183406, defect 6).
+   *
+   * `body` strips ALL fences and `code` keeps only the FIRST one, so a step containing more
+   * than one fenced block silently lost every block after the first: nothing warned, nothing
+   * validated, and the rendered instruction read as complete. A draft of iris-hive-start lost
+   * three of its four discovery commands and two of its three install commands that way, and
+   * the workaround that spread across eleven playbooks — bulleted inline-code instead of a
+   * fence — was people routing around this field not existing.
+   *
+   * Optional so anything that builds a StepDef by hand (tests, the MCP layer) keeps compiling.
+   * Nothing reads it except the human/manual renderers; `body` and `code` are untouched, so
+   * shell, ai and every other mode behave exactly as before.
+   */
+  instructions?: string
   confirm: boolean
   depends: string | null
   retry: number
@@ -267,12 +283,17 @@ export function parseSteps(markdownBody: string): StepDef[] {
       .replace(fencePattern, "")
       .trim()
 
+    // Everything the author wrote for this step except the ```yaml header — fences intact,
+    // in order. See StepDef.instructions.
+    const instructions = sectionWithoutYaml.trim()
+
     steps.push({
       id,
       title,
       mode: meta.mode ?? "manual",
       body,
       code,
+      instructions,
       confirm: meta.confirm === true,
       depends: meta.depends ?? null,
       retry: meta.retry ?? 0,
@@ -450,6 +471,16 @@ export interface InterpolateOptions {
   shellSafe?: boolean
   /** Absolute path to the playbook container, enabling ${{playbook.*}}. */
   root?: string
+  /**
+   * Called for every `${{args.NAME}}` that renders as nothing (#183406, defect 3).
+   *
+   * An unset optional arg interpolates to the empty string with no signal at all, so
+   * `iris hive enroll ${{args.target}}` renders `iris hive enroll ` — a syntactically valid
+   * command that does the wrong thing, or nothing, and reports success either way. The
+   * substitution itself is UNCHANGED (94 playbooks depend on the empty-string render); this
+   * only lets a caller SAY that it happened.
+   */
+  onMissing?: (argName: string) => void
 }
 
 export function interpolate(
@@ -466,7 +497,11 @@ export function interpolate(
   const out = template.replace(/\$\{\{(\s*[\w.\-]+\s*)\}\}/g, (_match, expr: string) => {
     const path = expr.trim().split(".")
     if (path[0] === "args" && path.length === 2) {
-      return escape(String(args[path[1]] ?? ""))
+      const raw = args[path[1]]
+      // Renders as nothing — undeclared, unset, or explicitly blank. All three produce the
+      // same broken command, so all three are reported. The RETURN VALUE is unchanged.
+      if (raw === undefined || raw === null || raw === "") opts.onMissing?.(path[1])
+      return escape(String(raw ?? ""))
     }
     if (path[0] === "steps" && path.length === 3) {
       const stepId = path[1]
@@ -625,15 +660,36 @@ export function splitPlaybookArgv(
   const flagArgs: Record<string, unknown> = {}
   const positional: string[] = []
   const declared = new Set(Object.keys(declaredArgs ?? {}))
+  const typeOf = (name: string) => (declaredArgs as Record<string, any> | undefined)?.[name]?.type
 
-  for (const a of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
     if (a.startsWith("--")) {
       const eqIdx = a.indexOf("=")
       if (eqIdx > 2) {
         flagArgs[a.slice(2, eqIdx)] = a.slice(eqIdx + 1)
-      } else {
-        flagArgs[a.slice(2)] = true
+        continue
       }
+
+      // `--name value` — the SPACE form (#183406, defect 4).
+      //
+      // Only `--name=value` bound, so every playbook that documented `--node dev-mini` in its
+      // own prose documented something that could not work. Guarded three ways so nothing that
+      // parses today parses differently:
+      //   · the name must be DECLARED — an unknown `--flag` stays the bare boolean it was,
+      //     and the caller reports it (see unknownPlaybookFlags);
+      //   · a declared BOOLEAN arg never eats the next token, so `--force somevalue` still
+      //     leaves `somevalue` a positional;
+      //   · the next token must exist and not itself be a flag.
+      const name = a.slice(2)
+      const next = argv[i + 1]
+      if (declared.has(name) && typeOf(name) !== "boolean" && next !== undefined && !next.startsWith("--")) {
+        flagArgs[name] = next
+        i++
+        continue
+      }
+
+      flagArgs[name] = true
       continue
     }
 
@@ -649,6 +705,32 @@ export function splitPlaybookArgv(
   return { flagArgs, positional }
 }
 
+/**
+ * Flag names a playbook does not declare (#183406, defect 4).
+ *
+ * `playbook run` has to stop pre-validating options at the yargs layer to let `--<argname>`
+ * through at all — yargs is built before the playbook is read, so it cannot know that `--node`
+ * is legitimate for iris-hive and nonsense for meal-plan-week. That check moves HERE instead of
+ * disappearing: without it a typo (`--nodee dev-mini`) would be swallowed as a boolean and its
+ * value bound to whichever positional arg came first, which is exactly the silent-success shape
+ * this whole bug is about. The caller turns a non-empty result into the same "Unknown argument"
+ * failure yargs used to produce.
+ */
+export function unknownPlaybookFlags(
+  flagArgs: Record<string, unknown>,
+  declaredArgs: Record<string, unknown> | undefined,
+): string[] {
+  const declared = new Set(Object.keys(declaredArgs ?? {}))
+  return Object.keys(flagArgs).filter((k) => !declared.has(k))
+}
+
+/**
+ * PRECEDENCE: a named value always beats a positional one. `--topic X`, `--topic=X` and
+ * `topic=X` are the same thing and all three win over whatever positional would otherwise
+ * have landed in `topic`; the displaced positional then falls to the NEXT undeclared-by-name
+ * slot, in schema order. Stated because defect 4 (#183406) made the flag form usable and
+ * "what happens if I give both" became a question anyone could ask.
+ */
 export function resolveArgs(
   schema: Record<string, ArgDef>,
   positionalArgs: string[],
@@ -1416,6 +1498,13 @@ export interface ExecuteOptions {
   onStepEnd?: (step: StepDef, result: StepResult) => void
   onManualPrompt?: (step: StepDef) => Promise<boolean>
   /**
+   * Something rendered wrong but did not fail (#183406, defect 3).
+   *
+   * Currently fires once per step per `${{args.NAME}}` that resolved to nothing. The step
+   * still runs with the empty substitution — this reports it, it does not change it.
+   */
+  onWarn?: (warning: { stepId: string; message: string }) => void
+  /**
    * Resume a specific paused run by id, reusing its run_id and completed steps.
    * Takes precedence over `resume` (which only finds the latest run by skill name).
    */
@@ -1502,6 +1591,10 @@ export async function executeSkill(
     }
   }
 
+  // What is actually in this invocation. With --step, everything else is absent rather than
+  // failed, and the two need different words (#183406, defect 5).
+  const inThisRun = new Set(stepsToRun.map((s) => s.id))
+
   let finalStatus: "completed" | "failed" | "interrupted" | "paused" = "completed"
   let pausedOn: SkillResult["paused_on"] | undefined
 
@@ -1516,10 +1609,21 @@ export async function executeSkill(
     if (step.depends) {
       const depResult = stepResults[step.depends]
       if (!depResult || depResult.status !== "success") {
+        // Say WHY, not just "not met" (#183406, defect 5). `iris playbook run X --step issue`
+        // printed "✓ completed / 0 passed, 1 skipped" and exited 0 having run nothing, because
+        // `issue` depends on a step that --step had excluded. "Dependency not met" reads as a
+        // fact about the playbook; the actual fact is about this invocation.
+        const reason = !depResult
+          ? inThisRun.has(step.depends)
+            ? `dependency "${step.depends}" has not run yet in this invocation`
+            : `dependency "${step.depends}" is not part of this invocation` +
+              (opts.stepFilter ? ` — --step ${opts.stepFilter} runs that step alone` : "")
+          : `dependency "${step.depends}" ${depResult.status}`
         stepResults[step.id] = {
-          id: step.id, status: "skipped", output: `Dependency "${step.depends}" not met`,
+          id: step.id, status: "skipped", output: `SKIPPED — ${reason}. Nothing ran for this step.`,
           exit_code: null, duration_ms: 0, attempts: 0,
         }
+        opts.onWarn?.({ stepId: step.id, message: `SKIPPED — ${reason}. Nothing ran for this step.` })
         opts.onStepEnd?.(step, stepResults[step.id])
         continue
       }
@@ -1545,14 +1649,25 @@ export async function executeSkill(
     const isShell = step.mode === "shell"
     let interpolatedCode: string | null
     let interpolatedBody: string
+    let interpolatedInstructions: string | null = null
+    // Every arg reference in this step that rendered as nothing. A Set, so a name used five
+    // times is reported once — a warning repeated per occurrence is a warning people learn
+    // to scroll past.
+    const emptyRefs = new Set<string>()
+    const onMissing = (name: string) => emptyRefs.add(name)
     // The step with its HEADER fields resolved. `step` itself is const and reused across
     // retries, so the interpolated form is a copy bound here and used from this point on.
     let stepH: StepDef = step
     try {
       interpolatedCode = step.code
-        ? interpolate(step.code, rawArgs, stepResults, { shellSafe: isShell, root })
+        ? interpolate(step.code, rawArgs, stepResults, { shellSafe: isShell, root, onMissing })
         : null
-      interpolatedBody = interpolate(step.body, rawArgs, stepResults, { root })
+      interpolatedBody = interpolate(step.body, rawArgs, stepResults, { root, onMissing })
+      // The verbatim section (fences intact) for human/manual rendering. Interpolated the
+      // same way the body is, so a person is shown resolved values rather than `${{...}}`.
+      interpolatedInstructions = step.instructions
+        ? interpolate(step.instructions, rawArgs, stepResults, { root })
+        : null
       // The HEADER too (#182415). Only the body and code were interpolated, so
       // `node: ${{args.target}}` reached the node resolver as that literal string and every
       // hive playbook was pinned to one machine at authoring time. The same `${{}}` syntax
@@ -1573,6 +1688,23 @@ export async function executeSkill(
       if (plan.onError === "continue") continue
       finalStatus = "failed"
       break
+    }
+
+    // #183406 defect 3 — an unset optional arg renders as nothing and nothing says so.
+    // Reported AFTER interpolation succeeded and BEFORE the step runs, so the warning
+    // arrives while the command it describes is still about to happen.
+    if (emptyRefs.size > 0 && opts.onWarn) {
+      for (const name of emptyRefs) {
+        const declaredHere = Object.prototype.hasOwnProperty.call(plan.args ?? {}, name)
+        opts.onWarn({
+          stepId: step.id,
+          message: declaredHere
+            ? `\${{args.${name}}} rendered as EMPTY — "${name}" is optional and was not given. ` +
+              `The step still runs, with a blank where that value should be.`
+            : `\${{args.${name}}} rendered as EMPTY — "${name}" is not declared in this playbook's args ` +
+              `(declared: ${Object.keys(plan.args ?? {}).join(", ") || "none"}). Likely a typo; it can never resolve.`,
+        })
+      }
     }
 
     // Confirmation gate
@@ -1601,7 +1733,13 @@ export async function executeSkill(
     // scheduled job) cannot be answered now. Persist a resumable pause instead of
     // silently reporting success for work nobody did.
     if ((step.mode === "human" || step.mode === "manual") && !opts.onManualPrompt && !opts.dryRun) {
-      const instructions = [interpolatedBody, interpolatedCode].filter(Boolean).join("\n\n").trim()
+      // Prefer the verbatim section: `body` has had every fence cut out of it and `code` holds
+      // only the first, so composing the two dropped every fenced block after the first and
+      // reordered the rest (#183406, defect 6). Falls back to the old composition for a step
+      // parsed before `instructions` existed, or built by hand.
+      const instructions =
+        interpolatedInstructions?.trim() ||
+        [interpolatedBody, interpolatedCode].filter(Boolean).join("\n\n").trim()
       const sr: StepResult = {
         id: step.id,
         status: "paused",
@@ -1779,9 +1917,12 @@ export async function executeSkill(
         case "agent":
         case "manual":
         default: {
-          // Print instructions, wait for user to confirm done
+          // Print instructions, wait for user to confirm done.
+          // Hand the renderer the INTERPOLATED verbatim section (fences and order intact) —
+          // same content the unattended pause path persists, so an attended run and an
+          // unattended one now show a person the same thing (#183406, defect 6).
           if (opts.onManualPrompt) {
-            const done = await opts.onManualPrompt(step)
+            const done = await opts.onManualPrompt({ ...stepH, instructions: interpolatedInstructions ?? step.instructions })
             lastResult = { output: done ? "User confirmed done" : "User skipped", exit_code: done ? 0 : 1 }
           } else {
             lastResult = { output: interpolatedBody, exit_code: 0 }
@@ -1927,6 +2068,41 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
           level: "error",
           message: `[${step.id}] ${field}: uses \${...} — playbook interpolation is \${{...}} (double braces). As written it reaches the resolver as literal text.`,
         })
+      }
+    }
+  }
+
+  // UNDECLARED ARG REFERENCES (#183406, defect 3).
+  //
+  // `${{args.tagret}}` is well-formed interpolation for an argument that does not exist, so it
+  // resolves to the empty string forever, on every run, for every caller. It cannot be fixed by
+  // passing the argument — there is no argument to pass. That is a static fact about the file,
+  // which is why it belongs in `test` rather than only in a runtime warning.
+  //
+  // A warning, not an error: it does not stop the playbook, and turning it into an error would
+  // fail `iris playbook test` for any of the 94 existing playbooks that carries one.
+  {
+    const declared = new Set(Object.keys(plan.args ?? {}))
+    const seen = new Set<string>()
+    const REF = /\$\{\{\s*args\.([\w-]+)\s*\}\}/g
+    for (const step of plan.steps) {
+      for (const text of [step.code, step.body, step.instructions]) {
+        if (typeof text !== "string") continue
+        for (const m of text.matchAll(REF)) {
+          const name = m[1]
+          if (declared.has(name)) continue
+          const key = `${step.id}:${name}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          issues.push({
+            level: "warning",
+            stepId: step.id,
+            message:
+              `\${{args.${name}}} references an argument this playbook does not declare ` +
+              `(declared: ${[...declared].join(", ") || "none"}) — it renders as an empty string on every run, ` +
+              `and no argument you can pass will fill it.`,
+          })
+        }
       }
     }
   }

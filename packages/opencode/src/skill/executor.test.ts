@@ -2251,7 +2251,12 @@ describe("human-in-the-loop pause/resume", () => {
       expect(resumed.steps["approve"].status).toBe("skipped")
       // Nothing may run on top of a human step that was never actually done.
       expect(resumed.steps["after"].status).toBe("skipped")
-      expect(resumed.steps["after"].output).toContain("not met")
+      // #183406 defect 5 — the message names the dependency AND what became of it. It used to
+      // read "Dependency "approve" not met", which sounds like a fact about the playbook when
+      // it is a fact about this invocation.
+      expect(resumed.steps["after"].output).toContain("SKIPPED")
+      expect(resumed.steps["after"].output).toContain("approve")
+      expect(resumed.steps["after"].output).toContain("Nothing ran for this step")
     } finally {
       cleanupRun(paused.run_id)
     }
