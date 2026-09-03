@@ -81,8 +81,12 @@ echo "→ typecheck"
 git fetch -q --tags origin || true
 
 PKG_VERSION=$(grep -m1 '"version"' "$PKG" | sed 's/.*"version": "\([^"]*\)".*/\1/')
-# Only the CLI line: 'v1.2.3'. Excludes desktop-v* and vscode-v*, which also start with v.
-LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+# MOST RECENTLY TAGGED, not highest-numbered. This repo is a fork, and it carries old
+# upstream tags — v1.18.23 and v1.4.x — that sort ABOVE the live IRIS line of 1.3.x. Picking
+# the highest number proposed v1.18.24 and would have jumped the CLI eleven minor versions.
+# The release line is whatever was cut last, which is a date question, not a number one.
+# Excludes desktop-v* and vscode-v*, which also begin with 'v'.
+LATEST_TAG=$(git for-each-ref --sort=-creatordate --format='%(refname:short)' 'refs/tags/v[0-9]*.[0-9]*.[0-9]*' | head -1 | sed 's/^v//')
 CURRENT="${LATEST_TAG:-$PKG_VERSION}"
 
 if [ -n "$LATEST_TAG" ] && [ "$PKG_VERSION" != "$LATEST_TAG" ]; then
