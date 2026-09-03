@@ -1433,6 +1433,11 @@
 },
 {
 "method": "POST",
+"uri": "/api/v1/atlas/comms/purge",
+"service": "fl-api"
+},
+{
+"method": "POST",
 "uri": "/api/v1/atlas/comms/send",
 "service": "fl-api"
 },
@@ -2944,6 +2949,16 @@
 {
 "method": "PUT",
 "uri": "/api/v1/bloqs/{}/settings",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/bloqs/{}/share-defaults",
+"service": "fl-api"
+},
+{
+"method": "PATCH",
+"uri": "/api/v1/bloqs/{}/share-defaults",
 "service": "fl-api"
 },
 {
@@ -4864,6 +4879,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/genesis/components/{}/versions",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/genesis/events",
 "service": "iris-api"
 },
 {
@@ -9179,6 +9199,11 @@
 {
 "method": "PUT",
 "uri": "/api/v1/radio/{}",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/reachr/steps/{}/send",
 "service": "fl-api"
 },
 {
