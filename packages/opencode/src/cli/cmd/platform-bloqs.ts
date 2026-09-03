@@ -1397,8 +1397,11 @@ const BloqsGetItemCommand = cmd({
     yargs
       .positional("item-id", { describe: "item ID to read", type: "number", demandOption: true })
       .option("content-only", { describe: "print just the content, for piping", type: "boolean", default: false })
-      .option("json", { describe: "JSON output", type: "boolean", default: false })
-      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  // No --user-id here on purpose. Every sibling in this file that registers it feeds it to
+  // requireUserId; this endpoint is scoped by the TOKEN and has nowhere to put a user id, so
+  // the flag was accepted and silently ignored — a caller passing it got their OWN item back
+  // with no hint the flag did nothing. Caught by the argv-mapping ratchet.
   async handler(args) {
     await requireAuth()
 
