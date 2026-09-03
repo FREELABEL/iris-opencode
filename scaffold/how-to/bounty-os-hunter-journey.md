@@ -138,6 +138,31 @@ does not. They meet on the dashboard, not in `AgreementService::REQUIREMENTS`.
 through that method — a quiz that ships its own answers is a form, and this one gates a
 certificate saying somebody knows what to do with PHI.
 
+## Feature requests earn too (2026-09-01)
+
+Reporting is no longer bugs-only. A feature request earns on the same terms as a bug — same
+pool, same verification, same payout path.
+
+```bash
+iris feature report "<what it should do>" -d "<why it matters>" --reporter-lead <yourLeadId>
+```
+
+It files to the requests board (**#652**) in its Requested column, gets triaged like anything
+else, and shows up in your standing:
+
+```bash
+iris bounty me 581
+```
+
+**The one thing that decides whether it earns:** `--reporter-lead`. Without it the item is
+credited to whoever ran the command, and nothing warns you — the item files perfectly and you
+simply never appear against it. Read it back with `iris bug show <id>` and look for your lead
+id under Attribution.
+
+One boundary worth knowing so you do not file into a dead end: only **#297** (bugs) and
+**#652** (features) can earn. Work filed onto other boards is recorded but never enters a
+payout sweep.
+
 ## When a step does not happen
 
 **"Your bounties could not be loaded"** — a real fetch failure. Not the same as the sign-in

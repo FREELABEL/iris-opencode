@@ -409,17 +409,65 @@ export const PlatformDoctorCommand = cmd({
     // ── 5. macOS Permissions (skip on non-macOS) ──
     if (process.platform === "darwin") {
       sp.start("Checking macOS permissions…")
-      // Full Disk Access (needed for iMessage SQLite)
+      /*
+       * FULL DISK ACCESS IS PER-PROCESS, SO ONE ROW CANNOT ANSWER IT (#182903).
+       *
+       * This printed `✓ Full Disk Access (Messages.app readable)` in the same output as
+       * `✗ iMessage — No permission to read Messages`. Both probe Messages. Both were right:
+       * `isAvailable()` shells out to sqlite3, which inherits THIS TERMINAL's grant, while the
+       * features read through iris-daemon, which has its own. Two processes, two answers, one
+       * label — and the label was the green one.
+       *
+       * The cost is not cosmetic. Someone whose mail search just failed runs doctor, reads
+       * "Full Disk Access ✓", and goes looking for the problem somewhere it is not. That is
+       * exactly what happened: a search for an email failed on permissions and doctor said
+       * permissions were fine.
+       *
+       * platform-leads already learned this and fixed it for the channels — the comment above
+       * `bridgeChannelHealth` describes this same bug ("health printed connected + verified
+       * directly above a scan that failed"). Doctor was never brought along, so it kept
+       * probing the terminal while its own channel checks probed the daemon, in one report.
+       *
+       * Now it reports WHICH PROCESS it asked, and a headline can never be greener than the
+       * worst thing under it.
+       */
       {
         const { isAvailable } = await import("../lib/imessage")
-        const ok = isAvailable()
+        const terminalOk = isAvailable()
         allResults.push({
-          name: "Full Disk Access",
-          ok,
-          detail: ok ? "Messages.app readable" : "cannot read Messages.app",
-          hint: ok ? undefined : "System Settings → Privacy → Full Disk Access",
+          name: "Full Disk Access — this terminal",
+          ok: terminalOk,
+          detail: terminalOk ? "sqlite3 read Messages.app" : "sqlite3 could not read Messages.app",
+          hint: terminalOk ? undefined : "System Settings → Privacy → Full Disk Access → add your terminal",
           category: "permission",
         })
+
+        // The daemon's grant is not inferred — it is read off the probes that actually went
+        // through it. `no_permission` is the status bridgeChannelHealth assigns to a TCC denial
+        // specifically, so this is the feature's own answer rather than a second guess at it.
+        // `no_permission` is set a little broadly upstream — WhatsApp reports it when the
+        // database is simply ABSENT ("is WhatsApp desktop installed?"), which is a missing app,
+        // not a refused grant. Rolling that into a denial would be the same laundering this
+        // fix exists to remove, so the error has to read like a denial too.
+        const denied = channelChecks
+          .filter((c) => c.status === "no_permission" && /permission|not permitted|authorization denied/i.test(c.error ?? ""))
+          .map((c) => c.name)
+        if (denied.length > 0) {
+          allResults.push({
+            name: "Full Disk Access — iris-daemon",
+            ok: false,
+            detail: `denied for ${denied.join(", ")} — the daemon has its own grant, separate from your terminal`,
+            hint: "grant Full Disk Access to iris-daemon (not just your terminal), then: iris-daemon restart",
+            category: "permission",
+          })
+        } else if (terminalOk) {
+          allResults.push({
+            name: "Full Disk Access — iris-daemon",
+            ok: true,
+            detail: "no channel reported a permission denial",
+            category: "permission",
+          })
+        }
       }
 
       // Contacts access (needed for address book matching)

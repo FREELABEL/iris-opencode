@@ -1,336 +1,354 @@
 {
-  "version": "2026.08.12-agreements-and-design-standard",
-  "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
-  "files": [
-    {
-      "src": "AGENTS.md",
-      "dest": "AGENTS.md",
-      "managed": true,
-      "purpose": "Top-level rules file. Loaded into every session by packages/opencode/src/session/system.ts. Keep small (~500 tokens) \u2014 it points to how-to/ for deep content."
-    },
-    {
-      "src": "how-to/README.md",
-      "dest": "how-to/README.md",
-      "managed": true,
-      "purpose": "Index of all how-to recipes. The agent lists this directory and reads README.md to find the right recipe."
-    },
-    {
-      "src": "how-to/agentic-loops.md",
-      "dest": "how-to/agentic-loops.md",
-      "managed": true,
-      "purpose": "Loop engineering \u2014 build a self-running goal\u2192discover\u2192plan\u2192execute\u2192verify\u2192ship loop on IRIS (agents + bloq memory + hive parallelism + weekly schedule + eval verify). The IRIS mapping, a worked store-growth build, 4 use cases, and an honest list of what's not first-class yet."
-    },
-    {
-      "src": "how-to/agreements-and-signing.md",
-      "dest": "how-to/agreements-and-signing.md",
-      "managed": true,
-      "purpose": "NDAs, BAAs, multi-party signing, and gating access on an executed agreement. Distinct from payment-gate-contracts, which sells rather than gates."
-    },
-    {
-      "src": "how-to/atlas-datasets.md",
-      "dest": "how-to/atlas-datasets.md",
-      "managed": true,
-      "purpose": "How to: Use Atlas Datasets (schema-driven data)"
-    },
-    {
-      "src": "how-to/bespoke.md",
-      "dest": "how-to/bespoke.md",
-      "managed": true,
-      "purpose": "Bespoke Genesis Pages \u2014 How-To"
-    },
-    {
-      "src": "how-to/bloq-access-control.md",
-      "dest": "how-to/bloq-access-control.md",
-      "managed": true,
-      "purpose": "Sharing a bloq board safely \u2014 scoped invites (--scope-list/--scope-item/--scope-own), auditing and revoking links, and the two non-obvious exposures: the invite default is the WHOLE board, and scoping does NOT protect the CRM notes of attached lead contacts."
-    },
-    {
-      "src": "how-to/bloq-relations.md",
-      "dest": "how-to/bloq-relations.md",
-      "managed": true,
-      "purpose": "Link bloqs together \u2014 relations, filtering, and the graph view"
-    },
-    {
-      "src": "how-to/bounty-os-hunter-journey.md",
-      "dest": "how-to/bounty-os-hunter-journey.md",
-      "managed": true,
-      "purpose": "The hunter's path on /p/bounty-dashboard \u2014 email gate, apply with signup folded in, agreements raised on acceptance, self-serve payouts. The person-facing counterpart to bug-bounty (money states) and agreements-and-signing (operator side)."
-    },
-    {
-      "src": "how-to/bug-bounty.md",
-      "dest": "how-to/bug-bounty.md",
-      "managed": true,
-      "purpose": "Bug Bounty \u2014 Source of Truth (READ BEFORE REPORTING ANY $)"
-    },
-    {
-      "src": "how-to/certification-courses.md",
-      "dest": "how-to/certification-courses.md",
-      "managed": true,
-      "purpose": "Build a certification: course, chapters, study material and quiz, and how the resulting certificate gates who gets paid on a bounty. Covers what makes a chapter examinable and how required_certification_course_id holds a payout."
-    },
-    {
-      "src": "how-to/comms-router.md",
-      "dest": "how-to/comms-router.md",
-      "managed": true,
-      "purpose": "Sending and logging communications: iMessage, Apple Mail, sender identities, email signatures, and the send/bounce rails. Read before any outreach send \u2014 it covers what is logged, what is not, and which channels cannot be tracked at all."
-    },
-    {
-      "src": "how-to/community-curation.md",
-      "dest": "how-to/community-curation.md",
-      "managed": true,
-      "purpose": "Feature producer profiles and curate instrumentals on the Discover Community tab via platform_configs."
-    },
-    {
-      "src": "how-to/crowdfunding-opportunities.md",
-      "dest": "how-to/crowdfunding-opportunities.md",
-      "managed": true,
-      "purpose": "Turn an opportunity into a crowdfunded pitch page \u2014 roles with pay/equity, pitch sections, board members, milestones, payouts ledger, filled-vs-open tracking."
-    },
-    {
-      "src": "how-to/deals.md",
-      "dest": "how-to/deals.md",
-      "managed": true,
-      "purpose": "Deal pipeline management: list active deals, check status, send reminders, win-back stale deals, heartbeat autonomous recovery."
-    },
-    {
-      "src": "how-to/debug-an-agent-run.md",
-      "dest": "how-to/debug-an-agent-run.md",
-      "managed": true,
-      "purpose": "Reading a -V / -VV chat trace: iterations, tool calls with their arguments, tool results with status AND size, and the model behind each decision. Carries what --help cannot \u2014 the three failures a trace separates (tool never offered / tool ran and returned nothing / model ignored the result), only the last of which is a model problem."
-    },
-    {
-      "src": "how-to/debug-install-failures.md",
-      "dest": "how-to/debug-install-failures.md",
-      "managed": true,
-      "purpose": "Diagnose 5 common install failure modes: baseline asset mismatch, macOS version floor, missing deps, scaffold fetch fail, branding. Includes quick diagnostic command to send users."
-    },
-    {
-      "src": "how-to/deploy-elon-build-lock.md",
-      "dest": "how-to/deploy-elon-build-lock.md",
-      "managed": true,
-      "purpose": "Recover the Elon frontend from a Railway build-lock race"
-    },
-    {
-      "src": "how-to/diary.md",
-      "dest": "how-to/diary.md",
-      "managed": true,
-      "purpose": "Daily diary \u2014 read/write your account-scoped diary and publish local daily-diary/*.md into it with `iris diary sync` (idempotent, date-deduped, frontmatter writeback). Scopes (user/agent/bloq), opt-in --public sharing, and the auth/owner-scoping security model."
-    },
-    {
-      "src": "how-to/discover-investments.md",
-      "dest": "how-to/discover-investments.md",
-      "managed": true,
-      "purpose": "Capture and manage investor interest on marketplace opportunities \u2014 the dual-sided opportunity flow (workers apply, investors fund)."
-    },
-    {
-      "src": "how-to/discover.md",
-      "dest": "how-to/discover.md",
-      "managed": true,
-      "purpose": "Master index for curating the Discover page \u2014 all CLI surfaces (sponsors, streamers, producers, instrumentals, opportunities, tutorials, investments) with links to deeper recipes and known gaps."
-    },
-    {
-      "src": "how-to/drive-iris-from-claude-code.md",
-      "dest": "how-to/drive-iris-from-claude-code.md",
-      "managed": true,
-      "purpose": "Bring-your-own-orchestrator manual \u2014 how Claude Code (or any external agent) drives IRIS as an execution substrate via the CLI + MCP contract (guide/how-to/--help/MCP), the substrate primitives, a worked loop cycle, and reliability notes."
-    },
-    {
-      "src": "how-to/event-flyer-import.md",
-      "dest": "how-to/event-flyer-import.md",
-      "managed": true,
-      "purpose": "Import an Event Flyer (IG / any URL) \u2192 Events + Show on the Front"
-    },
-    {
-      "src": "how-to/event-production.md",
-      "dest": "how-to/event-production.md",
-      "managed": true,
-      "purpose": "Event Production \u2014 How-To"
-    },
-    {
-      "src": "how-to/expose-dataset-api.md",
-      "dest": "how-to/expose-dataset-api.md",
-      "managed": true,
-      "purpose": "How to: Expose Atlas dataset as a REST API"
-    },
-    {
-      "src": "how-to/forkable-exports.md",
-      "dest": "how-to/forkable-exports.md",
-      "managed": true,
-      "purpose": "Export an agent or workflow as forkable files \u2014 what travels, what is deliberately dropped, and why the workflow export is a transliteration rather than an equivalence."
-    },
-    {
-      "src": "how-to/genesis-design-standard.md",
-      "dest": "how-to/genesis-design-standard.md",
-      "managed": true,
-      "purpose": "The 10-point page design audit. CLAUDE.md calls this mandatory reading before writing any Genesis page or artifact, and it has never been distributed \u2014 it was in the repo and absent from this manifest."
-    },
-    {
-      "src": "how-to/genesis-sdk.md",
-      "dest": "how-to/genesis-sdk.md",
-      "managed": true,
-      "purpose": "How to: give a bespoke render_mode:html page data and behaviour with the Genesis SDK"
-    },
-    {
-      "src": "how-to/genesis-components.md",
-      "dest": "how-to/genesis-components.md",
-      "managed": true,
-      "purpose": "How to: build a Genesis page out of components backed by Atlas collections. Committed in ce2fdf8be without a manifest entry, so the installer never fetched it."
-    },
-    {
-      "src": "how-to/genesis-verify-pages.md",
-      "dest": "how-to/genesis-verify-pages.md",
-      "managed": true,
-      "purpose": "How to: verify a page actually renders \u2014 check-public, verify and read \u2014 rather than trusting a 200. Committed in ce2fdf8be without a manifest entry, so the installer never fetched it."
-    },
-    {
-      "src": "how-to/hive-dispatch.md",
-      "dest": "how-to/hive-dispatch.md",
-      "managed": true,
-      "purpose": "Connect a machine to the IRIS Hive and dispatch a distributed task."
-    },
-    {
-      "src": "how-to/hive-tailscale.md",
-      "dest": "how-to/hive-tailscale.md",
-      "managed": true,
-      "purpose": "How to: Reach a machine that isn't on your network (Hive + Tailscale) \u2014 the three layers (mesh / ACL / Hive node), the two independent rails (daemon dials out vs tailnet dials in) and how to pick, plus lockdown and bottom-up diagnosis."
-    },
-    {
-      "src": "how-to/iris-login.md",
-      "dest": "how-to/iris-login.md",
-      "managed": true,
-      "purpose": "First-run authentication and setup."
-    },
-    {
-      "src": "how-to/iris-platform.md",
-      "dest": "how-to/iris-platform.md",
-      "managed": true,
-      "purpose": "IRIS Platform \u2014 Connect Any Frontend to IRIS as Its Backend"
-    },
-    {
-      "src": "how-to/lead-to-proposal.md",
-      "dest": "how-to/lead-to-proposal.md",
-      "managed": true,
-      "purpose": "Atlas OS flow: capture lead \u2192 create deal \u2192 send proposal \u2192 contract \u2192 payment gate."
-    },
-    {
-      "src": "how-to/learning-tutorials.md",
-      "dest": "how-to/learning-tutorials.md",
-      "managed": true,
-      "purpose": "Price videos and articles as paid tutorials on the Discover Learning tab. Sets price_usd; green pill auto-renders on the card."
-    },
-    {
-      "src": "how-to/manage-staff-and-contracts.md",
-      "dest": "how-to/manage-staff-and-contracts.md",
-      "managed": true,
-      "purpose": "CRM & Sales recipe. Add staff members (employees, contractors, vendors, volunteers), set hourly rates, send contracts for signing, and track contract status."
-    },
-    {
-      "src": "how-to/meetings.md",
-      "dest": "how-to/meetings.md",
-      "managed": true,
-      "purpose": "Turning a recorded Wispr Flow meeting into a filed summary on a bloq \u2014 decisions, action items with owners, open questions. Includes the system-audio warning (your own mic may not be captured)."
-    },
-    {
-      "src": "how-to/multi-persona-content-engine.md",
-      "dest": "how-to/multi-persona-content-engine.md",
-      "managed": true,
-      "purpose": "Content & Media recipe. Create multiple brand personas, each with their own voice/tone/demographic, and route content through the Copycat pipeline to different social accounts. This is the \"$1.8B one-man business\" model \u2014 one person, multiple AI-driven accounts targeting different audiences."
-    },
-    {
-      "src": "how-to/newsroom-syndication.md",
-      "dest": "how-to/newsroom-syndication.md",
-      "managed": true,
-      "purpose": "RSS, JSON Feed and Google News for a Genesis newsroom page. The three feed URLs already exist on any newsroom page \u2014 this is how to find and use them."
-    },
-    {
-      "src": "how-to/onboarding-flows.md",
-      "dest": "how-to/onboarding-flows.md",
-      "managed": true,
-      "purpose": "How to: Create Schema-Driven Onboarding Flows"
-    },
-    {
-      "src": "how-to/outreach-campaign.md",
-      "dest": "how-to/outreach-campaign.md",
-      "managed": true,
-      "purpose": "SOM pipeline: discover \u2192 enrich \u2192 dispatch outreach across LinkedIn / Twitter / Instagram."
-    },
-    {
-      "src": "how-to/page-privacy.md",
-      "dest": "how-to/page-privacy.md",
-      "managed": true,
-      "purpose": "Who can see a Genesis page and how to lock one down. The gating model is TWO independent settings (requires_auth for the login gate, visibility private to kill the public /p/ urls) plus a cache purge before either takes effect \u2014 the step whose absence makes the other two look broken. Also: inspect a draft with `genesis get`, never by publishing it, and offer preview/share links before publish."
-    },
-    {
-      "src": "how-to/pages.md",
-      "dest": "how-to/pages.md",
-      "managed": true,
-      "purpose": "Genesis page builder: create pages, valid component types, pull/edit/push workflow, component-showcase reference."
-    },
-    {
-      "src": "how-to/pathways-cfo-workflow.md",
-      "dest": "how-to/pathways-cfo-workflow.md",
-      "managed": true,
-      "purpose": "How to: Run the Pathways CFO Workflow (Service AI \u2192 Atlas \u2192 QuickBooks)"
-    },
-    {
-      "src": "how-to/payment-gate-contracts.md",
-      "dest": "how-to/payment-gate-contracts.md",
-      "managed": true,
-      "purpose": "Full payment gate flow: contract + proposal page + Stripe checkout + auto-reminders. Covers PaymentGateService, line items, deliverables, and deal-status tracking."
-    },
-    {
-      "src": "how-to/pulse.md",
-      "dest": "how-to/pulse.md",
-      "managed": true,
-      "purpose": "Pulse readiness engine \u2014 autonomous 4-signal scoring (requirements + liveness + comms freshness + config), 15-min cron, daily digest. How to enroll a lead, view the score, run requirements, debug the loop."
-    },
-    {
-      "src": "how-to/remote-support-a-family-pc.md",
-      "dest": "how-to/remote-support-a-family-pc.md",
-      "managed": true,
-      "purpose": "Infrastructure recipe. Put their machine on a personal tailnet, connect to it over that, and you can help them without them having to do anything except turn the computer on. The whole job is three decisions \u2014 which tailnet, which remote-control tool, and who is at the keyboard for the first five minutes \u2014 and getting\u2026"
-    },
-    {
-      "src": "how-to/setup-brand-with-personas.md",
-      "dest": "how-to/setup-brand-with-personas.md",
-      "managed": true,
-      "purpose": "Content & Media recipe. Creates a brand entity with one or more personas (voice/tone profiles). Each persona can have its own system prompt, hashtags, style guidelines, and AI settings. Used for the multi-persona content engine (e.g., 6 IG accounts, each a different finance archetype)."
-    },
-    {
-      "src": "how-to/storage-backends.md",
-      "dest": "how-to/storage-backends.md",
-      "managed": true,
-      "purpose": "Put a client's Atlas data on their own PostgreSQL or S3 bucket (Provider Proxy) - bind the workspace, then migrate the objects. Covers data residency, the refusals, and why a bad binding stays silent."
-    },
-    {
-      "src": "how-to/track-finances-atlas-ledger.md",
-      "dest": "how-to/track-finances-atlas-ledger.md",
-      "managed": true,
-      "purpose": "Finance recipe. Record revenue, expenses, and transfers using the Atlas ledger. Set up a chart of accounts for proper categorization. View summaries and prepare for QuickBooks sync."
-    },
-    {
-      "src": "how-to/playbook-sops-and-skills.md",
-      "dest": "how-to/playbook-sops-and-skills.md",
-      "managed": true,
-      "purpose": "How a playbook holds human SOPs (Atlas items, attached by reference) alongside agent skills \u2014 iris playbook items/roles. The container shipped long before anyone could find it."
-    },
-    {
-      "src": "how-to/playbook-composition.md",
-      "dest": "how-to/playbook-composition.md",
-      "managed": true,
-      "purpose": "Chaining playbooks \u2014 a step can run another playbook (mode: playbook). Worked since the executor shipped with zero usage because nothing said it was possible."
-    },
-    {
-      "src": "playbooks/agentic-loop/PLAYBOOK.md",
-      "dest": "playbooks/agentic-loop/PLAYBOOK.md",
-      "managed": true,
-      "purpose": "Canonical reference loopable playbook (the 'fuel' for `iris loop run`). A v2 implement\u2192verify loop \u2014 orchestrator \u2192 Builder/Scout/Growth \u2192 verify \u2192 synthesize \u2192 memory \u2014 whose verify step emits `VERDICT: SHIP|ITERATE` so the loop engine (platform-loop.ts) terminates correctly. Resolves `iris playbook show agentic-loop` and `iris loop run agentic-loop --until SHIP`, which the agentic-loops.md how-to points at."
-    },
-    {
-      "src": "playbooks/hive-secure-mesh/PLAYBOOK.md",
-      "dest": "playbooks/hive-secure-mesh/PLAYBOOK.md",
-      "managed": true,
-      "purpose": "Runnable SOP for the Hive + Tailscale secure mesh \u2014 onboard a machine, lock it down with a least-privilege ACL, connect, enroll it as a Hive node, and diagnose bottom-up. Companion to the hive-tailscale how-to, which explains the model; this is the half you run."
-    }
-  ]
+ "version": "2026.08.12-agreements-and-design-standard",
+ "description": "IRIS CLI scaffold manifest. The installer fetches this file from GitHub raw (or heyiris.io when configured), then downloads each entry to the user's ~/.iris/ directory. Adding a new how-to is just a PR adding the file + a line here.",
+ "files": [
+  {
+   "src": "AGENTS.md",
+   "dest": "AGENTS.md",
+   "managed": true,
+   "purpose": "Top-level rules file. Loaded into every session by packages/opencode/src/session/system.ts. Keep small (~500 tokens) — it points to how-to/ for deep content."
+  },
+  {
+   "src": "how-to/README.md",
+   "dest": "how-to/README.md",
+   "managed": true,
+   "purpose": "Index of all how-to recipes. The agent lists this directory and reads README.md to find the right recipe."
+  },
+  {
+   "src": "how-to/agentic-loops.md",
+   "dest": "how-to/agentic-loops.md",
+   "managed": true,
+   "purpose": "Loop engineering — build a self-running goal→discover→plan→execute→verify→ship loop on IRIS (agents + bloq memory + hive parallelism + weekly schedule + eval verify). The IRIS mapping, a worked store-growth build, 4 use cases, and an honest list of what's not first-class yet."
+  },
+  {
+   "src": "how-to/agreements-and-signing.md",
+   "dest": "how-to/agreements-and-signing.md",
+   "managed": true,
+   "purpose": "NDAs, BAAs, multi-party signing, and gating access on an executed agreement. Distinct from payment-gate-contracts, which sells rather than gates."
+  },
+  {
+   "src": "how-to/atlas-datasets.md",
+   "dest": "how-to/atlas-datasets.md",
+   "managed": true,
+   "purpose": "How to: Use Atlas Datasets (schema-driven data)"
+  },
+  {
+   "src": "how-to/bespoke.md",
+   "dest": "how-to/bespoke.md",
+   "managed": true,
+   "purpose": "Bespoke Genesis Pages — How-To"
+  },
+  {
+   "src": "how-to/bloq-access-control.md",
+   "dest": "how-to/bloq-access-control.md",
+   "managed": true,
+   "purpose": "Sharing a bloq board safely — scoped invites (--scope-list/--scope-item/--scope-own), auditing and revoking links, and the two non-obvious exposures: the invite default is the WHOLE board, and scoping does NOT protect the CRM notes of attached lead contacts."
+  },
+  {
+   "src": "how-to/bloq-relations.md",
+   "dest": "how-to/bloq-relations.md",
+   "managed": true,
+   "purpose": "Link bloqs together — relations, filtering, and the graph view"
+  },
+  {
+   "src": "how-to/bounty-os-hunter-journey.md",
+   "dest": "how-to/bounty-os-hunter-journey.md",
+   "managed": true,
+   "purpose": "The hunter's path on /p/bounty-dashboard — email gate, apply with signup folded in, agreements raised on acceptance, self-serve payouts. The person-facing counterpart to bug-bounty (money states) and agreements-and-signing (operator side)."
+  },
+  {
+   "src": "how-to/bug-bounty.md",
+   "dest": "how-to/bug-bounty.md",
+   "managed": true,
+   "purpose": "Bug Bounty — Source of Truth (READ BEFORE REPORTING ANY $)"
+  },
+  {
+   "src": "how-to/certification-courses.md",
+   "dest": "how-to/certification-courses.md",
+   "managed": true,
+   "purpose": "Build a certification: course, chapters, study material and quiz, and how the resulting certificate gates who gets paid on a bounty. Covers what makes a chapter examinable and how required_certification_course_id holds a payout."
+  },
+  {
+   "src": "how-to/comms-router.md",
+   "dest": "how-to/comms-router.md",
+   "managed": true,
+   "purpose": "Sending and logging communications: iMessage, Apple Mail, sender identities, email signatures, and the send/bounce rails. Read before any outreach send — it covers what is logged, what is not, and which channels cannot be tracked at all."
+  },
+  {
+   "src": "how-to/community-curation.md",
+   "dest": "how-to/community-curation.md",
+   "managed": true,
+   "purpose": "Feature producer profiles and curate instrumentals on the Discover Community tab via platform_configs."
+  },
+  {
+   "src": "how-to/crowdfunding-opportunities.md",
+   "dest": "how-to/crowdfunding-opportunities.md",
+   "managed": true,
+   "purpose": "Turn an opportunity into a crowdfunded pitch page — roles with pay/equity, pitch sections, board members, milestones, payouts ledger, filled-vs-open tracking."
+  },
+  {
+   "src": "how-to/dashboards.md",
+   "dest": "how-to/dashboards.md",
+   "managed": true,
+   "purpose": "Build a working console on Genesis, Atlas and Hive — rail, sub-tabs, list, stage and status bar composed from existing components rather than hand-built."
+  },
+  {
+   "src": "how-to/deals.md",
+   "dest": "how-to/deals.md",
+   "managed": true,
+   "purpose": "Deal pipeline management: list active deals, check status, send reminders, win-back stale deals, heartbeat autonomous recovery."
+  },
+  {
+   "src": "how-to/debug-an-agent-run.md",
+   "dest": "how-to/debug-an-agent-run.md",
+   "managed": true,
+   "purpose": "Reading a -V / -VV chat trace: iterations, tool calls with their arguments, tool results with status AND size, and the model behind each decision. Carries what --help cannot — the three failures a trace separates (tool never offered / tool ran and returned nothing / model ignored the result), only the last of which is a model problem."
+  },
+  {
+   "src": "how-to/debug-install-failures.md",
+   "dest": "how-to/debug-install-failures.md",
+   "managed": true,
+   "purpose": "Diagnose 5 common install failure modes: baseline asset mismatch, macOS version floor, missing deps, scaffold fetch fail, branding. Includes quick diagnostic command to send users."
+  },
+  {
+   "src": "how-to/deploy-elon-build-lock.md",
+   "dest": "how-to/deploy-elon-build-lock.md",
+   "managed": true,
+   "purpose": "Recover the Elon frontend from a Railway build-lock race"
+  },
+  {
+   "src": "how-to/diary.md",
+   "dest": "how-to/diary.md",
+   "managed": true,
+   "purpose": "Daily diary — read/write your account-scoped diary and publish local daily-diary/*.md into it with `iris diary sync` (idempotent, date-deduped, frontmatter writeback). Scopes (user/agent/bloq), opt-in --public sharing, and the auth/owner-scoping security model."
+  },
+  {
+   "src": "how-to/discover-investments.md",
+   "dest": "how-to/discover-investments.md",
+   "managed": true,
+   "purpose": "Capture and manage investor interest on marketplace opportunities — the dual-sided opportunity flow (workers apply, investors fund)."
+  },
+  {
+   "src": "how-to/discover.md",
+   "dest": "how-to/discover.md",
+   "managed": true,
+   "purpose": "Master index for curating the Discover page — all CLI surfaces (sponsors, streamers, producers, instrumentals, opportunities, tutorials, investments) with links to deeper recipes and known gaps."
+  },
+  {
+   "src": "how-to/drive-iris-from-claude-code.md",
+   "dest": "how-to/drive-iris-from-claude-code.md",
+   "managed": true,
+   "purpose": "Bring-your-own-orchestrator manual — how Claude Code (or any external agent) drives IRIS as an execution substrate via the CLI + MCP contract (guide/how-to/--help/MCP), the substrate primitives, a worked loop cycle, and reliability notes."
+  },
+  {
+   "src": "how-to/event-flyer-import.md",
+   "dest": "how-to/event-flyer-import.md",
+   "managed": true,
+   "purpose": "Import an Event Flyer (IG / any URL) → Events + Show on the Front"
+  },
+  {
+   "src": "how-to/event-production.md",
+   "dest": "how-to/event-production.md",
+   "managed": true,
+   "purpose": "Event Production — How-To"
+  },
+  {
+   "src": "how-to/expose-dataset-api.md",
+   "dest": "how-to/expose-dataset-api.md",
+   "managed": true,
+   "purpose": "How to: Expose Atlas dataset as a REST API"
+  },
+  {
+   "src": "how-to/forkable-exports.md",
+   "dest": "how-to/forkable-exports.md",
+   "managed": true,
+   "purpose": "Export an agent or workflow as forkable files — what travels, what is deliberately dropped, and why the workflow export is a transliteration rather than an equivalence."
+  },
+  {
+   "src": "how-to/genesis-design-standard.md",
+   "dest": "how-to/genesis-design-standard.md",
+   "managed": true,
+   "purpose": "The 10-point page design audit. CLAUDE.md calls this mandatory reading before writing any Genesis page or artifact, and it has never been distributed — it was in the repo and absent from this manifest."
+  },
+  {
+   "src": "how-to/genesis-sdk.md",
+   "dest": "how-to/genesis-sdk.md",
+   "managed": true,
+   "purpose": "How to: give a bespoke render_mode:html page data and behaviour with the Genesis SDK"
+  },
+  {
+   "src": "how-to/genesis-components.md",
+   "dest": "how-to/genesis-components.md",
+   "managed": true,
+   "purpose": "How to: build a Genesis page out of components backed by Atlas collections. Committed in ce2fdf8be without a manifest entry, so the installer never fetched it."
+  },
+  {
+   "src": "how-to/genesis-verify-pages.md",
+   "dest": "how-to/genesis-verify-pages.md",
+   "managed": true,
+   "purpose": "How to: verify a page actually renders — check-public, verify and read — rather than trusting a 200. Committed in ce2fdf8be without a manifest entry, so the installer never fetched it."
+  },
+  {
+   "src": "how-to/hive-dispatch.md",
+   "dest": "how-to/hive-dispatch.md",
+   "managed": true,
+   "purpose": "Connect a machine to the IRIS Hive and dispatch a distributed task."
+  },
+  {
+   "src": "how-to/hive-tailscale.md",
+   "dest": "how-to/hive-tailscale.md",
+   "managed": true,
+   "purpose": "How to: Reach a machine that isn't on your network (Hive + Tailscale) — the three layers (mesh / ACL / Hive node), the two independent rails (daemon dials out vs tailnet dials in) and how to pick, plus lockdown and bottom-up diagnosis."
+  },
+  {
+   "src": "how-to/hive-rent-compute.md",
+   "dest": "how-to/hive-rent-compute.md",
+   "managed": true,
+   "purpose": "Rent a long-lived machine (Railway/DigitalOcean), run Python/PHP on it, and release it to stop billing. Covers the --no-hive opt-out and why a failed release is reported as a failure."
+  },
+  {
+   "src": "how-to/iris-login.md",
+   "dest": "how-to/iris-login.md",
+   "managed": true,
+   "purpose": "First-run authentication and setup."
+  },
+  {
+   "src": "how-to/iris-platform.md",
+   "dest": "how-to/iris-platform.md",
+   "managed": true,
+   "purpose": "IRIS Platform — Connect Any Frontend to IRIS as Its Backend"
+  },
+  {
+   "src": "how-to/lead-to-proposal.md",
+   "dest": "how-to/lead-to-proposal.md",
+   "managed": true,
+   "purpose": "Atlas OS flow: capture lead → create deal → send proposal → contract → payment gate."
+  },
+  {
+   "src": "how-to/learning-tutorials.md",
+   "dest": "how-to/learning-tutorials.md",
+   "managed": true,
+   "purpose": "Price videos and articles as paid tutorials on the Discover Learning tab. Sets price_usd; green pill auto-renders on the card."
+  },
+  {
+   "src": "how-to/manage-staff-and-contracts.md",
+   "dest": "how-to/manage-staff-and-contracts.md",
+   "managed": true,
+   "purpose": "CRM & Sales recipe. Add staff members (employees, contractors, vendors, volunteers), set hourly rates, send contracts for signing, and track contract status."
+  },
+  {
+   "src": "how-to/meetings.md",
+   "dest": "how-to/meetings.md",
+   "managed": true,
+   "purpose": "Turning a recorded Wispr Flow meeting into a filed summary on a bloq — decisions, action items with owners, open questions. Includes the system-audio warning (your own mic may not be captured)."
+  },
+  {
+   "src": "how-to/multi-persona-content-engine.md",
+   "dest": "how-to/multi-persona-content-engine.md",
+   "managed": true,
+   "purpose": "Content & Media recipe. Create multiple brand personas, each with their own voice/tone/demographic, and route content through the Copycat pipeline to different social accounts. This is the \"$1.8B one-man business\" model — one person, multiple AI-driven accounts targeting different audiences."
+  },
+  {
+   "src": "how-to/newsroom-syndication.md",
+   "dest": "how-to/newsroom-syndication.md",
+   "managed": true,
+   "purpose": "RSS, JSON Feed and Google News for a Genesis newsroom page. The three feed URLs already exist on any newsroom page — this is how to find and use them."
+  },
+  {
+   "src": "how-to/onboarding-flows.md",
+   "dest": "how-to/onboarding-flows.md",
+   "managed": true,
+   "purpose": "How to: Create Schema-Driven Onboarding Flows"
+  },
+  {
+   "src": "how-to/ocr-scanned-documents.md",
+   "dest": "how-to/ocr-scanned-documents.md",
+   "managed": true,
+   "purpose": "OCR and vision ingestion — reading scanned documents that have no text layer. Covers --include-images, which is OFF by default, so images are silently stripped from a sync."
+  },
+  {
+   "src": "how-to/outreach-campaign.md",
+   "dest": "how-to/outreach-campaign.md",
+   "managed": true,
+   "purpose": "SOM pipeline: discover → enrich → dispatch outreach across LinkedIn / Twitter / Instagram."
+  },
+  {
+   "src": "how-to/page-privacy.md",
+   "dest": "how-to/page-privacy.md",
+   "managed": true,
+   "purpose": "Who can see a Genesis page and how to lock one down. The gating model is TWO independent settings (requires_auth for the login gate, visibility private to kill the public /p/ urls) plus a cache purge before either takes effect — the step whose absence makes the other two look broken. Also: inspect a draft with `genesis get`, never by publishing it, and offer preview/share links before publish."
+  },
+  {
+   "src": "how-to/pages.md",
+   "dest": "how-to/pages.md",
+   "managed": true,
+   "purpose": "Genesis page builder: create pages, valid component types, pull/edit/push workflow, component-showcase reference."
+  },
+  {
+   "src": "how-to/pathways-cfo-workflow.md",
+   "dest": "how-to/pathways-cfo-workflow.md",
+   "managed": true,
+   "purpose": "How to: Run the Pathways CFO Workflow (Service AI → Atlas → QuickBooks)"
+  },
+  {
+   "src": "how-to/payment-gate-contracts.md",
+   "dest": "how-to/payment-gate-contracts.md",
+   "managed": true,
+   "purpose": "Full payment gate flow: contract + proposal page + Stripe checkout + auto-reminders. Covers PaymentGateService, line items, deliverables, and deal-status tracking."
+  },
+  {
+   "src": "how-to/pulse.md",
+   "dest": "how-to/pulse.md",
+   "managed": true,
+   "purpose": "Pulse readiness engine — autonomous 4-signal scoring (requirements + liveness + comms freshness + config), 15-min cron, daily digest. How to enroll a lead, view the score, run requirements, debug the loop."
+  },
+  {
+   "src": "how-to/remote-support-a-family-pc.md",
+   "dest": "how-to/remote-support-a-family-pc.md",
+   "managed": true,
+   "purpose": "Infrastructure recipe. Put their machine on a personal tailnet, connect to it over that, and you can help them without them having to do anything except turn the computer on. The whole job is three decisions — which tailnet, which remote-control tool, and who is at the keyboard for the first five minutes — and getting…"
+  },
+  {
+   "src": "how-to/setup-brand-with-personas.md",
+   "dest": "how-to/setup-brand-with-personas.md",
+   "managed": true,
+   "purpose": "Content & Media recipe. Creates a brand entity with one or more personas (voice/tone profiles). Each persona can have its own system prompt, hashtags, style guidelines, and AI settings. Used for the multi-persona content engine (e.g., 6 IG accounts, each a different finance archetype)."
+  },
+  {
+   "src": "how-to/storage-backends.md",
+   "dest": "how-to/storage-backends.md",
+   "managed": true,
+   "purpose": "Put a client's Atlas data on their own PostgreSQL or S3 bucket (Provider Proxy) - bind the workspace, then migrate the objects. Covers data residency, the refusals, and why a bad binding stays silent."
+  },
+  {
+   "src": "how-to/track-finances-atlas-ledger.md",
+   "dest": "how-to/track-finances-atlas-ledger.md",
+   "managed": true,
+   "purpose": "Finance recipe. Record revenue, expenses, and transfers using the Atlas ledger. Set up a chart of accounts for proper categorization. View summaries and prepare for QuickBooks sync."
+  },
+  {
+   "src": "how-to/playbook-sops-and-skills.md",
+   "dest": "how-to/playbook-sops-and-skills.md",
+   "managed": true,
+   "purpose": "How a playbook holds human SOPs (Atlas items, attached by reference) alongside agent skills — iris playbook items/roles. The container shipped long before anyone could find it."
+  },
+  {
+   "src": "how-to/playbook-composition.md",
+   "dest": "how-to/playbook-composition.md",
+   "managed": true,
+   "purpose": "Chaining playbooks — a step can run another playbook (mode: playbook). Worked since the executor shipped with zero usage because nothing said it was possible."
+  },
+  {
+   "src": "playbooks/agentic-loop/PLAYBOOK.md",
+   "dest": "playbooks/agentic-loop/PLAYBOOK.md",
+   "managed": true,
+   "purpose": "Canonical reference loopable playbook (the 'fuel' for `iris loop run`). A v2 implement→verify loop — orchestrator → Builder/Scout/Growth → verify → synthesize → memory — whose verify step emits `VERDICT: SHIP|ITERATE` so the loop engine (platform-loop.ts) terminates correctly. Resolves `iris playbook show agentic-loop` and `iris loop run agentic-loop --until SHIP`, which the agentic-loops.md how-to points at."
+  },
+  {
+   "src": "playbooks/hive-secure-mesh/PLAYBOOK.md",
+   "dest": "playbooks/hive-secure-mesh/PLAYBOOK.md",
+   "managed": true,
+   "purpose": "Runnable SOP for the Hive + Tailscale secure mesh — onboard a machine, lock it down with a least-privilege ACL, connect, enroll it as a Hive node, and diagnose bottom-up. Companion to the hive-tailscale how-to, which explains the model; this is the half you run."
+  }
+ ]
 }

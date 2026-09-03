@@ -81,6 +81,8 @@ import { PlatformClipsCommand } from "./cli/cmd/platform-clips"
 import { PlatformPostCommand } from "./cli/cmd/platform-post"
 import { XCommand } from "./cli/cmd/platform-x"
 import { PlatformOutreachCommand } from "./cli/cmd/platform-outreach"
+import { OffersCommand } from "./cli/cmd/offers"
+import { LicenceCommand } from "./cli/cmd/licence"
 import { PlatformOutreachCampaignCommand } from "./cli/cmd/platform-outreach-campaign"
 import { PlatformOutreachSendCommand } from "./cli/cmd/platform-outreach-send"
 import { PlatformSomCommand } from "./cli/cmd/platform-som"
@@ -97,6 +99,7 @@ import { PlatformListenCommand } from "./cli/cmd/listen"
 import { PlatformTranscribeCommand } from "./cli/cmd/transcribe"
 import { PlatformDownloadCommand } from "./cli/cmd/download"
 import { PlatformBugCommand } from "./cli/cmd/platform-bug"
+import { PlatformFeatureCommand } from "./cli/cmd/platform-feature"
 import { DeviceCommand } from "./cli/cmd/platform-device"
 import { PlatformCameraCommand } from "./cli/cmd/platform-camera"
 import { PlatformAtlasMeetingsCommand } from "./cli/cmd/platform-atlas-meetings"
@@ -136,6 +139,7 @@ import { PlatformDriveCommand } from "./cli/cmd/platform-drive"
 import { PlatformObsidianCommand } from "./cli/cmd/platform-obsidian"
 import { PlatformCreativeCommand } from "./cli/cmd/platform-creative"
 import { PlatformPackagesCommand } from "./cli/cmd/platform-packages"
+import { PricingCommand } from "./cli/cmd/pricing"
 import { PlatformMarketplaceCommand } from "./cli/cmd/platform-marketplace"
 import { PlatformMemoryCommand } from "./cli/cmd/platform-memory"
 import { PlatformProfileCommand } from "./cli/cmd/platform-profile"
@@ -349,6 +353,8 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformPostCommand))
   .command(reg(XCommand))
   .command(reg(PlatformOutreachCommand))
+  .command(reg(OffersCommand))
+  .command(reg(LicenceCommand))
   .command(reg(PlatformOutreachCampaignCommand))
   .command(reg(PlatformOutreachSendCommand))
   .command(reg(PlatformSomCommand))
@@ -374,6 +380,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformListConnectedCommand))
   .command(reg(PlatformListAvailableCommand))
   .command(reg(PlatformBugCommand))
+  .command(reg(PlatformFeatureCommand))
   .command(reg(DeviceCommand))
   .command(reg(PlatformAtlasMeetingsCommand))
   .command(reg(PlatformAtlasBrandKitCommand))
@@ -418,6 +425,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformObsidianCommand))
   .command(reg(PlatformCreativeCommand))
   .command(reg(PlatformPackagesCommand))
+  .command(reg(PricingCommand))
   .command(reg(PlatformMarketplaceCommand))
   .command(reg(PlatformMemoryCommand))
   .command(reg(PlatformProfileCommand))

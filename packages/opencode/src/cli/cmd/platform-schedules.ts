@@ -64,6 +64,38 @@ function timeUntil(dateStr: string | null | undefined): string {
   return `${Math.round(diff / 86400_000)}d`
 }
 
+/**
+ * How long ago a PAST timestamp was.
+ *
+ * timeUntil() counts down to a future moment, and its `diff < 0` branch returns the bare
+ * string "overdue" — correct for a next_run_at that has slipped, and useless for a run that
+ * already happened, because it discards the magnitude. Both run-history callers used to pass
+ * a past timestamp into it and render the resulting "overdue" as "just now", so EVERY
+ * completed run read as if it had finished seconds ago: `schedules list --latest` printed
+ * "just now" for 350 of 350 rows, and `schedules history` gave the same answer for runs 114
+ * days apart. The data was never wrong — `--json` carried correct timestamps throughout.
+ *
+ * Elapsed time is a different question from remaining time, so it gets its own function
+ * rather than a sign flag on that one. Keep them separate: a future timestamp asks "how
+ * long until", a past one asks "how long since", and conflating them is what produced a
+ * dashboard that could not tell a live schedule from one dead since May.
+ */
+export function timeSince(dateStr: string | null | undefined): string {
+  if (!dateStr) return ""
+  const then = new Date(String(dateStr)).getTime()
+  if (isNaN(then)) return ""
+  const diff = Date.now() - then
+  // A clock skew or a timestamp a hair in the future is "just now", not a negative age.
+  if (diff < 60_000) return "just now"
+  if (diff < 3600_000) return `${Math.round(diff / 60_000)}m ago`
+  if (diff < 86400_000) return `${Math.round(diff / 3600_000)}h ago`
+  if (diff < 30 * 86400_000) {
+    const days = diff / 86400_000
+    return `${days < 10 ? days.toFixed(1) : Math.round(days)}d ago`
+  }
+  return `${Math.round(diff / (30 * 86400_000))}mo ago`
+}
+
 function taskLabel(s: Record<string, any>): string {
   const data = s.data ?? {}
   return data.task_type ?? data.type ?? s.task_name ?? ""
@@ -375,9 +407,8 @@ const SchedulesListCommand = cmd({
               : exec.status === "failed"
               ? `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
               : dim(exec.status ?? "?")
-            const when = exec.completed_at
-              ? timeUntil(exec.completed_at) === "overdue" ? dim("just now") : dim(`${timeUntil(exec.completed_at)} ago`)
-              : ""
+            const whenAgo = timeSince(exec.completed_at)
+            const when = whenAgo ? dim(whenAgo) : ""
             const model = exec.model_used ? dim(`[${exec.model_used}]`) : ""
             const tokens = exec.tokens_used ? dim(`${Number(exec.tokens_used).toLocaleString()} tok`) : ""
             const preview = String(exec.response_preview ?? exec.response ?? "").replace(/\n/g, " ").slice(0, 70)
@@ -617,8 +648,8 @@ const SchedulesHistoryCommand = cmd({
           : statusColor(String(r.status ?? "?"))
 
         const when = r.completed_at ?? r.started_at ?? r.created_at
-        const ago = when ? timeUntil(String(when)) : ""
-        const agoStr = ago === "overdue" ? dim("just now") : ago ? dim(`${ago} ago`) : ""
+        const ago = when ? timeSince(String(when)) : ""
+        const agoStr = ago ? dim(ago) : ""
 
         console.log()
         printDivider()

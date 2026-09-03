@@ -209,6 +209,17 @@ async function resolveTokenUncached(): Promise<string> {
 // Shared fetch helper
 // ============================================================================
 
+/** Describe a request body for debug output without ever parsing or printing its contents. */
+function describeBody(body: RequestInit["body"]): string {
+  if (!body) return "(none)"
+  if (body instanceof FormData) return `(multipart: ${[...body.keys()].join(", ")})`
+  try {
+    return Object.keys(JSON.parse(String(body))).join(", ")
+  } catch {
+    return "(unparsed)"
+  }
+}
+
 export async function irisFetch(
   path: string,
   options: RequestInit = {},
@@ -228,7 +239,10 @@ export async function irisFetch(
     console.error(`[irisFetch] ${options.method ?? "GET"} ${url}`)
     // Never print the token — not even a prefix (#137421). Presence only.
     console.error(`[irisFetch] token: ${token ? "(present)" : "(none)"}`)
-    console.error(`[irisFetch] body keys: ${options.body ? Object.keys(JSON.parse(String(options.body))).join(", ") : "(none)"}`)
+    // FormData (audio uploads) stringifies to "[object FormData]", which JSON.parse
+    // throws on — so --print-logs, the flag you reach for BECAUSE an upload is
+    // misbehaving, was the flag that killed it (epic #182784, B3).
+    console.error(`[irisFetch] body keys: ${describeBody(options.body)}`)
   }
   const res = await fetchWithRetry(url, { ...options, headers })
   if (process.argv.includes("--print-logs")) {

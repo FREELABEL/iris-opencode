@@ -1,8 +1,9 @@
 import { spawn, spawnSync } from "child_process"
 import { existsSync } from "fs"
 import { tmpdir } from "os"
-import { join } from "path"
+import { dirname, join } from "path"
 import { which } from "./transcription"
+import { discardDir, secureTempDir } from "./stt-policy"
 
 // ============================================================================
 // Voice lib — the local, free, on-device half of voice chat.
@@ -12,6 +13,7 @@ import { which } from "./transcription"
 //   speak()       = local text-to-speech. macOS `say` (zero-dep default) or
 //                   Piper (cross-platform neural) — no cloud, no per-minute cost.
 //   listMics()    = enumerate input devices so `--mic <id>` is discoverable.
+//   discardRecording() = delete a capture. Callers MUST call this in a `finally`.
 //
 // Everything here runs on-device: HIPAA-safe, offline-capable, $0 per turn.
 // Cloud voices (ElevenLabs/VAPI) stay in `iris voice` for phone/agent config.
@@ -86,7 +88,10 @@ export async function captureMic(opts: CaptureOptions = {}): Promise<string> {
   const noise = opts.silenceDb ?? -30
   const dur = opts.silenceDur ?? 1.4
   const maxSeconds = opts.maxSeconds ?? 60
-  const wav = join(tmpdir(), `iris-voice-${Date.now()}.wav`)
+  // A 0700 dir per capture. This used to be a loose file in tmpdir that NOTHING
+  // ever deleted — one permanent WAV of the user's voice per conversational turn,
+  // and the voice loop is `while (true)` (epic #182784, B1).
+  const wav = join(secureTempDir("iris-voice-"), "capture.wav")
   const args = [
     "-hide_banner", "-nostdin", "-y",
     ...micInputArgs(opts.mic),
@@ -123,6 +128,18 @@ export async function captureMic(opts: CaptureOptions = {}): Promise<string> {
     proc.on("error", () => resolve())
   })
   return wav
+}
+
+/**
+ * Delete a recording produced by captureMic(), and the private directory holding it.
+ *
+ * Separate from captureMic() rather than automatic because the caller needs the file
+ * to survive long enough to transcribe it. That gap is exactly where the leak lived,
+ * so every caller wraps the pair in try/finally.
+ */
+export function discardRecording(wavPath: string | null | undefined): void {
+  if (!wavPath) return
+  discardDir(dirname(wavPath))
 }
 
 /** Strip markdown so TTS doesn't read asterisks/backticks/link syntax aloud. */

@@ -1262,6 +1262,10 @@ const BloqsAddItemCommand = cmd({
       .option("title", { describe: "item title", type: "string" })
       .option("text", { describe: "item content (alternative to positional)", type: "string" })
       .option("due", { describe: "due date (ISO, e.g. 2026-07-22)", type: "string" })
+      .option("reporter-lead", {
+        describe: "lead ID of the person who reported this, for bounty attribution",
+        type: "number",
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -1328,6 +1332,14 @@ const BloqsAddItemCommand = cmd({
       const payload: Record<string, unknown> = { content }
       if (title) payload.title = title
       if (dueDate) payload.due_date = dueDate
+      // Credit follows the work, not the board it lands on.
+      //
+      // Attribution used to be a property of `bug report` alone: anything filed through this
+      // command carried none, so an epic or a feature ticket could not be credited to whoever
+      // reported it. The server composes the metadata from this id — the client cannot set
+      // reporter_verified or machine_id, which is what stops a caller minting a verified
+      // attribution on somebody else's work.
+      if (args["reporter-lead"]) payload.reporter_lead_id = args["reporter-lead"]
 
       // ROUTE: the list id goes in the BODY, not the path.
       //

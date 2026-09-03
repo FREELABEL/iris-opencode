@@ -71,6 +71,53 @@ GET  /api/v1/marketplace/opportunities/{id}/bug-bounty/hunter?lead_id=<id>   # o
 Response money fields: `paid_cents` (real), `accrued_cents` (wallet, not paid), `owed_cents`,
 `potential_cents`. Public `earned_cents` = owed + paid + accrued (all verified value).
 
+## Attribution — what makes work earn at all (2026-09-01)
+
+Money can only reach somebody the item is CREDITED to, and credit is set when the item is
+**filed**. Get this wrong and nothing errors: the item saves, the board looks right, and the
+reporter simply never appears in a tally.
+
+**Two boards can earn, and only two.** `config('bounty.credited_bloq_ids')` = bugs on **#297**
+and feature requests on **#652**. The list is short on purpose — every id on it becomes payable
+in a sweep. **Bloq 503 is deliberately absent**: it holds 914 items and adding it would make all
+of them payable at once.
+
+```bash
+# A bug
+iris bug report "<title>" -s high --reporter-lead <leadId> \
+  -d "Reported by <Name>, <date>. <observed vs expected>"
+
+# A feature request (defaults to bloq 652 / Requested; --bloq and --list override)
+iris feature report "<title>" -d "<what it should do, and why>" --reporter-lead <leadId>
+
+# Anything else that should carry credit
+iris bloqs add-item <bloq> <list> --title "<t>" --text "<body>" --reporter-lead <leadId>
+```
+
+**Read the credit back — do not assume it landed.** Attribution failing is silent:
+
+```bash
+iris bug show <id>     # look for:  lead: <leadId>  under Attribution
+```
+
+Three rules that have each cost something:
+
+1. **Attribution goes on at FILING time.** `bug update --reporter-lead` repairs a ticket already
+   filed, but it only reaches the bug board — an item filed anywhere else answers "not found"
+   and cannot be repaired afterwards.
+2. **Never pass `--reporter-name`.** It is a per-bug snapshot; using it to correct one
+   attribution once renamed a hunter across all 108 of their bugs. The display name resolves
+   from the lead, so `--reporter-lead` alone is both correct and safe.
+3. **Split by reporter before quoting any total.** 791 of 1,052 attributed bugs are
+   admin-filed, so a raw count overstates hunter contribution by roughly 5x.
+
+**Features earn on the same terms as bugs** — a leadership decision, wired through the six
+`BugBountyPayoutService` enumeration queries and the `BloqItemObserver` auto-pay gate. Auto-pay
+itself is still gated per-opportunity (`proposal_metadata.bounty_auto_pay`, default OFF), so
+widening which boards *can* pay did not turn paying on.
+
+**Runnable version of all of this:** `iris playbook run bounty-os`.
+
 ## Rules for agents
 
 1. **Never post a "$ paid" number pulled from raw payout records.** Run `bounty:hunters` (or the

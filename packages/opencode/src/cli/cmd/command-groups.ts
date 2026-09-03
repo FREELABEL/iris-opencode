@@ -148,7 +148,6 @@ export const COMMAND_CATEGORY_MAP: Record<string, string> = {
   tools: "integrations",
   skills: "integrations",
   n8n: "integrations",
-  "platform-marketplace": "integrations",
 
   // Entity Management
   brands: "entities",
@@ -246,6 +245,10 @@ export function registerCommand(commandModule: any): void {
   const cmdStr = String(commandModule.command ?? "")
   const name = cmdStr.split(/\s/)[0]
   if (!name || name === "$0") return
+  // `describe: false` is yargs' own way of saying "runnable, not advertised". Honour it here
+  // too, or a command hidden from `--help` still shows up in the grouped listing and the
+  // hiding is only half done (#182938). One convention, both surfaces.
+  if (commandModule.describe === false) return
   registry.push({
     name,
     describe: commandModule.describe ?? "",

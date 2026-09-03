@@ -388,37 +388,104 @@ async function executeMacosLocal(
  * the first match. If multiple exist, the user should disambiguate
  * with --integration-id directly.
  */
+/**
+ * Why this reports what it FOUND, not just that it failed (#182862).
+ *
+ * `--account=alex@freelabel.net` on gmail said "No connection ... Run: iris integrations list".
+ * The user runs that, sees Gmail plainly connected, and concludes --account is broken. It was
+ * not: alex@freelabel.net is a GOOGLE-DRIVE account, and the two gmail connections are one with
+ * a different email and one with no account email recorded at all. The resolution was right and
+ * the sentence was useless — it described the outcome instead of the evidence.
+ *
+ * 21 of 25 connections on this account carry NO account_email, so matching an email against them
+ * can never succeed. That is worth saying out loud at the moment it bites, because the fix is to
+ * reconnect or pass --integration-id, and neither is guessable from "No connection".
+ */
+export type AccountResolution =
+  | { ok: true; integrationId: number }
+  | { ok: false; message: string }
+
 export async function resolveAccountToIntegrationId(
   userId: number,
   normalizedType: string,
   account: string,
-): Promise<number | null> {
+): Promise<AccountResolution> {
+  let items: any[] = []
   try {
     const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {}, IRIS_API)
-    if (!res.ok) return null
+    if (!res.ok) {
+      // Was `return null`, which the caller rendered as "no connection". A 500 on the
+      // lookup is not evidence about the user's connections — same conflation as #182861.
+      return {
+        ok: false,
+        message:
+          `Could not look up connections — iris-api returned HTTP ${res.status}. ` +
+          `This says nothing about whether '${normalizedType}' is connected; the lookup itself failed.`,
+      }
+    }
     const data = (await res.json()) as any
-    const items: any[] = firstArray(data?.connections, data?.data, data)
-    const needle = account.toLowerCase()
-    const candidates = items.filter((i) => {
-      if (String(i.type ?? "").toLowerCase() !== normalizedType) return false
-      const email = String(i.account_email ?? "").toLowerCase()
-      const name = String(i.name ?? "").toLowerCase()
-      return email === needle || name === needle || email.includes(needle) || name.includes(needle)
-    })
-    if (candidates.length === 0) return null
-    return Number(candidates[0].id) || null
+    items = firstArray(data?.connections, data?.data, data)
   } catch (err) {
-    // Distinguish network/transport errors (which should surface) from a
-    // genuine "no match". Previously swallowed as null, masking outages
-    // (bug #16).
     if (err instanceof TypeError || (err as any)?.name === "FetchError" || (err as any)?.code === "ECONNREFUSED") {
       throw err
     }
     if (process.env.IRIS_DEBUG) {
       console.error(dim(`[resolveAccountToIntegrationId] lookup failed for ${normalizedType}/${account}:`), err)
     }
-    return null
+    return { ok: false, message: `Connection lookup failed for '${normalizedType}'. Re-run with IRIS_DEBUG=1 for the cause.` }
   }
+
+  const ofType = items.filter((i) => String(i.type ?? "").toLowerCase() === normalizedType)
+  const needle = account.toLowerCase()
+  const candidates = ofType.filter((i) => {
+    const email = String(i.account_email ?? "").toLowerCase()
+    const name = String(i.name ?? "").toLowerCase()
+    return email === needle || name === needle || email.includes(needle) || name.includes(needle)
+  })
+
+  if (candidates.length > 0) {
+    const id = Number(candidates[0].id)
+    if (id) return { ok: true, integrationId: id }
+  }
+
+  return { ok: false, message: describeAccountMiss(normalizedType, account, ofType) }
+}
+
+/**
+ * The sentence a failed --account match should produce.
+ *
+ * Pure and exported so it can be tested without a transport — the bug here was never in the
+ * matching, it was in what the failure SAID, so the sentence is the thing worth pinning.
+ */
+export function describeAccountMiss(
+  normalizedType: string,
+  account: string,
+  ofType: Array<{ id?: unknown; account_email?: unknown; name?: unknown }>,
+): string {
+  // "nothing matched" and "nothing is connected" are different problems with different fixes,
+  // and the old message could not tell them apart.
+  if (ofType.length === 0) {
+    return `No '${normalizedType}' connection exists. Connect one: iris connect ${normalizedType}`
+  }
+
+  const rows = ofType
+    .map((i) => {
+      const email = i.account_email ? String(i.account_email) : "(no account email recorded)"
+      return `    #${i.id}  ${email}  ${String(i.name ?? "")}`.trimEnd()
+    })
+    .join("\n")
+
+  const missingEmail = ofType.filter((i) => !i.account_email).length
+  const hint = missingEmail
+    ? `\n  ${missingEmail} of these ${missingEmail === 1 ? "has" : "have"} no account email stored, so an ` +
+      `--account match can never succeed against ${missingEmail === 1 ? "it" : "them"}. ` +
+      `Use --integration-id=<id> above, or reconnect to record the address.`
+    : `\n  Use --integration-id=<id> above.`
+
+  return (
+    `No '${normalizedType}' connection matches --account='${account}', but ${ofType.length} ` +
+    `'${normalizedType}' connection${ofType.length === 1 ? " exists" : "s exist"}:\n${rows}${hint}`
+  )
 }
 
 // Composio returns slugs without hyphens (googledrive), but iris-api expects
@@ -428,6 +495,45 @@ const SLUG_ALIASES: Record<string, string> = {
   googledocs: "google-docs",
   googlecalendar: "google-calendar",
   outlookcalendar: "outlook-calendar",
+}
+
+/**
+ * The same parameter has two names depending on which backend answers (#182866).
+ *
+ * `iris integrations exec gmail read_emails limit=3` returns ONE message. The same call with
+ * max_results=3 returns three. Neither is a typo on the caller's part — the two Gmail services
+ * genuinely disagree:
+ *
+ *   fl-api   app/Services/Integrations/GmailIntegrationService.php        $parameters['max_results']
+ *   iris-api app/Services/Integrations/Gmail/GmailIntegrationService.php  $parameters['limit']
+ *
+ * Both default to 10, so neither explains the 1 that actually comes back — the executing backend
+ * is a third path again. But the caller-visible defect does not depend on resolving that: a
+ * parameter the backend does not recognise is DROPPED IN SILENCE, and the caller is handed a
+ * result that quietly ignored what they asked for. A wrong answer with a 200 on it.
+ *
+ * Sending every spelling is the fix that survives not knowing which backend answers. These are
+ * synonyms for one another, no backend errors on an extra key, and whichever service runs finds
+ * the name it expects. Only fills in spellings the caller did NOT supply, so an explicit value
+ * always wins and passing two different values for the same idea is left alone rather than
+ * silently reconciled.
+ */
+const PARAM_SYNONYMS: string[][] = [
+  ["limit", "max_results", "maxResults"],
+  ["query", "q"],
+]
+
+export function withParamSynonyms(params: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...params }
+  for (const group of PARAM_SYNONYMS) {
+    const supplied = group.filter((k) => out[k] !== undefined && out[k] !== null)
+    // 0 supplied: nothing to broadcast. 2+ supplied: the caller was explicit about
+    // different keys and guessing which they meant would be worse than passing both.
+    if (supplied.length !== 1) continue
+    const value = out[supplied[0]!]
+    for (const k of group) if (out[k] === undefined) out[k] = value
+  }
+  return out
 }
 
 export async function executeIntegrationCall(
@@ -444,6 +550,7 @@ export async function executeIntegrationCall(
   }
 
   const normalized = SLUG_ALIASES[type] ?? type
+  params = withParamSynonyms(params)
   const userId = await requireUserId()
   if (!userId) throw new Error("user_id required")
 
@@ -452,13 +559,9 @@ export async function executeIntegrationCall(
   // name matches case-insensitively.
   let integrationId: number | undefined = options.integrationId
   if (!integrationId && options.account) {
-    integrationId = (await resolveAccountToIntegrationId(userId, normalized, options.account)) ?? undefined
-    if (!integrationId) {
-      throw new Error(
-        `No connection for type='${normalized}' matching --account='${options.account}'. ` +
-        `Run: iris integrations list`
-      )
-    }
+    const resolution = await resolveAccountToIntegrationId(userId, normalized, options.account)
+    if (!resolution.ok) throw new Error(resolution.message)
+    integrationId = resolution.integrationId
   }
 
   // Canva uses native service on fl-api (Composio has 0 actions)
@@ -742,19 +845,48 @@ const ListConnectedCommand = cmd({
       return msg ? `${target} unreachable — ${msg}` : `${target} unreachable`
     }
 
+    // A FAILING PROBE IS NOT A FAILING INTEGRATION (#182861, #182867).
+    //
+    // The state model above already says the right thing — "unknown" renders dim, as "we could
+    // not determine this", and is deliberately not coloured like a failure. The classification
+    // did not match it: only a 404 reached that branch, so a 500/502/503 from the probe endpoint,
+    // or iris-api being unreachable, fell through to `error` and rendered [unverified]. That is a
+    // claim about the INTEGRATION made on the strength of a failure in OUR probe path — and it
+    // was measurably wrong: connections reporting [unverified] executed their functions fine.
+    //
+    // The distinction that matters is WHO failed:
+    //   - the probe transport failed (4xx-not-auth, 5xx, network) -> we could not ask -> unknown
+    //   - the probe ran and was REFUSED (401/403)                 -> we asked, denied  -> expired
+    // Only the second is evidence about the integration.
+    //
+    // Deliberately NOT applied to the calendar/bridge probe: there the bridge IS the execution
+    // path, so a dead bridge means calendar reads genuinely do not work. That one stays `error`.
+    const probeUnavailable = (status: number, endpoint: string): Probe | null => {
+      if (status === 401 || status === 403) return null // auth answers are real answers
+      if (status === 404)
+        return { state: "unknown", reason: `probe endpoint ${endpoint} returned 404` }
+      if (status === 408 || status === 429 || status >= 500)
+        return {
+          state: "unknown",
+          reason: `probe endpoint ${endpoint} returned HTTP ${status} — the probe is unavailable, which says nothing about the integration`,
+        }
+      return null
+    }
+
     const verifyFns: Record<string, (row: any) => Promise<Probe>> = {
       gmail: async () => {
         let r: Response | null = null
         try {
           r = await irisFetch(`/api/v1/leads/0/gmail-threads`)
         } catch (e) {
-          return { state: "error", reason: netReason(e, "iris-api") }
+          // Could not reach our own API. That is a fact about us, not about Gmail.
+          return { state: "unknown", reason: netReason(e, "iris-api") }
         }
-        if (!r) return { state: "error", reason: "iris-api unreachable" }
+        if (!r) return { state: "unknown", reason: "iris-api unreachable" }
         if (r.status === 401 || r.status === 403)
           return { state: "expired", reason: "Google OAuth token rejected" }
-        if (r.status === 404)
-          return { state: "unknown", reason: "probe endpoint /leads/0/gmail-threads returned 404" }
+        const gUnavail = probeUnavailable(r.status, "/leads/0/gmail-threads")
+        if (gUnavail) return gUnavail
         if (!r.ok) return { state: "error", reason: `iris-api returned HTTP ${r.status}` }
         return { state: "verified", reason: "Gmail API reachable" }
       },
@@ -803,13 +935,13 @@ const ListConnectedCommand = cmd({
         try {
           r = await irisFetch("/api/v1/integrations/exec", { method: "POST", body: JSON.stringify(body) })
         } catch (e) {
-          return { state: "error", reason: netReason(e, "iris-api") }
+          return { state: "unknown", reason: netReason(e, "iris-api") }
         }
-        if (!r) return { state: "error", reason: "iris-api unreachable" }
+        if (!r) return { state: "unknown", reason: "iris-api unreachable" }
         if (r.status === 401 || r.status === 403)
           return { state: "expired", reason: "Google OAuth token rejected" }
-        if (r.status === 404)
-          return { state: "unknown", reason: "probe endpoint /integrations/exec returned 404" }
+        const dUnavail = probeUnavailable(r.status, "/integrations/exec")
+        if (dUnavail) return dUnavail
         if (!r.ok) return { state: "error", reason: `iris-api returned HTTP ${r.status}` }
         return { state: "verified", reason: "Drive API reachable" }
       },

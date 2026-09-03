@@ -4,6 +4,9 @@ import { GlobalBus } from "@/bus/global"
 import { Log } from "../util/log"
 import { describeRoute, generateSpecs, validator, resolver, openAPIRouteHandler } from "hono-openapi"
 import { Hono } from "hono"
+import { join } from "path"
+import { transcribeLocal } from "../cli/lib/transcription"
+import { discardDir, secureTempDir } from "../cli/lib/stt-policy"
 import { cors } from "hono/cors"
 import { stream, streamSSE } from "hono/streaming"
 import { proxy } from "hono/proxy"
@@ -60,6 +63,11 @@ export namespace Server {
 
   let _url: URL | undefined
   let _corsWhitelist: string[] = []
+  // The hostname the server actually bound to. /transcribe refuses unless this is loopback:
+  // --mdns flips the bind to 0.0.0.0, and an audio endpoint reachable from the LAN is a
+  // microphone reachable from the LAN. Recorded at listen() rather than checked per-request
+  // because Bun's per-connection IP is not threaded through Hono's fetch here.
+  let _boundHostname = "127.0.0.1"
 
   export function url(): URL {
     return _url ?? new URL("http://localhost:4096")
@@ -369,6 +377,66 @@ iris traces          what your agents did</pre>
             },
           })
           return c.json(true)
+        },
+      )
+      .post(
+        "/transcribe",
+        describeRoute({
+          summary: "Transcribe audio on-device",
+          description:
+            "Transcribe an audio file using local whisper.cpp. Audio never leaves the machine: this route " +
+            "always uses the on-device engine and has no cloud path, regardless of IRIS_TRANSCRIPTION_PROVIDER. " +
+            "Available only when the server is bound to loopback.",
+          operationId: "transcribe",
+          responses: {
+            200: {
+              description: "Transcript",
+              content: {
+                "application/json": {
+                  schema: resolver(z.object({ text: z.string(), provider: z.string(), ms: z.number() })),
+                },
+              },
+            },
+          },
+        }),
+        async (c) => {
+          // A microphone endpoint on 0.0.0.0 is a microphone the network can reach.
+          if (!["127.0.0.1", "localhost", "::1"].includes(_boundHostname)) {
+            return c.json(
+              { error: `Refused: /transcribe is loopback-only and this server is bound to ${_boundHostname}.` },
+              403,
+            )
+          }
+
+          const form = await c.req.formData().catch(() => null)
+          const entry = form?.get("audio")
+          // Blob, not File: this tsconfig has no DOM lib, so `File` is not a value here.
+          if (!entry || typeof entry === "string") {
+            return c.json({ error: "audio file is required (multipart field 'audio')" }, 400)
+          }
+          const file = entry as Blob & { name?: string }
+
+          // whisper.cpp has no size limit, but an unbounded body on a local daemon is still a
+          // way to fill someone's disk. 200MB is hours of speech.
+          const MAX_BYTES = 200 * 1024 * 1024
+          if (file.size > MAX_BYTES) return c.json({ error: `audio exceeds ${MAX_BYTES} bytes` }, 413)
+
+          const started = Date.now()
+          // 0700 dir, removed in finally — the recording must not outlive the request that
+          // produced it (epic #182784, B1).
+          const work = secureTempDir("iris-serve-stt-")
+          try {
+            const name = (file.name || "audio.webm").replace(/[^\w.-]/g, "_")
+            const dest = join(work, name)
+            await Bun.write(dest, file)
+            // transcribeLocal, never transcribeAudio: this route has no cloud branch to reach.
+            const text = await transcribeLocal(dest, { language: c.req.query("language") || undefined })
+            return c.json({ text, provider: "whisper-local", ms: Date.now() - started })
+          } catch (err) {
+            return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+          } finally {
+            discardDir(work)
+          }
         },
       )
       .use(async (c, next) => {
@@ -2957,6 +3025,7 @@ iris traces          what your agents did</pre>
 
   export function listen(opts: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
     _corsWhitelist = opts.cors ?? []
+    _boundHostname = opts.hostname
 
     const args = {
       hostname: opts.hostname,

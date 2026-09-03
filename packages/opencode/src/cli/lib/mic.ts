@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "child_process"
-import { mkdirSync } from "fs"
+import { chmodSync, mkdirSync } from "fs"
 import { homedir, platform } from "os"
 import { join } from "path"
 
@@ -126,7 +126,18 @@ export async function startRecording(opts: StartOptions = {}): Promise<Recording
     )
   }
 
-  mkdirSync(CAPTURE_DIR, { recursive: true })
+  mkdirSync(CAPTURE_DIR, { recursive: true, mode: 0o700 })
+  // chmod unconditionally: mkdirSync's `mode` applies ONLY to directories it actually
+  // CREATES, so once ~/.iris/recordings exists at 0755 the mode above is a silent no-op.
+  // (~/.iris/logs was found at 0744 for exactly this reason.) These recordings are not
+  // transient — listen.ts deliberately KEEPS the wav when transcription fails, so a
+  // world-readable directory here means retained voice sitting around for other local
+  // accounts to read.
+  try {
+    chmodSync(CAPTURE_DIR, 0o700)
+  } catch {
+    /* not ours to chmod — better to record than to fail on a permissions nicety */
+  }
   const path = join(CAPTURE_DIR, `listen-${Date.now()}.wav`)
   const fixed = typeof opts.seconds === "number" && opts.seconds > 0
 

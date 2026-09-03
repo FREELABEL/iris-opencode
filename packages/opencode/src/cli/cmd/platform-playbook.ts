@@ -1,7 +1,8 @@
 import { cmd } from "./cmd"
 import { PlaybookContentsCommands } from "./platform-playbook-contents"
 import * as prompts from "./clack"
-import { confirmWiden } from "./exposure-gate"
+// Aliased: `Tier` is already taken in this file by the e2e runner's own unrelated enum.
+import { confirmWiden, type Tier as ExposureTier } from "./exposure-gate"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError, writeJson, IRIS_API } from "./iris-api"
 import { Skill } from "../../skill/skill"
@@ -22,7 +23,7 @@ import {
   type StepResult,
   type ExecuteOptions,
 } from "../../skill/executor"
-import { existsSync, readdirSync } from "fs"
+import { existsSync, readdirSync, readFileSync } from "fs"
 import { join as pathJoin } from "path"
 import { runE2ESuite, probeServices, type E2ESuiteResult, type Tier, type ModeCoverage } from "../../skill/e2e/runner"
 import { PlaybookDraftCommand } from "./playbook-draft"
@@ -123,7 +124,12 @@ const SkillShowCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", demandOption: true })
-      .option("json", { type: "boolean", default: false }),
+      .option("json", { type: "boolean", default: false })
+      .option("full", {
+        type: "boolean",
+        default: false,
+        describe: "print the whole playbook — step bodies, code and prose, not just the outline",
+      }),
   async handler(args) {
     await withInstance(async () => {
       const info = await Skill.get(args.name as string)
@@ -190,6 +196,45 @@ const SkillShowCommand = cmd({
           const deps = step.depends ? dim(` (after: ${step.depends})`) : ""
           const cond = step.condition ? dim(` (if: ${step.condition})`) : ""
           console.log(`    ${bold(step.id)} — ${step.title}  ${mode}${confirm}${deps}${cond}`)
+        }
+      }
+
+      // The outline above is not the playbook. The step bodies, the step code, and any prose
+      // after the last step ARE the procedure — and `show` printed none of it (#182906).
+      // Silently, which is what made it a bug rather than a preference: a model that ran
+      // `show` had no way to tell it was holding 57% of the document. work-the-epic made it
+      // concrete — its step 02 tells the reader to "read 'Writing it well' at the bottom of
+      // this playbook", and `show` never printed that section. The instruction was not
+      // followable through the surface that delivered it.
+      // `--json` always carried the whole text; only this path dropped it.
+      const rawDoc = existsSync(plan.location) ? readFileSync(plan.location, "utf8") : ""
+      const docBody = rawDoc.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trimEnd()
+
+      if (docBody) {
+        if (args.full) {
+          console.log()
+          console.log(bold("  Playbook:"))
+          console.log()
+          for (const line of docBody.split("\n")) console.log(`  ${line}`)
+        } else {
+          // Never truncate silently. Report how much is withheld and how to get it: someone
+          // told "310 lines, the outline omits them" goes and reads them, where someone shown
+          // only an outline reasonably concludes the outline was the whole thing.
+          const lines = docBody.split("\n").length
+          const chars = plan.steps.reduce((n, s) => n + (s.body?.length ?? 0) + (s.code?.length ?? 0), 0)
+          // `plan.guidance` was read here and does not exist on SkillPlan — never has. The
+          // branch it gated could not fire, so this line has always rendered "and any prose"
+          // while appearing to offer a character count. Surfaced when a later change let the
+          // compiler see the property access; removed rather than typed away, because the
+          // count it promised was never available to give.
+          console.log()
+          console.log(
+            `  ${bold("Body:")} ${lines} lines. The outline above omits the step bodies` +
+              (chars ? ` (${chars.toLocaleString()} chars)` : "") +
+              ` and any prose.`,
+          )
+          console.log(`        ${dim("full text:")} iris playbook show ${plan.name} --full`)
+          console.log(`        ${dim("json:     ")} iris playbook show ${plan.name} --json`)
         }
       }
 
@@ -1418,32 +1463,77 @@ const PlaybookCheckPrivateCommand = cmd({
  * Built from IRIS_API rather than hardcoded, so a staging or self-hosted install prints its own
  * host instead of confidently sending somebody to production.
  */
-function playbookUrl(name: string): string {
+export function playbookUrl(name: string): string {
   const base = String(IRIS_API).replace(/\/+$/, "")
-  return `${base}/p/playbook?name=${encodeURIComponent(name)}`
+
+  // /playbooks/{name} — the real detail route (web.php: playbooks.show), serving a
+  // Playbooks/Show page. This used to build /p/playbook?name=… : a query string against a
+  // generic viewer page, which is not the address anyone would type, link, or recognise.
+  // The docblock above already described /playbooks semantics; only the string was wrong.
+  return `${base}/playbooks/${encodeURIComponent(name)}`
 }
 
 /** What a given scope means for who can open that URL. Said plainly, because "published" does not. */
 function audienceNote(scope?: string, bloqId?: number | null): string {
   switch (scope) {
-    case "public":  return "anyone — it is listed in the marketplace"
-    case "project": return `unlisted — anyone in bloq #${bloqId ?? "?"} can open it, nobody else`
-    case "private": return "only you"
-    default:        return "whoever the API allows"
+    case "public":   return "anyone — it is listed in the marketplace"
+    case "unlisted": return "anyone with the link — it appears in no listing, and no sign-in is asked for"
+    // Deliberately no longer described as "unlisted". It said that for months, which reads as
+    // "a link will work" — and a link does NOT work: the reader has to be an OTP-proven member
+    // of the bloq. That wording is what sent someone hunting for a share URL that did not exist.
+    case "project":  return `members of bloq #${bloqId ?? "?"} only, and they must be signed in — a bare link will 404`
+    case "private":  return "only you — but stored in the cloud registry, so it can reach another machine you sign into"
+    case "local":    return "nobody but this machine — it is never uploaded, so there is no URL to open"
+    default:         return "whoever the API allows"
+  }
+}
+
+/**
+ * Playbook scope -> exposure-gate tier. The two vocabularies differ on purpose: the ladder in
+ * exposure-gate.ts is shared across pages, notes, datasets and components, so it says "team"
+ * where playbooks say "project".
+ */
+function scopeToTier(scope: string): ExposureTier {
+  switch (scope) {
+    case "public":   return "public"
+    case "unlisted": return "unlisted"
+    case "project":  return "team"
+    default:         return "private"   // private, local
+  }
+}
+
+/**
+ * What scope is this playbook at RIGHT NOW, so the gate compares against reality.
+ *
+ * A lookup that fails answers "private" — the most private thing it could be — because
+ * isWidening() treats an unknown `from` the same way: when we cannot tell, err toward asking
+ * rather than toward silently widening. Never let a network hiccup become consent.
+ */
+async function currentTier(name: string): Promise<ExposureTier> {
+  try {
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`)
+    if (!res.ok) return "private"
+    const body = (await res.json()) as any
+    return scopeToTier(String(body?.playbook?.scope ?? "private"))
+  } catch {
+    return "private"
   }
 }
 
 const PublishCommand = cmd({
   command: "publish <name>",
-  describe: "publish a playbook with a scope: private | project | public",
+  describe: "publish a playbook with a scope: local | private | project | unlisted | public",
   builder: (yargs) =>
     yargs
       .positional("name", { type: "string", demandOption: true })
       .option("scope", {
         type: "string",
-        choices: ["private", "project", "public"] as const,
+        choices: ["local", "private", "project", "unlisted", "public"] as const,
         demandOption: true,
-        describe: "association scope: private (you), project (a bloq/team), public (marketplace)",
+        describe:
+          "association scope: local (this machine only, never uploaded), private (you, via the cloud registry), " +
+          "project (a bloq/team, sign-in required), unlisted (anyone with the link, in no listing), " +
+          "public (marketplace)",
       })
       .option("bloq", { type: "number", describe: "bloq (project) id — required when --scope project" })
       .option("access", {
@@ -1458,23 +1548,93 @@ const PublishCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Publish Playbook — ${highlight(String(args.name))}`)
 
+    // #182937 — `local` returns HERE, above everything.
+    //
+    // "private" was read as "stays on my machine". It does not: it is a cloud-backed,
+    // you-only association — `playbook verify` compares the local file against the API
+    // registry, and `check-private` fetches the URL "as a stranger would", both of which
+    // require the thing to have been uploaded. That is the right primitive for reaching a
+    // second machine you sign into, and the wrong one for "no cloud footprint".
+    //
+    // So this branch sits ABOVE the consent prompt, ABOVE requireAuth, and above every
+    // irisFetch in this handler. Not as an optimisation — as the guarantee. There is no
+    // ordering of the code below that can be reached with scope=local, which is what makes
+    // "never written to the API registry" a property of the control flow rather than a promise
+    // in a docstring.
+    if (args.scope === "local") {
+      const resolved = await withInstance(async () => {
+        const info = await Skill.get(String(args.name))
+        if (!info) return null
+        const plan = await parsePlan(info)
+        return { location: info.location, version: plan.version ?? undefined }
+      })
+
+      if (!resolved) {
+        console.error(`  No playbook named '${args.name}' resolves on this machine.`)
+        console.error(`  ${dim("`iris playbook list` shows the exact names.")}`)
+        process.exitCode = 1
+        prompts.outro("Done"); return
+      }
+
+      if (args.json) {
+        await writeJson({
+          ok: true,
+          name: String(args.name),
+          scope: "local",
+          location: resolved.location,
+          version: resolved.version ?? null,
+          uploaded: false,
+          audience: audienceNote("local"),
+        })
+        return
+      }
+
+      console.log()
+      console.log(`  ${success(">")} ${bold(String(args.name))} is registered locally — nothing was uploaded.`)
+      console.log(`    ${dim("on disk")}    ${resolved.location}`)
+      if (resolved.version) console.log(`    ${dim("version")}   ${resolved.version}`)
+      console.log(`    ${dim("audience")}  ${audienceNote("local")}`)
+      console.log()
+      console.log(`  ${dim(`Run it:   iris playbook run ${args.name}`)}`)
+      console.log(`  ${dim(`List it:  iris playbook list`)}`)
+      console.log(`  ${dim(`Later, to put it in the cloud registry: iris playbook publish ${args.name} --scope private`)}`)
+      prompts.outro("Done")
+      return
+    }
+
     if (args.scope === "project" && !args.bloq) {
       console.error("  --bloq <id> is required when --scope project")
       prompts.outro("Done"); return
     }
 
     // #182344 G-04 — a marketplace publish is the widest thing this CLI can do.
-    // private/project never ask; public always does, and refuses with no terminal.
+    //
+    // `from` is READ, not assumed. It was hardcoded to "private", which made every
+    // re-publish of an already-project playbook look like a widening: the gate demanded
+    // --force for a no-op at the scope the playbook was already at, moments after a
+    // publish had reported that exact scope back. A guard that cries wolf on a no-op
+    // trains people to pass --force reflexively, which is the worst possible outcome for
+    // a guard whose entire job is to make one specific action deliberate.
+    //
+    // Failing to READ the current scope now falls back to "private" for the same reason
+    // isWidening() does — err toward asking. But that is now a fallback for a failed
+    // lookup, not the permanent answer it used to be.
     {
-      const to = args.scope === "public" ? "public" : args.scope === "project" ? "team" : "private"
+      const to = scopeToTier(String(args.scope))
+      const from = await currentTier(String(args.name))
       const verdict = await confirmWiden({
         noun: "playbook",
         name: String(args.name),
-        from: "private",
+        from,
         to: to as any,
         extra: args.scope === "public"
           ? [`It is listed in the marketplace as ${String(args.access ?? "free")} and anyone can install it.`]
-          : [],
+          : args.scope === "unlisted"
+            ? [
+                "Anyone holding the link can read it without signing in.",
+                "It stays out of every listing, but the link is the whole credential — once sent it cannot be recalled.",
+              ]
+            : [],
         force: Boolean(args.force),
       })
       if (!verdict.ok) {
@@ -1581,20 +1741,25 @@ const PublishCommand = cmd({
     // The address, or why there is not one. /playbooks/{name} has worked all along; nothing ever
     // returned it, so publish reported success and left the caller to guess — or to conclude that
     // playbooks had no web surface at all.
-    if (pb.public_url) {
-      console.log(`  ${bold("URL")}         ${highlight(String(pb.public_url))}`)
-    } else {
-      console.log(
-        `  ${bold("URL")}         ${dim("none — only a public playbook gets one")}` +
-          dim(`  (re-run with --scope public)`),
-      )
-    }
     if (data?.marketplace) {
       console.log(`  ${bold("Marketplace")} ${highlight(String(data.marketplace.slug))} ${dim(`(${data.marketplace.status})`)}`)
     }
-    // The link, and who can open it. A publish that prints neither is the bug this fixes.
-    const url = playbookUrl(String(args.name))
+
+    // ONE url line. This printed two: "none — only a public playbook gets one", immediately
+    // followed by an actual URL. Both were labelled URL, so the output contradicted itself
+    // and the reader had to guess which half to believe.
+    //
+    // The address is the same whatever the scope — /playbooks/{name} resolves by name and
+    // inherits the API's visibility. Scope decides who can OPEN it, not whether it exists,
+    // so that is said on its own line rather than by withholding the link.
+    const url = String(pb.public_url || playbookUrl(String(args.name)))
     console.log(`  ${bold("URL")}         ${highlight(url)}`)
+    // For an unlisted playbook the two addresses differ and both matter: the uuid is the
+    // unguessable one you send, the slug is the stable one you cite in a doc. Printing only
+    // one of them means somebody pastes the wrong kind into the wrong place.
+    if ((pb.scope ?? args.scope) === "unlisted" && pb.canonical_url && pb.canonical_url !== url) {
+      console.log(`  ${bold("Canonical")}   ${dim(String(pb.canonical_url))}`)
+    }
     console.log(`  ${bold("Who can open")} ${audienceNote(pb.scope ?? String(args.scope), pb.bloq_id ?? args.bloq)}`)
     printDivider()
     prompts.outro(`${success("✓")} Published ${highlight(String(args.name))} as ${bold(String(args.scope))}`)

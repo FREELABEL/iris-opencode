@@ -385,6 +385,43 @@ fi
 INSTALL_DIR=$HOME/.iris/bin
 mkdir -p "$INSTALL_DIR"
 
+# Platform detection runs UNCONDITIONALLY, before the --binary branch.
+#
+# It used to live inside the `else` below — i.e. only on the download path. The desktop app
+# installs the CLI from its BUNDLED sidecar, so it always passes --binary, always took the
+# `if` branch, and never set os/arch. The tmux and Node sections further down then hit
+# `node-v$NODE_VERSION-$os-$arch` under `set -u` and died with:
+#
+#     line 461: os: unbound variable
+#
+# So the app's install path was broken 100% of the time while the curl-pipe path was fine —
+# and a bare-machine test of the curl path passes cleanly right next to it. Detection is
+# cheap, has no side effects, and every later section wants it, so it belongs out here where
+# both branches get it. (Originally 1afe66dc77; re-applied after this file was restored, because
+# a wholesale restore drops it exactly the way the wholesale replacement dropped the funnel.)
+raw_os=$(uname -s)
+os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
+case "$raw_os" in
+  Darwin*) os="darwin" ;;
+  Linux*) os="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) os="windows" ;;
+esac
+
+arch=$(uname -m)
+if [[ "$arch" == "aarch64" ]]; then
+  arch="arm64"
+fi
+if [[ "$arch" == "x86_64" ]]; then
+  arch="x64"
+fi
+
+if [ "$os" = "darwin" ] && [ "$arch" = "x64" ]; then
+  rosetta_flag=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
+  if [ "$rosetta_flag" = "1" ]; then
+    arch="arm64"
+  fi
+fi
+
 # If --binary is provided, skip all download/detection logic
 if [ -n "$binary_path" ]; then
     if [ ! -f "$binary_path" ]; then
@@ -393,29 +430,6 @@ if [ -n "$binary_path" ]; then
     fi
     specific_version="local"
 else
-    raw_os=$(uname -s)
-    os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
-    case "$raw_os" in
-      Darwin*) os="darwin" ;;
-      Linux*) os="linux" ;;
-      MINGW*|MSYS*|CYGWIN*) os="windows" ;;
-    esac
-
-    arch=$(uname -m)
-    if [[ "$arch" == "aarch64" ]]; then
-      arch="arm64"
-    fi
-    if [[ "$arch" == "x86_64" ]]; then
-      arch="x64"
-    fi
-
-    if [ "$os" = "darwin" ] && [ "$arch" = "x64" ]; then
-      rosetta_flag=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
-      if [ "$rosetta_flag" = "1" ]; then
-        arch="arm64"
-      fi
-    fi
-
     combo="$os-$arch"
     case "$combo" in
       linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64)
@@ -815,6 +829,110 @@ if [[ "$no_modify_path" != "true" ]]; then
         echo "# IRIS CLI" >> "$config_file"
         echo "$source_line" >> "$config_file"
     fi
+fi
+
+# ─── Node.js ──────────────────────────────────────────────────────────────────
+#
+# The Hive bridge/daemon needs Node. This script never installed it, never checked for it,
+# and never mentioned it — `grep -ic node install` returned 0 — so the dependency surfaced
+# later, from a different component, as "bridge daemon still needs installing" with no hint
+# that Node was the reason.
+#
+# What a client actually did on a new Mac, 2026-08-30, after this script said SUCCESS:
+#   try brew -> "no pre-built node for this setup" -> download the official binary by hand
+#   -> permission error writing under /usr/local -> node finally detected -> re-run installer
+# Six improvised steps on a paid product, for a dependency we know we need.
+#
+# Deliberately NOT brew: it is absent on plenty of Macs, and "no pre-built bottle for this
+# setup" is precisely what sent that user to a manual download. The official tarball works
+# everywhere and pins the version.
+#
+# Deliberately into $HOME: the permission error above came from targeting a system path.
+# Nothing here needs sudo, and an installer that asks for it on first run is one people quit.
+NODE_VERSION="22.11.0"
+NODE_ROOT="$HOME/.iris/runtime"
+NODE_HOME="$NODE_ROOT/node-v$NODE_VERSION-$os-$arch"
+
+node_ok() {
+    command -v node >/dev/null 2>&1 || return 1
+    # v18 is the floor the bridge needs; an ancient node is worse than none because it fails
+    # deep inside npm rather than here.
+    node_major=$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)
+    [ "$node_major" -ge 18 ] 2>/dev/null
+}
+
+install_node() {
+    case "$os" in
+        darwin|linux) ;;
+        *) print_message warning "Skipping Node install on $os — install Node 18+ manually."; return 1 ;;
+    esac
+
+    if [ -x "$NODE_HOME/bin/node" ]; then
+        export PATH="$NODE_HOME/bin:$PATH"
+        node_ok && return 0
+    fi
+
+    node_url="https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$os-$arch.tar.gz"
+    print_message info "${MUTED}Installing Node ${NC}v$NODE_VERSION${MUTED} (needed by the Hive bridge)${NC}"
+
+    mkdir -p "$NODE_ROOT" || { print_message warning "Could not create $NODE_ROOT"; return 1; }
+    node_tmp=$(mktemp -d) || return 1
+    if ! curl -fsSL "$node_url" -o "$node_tmp/node.tar.gz"; then
+        print_message warning "Could not download Node from $node_url"
+        rm -rf "$node_tmp"; return 1
+    fi
+    if ! tar -xzf "$node_tmp/node.tar.gz" -C "$NODE_ROOT"; then
+        print_message warning "Could not unpack Node"
+        rm -rf "$node_tmp"; return 1
+    fi
+    rm -rf "$node_tmp"
+
+    export PATH="$NODE_HOME/bin:$PATH"
+    add_to_path "$config_file" "export PATH=$NODE_HOME/bin:\$PATH" 2>/dev/null || true
+    node_ok
+}
+
+if node_ok; then
+    print_message info "${MUTED}Node ${NC}$(node -v)${MUTED} already present${NC}"
+elif install_node; then
+    print_message info "${MUTED}Node ${NC}$(node -v)${MUTED} installed${NC}"
+else
+    # Fail LOUDLY rather than succeeding into a broken bridge. The whole reason this section
+    # exists is that a missing dependency used to be discovered by a later, unrelated error.
+    print_message warning "Node 18+ could not be installed automatically."
+    print_message warning "The Hive bridge/daemon will not work until Node is available."
+    print_message info "  Install it from https://nodejs.org and re-run this installer."
+fi
+
+# tmux — the daemon runs agent sessions inside it (173 references in the bridge).
+# Same failure as Node: never installed, never checked, and the daemon does not test for it
+# either — it simply exits code 1. A client hit this on 2026-08-31 immediately after the Node
+# fix and had to read daemon logs to discover the cause.
+#
+# Unlike Node there is no official static tarball, so brew is the only sane automatic route.
+# When brew is absent we FAIL LOUDLY naming tmux, rather than leaving a daemon that exits 1
+# with no reason given.
+ensure_tmux() {
+    command -v tmux >/dev/null 2>&1 && return 0
+    case "$os" in darwin|linux) ;; *) return 1 ;; esac
+    if command -v brew >/dev/null 2>&1; then
+        print_message info "${MUTED}Installing ${NC}tmux${MUTED} (needed by the Hive daemon)${NC}"
+        brew install tmux >/dev/null 2>&1 || true
+        command -v tmux >/dev/null 2>&1 && return 0
+    fi
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y tmux >/dev/null 2>&1 || true
+        command -v tmux >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+if ensure_tmux; then
+    print_message info "${MUTED}tmux ${NC}$(tmux -V 2>/dev/null | awk '{print $2}')${MUTED} present${NC}"
+else
+    print_message warning "tmux is not installed — the Hive daemon will exit immediately without it."
+    print_message info "  macOS:  brew install tmux"
+    print_message info "  Linux:  sudo apt-get install tmux"
 fi
 
 if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then

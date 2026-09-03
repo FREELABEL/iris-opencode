@@ -648,12 +648,31 @@ const SyncCommand = cmd({
       // as importable while `sync` still rejected it at the argument parser. One list.
       .positional("source", { type: "string", demandOption: true, choices: [...BULK_INGESTABLE_TYPES] })
       .positional("path", { type: "string", demandOption: true, describe: "folder path or ID" })
-      .option("recursive", { alias: "r", type: "boolean", default: false })
+      // TRUE, matching the server. fl-api defaults `recursive` to true; this defaulted to
+      // false and sent it explicitly, so the CLI's false always won and "sync this folder"
+      // silently skipped every subfolder — reporting success for a partial import.
+      // Verified 2026-08-29: a Drive folder with one file and one subfolder ingested 1 of 2
+      // without the flag and 2 of 2 with it. Pass --recursive=false for the top level only.
+      .option("recursive", { alias: "r", type: "boolean", default: true })
       .option("list-name", { alias: "l", type: "string", default: "Imported Files" })
       .option("dataset", {
         alias: "d",
         type: "string",
         describe: "target Atlas Dataset slug — files become structured, cited records (not raw list items)",
+      })
+      // MULTIMODAL WAS UNREACHABLE. fl-api gates image OCR on include_images (default
+      // false) and silently drops every image when it is off — and no CLI flag set it, so
+      // the vision path could not be turned on from here at all.
+      .option("include-images", {
+        type: "boolean",
+        default: false,
+        describe: "read images with vision/OCR instead of skipping them (costs vision calls)",
+      })
+      .option("image-detail", {
+        type: "string",
+        choices: ["low", "high", "auto"],
+        default: "high",
+        describe: "vision detail level for images (low is cheaper and coarser)",
       })
       .option("model", { type: "string", describe: "nano model for extraction (default gpt-4o-mini)" })
       .option("json", { type: "boolean", default: false }),
@@ -675,6 +694,8 @@ const SyncCommand = cmd({
         source: args.source,
         path: args.path,
         recursive: args.recursive,
+        include_images: args["include-images"],
+        image_detail_level: args["image-detail"],
         list_name: args["list-name"],
         ...(args.dataset ? { dataset_slug: args.dataset } : {}),
         ...(args.model ? { extractor_model: args.model } : {}),

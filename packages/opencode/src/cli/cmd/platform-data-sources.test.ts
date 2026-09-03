@@ -1,4 +1,5 @@
 import { test, expect } from "bun:test"
+import { readFileSync } from "fs"
 import {
   ABSTAIN_SENTINEL,
   parseParams,
@@ -438,4 +439,14 @@ test("no errors renders nothing rather than an empty Errors heading", () => {
 
 test("blank error strings are not reasons", () => {
   expect(summarizeJobErrors([{ file: "x", error: "   " }, { file: "y" }])).toEqual([])
+})
+
+test("sync recurses by default, because the server does and a partial import looked complete", () => {
+  // Not a pure function to call — this pins the intent that produced the fix, and the
+  // measurement behind it: a Drive folder holding one file plus one subfolder ingested
+  // 1 of 2 with the old default and 2 of 2 with --recursive. The CLI sent `false`
+  // EXPLICITLY, so fl-api's `?? true` never applied and the disagreement was invisible.
+  const src = readFileSync(new URL("./platform-data-sources.ts", import.meta.url), "utf8")
+  const opt = src.match(/\.option\("recursive",[^)]*\)/s)?.[0] ?? ""
+  expect(opt).toContain("default: true")
 })
