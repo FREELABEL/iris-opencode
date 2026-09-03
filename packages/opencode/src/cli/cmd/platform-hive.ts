@@ -16,6 +16,7 @@ import {
 import { HiveFilesCommandExport } from "./platform-hive-files"
 import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
+import { HiveSessionsCommand } from "./platform-hive-sessions"
 import { HiveRentCommand, HiveRentalsCommand, HiveReleaseCommand, HiveProvidersCommand } from "./platform-hive-rent"
 import { VaultCommandExport } from "./platform-vault"
 import {
@@ -4662,6 +4663,7 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveRunCommandExport)
       .command(HiveFilesCommandExport)
       .command(HiveSelftestCommandExport)
+      .command(HiveSessionsCommand)
       // Rentals — long-lived machines a customer pays for, distinct from the ephemeral task
       // workers behind `hive nodes`. Separate verbs because they are a separate product.
       .command(HiveRentCommand)
