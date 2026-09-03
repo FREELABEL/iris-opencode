@@ -207,6 +207,12 @@
    "purpose": "Rent a long-lived machine (Railway/DigitalOcean), run Python/PHP on it, and release it to stop billing. Covers the --no-hive opt-out and why a failed release is reported as a failure."
   },
   {
+   "src": "how-to/hive-sessions.md",
+   "dest": "how-to/hive-sessions.md",
+   "managed": true,
+   "purpose": "See every AI session across your Hive — machine, model, branch, staleness — and send input into any of them without knowing which machine holds it."
+  },
+  {
    "src": "how-to/iris-login.md",
    "dest": "how-to/iris-login.md",
    "managed": true,
