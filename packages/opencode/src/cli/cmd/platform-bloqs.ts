@@ -16,6 +16,7 @@ import { BloqsExportCommand } from "./platform-bloq-export"
 import { AtlasFilesCommandExport } from "./platform-atlas-files"
 import path from "path"
 import { firstArray } from "../../util/array"
+import { openBrowser } from "../../util/browser"
 
 // ============================================================================
 // Display helpers
@@ -76,16 +77,6 @@ async function mintShareLink(
   return data
 }
 
-function openBrowser(url: string): boolean {
-  try {
-    const { execSync } = require("child_process")
-    const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
-    execSync(`${opener} "${url}"`, { stdio: "ignore" })
-    return true
-  } catch {
-    return false
-  }
-}
 
 function printBloq(b: Record<string, unknown>): void {
   const name = bold(String(b.name ?? `Bloq #${b.id}`))
@@ -1658,6 +1649,13 @@ const BloqsMakePublicCommand = cmd({
       .positional("item-id", { describe: "item ID to share", type: "number", demandOption: true })
       .option("password", { describe: "gate the public link behind a password (min 6 chars)", type: "string" })
       .option("expires", { describe: "expiry as an ISO date/time (e.g. 2026-12-31)", type: "string" })
+      // A PHI-classified item REFUSES a wide-open link and its error names
+      // allowed_emails as the way through. These two flags existed only on
+      // `atlas:item make-public`, so anyone who reached for `bloqs make-public`
+      // was told the answer and handed a command that could not express it —
+      // and the only escapes left were un-flagging PHI or moving the item.
+      .option("allowed-emails", { describe: "gate the link to these named, address-verified emails (required for PHI-classified items)", type: "array", string: true })
+      .option("allowed-domains", { describe: "gate the link to these bare domains, e.g. vanguardhcs.com", type: "array", string: true })
       .option("force", { describe: "consent to widening exposure — REQUIRED when there is no terminal", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
@@ -1688,7 +1686,9 @@ const BloqsMakePublicCommand = cmd({
       noun: "note",
       name: `#${args["item-id"]}`,
       from: "private",
-      to: args.password ? "gated" : "public",
+      // named recipients and a password are both "gated" to the exposure ladder —
+      // the difference is who can answer the gate, not how wide it is
+      to: (args["allowed-emails"] || args["allowed-domains"] || args.password) ? "gated" : "public",
       force: Boolean(args.force),
     })
     if (!verdict.ok) {
@@ -1707,6 +1707,8 @@ const BloqsMakePublicCommand = cmd({
       const shareBody: Record<string, unknown> = {}
       if (args.password) shareBody.password = args.password
       if (args.expires) shareBody.expires_at = args.expires
+      if (args["allowed-emails"]) shareBody.allowed_emails = args["allowed-emails"]
+      if (args["allowed-domains"]) shareBody.allowed_domains = args["allowed-domains"]
       const res = await irisFetch(
         `/api/v1/user/${userId}/bloqs/list/item/${args["item-id"]}/make-public`,
         { method: "POST", body: JSON.stringify(shareBody) },

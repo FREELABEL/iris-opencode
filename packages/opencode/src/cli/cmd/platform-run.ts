@@ -33,6 +33,7 @@ import {
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
+import { openBrowser } from "../../util/browser"
 
 // ============================================================================
 // Known integration types — anything else routes to V6 system tools.
@@ -693,13 +694,6 @@ async function getComposioOAuthUrl(type: string): Promise<{ url: string | null; 
   return { url: null, error: lastError }
 }
 
-function openBrowser(url: string): void {
-  const opener =
-    process.platform === "darwin" ? "open" :
-    process.platform === "win32" ? "start" :
-    "xdg-open"
-  exec(`${opener} "${url.replace(/"/g, '\\"')}"`, () => {})
-}
 
 // ============================================================================
 // Subcommands

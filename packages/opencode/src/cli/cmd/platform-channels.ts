@@ -12,6 +12,7 @@ import {
   highlight,
   getBridgeToken,
   PLATFORM_URLS, writeJson } from "./iris-api"
+import { openBrowser } from "../../util/browser"
 
 const BRIDGE_URL = "http://localhost:3200"
 
@@ -592,13 +593,6 @@ const ChannelsStatusCommand = cmd({
 
 // ─── Helper: open browser ────────────────────────────────────────
 
-function openBrowser(url: string) {
-  try {
-    const { execSync } = require("child_process")
-    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
-    execSync(`${cmd} "${url}"`, { stdio: "ignore" })
-  } catch {}
-}
 
 // ─── Announce Target ─────────────────────────────────────────────
 // Designate which channel (within a connected workspace) receives announcements.

@@ -20,6 +20,7 @@ import {
   loopbackRedirectUri,
   type LocalOAuthProvider,
 } from "./integration-oauth-local"
+import { openBrowser } from "../../util/browser"
 
 export interface LocalConnectArgs {
   "client-id"?: string
@@ -33,14 +34,6 @@ export interface LocalConnectArgs {
   "user-id"?: number
 }
 
-function openBrowser(url: string): void {
-  const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
-  try {
-    exec(`${opener} "${url}"`)
-  } catch {
-    // Non-fatal — the URL is always printed as well.
-  }
-}
 
 function envKey(slug: string, suffix: string): string {
   return `${slug.toUpperCase().replace(/-/g, "_")}_${suffix}`
