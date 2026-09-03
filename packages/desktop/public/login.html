@@ -78,6 +78,11 @@
   .ok  { color: var(--primary); }
   .back { background: none; border: 0; color: var(--muted); font-size: 13px;
           cursor: pointer; margin-top: 14px; padding: 0; width: auto; font-family: inherit; }
+  .opt { color: var(--dim); font-weight: 500; text-transform: none; letter-spacing: 0; }
+  #promo { font-family: ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 0.08em; }
+  /* Says what happens when it is left EMPTY. Without that, "optional" reads as
+     "optional but probably required" and people hunt for a key nobody sent them. */
+  .hint { color: var(--dim); font-size: 12px; line-height: 1.5; margin: 8px 0 0; }
   .back:hover { color: var(--fg); background: none; }
   /* True, and unique to this product: one sign-in covers the app and the CLI. Worth saying
      where someone can act on it, rather than in a doc they will not read. */
@@ -111,6 +116,12 @@
 <div id="step-email">
   <label for="email">Email</label>
   <input id="email" type="email" autocomplete="email" placeholder="you@example.com" autofocus />
+
+  <label for="promo" style="margin-top:18px">Start a free trial <span class="opt">optional</span></label>
+  <input id="promo" placeholder="Trial code or licence key" autocapitalize="characters" />
+  <p class="hint">If someone sent you a key, put it here. Without one you can still sign in and
+    use IRIS on the free allowance.</p>
+
   <button id="send">Send code</button>
 </div>
 
@@ -149,21 +160,37 @@ on this machine.</p>
   $("send").onclick = async () => {
     email = $("email").value.trim();
     if (!email) return msg("Enter your email address.", "err");
+    // One field takes BOTH a promo code and a licence key — the server tells them apart by
+    // shape. Asking a client to know which kind of thing they hold is asking them to
+    // understand our billing history.
+    const promo = $("promo").value.trim().toUpperCase();
+    let trialNote = "";
     $("send").disabled = true;
     msg("Sending…");
     try {
       // Exactly the CLI's payload. `email` alone returns 422 — auto_create is what lets a
       // new client sign in at all, and method/expiration are required by the endpoint.
-      await post("/api/v1/auth/send-login-code", {
+      const data = await post("/api/v1/auth/send-login-code", {
         email,
         method: "with_login_code",
         expiration_minutes: 30,
         auto_create: true,
+        // Only when filled: an empty string is a code the server has to reject, which turns a
+        // blank optional field into a visible error.
+        ...(promo ? { promo_code: promo } : {}),
       });
+      const t = data?.data?.trial;
+      trialNote = t?.granted
+        ? (t.kind === "license"
+            ? `Licence applied — ${t.tier || "your"} plan.`
+            : `Trial applied — ${(t.credits || 0).toLocaleString()} credits added.`)
+        : (promo ? (t?.error || "That code could not be applied.") : "");
       $("step-email").hidden = true;
       $("step-code").hidden = false;
       $("sub").textContent = "We sent a code to " + email + ".";
-      msg("");
+      // Say what the key did. One silently ignored is worse than one plainly refused — the
+      // client believes they are on a licence and finds out otherwise mid-task.
+      if (trialNote) { msg(trialNote, /applied/.test(trialNote) ? "ok" : "err"); } else { msg(""); }
       $("code").focus();
     } catch (e) {
       msg(e.message, "err");
