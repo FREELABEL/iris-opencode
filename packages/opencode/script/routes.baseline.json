@@ -1,151 +1,161 @@
 {
-  "note": "Endpoints the CLI calls that no route serves. Introduced with check-routes.ts so the check could land on a codebase that already had these — it fails only on NEW ones. This list must SHRINK. Every entry is a real defect unless its `why` says otherwise; the check reports entries that start passing so they can be deleted.",
-  "source": "#181136 census, 2026-08-19",
-  "allowed": [
-    {
-      "method": "GET",
-      "path": "/api/v1/users/{}/workflows/{}",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/users/{}/workflows",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/v1/workflows/{}",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/workflows/runs/{}/cancel",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/user/{}/bloqs/{}/files",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/bloqs/items/{}",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/users/{}/bloqs/{}/outreach-strategies",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "GET",
-      "path": "/api/v6/user/channels",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/v6/user/channels/{}",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/leads/{}/deliverables/workflow",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v6/integrations/execute",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v6/pages",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/leads/{}/invoices",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/leads/{}/email",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/users/{}/leads/{}/outreach-steps",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/users/{}/leads/{}/notes",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "PATCH",
-      "path": "/api/v1/leads/{}/requirements/{}",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/leads/{}/notes",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v6/workspace/tools/execute",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "GET",
-      "path": "/api/v6/bloqs/agents/{}/skills",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "GET",
-      "path": "/api/v6/bloqs/agents/{}/skills/{}",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v6/bloqs/agents/{}/skills",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/v6/bloqs/agents/{}/skills/{}",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/search",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/bloq-packages/{}",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/bloqs/leads/{}",
-      "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/integrations/exec",
-      "why": "deliberate — this is a PROBE. platform-run.ts calls it expecting a 404 and the next line reads 'probe endpoint /integrations/exec returned 404'. Not a defect."
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/bloqs/{}/service-packages",
-      "why": "Called by offers.ts from the reachr commit 4147af8306. Verified genuinely dead 2026-09-02: a routes snapshot read from PRODUCTION contains 0 matches, so the endpoint was never deployed. Baselined only to unblock an unrelated push (#183399 compute CLI) — it is a REAL defect and is tracked separately. Either ship the fl-api route or fix the call site; do not let this sit."
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/reachr/steps/{}/send",
-      "why": "known dead, bug #183489. NOT yet fixed. Introduced by 726296579 'outreach-send send actually sends'; no reachr route exists in fl-iris-api OR fl-api. Baselined only so the guard keeps failing on NEW dead endpoints instead of blocking every push on this one — `iris outreach-send send` still 404s and must be fixed, not left here."
-    }
-  ]
+ "note": "Endpoints the CLI calls that no route serves. Introduced with check-routes.ts so the check could land on a codebase that already had these — it fails only on NEW ones. This list must SHRINK. Every entry is a real defect unless its `why` says otherwise; the check reports entries that start passing so they can be deleted.",
+ "source": "#181136 census, 2026-08-19",
+ "allowed": [
+  {
+   "method": "GET",
+   "path": "/api/v1/users/{}/workflows/{}",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/users/{}/workflows",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/workflows/{}",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/workflows/runs/{}/cancel",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/user/{}/bloqs/{}/files",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/bloqs/items/{}",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/{}/bloqs/{}/outreach-strategies",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v6/user/channels",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v6/user/channels/{}",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/leads/{}/deliverables/workflow",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v6/integrations/execute",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v6/pages",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/leads/{}/invoices",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/leads/{}/email",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/{}/leads/{}/outreach-steps",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/{}/leads/{}/notes",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/v1/leads/{}/requirements/{}",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/leads/{}/notes",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v6/workspace/tools/execute",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v6/bloqs/agents/{}/skills",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v6/bloqs/agents/{}/skills/{}",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v6/bloqs/agents/{}/skills",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v6/bloqs/agents/{}/skills/{}",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/search",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/bloq-packages/{}",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/bloqs/leads/{}",
+   "why": "known dead, #181136 census. NOT yet fixed. Needs the call site read and the target payload verified — a wrong path swapped for a different wrong path is worse than a 404 because it stops looking broken."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/integrations/exec",
+   "why": "deliberate — this is a PROBE. platform-run.ts calls it expecting a 404 and the next line reads 'probe endpoint /integrations/exec returned 404'. Not a defect."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/bloqs/{}/service-packages",
+   "why": "Called by offers.ts from the reachr commit 4147af8306. Verified genuinely dead 2026-09-02: a routes snapshot read from PRODUCTION contains 0 matches, so the endpoint was never deployed. Baselined only to unblock an unrelated push (#183399 compute CLI) — it is a REAL defect and is tracked separately. Either ship the fl-api route or fix the call site; do not let this sit."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/bloq-items/{}/relate",
+   "why": "Called by platform-boards.ts. The API half is UNPUSHED: fl-api commit c621c1fa 'feat(bloq): typed relations between ITEMS' sits on branch feat/bloq-item-relations and has never been deployed — verified 2026-09-03 against a routes snapshot read from production. So the CLI shipped and its endpoint did not. Baselined ONLY to unblock an unrelated push (#183399 hive sessions). The fix is to ship the fl-api branch, not to keep this entry — delete it the moment that lands."
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/bloq-items/{}/unrelate",
+   "why": "Called by platform-boards.ts. The API half is UNPUSHED: fl-api commit c621c1fa 'feat(bloq): typed relations between ITEMS' sits on branch feat/bloq-item-relations and has never been deployed — verified 2026-09-03 against a routes snapshot read from production. So the CLI shipped and its endpoint did not. Baselined ONLY to unblock an unrelated push (#183399 hive sessions). The fix is to ship the fl-api branch, not to keep this entry — delete it the moment that lands."
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/bloq-items/{}/relations",
+   "why": "Called by platform-boards.ts. The API half is UNPUSHED: fl-api commit c621c1fa 'feat(bloq): typed relations between ITEMS' sits on branch feat/bloq-item-relations and has never been deployed — verified 2026-09-03 against a routes snapshot read from production. Baselined ONLY to unblock an unrelated push (#183399). Delete the moment that branch ships."
+  }
+ ]
 }
