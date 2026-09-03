@@ -1388,6 +1388,68 @@ const BloqsAddItemCommand = cmd({
   },
 })
 
+/**
+ * Read ONE item by id (#183481).
+ *
+ * Item ids are what the rest of the CLI hands you — `bug report` returns one, `atlas publish`
+ * returns one, search lists them — and until now nothing could read one back. `atlas get`
+ * takes a BLOQ id, so passing an item id there suggested `edit-item`. The workaround was
+ * fetching up to 500 items from a board you had to already know and filtering client-side.
+ *
+ * The endpoint existed the whole time; only the verb was missing.
+ */
+const BloqsGetItemCommand = cmd({
+  command: "get-item <item-id>",
+  aliases: ["item", "show-item"],
+  describe: "show one bloq item by id — title, list, and full content",
+  builder: (yargs) =>
+    yargs
+      .positional("item-id", { describe: "item ID to read", type: "number", demandOption: true })
+      .option("content-only", { describe: "print just the content, for piping", type: "boolean", default: false })
+      .option("json", { describe: "JSON output", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
+  async handler(args) {
+    await requireAuth()
+
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args["item-id"]}`)
+    if (!res.ok) {
+      // 404 here means "no item with that id that you can see" — which is not the same as
+      // "no such item". Say the version that is true.
+      const msg =
+        res.status === 404
+          ? `No item ${args["item-id"]} visible to this account. Check the id, or whether the board is shared with you.`
+          : `HTTP ${res.status}`
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
+      else prompts.log.error(msg)
+      process.exitCode = 1
+      return
+    }
+
+    const body = (await res.json()) as any
+    const item = body?.data ?? body
+
+    if (args.json) {
+      console.log(JSON.stringify(item, null, 2))
+      return
+    }
+    if (args["content-only"]) {
+      console.log(String(item.content ?? ""))
+      return
+    }
+
+    UI.empty()
+    prompts.intro(`◈  Item ${item.id}`)
+    printKV("Title", String(item.title ?? ""))
+    if (item.list_name) printKV("List", `${item.list_name}${item.bloq_list_id ? ` (#${item.bloq_list_id})` : ""}`)
+    if (item.status) printKV("Status", String(item.status))
+    if (item.created_at) printKV("Created", String(item.created_at).slice(0, 16).replace("T", " "))
+    if (item.public_url) printKV("Public", String(item.public_url))
+    printDivider()
+    console.log(String(item.content ?? "").trimEnd())
+    printDivider()
+  },
+})
+
 const BloqsDeleteItemCommand = cmd({
   command: "delete-item <item-id>",
   aliases: ["rm-item", "remove-item"],
@@ -3971,6 +4033,7 @@ export const PlatformBloqsCommand = productCommand({
       .command(BloqsUpdateCommand)
       .command(BloqsIngestCommand)
       .command(BloqsAddItemCommand)
+      .command(BloqsGetItemCommand)
       .command(BloqsDeleteItemCommand)
       .command(BloqsRestoreItemCommand)
       .command(BloqsDeleteCommand)
