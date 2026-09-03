@@ -9,12 +9,17 @@ import { executePublish, executePublishMany, executeMakePublic, executeMakePriva
 // ============================================================================
 
 const AtlasItemPublishCommand = cmd({
-  command: "publish <files..>",
+  command: "publish [files..]",
   aliases: ["sync"],
   describe: "publish markdown file(s) as Atlas items (private by default — add --public for a shareable URL; globs ok; re-run to sync)",
   builder: (yargs) =>
     yargs
       .positional("files", { describe: "one or more markdown (.md) files (e.g. ./docs/*.md)", type: "string", demandOption: true })
+      .option("bloq-item", {
+        describe: "share an EXISTING item by id instead of publishing a file (same as make-public)",
+        type: "number",
+        alias: ["bloqItem", "item"],
+      })
       .option("bloq", { describe: "target bloq ID (default: prompt, or auto 'Published Docs')", type: "number" })
       .option("list", { describe: "target list (ID or name; created if missing)", type: "string" })
       .option("title", { describe: "override the item title (single file only)", type: "string" })
@@ -40,7 +45,7 @@ const AtlasItemUnpublishCommand = cmd({
   describe: "make the item a markdown file points at private again (--delete to remove it)",
   builder: (yargs) =>
     yargs
-      .positional("file", { describe: "the published markdown file (reads iris_item_id from frontmatter)", type: "string", demandOption: true })
+      .positional("file", { describe: "the published markdown file (reads iris_item_id from frontmatter)", type: "string", demandOption: false })
       .option("delete", { describe: "also delete the bloq item (not just unshare)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),

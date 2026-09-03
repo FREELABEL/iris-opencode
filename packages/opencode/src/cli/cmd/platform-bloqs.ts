@@ -1614,12 +1614,17 @@ const BloqsDeleteCommand = cmd({
 })
 
 const BloqsPublishCommand = cmd({
-  command: "publish <file>",
+  command: "publish [file]",
   aliases: ["publish-md"],
   describe: "publish a markdown file or HTML artifact as a bloq item (private by default — add --public for a shareable URL; re-run to sync)",
   builder: (yargs) =>
     yargs
       .positional("file", { describe: "path to a markdown (.md) file", type: "string", demandOption: true })
+      .option("bloq-item", {
+        describe: "share an EXISTING item by id instead of publishing a file (same as make-public)",
+        type: "number",
+        alias: ["bloqItem", "item"],
+      })
       .option("bloq", { describe: "target bloq ID (default: prompt, or auto 'Published Docs')", type: "number" })
       .option("list", { describe: "target list (ID or name; created if missing)", type: "string" })
       .option("title", { describe: "override the item title", type: "string" })

@@ -423,6 +423,21 @@ export async function executePublish(args: PublishArgs): Promise<void> {
   const userId = await requireUserId(args["user-id"])
   if (!userId) { if (!json) prompts.outro("Done"); return }
 
+  // DO WHAT WAS ASKED. `publish` takes a file; `make-public` takes an item id.
+  // The words read as synonyms, so "publish this as a public URL" lands here with
+  // an id. Rather than refuse, delegate — make-public carries every guard
+  // (classification, allowlists, the exposure ladder), so nothing is bypassed by
+  // arriving through this door. Erroring instead is what sent an agent improvising
+  // until a PHI-classified SOP was world-readable (#183518).
+  const idArg = String((args as any)["bloq-item"] ?? (args as any).item ?? args.file ?? "")
+  if (/^\d{3,}$/.test(idArg) && !existsSync(idArg)) {
+    if (!args.json) {
+      prompts.log.info(`#${idArg} is an item id — sharing the existing item rather than creating a new one.`)
+    }
+    await executeMakePublic({ ...(args as any), "item-id": Number(idArg) })
+    return
+  }
+
   if (!existsSync(args.file)) {
     // `publish` takes a FILE and creates a new item. `make-public` takes an
     // EXISTING item id and gives it a URL. Asked to "publish this as a public
@@ -823,6 +838,21 @@ export async function executeUnpublish(args: UnpublishArgs): Promise<void> {
   if (!token) { if (!json) prompts.outro("Done"); return }
   const userId = await requireUserId(args["user-id"])
   if (!userId) { if (!json) prompts.outro("Done"); return }
+
+  // DO WHAT WAS ASKED. `publish` takes a file; `make-public` takes an item id.
+  // The words read as synonyms, so "publish this as a public URL" lands here with
+  // an id. Rather than refuse, delegate — make-public carries every guard
+  // (classification, allowlists, the exposure ladder), so nothing is bypassed by
+  // arriving through this door. Erroring instead is what sent an agent improvising
+  // until a PHI-classified SOP was world-readable (#183518).
+  const idArg = String((args as any)["bloq-item"] ?? (args as any).item ?? args.file ?? "")
+  if (/^\d{3,}$/.test(idArg) && !existsSync(idArg)) {
+    if (!args.json) {
+      prompts.log.info(`#${idArg} is an item id — sharing the existing item rather than creating a new one.`)
+    }
+    await executeMakePublic({ ...(args as any), "item-id": Number(idArg) })
+    return
+  }
 
   if (!existsSync(args.file)) {
     // `publish` takes a FILE and creates a new item. `make-public` takes an
