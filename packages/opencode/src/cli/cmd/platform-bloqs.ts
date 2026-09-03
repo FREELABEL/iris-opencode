@@ -4000,7 +4000,11 @@ const BloqsPublishPagesCommand = cmd({
 export const PlatformSearchCommand = cmd({
   ...BloqsSearchCommand,
   command: "search <query>",
-  aliases: ["find"],
+  // NOT aliased to `find`. `find` is its own command (platform-find) searching the CLI's
+  // verbs, and yargs already resolved `iris find` to that one — so this alias did nothing
+  // except make the help attribute `find` to content search, hiding the real command
+  // (#183479). Two commands cannot both own a name; the loser should not advertise it.
+  aliases: [],
   describe: "search everything you have written — item titles, item content, and board names",
 })
 
