@@ -192,16 +192,22 @@ export const AuthWhoamiCommand = cmd({
   describe: "show which account this credential authenticates as (id + email)",
   builder: (yargs) => yargs.option("json", { type: "boolean", default: false, describe: "JSON output" }),
   async handler(args) {
-    const { irisFetch, FL_API, IRIS_API, dim, bold } = await import("./iris-api")
+    const { irisFetch, FL_API, IRIS_API, resolveTokenSource, dim, bold } = await import("./iris-api")
 
-    // Say which source won, not just what it resolved to.
-    const credentialSource = process.env.IRIS_API_KEY
-      ? "IRIS_API_KEY (environment)"
-      : process.env.FL_API_TOKEN
-        ? "FL_API_TOKEN (environment)"
-        : fs.existsSync(path.join(os.homedir(), ".iris", "sdk", ".env"))
-          ? "~/.iris/sdk/.env (iris auth login)"
-          : "unknown"
+    // ASK THE RESOLVER WHICH SOURCE WON (#183661).
+    //
+    // This used to re-derive the label here, by re-checking the environment and the sdk
+    // .env — in a different ORDER from the resolver, and with a list that did not include
+    // the auth store at all, which is the resolver's FIRST source. So a token from
+    // `iris auth login` was reported as "IRIS_API_KEY (environment)".
+    //
+    // It is read at the worst moment: nobody runs whoami idly, they run it while
+    // something is refusing them. Acting on the wrong pointer means editing a file that
+    // is not being read, and the fix then appears to fail — which argues the diagnosis
+    // was wrong rather than the label. That is exactly what happened during #183652.
+    //
+    // One value, one code path. Deriving it twice is what made them disagree.
+    const credentialSource = await resolveTokenSource()
 
     let me: any = null
     try {

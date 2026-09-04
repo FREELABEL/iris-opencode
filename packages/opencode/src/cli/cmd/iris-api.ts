@@ -182,6 +182,7 @@ async function readSdkEnv(): Promise<Record<string, string>> {
 // Resolve auth ONCE per process — not once per request/poll (#137421). Repeated
 // resolution spammed the "token source" line on every poll loop iteration.
 let _cachedToken: string | undefined
+let _cachedTokenSource: string | undefined
 
 async function resolveToken(): Promise<string> {
   if (_cachedToken !== undefined) return _cachedToken
@@ -189,22 +190,47 @@ async function resolveToken(): Promise<string> {
   return _cachedToken
 }
 
+/**
+ * WHERE the token came from, reported BY the resolver (#183661).
+ *
+ * `iris auth whoami` used to derive this label itself, by re-checking the environment and
+ * the sdk .env in a different order — and its list did not include the auth store at all,
+ * which is the resolver's FIRST source. So it printed "IRIS_API_KEY (environment)" for a
+ * token that came from `iris auth login`.
+ *
+ * That is read at the worst possible moment: nobody runs whoami idly, they run it while
+ * something is refusing them. Acting on the wrong pointer means editing a file that is not
+ * being read, and the fix then appears to fail — which argues the diagnosis was wrong. It
+ * happened during #183652, where the CLI was signed in as the wrong account and every
+ * push 403'd.
+ *
+ * One value, one code path: whoever wants the source asks the thing that chose it.
+ */
+export async function resolveTokenSource(): Promise<string> {
+  if (_cachedTokenSource === undefined) await resolveToken()
+
+  return _cachedTokenSource ?? "none (not signed in)"
+}
+
 async function resolveTokenUncached(): Promise<string> {
   // 1. Try stored auth (iris auth login)
   const stored = await Auth.get("iris")
   if (stored?.type === "api" && stored.key) {
-    if (process.argv.includes("--print-logs")) console.error("[auth] token source: iris auth store")
+    _cachedTokenSource = "iris auth store (iris auth login)"
+    if (process.argv.includes("--print-logs")) console.error(`[auth] token source: ${_cachedTokenSource}`)
     return stored.key
   }
   // 2. Env var
   if (process.env.IRIS_API_KEY) {
-    if (process.argv.includes("--print-logs")) console.error("[auth] token source: IRIS_API_KEY env var")
+    _cachedTokenSource = "IRIS_API_KEY (environment)"
+    if (process.argv.includes("--print-logs")) console.error(`[auth] token source: ${_cachedTokenSource}`)
     return process.env.IRIS_API_KEY
   }
   // 3. Read from ~/.iris/sdk/.env (written by iris-login installer)
   const sdkEnv = await readSdkEnv()
   if (sdkEnv["IRIS_API_KEY"]) {
     if (process.argv.includes("--print-logs")) console.error("[auth] token source: ~/.iris/sdk/.env")
+    _cachedTokenSource = "~/.iris/sdk/.env"
     return sdkEnv["IRIS_API_KEY"]
   }
   // 4. Read node_api_key from ~/.iris/config.json as last resort (used by hive commands)
@@ -215,6 +241,7 @@ async function resolveTokenUncached(): Promise<string> {
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
       if (config.node_api_key) {
         if (process.argv.includes("--print-logs")) console.error("[auth] token source: ~/.iris/config.json node_api_key")
+        _cachedTokenSource = "~/.iris/config.json (node_api_key)"
         return config.node_api_key
       }
     }
