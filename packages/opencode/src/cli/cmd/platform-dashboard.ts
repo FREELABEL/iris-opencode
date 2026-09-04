@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import { DashboardRulesListCommand, DashboardRuleGetCommand } from "./platform-dashboard-rules"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, IRIS_API, PUBLIC_SITE } from "./iris-api"
 import { firstArray } from "../../util/array"
 
 function dashFetch(path: string, options?: RequestInit): Promise<Response> {
@@ -13,7 +13,7 @@ function publicUrl(slug: string): string {
   const env = process.env.IRIS_ENV ?? "production"
   return env === "local"
     ? `http://local.iris.freelabel.net:9300/p/${slug}`
-    : `https://freelabel.net/p/${slug}`
+    : `${PUBLIC_SITE}/p/${slug}`
 }
 
 interface DesignTokens {

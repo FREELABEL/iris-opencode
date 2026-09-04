@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, printDivider, dim, writeJson } from "./iris-api"
+import { irisFetch, printDivider, dim, writeJson, PUBLIC_SITE } from "./iris-api"
 
 /**
  * `iris pricing` — where to sign up, answered on the machine the agent is running on.
@@ -49,7 +49,7 @@ const SITE: Record<Brand, { name: string; pricing: string; install: string }> = 
   freelabel: {
     name: "FREELABEL",
     pricing: "https://web.freelabel.net/pricing",
-    install: "https://freelabel.net/p/freelabel-start",
+    install: `${PUBLIC_SITE}/p/freelabel-start`,
   },
 }
 

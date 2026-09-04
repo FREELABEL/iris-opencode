@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, PUBLIC_SITE } from "./iris-api"
 import { resolveOpenAIKey, aiGenerateCarouselProps, fetchBrandTokens, resolveRemotionDir } from "./platform-remotion"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "fs"
@@ -1085,7 +1085,7 @@ const AnnounceCommand = cmd({
         page: existsSync(join(outDir, "page.json")) ? "page.json" : null,
         caption: "caption.txt",
       },
-      page: pageSlug ? { slug: pageSlug, url: `https://freelabel.net/p/${pageSlug}` } : null,
+      page: pageSlug ? { slug: pageSlug, url: `${PUBLIC_SITE}/p/${pageSlug}` } : null,
       published: {
         discord: !skipDiscord && !!discordWebhook,
         social: !skipSocial && !!authToken,

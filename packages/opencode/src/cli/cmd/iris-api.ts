@@ -66,11 +66,28 @@ export const PLATFORM_URLS = {
   irisApi: process.env.IRIS_API_URL ?? "https://freelabel.net",
   /** Fallback URLs for iris-api (tried in order when primary fails) */
   irisApiFallbacks: [] as string[],
+  /**
+   * The PUBLIC BRAND HOST — where a human is sent to look at a page.
+   *
+   * Deliberately separate from `irisApi`. Both hosts answer /p/, so building a public
+   * link from the API base produced a working URL on the wrong brand: every `pages
+   * push`, dashboard listing and share line handed people freelabel.net, which is the
+   * API/infra host, for a page that lives on the business platform. Nothing 404s, so
+   * the mistake propagates into docs, tickets and client emails and is only ever caught
+   * by someone noticing the name.
+   *
+   * A URL we SEND SOMEONE and a URL we CALL are different things even when they resolve
+   * to the same app — keep them apart so a change to one cannot silently rebrand the
+   * other.
+   */
+  publicSite: process.env.IRIS_PUBLIC_URL ?? "https://heyiris.io",
 } as const
 
 // Aliases for backward compat — prefer PLATFORM_URLS in new code
 export const FL_API = PLATFORM_URLS.flApi
 export const IRIS_API = PLATFORM_URLS.irisApi
+/** Public brand host for links shown to humans — never an API base. */
+export const PUBLIC_SITE = PLATFORM_URLS.publicSite
 
 // ============================================================================
 // Read ~/.iris/sdk/.env (written by iris-login)

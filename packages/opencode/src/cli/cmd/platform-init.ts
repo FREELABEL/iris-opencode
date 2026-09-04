@@ -12,7 +12,7 @@ import {
   success,
   highlight,
   resolveUserId,
-  FL_API, writeJson } from "./iris-api"
+  FL_API, PUBLIC_SITE, writeJson } from "./iris-api"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
@@ -496,7 +496,7 @@ const STEPS: StepDef[] = [
         sp.stop("Page creation failed — run: iris dashboard create --client " + brandSlug, 1)
       }
 
-      console.log(`  ${dim("URL:")} ${highlight(`https://freelabel.net/p/${slug}`)}`)
+      console.log(`  ${dim("URL:")} ${highlight(`${PUBLIC_SITE}/p/${slug}`)}`)
 
       progress.steps.dashboard = { completed: true, slug }
       saveProgress(progress)

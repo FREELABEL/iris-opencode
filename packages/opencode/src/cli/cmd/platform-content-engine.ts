@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, dim, bold, success, PUBLIC_SITE } from "./iris-api"
 import { firstArray } from "../../util/array"
 
 /**
@@ -173,7 +173,7 @@ const ContentEngineStatusCommand = cmd({
     prompts.log.message(
       [
         `${dim("Enabled:")}      ${config.enabled ? success("yes") : "no"}`,
-        `${dim("Newsletter:")}   ${config.newsletter_slug} ${dim(`(https://freelabel.net/p/${config.newsletter_slug})`)}`,
+        `${dim("Newsletter:")}   ${config.newsletter_slug} ${dim(`(${PUBLIC_SITE}/p/${config.newsletter_slug})`)}`,
         `${dim("Slug prefix:")}  ${config.slug_prefix}`,
         `${dim("Auto-publish:")} ${config.auto_publish ?? "verbatim_only"}`,
         `${dim("Since:")}        ${config.promote_since ?? "(last 7 days)"}`,

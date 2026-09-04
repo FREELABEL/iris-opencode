@@ -21,7 +21,7 @@ import {
   PLATFORM_URLS,
   BRIDGE_URL,
   getBridgeToken,
-  resolveUserId, writeJson, failNoOp} from "./iris-api"
+  resolveUserId, writeJson, failNoOp, PUBLIC_SITE} from "./iris-api"
 // #137403/#137526 — reuse the venues browser Google-Maps discovery path for leads.
 import { findOnlineHiveNode, dispatchHiveSearch } from "./platform-venues"
 import { executeIntegrationCall } from "./platform-run"
@@ -10353,7 +10353,7 @@ const LeadsReviewCommand = cmd({
           let pagesSkipped = 0
           let pagesFailed = 0
           for (const p of matchingPages) {
-            const pageUrl = `https://freelabel.net/p/${p.slug}`
+            const pageUrl = `${PUBLIC_SITE}/p/${p.slug}`
             if (existingUrls.has(pageUrl)) { pagesSkipped++; continue }
             const body: Record<string, any> = {
               type: "link",

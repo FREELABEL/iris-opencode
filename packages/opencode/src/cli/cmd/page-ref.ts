@@ -36,7 +36,24 @@ export function publicUrl(slugOrPage: string | { public_url?: string; slug?: str
   const env = process.env.IRIS_ENV ?? "production"
   return env === "local"
     ? `http://local.iris.freelabel.net:9300/${path}`
-    : `https://freelabel.net/${path}`
+    : `${publicSite()}/${path}`
+}
+
+/**
+ * The PUBLIC BRAND HOST — heyiris.io, the business platform.
+ *
+ * This used to be `https://freelabel.net`, the iris-api base. Both hosts answer /p/, so
+ * the link worked and was simply on the wrong brand — which is why it survived: nothing
+ * 404s, nothing errors, and the URL goes on to be pasted into tickets, docs and client
+ * email. A wrong link that resolves is harder to notice than one that breaks.
+ *
+ * Read from the environment rather than imported from iris-api.ts on purpose: this module
+ * is deliberately dependency-free so it can be unit-tested without loading the yargs/UI/API
+ * graph (see the note at the top of platform-pages.ts). IRIS_PUBLIC_URL overrides for
+ * white-label or staging hosts.
+ */
+function publicSite(): string {
+  return (process.env.IRIS_PUBLIC_URL ?? "https://heyiris.io").replace(/\/+$/, "")
 }
 
 /**

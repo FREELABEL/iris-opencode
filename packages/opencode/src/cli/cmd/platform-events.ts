@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, BRIDGE_URL, bridgeFetch, writeJson, failNoOp} from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, IRIS_API, FL_API, PUBLIC_SITE, BRIDGE_URL, bridgeFetch, writeJson, failNoOp} from "./iris-api"
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { ProductionCommand } from "./platform-events-production"
@@ -1639,7 +1639,7 @@ const LinkPageCommand = cmd({
       }
 
       // 2. Public URL — MUST match the frontend /p/ whitelist (isOwnLandingPage).
-      const url: string = page.public_url || `https://freelabel.net/p/${slug}`
+      const url: string = page.public_url || `${PUBLIC_SITE}/p/${slug}`
 
       // Derive the lead bloq from the page's json_content unless overridden.
       let jc: any = page.json_content

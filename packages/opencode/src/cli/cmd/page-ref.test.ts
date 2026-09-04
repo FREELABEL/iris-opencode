@@ -45,14 +45,28 @@ describe("noteUuid", () => {
 })
 
 describe("publicUrl", () => {
+  /**
+   * The host is heyiris.io — the business platform — not freelabel.net, which is the
+   * iris-api base. Both answer /p/, so the old link worked and was merely on the wrong
+   * brand: nothing 404s, nothing errors, and the URL goes on to be pasted into tickets,
+   * docs and client email. A wrong link that resolves is harder to catch than one that
+   * breaks, which is why this is pinned rather than left to review.
+   */
   test("a note ref addresses the NOTE viewer, not /p/", () => {
-    expect(publicUrl(`n-${UUID}`)).toBe(`https://freelabel.net/n/${UUID}`)
+    expect(publicUrl(`n-${UUID}`)).toBe(`https://heyiris.io/n/${UUID}`)
   })
 
   test("an ordinary page still addresses /p/", () => {
     expect(publicUrl("design-philosophy-and-page-audit")).toBe(
-      "https://freelabel.net/p/design-philosophy-and-page-audit",
+      "https://heyiris.io/p/design-philosophy-and-page-audit",
     )
+  })
+
+  test("never hands out the API host as a public link", () => {
+    for (const ref of ["some-page", `n-${UUID}`]) {
+      expect(publicUrl(ref)).toStartWith("https://heyiris.io/")
+      expect(publicUrl(ref)).not.toContain("freelabel.net")
+    }
   })
 
   test("an explicit public_url always wins", () => {

@@ -5,7 +5,7 @@ import { buildListEnvelope } from "./list-envelope"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, handleApiError, requireUserId, printDivider, printKV, dim, bold, success, FL_API, PUBLIC_SITE, promptOrFail, MissingFlagError, isNonInteractive, cli, writeJson } from "./iris-api"
 import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
 import { executePublish } from "./bloq-item-shared"
 import { confirmWiden } from "./exposure-gate"
@@ -3984,7 +3984,7 @@ const BloqsPublishPagesCommand = cmd({
           ],
         }
         const page = await createPageFromJson({ slug, title, json_content, owner_type: "bloq", owner_id: ownerId, publish: true, requires_auth: !args.public })
-        if (page?.id) created.push({ item_id: Number(item.id), title, slug, url: `https://freelabel.net/p/${slug}` })
+        if (page?.id) created.push({ item_id: Number(item.id), title, slug, url: `${PUBLIC_SITE}/p/${slug}` })
       }
 
       if (args.json) { console.log(JSON.stringify({ success: true, gated: !args.public, pages: created })); return }
