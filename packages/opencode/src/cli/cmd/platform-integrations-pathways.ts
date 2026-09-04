@@ -4,16 +4,73 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, printKV, dim, bold, success, IRIS_API, writeJson } from "./iris-api"
 import { firstArray } from "../../util/array"
 
+/**
+ * Refused because of WHO you are, not because something broke (#183663).
+ *
+ * Carries the server's reason so a caller can tell "you were never granted a role" apart from
+ * "the request failed" — and, more importantly, apart from "there is no work". The whole of
+ * #183549 was those last two being indistinguishable: a client with no role read "All caught
+ * up" over a live personal-injury book, because a denial and an empty result rendered the same.
+ */
+export class PathwaysAccessDenied extends Error {
+  constructor(
+    message: string,
+    readonly reason: string | null,
+  ) {
+    super(message)
+    this.name = "PathwaysAccessDenied"
+  }
+}
+
 async function callPathways(userId: number, func: string, params: Record<string, unknown> = {}): Promise<any> {
   const res = await irisFetch(`/api/v1/users/${userId}/integrations/execute-direct`, {
     method: "POST",
     body: JSON.stringify({ integration: "pathways", action: func, params }),
   }, IRIS_API)
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).message || `Pathways ${func} failed (${res.status})`)
+    const err = (await res.json().catch(() => ({}))) as any
+
+    // The server sends `error`; this used to read only `message`, so an authorization refusal
+    // arrived as the bare string "Pathways get_pipeline_summary failed (403)" and the sentence
+    // explaining what to DO about it was thrown away at the last step.
+    const detail = err?.error || err?.message
+
+    if (res.status === 403 || err?.access_denied) {
+      throw new PathwaysAccessDenied(
+        detail || `Pathways ${func} refused (${res.status})`,
+        err?.access_denied_reason ?? null,
+      )
+    }
+
+    throw new Error(detail || `Pathways ${func} failed (${res.status})`)
   }
-  return res.json()
+
+  const body = await res.json()
+
+  // A 200 can still be a refusal: the service-level gate returns its denial inside the envelope
+  // rather than as an HTTP status, because it is one of 34 functions behind a single dispatch.
+  // Checking only res.ok would let that through as a successful, empty-looking answer — which
+  // is the exact shape of the bug this fix exists to prevent.
+  if (body && typeof body === "object" && (body as any).access_denied) {
+    const b = body as any
+    throw new PathwaysAccessDenied(b.error || `Pathways ${func} refused`, b.access_denied_reason ?? null)
+  }
+
+  return body
+}
+
+/**
+ * Print a refusal AS a refusal.
+ *
+ * Deliberately not `prompts.log.error(...)` with the raw message: an operator who is told
+ * "0 cases" or handed a stack trace will reasonably conclude their caseload is empty or that
+ * IRIS is broken. Neither is true, and the true thing — nobody has granted you a role — is the
+ * only one they can act on.
+ */
+function reportAccessDenied(err: PathwaysAccessDenied): void {
+  prompts.log.error("Access denied — this is NOT an empty caseload.")
+  prompts.log.info(err.message)
+  if (err.reason) prompts.log.info(dim(`reason: ${err.reason}`))
 }
 
 /**
@@ -109,6 +166,12 @@ const PathwaysAuditCommand = cmd({
       console.log()
       prompts.outro("Done")
     } catch (err) {
+      if (err instanceof PathwaysAccessDenied) {
+        spinner.stop("Access denied", 1)
+        reportAccessDenied(err)
+        prompts.outro("Done")
+        return
+      }
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
@@ -174,6 +237,12 @@ const PathwaysSettleCommand = cmd({
       console.log()
       prompts.outro("Done")
     } catch (err) {
+      if (err instanceof PathwaysAccessDenied) {
+        spinner.stop("Access denied", 1)
+        reportAccessDenied(err)
+        prompts.outro("Done")
+        return
+      }
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
@@ -210,6 +279,12 @@ const PathwaysPipelineCommand = cmd({
       console.log()
       prompts.outro("Done")
     } catch (err) {
+      if (err instanceof PathwaysAccessDenied) {
+        spinner.stop("Access denied", 1)
+        reportAccessDenied(err)
+        prompts.outro("Done")
+        return
+      }
       spinner.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
@@ -245,6 +320,11 @@ const PathwaysStatusCommand = cmd({
       console.log()
       prompts.outro("Done")
     } catch (err) {
+      if (err instanceof PathwaysAccessDenied) {
+        reportAccessDenied(err)
+        prompts.outro("Done")
+        return
+      }
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
