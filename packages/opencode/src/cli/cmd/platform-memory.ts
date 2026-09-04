@@ -1,7 +1,7 @@
 import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
-import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson } from "./iris-api"
+import { irisFetch, requireAuth, requireUserId, handleApiError, printDivider, printKV, dim, bold, success, writeJson, IRIS_API } from "./iris-api"
 import { existsSync, readFileSync, statSync } from "fs"
 import { basename } from "path"
 import { Glob } from "bun"
@@ -253,19 +253,118 @@ const MemoryComposeCommand = cmd({
 })
 
 // ============================================================================
+// memory status — GET /api/v6/memory/status on iris-api
+//
+// The first subcommand here that is actually about MEMORY rather than about bloqs.
+// Epic #183588. Reports the audit state of the agent memory store: how many memories
+// are confirmed, corroborated, unverified, stale, superseded, or predate the audit
+// layer — and, separately, how many are old AND highly rated AND never revalidated.
+//
+// That last number is the one worth having. A census of 162 real memories found
+// business decisions from March 2026 sitting at importance 9-10, still eligible for
+// injection into any agent prompt, with nothing anywhere recording whether they were
+// still true. This command is what makes that visible instead of inferable.
+// ============================================================================
+
+const MemoryStatusCommand = cmd({
+  command: "status",
+  describe: "audit the agent memory store — what is confirmed, unverified, stale, or aging",
+  builder: (yargs) =>
+    yargs
+      .option("agent", { describe: "limit to one agent id", type: "number" })
+      .option("days", { describe: "age threshold for the aging count", type: "number", default: 90 })
+      .option("min-importance", { describe: "importance floor for the aging count", type: "number", default: 9 })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Memory Status")
+    const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
+    const userId = await requireUserId(); if (!userId) { prompts.outro("Done"); return }
+
+    const spinner = prompts.spinner()
+    spinner.start("Auditing…")
+    try {
+      const qs = new URLSearchParams({ user_id: String(userId) })
+      if (args.agent) qs.set("agent_id", String(args.agent))
+      qs.set("older_than_days", String(args.days))
+      qs.set("min_importance", String(args["min-importance"]))
+
+      const res = await irisFetch(`/api/v6/memory/status?${qs.toString()}`, {}, IRIS_API)
+      const ok = await handleApiError(res, "Memory status")
+      if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
+
+      const data = (await res.json()) as any
+      const total = Number(data?.total ?? 0)
+      spinner.stop(`${total} memor${total === 1 ? "y" : "ies"}`)
+
+      if (args.json) { await writeJson(data); prompts.outro("Done"); return }
+
+      const conf = (data?.confidence ?? {}) as Record<string, number>
+      // Weakest first — the order is the point, and it matches the model's own ranking.
+      const ORDER = ["superseded", "unaudited", "unverified", "stale", "corroborated", "confirmed"] as const
+      const GLOSS: Record<string, string> = {
+        superseded: "replaced by something newer — never injected",
+        unaudited: "predates the audit layer — unknown, not wrong",
+        unverified: "one automatic extraction, never confirmed",
+        stale: "was true once; nothing has checked it since",
+        corroborated: "several independent extractions agreed",
+        confirmed: "a human said so, recently",
+      }
+
+      printDivider()
+      // Always print every state, including at zero. A section that vanishes when empty
+      // reads as "not measured", and those two look identical from the outside.
+      for (const k of ORDER) {
+        const n = Number(conf[k] ?? 0)
+        const pct = total > 0 ? ` ${dim(`${Math.round((n / total) * 100)}%`)}` : ""
+        console.log(`  ${String(n).padStart(5)}  ${bold(k.padEnd(13))}${pct}  ${dim(GLOSS[k] ?? "")}`)
+      }
+      printDivider()
+
+      const aging = data?.aging ?? {}
+      const agingCount = Number(aging?.count ?? 0)
+      if (agingCount === 0) {
+        console.log(`  ${success("none")} older than ${aging?.older_than_days ?? args.days} days at importance ≥ ${aging?.min_importance ?? args["min-importance"]} without validation`)
+      } else {
+        console.log(
+          `  ${bold(String(agingCount))} memor${agingCount === 1 ? "y" : "ies"} older than ${aging.older_than_days} days ` +
+          `at importance ≥ ${aging.min_importance}, ${bold("never revalidated")}`,
+        )
+        if (aging.oldest_days) console.log(`    ${dim(`oldest: ${aging.oldest_days} days`)}`)
+        const topics: any[] = Array.isArray(aging.top_topics) ? aging.top_topics : []
+        // The count alone is a dead end. Naming the topics is what `refresh` starts from.
+        if (topics.length) {
+          console.log(`    ${dim("mostly:")} ${topics.map((t) => `${t.topic} ${dim(`×${t.count}`)}`).join(dim(" · "))}`)
+        }
+      }
+      printDivider()
+      prompts.outro(dim(agingCount > 0 ? "iris memory status --json  ·  refresh is next" : "iris memory status --json"))
+    } catch (err) {
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+// ============================================================================
 // Root
 // ============================================================================
 
 export const PlatformMemoryCommand = cmd({
   command: "memory",
-  // #180717 asked for the word ALIAS specifically, and it earns its place: `memory list`
+  // #180717 asked for the word ALIAS specifically, and it earned its place: `memory list`
   // returns byte-identical output to `bloqs list`, so anyone told this is "memory" reasonably
-  // infers a durable agent memory store that can be written to and queried. There isn't one —
-  // facts are stored as bloq items. Naming the relationship here is what stops an agent
-  // assuming a persistence layer exists and skipping its own.
-  describe: "manage knowledge bases — ALIAS of bloqs (list, show, add, compose); no separate memory store",
+  // infers a durable agent memory store that can be written to and queried.
+  //
+  // As of #183588 there IS one, and `status` reads it — but list/show/add/compose still go to
+  // bloqs, so the describe line has to say which half is which. Dropping the ALIAS warning
+  // now that one real subcommand exists would be the worse error of the two: it would imply
+  // all five talk to the same store.
+  describe: "audit agent memory (status) — list/show/add/compose remain ALIASES of bloqs",
   builder: (yargs) =>
     yargs
+      .command(MemoryStatusCommand)
       .command(MemoryListCommand)
       .command(MemoryShowCommand)
       .command(MemoryAddCommand)
