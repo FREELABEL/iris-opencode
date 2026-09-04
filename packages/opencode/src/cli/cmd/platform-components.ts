@@ -9,8 +9,9 @@ import {
   componentHeader, parseComponentHeader, stripComponentHeader,
   handleComponentConflictResponse, restampComponentHeader,
 } from "./component-base"
-import { existsSync, mkdirSync, writeFileSync } from "fs"
-import { join, resolve } from "path"
+import { diffComponentSource, mergeComponentSource } from "./component-diff"
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
+import { join, resolve, dirname } from "path"
 
 /**
  * `iris genesis components …` — the stored Genesis Component library.
@@ -229,17 +230,77 @@ const RollbackCmd = cmd({
  * scrollback. These components have no `.vue` anywhere on disk — the stored row IS the source —
  * so that was the only route, and it carried no record of which state you edited.
  */
+/** One component to disk, marker + pristine base. Returns false rather than throwing. */
+async function pullOne(slug: string, dir: string): Promise<boolean> {
+  try {
+    const res = await api(`${BASE}/${slug}`)
+    if (!res.ok) return false
+    const body = await res.json()
+    const c = body.component ?? body
+    if (typeof c.source !== "string" || c.source === "") return false
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    const pristine = stripComponentHeader(c.source)
+    const header = componentHeader({
+      slug: c.slug ?? slug,
+      hash: c.compileHash ?? "none",
+      compiler: c.compilerVersion ?? "unknown",
+      pulledAt: new Date().toISOString(),
+    })
+    writeFileSync(join(dir, `${slug}.vue`), `${header}\n${pristine}`)
+    const baseDir = join(dir, ".iris-base")
+    if (!existsSync(baseDir)) mkdirSync(baseDir, { recursive: true })
+    writeFileSync(join(baseDir, `${slug}.vue`), pristine)
+    return true
+  } catch {
+    return false
+  }
+}
+
 const PullCmd = cmd({
-  command: "pull <slug>",
+  // `[slug]` not `<slug>`: --all takes no slug, and yargs' demandOption would print help
+  // instead of running — a flag that silently does nothing reads as a broken flag.
+  command: "pull [slug]",
   aliases: ["download", "checkout"],
   describe: "download a stored component to a local .vue you can edit and publish back",
   builder: (y: any) =>
     y
-      .positional("slug", { describe: "component slug", type: "string", demandOption: true })
+      .positional("slug", { describe: "component slug (omit with --all)", type: "string" })
       .option("dir", { describe: "output directory", type: "string", default: "./components" })
+      .option("all", { describe: "pull every component you own", type: "boolean", default: false })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args: any) {
     await requireAuth()
+
+    if (!args.all && !args.slug) {
+      UI.println("")
+      UI.println("  Which component? Pass a slug, or --all to pull every one you own.")
+      UI.println(dim("    iris pages library pull chat-stage"))
+      UI.println(dim("    iris pages library pull --all"))
+      process.exitCode = 1
+      return
+    }
+
+    // --all: the library is the source of truth for these components and there is no .vue on
+    // disk for any of them, so "let me see everything I own" is the normal first move.
+    if (args.all) {
+      const idx = await api(BASE)
+      if (!idx.ok) { handleApiError(idx, "list components"); process.exitCode = 1; return }
+      const ib = await idx.json()
+      const all = firstArray(ib.components) ?? firstArray(ib) ?? []
+      let ok = 0
+      let failed = 0
+      for (const item of all) {
+        const slug = item?.slug
+        if (!slug) continue
+        const r = await pullOne(slug, args.dir)
+        r ? ok++ : failed++
+      }
+      UI.println("")
+      UI.println(`  ${success("pulled")} ${ok} component(s) → ${resolve(args.dir)}${failed ? dim(`  (${failed} failed)`) : ""}`)
+      if (failed) process.exitCode = 1
+      return
+    }
+
     const res = await api(`${BASE}/${args.slug}`)
     if (!res.ok) { handleApiError(res, `pull ${args.slug}`); process.exitCode = 1; return }
     const body = await res.json()
@@ -265,7 +326,25 @@ const PullCmd = cmd({
       compiler: c.compilerVersion ?? "unknown",
       pulledAt: new Date().toISOString(),
     })
-    writeFileSync(file, `${header}\n${stripComponentHeader(c.source)}`)
+    const pristine = stripComponentHeader(c.source)
+    writeFileSync(file, `${header}\n${pristine}`)
+
+    // A PRISTINE COPY OF WHAT WE PULLED, for `library merge`.
+    //
+    // The merge base cannot come from the server: `GET {slug}/versions` returns version,
+    // compiler, author and note — no source. So without this, a three-way merge has no
+    // ancestor, and a two-way guess is exactly the failure the page merge refuses (every line
+    // reads as "added on both sides", resolving falsely clean or conflicting on everything).
+    //
+    // A sidecar is the right shape HERE, unlike the provenance marker: losing it degrades the
+    // merge to an honest refusal, not to a silently disabled guard.
+    try {
+      const baseDir = join(dir, ".iris-base")
+      if (!existsSync(baseDir)) mkdirSync(baseDir, { recursive: true })
+      writeFileSync(join(baseDir, `${args.slug ?? c.slug}.vue`), pristine)
+    } catch {
+      // Non-fatal: the pull succeeded. `merge` will refuse rather than guess.
+    }
 
     if (args.json) { writeJson({ ok: true, slug: c.slug, file: resolve(file), compileHash: c.compileHash }); return }
 
@@ -277,6 +356,144 @@ const PullCmd = cmd({
       UI.println(dim(`    no compile hash on the server — publish cannot detect a clobber`))
     }
     UI.println(dim(`    edit it, then: ${highlight("iris pages library publish " + c.slug + " --file " + file)}`))
+  },
+})
+
+/**
+ * `diff` — what pages got and components did not. Nothing makes you run it, but its absence
+ * meant there was no way to answer "am I about to clobber someone" before publishing.
+ */
+const DiffCmd = cmd({
+  command: "diff <slug>",
+  describe: "compare your local .vue against the published component",
+  builder: (y: any) =>
+    y
+      .positional("slug", { describe: "component slug", type: "string", demandOption: true })
+      .option("file", { describe: "path to the local .vue (default ./components/<slug>.vue)", type: "string" })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args: any) {
+    await requireAuth()
+    const file = args.file ?? join("./components", `${args.slug}.vue`)
+    if (!existsSync(file)) {
+      UI.println("")
+      UI.println(`  no local file: ${file}`)
+      UI.println(dim(`  pull it first: iris pages library pull ${args.slug}`))
+      process.exitCode = 1
+      return
+    }
+    const res = await api(`${BASE}/${args.slug}`)
+    if (!res.ok) { handleApiError(res, `diff ${args.slug}`); process.exitCode = 1; return }
+    // Same shape ShowCmd reads: the API returns the fields at top level, with `component` as an
+    // older nesting. Defaulting to {} here would make `live` empty and report the whole file as
+    // changed — a diff that is confidently wrong is worse than no diff.
+    const body = await res.json()
+    const c = body.component ?? body
+    const live = typeof c.source === "string" ? c.source : ""
+    const d = diffComponentSource(live, readFileSync(file, "utf-8"))
+
+    if (args.json) { writeJson({ ok: true, slug: args.slug, ...d }); return }
+    UI.println("")
+    if (!d.changed) {
+      UI.println(`  ${success("identical")}  ${bold(args.slug)}  ${dim("(the marker is not counted)")}`)
+      return
+    }
+    UI.println(`  ${bold(args.slug)}  ${dim(`+${d.added} -${d.removed}`)}`)
+    printDivider()
+    for (const l of d.lines.slice(0, 200)) UI.println("  " + l)
+    if (d.lines.length > 200) UI.println(dim(`  … ${d.lines.length - 200} more line(s)`))
+  },
+})
+
+/**
+ * `merge` — the recovery a component conflict never had.
+ *
+ * Line-based three-way, because a `.vue` is text with no addressable units. The page merge is
+ * structural for the opposite reason; see component-diff.ts.
+ */
+const MergeCmd = cmd({
+  command: "merge <slug>",
+  describe: "three-way merge your local .vue with the published one after a conflict",
+  builder: (y: any) =>
+    y
+      .positional("slug", { describe: "component slug", type: "string", demandOption: true })
+      .option("file", { describe: "path to the local .vue (default ./components/<slug>.vue)", type: "string" })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args: any) {
+    await requireAuth()
+    const file = args.file ?? join("./components", `${args.slug}.vue`)
+    if (!existsSync(file)) {
+      UI.println(""); UI.println(`  no local file: ${file}`); process.exitCode = 1; return
+    }
+    const baseFile = join(dirname(file), ".iris-base", `${args.slug}.vue`)
+    const base = existsSync(baseFile) ? readFileSync(baseFile, "utf-8") : null
+
+    const res = await api(`${BASE}/${args.slug}`)
+    if (!res.ok) { handleApiError(res, `merge ${args.slug}`); process.exitCode = 1; return }
+    const mbody = await res.json()
+    const c = mbody.component ?? mbody
+    const ours = readFileSync(file, "utf-8")
+    const r = mergeComponentSource(base, ours, typeof c.source === "string" ? c.source : "")
+
+    if (r.refused) {
+      UI.println("")
+      UI.println(`  Refusing to merge ${bold(args.slug)} — no record of what you started from.`)
+      UI.println(dim(`  ${baseFile} is missing, so there is no common ancestor and a two-way`))
+      UI.println(dim(`  merge would read every line as added on both sides.`))
+      UI.println("")
+      UI.println(`  See the difference:  ${highlight("iris pages library diff " + args.slug)}`)
+      UI.println(`  Take theirs:         ${highlight("iris pages library pull " + args.slug)}`)
+      if (args.json) writeJson({ ok: false, refused: true, slug: args.slug, reason: "no_merge_base" })
+      process.exitCode = 1
+      return
+    }
+
+    // STAMP A CLEAN MERGE WITH *THEIRS* — so the follow-up publish is still guarded.
+    //
+    // Found by the production round trip: merge wrote the file bare, publish therefore sent no
+    // expected_hash, and the recovery path for a clobber was itself unguarded. A third writer
+    // publishing between your merge and your publish would have been overwritten silently —
+    // the exact defect this work removes, reappearing inside the fix for it.
+    //
+    // Theirs is the right anchor: you merged against the published state, so that is the state
+    // you are claiming to replace. Ours would claim a state the server never had.
+    //
+    // A CONFLICTED merge is deliberately left bare. It contains <<<<<<< markers, does not
+    // compile, and is not a publishable state; stamping it would smooth the path for a reflex
+    // publish that sends conflict markers to the server as source.
+    const body = r.merged.endsWith("\n") ? r.merged : r.merged + "\n"
+    const liveHash = typeof c.compileHash === "string" ? c.compileHash : ""
+    writeFileSync(
+      file,
+      r.conflicted || !liveHash
+        ? body
+        : restampComponentHeader(body, {
+            slug: args.slug,
+            hash: liveHash,
+            compiler: c.compilerVersion ?? "unknown",
+            pulledAt: new Date().toISOString(),
+          }),
+    )
+
+    // The ancestor for any FUTURE merge is now what we merged against, not what we first pulled.
+    try {
+      const bd = join(dirname(file), ".iris-base")
+      if (!existsSync(bd)) mkdirSync(bd, { recursive: true })
+      writeFileSync(join(bd, `${args.slug}.vue`), stripComponentHeader(String(c.source ?? "")))
+    } catch {
+      // Non-fatal: a later merge refuses rather than guessing.
+    }
+
+    if (args.json) { writeJson({ ok: !r.conflicted, slug: args.slug, conflicts: r.conflicts, file: resolve(file) }); return }
+    UI.println("")
+    if (r.conflicted) {
+      UI.println(`  ${bold(args.slug)} merged with ${r.conflicts} conflict${r.conflicts === 1 ? "" : "s"}`)
+      UI.println(dim(`  resolve the <<<<<<< markers in ${resolve(file)}, then:`))
+      UI.println(`    ${highlight("iris pages library publish " + args.slug + " --file " + file + " --force")}`)
+      process.exitCode = 1
+    } else {
+      UI.println(`  ${success("merged cleanly")}  ${bold(args.slug)}  ${dim("→ " + resolve(file))}`)
+      UI.println(dim(`  review it, then: iris pages library publish ${args.slug} --file ${file} --force`))
+    }
   },
 })
 
@@ -511,6 +728,8 @@ export const LibraryCmd = cmd({
   builder: (y) =>
     y
       .command(PullCmd)
+      .command(DiffCmd)
+      .command(MergeCmd)
       .command(PublishCmd)
       .command(ListCmd)
       .command(ShowCmd)
