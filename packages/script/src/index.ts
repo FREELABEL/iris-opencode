@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { $ } from "bun"
 import path from "path"
 
@@ -26,9 +27,55 @@ const CHANNEL = await (async () => {
 })()
 const IS_PREVIEW = CHANNEL !== "latest"
 
+/**
+ * The server stores a CLI version in 32 characters (#183539).
+ *
+ * A preview version is `0.0.0-<channel>-<YYYYMMDDHHMM>` — 19 fixed characters, so the channel
+ * segment has a 13-character budget. `main` spends 4 and nothing ever noticed. A branch does not:
+ *
+ *     0.0.0-fix/hive-sessions-cli-202609032004    40 chars -> `iris how-to publish` 422s
+ *     0.0.0-main-202609032035                     23 chars -> works
+ *
+ * And the 422 names the FIELD, not the cause — nothing connects "version too long" to "you are
+ * on a branch", so the obvious readings (bad recipe, bad token, server problem) are all wrong.
+ * It also fails at the LAST step, after the how-to is written, committed and pushed: the work
+ * looks done and the artefact never reaches the web.
+ *
+ * Bounded here rather than by renaming branches. Note this shortens the VERSION segment only —
+ * CHANNEL itself is untouched, because it is used as an npm dist-tag by four publish scripts and
+ * truncating it there would publish under the wrong tag.
+ */
+const VERSION_MAX = 32
+const VERSION_STAMP_LEN = 12 // YYYYMMDDHHMM
+const CHANNEL_BUDGET = VERSION_MAX - "0.0.0-".length - 1 - VERSION_STAMP_LEN // 13
+
+export function versionChannelSegment(channel: string): string {
+  const slug = channel.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+  if (slug.length <= CHANNEL_BUDGET) return slug
+
+  // Keep a readable head, and disambiguate with a hash of the FULL name — two long branches
+  // sharing a prefix (`feature/pathways-scope-a`, `feature/pathways-scope-b`) must not collapse
+  // to the same version, or two different builds become indistinguishable by their own report.
+  const hash = createHash("sha1").update(channel).digest("hex").slice(0, 4)
+  // Trim a trailing hyphen so a slug cut mid-separator does not read as `feature--b4c4`.
+  return `${slug.slice(0, CHANNEL_BUDGET - 5).replace(/-+$/, "")}-${hash}`
+}
+
 const VERSION = await (async () => {
   if (env.OPENCODE_VERSION) return env.OPENCODE_VERSION
-  if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
+  if (IS_PREVIEW) {
+    const v = `0.0.0-${versionChannelSegment(CHANNEL)}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
+    // Fail HERE, at build, naming the cause — not later with a 422 that names a column. An
+    // assertion that should be unreachable is still worth keeping: it is the difference between
+    // a build that refuses and a publish that fails after the work is done.
+    if (v.length > VERSION_MAX) {
+      throw new Error(
+        `Built version "${v}" is ${v.length} chars; the server accepts ${VERSION_MAX}. ` +
+          `Branch "${CHANNEL}" did not fit its ${CHANNEL_BUDGET}-char budget.`,
+      )
+    }
+    return v
+  }
   // For IRIS Code, start at 1.0.0 if no version specified
   // Check GitHub releases for latest version
   const version = await fetch("https://api.github.com/repos/FREELABEL/iris-opencode/releases/latest")
