@@ -13,7 +13,9 @@ import { firstArray } from "../../util/array"
 // GLD-01/02. Local file provenance and the three-way merge live in their own dependency-free
 // modules so they are unit-testable without this file's yargs/UI/API graph — same reason
 // page-ref.ts was split out. See page-base.test.ts / page-merge.test.ts.
+import { watch } from "fs"
 import { baseFromPage, readBase, stripBase, expectedVersionField, handleVersionConflictResponse, contentUpdatePayload, ownershipDrift } from "./page-base"
+import { absolutizeAssets, injectLiveReload } from "./page-dev"
 import { mergePageDocs, formatMergeReport, versionDocFromRow, mergePreconditions } from "./page-merge"
 
 // ============================================================================
@@ -1078,6 +1080,129 @@ const PushCmd = cmd({
       prompts.log.error(err instanceof Error ? err.message : String(err))
       prompts.outro("Done")
     }
+  },
+})
+
+/**
+ * `pages dev` — see the page you are editing, without publishing it (GLD-04).
+ *
+ * Every visual iteration used to be a production write: publish, demote to draft, rotate the
+ * cache key, screenshot the live page. One dashboard reached 89 versions largely because of it.
+ *
+ * The render happens on the SERVER, from a preview session holding your local document. That is
+ * not a shortcut — `/p/` pages carry no `data-page` and no `#app`, so there is nothing to hydrate
+ * locally, and it means the renderer is always the deployed one (ADR-03). A local copy of 240
+ * components would drift, and the drift reads as green locally and broken in production.
+ */
+const DevCmd = cmd({
+  command: "dev <slug>",
+  aliases: ["serve", "preview-local"],
+  describe: "serve the page you are editing locally, rendered by production, without publishing",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug", type: "string", demandOption: true })
+      .option("dir", { describe: "directory holding <slug>.json", type: "string", default: "./pages" })
+      .option("port", { describe: "local port", type: "number", default: 4321 })
+      .option("open", { describe: "open a browser", type: "boolean", default: true }),
+  async handler(args) {
+    const slug = String(args.slug)
+    UI.empty()
+    prompts.intro(`◈  Dev ${slug}`)
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+
+    const file = join(pagesDir(args.dir), `${slug}.json`)
+    if (!existsSync(file)) {
+      prompts.log.error(`Local file not found: ${file}`)
+      prompts.log.info(dim(`Pull it first: iris pages pull ${slug}`))
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
+
+    let version = 0
+    let cached: string | null = null
+    let lastError: string | null = null
+
+    /** Mint a session from the CURRENT file and render it. Never touches the live page. */
+    async function render(): Promise<void> {
+      try {
+        const local = JSON.parse(readFileSync(file, "utf-8"))
+        const doc = local.json_content ?? local
+        const mint = await pagesFetch("/api/v1/preview/sessions", {
+          method: "POST",
+          body: JSON.stringify({ page: { ...stripBase(local), json_content: stripBase(doc) } }),
+        })
+        if (!mint.ok) {
+          lastError = `preview session refused (HTTP ${mint.status})`
+          cached = null
+          return
+        }
+        const { session_id: sid } = (await mint.json()) as any
+        const r = await pagesFetch(`/api/v1/preview/${sid}/render`)
+        if (!r.ok) { lastError = `render refused (HTTP ${r.status})`; cached = null; return }
+        lastError = null
+        cached = injectLiveReload(absolutizeAssets(await r.text(), IRIS_API), Number(args.port))
+      } catch (err) {
+        // A malformed file mid-save is the common case; report it rather than dying.
+        lastError = err instanceof Error ? err.message : String(err)
+        cached = null
+      }
+    }
+
+    await render()
+
+    const server = Bun.serve({
+      port: Number(args.port),
+      async fetch(req) {
+        const u = new URL(req.url)
+        if (u.pathname === "/__dev/version") return new Response(String(version))
+
+        // The browser has no platform credentials. Proxying with the CLI's token is what makes a
+        // bound component show REAL rows here; sending it cross-origin instead would fail as an
+        // empty result, indistinguishable from a binding that legitimately has no data.
+        if (u.pathname.startsWith("/api/")) {
+          const res = await pagesFetch(u.pathname + u.search, {
+            method: req.method,
+            body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.text(),
+          })
+          return new Response(await res.text(), {
+            status: res.status,
+            headers: { "Content-Type": res.headers.get("Content-Type") ?? "application/json" },
+          })
+        }
+
+        if (cached) return new Response(cached, { headers: { "Content-Type": "text/html; charset=utf-8" } })
+        // An error state is RENDERED, not left blank — a blank page reads as "my edit broke the
+        // component" when it usually means the session or the endpoint refused.
+        return new Response(
+          injectLiveReload(
+            `<pre style="font:14px ui-monospace;padding:2rem;color:#b91c1c">iris pages dev — ${lastError ?? "no render yet"}</pre>`,
+            Number(args.port),
+          ),
+          { status: 503, headers: { "Content-Type": "text/html; charset=utf-8" } },
+        )
+      },
+    })
+
+    const url = `http://localhost:${server.port}`
+    prompts.log.info(`${highlight(url)}  ${dim("— rendered by " + IRIS_API + ", nothing published")}`)
+    if (lastError) prompts.log.warn(lastError)
+    prompts.log.info(dim(`watching ${resolve(file)} — save to reload`))
+
+    let timer: any = null
+    watch(file, () => {
+      clearTimeout(timer)
+      // Editors write in bursts (truncate, then write). Debounce, or a save renders a file that
+      // is momentarily empty and the page flashes an error for no reason.
+      timer = setTimeout(async () => {
+        await render()
+        version++
+        prompts.log.info(`${dim(new Date().toLocaleTimeString())} ${lastError ?? "reloaded"}`)
+      }, 150)
+    })
+
+    if (args.open) { try { Bun.spawn(["open", url]) } catch { /* not fatal */ } }
+    await new Promise(() => {})
   },
 })
 
@@ -4353,6 +4478,7 @@ export const PlatformPagesCommand = productCommand({
       .command(SetCmd)
       .command(PullCmd)
       .command(PushCmd)
+      .command(DevCmd)
       .command(DiffCmd)
       .command(MergeCmd)
       .command(PublishCmd)
