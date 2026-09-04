@@ -409,15 +409,155 @@ const PathwaysOnboardCommand = cmd({
   },
 })
 
+
+/**
+ * Write-Back Approval Flow (#157733, surfaced by #183708) — the human side of the queue.
+ *
+ * The engine was already finished: WriteProposalService stores from_value (so every applied
+ * write is reversible), reason, confidence, an audit_id into servis_write_audit, a dedup_key,
+ * and a second-approver rule above a value threshold. What it had was one artisan command and
+ * one controller — nothing an operator could reach.
+ *
+ * The split here is deliberate and is the point of the feature: `list` and `scan` are the same
+ * calls the agent can make (READ and STAGE — neither touches FreeAgent). `approve`, `reject`
+ * and `apply` go through the HTTP sign-off routes and are human-only, by design, forever. An
+ * agent that could apply its own proposals is just an agent writing to FA with extra steps.
+ */
+const PathwaysProposalsCommand = cmd({
+  command: "proposals [action] [id]",
+  aliases: ["writeback"],
+  describe: "write-back queue — list/scan what is staged, then approve, reject or apply it (sign-off is human-only)",
+  builder: (yargs) =>
+    yargs
+      .positional("action", {
+        type: "string",
+        choices: ["list", "scan", "approve", "reject", "apply"] as const,
+        default: "list",
+        describe: "list (default) · scan to stage new ones · approve/reject/apply one by id",
+      })
+      .positional("id", { type: "number", describe: "proposal id — required for approve/reject/apply" })
+      .option("limit", { type: "number", default: 20, describe: "max proposals to list" })
+      .option("proposer", { type: "string", describe: "scan: limit to one proposer key, e.g. settlement_amount" })
+      .option("case-id", { type: "string", describe: "scan: limit to a single case" })
+      .option("reason", { type: "string", describe: "reject: why (recorded on the proposal)" })
+      .option("yes", { type: "boolean", default: false, describe: "skip the confirmation prompt" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    const action = String(args.action ?? "list")
+    if (!args.json) { UI.empty(); prompts.intro(`Pathways Write-Back — ${action}`) }
+    const token = await requireAuth()
+    if (!token) return
+    const userId = await requireUserId()
+    if (!userId) return
+    const spinner = prompts.spinner()
+
+    try {
+      // ── READ / STAGE — the agent-safe half. Neither writes to FreeAgent. ──────────────
+      if (action === "list" || action === "scan") {
+        if (action === "list") {
+          spinner.start("Loading pending proposals...")
+          const data = await callPathways(userId, "get_write_proposals", { limit: args.limit })
+          if (args.json) { await writeJson(data); return }
+          const rows = firstArray(data?.proposals) ?? []
+          spinner.stop(success(`${data?.pending ?? rows.length} pending · ${data?.value_pending ?? "$0"} at stake`))
+          if (!rows.length) {
+            // "Nothing pending" and "you cannot see this queue" must not render the same
+            // way — that was #183549. A denial throws above; reaching here means an
+            // authorised, genuinely empty queue, and it says so in those words.
+            prompts.log.info("Queue is empty for your access — nothing is awaiting sign-off.")
+            prompts.outro("Done")
+            return
+          }
+          console.log()
+          for (const p of rows) {
+            const id = (p as any).id ?? (p as any).proposal_id
+            const from = (p as any).from_value ?? (p as any).current ?? "—"
+            const to = (p as any).to_value ?? (p as any).proposed ?? "—"
+            console.log(`  ${bold(`#${id}`)} ${(p as any).case_id ?? ""} ${dim((p as any).field ?? "")}`)
+            console.log(`      ${dim(String(from))} → ${bold(String(to))}   ${dim(String((p as any).reason ?? ""))}`)
+          }
+          console.log()
+          prompts.log.info(dim("Nothing here has been written to FreeAgent. Approve then apply, one at a time."))
+          prompts.outro("Done")
+          return
+        }
+
+        spinner.start("Scanning for new proposals...")
+        const params: Record<string, unknown> = {}
+        if (args.proposer) params.proposer = args.proposer
+        if (args["case-id"]) params.case_id = args["case-id"]
+        const data = await callPathways(userId, "scan_write_proposals", params)
+        if (args.json) { await writeJson(data); return }
+        spinner.stop(success(`staged ${data?.created ?? 0} of ${data?.scanned ?? 0} scanned`))
+        printKV("By proposer", JSON.stringify(data?.by_proposer ?? {}))
+        prompts.log.warn("Staged only — nothing written to FreeAgent. Each still needs sign-off.")
+        prompts.outro("Done")
+        return
+      }
+
+      // ── SIGN-OFF — human-only. Never exposed as an agent tool. ───────────────────────
+      const id = Number(args.id)
+      if (!Number.isInteger(id) || id <= 0) {
+        spinner.stop("Missing proposal id", 1)
+        prompts.log.error(`\`${action}\` needs a proposal id — run \`iris integrations pathways proposals list\` first.`)
+        prompts.outro("Done")
+        return
+      }
+
+      if (action === "apply" && !args.yes) {
+        const ok = await prompts.confirm({
+          message: `Apply proposal #${id}? This WRITES to FreeAgent. It is reversible (the prior value is stored), but it is a real write.`,
+          initialValue: false,
+        })
+        if (prompts.isCancel(ok) || !ok) { prompts.outro("Cancelled — nothing written"); return }
+      }
+
+      spinner.start(`${action} #${id}...`)
+      const body: Record<string, unknown> = {}
+      if (args.reason) body.reason = args.reason
+      const res = await irisFetch(`/api/v1/pathways/actions/proposals/${id}/${action}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }, IRIS_API)
+      const out = (await res.json().catch(() => ({}))) as any
+      if (!res.ok || out?.success === false) {
+        spinner.stop(`${action} refused`, 1)
+        // Same rule as the read path: say WHY, and never let a refusal read as "done".
+        prompts.log.error(out?.error || out?.message || `Proposal ${action} failed (${res.status})`)
+        if (out?.needs_second_approver) {
+          prompts.log.warn("Above the two-person threshold — a second approver must sign off before this can apply.")
+        }
+        prompts.outro("Done")
+        return
+      }
+      if (args.json) { await writeJson(out); return }
+      spinner.stop(success(`#${id} ${action === "apply" ? "applied" : action + "ed"}`))
+      if (action === "apply") printKV("Audit", String(out?.audit_id ?? out?.data?.audit_id ?? "recorded"))
+      prompts.outro("Done")
+    } catch (err) {
+      if (err instanceof PathwaysAccessDenied) {
+        spinner.stop("Access denied", 1)
+        reportAccessDenied(err)
+        prompts.outro("Done")
+        return
+      }
+      spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
 export const PathwaysCommand = cmd({
   command: "pathways",
   aliases: ["pw"],
-  describe: "Pathways AI — settlement calc, audit, pipeline, batch processing, tenant onboarding",
+  describe: "Pathways AI — settlement calc, audit, pipeline, write-back queue, batch processing, tenant onboarding",
   builder: (yargs) =>
     yargs
       .command(PathwaysAuditCommand)
       .command(PathwaysSettleCommand)
       .command(PathwaysPipelineCommand)
+      .command(PathwaysProposalsCommand)
       .command(PathwaysStatusCommand)
       .command(PathwaysOnboardCommand)
       .demandCommand(),
