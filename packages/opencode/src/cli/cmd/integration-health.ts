@@ -212,19 +212,27 @@ export const IntegrationsTestCommand = cmd({
     let failure: string | null = null
     let notConnected = false
 
-    try {
-      const res = await irisFetch(`/api/v1/integrations/health/${encodeURIComponent(type)}`, { method: "POST" })
-      const body = (await res.json().catch(() => null)) as { data?: HealthRow[]; code?: string; error?: string } | null
-
-      if (res.status === 404 && body?.code === "not_connected") {
+    // Probe every connection, then narrow to the one asked for.
+    //
+    // This used to POST /api/v1/integrations/health/{type}, a per-type route that was never
+    // built. A 404 from a MISSING ROUTE carries no `code`, so it fell through to the generic
+    // branch and the command reported "the health API returned HTTP 404" — which reads as
+    // "your integration is broken" when it means "this endpoint does not exist". Every run of
+    // `iris integrations test <type>` said that, about every integration.
+    //
+    // GET /api/v1/integrations/health?probe=1 exists and already probes live. Filtering its
+    // rows answers the same question, and preserves the distinction that matters: a type with
+    // no row is NOT CONNECTED, which is a different answer from a connection that failed.
+    const probe = await fetchHealth(true)
+    if (probe.failure) {
+      failure = probe.failure
+    } else {
+      const match = (probe.rows ?? []).filter((r) => r.type?.toLowerCase() === type.toLowerCase())
+      if (match.length === 0) {
         notConnected = true
-      } else if (!res.ok) {
-        failure = body?.error ?? `the health API returned HTTP ${res.status}`
       } else {
-        rows = body?.data ?? []
+        rows = match
       }
-    } catch (e) {
-      failure = e instanceof Error ? e.message : String(e)
     }
 
     sp.stop(failure || notConnected ? "Done" : "Done", failure ? 1 : 0)
