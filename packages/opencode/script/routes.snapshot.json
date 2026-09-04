@@ -2062,6 +2062,21 @@
 "service": "fl-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/bloq-items/{}/relate",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/bloq-items/{}/relations",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/bloq-items/{}/unrelate",
+"service": "fl-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/bloq/item/{}",
 "service": "fl-api"
@@ -2949,16 +2964,6 @@
 {
 "method": "PUT",
 "uri": "/api/v1/bloqs/{}/settings",
-"service": "fl-api"
-},
-{
-"method": "GET",
-"uri": "/api/v1/bloqs/{}/share-defaults",
-"service": "fl-api"
-},
-{
-"method": "PATCH",
-"uri": "/api/v1/bloqs/{}/share-defaults",
 "service": "fl-api"
 },
 {
@@ -10502,6 +10507,16 @@
 "service": "fl-api"
 },
 {
+"method": "GET",
+"uri": "/api/v1/user/bloqs/{}/share-defaults",
+"service": "fl-api"
+},
+{
+"method": "PATCH",
+"uri": "/api/v1/user/bloqs/{}/share-defaults",
+"service": "fl-api"
+},
+{
 "method": "POST",
 "uri": "/api/v1/user/bloqs/{}/share-link",
 "service": "fl-api"
@@ -11022,6 +11037,11 @@
 "service": "fl-api"
 },
 {
+"method": "GET",
+"uri": "/api/v1/user/{}/bloqs/graph",
+"service": "fl-api"
+},
+{
 "method": "POST",
 "uri": "/api/v1/user/{}/bloqs/item/{}/publish",
 "service": "fl-api"
@@ -11209,6 +11229,11 @@
 {
 "method": "POST",
 "uri": "/api/v1/user/{}/bloqs/{}/activity",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/user/{}/bloqs/{}/composition",
 "service": "fl-api"
 },
 {
@@ -13399,6 +13424,11 @@
 {
 "method": "GET",
 "uri": "/api/v6/memory/search",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v6/memory/status",
 "service": "iris-api"
 },
 {
