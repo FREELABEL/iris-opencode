@@ -117,7 +117,7 @@ $ iris pages compose "Pathways CFO Dashboard showing:
   - Financial summary: total pipeline value"
 
 # The page will be served at:
-# https://freelabel.net/p/pathways-cfo-dashboard
+# https://heyiris.io/p/pathways-cfo-dashboard
 ```
 
 The dashboard page can pull live data from the Atlas dataset API on each page load.
@@ -148,7 +148,7 @@ $ iris atlas:datasets schemas show cases
 $ iris pages compose "Dashboard for Pathways Injury Consultants"
 
 # 4. Share the URL with Haroon
-# https://freelabel.net/p/pathways-dashboard
+# https://heyiris.io/p/pathways-dashboard
 
 # 5. Set up daily audit email
 $ iris schedules create \

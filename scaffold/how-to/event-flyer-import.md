@@ -60,7 +60,7 @@ The page's `EventGrid` takes a static `events[]` array; each item supports `imag
         "category": "Art Market",
         "imageUrl": "https://<cdn>/ffat-june-flyer.jpg",   // ← the flyer
         "ctaText": "Vendor Registration",
-        "ctaUrl": "https://freelabel.net/p/ffat-vendors",
+        "ctaUrl": "https://heyiris.io/p/ffat-vendors",
         "featured": true
       }
     ]

@@ -31,7 +31,7 @@ iris pages create --slug my-page --title "My Page" --seo-description "Page descr
 ```
 
 This creates a page with a Hero + SiteFooter and auto-publishes it.
-The public URL is shown in the output: `freelabel.net/p/my-page`
+The public URL is shown in the output: `heyiris.io/p/my-page`
 
 ## Add Components
 
@@ -108,4 +108,4 @@ cat pages/component-showcase.json   # 28 components with full props
 
 - **Blank page?** You used an invalid component type. Run `iris pages component-registry` to check.
 - **Auth error on pages list?** The CLI routes pages through iris-api. If auth fails, the service token may need refreshing.
-- **Page URL format:** `freelabel.net/p/{slug}` — served by iris-api on Railway.
+- **Page URL format:** `heyiris.io/p/{slug}` — served by iris-api on Railway. (`freelabel.net` is the API host and also answers /p/, so a link built from it works and is on the wrong brand — which is why it spread.)
