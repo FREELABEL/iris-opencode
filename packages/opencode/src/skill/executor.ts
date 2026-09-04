@@ -1032,6 +1032,22 @@ async function executeAi(
   model: string,
   context: string,
 ): Promise<{ output: string; exit_code: number }> {
+  // Fail HERE, not at the vendor. An empty prompt is a defect in the playbook that the
+  // author can fix in seconds — but sent upstream it comes back as a provider 400 about
+  // `messages.[0].content`, which reads like the model or the proxy is broken. Paying a
+  // network round trip to be told the request was malformed also spends someone's quota
+  // to produce a worse error message than we could have written locally.
+  if (!prompt.trim()) {
+    return {
+      output:
+        "AI step has an empty prompt — nothing was sent.\n" +
+        "  A `mode: ai` step takes its prompt from the prose under the step heading, or\n" +
+        "  from a tagged fence (```text) when there is no prose. An untagged ``` fence\n" +
+        "  populates neither.",
+      exit_code: 1,
+    }
+  }
+
   const fullPrompt = context ? `Context from previous steps:\n${context}\n\n${prompt}` : prompt
   const forceDirect = process.env.IRIS_AI_DIRECT === "1"
   let platformNote = "not attempted (IRIS_AI_DIRECT=1)"
@@ -1800,7 +1816,21 @@ export async function executeSkill(
             .map(([id, r]) => `[${id}]: ${r.output.slice(0, 2000)}`)
             .join("\n\n")
           const aiModel = stepH.model ?? "gpt-4o-mini"
-          lastResult = await executeAi(interpolatedBody, aiModel, context)
+          // The validator accepts `body || code` ("AI step has no prompt body" fires only
+          // when BOTH are empty), so honour the same contract here. This used to pass
+          // `interpolatedBody` alone, which meant a step whose prompt lives in a tagged
+          // fence — the form the publishing guide actually tells authors to write — parsed
+          // fine, validated fine, and then POSTed an EMPTY prompt. OpenAI answered the only
+          // way it can:
+          //
+          //     Invalid value for 'content': expected a string, got null.
+          //
+          // Read from the outside that is a vendor 400 on a playbook that `iris playbook
+          // test` had just called valid, which sends the author to debug the model instead
+          // of their fence. Body wins when both are present: prose is the authored prompt
+          // and the fence is then its payload.
+          const aiPrompt = interpolatedBody?.trim() ? interpolatedBody : (interpolatedCode ?? "")
+          lastResult = await executeAi(aiPrompt, aiModel, context)
           break
         }
 
