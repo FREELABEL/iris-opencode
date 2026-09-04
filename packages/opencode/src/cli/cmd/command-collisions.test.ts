@@ -128,7 +128,22 @@ describe("top-level command names", () => {
    */
   const KNOWN_SHADOWED = [
     "contracts: PlatformAgreementsCommand + PlatformContractsCommand",
-    "find: PlatformFindCommand + PlatformSearchCommand",
+    // `find` was here and is GONE, fixed by #183479: PlatformSearchCommand now declares
+    // `aliases: []` with a comment saying why — the alias "did nothing except make the help
+    // attribute `find` to content search, hiding the real command".
+    //
+    // #183537 filed this test's failure and read it the other way round: that the scanner had
+    // gone blind to a collision that still existed, and that pruning the entry would delete the
+    // only signal of that. Reasonable caution, and wrong here — checked before pruning:
+    //   - PlatformSearchCommand's declaration has aliases: [] (platform-bloqs.ts)
+    //   - among REGISTERED commands only PlatformFindCommand claims `find`
+    //   - the twelve other files declaring a `find` alias are all SUBcommands
+    //     (`iris mail search`, `iris slack search`, …) and never registered at top level
+    //   - 8 of the 9 known entries are still detected, so alias parsing plainly works
+    //
+    // The two failure modes are distinguishable, which is what makes pruning safe: a detector
+    // that stopped seeing aliases empties `current` and reports ALL NINE as stale. One stale
+    // entry is a fixed collision. Nine is a broken scanner. See the alias-detection test below.
     "flows: PlatformOnboardFlowsCommand + PlatformOnboardingCommand",
     "health: PlatformDoctorCommand + PlatformHeartbeatCommand + PlatformMonitorCommand",
     "identities: PlatformIdentityCommand + PlatformSendersCommand",
@@ -144,6 +159,22 @@ describe("top-level command names", () => {
       .map(([name, v]) => `${name}: ${[...v.canonical, ...v.alias].sort().join(" + ")}`)
       .sort()
     expect(current.filter((c) => !KNOWN_SHADOWED.includes(c))).toEqual([])
+  })
+
+  /**
+   * The blindness guard for the ALIAS path specifically.
+   *
+   * The scan test above counts resolved COMMANDS, so it stays green even if alias parsing
+   * breaks entirely — and a detector that sees no aliases reports every known entry as "fixed",
+   * which is the one way pruning the list could hide a real regression. Ratcheting the count of
+   * detected alias collisions makes that failure loud and specific instead.
+   */
+  test("alias detection is alive — a silent scanner must not read as 'all fixed'", () => {
+    const aliasCollisions = [...claims().entries()].filter(
+      ([, v]) => v.canonical.length + v.alias.length > 1 && v.alias.length > 0,
+    )
+
+    expect(aliasCollisions.length).toBeGreaterThanOrEqual(5)
   })
 
   test("the known list has no stale entries — a fixed collision must leave it", () => {
