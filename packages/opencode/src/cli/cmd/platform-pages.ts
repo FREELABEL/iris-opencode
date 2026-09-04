@@ -173,6 +173,19 @@ export function normaliseSetPath(path: string): { path: string; stripped: boolea
  * key on write. Anything that asks "is this gated" while reading one of them gets the right
  * answer only by luck, which is most of #181940. One reader, both flags.
  */
+/**
+ * Paths where a stale render is an ACCESS statement, not a cosmetic lag (#183705).
+ *
+ * `pages set` printed "run cache-clear so the change takes effect" and left it there. For a
+ * colour that is a nag; for a gate it means "I gated it" and "the old gate is still serving"
+ * are indistinguishable, and the person who just typed the command believes the first.
+ * So these purge themselves.
+ */
+export function isGateAffectingPath(path: string): boolean {
+  const p = String(path ?? "").toLowerCase().replace(/^json_content\./, "")
+  return p === "requires_auth" || p === "visibility" || p === "requireotp" || p === "gate" || p.startsWith("gate.")
+}
+
 export function pageGateFlags(page: { requires_auth?: unknown; json_content?: any } | null | undefined): {
   gated: boolean
   requiresAuth: boolean
@@ -673,7 +686,7 @@ const SetCmd = cmd({
               `  iris pages ungate ${args.slug}`,
           )
         }
-        prompts.outro(dim(`iris pages cache-clear ${args.slug}   # purge the rendered cache so the change takes effect`))
+        await purgeIfGatePath(String(args.path), String(args.slug))
         return
       }
 
@@ -728,7 +741,7 @@ const SetCmd = cmd({
       if (!readBack) {
         prompts.log.warn(`Could not read the page back to confirm. Check: iris pages get ${args.slug} ${args.path}`)
       }
-      prompts.outro(dim(`iris pages cache-clear ${args.slug}   # purge the rendered cache so the change takes effect`))
+      await purgeIfGatePath(String(args.path), String(args.slug))
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
@@ -3078,6 +3091,162 @@ const UngateCmd = cmd({
 // Cache Clear — purge rendered page cache on iris-api
 // ============================================================================
 
+
+/**
+ * Gate audit (#183705) — the whole allowlist, in one table.
+ *
+ * The CLI could print one page's gate at a time. So a client's OWN DOMAIN being absent from
+ * all twelve of her pages was invisible: she reached the dashboard through a single
+ * allowedEmails entry for her own address, and everyone else at Pathways was refused
+ * everywhere. Finding that took reading twelve JSON blobs by hand on a client call.
+ *
+ * Two things this flags that a per-page view structurally cannot:
+ *   - a value in the WRONG LIST. `kmontero.com` sat in allowedEmails on two pages. It is not
+ *     an address, so it matched nothing — and it IS a live registered domain, so one key over
+ *     it would have admitted anyone holding mail there. A bare domain in an email list is the
+ *     exact shape of that bug and is called out by name.
+ *   - config that claims a gate the page does not have. `visibility: unlisted` DELISTS: a
+ *     stranger gets 404, not an OTP prompt, and the allowlist is inert. Easy to set believing
+ *     you have gated something.
+ */
+const DOMAIN_RE = /^(?!-)[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i
+
+export function classifyGateEntry(list: "domains" | "emails", value: string): string | null {
+  const v = String(value ?? "").trim()
+  if (!v) return "empty entry"
+  if (list === "emails") {
+    if (EMAIL_RE.test(v)) return null
+    // The kmontero.com case: reads like access, grants none, and is one key from granting a lot.
+    if (DOMAIN_RE.test(v)) return "a DOMAIN in the email list — matches nobody; in allowedDomains it would admit everyone there"
+    return "not an email address"
+  }
+  if (DOMAIN_RE.test(v)) return null
+  if (EMAIL_RE.test(v)) return "an EMAIL in the domain list — this does not grant that person access"
+  return "not a domain"
+}
+
+const PagesGateCommand = cmd({
+  command: "gate [slug]",
+  describe: "audit gates across a set of pages — who can open them, and what is misconfigured",
+  builder: (y) =>
+    y
+      .positional("slug", { type: "string", describe: "one page, or omit and use --prefix" })
+      .option("prefix", { type: "string", describe: "audit every page whose slug starts with this, e.g. pathways-" })
+      .option("expect-domain", { type: "array", describe: "domains that SHOULD be on every gated page — reports which pages lack them" })
+      .option("limit", { type: "number", default: 200, describe: "max pages to scan with --prefix" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    if (!args.json) { UI.empty(); prompts.intro("◈  Gate audit") }
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const prefix = args.prefix ? String(args.prefix) : null
+    const one = args.slug ? String(args.slug) : null
+    if (!one && !prefix) {
+      prompts.log.error("Give a slug, or --prefix pathways- to audit a set.")
+      prompts.outro("Done")
+      return
+    }
+
+    const sp = prompts.spinner()
+    sp.start(one ? `Reading ${one}…` : `Finding ${prefix}* pages…`)
+
+    let slugs: string[] = []
+    if (one) slugs = [one]
+    else {
+      const params = new URLSearchParams({ per_page: String(args.limit ?? 200), page: "1", include_json: "0", slim: "1", search: prefix! })
+      const res = await pagesFetch(`/api/v1/pages?${params.toString()}`)
+      const j = (await res.json().catch(() => ({}))) as any
+      const rows: any[] = Array.isArray(j?.data) ? j.data : Array.isArray(j?.data?.data) ? j.data.data : []
+      slugs = rows.map((p) => String(p.slug)).filter((s) => s.startsWith(prefix!)).sort()
+    }
+
+    if (!slugs.length) { sp.stop("No pages matched", 1); prompts.outro("Done"); return }
+
+    type Row = {
+      slug: string; owner: string; visibility: string; requiresAuth: boolean; requireOtp: boolean
+      domains: string[]; emails: string[]; problems: string[]
+    }
+    const out: Row[] = []
+    for (const slug of slugs) {
+      sp.message(`Reading ${slug}…`)
+      const res = await pagesFetch(`/api/v1/pages/by-slug/${encodeURIComponent(slug)}?include_json=1`)
+      if (!res.ok) { out.push({ slug, owner: "?", visibility: "?", requiresAuth: false, requireOtp: false, domains: [], emails: [], problems: [`could not read (HTTP ${res.status})`] }); continue }
+      const body = (await res.json().catch(() => ({}))) as any
+      const page = body?.data ?? body
+      const jc = page?.json_content ?? {}
+      const gate = jc?.gate ?? {}
+      const domains: string[] = Array.isArray(gate?.allowedDomains) ? gate.allowedDomains.map(String) : []
+      const emails: string[] = Array.isArray(gate?.allowedEmails) ? gate.allowedEmails.map(String) : []
+      const requiresAuth = Boolean(page?.requires_auth)
+      const requireOtp = Boolean(jc?.requireOtp)
+      const visibility = String(page?.visibility ?? "?")
+
+      const problems: string[] = []
+      for (const d of domains) { const p = classifyGateEntry("domains", d); if (p) problems.push(`allowedDomains["${d}"] — ${p}`) }
+      for (const e of emails) { const p = classifyGateEntry("emails", e); if (p) problems.push(`allowedEmails["${e}"] — ${p}`) }
+      // An allowlist on a page nothing gates is decoration; say so rather than let it read as protection.
+      if ((domains.length || emails.length) && !requiresAuth && !requireOtp) {
+        problems.push("has an allowlist but NO gate — requires_auth and requireOtp are both false, so the list does nothing")
+      }
+      if (visibility === "unlisted" && (requiresAuth || requireOtp)) {
+        problems.push("visibility=unlisted DELISTS rather than gates — a stranger gets 404, not an OTP prompt")
+      }
+      // Empty domain list on a gated page is the dangerous default: it reads as "restricted".
+      if ((requiresAuth || requireOtp) && !domains.length && !emails.length) {
+        problems.push("gated with an EMPTY allowlist — verify who this actually admits before trusting it")
+      }
+      for (const want of ((args["expect-domain"] as string[] | undefined) ?? [])) {
+        if ((requiresAuth || requireOtp) && !domains.some((d) => d.toLowerCase() === String(want).toLowerCase())) {
+          problems.push(`missing expected domain: ${want}`)
+        }
+      }
+      out.push({ slug, owner: `${page?.owner_type ?? "?"} ${page?.owner_id ?? "?"}`, visibility, requiresAuth, requireOtp, domains, emails, problems })
+    }
+
+    sp.stop(success(`${out.length} page(s) audited`))
+    if (args.json) { await writeJson(out); return }
+
+    console.log()
+    for (const r of out) {
+      const state = r.requiresAuth || r.requireOtp ? "gated" : dim("OPEN")
+      console.log(`  ${bold(r.slug)}  ${state}  ${dim(`${r.owner} · ${r.visibility}`)}`)
+      if (r.domains.length) console.log(`      domains: ${r.domains.join(" · ")}`)
+      if (r.emails.length) console.log(`      emails:  ${r.emails.join(" · ")}`)
+      for (const p of r.problems) console.log(`      ${bold("!")} ${p}`)
+    }
+    console.log()
+    const bad = out.filter((r) => r.problems.length)
+    if (bad.length) {
+      prompts.log.warn(`${bad.length} of ${out.length} page(s) have something worth looking at.`)
+      process.exitCode = 1
+    } else {
+      prompts.log.success("Every gate reads consistently.")
+    }
+    prompts.outro("Done")
+  },
+})
+
+/** Purge the rendered cache when the path just written changes who can read the page. */
+async function purgeIfGatePath(path: string, slug: string): Promise<void> {
+  if (!isGateAffectingPath(path)) {
+    prompts.outro(dim(`iris pages cache-clear ${slug}   # purge the rendered cache so the change takes effect`))
+    return
+  }
+  try {
+    const res = await irisFetch("/api/internal/cache/purge-page", { method: "POST", body: JSON.stringify({ slug }) })
+    if (res.ok) {
+      prompts.log.success("Gate changed — rendered cache purged, so this is live now.")
+      prompts.outro(dim(`iris pages check-public ${slug}   # confirm who can actually read it`))
+      return
+    }
+    // Never let a failed purge read as a completed gate change.
+    prompts.log.warn(`Gate changed but the cache purge returned HTTP ${res.status} — the OLD gate may still be serving.`)
+  } catch (e) {
+    prompts.log.warn(`Gate changed but the cache purge failed (${e instanceof Error ? e.message : String(e)}) — the OLD gate may still be serving.`)
+  }
+  prompts.outro(dim(`iris pages cache-clear ${slug}   # run this, then check-public`))
+}
+
 const CacheClearCmd = cmd({
   command: "cache-clear [slug]",
   aliases: ["cc", "purge"],
@@ -4684,6 +4853,7 @@ export const PlatformPagesCommand = productCommand({
       .command(PublishHtmlCmd)
       .command(ReassignCmd)
       .command(UngateCmd)
+      .command(PagesGateCommand)
       .command(CacheClearCmd)
       .demandCommand(),
 })
