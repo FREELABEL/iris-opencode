@@ -25,6 +25,7 @@ import { exec } from "child_process"
 import { randomBytes } from "node:crypto"
 import { detectNewConnection, extractConnections, shouldPrintUrlOnly, type ConnectionRow } from "./integration-connect-state"
 import { verifyProbeFor, isProbeSuccess, isProbeInconclusive } from "./integration-verify-probe"
+import { IntegrationsHealthCommand, IntegrationsTestCommand } from "./integration-health"
 import {
   normalizeCatalog, normalizeEntry, findEntry, isOAuthEntry, requiredFields,
   missingRequired, parseFieldFlags, connectCommandHint, groupByCategory,
@@ -2274,6 +2275,8 @@ export const PlatformRunCommand = cmd({
       .command(ListToolsCommand)
       .command(ListIntegrationsCommand)
       .command(ListConnectedCommand)
+      .command(IntegrationsHealthCommand)
+      .command(IntegrationsTestCommand)
       .command(ListAvailableCommand)
       .command(ConnectCommand)
       .command(SetupCommand)
