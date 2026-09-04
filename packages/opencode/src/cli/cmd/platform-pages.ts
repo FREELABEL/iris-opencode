@@ -3999,6 +3999,61 @@ async function renderPage(slug: string, opts: { width: number; timeout: number; 
   }
 }
 
+/**
+ * The literal text stored in a page's JSON, with no browser (#183704).
+ *
+ * THIS IS NOT A RENDER CHECK AND MUST NEVER BE PRESENTED AS ONE.
+ *
+ * `iris pages verify` needs Playwright, and the person building these pages is on a managed
+ * Windows machine where the last install we asked her to run threw Abort/Retry/Ignore at her
+ * mid-call (#183651). So she builds, publishes, and asks someone else whether it worked.
+ *
+ * This closes the smaller half of that gap — "does the page contain the words I wrote" — which
+ * needs no browser, because those words are in the stored JSON.
+ *
+ * WHAT IT CANNOT SEE, AND WHY THAT MATTERS HERE. Measured on pathways-dashboard: the page
+ * carries 27 dataSources, and NEITHER of the two numbers that contradicted each other on it
+ * — a stat row reading 1,182 above a board reading 16 — appears anywhere in the JSON. Both are
+ * fetched at render time. So this fallback would have called that page healthy.
+ *
+ * That is the exact shape of an instrument that cannot fail, so the output says what it did not
+ * check, every time, and never uses the word "verified".
+ */
+function staticTextFromJson(jsonContent: any): { text: string; dataSources: number; components: number } {
+  let jc = jsonContent
+  if (typeof jc === "string") {
+    try {
+      jc = JSON.parse(jc)
+    } catch {
+      jc = {}
+    }
+  }
+  const comps = Array.isArray(jc?.components) ? jc.components : []
+  const sources = Array.isArray(jc?.dataSources) ? jc.dataSources : Array.isArray(jc?.data_sources) ? jc.data_sources : []
+
+  // Every string in the component tree. Deliberately greedy: a missed prop is a false negative,
+  // and a false negative here reads as "your text is not on the page" — a wrong statement about
+  // her work, which is the failure this whole ticket family is about.
+  const out: string[] = []
+  const walk = (v: any) => {
+    if (typeof v === "string") out.push(v)
+    else if (Array.isArray(v)) v.forEach(walk)
+    else if (v && typeof v === "object") Object.values(v).forEach(walk)
+  }
+  walk(comps)
+
+  // Strip tags so CustomHtml blocks compare like rendered text rather than like markup.
+  const text = out
+    .join(" ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  return { text, dataSources: sources.length, components: comps.length }
+}
+
 function playwrightHint(e: any): string {
   const m = e?.message ?? String(e)
   if (m.includes("Cannot find module") || m.toLowerCase().includes("playwright")) {
@@ -4136,9 +4191,133 @@ const VerifyCmd = cmd({
       }
       prompts.outro("Done")
     } catch (e: any) {
-      sp?.stop("Failed", 1)
-      prompts.log.error(playwrightHint(e))
-      process.exitCode = 1
+      // NO BROWSER? DEGRADE HONESTLY RATHER THAN REFUSE (#183704).
+      //
+      // Playwright is an optional dep and the person who most needs this command does not have
+      // it — she is on a managed Windows machine where the last install threw Abort/Retry/Ignore
+      // at her mid-call (#183651). Refusing outright means she builds, publishes, and asks
+      // somebody else whether it worked, which is the actual complaint.
+      //
+      // So fall back to the text stored in the page's JSON. It answers "are my words on the
+      // page" and nothing else — and the output says so, loudly, every time. It must never read
+      // as verification: on pathways-dashboard, 27 dataSources supply the numbers, and the
+      // contradiction that motivated this ticket (1,182 above a board reading 16) is invisible
+      // to this path by construction.
+      const missingBrowser = /cannot find module|playwright/i.test(e?.message ?? String(e))
+
+      if (!missingBrowser) {
+        sp?.stop("Failed", 1)
+        prompts.log.error(playwrightHint(e))
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      let page: any = null
+      try {
+        page = await getBySlug(slug, true, { quiet404: true })
+      } catch {}
+
+      if (!page?.json_content) {
+        sp?.stop("Failed", 1)
+        prompts.log.error(playwrightHint(e))
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      const stat = staticTextFromJson(page.json_content)
+      const caseSensitive = !!args["case-sensitive"]
+      const hay = normalizeForMatch(stat.text, { caseSensitive })
+
+      const checks: Array<{ kind: string; label: string; pass: boolean }> = []
+      for (const raw of (args.expect as string[]) ?? []) {
+        checks.push({ kind: "expect", label: raw, pass: hay.includes(normalizeForMatch(raw, { caseSensitive })) })
+      }
+      for (const raw of (args["not-expect"] as string[]) ?? []) {
+        checks.push({ kind: "not-expect", label: raw, pass: !hay.includes(normalizeForMatch(raw, { caseSensitive })) })
+      }
+
+      // min-words and lane are RENDER facts. Answering them from stored JSON would be a
+      // different measurement wearing the same name, so they are reported as not-run.
+      const skipped: string[] = []
+      if (args["min-words"] !== undefined) skipped.push("--min-words")
+      if (args.lane) skipped.push("--lane")
+
+      const failed = checks.filter((c) => !c.pass)
+
+      if (args.json) {
+        writeJson({
+          slug, mode: "static-text-only", rendered: false,
+          reason: "playwright not installed — checked the page's stored text, not a render",
+          dataSourcesUnchecked: stat.dataSources, components: stat.components,
+          checks, skipped,
+          // `ok` is only meaningful when nothing is indeterminate — see the console branch.
+          indeterminate: stat.dataSources > 0 && failed.length > 0,
+          ok: failed.length === 0,
+        })
+        if (failed.length) process.exitCode = 1
+        return
+      }
+
+      sp?.stop("Not rendered — static text only", 1)
+      console.log()
+      prompts.log.warn("NO BROWSER — the page was NOT rendered. This is not verification.")
+      prompts.log.info(`Checked the ${stat.components} component(s) stored in the page's JSON.`)
+      if (stat.dataSources > 0) {
+        prompts.log.warn(
+          `${stat.dataSources} data source(s) were NOT checked — every number and list this page ` +
+            `fetches at render time is invisible here. A page can pass this and still contradict itself.`,
+        )
+      }
+      if (skipped.length) prompts.log.info(dim(`Not run without a render: ${skipped.join(", ")}`))
+
+      // A MISS HERE IS "UNKNOWN", NOT "MISSING" — and getting that wrong was worse than not
+      // shipping the fallback at all.
+      //
+      // Found by running it: `--expect "Active Cases"` came back ✗ on a page that plainly shows
+      // Active Cases. The label is supplied by a dataSource, not stored in the page, so absence
+      // from the JSON says nothing about the rendered page. Printing ✗ there tells the author
+      // her text is missing when it is on screen — a confident wrong statement about her own
+      // work, which is the whole family of bug this ticket sits in.
+      //
+      // So: a hit is a real positive (the text is definitely in the page source). A miss is
+      // INDETERMINATE whenever the page has data sources, and is only a genuine failure when
+      // there are none to explain it.
+      const indeterminate = stat.dataSources > 0
+      console.log()
+      for (const c of checks) {
+        const mark = c.pass
+          ? success("✓")
+          : indeterminate
+            ? `${UI.Style.TEXT_DIM}?${UI.Style.TEXT_NORMAL}`
+            : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+        const note = c.pass ? "" : indeterminate ? dim("  (not in the stored page — may still render from a data source)") : ""
+        console.log(`  ${mark} ${c.kind}: ${c.label}${note}`)
+      }
+
+      console.log()
+      if (checks.length === 0) {
+        prompts.log.warn("No assertions given, and nothing was rendered — this established nothing.")
+        process.exitCode = 1
+      } else if (failed.length && indeterminate) {
+        // Non-zero on purpose. The answer is "could not determine", and a command that exits 0
+        // there would be read by a script — and by a person — as "verified".
+        prompts.log.warn(
+          `COULD NOT VERIFY ${failed.length} of ${checks.length} check(s). They are not in the stored ` +
+            `page, but this page has ${stat.dataSources} data source(s), so they may render anyway.`,
+        )
+        process.exitCode = 1
+      } else if (failed.length) {
+        prompts.log.error(
+          `${failed.length} of ${checks.length} text check(s) failed. This page has no data sources, ` +
+            `so absent from the stored page means absent from the rendered one.`,
+        )
+        process.exitCode = 1
+      } else {
+        prompts.log.success(`${checks.length} text check(s) found in the STORED page (not a render).`)
+      }
+      prompts.log.info(dim("For a real render: install Playwright locally, or open the page in a browser."))
       prompts.outro("Done")
     }
   },
