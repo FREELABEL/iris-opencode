@@ -67,7 +67,11 @@ const SessionsCommand = cmd({
       .option("status", { describe: "active | idle | stale | unknown", type: "string" })
       .option("all", { describe: "include stale sessions (hidden by default)", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
-      .option("user-id", { describe: "user ID", type: "number" }),
+      .option("user-id", { describe: "user ID", type: "number" })
+      .epilogue(
+        "A node that has not confirmed its session list recently is flagged above the table.\n" +
+          "Its rows are a last-known snapshot, not a live one — `iris hive doctor` says why.",
+      ),
   async handler(argv) {
     await requireAuth()
     const userId = await requireUserId(argv["user-id"] as number | undefined)
@@ -78,8 +82,25 @@ const SessionsCommand = cmd({
     const nodes = (body.nodes || body.data || []) as any[]
 
     const rows: Array<Session & { node: string }> = []
+    // A node that has STOPPED reporting keeps its last known list on the server, so the
+    // sessions still appear. What changes is that `sessions_updated_at` freezes — and if
+    // nothing surfaces that, a frozen list is indistinguishable from a current one, which
+    // is the bug this whole area kept producing (#183538).
+    const quiet: Array<{ name: string; ago: string }> = []
+    // Five minutes. A healthy node confirms its list on every heartbeat and sits at 0m; the
+    // degraded one measured while building this hovered at 7-8m, reporting only occasionally.
+    // Ten minutes did not separate those two, which is the whole job of this number. Five is
+    // still ten missed heartbeats, so it does not fire on a brief hiccup.
+    const QUIET_MS = 5 * 60 * 1000
+
     for (const n of nodes) {
       if (argv.node && String(n.name).toLowerCase() !== String(argv.node).toLowerCase()) continue
+
+      const reported = n.sessions_updated_at ? Date.parse(n.sessions_updated_at) : NaN
+      if (Number.isNaN(reported) || Date.now() - reported > QUIET_MS) {
+        quiet.push({ name: n.name, ago: n.sessions_updated_at ? age(n.sessions_updated_at) : "never" })
+      }
+
       for (const s of (n.active_sessions || []) as Session[]) {
         rows.push({ ...s, node: n.name })
       }
@@ -101,6 +122,14 @@ const SessionsCommand = cmd({
     if (argv.json) return void (await writeJson(shown))
 
     console.log()
+    // Printed BEFORE the table, and printed even when the table is empty. A node that cannot
+    // report is the most important thing on this screen, because everything below it is then
+    // a last-known snapshot rather than a current one.
+    for (const q of quiet) {
+      console.log(dim(`  ⚠ ${q.name} last reported its sessions ${q.ago} ago — what follows for it may be out of date.`))
+    }
+    if (quiet.length) console.log()
+
     if (shown.length === 0) {
       console.log(dim("  No sessions." + (staleCount ? `  ${staleCount} stale hidden — see with --all` : "")))
       console.log()

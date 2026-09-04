@@ -83,8 +83,22 @@ Your suffix was ambiguous. Session ids share leading characters, so nothing here
 prefix — pass more of the id.
 
 **A machine shows sessions that are clearly gone**
-Its daemon may have stopped reporting. See `iris hive doctor` and check the node's own
-loopback health; a node that cannot report sessions keeps showing its last known list.
+Look for a warning line above the table:
+
+```
+  ⚠ MacBookPro last reported its sessions 41m ago — what follows for it may be out of date.
+```
+
+A node that cannot look up its own sessions keeps its last known list on the server rather
+than replacing it with an empty one, because "I looked and found none" and "I could not look"
+are different facts and only one of them means the sessions ended. What changes is that the
+node stops confirming the list, so its report age climbs and the warning appears.
+
+Treat everything listed for a warned node as a snapshot from that long ago. `iris hive doctor`
+on that machine will say why it stopped reporting — usually its local bridge is not serving
+`/api/sessions/*`, often because something else grabbed the port.
+
+A node with no warning confirmed its list within the last five minutes.
 
 ## Related
 
