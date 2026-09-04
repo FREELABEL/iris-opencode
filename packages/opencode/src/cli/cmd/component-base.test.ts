@@ -175,3 +175,32 @@ describe("restampComponentHeader — a guard that cries wolf gets disabled, not 
     expect(stripComponentHeader(after)).toBe(body)
   })
 })
+
+describe("blast radius has THREE states, not two", () => {
+  const base = { error: "component_conflict", changedAt: "2026-09-04T12:00:00+00:00" }
+
+  test("zero pages says so, rather than saying nothing", () => {
+    // Found by the production run, 2026-09-04. A component named by no page printed NO blast
+    // radius line at all, because the code branched on `> 0` and on `null` and let 0 fall
+    // between them. Silence there is indistinguishable from "we did not check" — which is the
+    // exact absent-vs-equal confusion this whole epic exists to remove.
+    const out = handleComponentConflictResponse("s", 409, { ...base, usedByPages: 0 } as any)
+    expect(out.lines.join("\n")).toMatch(/no page/i)
+  })
+
+  test("a positive count is named", () => {
+    expect(handleComponentConflictResponse("s", 409, { ...base, usedByPages: 3 } as any)
+      .lines.join("\n")).toMatch(/3 pages/)
+  })
+
+  test("one page is singular", () => {
+    expect(handleComponentConflictResponse("s", 409, { ...base, usedByPages: 1 } as any)
+      .lines.join("\n")).toMatch(/1 page\b/)
+  })
+
+  test("unknown stays distinguishable from zero", () => {
+    const out = handleComponentConflictResponse("s", 409, { ...base } as any)
+    expect(out.lines.join("\n")).toMatch(/could not determine/i)
+    expect(out.lines.join("\n")).not.toMatch(/no page/i)
+  })
+})

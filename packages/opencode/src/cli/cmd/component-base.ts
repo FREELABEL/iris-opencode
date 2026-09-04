@@ -95,12 +95,16 @@ export function handleComponentConflictResponse(
   // The blast radius, stated at the moment somebody is actually looking (#182331). A publish
   // changes every page naming the slug at once, and that is normally what you want — which is
   // exactly why nothing distinguishes an intended propagation from an accidental one.
-  if (pages !== null && pages > 0) {
-    lines.push(`  this publish would have changed ${pages} page${pages === 1 ? "" : "s"}`)
-  } else if (pages === null) {
-    // The server answers 0 when the lookup itself failed. Printing "0 pages" would state as a
-    // finding something that was never measured.
+  // THREE states, not two. Found by the production run on 2026-09-04: a component named by no
+  // page printed no blast-radius line at all, because this branched on `> 0` and on `null` and
+  // let 0 fall between them. Silence reads as "we did not check", which is the same absent-vs-
+  // equal confusion this whole epic exists to remove — and it appeared inside the fix for it.
+  if (pages === null) {
     lines.push(`  (could not determine how many pages name this component)`)
+  } else if (pages > 0) {
+    lines.push(`  this publish would have changed ${pages} page${pages === 1 ? "" : "s"}`)
+  } else {
+    lines.push(`  no page currently names this component`)
   }
   lines.push("")
   lines.push(`  Take their version:   iris pages library pull ${slug}`)
