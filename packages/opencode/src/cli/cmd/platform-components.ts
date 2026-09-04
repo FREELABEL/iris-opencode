@@ -5,6 +5,12 @@ import {
 } from "./iris-api"
 import { UI } from "../ui"
 import { firstArray } from "../../util/array"
+import {
+  componentHeader, parseComponentHeader, stripComponentHeader,
+  handleComponentConflictResponse, restampComponentHeader,
+} from "./component-base"
+import { existsSync, mkdirSync, writeFileSync } from "fs"
+import { join, resolve } from "path"
 
 /**
  * `iris genesis components …` — the stored Genesis Component library.
@@ -216,6 +222,64 @@ const RollbackCmd = cmd({
  * failed publish prints every error with its line, rather than one generic message: the author
  * is mid-edit and needs the list, not a verdict.
  */
+/**
+ * `pull` — the half of the round trip that never existed.
+ *
+ * `show --source` prints to a terminal, so editing a stored component meant copy-pasting out of
+ * scrollback. These components have no `.vue` anywhere on disk — the stored row IS the source —
+ * so that was the only route, and it carried no record of which state you edited.
+ */
+const PullCmd = cmd({
+  command: "pull <slug>",
+  aliases: ["download", "checkout"],
+  describe: "download a stored component to a local .vue you can edit and publish back",
+  builder: (y: any) =>
+    y
+      .positional("slug", { describe: "component slug", type: "string", demandOption: true })
+      .option("dir", { describe: "output directory", type: "string", default: "./components" })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args: any) {
+    await requireAuth()
+    const res = await api(`${BASE}/${args.slug}`)
+    if (!res.ok) { handleApiError(res, `pull ${args.slug}`); process.exitCode = 1; return }
+    const body = await res.json()
+    const c = body.component ?? body
+
+    if (typeof c.source !== "string" || c.source === "") {
+      UI.println("")
+      UI.println(`  ${bold(args.slug)} has no stored source to pull.`)
+      process.exitCode = 1
+      return
+    }
+
+    const dir = args.dir as string
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    const file = join(dir, `${args.slug}.vue`)
+
+    // The marker rides IN the file. A sidecar is lost the moment somebody copies just the .vue,
+    // and a guard that disables itself when a file moves is the defect it exists to prevent.
+    // `publish` strips it again before sending, so it never becomes stored source.
+    const header = componentHeader({
+      slug: c.slug,
+      hash: c.compileHash ?? "none",
+      compiler: c.compilerVersion ?? "unknown",
+      pulledAt: new Date().toISOString(),
+    })
+    writeFileSync(file, `${header}\n${stripComponentHeader(c.source)}`)
+
+    if (args.json) { writeJson({ ok: true, slug: c.slug, file: resolve(file), compileHash: c.compileHash }); return }
+
+    UI.println("")
+    UI.println(`  ${success("pulled")}  ${bold(c.slug)}  ${dim("→ " + resolve(file))}`)
+    if (!c.compileHash) {
+      // No token means publish cannot check divergence. Say so rather than letting a silent
+      // downgrade look like protection.
+      UI.println(dim(`    no compile hash on the server — publish cannot detect a clobber`))
+    }
+    UI.println(dim(`    edit it, then: ${highlight("iris pages library publish " + c.slug + " --file " + file)}`))
+  },
+})
+
 const PublishCmd = cmd({
   command: "publish <slug>",
   aliases: ["push", "create"],
@@ -227,6 +291,7 @@ const PublishCmd = cmd({
       .option("name", { describe: "display name (defaults to the slug)", type: "string" })
       .option("description", { describe: "one line describing what it is for", type: "string" })
       .option("dry-run", { describe: "compile only — report errors and slots, publish nothing", type: "boolean", default: false })
+      .option("force", { describe: "publish even if someone else changed the component since you pulled it", type: "boolean", default: false })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args: any) {
     await requireAuth()
@@ -238,7 +303,11 @@ const PublishCmd = cmd({
       process.exitCode = 1
       return
     }
-    const source = await file.text()
+    const raw = await file.text()
+    // The provenance marker is NOT source. Storing it would drift the hash by one byte on every
+    // pull, and every publish would then conflict against itself.
+    const source = stripComponentHeader(raw)
+    const pulledFrom = parseComponentHeader(raw)
 
     // COMPILE FIRST, ALWAYS — including on a real publish. The store endpoint compiles too,
     // but asking here means a failure is reported as a LIST OF ERRORS WITH LINES rather than
@@ -290,10 +359,45 @@ const PublishCmd = cmd({
         source,
         // The slug already exists in most real uses — this is an edit, not a first publish.
         replace: true,
+        // Optimistic concurrency (#182331 / the #183600 shape). Only when the file carries a
+        // marker: a hand-written component has nothing to diverge from, and refusing every
+        // unmarked file is the shape that gets a guard disabled rather than fixed.
+        ...(pulledFrom && pulledFrom.hash && pulledFrom.hash !== "none" && !args.force
+          ? { expected_hash: pulledFrom.hash }
+          : {}),
       }),
     })
-    if (!res.ok) { handleApiError(res, `publish ${args.slug}`); return }
+
+    // A publish changes every page naming this slug, so a refusal here is protecting more than
+    // one document. Handled before the generic error path so it reads as a conflict, not a 409.
+    const conflictBody = res.status === 409 ? await res.clone().json().catch(() => null) : null
+    const conflict = handleComponentConflictResponse(args.slug, res.status, conflictBody)
+    if (conflict.conflicted) {
+      UI.println("")
+      for (const line of conflict.lines) UI.println("  " + line)
+      if (args.json) writeJson({ ok: false, conflict: true, slug: args.slug, ...conflictBody })
+      process.exitCode = conflict.exitCode
+      return
+    }
+
+    if (!res.ok) { handleApiError(res, `publish ${args.slug}`); process.exitCode = 1; return }
     const body = await res.json()
+
+    // Point the local file at the state we just created, so the NEXT publish from this file is
+    // guarded rather than conflicting with our own work.
+    if (body?.compileHash) {
+      try {
+        writeFileSync(args.file, restampComponentHeader(raw, {
+          slug: args.slug,
+          hash: body.compileHash,
+          compiler: body.compilerVersion ?? pulledFrom?.compiler ?? "unknown",
+          pulledAt: new Date().toISOString(),
+        }))
+      } catch {
+        // Non-fatal: the publish already succeeded. The file just keeps its old marker, and the
+        // next publish will refuse rather than clobber — the safe direction to fail.
+      }
+    }
 
     UI.println("")
     UI.println(`  ${success("published")}  ${bold(args.slug)}${body.version ? dim(`  v${body.version}`) : ""}`)
@@ -406,6 +510,7 @@ export const LibraryCmd = cmd({
   describe: "the stored component library — publish, list, show, usage, versions, audit, rollback",
   builder: (y) =>
     y
+      .command(PullCmd)
       .command(PublishCmd)
       .command(ListCmd)
       .command(ShowCmd)

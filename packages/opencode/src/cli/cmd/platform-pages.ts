@@ -10,6 +10,11 @@ import { profileFromBrand, rebrandJsonContent, type BrandProfile } from "./rebra
 import { LibraryCmd } from "./platform-components"
 import { confirmWiden, isWidening, type Tier } from "./exposure-gate"
 import { firstArray } from "../../util/array"
+// GLD-01/02. Local file provenance and the three-way merge live in their own dependency-free
+// modules so they are unit-testable without this file's yargs/UI/API graph — same reason
+// page-ref.ts was split out. See page-base.test.ts / page-merge.test.ts.
+import { baseFromPage, readBase, stripBase, expectedVersionField, handleVersionConflictResponse, contentUpdatePayload, ownershipDrift } from "./page-base"
+import { mergePageDocs, formatMergeReport, versionDocFromRow, mergePreconditions } from "./page-merge"
 
 // ============================================================================
 // Helpers
@@ -34,7 +39,11 @@ function formatStatus(status: string): string {
   return status
 }
 
-export async function getBySlug(slug: string, includeJson = false): Promise<any | null> {
+export async function getBySlug(
+  slug: string,
+  includeJson = false,
+  opts: { quiet404?: boolean } = {},
+): Promise<any | null> {
   const params = new URLSearchParams({
     include_json: includeJson ? "1" : "0",
     include_drafts: "1",
@@ -51,6 +60,20 @@ export async function getBySlug(slug: string, includeJson = false): Promise<any 
     if (res.ok || !TRANSIENT.has(res.status) || attempt === 4) break
     await new Promise((r) => setTimeout(r, 300 * attempt + Math.floor(Math.random() * 150)))
   }
+  // #183670 — a 404 here is not always an error, and treating it as one made a SUCCESSFUL
+  // command exit 1.
+  //
+  // `push` deliberately treats a missing page as a CREATE ("the file is the intent; honour
+  // it"). It correctly ignores this function's return value in that case — but every branch of
+  // handleApiError sets `process.exitCode = 1`, and nothing ever reset it. So a brand-new page
+  // that was created and pushed, with two green messages, exited 1: a script reads that as
+  // failure on the FIRST push of every new page.
+  //
+  // Resetting the code after the create would be worse — it would mask a genuine earlier
+  // error. The fix is to not record a failure that did not happen. Callers that are ASKING
+  // whether a page exists pass quiet404; every other caller is unchanged, so a real 404 still
+  // reports and still exits non-zero.
+  if (res.status === 404 && opts.quiet404) return null
   if (!res.ok) {
     await handleApiError(res, `Get page ${slug}`)
     return null
@@ -733,7 +756,14 @@ const PullCmd = cmd({
       const dir = pagesDir(args.dir)
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
       const filePath = join(dir, `${slug}.json`)
+      // GLD-01 (#183600). The version this file came from, stamped at the TOP LEVEL —
+      // never inside json_content, which renders. `push` sends it back as
+      // `expected_version` and the server refuses the write if the page has moved on.
+      // Null when the server exposes no current_version (contract §3 not deployed yet):
+      // no marker is better than one we cannot trust, and push then behaves as before.
+      const base = baseFromPage(page)
       const exp = {
+        ...(base ? { _base: base } : {}),
         id: page.id,
         slug: page.slug,
         title: page.title,
@@ -762,6 +792,8 @@ const PullCmd = cmd({
       writeFileSync(filePath, JSON.stringify(exp, null, 2) + "\n")
       const cnt = exp.json_content?.components?.length ?? 0
       sp.stop(success(`Pulled → ${filePath} (${cnt} components)`))
+      if (base) prompts.log.info(dim(`based on v${base.version} — push will refuse if the live page moves past it`))
+      else prompts.log.warn(`This page reports no version, so push cannot detect a concurrent edit. Run ${highlight(`iris pages diff ${slug}`)} before pushing.`)
       prompts.outro(dim(`iris pages push ${slug}`))
     } catch (err) {
       sp.stop("Error", 1)
@@ -783,7 +815,12 @@ const PushCmd = cmd({
       .option("dir", { describe: "input directory", type: "string", default: "./pages" })
       .option("live", { describe: "skip draft — push directly to live (dangerous)", type: "boolean", default: false })
       .option("publish", { describe: "publish right after push — use this on any page that is already live, or it 404s until you publish", type: "boolean", default: false })
-      .option("force", { describe: "push even if the local file looks like a stale shadow copy (#181601)", type: "boolean", default: false }),
+      .option("force", { describe: "push even if the local file looks like a stale shadow copy (#181601)", type: "boolean", default: false })
+      // Deliberately NOT folded into --force. --force answers "yes, this directory is the one
+      // I meant"; this answers "yes, discard the newer versions on the server". Overloading
+      // one flag would mean anyone silencing the directory warning also silences the data-loss
+      // one, which is how #183600 happened in the first place.
+      .option("force-version", { describe: "push over a page that has changed since you pulled it — DISCARDS the newer versions", type: "boolean", default: false }),
   async handler(args) {
     const { slug, corrected } = normalizeSlugArg(args.slug)
     UI.empty()
@@ -826,7 +863,8 @@ const PushCmd = cmd({
       prompts.log.info(dim(`from ${resolve(filePath)}`))
       sp.start("Pushing…")
       const local = JSON.parse(readFileSync(filePath, "utf-8"))
-      let page = await getBySlug(slug, false)
+      // quiet404: a missing page here means CREATE, not failure (#183670).
+      let page = await getBySlug(slug, false, { quiet404: true })
 
       // A slug with no page yet is a CREATE, not an error. `push` used to stop at
       // "Page not found", so shipping a new page meant discovering that `pages create`
@@ -879,19 +917,36 @@ const PushCmd = cmd({
         return
       }
 
-      const updateData: Record<string, unknown> = { json_content: jsonContent }
-      if (local.title) updateData.title = local.title
-      if (local.seo_title) updateData.seo_title = local.seo_title
-      if (local.seo_description) updateData.seo_description = local.seo_description
-      if (local.og_image) updateData.og_image = local.og_image
-      if (local.owner_type) updateData.owner_type = local.owner_type
-      if (local.owner_id !== undefined) updateData.owner_id = local.owner_id
-      // Re-assert visibility when the local file carries one. Unlike status (below), this
-      // is safe: visibility is orthogonal to the publish cycle, and re-sending the value
-      // we pulled can only preserve it. Sending nothing is what let it drift silently, and
-      // a page demoted to `unlisted` 404s on its /p/{slug} address — indistinguishable
-      // from deleted.
-      if (local.visibility) updateData.visibility = local.visibility
+      // `_base` is provenance, not content. When the file is the bare `{components: […]}`
+      // shape, `jsonContent` IS `local`, so without this strip the marker would be pushed
+      // into json_content and rendered. The server ignoring an unknown key is not a licence
+      // to send it.
+      // #183667 — the payload is an ALLOW-LIST, built in one place and unit-tested, rather than
+      // a run of `if (local.x)` lines that sent every field anyone ever added. Ownership, the
+      // gate and the publish status are all deliberately absent; see contentUpdatePayload.
+      const updateData: Record<string, unknown> = contentUpdatePayload(local, jsonContent)
+      // GLD-01 (#183600). Optimistic concurrency: the server compares this against
+      // page.current_version atomically with the write and 409s on a mismatch. Absent when
+      // the file carries no _base (hand-written, or pulled before this shipped) — the same
+      // call `bloqs publish` makes on a missing marker.
+      const localBase = readBase(local)
+      if (localBase && !args["force-version"]) Object.assign(updateData, expectedVersionField(local))
+      if (localBase && args["force-version"]) {
+        prompts.log.warn(`--force-version: pushing over v${localBase.version} without checking whether the live page moved. Anything written since your pull is discarded.`)
+      }
+      // Ownership drift is REPORTED, never synced. push no longer sends owner_type/owner_id:
+      // fl-api refuses them on presence alone for anyone outside `genesis.trusted_user_ids`
+      // (default [193], the operator account), so a plain pull -> push 403'd for every ordinary
+      // user, and a merged push 403'd too because `pages merge` restores those fields from live.
+      const drift = ownershipDrift(local, page)
+      if (drift) {
+        prompts.log.warn(
+          `${slug}.json says owner ${drift.localType ?? "?"}/${drift.localId ?? "?"}, ` +
+            `live is ${drift.liveType ?? "?"}/${drift.liveId ?? "?"}. ` +
+            `Not sent — push never changes ownership.\n` +
+            `  Change it deliberately:  ${highlight(`iris pages reassign ${slug}`)}`,
+        )
+      }
       // ACCESS CONTROL DOES NOT TRAVEL IN A CONTENT FILE. (#181984)
       //
       // push used to re-assert `requires_auth` from the local JSON, on the reasoning that
@@ -935,15 +990,52 @@ const PushCmd = cmd({
         method: "PUT",
         body: JSON.stringify(updateData),
       })
+
+      // The 409 is handled BEFORE handleApiError, which would flatten it into a generic
+      // "Push page failed: …" and lose changed_by / changed_at / changed_components — the
+      // three things that let someone decide what to do next.
+      if (res.status === 409) {
+        let body: any = null
+        try { body = await res.json() } catch { /* the STATUS is the check, not the body */ }
+        const conflict = handleVersionConflictResponse(slug, res.status, body)
+        sp.stop("Refused — the live page moved", 1)
+        prompts.log.error(conflict.lines[0])
+        for (const line of conflict.lines.slice(1)) console.log(line)
+        // NON-ZERO. #181601: a refusal that exits 0 is read by a script as a successful push,
+        // which is the exact defect this guard exists to stop.
+        process.exitCode = conflict.exitCode
+        prompts.outro("Done")
+        return
+      }
+
       if (!(await handleApiError(res, "Push page"))) { sp.stop("Failed", 1); prompts.outro("Done"); return }
       const cnt = jsonContent?.components?.length ?? 0
 
+      // Re-stamp the file's provenance from what the server now holds, so the NEXT push
+      // carries the version this push created. A stale _base left here would 409 forever.
+      let nextBase: ReturnType<typeof baseFromPage> = null
+      let putBody: any = null
+      try { putBody = await res.json() } catch {}
+      nextBase = baseFromPage(putBody?.data ?? putBody)
+      // The PUT response may not echo the page. Ask for it rather than guessing — and do it
+      // only when it can matter, i.e. this file is (or is about to become) guarded.
+      if (!nextBase && (localBase || baseFromPage(page))) nextBase = baseFromPage(await getBySlug(slug, false))
+      if (!nextBase && localBase) {
+        // The server has no opinion about versions on this page. Keeping a marker it will
+        // never validate would silently turn the guard off while looking like it is on;
+        // dropping it makes the next push honestly unguarded.
+        prompts.log.warn(`Removed the _base marker — this page reports no current_version, so push cannot guard it.`)
+      }
+      const baseChanged = JSON.stringify(local._base ?? null) !== JSON.stringify(nextBase ?? null)
+
       // Persist the backfilled ids locally so the file matches what the server now holds —
       // otherwise `pages diff` would report a permanent phantom difference on every page
-      // whose ids we generated at push time.
-      if (backfilled > 0) {
+      // whose ids we generated at push time. The refreshed `_base` rides along, so the next
+      // push carries the version this one just created.
+      if (backfilled > 0 || baseChanged) {
         try {
-          writeFileSync(filePath, JSON.stringify(local, null, 2) + "\n")
+          const onDisk = { ...(nextBase ? { _base: nextBase } : {}), ...stripBase(local) }
+          writeFileSync(filePath, JSON.stringify(onDisk, null, 2) + "\n")
         } catch {
           // Non-fatal: the push already succeeded; the local file just keeps its old shape.
         }
@@ -1058,6 +1150,172 @@ const DiffCmd = cmd({
     } catch (err) {
       sp.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
+      prompts.outro("Done")
+    }
+  },
+})
+
+/**
+ * Fetch the json_content of one historical version, for use as the merge BASE.
+ *
+ * Tries the single-version route first and falls back to scanning the versions list, because
+ * `pages versions` proves the list route exists while the single-version route may not. If
+ * neither answers, the caller merges with an UNKNOWN base — which turns every difference into
+ * a conflict. That is the honest degradation: a merge with a guessed ancestor is worse than a
+ * merge that admits it does not have one.
+ */
+async function fetchVersionDoc(pageId: number | string, version: number): Promise<any | null> {
+  // NOTE: the single-version route answers 200 with `json_content: null` for a version whose
+  // content is not inlined. `versionDocFromRow` turns that into null, and the caller REFUSES —
+  // it must never become an empty base. See mergePreconditions.
+  try {
+    const res = await pagesFetch(`/api/v1/pages/${pageId}/versions/${version}`)
+    if (res.ok) {
+      const d = (await res.json()) as any
+      const hit = versionDocFromRow(d?.data ?? d)
+      if (hit) return hit
+    }
+  } catch { /* fall through to the list */ }
+  try {
+    const res = await pagesFetch(`/api/v1/pages/${pageId}/versions`)
+    if (!res.ok) return null
+    const d = (await res.json()) as any
+    const rows = extractVersions(d?.data)
+    const row = rows.find((r: any) => Number(r.version_number ?? r.version ?? r.id) === version)
+    return versionDocFromRow(row)
+  } catch {
+    return null
+  }
+}
+
+const MergeCmd = cmd({
+  // GLD-02 (#183600). `push` prints this command on a 409 and NEVER merges implicitly — an
+  // automatic merge on the write path is a merge nobody read.
+  command: "merge <slug>",
+  describe: "three-way merge ./pages/<slug>.json against the live page (run this when push reports a conflict)",
+  builder: (y) =>
+    y
+      .positional("slug", { describe: "page slug — e.g. `my-page`, not `pages/my-page.json`", type: "string", demandOption: true })
+      .option("dir", { describe: "directory", type: "string", default: "./pages" })
+      .option("ours", { describe: "resolve every conflict in favour of your local file", type: "boolean", default: false })
+      .option("theirs", { describe: "resolve every conflict in favour of the live page", type: "boolean", default: false })
+      .option("edit", { describe: "write <slug>.conflicts.json with all three sides of every conflict, for hand resolution", type: "boolean", default: false })
+      .example("$0 pages merge pathways-case", "merge, refusing on any conflict")
+      .example("$0 pages merge pathways-case --theirs", "keep the live side wherever the two disagree"),
+  async handler(args) {
+    const { slug, corrected } = normalizeSlugArg(args.slug)
+    UI.empty()
+    prompts.intro(`◈  Merge ${slug}`)
+    if (corrected) noteSlugCorrection(args.slug, slug)
+    if (args.ours && args.theirs) {
+      prompts.log.error("--ours and --theirs both given. Pick one — they are opposite answers to the same question.")
+      process.exitCode = 2
+      prompts.outro("Done")
+      return
+    }
+    if (!(await requireAuth())) { prompts.outro("Done"); return }
+    const sp = prompts.spinner()
+    sp.start("Reading three sides…")
+    try {
+      const filePath = join(pagesDir(args.dir), `${slug}.json`)
+      if (!existsSync(filePath)) {
+        sp.stop("Failed", 1)
+        prompts.log.error(`Local file not found: ${filePath}`)
+        prompts.log.info(dim(`Nothing to merge. Pull first: iris pages pull ${slug}`))
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      const ours = JSON.parse(readFileSync(filePath, "utf-8"))
+      const theirs = await getBySlug(slug, true)
+      if (!theirs) { sp.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
+
+      const localBase = readBase(ours)
+      let base: any = null
+      if (localBase) {
+        sp.message(`Fetching base v${localBase.version}…`)
+        base = await fetchVersionDoc(theirs.id, localBase.version)
+      }
+
+      // NOT named `resolve` — that is `path.resolve`, imported at the top of this file and
+      // used three lines down. Shadowing it here turned the source line into a call to a
+      // string.
+      const resolveMode: "ours" | "theirs" | undefined = args.ours ? "ours" : args.theirs ? "theirs" : undefined
+
+      // A base version we NAMED but could not LOAD is not the same as having no base, and the
+      // two must not behave the same way. Falling through to a two-way merge here would print
+      // the same confident output off a fabricated ancestor.
+      const pre = mergePreconditions(localBase, base, resolveMode)
+      if (!pre.ok) {
+        sp.stop("Refused — base unavailable", 1)
+        prompts.log.error(pre.lines[0])
+        for (const line of pre.lines.slice(1)) console.log(line.replace("iris pages diff", `iris pages diff ${slug}`).replace(/--(ours|theirs)$/, `iris pages merge ${slug} --$1`))
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      const out = mergePageDocs(base, ours, theirs, resolveMode ? { resolve: resolveMode } : undefined)
+      if (out.mergeable) sp.stop(success("Merged"))
+      else sp.stop(`${out.conflicts.length} conflict(s)`, 1)
+
+      const liveVersion = (theirs as any).current_version
+      printDivider()
+      console.log(`  base:   ${localBase ? `v${localBase.version}${base ? "" : dim(" (unavailable — every difference is a conflict)")}` : dim("unknown — file has no _base; every difference is a conflict")}`)
+      console.log(`  ours:   ${resolve(filePath)}`)
+      console.log(`  theirs: live${liveVersion !== undefined ? ` v${liveVersion}` : ""}`)
+      console.log()
+      for (const line of formatMergeReport(slug, out, resolveMode)) console.log(line)
+      printDivider()
+
+      if (!out.mergeable) {
+        if (args.edit) {
+          const sidecar = join(pagesDir(args.dir), `${slug}.conflicts.json`)
+          writeFileSync(
+            sidecar,
+            JSON.stringify(
+              {
+                slug,
+                generated_at: new Date().toISOString(),
+                base_version: localBase?.version ?? null,
+                live_version: liveVersion ?? null,
+                conflicts: out.conflicts,
+              },
+              null,
+              2,
+            ) + "\n",
+          )
+          prompts.log.info(`Wrote ${sidecar}`)
+          prompts.log.info(
+            `Edit ${filePath} by hand until it says what you want, then take your side:\n` +
+              `  ${highlight(`iris pages merge ${slug} --ours`)}`,
+          )
+        }
+        // Non-zero, always. A merge that refuses and exits 0 is read by a script as a merge
+        // that succeeded — the #181601 shape.
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      // The merged document is built on the LIVE version, so that is its new base: pushing it
+      // sends expected_version = live, which succeeds unless someone writes again in between —
+      // in which case it 409s again, correctly.
+      const nextBase = baseFromPage(theirs)
+      const merged = {
+        ...(nextBase ? { _base: nextBase } : {}),
+        id: theirs.id,
+        slug: theirs.slug ?? slug,
+        ...out.merged,
+        status: theirs.status,
+      }
+      writeFileSync(filePath, JSON.stringify(merged, null, 2) + "\n")
+      prompts.log.info(success(`Wrote ${filePath}${nextBase ? ` (now based on v${nextBase.version})` : ""}`))
+      prompts.outro(dim(`Review it, then: iris pages push ${slug}`))
+    } catch (err) {
+      sp.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+      process.exitCode = 1
       prompts.outro("Done")
     }
   },
@@ -4096,6 +4354,7 @@ export const PlatformPagesCommand = productCommand({
       .command(PullCmd)
       .command(PushCmd)
       .command(DiffCmd)
+      .command(MergeCmd)
       .command(PublishCmd)
       .command(UnpublishCmd)
       .command(PreviewCmd)
