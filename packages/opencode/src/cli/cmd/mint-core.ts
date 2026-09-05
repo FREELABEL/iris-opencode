@@ -201,12 +201,58 @@ export function verifyAgainstSource(
   const withCommas = Number(bare).toLocaleString("en-US", { minimumFractionDigits: 2 })
   const hay = haystack.replace(/\s+/g, " ")
   if (!hay.includes(bare) && !hay.includes(withCommas))
-    return { ok: false, reason: `amount ${bare} not found in email body` }
+    return { ok: false, reason: `amount ${bare} not found in source text` }
   const date = normalizeDate(String(ex?.date ?? ""))
   if (!date) return { ok: false, reason: "no usable date" }
   const amount = Number(bare)
   if (!(amount > 0)) return { ok: false, reason: "amount is zero" }
   return { ok: true, amount, date }
+}
+
+/**
+ * WHAT THE DOCUMENT RAIL WILL READ, and how it decides.
+ *
+ * A PDF with a text layer is read as TEXT, never photographed into a vision
+ * model. The text layer is the document's own account of itself: it is free,
+ * exact, and cannot misread its own glyphs. Vision is the fallback for pixels,
+ * not the default for documents — sending a digital invoice through OCR is a
+ * worse answer at a higher price.
+ *
+ * Anything not listed here returns null and is REFUSED BY NAME rather than
+ * skipped. A folder where three of twelve files quietly did not count is
+ * indistinguishable from one where all twelve were read.
+ */
+export const BILL_IMAGE_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".heic": "image/heic",
+}
+
+export type BillKind = "image" | "pdf" | "text"
+
+export function billKind(filePath: string): BillKind | null {
+  const ext = (String(filePath).match(/\.[^./\\]+$/)?.[0] ?? "").toLowerCase()
+  if (ext in BILL_IMAGE_MIME) return "image"
+  if (ext === ".pdf") return "pdf"
+  if (ext === ".txt" || ext === ".md") return "text"
+  return null
+}
+
+/**
+ * Is a transcript worth sending to the extractor at all?
+ *
+ * An OCR call that returns three characters has failed, but it fails as a
+ * SUCCESS: a non-empty string, an extractor that finds no amount, and a
+ * quarantine line reading "no amount extracted" — which describes the receipt
+ * rather than the instrument, and points the reader at the wrong thing. The
+ * floor is deliberately low; it is here to separate "read nothing" from "read a
+ * receipt with no total", not to judge quality.
+ */
+export function transcriptIsUsable(text: string): boolean {
+  return String(text ?? "").replace(/\s+/g, "").length >= 24
 }
 
 /**

@@ -6,6 +6,8 @@ import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, dim, bold, writeJson, IRIS_API } from "./iris-api"
 import fs from "fs"
 import path from "path"
+import crypto from "crypto"
+import { spawnSync } from "child_process"
 import { executeIntegrationCall } from "./platform-run"
 import { bridgeFetch } from "./iris-api"
 import { mailRows } from "./mail-response"
@@ -29,6 +31,9 @@ import {
   sparkline,
   today,
   verifyAgainstSource,
+  billKind,
+  transcriptIsUsable,
+  BILL_IMAGE_MIME,
   ymd,
   budgetCategories,
   groupResolves,
@@ -2011,6 +2016,374 @@ const ScanCommand = cmd({
   },
 })
 
+// ── document & photo receipt rail (`mint bill`) ──────────────────────────────
+/**
+ * WHY THIS IS TWO STAGES AND NOT ONE VISION CALL.
+ *
+ * The obvious implementation hands the image to a vision model and asks for
+ * {merchant, amount, date} directly. It is shorter, and it quietly destroys the
+ * only check this pipeline has.
+ *
+ * `verifyAgainstSource` works by requiring the extracted amount to appear
+ * LITERALLY in the source text — the email rail catches a model inventing 51.79
+ * because 51.79 is nowhere in the email. Ask a vision model for JSON straight
+ * from pixels and there IS no source text to check against. Its claim becomes
+ * unfalsifiable, and the gate does not fail loudly, it just stops being a gate.
+ *
+ * So: stage one TRANSCRIBES (pixels -> text), stage two EXTRACTS (text -> JSON)
+ * through the same extractReceipt/verifyAgainstSource pair the email rail uses.
+ * The gate survives unchanged, and the transcript is stored on the row so a
+ * human can see what the extractor was actually reading.
+ *
+ * THE LIMIT, stated because it would otherwise be mistaken for a stronger
+ * guarantee: this catches the EXTRACTOR fabricating, not the TRANSCRIBER. If
+ * the vision model misreads 51.97 as 51.79, the extractor copies 51.79, the
+ * gate finds 51.79 in the transcript, and it passes. Quantifying that rate is
+ * B-05 in epic #183767 and it is NOT done. Until it is, rows from this rail are
+ * reviewable rather than trusted — which is the entire reason the transcript is
+ * kept on the row instead of thrown away.
+ */
+let lastBillError = ""
+
+const OCR_MODEL = "iris/gpt-4o-mini"
+
+const OCR_PROMPT =
+  "Transcribe ALL text visible in this receipt or invoice, exactly as it appears. " +
+  "Preserve every number character-for-character — never round, reformat, or convert a currency. " +
+  "Keep line items on their own lines. Output the transcription only: no commentary, no summary, " +
+  "no markdown fences. If the image contains no legible text, output nothing."
+
+function sha256File(filePath: string): string {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex")
+}
+
+/** Stage one for pixels. Returns the transcript, or null with `lastBillError` set. */
+async function ocrImageToText(model: string, filePath: string, detail: string): Promise<string | null> {
+  const ext = (filePath.match(/\.[^./\\]+$/)?.[0] ?? "").toLowerCase()
+  const mime = BILL_IMAGE_MIME[ext] ?? "image/jpeg"
+  let dataUri: string
+  try {
+    dataUri = `data:${mime};base64,${fs.readFileSync(filePath).toString("base64")}`
+  } catch (e) {
+    lastBillError = `unreadable file: ${e instanceof Error ? e.message : String(e)}`
+    return null
+  }
+  const res = await irisFetch(
+    `/api/v6/openai/chat/completions`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: 1500,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: OCR_PROMPT },
+              { type: "image_url", image_url: { url: dataUri, detail } },
+            ],
+          },
+        ],
+      }),
+    },
+    IRIS_API,
+  )
+  if (!res.ok) {
+    lastBillError = `vision HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 160)}`
+    return null
+  }
+  const j = (await res.json()) as any
+  const text = String(j?.choices?.[0]?.message?.content ?? "").trim()
+  if (!text) {
+    lastBillError = "vision model returned nothing"
+    return null
+  }
+  return text
+}
+
+/**
+ * PDF text layer, via `pdftotext`. Absent binary is reported, never treated as
+ * an empty document — "poppler is not installed" and "this PDF has no text" are
+ * different facts with different fixes, and collapsing them sends the reader to
+ * the wrong one.
+ */
+function pdfToText(filePath: string): string | null {
+  const r = spawnSync("pdftotext", ["-layout", "-q", filePath, "-"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })
+  if (r.error) {
+    lastBillError =
+      (r.error as any)?.code === "ENOENT"
+        ? "pdftotext not installed — `brew install poppler`, or pass the bill as an image"
+        : `pdftotext failed: ${r.error.message}`
+    return null
+  }
+  if (r.status !== 0) {
+    lastBillError = `pdftotext exited ${r.status}: ${String(r.stderr ?? "").slice(0, 120)}`
+    return null
+  }
+  return String(r.stdout ?? "").trim()
+}
+
+/** Route a file to the right reader. `how` is reported so the cost is visible. */
+async function readBillText(
+  filePath: string,
+  ocrModel: string,
+  detail: string,
+): Promise<{ text: string; how: "vision" | "pdf-text" | "text" } | null> {
+  const kind = billKind(filePath)
+  if (kind === "text") {
+    try {
+      return { text: fs.readFileSync(filePath, "utf8").trim(), how: "text" }
+    } catch (e) {
+      lastBillError = `unreadable file: ${e instanceof Error ? e.message : String(e)}`
+      return null
+    }
+  }
+  if (kind === "pdf") {
+    const t = pdfToText(filePath)
+    if (t === null) return null
+    // A scanned PDF has a valid but EMPTY text layer. That is pixels wearing a
+    // document's extension, so it falls through to vision rather than being
+    // reported as an unreadable PDF.
+    if (transcriptIsUsable(t)) return { text: t, how: "pdf-text" }
+    lastBillError = "PDF has no usable text layer (a scan?) — export it as an image and re-run"
+    return null
+  }
+  if (kind === "image") {
+    const t = await ocrImageToText(ocrModel, filePath, detail)
+    if (t === null) return null
+    return { text: t, how: "vision" }
+  }
+  lastBillError = "unsupported file type"
+  return null
+}
+
+const BillCommand = cmd({
+  command: "bill <files..>",
+  aliases: ["bills", "receipt"],
+  describe: "read a photo or PDF of a bill into a transaction (verified, idempotent)",
+  builder: (y) =>
+    y
+      .positional("files", { type: "string", describe: "image/PDF/text paths — let your shell expand globs" })
+      .option("scope", { alias: "s", type: "string", default: DEFAULT_SCOPE })
+      .option("category", { alias: "c", type: "string" })
+      .option("account-id", { type: "number", describe: "chart-of-accounts id" })
+      .option("model", { type: "string", default: DEFAULT_EXTRACT_MODEL, describe: "stage 2 — extraction" })
+      .option("ocr-model", { type: "string", default: OCR_MODEL, describe: "stage 1 — vision transcription" })
+      .option("detail", { type: "string", default: "high", describe: "vision detail: high | low | auto" })
+      .option("keep-text", { type: "boolean", default: true, describe: "store the transcript on the row for audit" })
+      .option("write", { type: "boolean", default: false, describe: "actually write (default is preview only)" })
+      .option("json", { type: "boolean", default: false }),
+  async handler(args) {
+    UI.empty()
+    prompts.intro("◈  Mint Bill")
+    const token = await requireAuth()
+    if (!token) {
+      prompts.outro("Done")
+      return
+    }
+    const scope = String(args.scope ?? DEFAULT_SCOPE)
+    const files = (Array.isArray(args.files) ? args.files : [args.files]).map(String).filter(Boolean)
+
+    // REFUSED BY NAME, before a single API call is spent. A file that cannot be
+    // read is a fact about the run and belongs in the output, not in silence.
+    const readable: string[] = []
+    const refused: { file: string; reason: string }[] = []
+    for (const f of files) {
+      if (!fs.existsSync(f)) refused.push({ file: f, reason: "no such file" })
+      else if (!fs.statSync(f).isFile()) refused.push({ file: f, reason: "not a file" })
+      else if (!billKind(f)) refused.push({ file: f, reason: `unsupported type (${path.extname(f) || "no extension"})` })
+      else readable.push(f)
+    }
+    if (refused.length) {
+      prompts.log.error(`${refused.length} of ${files.length} file(s) will NOT be read:`)
+      for (const r of refused.slice(0, 10)) console.log(`    ${dim("·")} ${path.basename(r.file)}  ${dim(r.reason)}`)
+      if (refused.length > 10) console.log("    " + dim(`… ${refused.length - 10} more`))
+    }
+    if (readable.length === 0) {
+      prompts.log.warn("Nothing readable to ingest")
+      await recordRun({ kind: "bill", scope, ok: false, failures: refused.length, candidates: files.length, written: 0,
+        notes: `no readable files of ${files.length} given` })
+      prompts.outro("Done")
+      return
+    }
+
+    const spinner = prompts.spinner()
+    const found: any[] = []
+    const quarantined: any[] = []
+    const howCount: Record<string, number> = {}
+    for (let i = 0; i < readable.length; i++) {
+      const f = readable[i]!
+      const base = path.basename(f)
+      spinner.start(`Reading ${base} (${i + 1}/${readable.length})…`)
+      lastBillError = ""
+      const read = await readBillText(f, String(args["ocr-model"]), String(args.detail))
+      if (!read) {
+        spinner.stop(`${base} — could not read`, 1)
+        quarantined.push({ subject: base, reason: lastBillError || "could not read" })
+        continue
+      }
+      howCount[read.how] = (howCount[read.how] ?? 0) + 1
+      if (!transcriptIsUsable(read.text)) {
+        spinner.stop(`${base} — nothing legible`, 1)
+        quarantined.push({ subject: base, reason: `transcript too short to be a receipt (${read.text.length} chars)` })
+        continue
+      }
+      const ex = await extractReceipt(String(args.model), base, read.text)
+      if (!ex) {
+        spinner.stop(`${base} — extraction failed`, 1)
+        quarantined.push({ subject: base, reason: lastExtractError || "extraction failed" })
+        continue
+      }
+      if (ex.is_receipt === false) {
+        spinner.stop(`${base} — not a receipt`)
+        quarantined.push({ subject: base, reason: "model says this is not a receipt or invoice" })
+        continue
+      }
+      // The SAME gate the email rail uses, against the transcript as the source.
+      const v = verifyAgainstSource(ex, read.text)
+      if (!v.ok) {
+        spinner.stop(`${base} — held for review`, 1)
+        quarantined.push({ subject: base, reason: v.reason })
+        continue
+      }
+      spinner.stop(`${base} — ${fmtCents(Math.round(v.amount! * 100))} ${dim(read.how)}`)
+      found.push({
+        date: v.date!,
+        amount: v.amount!,
+        desc: (String(ex.merchant ?? "").trim() || base).slice(0, 200),
+        subject: base,
+        file: f,
+        sha: sha256File(f),
+        how: read.how,
+        // Recorded, never converted. An FX rate we did not fetch is not a number
+        // we may invent, and a row that remembers it was EUR can be converted
+        // later; one that silently became USD cannot be un-converted (B-04).
+        currency: String(ex.currency ?? "").trim().toUpperCase() || "USD",
+        transcript: args["keep-text"] ? read.text.slice(0, 4000) : undefined,
+        category: args.category ?? undefined,
+        accountId: args["account-id"] ?? undefined,
+      })
+    }
+
+    if (found.length === 0 && quarantined.length === 0) {
+      prompts.log.warn("Nothing extracted")
+      prompts.outro("Done")
+      return
+    }
+
+    // IDENTITY IS THE FILE'S BYTES, not its name and not its values. `source_ref`
+    // (#182038) already gives stable identity across a revised amount, so a
+    // re-run of the same photo is one row whatever it is called — and two
+    // genuinely different bills from the same merchant, same day, same total
+    // stay two rows, which `fingerprint` alone would have collapsed into one.
+    let fresh = found
+    const conflicts: any[] = []
+    if (found.length) {
+      const dates = found.map((f) => f.date).sort()
+      const byRef = await existingBySourceRef(dates[0]!, dates[dates.length - 1]!, scope)
+      fresh = []
+      for (const f of found) {
+        const ref = sourceRef(["bill", f.sha])
+        const prior = byRef.get(ref)
+        const verdict = classifySync(prior?.amount_cents, centsOf(f))
+        if (verdict === "fresh") fresh.push({ ...f, ref })
+        else if (verdict === "correction") {
+          // Identical bytes that read to a DIFFERENT amount is not a revised
+          // source — it is the transcriber being non-deterministic, which is a
+          // finding about the instrument. Reported, never silently applied.
+          conflicts.push({ file: f.subject, was: prior!.amount_cents, now: centsOf(f), id: prior!.id })
+        }
+      }
+    }
+
+    printDivider()
+    for (const f of fresh)
+      console.log(
+        `  ${dim(f.date)}  ${fmtCents(centsOf(f)).padEnd(12)}  ${bold(f.desc)}  ${dim([f.currency, f.category ?? "uncategorised", f.how].filter(Boolean).join(" · "))}`,
+      )
+    if (fresh.length === 0) console.log("  " + dim("nothing new"))
+    printDivider()
+    const readSummary = Object.entries(howCount).map(([k, n]) => `${n} ${k}`).join(", ")
+    console.log(
+      `  ${bold(String(fresh.length))} new  ·  ${dim(`${found.length - fresh.length - conflicts.length} already recorded`)}  ·  ${bold(fmtCents(fresh.reduce((s, f) => s + centsOf(f), 0)))}  ${dim(`scope=${scope}${readSummary ? " · " + readSummary : ""}`)}`,
+    )
+
+    if (conflicts.length) {
+      console.log("")
+      prompts.log.error(
+        `${conflicts.length} file(s) read to a DIFFERENT amount than the row already on file, from identical bytes.`,
+      )
+      for (const c of conflicts)
+        console.log(`    ${dim("·")} ${c.file}  ${dim(`tx #${c.id}: ${fmtCents(c.was)} → now reads ${fmtCents(c.now)}`)}`)
+      console.log("    " + dim("Not applied. Same file, two answers — check the transcript before trusting either."))
+    }
+    if (quarantined.length) {
+      console.log("")
+      console.log("  " + bold(`${quarantined.length} held for review — read but NOT verified against the source:`))
+      for (const q of quarantined.slice(0, 10)) console.log(`    ${dim("·")} ${q.subject.slice(0, 60)}  ${dim(q.reason)}`)
+      if (quarantined.length > 10) console.log("    " + dim(`… ${quarantined.length - 10} more`))
+    }
+
+    const runOk = refused.length === 0 && conflicts.length === 0
+    if (args.json) {
+      await writeJson({ fresh, quarantined, refused, conflicts })
+      prompts.outro("Done")
+      return
+    }
+    if (!args.write) {
+      await recordRun({
+        kind: "bill", scope, rail: "document", ok: runOk, failures: refused.length + conflicts.length,
+        candidates: files.length, written: 0, duplicates: found.length - fresh.length - conflicts.length,
+        quarantined: quarantined.length, amount: fresh.reduce((a, f) => a + centsOf(f), 0) / 100,
+        notes: "preview only (no --write)",
+      })
+      prompts.log.info("Preview only — re-run with --write to record these")
+      prompts.outro("Done")
+      return
+    }
+    if (fresh.length === 0) {
+      prompts.log.success("Already up to date")
+      prompts.outro("Done")
+      return
+    }
+
+    let ok = 0
+    for (const f of fresh) {
+      const body: Record<string, any> = {
+        type: "expense",
+        description: f.desc,
+        amount_cents: centsOf(f),
+        transaction_date: f.date,
+        source: "import",
+        metadata: {
+          scope,
+          fp: fingerprint(f.date, centsOf(f), f.desc),
+          source_ref: f.ref,
+          imported_from: "bill-scan",
+          read_as: f.how,
+          currency: f.currency,
+          file: f.subject.slice(0, 200),
+          sha256: f.sha,
+          ...(f.transcript ? { transcript: f.transcript } : {}),
+        },
+      }
+      if (f.category) body.category = f.category
+      if (f.accountId != null) body["account_id"] = f.accountId
+      const res = await irisFetch(`/api/v1/atlas/transactions`, { method: "POST", body: JSON.stringify(body) })
+      if (res.ok) ok++
+    }
+    await recordRun({
+      kind: "bill", scope, rail: "document", ok: runOk && ok === fresh.length,
+      failures: refused.length + conflicts.length + (fresh.length - ok),
+      candidates: files.length, written: ok, duplicates: found.length - fresh.length - conflicts.length,
+      quarantined: quarantined.length, amount: fresh.reduce((a, f) => a + centsOf(f), 0) / 100,
+    })
+    prompts.log.success(`Recorded ${ok}/${fresh.length} · scope=${scope}`)
+    prompts.outro("Done")
+  },
+})
+
 const MerchantsCommand = cmd({
   command: "merchants",
   aliases: ["m"],
@@ -2063,7 +2436,7 @@ const MerchantsCommand = cmd({
  * exist so those two can never be confused again.
  */
 type RunRow = {
-  kind: "snapshot" | "scan" | "import"
+  kind: "snapshot" | "scan" | "import" | "bill"
   scope: string
   rail?: string
   ok: boolean
@@ -2308,7 +2681,7 @@ const TrendCommand = cmd({
   describe: "how spend and run health have moved over time",
   builder: (y) =>
     y
-      .option("kind", { type: "string", describe: "snapshot | scan | import" })
+      .option("kind", { type: "string", describe: "snapshot | scan | import | bill" })
       .option("limit", { type: "number", default: 30 })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
@@ -3071,7 +3444,7 @@ const DoctorCommand = cmd({
 export const PlatformMintCommand = productCommand({
   name: "mint",
   purpose: "Mint — budgets vs actuals for personal and business money",
-  keywords: ["mint", "budget", "actuals", "spend", "money", "finance", "scenario", "ledger"],
+  keywords: ["mint", "budget", "actuals", "spend", "money", "finance", "scenario", "ledger", "bill", "bills", "receipt", "receipts", "invoice", "ocr"],
   howtos: ["track-finances-atlas-ledger"],
   builder: (y) =>
     y
@@ -3084,6 +3457,7 @@ export const PlatformMintCommand = productCommand({
       .command(ImportCommand)
       .command(SplitCommand)
       .command(ScanCommand)
+      .command(BillCommand)
       .command(GroupCommand)
       .command(PolicyCommand)
       .command(DoctorCommand)

@@ -13,6 +13,8 @@ import {
   fingerprint,
   centsOf,
   verifyAgainstSource,
+  billKind,
+  transcriptIsUsable,
   parseCsv,
   pickCol,
   DATE_COLS,
@@ -608,5 +610,54 @@ describe("reimbursableOf — business-paid-from-personal (#182036)", () => {
     // owes personal, not the other way around.
     const r = reimbursableOf({ metadata: { scope: "business", paid_from: "personal" } })
     expect(r).toEqual({ owed_by: "business", owed_to: "personal" })
+  })
+})
+
+describe("billKind — routing a file to the reader that suits it", () => {
+  test("images go to vision", () => {
+    for (const f of ["a.jpg", "a.JPEG", "b.png", "c.webp", "d.gif", "e.heic"]) expect(billKind(f)).toBe("image")
+  })
+
+  test("a PDF is a PDF — read its text layer, do not photograph it", () => {
+    // The cheap, exact reader must win over the expensive, fallible one whenever
+    // the document can describe itself.
+    expect(billKind("/inbox/invoice-2026-09.pdf")).toBe("pdf")
+  })
+
+  test("plain text is read as-is", () => {
+    expect(billKind("notes.txt")).toBe("text")
+    expect(billKind("bill.md")).toBe("text")
+  })
+
+  test("REFUSES anything else, rather than guessing", () => {
+    // null is what makes the command name the file it will not read. Guessing a
+    // reader here is how a folder silently ingests two thirds of itself.
+    expect(billKind("statement.csv")).toBeNull()
+    expect(billKind("bill.docx")).toBeNull()
+    expect(billKind("receipt")).toBeNull()
+    expect(billKind("archive.tar.gz")).toBeNull()
+  })
+
+  test("a dot in the DIRECTORY name is not an extension", () => {
+    expect(billKind("/Users/me/my.receipts/august")).toBeNull()
+    expect(billKind("/Users/me/my.receipts/august.png")).toBe("image")
+  })
+})
+
+describe("transcriptIsUsable — separating a dead instrument from an odd receipt", () => {
+  test("rejects what a failed read returns", () => {
+    // These must NOT reach the extractor: each would come back "no amount
+    // extracted", which describes the receipt and blames the wrong thing.
+    expect(transcriptIsUsable("")).toBe(false)
+    expect(transcriptIsUsable("   \n\t  ")).toBe(false)
+    expect(transcriptIsUsable("N/A")).toBe(false)
+  })
+
+  test("accepts a real, short receipt", () => {
+    expect(transcriptIsUsable("BLUE BOTTLE COFFEE\n2026-09-05\nTOTAL  6.40\nVISA ****1234")).toBe(true)
+  })
+
+  test("counts characters, not whitespace", () => {
+    expect(transcriptIsUsable(" ".repeat(500))).toBe(false)
   })
 })
