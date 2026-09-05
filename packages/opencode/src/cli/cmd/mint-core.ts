@@ -210,6 +210,71 @@ export function verifyAgainstSource(
 }
 
 /**
+ * Pixel dimensions from a PNG/JPEG header, without decoding the image or adding a dependency.
+ *
+ * WHY THE SIZE MATTERS, measured over 18 real bills x 3 reads (2026-09-05):
+ *
+ *              72 DPI (612x792)      200 DPI (1700x2200)
+ *   correct         70.4%                  92.6%
+ *   held            24.1%                   1.9%
+ *   WRONG WRITTEN    5.6%                   5.6%
+ *
+ * and every wrong value at 72 DPI was a DIGIT MISREAD — 95.32 read as 95.92, 46.26 read as
+ * 44.26 and then taken for the total. At 200 DPI those disappeared entirely. Resolution, not
+ * the model, was the failure.
+ *
+ * A misread digit is the worst possible failure here because it is silent: the gate checks the
+ * amount appears in the TRANSCRIPT, and the transcript is the vision model's own output, so a
+ * number it misread is a number it will happily confirm. Nothing downstream can catch it.
+ * Refusing to guess on a small image is the only place this can be stopped.
+ *
+ * Returns null when the header is unreadable — unknown is not the same as small, and a file
+ * we cannot measure must not be reported as low quality.
+ */
+export function imagePixels(buf: Uint8Array): { width: number; height: number } | null {
+  // PNG: 8-byte signature, then IHDR whose width/height are big-endian at 16..24.
+  if (buf.length >= 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+    return { width: dv.getUint32(16), height: dv.getUint32(20) }
+  }
+  // JPEG: walk the segment chain to a Start-Of-Frame marker; the size lives there, not in the
+  // header, and APP segments before it vary in length so the offset cannot be assumed.
+  if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+    let i = 2
+    while (i + 8 < buf.length) {
+      if (buf[i] !== 0xff) { i++; continue }
+      const marker = buf[i + 1]!
+      // SOF0-SOF15, excluding DHT(c4), JPG(c8) and DAC(cc) which are not frame headers.
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+        return { height: dv.getUint16(i + 5), width: dv.getUint16(i + 7) }
+      }
+      const len = (buf[i + 2]! << 8) | buf[i + 3]!
+      if (len < 2) return null
+      i += 2 + len
+    }
+  }
+  return null
+}
+
+/**
+ * Is this image big enough to read digits from reliably?
+ *
+ * 1000px on the long edge is roughly 120 DPI on US Letter — comfortably above the 72 DPI that
+ * produced misreads and below the 200 DPI that did not. Deliberately a WARNING threshold and
+ * not a refusal: a small image is a reason to look at the row, not a reason to refuse a bill
+ * somebody actually needs recorded.
+ */
+export const MIN_LONG_EDGE_PX = 1000
+
+export function resolutionWarning(px: { width: number; height: number } | null): string | null {
+  if (!px) return null
+  const longEdge = Math.max(px.width, px.height)
+  if (longEdge >= MIN_LONG_EDGE_PX) return null
+  return `low resolution (${px.width}x${px.height}) — digits misread at this size; measured 70% vs 93% correct. Re-scan at 200+ DPI.`
+}
+
+/**
  * WHAT THE DOCUMENT RAIL WILL READ, and how it decides.
  *
  * A PDF with a text layer is read as TEXT, never photographed into a vision

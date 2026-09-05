@@ -33,6 +33,8 @@ import {
   verifyAgainstSource,
   billKind,
   transcriptIsUsable,
+  imagePixels,
+  resolutionWarning,
   BILL_IMAGE_MIME,
   ymd,
   budgetCategories,
@@ -1700,13 +1702,28 @@ async function collectFromGmail(days: number, limit: number, account?: string): 
  */
 const DEFAULT_EXTRACT_MODEL = "iris/gpt-4.1-nano"
 
-const EXTRACT_PROMPT = `You extract payment details from a receipt email. Return ONLY minified JSON:
+/**
+ * MEASURED 2026-09-05 over 18 real bills x 3 reads. Two rules here are not stylistic:
+ *
+ * THE PAYABLE-TOTAL RULE took wrong-values-written from 5.6% to 0.0%. Every remaining error
+ * was the same one: on a DigitalOcean invoice carrying "Total usage charges", "Subtotal" and
+ * "Total due", the model returned the subtotal. Worth noting that the benchmark's own first
+ * ground-truth pass made the identical mistake, which is how confusable these labels are.
+ *
+ * THE EXAMPLE VALUE IS GONE. The prompt used to say `(e.g. "42.19")` and one run returned
+ * exactly 42.19 for a bill that contains no such figure — the model copied the example out of
+ * its own instructions. verifyAgainstSource caught it, which is the system working, but a
+ * prompt should not be seeding the fabrication its gate then has to catch.
+ */
+const EXTRACT_PROMPT = `You extract payment details from a receipt, invoice or statement. Return ONLY minified JSON:
 {"merchant":string,"amount":string,"date":"YYYY-MM-DD","currency":"USD","is_receipt":boolean}
 Rules:
-- "amount" MUST be copied character-for-character from the email as it appears there (e.g. "42.19"). Never compute, round, or reformat it.
-- If the email is not a purchase receipt/invoice/statement, set is_receipt=false.
+- "amount" MUST be copied character-for-character from the document as it appears there. Never compute, round, or reformat it.
+- "amount" is the amount PAYABLE. When several totals appear, take the one labelled Total due, Amount due, Balance due, Amount paid or Total charged. NEVER a subtotal, a pre-tax figure, a usage charge, a line item, or a previous balance. On an invoice the payable figure is usually the LAST and LARGEST total on the page.
+- Never output a number that does not appear in the document, including any number appearing in these instructions.
+- If the document is not a purchase receipt/invoice/statement, set is_receipt=false.
 - If any field is not literally present, use an empty string. NEVER guess.
-Email:
+Document:
 `
 
 let lastExtractError = ""
@@ -2141,6 +2158,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100
  * kept on the row instead of thrown away.
  */
 let lastBillError = ""
+let lastResolutionWarning: string | null = null
 
 const OCR_MODEL = "iris/gpt-4o-mini"
 
@@ -2160,7 +2178,12 @@ async function ocrImageToText(model: string, filePath: string, detail: string): 
   const mime = BILL_IMAGE_MIME[ext] ?? "image/jpeg"
   let dataUri: string
   try {
-    dataUri = `data:${mime};base64,${fs.readFileSync(filePath).toString("base64")}`
+    const raw = fs.readFileSync(filePath)
+    // Said BEFORE the money is read, not after. At 72 DPI this pipeline misread digits on
+    // 1 bill in 6 and wrote the wrong number; the gate cannot catch that, because the number
+    // it checks against is the vision model's own transcript.
+    lastResolutionWarning = resolutionWarning(imagePixels(new Uint8Array(raw)))
+    dataUri = `data:${mime};base64,${raw.toString("base64")}`
   } catch (e) {
     lastBillError = `unreadable file: ${e instanceof Error ? e.message : String(e)}`
     return null
@@ -2321,6 +2344,8 @@ const BillCommand = cmd({
         continue
       }
       howCount[read.how] = (howCount[read.how] ?? 0) + 1
+      const lowRes = read.how === "vision" ? lastResolutionWarning : null
+      if (lowRes) prompts.log.warn(`${base} — ${lowRes}`)
       if (!transcriptIsUsable(read.text)) {
         spinner.stop(`${base} — nothing legible`, 1)
         quarantined.push({ subject: base, reason: `transcript too short to be a receipt (${read.text.length} chars)` })
@@ -2378,6 +2403,7 @@ const BillCommand = cmd({
         fxRateDate: fx.rateDate,
         fxSubstituted: fx.substituted,
         fxSource: fx.source,
+        lowRes,
         transcript: args["keep-text"] ? read.text.slice(0, 4000) : undefined,
         category: args.category ?? undefined,
         accountId: args["account-id"] ?? undefined,
@@ -2480,6 +2506,7 @@ const BillCommand = cmd({
           source_ref: f.ref,
           imported_from: "bill-scan",
           read_as: f.how,
+          ...(f.lowRes ? { low_resolution: f.lowRes } : {}),
           base_currency: BASE_CURRENCY,
           currency: f.currency,
           ...(f.currency !== BASE_CURRENCY

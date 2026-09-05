@@ -15,6 +15,8 @@ import {
   verifyAgainstSource,
   billKind,
   transcriptIsUsable,
+  imagePixels,
+  resolutionWarning,
   parseCsv,
   pickCol,
   DATE_COLS,
@@ -659,5 +661,48 @@ describe("transcriptIsUsable — separating a dead instrument from an odd receip
 
   test("counts characters, not whitespace", () => {
     expect(transcriptIsUsable(" ".repeat(500))).toBe(false)
+  })
+})
+
+describe("imagePixels / resolutionWarning — the guard on a silent digit misread", () => {
+  const png = (w: number, h: number) => {
+    const b = new Uint8Array(24)
+    b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
+    new DataView(b.buffer).setUint32(16, w)
+    new DataView(b.buffer).setUint32(20, h)
+    return b
+  }
+
+  test("reads PNG dimensions from the IHDR", () => {
+    expect(imagePixels(png(1700, 2200))).toEqual({ width: 1700, height: 2200 })
+  })
+
+  test("reads JPEG dimensions by walking to the SOF marker, not a fixed offset", () => {
+    // An APP0 segment of arbitrary length sits before the frame header, so the offset cannot
+    // be assumed — that is the whole reason this walks the chain.
+    const b = new Uint8Array([
+      0xff, 0xd8,
+      0xff, 0xe0, 0x00, 0x08, 1, 2, 3, 4, 5, 6, // APP0, length 8
+      0xff, 0xc0, 0x00, 0x11, 0x08, 0x02, 0x58, 0x03, 0x20, // SOF0: h=600, w=800
+    ])
+    expect(imagePixels(b)).toEqual({ width: 800, height: 600 })
+  })
+
+  test("warns below the threshold and stays quiet above it", () => {
+    // 72 DPI letter — the size that misread 95.32 as 95.92 and wrote it.
+    expect(resolutionWarning({ width: 612, height: 792 })).toContain("low resolution")
+    // 200 DPI letter — no wrong values written across 54 reads.
+    expect(resolutionWarning({ width: 1700, height: 2200 })).toBeNull()
+  })
+
+  test("judges on the LONG edge, so a tall narrow phone photo is not failed for its width", () => {
+    expect(resolutionWarning({ width: 900, height: 1600 })).toBeNull()
+  })
+
+  test("UNKNOWN is not the same as SMALL", () => {
+    // An unreadable header must not be reported as low quality — that would attach a warning
+    // to rows nobody can act on, and a warning that fires on everything is ignored.
+    expect(imagePixels(new Uint8Array([1, 2, 3]))).toBeNull()
+    expect(resolutionWarning(null)).toBeNull()
   })
 })
