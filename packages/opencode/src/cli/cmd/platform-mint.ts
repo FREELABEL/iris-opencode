@@ -1901,10 +1901,25 @@ const ScanCommand = cmd({
         quarantined.push({ subject: c.subject, reason: v.reason })
         continue
       }
+      // Same defect as the document rail had, and it predates it: the extractor has
+      // always returned a currency and nothing has ever read it, so a EUR email
+      // receipt has been landing in the ledger as USD. Fail closed here too.
+      const scanCurrency = String(ex.currency ?? "").trim().toUpperCase() || BASE_CURRENCY
+      const scanFx = await convertToBase(v.amount!, scanCurrency, v.date!)
+      if (!scanFx.ok) {
+        quarantined.push({ subject: c.subject, reason: scanFx.reason })
+        continue
+      }
       const mm = merchants.find((m) => m.term === c.term)
       found.push({
         date: v.date!,
-        amount: v.amount!,
+        amount: scanFx.amount,
+        currency: scanCurrency,
+        originalAmount: v.amount!,
+        fxRate: scanFx.rate,
+        fxRateDate: scanFx.rateDate,
+        fxSubstituted: scanFx.substituted,
+        fxSource: scanFx.source,
         desc: (String(ex.merchant ?? "").trim() || mm?.label || c.subject).slice(0, 200),
         subject: c.subject,
         category: args.category ?? (mm?.category || undefined),
@@ -1991,6 +2006,17 @@ const ScanCommand = cmd({
           scope: f.rowScope ?? scope,
           fp: fingerprint(f.date, centsOf(f), f.desc),
           imported_from: `${rail}-scan`,
+          base_currency: BASE_CURRENCY,
+          currency: f.currency,
+          ...(f.currency !== BASE_CURRENCY
+            ? {
+                original_amount: f.originalAmount,
+                fx_rate: f.fxRate,
+                fx_rate_date: f.fxRateDate,
+                fx_rate_date_substituted: f.fxSubstituted,
+                fx_source: f.fxSource,
+              }
+            : {}),
           subject: f.subject.slice(0, 200),
         },
       }
@@ -2015,6 +2041,77 @@ const ScanCommand = cmd({
     prompts.outro("Done")
   },
 })
+
+// ── currency conversion, via the platform integration ────────────────────────
+/**
+ * THE BUG THIS CLOSES, which was live in both rails before this existed.
+ *
+ * `verifyAgainstSource` gives us the amount as it appears on the document. Nothing
+ * asked what CURRENCY it was in. A EUR 100 receipt produced `amount_cents: 10000`,
+ * which the ledger, every budget, `mint status` and `mint verify` then treated as
+ * 100 USD. Silently, and off by whatever the rate happened to be.
+ *
+ * FAIL CLOSED. If a rate cannot be fetched the row is QUARANTINED, never written.
+ * That is not caution for its own sake: writing the foreign face value is exactly
+ * the bug, so "no rate available" must not fall back to it. A held row is visible
+ * and fixable; a wrong row is neither.
+ *
+ * The rate comes from the `currency-exchange` integration (fl-api), not from an
+ * HTTP call here — CLAUDE.md's backend-centric rule, and it means agents, invoices
+ * and clients get the same conversion rather than three private implementations.
+ * NOTE the ordering dependency: until that integration is deployed, foreign-currency
+ * rows quarantine with a message saying so. Base-currency rows are unaffected.
+ */
+const BASE_CURRENCY = (process.env.MINT_BASE_CURRENCY ?? "USD").toUpperCase()
+
+type FxResult =
+  | { ok: true; amount: number; rate: number; rateDate: string; substituted: boolean; source: string }
+  | { ok: false; reason: string }
+
+/** One rate per (currency, date) per run — a folder of 20 EUR bills is one lookup. */
+const fxCache = new Map<string, FxResult>()
+
+async function convertToBase(amount: number, currency: string, date: string): Promise<FxResult> {
+  const from = String(currency || BASE_CURRENCY).toUpperCase()
+  if (from === BASE_CURRENCY) {
+    return { ok: true, amount, rate: 1, rateDate: date, substituted: false, source: "identity" }
+  }
+  const key = `${from}|${date}`
+  const hit = fxCache.get(key)
+  // Cache the RATE decision, then apply it to this row's own amount.
+  if (hit) {
+    return hit.ok ? { ...hit, amount: round2(amount * hit.rate) } : hit
+  }
+  let out: FxResult
+  try {
+    const r = await executeIntegrationCall("currency-exchange", "convert_amount", {
+      amount: 1, from, to: BASE_CURRENCY, date,
+    })
+    const d = r?.data ?? r
+    const rate = Number(d?.rate)
+    if (!Number.isFinite(rate) || rate <= 0) {
+      out = { ok: false, reason: `no usable ${from}->${BASE_CURRENCY} rate for ${date}` }
+    } else {
+      out = {
+        ok: true,
+        amount: round2(amount * rate),
+        rate,
+        rateDate: String(d?.rate_date ?? date),
+        substituted: Boolean(d?.rate_date_substituted),
+        source: String(d?.source ?? "currency-exchange"),
+      }
+    }
+  } catch (e) {
+    out = {
+      ok: false,
+      reason: `${from}->${BASE_CURRENCY} rate unavailable (${e instanceof Error ? e.message.slice(0, 80) : "error"})`,
+    }
+  }
+  fxCache.set(key, out)
+  return out.ok ? { ...out, amount: round2(amount * out.rate) } : out
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100
 
 // ── document & photo receipt rail (`mint bill`) ──────────────────────────────
 /**
@@ -2247,19 +2344,40 @@ const BillCommand = cmd({
         quarantined.push({ subject: base, reason: v.reason })
         continue
       }
-      spinner.stop(`${base} — ${fmtCents(Math.round(v.amount! * 100))} ${dim(read.how)}`)
+      // CONVERT BEFORE THE ROW EXISTS. The ledger stores one currency; a foreign
+      // face value written into it is wrong from the moment it lands, and nothing
+      // downstream can tell. Quarantined rather than guessed at.
+      const currency = String(ex.currency ?? "").trim().toUpperCase() || BASE_CURRENCY
+      const fx = await convertToBase(v.amount!, currency, v.date!)
+      if (!fx.ok) {
+        spinner.stop(`${base} — held, no rate`, 1)
+        quarantined.push({ subject: base, reason: fx.reason })
+        continue
+      }
+      spinner.stop(
+        `${base} — ${fmtCents(Math.round(fx.amount * 100))}` +
+          (currency !== BASE_CURRENCY ? ` ${dim(`(${currency} ${v.amount!} @ ${fx.rate})`)}` : "") +
+          ` ${dim(read.how)}`,
+      )
       found.push({
         date: v.date!,
-        amount: v.amount!,
+        amount: fx.amount,
         desc: (String(ex.merchant ?? "").trim() || base).slice(0, 200),
         subject: base,
         file: f,
         sha: sha256File(f),
         how: read.how,
-        // Recorded, never converted. An FX rate we did not fetch is not a number
-        // we may invent, and a row that remembers it was EUR can be converted
-        // later; one that silently became USD cannot be un-converted (B-04).
-        currency: String(ex.currency ?? "").trim().toUpperCase() || "USD",
+        // BOTH sides are kept. The converted figure is what the books add up, the
+        // original is what the document says, and the rate is what connects them —
+        // drop any one and the number stops being auditable. ECB reference rates are
+        // an estimate, not the rate a card was charged, so the statement supersedes
+        // this and the original must survive to be re-converted when it does.
+        currency,
+        originalAmount: v.amount!,
+        fxRate: fx.rate,
+        fxRateDate: fx.rateDate,
+        fxSubstituted: fx.substituted,
+        fxSource: fx.source,
         transcript: args["keep-text"] ? read.text.slice(0, 4000) : undefined,
         category: args.category ?? undefined,
         accountId: args["account-id"] ?? undefined,
@@ -2362,7 +2480,17 @@ const BillCommand = cmd({
           source_ref: f.ref,
           imported_from: "bill-scan",
           read_as: f.how,
+          base_currency: BASE_CURRENCY,
           currency: f.currency,
+          ...(f.currency !== BASE_CURRENCY
+            ? {
+                original_amount: f.originalAmount,
+                fx_rate: f.fxRate,
+                fx_rate_date: f.fxRateDate,
+                fx_rate_date_substituted: f.fxSubstituted,
+                fx_source: f.fxSource,
+              }
+            : {}),
           file: f.subject.slice(0, 200),
           sha256: f.sha,
           ...(f.transcript ? { transcript: f.transcript } : {}),
