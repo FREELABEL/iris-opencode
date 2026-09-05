@@ -10,41 +10,31 @@ duration_min: 15
 Write a component, compile it, store it, and name it from any page. The page carries no code —
 it names a stored component and binds a collection, and the server attaches both at render.
 
-## The mental model (read this first)
+## Start here — write one in the browser
 
-**A page binds an ADDRESS. Where the rows live sits behind it.**
+**Do this before reading the rest of this page.** It is the whole loop in one place, and most
+questions below answer themselves once you have watched it work.
 
-That separation is the whole design. It is what makes "should a dataset live at the item level or
-the bloq level?" answerable — the question conflated how a page *addresses* rows with where rows
-are *stored*.
+`https://heyiris.io/p/genesis-studio` — code on the left, the component rendering on the right.
+It compiles as you type, shows each refusal with its code and line, and previews through the
+**same runtime** a live page uses, so the preview cannot show you something production would not
+do. Point it at a real collection and you are looking at your own rows. Nothing to install.
 
-```
-   ADDRESSING — what a page binds. Stable.
-   collection: "item:181094" | "list:2115" | "bloq:620" | "dataset:sessions"
-                             │
-                ┌────────────┴────────────┐
-                │   Collection contract   │
-                │   fields() · query()    │
-                │   rows()   · create()   │
-                └────────────┬────────────┘
-                             │
-   STORAGE — swappable, invisible to the page.
-    bloq_items.content       bloq_items          atlas_records
-    (a card's table)         (cards as rows)     (typed records)
-```
+    iris pages library studio        # prints the URL, and the sign-in link
 
-| Address | Rows are | Backed by |
-| --- | --- | --- |
-| `item:181094` | the table a **card carries** | `bloq_items.content.dataset` |
-| `list:2115` | the **cards in a list** | `bloq_items` |
-| `bloq:620` | the **cards in a workspace** | `bloq_items`, `list` is a field |
-| `dataset:sessions` | **typed records** | `atlas_schemas` + `atlas_records` |
+Sign in first — components are owner-scoped, and an unauthenticated Studio cannot compile.
 
-**Which to reach for** — the line is *who reads a row*, not where it is stored. A board list is
-read by a human, item by item: tens to hundreds, curated, prose-bearing. An Atlas dataset is read
-by nothing individually: hundreds to hundreds of thousands, uniform, generated, queried. 560
-generated rows should not be 560 draggable cards; a curated todo list should not need a schema
-migration.
+**When to leave the browser.** The Studio has no merge: last writer wins. The moment a component
+is shared, work in your editor instead —
+
+    iris pages library pull  <slug>   # -> a .vue file you own
+    iris pages library diff  <slug>   # local vs published
+    iris pages library merge <slug>   # three-way, when someone moved first
+    iris pages library usage <slug>   # which pages name it, BEFORE you change them
+
+Publishing a component changes **every page that names it, at once**. That is usually the point.
+It is also why `usage` exists, and why a publish over someone else's newer version is refused
+rather than accepted quietly.
 
 ## Prerequisites
 - IRIS CLI authenticated (`iris auth`), with `node_api_key` in `~/.iris/config.json`
@@ -222,11 +212,44 @@ and named in `meta.sort_ignored`, so a dropped sort cannot pass as an honoured o
 a gated session and a write-capable role — on a public page a create returns `gate_required`,
 which is the correct answer rather than a limitation.
 
-## Authoring in the browser
+## The mental model — addressing vs storage
 
-`https://heyiris.io/p/genesis-studio` — compiles as you type, shows each refusal with its code and
-line, and previews through the **same runtime** a live page uses, so the preview cannot show you
-something production would not do.
+*Reference. You do not need this to ship your first component; you will need it the first
+time you wonder where a row actually lives.*
+
+**A page binds an ADDRESS. Where the rows live sits behind it.**
+
+That separation is the whole design. It is what makes "should a dataset live at the item level or
+the bloq level?" answerable — the question conflated how a page *addresses* rows with where rows
+are *stored*.
+
+```
+   ADDRESSING — what a page binds. Stable.
+   collection: "item:181094" | "list:2115" | "bloq:620" | "dataset:sessions"
+                             │
+                ┌────────────┴────────────┐
+                │   Collection contract   │
+                │   fields() · query()    │
+                │   rows()   · create()   │
+                └────────────┬────────────┘
+                             │
+   STORAGE — swappable, invisible to the page.
+    bloq_items.content       bloq_items          atlas_records
+    (a card's table)         (cards as rows)     (typed records)
+```
+
+| Address | Rows are | Backed by |
+| --- | --- | --- |
+| `item:181094` | the table a **card carries** | `bloq_items.content.dataset` |
+| `list:2115` | the **cards in a list** | `bloq_items` |
+| `bloq:620` | the **cards in a workspace** | `bloq_items`, `list` is a field |
+| `dataset:sessions` | **typed records** | `atlas_schemas` + `atlas_records` |
+
+**Which to reach for** — the line is *who reads a row*, not where it is stored. A board list is
+read by a human, item by item: tens to hundreds, curated, prose-bearing. An Atlas dataset is read
+by nothing individually: hundreds to hundreds of thousands, uniform, generated, queried. 560
+generated rows should not be 560 draggable cards; a curated todo list should not need a schema
+migration.
 
 ## Gotchas
 
