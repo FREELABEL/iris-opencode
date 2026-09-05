@@ -721,12 +721,61 @@ const AuditCmd = cmd({
   },
 })
 
+/**
+ * `studio` — point people at the browser workbench.
+ *
+ * WHY A CLI COMMAND FOR A URL
+ *
+ * The Component Studio has existed since 2026-08-21 and the CLI never mentioned it — zero
+ * references in the whole source. So the only people who knew were the ones who already knew.
+ * A capability nobody can find is indistinguishable from one that was never built: a session
+ * spent a day rebuilding a local preview loop for a thing that was already live.
+ *
+ * The two lanes are complementary and the describe text says which is which, because "write it
+ * in a browser" and "edit it in my own editor with a merge" are different days.
+ */
+const StudioCmd = cmd({
+  command: "studio [slug]",
+  aliases: ["workbench", "web"],
+  describe: "open the browser Studio — write a component with a live preview beside it",
+  builder: (y: any) =>
+    y
+      .positional("slug", { describe: "open this component (omit to start a new one)", type: "string" })
+      .option("open", { describe: "open a browser", type: "boolean", default: true })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args: any) {
+    // heyiris.io, not IRIS_API: this is a page a human opens, not an endpoint. Pointing it at
+    // an API host would hand somebody a URL that renders nothing.
+    const base = (process.env.IRIS_WEB_URL || "https://heyiris.io").replace(/\/$/, "")
+    const url = `${base}/p/genesis-studio`
+
+    if (args.json) { writeJson({ ok: true, url, slug: args.slug ?? null }); return }
+
+    UI.println("")
+    UI.println(`  ${bold("Component Studio")} — code on the left, live preview on the right`)
+    printDivider()
+    UI.println(`  ${highlight(url)}`)
+    UI.println("")
+    UI.println(dim("  Sign in first, or it cannot compile — components are owner-scoped:"))
+    UI.println(`    ${highlight(base + "/auth/google/redirect?intended=/p/genesis-studio")}`)
+    UI.println("")
+    UI.println(dim("  In the Studio:  Open… loads a stored component · Compile · Save component"))
+    UI.println(dim("  Here instead:   iris pages library pull <slug>   — edit it in your own editor,"))
+    UI.println(dim("                  with diff, three-way merge and a stale-write guard the"))
+    UI.println(dim("                  Studio does not have."))
+    if (args.slug) UI.println(dim(`\n  Tip: in the Studio press Open… and pick “${args.slug}”.`))
+
+    if (args.open) { try { Bun.spawn(["open", url]) } catch { /* not fatal */ } }
+  },
+})
+
 export const LibraryCmd = cmd({
   command: "library <command>",
   aliases: ["lib", "components-library"],
-  describe: "the stored component library — publish, list, show, usage, versions, audit, rollback",
+  describe: "stored components — write one in the browser (studio), or pull/diff/merge it here",
   builder: (y) =>
     y
+      .command(StudioCmd)
       .command(PullCmd)
       .command(DiffCmd)
       .command(MergeCmd)
