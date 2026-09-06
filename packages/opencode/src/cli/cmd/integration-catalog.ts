@@ -36,6 +36,8 @@ export interface CatalogEntry {
   description?: string
   category?: string
   authType: string
+  /** Where the customer goes to issue the credential — `auth.setup_url` in the yml. */
+  setupUrl?: string
   fields: CatalogAuthField[]
   functions: string[]
   isLive: boolean
@@ -62,6 +64,9 @@ export function normalizeEntry(raw: any): CatalogEntry | null {
     // A missing auth block means nobody declared one. Treat that as oauth2 — the historical
     // default this CLI assumed — rather than inventing a credential prompt for it.
     authType: (str(auth?.type) || "oauth2").toLowerCase(),
+    // 18 connectors already publish this and nothing has ever rendered it — the one link a
+    // customer needs at the exact moment they are asked for a key.
+    setupUrl: str(auth?.setup_url) || undefined,
     fields: rawFields
       .map((f) => ({
         // Most yml files spell it `name`; tradovate spells it `key`, and reading only `name`
@@ -69,7 +74,10 @@ export function normalizeEntry(raw: any): CatalogEntry | null {
         // connector with no fields, prompted for nothing, and posted an empty credential.
         name: (str(f?.name) || str(f?.key)).trim(),
         label: str(f?.label) || undefined,
-        description: str(f?.description) || undefined,
+        // The ymls overwhelmingly write `help_text`; only wix writes `description`. Reading
+        // one and not the other silently threw away the guidance for 13 of the 14 connectors
+        // that had bothered to write it — including every line that names where to get a key.
+        description: (str(f?.description) || str(f?.help_text)) || undefined,
         // Only an explicit `false` makes a declared field optional.
         required: f?.required !== false,
       }))

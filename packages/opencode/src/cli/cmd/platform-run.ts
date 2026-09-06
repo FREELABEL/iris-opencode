@@ -1234,6 +1234,10 @@ const ConnectCommand = cmd({
           console.log()
           console.log(`  ${dim("This is a gap in the connector's config/integrations/" + entry.type + ".yml — it needs an auth.fields block.")}`)
           console.log()
+          if (entry.setupUrl) {
+            console.log(`  ${dim("Get your key:")} ${highlight(entry.setupUrl)}`)
+            console.log()
+          }
           console.log(`  ${dim("Meanwhile, name the field yourself:")}`)
           console.log(`    ${highlight(`iris integrations connect ${entry.type} --field api_key=<value>`)}`)
           console.log(`    ${highlight(`iris integrations setup-native ${entry.type} --key <value>`)}`)
@@ -1248,6 +1252,30 @@ const ConnectCommand = cmd({
         if (missing.length > 0 && process.stdin.isTTY && !args.json) {
           console.log()
           console.log(`  ${entry.name} uses ${highlight(entry.authType)} authentication.`)
+
+          // WHERE TO GET THE KEY, at the moment we ask for it.
+          //
+          // `auth.setup_url` was already declared by 18 connectors and read by NOTHING —
+          // not this CLI, not iris-api. So the answer to "where do I get this?" existed,
+          // in version control, and never reached the one screen where it is needed. Same
+          // for the per-field `help_text`, which 13 of 14 connectors write and the catalog
+          // used to drop on the floor.
+          if (entry.setupUrl) {
+            console.log()
+            console.log(`  ${dim("Get your key:")} ${highlight(entry.setupUrl)}`)
+
+            const open = await prompts.confirm({ message: "Open it in your browser?", initialValue: true })
+            if (prompts.isCancel(open)) {
+              process.exitCode = 1
+              prompts.outro("Cancelled")
+              return
+            }
+            if (open && !openBrowser(entry.setupUrl)) {
+              // A browser that will not open is not a reason to stop — the URL is on screen.
+              console.log(`  ${dim("Could not open a browser. Copy the link above.")}`)
+            }
+          }
+
           console.log()
           for (const f of missing) {
             if (f.description) console.log(`  ${dim(f.description)}`)

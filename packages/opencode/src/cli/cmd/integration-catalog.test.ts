@@ -255,3 +255,45 @@ describe("auth fields spelled `key` instead of `name`", () => {
       .toEqual(["password", "cid", "sec"])
   })
 })
+
+/**
+ * "Where do I get this key?" — the answer was already in version control and reached nobody.
+ *
+ * Measured against the live registry 2026-09-06: 18 connectors publish `auth.setup_url`, and
+ * NOTHING read it — not this CLI, not iris-api. Separately, 13 of the 14 connectors that
+ * documented their credential fields wrote `help_text`, and normalizeEntry read only
+ * `description`, so every one of those lines — including the URLs inside them — was dropped.
+ *
+ * Both are the same failure as an unlisted tool: the work was done, and no surface showed it.
+ */
+describe("where the customer gets their key", () => {
+  const STRIPE = {
+    type: "stripe", name: "Stripe", isLive: true, functions: [],
+    auth: {
+      type: "api_key",
+      setup_url: "https://dashboard.stripe.com/apikeys",
+      fields: [{ name: "api_key", label: "Secret Key", help_text: "Starts with sk_live_ or sk_test_." }],
+    },
+  }
+
+  test("setup_url survives normalization", () => {
+    expect(normalizeEntry(STRIPE)!.setupUrl).toBe("https://dashboard.stripe.com/apikeys")
+  })
+
+  test("a field's help_text is read, not just its description", () => {
+    // The ymls write help_text; only wix writes description. Reading one and not the other
+    // threw away the guidance for 13 of 14 connectors.
+    expect(normalizeEntry(STRIPE)!.fields[0].description).toBe("Starts with sk_live_ or sk_test_.")
+  })
+
+  test("description still wins where a yml uses it", () => {
+    expect(normalizeEntry(WIX)!.fields[0].description).toContain("manage.wix.com")
+  })
+
+  test("a connector that declares neither is left undefined, not blank-stringed", () => {
+    const bare = { type: "x", name: "X", isLive: true, auth: { type: "api_key", fields: [{ name: "api_key" }] } }
+    const e = normalizeEntry(bare)!
+    expect(e.setupUrl).toBeUndefined()
+    expect(e.fields[0].description).toBeUndefined()
+  })
+})
