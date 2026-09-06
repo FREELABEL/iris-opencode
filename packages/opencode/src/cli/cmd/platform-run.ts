@@ -29,6 +29,7 @@ import { IntegrationsHealthCommand, IntegrationsTestCommand } from "./integratio
 import {
   normalizeCatalog, normalizeEntry, findEntry, isOAuthEntry, requiredFields,
   missingRequired, parseFieldFlags, connectCommandHint, groupByCategory,
+  isKnownIntegration, hasNothingToCollect,
   type CatalogEntry,
 } from "./integration-catalog"
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
@@ -176,8 +177,39 @@ const COMPOSIO_APIKEY_TOOLKITS: Record<string, string> = {
   perplexity: "perplexity_api_key",
 }
 
-function isIntegration(t: string): boolean {
-  return INTEGRATION_TYPES.includes(t.toLowerCase())
+/**
+ * Is this an integration, according to the SERVER — with the compiled-in array as a fast path
+ * and a fallback.
+ *
+ * #182712 replaced the hardcoded catalog with the live registry for `list-available` and
+ * `connect`, and left `exec` reading the array. So a connector could be listed by
+ * `list-available`, connectable, and still un-executable, because the compiled-in array had never
+ * heard of it: `exec <type> <fn>` fell through to the V6 system-tool branch, which DISCARDS the
+ * function argument and asks for a tool by the bare type name. Measured 2026-09-06 on reclaim:
+ *
+ *     iris integrations exec reclaim list_tasks   ->  "Unknown tool: reclaim"
+ *     iris integrations exec reclaim.list_tasks   ->  works
+ *
+ * The array holds 41 types; the registry holds 95. Everything in the gap fails this way, and it
+ * fails with the SAME message a genuinely unregistered type produces — so a correctly built
+ * connector cannot be told apart from a missing one.
+ *
+ * Checking the array first keeps the common case network-free; only an unrecognised target pays
+ * for a lookup, and if the registry is unreachable we are exactly where we were before.
+ */
+async function isIntegrationLive(t: string): Promise<boolean> {
+  const wanted = String(t ?? "").trim().toLowerCase()
+  if (!wanted) return false
+
+  // Fast path: no network for anything the binary already knows.
+  if (isKnownIntegration(wanted, INTEGRATION_TYPES, SLUG_ALIASES, [])) return true
+
+  try {
+    const { entries } = await loadCatalog()
+    return isKnownIntegration(wanted, INTEGRATION_TYPES, SLUG_ALIASES, entries)
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -1172,6 +1204,44 @@ const ConnectCommand = cmd({
         if (args["api-key"] && requiredFields(entry).length === 1) {
           provided[requiredFields(entry)[0].name] = String(args["api-key"])
         }
+        // …and for an entry that declares NO fields at all, where typing the flag is itself
+        // the statement of what the credential is called. Without this the flag is silently
+        // ignored on exactly the connectors that need it most.
+        if (args["api-key"] && requiredFields(entry).length === 0) {
+          provided.api_key = String(args["api-key"])
+        }
+
+        // A non-OAuth connector that declares no credential fields collects nothing, so
+        // `missing` is empty, the prompt never fires, and we POST `credentials: {}` — which
+        // the API rejects as 422 and the CLI reports as "Could not store the credential",
+        // blaming storage for a value that was never gathered.
+        //
+        // Measured 2026-09-06 against the live registry: EIGHT connectors are in this state —
+        // 1password, apollo, cloudflare-api-key, google-gemini, mailjet, mercury, reclaim,
+        // vapi — because their `config/integrations/<type>.yml` declares `auth: {type: api_key}`
+        // with no `fields:` block. Every one of them fails at the moment of connecting, which
+        // is the worst possible moment to be told something vague.
+        //
+        // We cannot invent the field names (mailjet needs api_key AND api_secret; guessing a
+        // single `api_key` would store a half-credential that fails later, somewhere else).
+        // So: refuse, say exactly what is wrong and where, and name the two commands that do
+        // work today.
+        if (hasNothingToCollect(entry, provided)) {
+          prompts.log.error(
+            `${entry.name} declares ${highlight(entry.authType)} authentication but no credential fields, `
+            + `so there is nothing to ask you for.`,
+          )
+          console.log()
+          console.log(`  ${dim("This is a gap in the connector's config/integrations/" + entry.type + ".yml — it needs an auth.fields block.")}`)
+          console.log()
+          console.log(`  ${dim("Meanwhile, name the field yourself:")}`)
+          console.log(`    ${highlight(`iris integrations connect ${entry.type} --field api_key=<value>`)}`)
+          console.log(`    ${highlight(`iris integrations setup-native ${entry.type} --key <value>`)}`)
+          console.log()
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
 
         let missing = missingRequired(entry, provided)
 
@@ -1783,7 +1853,7 @@ const ExecCommand = cmd({
     }
 
     try {
-      if (isIntegration(target)) {
+      if (await isIntegrationLive(target)) {
         if (!fn) {
           // Show available functions for this integration
           const functions = INTEGRATION_FUNCTIONS[target] ?? INTEGRATION_FUNCTIONS[SLUG_ALIASES[target] ?? ""]

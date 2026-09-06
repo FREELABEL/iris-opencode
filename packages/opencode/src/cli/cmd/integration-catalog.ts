@@ -64,7 +64,10 @@ export function normalizeEntry(raw: any): CatalogEntry | null {
     authType: (str(auth?.type) || "oauth2").toLowerCase(),
     fields: rawFields
       .map((f) => ({
-        name: str(f?.name).trim(),
+        // Most yml files spell it `name`; tradovate spells it `key`, and reading only `name`
+        // dropped all five of its required credentials on the floor — so the CLI saw a
+        // connector with no fields, prompted for nothing, and posted an empty credential.
+        name: (str(f?.name) || str(f?.key)).trim(),
         label: str(f?.label) || undefined,
         description: str(f?.description) || undefined,
         // Only an explicit `false` makes a declared field optional.
@@ -158,4 +161,71 @@ export function groupByCategory(entries: CatalogEntry[]): Array<[string, Catalog
   return [...groups.entries()]
     .map(([k, v]) => [k, v.sort((a, b) => a.type.localeCompare(b.type))] as [string, CatalogEntry[]])
     .sort((a, b) => a[0].localeCompare(b[0]))
+}
+
+/**
+ * Is `target` an integration — given the list compiled into this binary, its slug aliases, and
+ * whatever the live registry returned?
+ *
+ * `exec <type> <fn>` branches on this. When it says no, the call falls through to the V6
+ * system-tool path, which DISCARDS the function argument and asks for a tool named by the bare
+ * type — so a real integration answers "Unknown tool: <type>", the same words an unregistered
+ * one produces. Measured 2026-09-06: the compiled array held 41 types and the registry 95, and
+ * everything in that gap failed this way.
+ *
+ * The compiled list is checked first so the common case costs no network, and it is a fallback
+ * rather than the authority: when the registry is unreachable, `entries` is empty and behaviour
+ * is exactly what it was before the lookup existed.
+ */
+export function isKnownIntegration(
+  target: string,
+  compiled: readonly string[],
+  aliases: Record<string, string>,
+  entries: CatalogEntry[],
+): boolean {
+  const wanted = String(target ?? "").trim().toLowerCase()
+  if (!wanted) return false
+  if (compiled.includes(wanted)) return true
+
+  const alias = aliases?.[wanted]
+  if (alias && compiled.includes(alias)) return true
+
+  return findEntry(entries, wanted) !== null || (alias ? findEntry(entries, alias) !== null : false)
+}
+
+/**
+ * Would `connect` post an empty credential?
+ *
+ * A non-OAuth connector whose registry entry declares no `auth.fields` collects nothing:
+ * `missingRequired` is empty, so the prompt never fires, and the flow posts `credentials: {}`.
+ * The API answers 422 and the CLI reports "Could not store the credential" — blaming storage
+ * for a value that was never gathered, at the exact moment someone is trying to connect.
+ *
+ * Eight connectors were in this state on 2026-09-06 (1password, apollo, cloudflare-api-key,
+ * google-gemini, mailjet, mercury, reclaim, vapi), each because its
+ * `config/integrations/<type>.yml` declares `auth: {type: api_key}` and no fields.
+ *
+ * The field names cannot be guessed — mailjet needs api_key AND api_secret, and storing a
+ * half-credential would move the failure somewhere later and less legible. So the caller
+ * refuses and says where the gap is.
+ */
+export function hasNothingToCollect(entry: CatalogEntry, provided: Record<string, string>): boolean {
+  // Narrow on purpose. Run against the live registry, the obvious formulation
+  // ("non-OAuth, no required fields, nothing supplied") matched 28 of 95 connectors, and
+  // 16 of them were working correctly. Each exclusion below is one of those, found by
+  // measuring rather than by reasoning about it:
+  //
+  //   auth: none        atlas-os, genesis, pathways, macos and ~12 more are in-process and
+  //                     hold no credential. An empty POST is the CORRECT call for them.
+  //   optional fields   courtlistener and google-scholar-legal declare a field with
+  //                     `required: false` — both work unauthenticated, at a lower rate limit.
+  //   other schemes     savelife-ai is `keycloak`. Whatever that flow does, it is not one
+  //                     this guard has evidence about, so it is left alone.
+  //
+  // What is left is the case actually diagnosed: `api_key`, no declared fields at all, and
+  // nothing passed on the command line.
+  if (isOAuthEntry(entry)) return false
+  if (entry.authType !== "api_key") return false
+  if (entry.fields.length > 0) return false
+  return Object.keys(provided ?? {}).length === 0
 }
