@@ -509,6 +509,11 @@ const PublishCmd = cmd({
       .option("description", { describe: "one line describing what it is for", type: "string" })
       .option("dry-run", { describe: "compile only — report errors and slots, publish nothing", type: "boolean", default: false })
       .option("force", { describe: "publish even if someone else changed the component since you pulled it", type: "boolean", default: false })
+      // No DEFAULT on purpose. Omitting it keeps whatever scope the component already had, and
+      // a new component starts private. A default of "private" here would look identical but
+      // behave differently: it would send private on every ordinary republish and quietly pull
+      // a public component back out of the catalogue.
+      .option("scope", { describe: "private (default for a new component) | public — listed in the shared catalogue. Omit to keep the current scope", type: "string", choices: ["private", "public"] })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args: any) {
     await requireAuth()
@@ -582,6 +587,10 @@ const PublishCmd = cmd({
         ...(pulledFrom && pulledFrom.hash && pulledFrom.hash !== "none" && !args.force
           ? { expected_hash: pulledFrom.hash }
           : {}),
+        // Sent only when asked for. The server reads an absent visibility as "unchanged", which
+        // is the behaviour every existing caller needs — the studio republishes on every save
+        // and has no opinion about scope.
+        ...(args.scope ? { visibility: args.scope } : {}),
       }),
     })
 
