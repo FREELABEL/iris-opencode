@@ -236,6 +236,14 @@ async function finishTranscript(
   const rawText = text
   let treatedChanged = false
 
+  // #183798 — someone reaches for --local precisely when the recording is sensitive, and the
+  // most natural pairing on the whole command is --local --treatment meeting. The audio does
+  // stay on the machine; the TEXT does not. Saying so at the moment it happens is the minimum;
+  // whether --local should refuse, or run treatments on-device, is a product decision.
+  if (treatment && treatment !== "raw" && !asJson) {
+    prompts.log.info(dim(`Sending the transcript text to the server for the '${treatment}' treatment. The audio stays on this machine.`))
+  }
+
   if (isStructuredTreatment(treatment)) {
     // sop and playbook are produced by /walkthrough/structure, not /walkthrough/treat. Sending
     // them to /treat is what made them 422 and silently fall back to the raw transcript
@@ -478,7 +486,7 @@ export const PlatformTranscribeCommand = cmd({
       .option("local", {
         type: "boolean",
         default: false,
-        describe: "Force local offline transcription via whisper.cpp",
+        describe: "Transcribe the AUDIO on-device via whisper.cpp. Note this does not make the whole run offline — a --treatment still sends the resulting text to the server",
       })
       .option("remote", {
         type: "boolean",

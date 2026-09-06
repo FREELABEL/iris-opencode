@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, bold, highlight, dim } from "./iris-api"
 import { spawnSync } from "child_process"
-import { existsSync, writeFileSync, statSync, renameSync, unlinkSync } from "fs"
+import { existsSync, writeFileSync, statSync, renameSync, unlinkSync, mkdirSync } from "fs"
 import { join } from "path"
 
 export function which(bin: string): string | null {
@@ -448,6 +448,17 @@ export const PlatformDownloadCommand = cmd({
 
     const url = String(args.url)
     const outDir = args.out ? String(args.out) : process.cwd()
+    // A --out directory that does not exist used to reach writeFileSync and throw a raw bun
+    // stack trace at the user (#183799). Creating it is what -o implies, and a path that
+    // genuinely cannot be created is worth one clear line rather than a trace.
+    try {
+      mkdirSync(outDir, { recursive: true })
+    } catch (e) {
+      prompts.log.error(`Cannot write to --out ${outDir}: ${e instanceof Error ? e.message : String(e)}`)
+      process.exitCode = 1
+      prompts.outro("Done")
+      return
+    }
     const slug = args.name ? String(args.name) : slugFromUrl(url)
     const textOnly = !!args["text-only"]
     const wantVideo = !textOnly && args.video
