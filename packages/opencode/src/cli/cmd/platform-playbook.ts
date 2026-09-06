@@ -2384,7 +2384,14 @@ const PlaybookInstallCommand = cmd({
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const { IRIS_API } = await import("./iris-api")
-    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`, {}, IRIS_API)
+    // `?intent=install` — install and show are the SAME GET, so the server cannot tell them
+    // apart and deliberately refuses to guess: anything but an explicit install is counted as a
+    // view. Only the CLI knows which verb the user typed, so only the CLI can say. Without this
+    // parameter every install would be filed as browsing and the install count would read zero
+    // while people were actively installing.
+    const res = await irisFetch(
+      `/api/v1/playbooks/${encodeURIComponent(name)}?intent=install`, {}, IRIS_API,
+    )
     const ok = await handleApiError(res, "Fetch playbook"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const pb = data?.playbook ?? {}
