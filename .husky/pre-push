@@ -78,6 +78,44 @@ fi
   exit 1
 }
 
+# Playbooks must not validate clean and then misbehave.
+#
+# `iris playbook test` answers "does this parse and match the schema". On 2026-09-04 three
+# defects passed that and shipped to the public marketplace anyway, because none of them are
+# schema questions:
+#
+#   - work-the-epic defaulted to `bloq: 297` — the authors' own bug board. Every stranger who
+#     installed it would file their planning document into someone else's project. A default
+#     on a shared artifact is a default for every tenant.
+#   - Its publish step read /tmp/epic-draft.md, which NO step ever wrote: the draft step is
+#     `mode: ai`, and an AI step returns text, it cannot write a file. So it published
+#     whatever a previous run had left in /tmp. Five epics shipped green carrying stale
+#     content; a clean /tmp gives an honest error and a dirty one gives a confident lie.
+#   - console-shape carried the same impossible write-a-file instruction.
+#
+# scaffold/playbooks is compiled into the binary, so everyone who installs the CLI gets it —
+# a tenant default there is always an error. The workspace set is linted too when present,
+# with tenancy downgraded to a warning: a private playbook named after one tenant is allowed
+# to hardcode that tenant, and flagging it would teach people to ignore the hook.
+#
+# No network, no auth, no fixtures — same constraint as the routes check above.
+(cd packages/opencode && bun run playbooks:check) || {
+  echo ""
+  echo "  A shipped playbook has a defect the schema validator cannot see."
+  echo "  Fix it above — do not publish; 'iris playbook test' will still call it valid."
+  exit 1
+}
+
+PROJECT_ROOT="${IRIS_PROJECT_ROOT:-$HOME/sites/freelabel}"
+if [ -d "$PROJECT_ROOT/.iris/playbooks" ]; then
+  node packages/opencode/script/check-playbooks.mjs "$PROJECT_ROOT/.iris/playbooks" --tenancy=warn || {
+    echo ""
+    echo "  A workspace playbook has a defect that survives 'iris playbook test'."
+    echo "  These are the ones published to the marketplace — fix before publishing."
+    exit 1
+  }
+fi
+
 # Every how-to in scaffold/ must be in scaffold/manifest.json.
 #
 # The installer fetches the MANIFEST and downloads what it lists — adding a recipe file

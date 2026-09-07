@@ -21,6 +21,7 @@
     "capabilities": "bun run script/build-capabilities.ts",
     "capabilities:check": "bun run script/build-capabilities.ts --check",
     "routes:check": "bun run script/check-routes.ts",
+    "playbooks:check": "bun run script/check-playbooks.mjs",
     "routes:refresh": "sh script/refresh-routes.sh"
   },
   "bin": {
