@@ -198,6 +198,7 @@ const SkillShowCommand = cmd({
       // easy to conflate: description is WHAT this does, triggers are WHEN to reach
       // for it (#182840 / CTX-2).
       if (plan.triggers?.length) printKV("Triggers", plan.triggers.join(", "))
+      if (plan.tags?.length) printKV("Tags", plan.tags.join(", "))
       printKV("Location", plan.location)
       // The shareable link, next to the local path (#182116). `show` used to give ONLY a
       // filesystem path, which is useless to anyone but the author on this machine. Printed
@@ -1089,6 +1090,7 @@ const RemoteShowCommand = cmd({
     printKV("Instructions", data.instructions)
     printKV("Tools", Array.isArray(data.tools) ? data.tools.join(", ") : data.tools)
     printKV("Triggers", Array.isArray(data.triggers) ? data.triggers.join(", ") : data.triggers)
+    if (data.tags) printKV("Tags", Array.isArray(data.tags) ? data.tags.join(", ") : data.tags)
     printKV("Active", data.is_active)
     printDivider()
     prompts.outro("Done")

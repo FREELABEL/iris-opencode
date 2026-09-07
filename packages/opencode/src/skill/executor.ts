@@ -101,6 +101,12 @@ export interface SkillPlan {
    * Distinct from `description`, which says what it does. Freeform, not a taxonomy.
    */
   triggers?: string[]
+  /**
+   * Product/brand filter labels — short, lexical, and meant for INDEXING, not routing.
+   * `triggers` says when a model should pick this; `tags` is how a human or a query
+   * narrows a library to one product or brand. Freeform, no taxonomy.
+   */
+  tags?: string[]
 }
 
 export interface StepResult {
@@ -393,6 +399,16 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
       ? [fm.triggers]
       : []
 
+  // Lexical labels for filtering a library down to one product or brand. Same freeform
+  // shape as the two above: accept a list or a bare string, lowercased and de-duped so
+  // "FreeLabel" and "freelabel" cannot split one product into two buckets.
+  const rawTags = Array.isArray(fm.tags)
+    ? fm.tags.filter((v: unknown) => typeof v === "string")
+    : typeof fm.tags === "string"
+      ? [fm.tags]
+      : []
+  const tags = [...new Set((rawTags as string[]).map((t) => t.trim().toLowerCase()).filter(Boolean))]
+
   return {
     name: fm.name ?? skillInfo.name,
     version,
@@ -410,6 +426,7 @@ export async function parsePlan(skillInfo: Skill.Info): Promise<SkillPlan> {
     location: skillInfo.location,
     industries,
     triggers,
+    tags,
   }
 }
 
