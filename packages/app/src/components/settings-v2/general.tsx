@@ -503,6 +503,33 @@ export const SettingsGeneralV2: Component<{
           </div>
         </SettingsRowV2>
 
+        {/*
+          The setting people asked for. Two states here, three in the desktop menu: "off"
+          is a real choice but a rare one, and putting it in a Switch would mean either a
+          third control most people never want or a toggle that silently means two
+          different things. Off stays reachable under IRIS > Automatic Updates.
+
+          Hidden entirely when the platform cannot install anything (web), rather than
+          rendering a dead control — see UpdaterPlatform.mode.
+        */}
+        <Show when={updater.mode && updater.setMode}>
+          <SettingsRowV2
+            title={language.t("settings.updates.row.auto.title")}
+            description={
+              updater.mode!() === "auto"
+                ? language.t("settings.updates.row.auto.description")
+                : language.t("settings.updates.row.auto.descriptionAsk")
+            }
+          >
+            <div data-action="settings-auto-update">
+              <Switch
+                checked={updater.mode!() === "auto"}
+                onChange={(checked) => void updater.setMode!(checked ? "auto" : "ask")}
+              />
+            </div>
+          </SettingsRowV2>
+        </Show>
+
         <SettingsRowV2
           title={language.t("settings.updates.row.check.title")}
           description={language.t("settings.updates.row.check.description")}

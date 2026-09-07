@@ -971,6 +971,10 @@ export const dict = {
 
   "settings.updates.row.startup.title": "Check for updates on startup",
   "settings.updates.row.startup.description": "Automatically check for updates when IRIS launches",
+  "settings.updates.row.auto.title": "Install updates automatically",
+  "settings.updates.row.auto.description":
+    "Download and install new versions in the background. Takes effect the next time IRIS starts — nothing is interrupted.",
+  "settings.updates.row.auto.descriptionAsk": "When off, IRIS asks once per version instead of on every launch.",
   "settings.updates.row.check.title": "Check for updates",
   "settings.updates.row.check.description": "Manually check for updates and install if available",
   "settings.updates.action.checkNow": "Check now",

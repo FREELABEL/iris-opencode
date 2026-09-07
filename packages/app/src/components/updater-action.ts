@@ -29,6 +29,12 @@ export function useUpdaterAction() {
 
   return {
     action,
+    // Passed through from the shell rather than mirrored into app settings: the shell's
+    // launch-time check reads the stored preference before this app mounts, so the store is
+    // the single source of truth and this is only a view onto it. Undefined on platforms
+    // that cannot install anything, which is how the Settings row knows to hide.
+    mode: platform.updater?.mode,
+    setMode: platform.updater?.setMode,
     async run() {
       const run = action().run
       if (run === "install") return platform.updater?.install()

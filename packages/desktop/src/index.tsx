@@ -7,7 +7,7 @@ import { type as ostype } from "@tauri-apps/plugin-os"
 import { AsyncStorage } from "@solid-primitives/storage"
 import { Store } from "@tauri-apps/plugin-store"
 
-import { UPDATER_ENABLED, createUpdaterPlatform, runUpdater } from "./updater"
+import { UPDATER_ENABLED, createUpdaterPlatform, onUpdateModeChanged, runUpdater } from "./updater"
 import { opencodeGlobal } from "./opencode-global"
 import { createMenu } from "./menu"
 import { check, Update } from "@tauri-apps/plugin-updater"
@@ -227,6 +227,12 @@ const platform: Platform = {
 }
 
 createMenu()
+// The Settings > Updates toggle and the "Automatic Updates" menu are two surfaces for one
+// preference; rebuilding the menu here keeps their tick marks in agreement without updater.ts
+// having to import menu.ts, which already imports it.
+onUpdateModeChanged(async () => {
+  await createMenu()
+})
 
 // ── Check for updates on launch, then every 6 hours ───────────────────────────
 //
@@ -239,10 +245,14 @@ createMenu()
 // on a flaky connection trains people to dismiss update dialogs. Silence unless there is
 // genuinely something to install; the menu item stays for the case where someone asks on purpose.
 if (UPDATER_ENABLED) {
-  const checkQuietly = () => runUpdater({ alertOnFail: false }).catch(() => undefined)
+  // Both background paths pass their real trigger, so the preference and the
+  // already-declined memory apply. Until 2026-09-07 they did not: every one of these checks
+  // re-asked about a version the user had already refused, at launch AND every six hours.
+  const checkQuietly = (trigger: "startup" | "interval") =>
+    runUpdater({ alertOnFail: false, trigger }).catch(() => undefined)
   // Not immediate — let the sidecar come up first so the prompt does not land on a splash.
-  setTimeout(checkQuietly, 15_000)
-  setInterval(checkQuietly, 6 * 60 * 60 * 1000)
+  setTimeout(() => checkQuietly("startup"), 15_000)
+  setInterval(() => checkQuietly("interval"), 6 * 60 * 60 * 1000)
 }
 
 // Stops mousewheel events from reaching Tauri's pinch-to-zoom handler
