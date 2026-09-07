@@ -149,6 +149,28 @@ export interface AudioTags {
   title?: string
   artist?: string
   album?: string
+  /** Beats per minute. Written as a real ID3 TBPM frame (verified, not a TXXX). */
+  bpm?: number
+  /** Musical key in ID3 TKEY form ("A#m", "C"). Convert from "A# minor" with id3Key(). */
+  key?: string
+  /** Camelot wheel code ("3A"). Not an ID3 frame, so it lands as a TXXX user frame. */
+  camelot?: string
+}
+
+/**
+ * Convert an analyser key ("A# minor", "C major") to ID3 TKEY form ("A#m", "C").
+ *
+ * TKEY is what Mixxx, Serato, rekordbox and Traktor read for harmonic mixing. The spec
+ * wants A-G, an optional b/#, and a trailing "m" for minor - not the prose the analyser
+ * emits. Returns undefined rather than guessing when the input is not a key, so a bad
+ * parse writes NO frame instead of a wrong one.
+ */
+export function id3Key(key?: string): string | undefined {
+  if (!key) return undefined
+  const m = key.trim().match(/^([A-G])\s*([#b]?)\s*(.*)$/i)
+  if (!m) return undefined
+  const minor = /min/i.test(m[3] ?? "")
+  return `${m[1].toUpperCase()}${m[2] ?? ""}${minor ? "m" : ""}`
 }
 
 /**
@@ -159,12 +181,24 @@ export interface AudioTags {
  * (e.g. "Dai Dai (Official Video)" / "…, FIFA") with clean Spotify metadata.
  * Best-effort: on any ffmpeg failure the original file is left untouched.
  */
-function retagMp3(ffmpeg: string, path: string, tags: AudioTags): boolean {
+export function retagMp3(ffmpeg: string, path: string, tags: AudioTags): boolean {
   const meta: string[] = []
   if (tags.title) meta.push("-metadata", `title=${tags.title}`)
   if (tags.artist) meta.push("-metadata", `artist=${tags.artist}`)
   if (tags.album) meta.push("-metadata", `album=${tags.album}`)
+  // Harmonic-mixing tags. TBPM and TKEY are native ID3 frames every DJ app reads, so a
+  // track arrives pre-analysed in any library with no export step. Guard the BPM: a NaN
+  // or 0 from a failed analysis must write no frame rather than a confident wrong one.
+  if (typeof tags.bpm === "number" && Number.isFinite(tags.bpm) && tags.bpm > 0) {
+    meta.push("-metadata", `TBPM=${Math.round(tags.bpm)}`)
+  }
+  if (tags.key) meta.push("-metadata", `TKEY=${tags.key}`)
+  if (tags.camelot) meta.push("-metadata", `CAMELOT=${tags.camelot}`)
   if (meta.length === 0) return false
+
+  // Drop YouTube's auto-generated blurb, which yt-dlp embeds and which shows up as pages
+  // of junk in a DJ library. purl/comment (the source URL) are left alone as provenance.
+  meta.push("-metadata", "description=", "-metadata", "synopsis=")
 
   const tmp = `${path}.retag.mp3`
   const r = spawnSync(
