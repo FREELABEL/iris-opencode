@@ -669,9 +669,24 @@ const PublishCmd = cmd({
       // behave differently: it would send private on every ordinary republish and quietly pull
       // a public component back out of the catalogue.
       .option("scope", { describe: "private (default for a new component) | public — listed in the shared catalogue. Omit to keep the current scope", type: "string", choices: ["private", "public"] })
+      // Same no-default rule as --scope, and for a sharper reason: a default here decides
+      // what something COSTS. Omitting it keeps whatever the component already had.
+      .option("access", { describe: "free (default for a new component) | paid — requires --price. Omit to keep the current access", type: "string", choices: ["free", "paid"] })
+      .option("price", { describe: "price in whole currency units, e.g. --price 25 for $25.00. Only meaningful with --access paid", type: "number" })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args: any) {
     await requireAuth()
+
+    // Caught here as well as server-side: this is the one mistake whose cost is a component
+    // listed at a price its author did not choose, and a round trip is not needed to see it.
+    if (args.access === "paid" && !(typeof args.price === "number" && args.price > 0)) {
+      UI.println("")
+      UI.println("  --access paid needs a price.")
+      UI.println(dim(`    iris genesis library publish ${args.slug} --file ${args.file} --scope public --access paid --price 25`))
+      UI.println(dim("  Nothing was published."))
+      process.exitCode = 1
+      return
+    }
 
     const file = Bun.file(args.file)
     if (!(await file.exists())) {
@@ -746,6 +761,15 @@ const PublishCmd = cmd({
         // is the behaviour every existing caller needs — the studio republishes on every save
         // and has no opinion about scope.
         ...(args.scope ? { visibility: args.scope } : {}),
+        // Likewise for price. Absent means unchanged; the server refuses paid-without-a-price
+        // rather than picking a reading of it.
+        ...(args.access ? { access_type: args.access } : {}),
+        ...(typeof args.price === "number" && !Number.isNaN(args.price)
+          // Whole units in, cents out. The CLI takes dollars because that is what a person
+          // means by a price, and rounds ONCE here rather than letting a float reach the
+          // column that gets charged.
+          ? { price_cents: Math.round(args.price * 100) }
+          : {}),
       }),
     })
 
@@ -782,6 +806,13 @@ const PublishCmd = cmd({
 
     UI.println("")
     UI.println(`  ${success("published")}  ${bold(args.slug)}${body.version ? dim(`  v${body.version}`) : ""}`)
+    // Say the price back. A publish that silently accepted a figure is how the wrong one ships.
+    if (body.accessType === "paid") {
+      const dollars = ((body.priceCents ?? 0) / 100).toFixed(2)
+      UI.println(dim(`    paid · $${dollars}`)
+        + (body.listing ? dim(`  ·  listing ${body.listing.slug} — ${body.listing.status.replace("_", " ")}`) : ""))
+      if (!body.listing) UI.println(dim("    not listed — a component is only listed once it is public, paid and priced"))
+    }
     for (const line of shape) UI.println(dim(`    ${line}`))
     // Every page naming this slug renders the NEW artifact from now on. Say so here rather
     // than letting it be discovered on a page nobody was looking at.
