@@ -108,7 +108,10 @@ fi
 
 PROJECT_ROOT="${IRIS_PROJECT_ROOT:-$HOME/sites/freelabel}"
 if [ -d "$PROJECT_ROOT/.iris/playbooks" ]; then
-  node packages/opencode/script/check-playbooks.mjs "$PROJECT_ROOT/.iris/playbooks" --tenancy=warn || {
+  # bun, not node: the script imports the rules from src/skill/playbook-lint.ts so there is
+  # only one copy of them, and node cannot load a .ts file
+  # (ERR_UNKNOWN_FILE_EXTENSION). This hook caught that itself, on the push that introduced it.
+  bun packages/opencode/script/check-playbooks.mjs "$PROJECT_ROOT/.iris/playbooks" --tenancy=warn || {
     echo ""
     echo "  A workspace playbook has a defect that survives 'iris playbook test'."
     echo "  These are the ones published to the marketplace — fix before publishing."

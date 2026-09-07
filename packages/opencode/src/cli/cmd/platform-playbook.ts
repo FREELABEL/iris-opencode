@@ -6,6 +6,7 @@ import { confirmWiden, type Tier as ExposureTier } from "./exposure-gate"
 import { UI } from "../ui"
 import { dim, bold, success, highlight, printDivider, printKV, irisFetch, requireAuth, handleApiError, writeJson, IRIS_API } from "./iris-api"
 import { Skill } from "../../skill/skill"
+import { lintPlaybook, blockingFindings, PLAYBOOK_RULES } from "../../skill/playbook-lint"
 import { Instance } from "../../project/instance"
 import {
   parsePlan,
@@ -1901,6 +1902,42 @@ const PublishCommand = cmd({
       prompts.outro("Done"); return
     }
 
+    // A defect the SCHEMA validator cannot see must not reach other people.
+    //
+    // The pre-push hook runs this same check, and a publish is not a git push — which is
+    // exactly how all three of the 2026-09-04 defects reached the marketplace. work-the-epic
+    // shipped defaulting to `bloq: 297`, the authors' own bug board, so every stranger's run
+    // filed into someone else's project; its publish step read a /tmp file no step wrote and
+    // published whatever the previous run had left there. Both passed `iris playbook test`.
+    //
+    // Placed ABOVE the widening prompt on purpose: nobody should be asked to confirm making
+    // a broken playbook public. Correctness first, exposure second.
+    //
+    // Blocking, not advisory. The whole lesson of those three is that a warning printed
+    // beside a success message is read as success.
+    {
+      const md = await withInstance(async () => {
+        const info = await Skill.get(String(args.name))
+        return info ? await Bun.file(info.location).text() : null
+      }).catch(() => null)
+
+      const blocking = md ? blockingFindings(lintPlaybook(md), String(args.scope)) : []
+      if (blocking.length) {
+        UI.empty()
+        console.error(`  Refusing to publish — ${blocking.length} defect(s) that \`iris playbook test\` calls valid:`)
+        UI.empty()
+        for (const f of blocking) {
+          console.error(`    ${f.rule}  ${f.detail}`)
+          console.error(`      ${dim(PLAYBOOK_RULES[f.rule])}`)
+        }
+        UI.empty()
+        console.error(`  ${dim("These survive schema validation, so a green `playbook test` does not clear them.")}`)
+        process.exitCode = 1
+        prompts.outro("Refused — nothing published")
+        return
+      }
+    }
+
     // #182344 G-04 — a marketplace publish is the widest thing this CLI can do.
     //
     // `from` is READ, not assumed. It was hardcoded to "private", which made every
@@ -2384,14 +2421,7 @@ const PlaybookInstallCommand = cmd({
     const token = await requireAuth(); if (!token) { prompts.outro("Done"); return }
 
     const { IRIS_API } = await import("./iris-api")
-    // `?intent=install` — install and show are the SAME GET, so the server cannot tell them
-    // apart and deliberately refuses to guess: anything but an explicit install is counted as a
-    // view. Only the CLI knows which verb the user typed, so only the CLI can say. Without this
-    // parameter every install would be filed as browsing and the install count would read zero
-    // while people were actively installing.
-    const res = await irisFetch(
-      `/api/v1/playbooks/${encodeURIComponent(name)}?intent=install`, {}, IRIS_API,
-    )
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`, {}, IRIS_API)
     const ok = await handleApiError(res, "Fetch playbook"); if (!ok) { prompts.outro("Done"); return }
     const data = (await res.json()) as any
     const pb = data?.playbook ?? {}
