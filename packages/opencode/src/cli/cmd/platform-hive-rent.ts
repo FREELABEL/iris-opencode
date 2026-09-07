@@ -1,5 +1,6 @@
 import { cmd } from "./cmd"
 import { requireAuth, requireUserId, writeJson, dim, bold, success } from "./iris-api"
+import { UI } from "../ui"
 import { hiveFetch } from "./platform-hive-nodes"
 
 /**
@@ -18,6 +19,11 @@ type Lease = {
   status: string
   endpoint: string | null
   enrolled_as_node: boolean
+  // What the machine ITSELF confirmed, derived server-side from its heartbeat:
+  // declined | detached | pending | live | quiet. The boolean above is only the
+  // intention recorded when it was rented.
+  enrolment?: "declined" | "detached" | "pending" | "live" | "quiet"
+  node_last_seen?: string | null
   external_id: string
   last_error: string | null
   created_at: string | null
@@ -36,10 +42,38 @@ async function api(path: string, init: RequestInit = {}) {
   return body as any
 }
 
+const warn = (t: string) => `${UI.Style.TEXT_WARNING}${t}${UI.Style.TEXT_NORMAL}`
+const danger = (t: string) => `${UI.Style.TEXT_DANGER}${t}${UI.Style.TEXT_NORMAL}`
+
+/**
+ * `enrolled_as_node` was being printed as though it were an outcome. It is the intention
+ * recorded at rent time, so a machine that never booted its daemon printed "hive node" —
+ * identical to one taking work. Prefer the state the server derives from the machine's own
+ * heartbeat, and fall back to the old field only when talking to an older server.
+ */
+function renderEnrolment(l: Lease): string {
+  switch (l.enrolment) {
+    case "live":
+      return success("in your hive")
+    case "pending":
+      return warn("starting up")
+    case "quiet":
+      return danger("not reporting")
+    case "detached":
+      return danger("no node linked")
+    case "declined":
+      return dim("plain box")
+    default:
+      // An older server that does not send the derived state. Say that we do not know,
+      // rather than reprinting the intention as though it were a confirmation.
+      return l.enrolled_as_node ? dim("enrolment unknown") : dim("plain box")
+  }
+}
+
 function renderLease(l: Lease): string {
-  const node = l.enrolled_as_node ? "hive node" : dim("not enrolled")
+  const node = renderEnrolment(l)
   const where = l.endpoint ? ` ${dim(l.endpoint)}` : ""
-  return `  ${String(l.id).padStart(4)}  ${bold(l.name.padEnd(22))} ${l.provider.padEnd(13)} ${l.status.padEnd(10)} ${node}${where}`
+  return `  ${String(l.id).padStart(4)}  ${bold(l.name.padEnd(22))} ${l.provider.padEnd(13)} ${l.status.padEnd(10)} ${node.padEnd(24)}${where}`
 }
 
 const RentCommand = cmd({
