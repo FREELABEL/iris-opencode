@@ -50,6 +50,90 @@ function canPromptHuman(json: boolean): boolean {
 // iris skill list
 // ============================================================================
 
+const SkillSearchCommand = cmd({
+  command: "search [query]",
+  aliases: ["find"],
+  describe: "search playbooks by tag, name, description or trigger",
+  builder: (yargs) =>
+    yargs
+      .positional("query", { type: "string", describe: "free text; matched against name, description, tags and triggers" })
+      .option("tag", { type: "array", describe: "require this tag (repeatable; ALL must match)" })
+      .option("json", { type: "boolean", default: false, describe: "JSON output" }),
+  async handler(args) {
+    await withInstance(async () => {
+      const q = String(args.query ?? "").trim().toLowerCase()
+      const need = ((args.tag as string[]) ?? []).map((t) => String(t).trim().toLowerCase()).filter(Boolean)
+
+      if (!q && !need.length) {
+        console.log("Give a query or at least one --tag. `iris playbook list` shows everything.")
+        process.exitCode = 1
+        return
+      }
+
+      const skills = await Skill.all()
+      const hits: Array<{ name: string; description: string; tags: string[]; why: string }> = []
+
+      for (const info of skills) {
+        let plan: any = null
+        try {
+          plan = await parsePlan(info)
+        } catch {
+          plan = null
+        }
+        const name = plan?.name ?? info.name ?? ""
+        const description = plan?.description ?? info.description ?? ""
+        const tags: string[] = plan?.tags ?? []
+        const triggers: string[] = plan?.triggers ?? []
+
+        // --tag is a FILTER, not a ranking signal: every requested tag must be present.
+        // Anything looser turns "show me one product" back into "show me everything".
+        if (need.length && !need.every((t) => tags.includes(t))) continue
+
+        if (!q) {
+          hits.push({ name, description, tags, why: "tag" })
+          continue
+        }
+
+        // Say WHICH field matched. A search that cannot explain itself gets distrusted
+        // the first time it returns something surprising.
+        let why = ""
+        if (name.toLowerCase().includes(q)) why = "name"
+        else if (tags.some((t) => t.includes(q))) why = "tag"
+        else if (description.toLowerCase().includes(q)) why = "description"
+        else if (triggers.some((t) => t.toLowerCase().includes(q))) why = "trigger"
+        if (!why) continue
+        hits.push({ name, description, tags, why })
+      }
+
+      // name, then tag, then description, then trigger — most specific signal first.
+      const rank: Record<string, number> = { name: 0, tag: 1, description: 2, trigger: 3 }
+      hits.sort((a, b) => (rank[a.why] ?? 9) - (rank[b.why] ?? 9) || a.name.localeCompare(b.name))
+
+      if (args.json) {
+        console.log(JSON.stringify(hits, null, 2))
+        return
+      }
+
+      if (!hits.length) {
+        console.log(`No playbook matches${q ? ` "${q}"` : ""}${need.length ? ` with tag(s): ${need.join(", ")}` : ""}.`)
+        console.log(dim("  Most playbooks carry no tags yet — try a word from the description, or `iris playbook list`."))
+        return
+      }
+
+      console.log(bold(`${hits.length} playbook(s)`))
+      printDivider()
+      for (const h of hits) {
+        console.log(`  ${bold(h.name)}  ${dim("(matched " + h.why + ")")}`)
+        if (h.tags.length) console.log(dim(`    tags: ${h.tags.join(", ")}`))
+        const d = h.description.length > 96 ? h.description.slice(0, 96) + "…" : h.description
+        if (d) console.log(dim(`    ${d}`))
+      }
+      printDivider()
+      console.log(dim("  Run one:  iris playbook run <name>"))
+    })
+  },
+})
+
 const SkillListCommand = cmd({
   command: "list",
   aliases: ["ls"],
@@ -2492,6 +2576,7 @@ export const PlatformPlaybookCommand = cmd({
       // `sync` for Claude. #P0b — moved off the `sop` verb, which owns service requests.
       .command(PlaybookSopDraftCommand)
       .command(SkillListCommand)
+      .command(SkillSearchCommand)
       .command(SkillShowCommand)
       .command(SkillRunCommand)
       .command(SkillResumeCommand)
