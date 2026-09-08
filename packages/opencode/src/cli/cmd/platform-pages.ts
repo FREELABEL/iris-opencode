@@ -16,6 +16,10 @@ import { firstArray } from "../../util/array"
 import { watch } from "fs"
 import { baseFromPage, readBase, stripBase, expectedVersionField, handleVersionConflictResponse, contentUpdatePayload, ownershipDrift } from "./page-base"
 import { absolutizeAssets, injectLiveReload } from "./page-dev"
+// GLD-04 read-back. The server-render tier of `read`/`verify` (#183716) parses an Inertia
+// payload and counts what actually resolved into it; that is pure string/shape work and
+// lives apart from this file's yargs/API graph so it can be tested without a server.
+import { readServerRender, type PayloadReading } from "./page-render-read"
 import { mergePageDocs, formatMergeReport, versionDocFromRow, mergePreconditions } from "./page-merge"
 
 // ============================================================================
@@ -1123,27 +1127,41 @@ const DevCmd = cmd({
     prompts.intro(`◈  Dev ${slug}`)
     if (!(await requireAuth())) { prompts.outro("Done"); return }
 
+    // A MISSING LOCAL FILE IS NOT AN ERROR HERE ANY MORE (#183716).
+    //
+    // `verify --server-render` answers "does it say the right words" with no browser install;
+    // this command is the other half of that question — "does it LOOK right" — and it is the
+    // only half she could not ask at all. Refusing without a pulled file made LOOKING at a
+    // published page a two-step with a pull in front of it, for the sole benefit of the
+    // watcher, which a live page has no use for. So: local file if there is one (watched), the
+    // stored page otherwise (rendered once).
     const file = join(pagesDir(args.dir), `${slug}.json`)
-    if (!existsSync(file)) {
-      prompts.log.error(`Local file not found: ${file}`)
-      prompts.log.info(dim(`Pull it first: iris pages pull ${slug}`))
-      process.exitCode = 1
-      prompts.outro("Done")
-      return
-    }
+    const hasLocal = existsSync(file)
 
     let version = 0
     let cached: string | null = null
     let lastError: string | null = null
 
-    /** Mint a session from the CURRENT file and render it. Never touches the live page. */
+    /** Mint a session from the CURRENT document and render it. Never touches the live page. */
     async function render(): Promise<void> {
       try {
-        const local = JSON.parse(readFileSync(file, "utf-8"))
-        const doc = local.json_content ?? local
+        let payload: any
+        if (hasLocal) {
+          const local = JSON.parse(readFileSync(file, "utf-8"))
+          const doc = local.json_content ?? local
+          payload = { ...stripBase(local), json_content: stripBase(doc) }
+        } else {
+          const stored = await getBySlug(slug, true, { quiet404: true })
+          if (!stored?.json_content) {
+            lastError = `no local ${file} and no stored page for "${slug}"`
+            cached = null
+            return
+          }
+          payload = { ...stripBase(stored), json_content: stripBase(stored.json_content) }
+        }
         const mint = await pagesFetch("/api/v1/preview/sessions", {
           method: "POST",
-          body: JSON.stringify({ page: { ...stripBase(local), json_content: stripBase(doc) } }),
+          body: JSON.stringify({ page: payload }),
         })
         if (!mint.ok) {
           lastError = `preview session refused (HTTP ${mint.status})`
@@ -1200,10 +1218,16 @@ const DevCmd = cmd({
     const url = `http://localhost:${server.port}`
     prompts.log.info(`${highlight(url)}  ${dim("— rendered by " + IRIS_API + ", nothing published")}`)
     if (lastError) prompts.log.warn(lastError)
-    prompts.log.info(dim(`watching ${resolve(file)} — save to reload`))
+    if (hasLocal) {
+      prompts.log.info(dim(`watching ${resolve(file)} — save to reload`))
+    } else {
+      // Say WHICH document is on screen. A rendered page with no note reads as "my edits are
+      // live", and here there are no edits at all — this is what is stored.
+      prompts.log.info(dim(`no local ${file} — serving the STORED page. Pull it to edit: iris pages pull ${slug}`))
+    }
 
     let timer: any = null
-    watch(file, () => {
+    if (hasLocal) watch(file, () => {
       clearTimeout(timer)
       // Editors write in bursts (truncate, then write). Debounce, or a save renders a file that
       // is momentarily empty and the page flashes an error for no reason.
@@ -4168,6 +4192,128 @@ async function renderPage(slug: string, opts: { width: number; timeout: number; 
   }
 }
 
+export interface ServerRendered extends PayloadReading {
+  url: string
+  status: number
+  sessionId: string
+}
+
+/**
+ * Render a page ON THE SERVER and read the payload it hands the browser (#183716).
+ *
+ * THE TIER BETWEEN A BROWSER AND A GUESS.
+ *
+ * #183704 shipped a no-browser fallback that reads the page's STORED JSON. It answers "are my
+ * words on the page" and is blind to everything the page fetches — which is the class of fault
+ * that shipped a stat row reading 1,182 above a board reading 16 on the same dashboard. Neither
+ * number is in that JSON; both are fetched. The fallback would have called the page healthy.
+ *
+ * The server can already render the whole thing, and has been able to since GLD-04. A preview
+ * session hands a page document to `PreviewRenderController`, which extends the controller `/p/`
+ * itself uses and calls the same two methods: brand tokens, cloudfile resolution, the shared
+ * nav, the atlas gate, the bespoke `render_mode=html` branch — and `SsrDatasetInjector`, which
+ * resolves every dataset and collection binding server-side and writes the ROWS into the
+ * payload. So this tier sees the data. No install, no browser, no Abort/Retry/Ignore.
+ *
+ * IT IS STILL NOT A RENDER, AND EVERY CALLER SAYS SO. The payload is what the renderer HANDS
+ * the browser, not what the browser paints: rows are in it, a total a component computes from
+ * those rows is not. `bindings.complete` is how much weaker the evidence is — with nothing left
+ * to fetch, absence from the payload is a real absence; with bindings outstanding it is an
+ * unknown, and the callers print `?` rather than `✗`.
+ *
+ * WHY IT MINTS A SESSION RATHER THAN FETCHING /p/{slug}. Two reasons, and the second is the
+ * one that matters. An anonymous GET of /p/ resolves no viewer, so the injector falls to
+ * `effectiveScope(null, …)` and injects PUBLIC datasets only — the numbers on a client
+ * dashboard would be missing for a reason that has nothing to do with the page. And a preview
+ * session works on a DRAFT, so the author can ask this question before publishing, which is
+ * the pressure epic #182344 exists to remove.
+ */
+async function serverRenderPage(slug: string, opts: { allowGated?: boolean } = {}): Promise<ServerRendered> {
+  const page = await getBySlug(slug, true, { quiet404: true })
+  if (!page?.json_content) {
+    throw new Error(`No stored page for "${slug}" — there is nothing to render.\n  ${notFoundHint(slug)}`)
+  }
+  const payload = { ...stripBase(page), json_content: stripBase(page.json_content) }
+
+  const mint = await pagesFetch("/api/v1/preview/sessions", { method: "POST", body: JSON.stringify({ page: payload }) })
+  if (!mint.ok) {
+    // Name the server's own reason. `raw_html_untrusted_owner` and `page_too_large` are
+    // permanent for this page and no amount of retrying fixes them, so "HTTP 403" alone would
+    // send someone to debug the wrong thing.
+    let reason = ""
+    try {
+      const body: any = await mint.json()
+      reason = body?.reason ?? body?.error ?? ""
+    } catch {}
+    throw new Error(`the server refused a preview session (HTTP ${mint.status}${reason ? ` — ${reason}` : ""}).`)
+  }
+
+  const { session_id: sid } = (await mint.json()) as any
+  const res = await pagesFetch(`/api/v1/preview/${sid}/render`)
+  const html = await res.text()
+  const url = `${IRIS_API.replace(/\/+$/, "")}/api/v1/preview/${sid}/render`
+  if (!res.ok) throw new Error(`the server render returned HTTP ${res.status} for ${slug}.`)
+
+  const reading = readServerRender(html)
+
+  // Same refusal as the browser lane, for the same reason: a gated render returns the LOCKED
+  // SHELL — `lockedContentShell()` strips the components, the layout and every data source — so
+  // asserting against it answers a question nobody asked. The CLI holds a platform token, and a
+  // platform session is deliberately not a credential the atlas gate accepts (#182831), so this
+  // is the expected outcome on a gated page rather than a surprise.
+  if (reading.gated && !opts.allowGated) {
+    throw new Error(
+      `the server render returned the LOCKED SHELL for ${slug}, not the page — it is gated, and ` +
+        `a platform token is not what that gate asks for (#182831).\n` +
+        // Deliberately NOT offering an --atlas-token flag. Passing a token as a query parameter
+        // short-circuits evaluateAtlasGate and skips the cookie path every real visitor arrives
+        // on — three production bugs hid behind exactly that gap on the catodrive funnel for
+        // ~7.5 weeks. The way past a gate is to complete it, in a browser, which `dev` gives
+        // her without installing anything.
+        `  Look at it past the gate:  iris pages dev ${slug}  (opens in YOUR browser; complete the gate there)\n` +
+        `  Who can actually read it:  iris pages check-public ${slug}`,
+    )
+  }
+
+  return { ...reading, url, status: res.status, sessionId: sid }
+}
+
+/** Does this page fetch anything at all? A page that does not is a much stronger reading. */
+function hasBindings(r: ServerRendered): boolean {
+  return r.bindings.dataSources > 0 || r.bindings.boundComponents > 0
+}
+
+/** One line saying what the server-render tier did and did not establish. Printed everywhere it runs. */
+function serverRenderCaveat(r: ServerRendered): string {
+  if (r.lane === "bespoke") return "This is the server's finished HTML for a bespoke page — the browser adds nothing to its text."
+  if (!hasBindings(r)) return "This page fetches nothing, so the payload holds all of its text — only styling and layout need eyes."
+  return (
+    `Read from the render PAYLOAD (${r.bindings.rows} row(s) resolved server-side), not from painted pixels — ` +
+    `a value a component COMPUTES from those rows is not in it.`
+  )
+}
+
+/**
+ * The bindings line.
+ *
+ * "all resolved" on a page with NO bindings is the wrong sentence — it claims a check was
+ * satisfied where none was performed, which is the same shape of false green this whole
+ * command exists to remove. Say what is actually true: this page fetches nothing.
+ *
+ * `type: 'api'` sources are the common unresolved case and they are unresolved by DESIGN — the
+ * browser fetches them, and no amount of server rendering will produce them. Naming that keeps
+ * an outstanding count from reading as a fault in the page.
+ */
+function bindingsLine(r: ServerRendered): string {
+  if (!hasBindings(r)) return dim("none — this page fetches nothing")
+  const outstanding = r.bindings.sourcesUnresolved + r.bindings.componentsUnresolved
+  if (outstanding === 0) return success(`all resolved server-side — ${r.bindings.rows} row(s) in the render`)
+  return (
+    `${UI.Style.TEXT_WARNING}${outstanding} of ${r.bindings.dataSources + r.bindings.boundComponents} still fetched by the browser${UI.Style.TEXT_NORMAL}` +
+    ` ${dim(r.bindings.rows > 0 ? `(${r.bindings.rows} row(s) did resolve)` : "(an `api` source always resolves in the browser, never here)")}`
+  )
+}
+
 /**
  * The literal text stored in a page's JSON, with no browser (#183704).
  *
@@ -4241,11 +4387,13 @@ const ReadCmd = cmd({
       .option("json", { describe: "emit a JSON envelope (url, lane, title, headings, words, text)", type: "boolean", default: false })
       .option("headings", { describe: "print only h1/h2/h3", type: "boolean", default: false })
       .option("allow-gated", { describe: "read the OTP gate itself instead of refusing (the text will NOT be the page)", type: "boolean", default: false })
+      .option("server-render", { describe: "skip the local browser and read the SERVER render (GLD-04)", type: "boolean", default: false })
       .option("width", { describe: "viewport width", type: "number", default: 1440 })
       .option("timeout", { describe: "navigation timeout (ms)", type: "number", default: 30000 }),
   async handler(args) {
     const { slug } = normalizeSlugArg(args.slug)
     try {
+      if (args["server-render"]) throw Object.assign(new Error("--server-render: local browser skipped"), { __skipBrowser: true })
       const r = await renderPage(slug, { width: Number(args.width), timeout: Number(args.timeout), allowGated: !!args["allow-gated"] })
 
       if (args.json) {
@@ -4263,6 +4411,40 @@ const ReadCmd = cmd({
       )
       process.stdout.write((args.headings ? r.headings.join("\n") : r.text) + "\n")
     } catch (e: any) {
+      // SAME LADDER AS `verify`, AND THAT IS LOAD-BEARING. These two share renderPage() so they
+      // can never disagree about what a page says; a tier that only one of them had would
+      // rebuild that disagreement one level down — verify reporting text that read cannot show
+      // her, which leaves her exactly as stuck as before.
+      const missingBrowser = e?.__skipBrowser === true || /cannot find module|playwright/i.test(e?.message ?? String(e))
+      if (missingBrowser) {
+        try {
+          const sr = await serverRenderPage(slug, { allowGated: !!args["allow-gated"] })
+          if (args.json) {
+            writeJson({ ...sr, mode: "server-render", rendered: false })
+            return
+          }
+          // Diagnostics on stderr so `read | grep` cannot swallow the one line saying this was
+          // not a browser — the same reasoning as the browser branch above.
+          process.stderr.write(
+            `${dim(`  ${sr.url}  ·  lane: ${sr.lane}  ·  SERVER RENDER (no local browser)  ·  ${sr.words} words in the payload`)}\n` +
+              `${dim(`  title: ${sr.title}`)}\n` +
+              `${dim(`  ${serverRenderCaveat(sr)}`)}\n`,
+          )
+          if (args.headings && !sr.headingsAvailable) {
+            process.stderr.write(
+              `${UI.Style.TEXT_WARNING}  --headings needs a browser: the payload carries components, not h-tags. Nothing printed.${UI.Style.TEXT_NORMAL}\n`,
+            )
+            process.exitCode = 1
+            return
+          }
+          process.stdout.write((args.headings ? sr.headings.join("\n") : sr.text) + "\n")
+          return
+        } catch (err: any) {
+          process.stderr.write(`${UI.Style.TEXT_DANGER}  Server render unavailable — ${err?.message ?? String(err)}${UI.Style.TEXT_NORMAL}\n`)
+          process.exitCode = 1
+          return
+        }
+      }
       process.stderr.write(`${UI.Style.TEXT_DANGER}  ${playwrightHint(e)}${UI.Style.TEXT_NORMAL}\n`)
       process.exitCode = 1
     }
@@ -4282,6 +4464,10 @@ const VerifyCmd = cmd({
       .option("lane", { describe: "assert which renderer served the page", type: "string", choices: ["composable", "bespoke"] })
       .option("case-sensitive", { describe: "match case exactly (default folds case — CSS uppercase makes exact matching a false-negative machine)", type: "boolean", default: false })
       .option("allow-gated", { describe: "assert against the OTP gate itself instead of refusing", type: "boolean", default: false })
+      // The tier ladder is automatic — this only pins it, so the middle tier can be exercised
+      // on a machine that HAS a browser. Without it the server lane would only ever run where
+      // nobody can watch it, which is how a fallback rots.
+      .option("server-render", { describe: "skip the local browser and assert against the SERVER render (GLD-04)", type: "boolean", default: false })
       .option("width", { describe: "viewport width", type: "number", default: 1440 })
       .option("timeout", { describe: "navigation timeout (ms)", type: "number", default: 30000 })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
@@ -4292,9 +4478,13 @@ const VerifyCmd = cmd({
     if (corrected && !args.json) noteSlugCorrection(args.slug, slug)
 
     const sp = args.json ? null : prompts.spinner()
-    sp?.start("Rendering…")
+    sp?.start(args["server-render"] ? "Rendering on the server…" : "Rendering…")
 
     try {
+      // `__skipBrowser` takes the same path a missing Playwright takes, so the pinned tier and
+      // the fallback tier are the same code. Two entrances to one tier is how the one nobody
+      // runs drifts from the one everybody does.
+      if (args["server-render"]) throw Object.assign(new Error("--server-render: local browser skipped"), { __skipBrowser: true })
       const r = await renderPage(slug, { width: Number(args.width), timeout: Number(args.timeout), allowGated: !!args["allow-gated"] })
       const caseSensitive = !!args["case-sensitive"]
       const hay = normalizeForMatch(r.text, { caseSensitive })
@@ -4360,19 +4550,27 @@ const VerifyCmd = cmd({
       }
       prompts.outro("Done")
     } catch (e: any) {
-      // NO BROWSER? DEGRADE HONESTLY RATHER THAN REFUSE (#183704).
+      // NO BROWSER? DROP A TIER, NOT ALL THE WAY TO A GUESS (#183716, was #183704).
       //
       // Playwright is an optional dep and the person who most needs this command does not have
       // it — she is on a managed Windows machine where the last install threw Abort/Retry/Ignore
       // at her mid-call (#183651). Refusing outright means she builds, publishes, and asks
       // somebody else whether it worked, which is the actual complaint.
       //
-      // So fall back to the text stored in the page's JSON. It answers "are my words on the
-      // page" and nothing else — and the output says so, loudly, every time. It must never read
-      // as verification: on pathways-dashboard, 27 dataSources supply the numbers, and the
-      // contradiction that motivated this ticket (1,182 above a board reading 16) is invisible
-      // to this path by construction.
-      const missingBrowser = /cannot find module|playwright/i.test(e?.message ?? String(e))
+      // #183704 answered that by falling straight to the text STORED in the page's JSON. Honest,
+      // and much too weak: it is blind to everything the page fetches, which is the class of
+      // fault that shipped a stat row reading 1,182 above a board reading 16 on the same
+      // dashboard. Neither number is in that JSON. It would have called the page healthy.
+      //
+      // So there are three tiers, and the middle one is the one to want:
+      //
+      //   1  BROWSER RENDER   what a reader sees, including anything computed after hydration
+      //   2  SERVER RENDER    the payload /p/ itself is built from, WITH the rows injected
+      //   3  STORED JSON      the words in the document, and nothing the page fetches
+      //
+      // Tier 2 needs no install: GLD-04's PreviewRenderController runs the deployed renderer
+      // and SsrDatasetInjector resolves the bindings before it answers.
+      const missingBrowser = e?.__skipBrowser === true || /cannot find module|playwright/i.test(e?.message ?? String(e))
 
       if (!missingBrowser) {
         sp?.stop("Failed", 1)
@@ -4382,6 +4580,127 @@ const VerifyCmd = cmd({
         return
       }
 
+      // ── TIER 2 — the server render ─────────────────────────────────────────────────────
+      let sr: ServerRendered | null = null
+      let srError: string | null = null
+      try {
+        sr = await serverRenderPage(slug, { allowGated: !!args["allow-gated"] })
+      } catch (err: any) {
+        srError = err?.message ?? String(err)
+      }
+
+      if (sr) {
+        const caseSensitive = !!args["case-sensitive"]
+        const hay = normalizeForMatch(sr.text, { caseSensitive })
+        const checks: Array<{ kind: string; label: string; pass: boolean }> = []
+
+        for (const raw of (args.expect as string[]) ?? []) {
+          checks.push({ kind: "expect", label: raw, pass: hay.includes(normalizeForMatch(raw, { caseSensitive })) })
+        }
+        for (const raw of (args["not-expect"] as string[]) ?? []) {
+          checks.push({ kind: "not-expect", label: raw, pass: !hay.includes(normalizeForMatch(raw, { caseSensitive })) })
+        }
+        // `--lane` IS answerable here, and better than in a browser: this is the renderer's own
+        // output, so which lane served it is a fact rather than a reading of the delivered HTML.
+        if (args.lane) {
+          checks.push({ kind: "lane", label: `lane == ${args.lane} (got ${sr.lane})`, pass: sr.lane === args.lane })
+        }
+
+        // `--min-words` counts PAINTED words. On the bespoke lane the server's HTML is the
+        // finished document and the count is the same measurement; on the composable lane it
+        // would be payload strings wearing a render's name, so it is reported as not run.
+        const skipped: string[] = []
+        if (args["min-words"] !== undefined) {
+          const min = Number(args["min-words"])
+          if (sr.lane === "bespoke") {
+            checks.push({ kind: "min-words", label: `>= ${min} words (got ${sr.words})`, pass: sr.words >= min })
+          } else {
+            skipped.push("--min-words")
+          }
+        }
+
+        const failed = checks.filter((c) => !c.pass)
+        // A miss means "not determined" only while something the browser would still fetch is
+        // outstanding. With every binding resolved, absence from the payload is a real absence
+        // from the page's inputs — see bindingHealth().
+        const indeterminate = sr.lane === "composable" && !sr.bindings.complete
+
+        if (args.json) {
+          writeJson({
+            slug, mode: "server-render", rendered: false, serverRendered: true,
+            reason: "no local browser — rendered on the server (GLD-04) and read from the payload",
+            url: sr.url, lane: sr.lane, gated: sr.gated, title: sr.title, words: sr.words,
+            components: sr.components, bindings: sr.bindings,
+            checks, skipped, indeterminate: indeterminate && failed.length > 0,
+            ok: failed.length === 0,
+          })
+          if (failed.length) process.exitCode = 1
+          return
+        }
+
+        sp?.stop(failed.length === 0 ? success("Server-rendered") : "Server-rendered", failed.length === 0 ? 0 : 1)
+        printKV("Rendered by", `${IRIS_API} ${dim("(server — no local browser)")}`)
+        printKV("Lane", sr.lane)
+        if (sr.title) printKV("Title", sr.title)
+        printKV("Words", `${sr.words} ${dim("in the payload")}`)
+        if (sr.lane === "composable") printKV("Bindings", bindingsLine(sr))
+
+        console.log()
+        // Never the word "verified" without a browser. This IS the deployed renderer and it DOES
+        // carry the data — which is the whole gain over the stored-JSON tier — but it is the
+        // payload handed to a browser, not the pixels one produced.
+        prompts.log.warn("NO LOCAL BROWSER — this is the SERVER render, not a browser render.")
+        prompts.log.info(dim(serverRenderCaveat(sr)))
+        if (skipped.length) prompts.log.info(dim(`Not run without a browser: ${skipped.join(", ")}`))
+
+        if (checks.length === 0) {
+          prompts.log.warn("No assertions given — this only proves the page RENDERS on the server.")
+          prompts.log.info(dim(`Add some: iris pages verify ${slug} --expect "a phrase from the page"`))
+          prompts.log.info(dim(`See it: ${highlight(`iris pages dev ${slug}`)} — opens the same render in YOUR browser, nothing installed.`))
+          prompts.outro("Done")
+          return
+        }
+
+        console.log()
+        for (const c of checks) {
+          const mark = c.pass
+            ? success("✓")
+            : indeterminate
+              ? `${UI.Style.TEXT_DIM}?${UI.Style.TEXT_NORMAL}`
+              : `${UI.Style.TEXT_DANGER}✗${UI.Style.TEXT_NORMAL}`
+          const note = c.pass || !indeterminate ? "" : dim("  (not in the render — may arrive from a source the browser still fetches)")
+          console.log(`  ${mark} ${dim(c.kind)}  ${c.label}${note}`)
+        }
+        console.log()
+
+        if (failed.length && indeterminate) {
+          prompts.log.warn(
+            `COULD NOT VERIFY ${failed.length} of ${checks.length} check(s). ` +
+              `${sr.bindings.sourcesUnresolved + sr.bindings.componentsUnresolved} binding(s) are still fetched by the browser, so they may arrive there.`,
+          )
+          process.exitCode = 1
+        } else if (failed.length) {
+          prompts.log.error(
+            `${failed.length} of ${checks.length} check(s) failed against the server render.` +
+              (sr.lane === "composable" ? " (A number a component COMPUTES from its rows would not appear here.)" : ""),
+          )
+          process.exitCode = 1
+        } else {
+          prompts.log.success(`All ${checks.length} check(s) passed against the SERVER render.`)
+        }
+        // The other half of the question. "Does it say the right words" is answered above;
+        // "does it LOOK right" is not, and `dev` answers it with no install — the same server
+        // render, served to the browser she already has.
+        prompts.log.info(dim(`Does it LOOK right? ${highlight(`iris pages dev ${slug}`)} — same render, in your own browser.`))
+        prompts.outro("Done")
+        return
+      }
+
+      // ── TIER 3 — the stored JSON ───────────────────────────────────────────────────────
+      //
+      // Reached only when the server render was refused too (gated, unpublished, too large,
+      // untrusted raw HTML). Weakest of the three and labelled as such: it answers "are my
+      // words on the page" and is blind to everything the page fetches.
       let page: any = null
       try {
         page = await getBySlug(slug, true, { quiet404: true })
@@ -4418,7 +4737,8 @@ const VerifyCmd = cmd({
       if (args.json) {
         writeJson({
           slug, mode: "static-text-only", rendered: false,
-          reason: "playwright not installed — checked the page's stored text, not a render",
+          reason: "no browser, and the server render was unavailable — checked the page's stored text, not a render",
+          serverRenderError: srError,
           dataSourcesUnchecked: stat.dataSources, components: stat.components,
           checks, skipped,
           // `ok` is only meaningful when nothing is indeterminate — see the console branch.
@@ -4431,6 +4751,10 @@ const VerifyCmd = cmd({
 
       sp?.stop("Not rendered — static text only", 1)
       console.log()
+      // WHY THE STRONGER TIER DID NOT RUN. Without this the output is identical whether the
+      // server render was never attempted or was refused for a reason worth fixing (the page is
+      // gated, is a draft, is too large) — and "no browser" would take the blame for all of it.
+      if (srError) prompts.log.warn(`Server render unavailable — ${srError}`)
       prompts.log.warn("NO BROWSER — the page was NOT rendered. This is not verification.")
       prompts.log.info(`Checked the ${stat.components} component(s) stored in the page's JSON.`)
       if (stat.dataSources > 0) {
