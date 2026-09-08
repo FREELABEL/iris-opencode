@@ -2,22 +2,43 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch, writeJson } from "./iris-api"
+import { probeWithHeal, type BridgeProbe, type BridgeHealth } from "./bridge-health"
 import { mailRows } from "./mail-response"
 import { routerSend, describeSend } from "./comms-send"
 
-// macOS Apple Mail integration via IRIS Bridge (localhost:3200)
+// macOS Apple Mail integration via the IRIS Bridge (BRIDGE_URL, default localhost:3200)
 // Bridge endpoint: GET /api/mail/search?from=X&subject=X&days=N&limit=N&include_body=1&max_body=N
 // Bridge endpoint: POST /api/mail/send { to_email, subject, body_text, cc, attachments }
 
-async function checkBridge(): Promise<boolean> {
+async function probeBridgeOnce(timeoutMs: number): Promise<BridgeProbe> {
   try {
-    const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(3000) })
-    if (!res.ok) return false
-    const data = (await res.json()) as any
-    return data?.status === "ok"
-  } catch {
-    return false
+    const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(timeoutMs) })
+    let body: any = undefined
+    try {
+      body = await res.json()
+    } catch {
+      /* a non-JSON body is still a real HTTP answer — status decides */
+    }
+    return { kind: "response", status: res.status, body }
+  } catch (e: any) {
+    const name = String(e?.name ?? "")
+    if (name === "TimeoutError" || name === "AbortError") return { kind: "timeout" }
+    return { kind: "network", error: String(e?.message ?? e) }
   }
+}
+
+/**
+ * Probe the bridge, retrying once on a transient failure. The retry is the self-healing
+ * part: a DNS/socket blip while the laptop wakes used to surface as a flat "not running".
+ */
+export async function probeBridge(): Promise<BridgeHealth> {
+  const health = await probeWithHeal(probeBridgeOnce, BRIDGE_URL)
+  // Emit the signal on the way past. A silent retry is an unfalsifiable claim; this line is
+  // what lets anyone confirm the heal path is still alive months from now.
+  if (health.healed) {
+    prompts.log.info(dim(`bridge recovered on retry — self-heal fired (${health.attempts} attempts)`))
+  }
+  return health
 }
 
 const MailSearchCommand = cmd({
@@ -38,8 +59,9 @@ const MailSearchCommand = cmd({
     UI.empty()
     prompts.intro("◈  Apple Mail Search")
 
-    if (!(await checkBridge())) {
-      prompts.log.error("IRIS Bridge not running on localhost:3200. Start with: iris bridge start")
+    const bridge = await probeBridge()
+    if (!bridge.ok) {
+      prompts.log.error(bridge.message)
       prompts.outro("Done")
       return
     }
@@ -117,8 +139,9 @@ const MailReadCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Read Mail — from "${args.query}"`)
 
-    if (!(await checkBridge())) {
-      prompts.log.error("IRIS Bridge not running on localhost:3200. Start with: iris bridge start")
+    const bridge = await probeBridge()
+    if (!bridge.ok) {
+      prompts.log.error(bridge.message)
       prompts.outro("Done")
       return
     }
@@ -215,8 +238,9 @@ const MailSendCommand = cmd({
     UI.empty()
     prompts.intro(`◈  Send Mail — to ${args.to}`)
 
-    if (!(await checkBridge())) {
-      prompts.log.error("IRIS Bridge not running on localhost:3200. Start with: iris bridge start")
+    const bridge = await probeBridge()
+    if (!bridge.ok) {
+      prompts.log.error(bridge.message)
       prompts.outro("Done")
       return
     }
@@ -335,9 +359,10 @@ const MailAccountsCommand = cmd({
       prompts.intro("◈  Apple Mail — accounts on this Mac")
     }
 
-    if (!(await checkBridge())) {
-      const msg = "IRIS Bridge not running on localhost:3200. Start with: iris bridge start"
-      if (args.json) console.log(JSON.stringify({ ok: false, error: msg }))
+    const bridge = await probeBridge()
+    if (!bridge.ok) {
+      const msg = bridge.message
+      if (args.json) console.log(JSON.stringify({ ok: false, error: msg, state: bridge.state }))
       else {
         prompts.log.error(msg)
         prompts.outro("Done")
