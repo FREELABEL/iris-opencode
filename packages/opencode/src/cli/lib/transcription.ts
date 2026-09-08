@@ -113,15 +113,25 @@ export function resolveFfmpeg(): FfmpegResolution {
     if (p !== onPath && existsSync(p)) candidates.push({ bin: p })
   }
 
-  // Bundled builds that carry their own dylibs. They only work with those on the loader path,
-  // which is exactly why they survive a broken system ffmpeg.
-  for (const rel of [
+  // Bundled builds that carry their own dylibs beside them, which is exactly why they survive
+  // a broken system ffmpeg. Walked up from the working directory rather than checked only in
+  // it: in a monorepo the bundle usually sits at a root several levels above wherever the
+  // command was actually run. Bounded, and it never descends — searching the disk for a binary
+  // to execute is not a thing a transcription command should do.
+  const RELATIVE_BUNDLES = [
     "node_modules/@remotion/compositor-darwin-arm64/ffmpeg",
     "node_modules/@remotion/compositor-darwin-x64/ffmpeg",
     "node_modules/ffmpeg-static/ffmpeg",
-  ]) {
-    const p = resolve(process.cwd(), rel)
-    if (existsSync(p)) candidates.push({ bin: p, env: { DYLD_LIBRARY_PATH: dirname(p) } })
+  ]
+  let dir = process.cwd()
+  for (let up = 0; up < 6; up++) {
+    for (const rel of RELATIVE_BUNDLES) {
+      const p = join(dir, rel)
+      if (existsSync(p)) candidates.push({ bin: p, env: { DYLD_LIBRARY_PATH: dirname(p) } })
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
   }
 
   let firstFailure = ""

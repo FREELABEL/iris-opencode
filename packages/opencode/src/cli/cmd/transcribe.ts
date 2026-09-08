@@ -89,7 +89,13 @@ function localDepAdvice(): string | null {
   return null
 }
 
-async function transcribeViaServer(absPath: string, language?: string, brandId?: number): Promise<string | null> {
+async function transcribeViaServer(
+  absPath: string,
+  language?: string,
+  brandId?: number,
+  /** The local failure was already explained to the user — do not say it twice. */
+  localAlreadyExplained = false,
+): Promise<string | null> {
   // POLICY GATE (epic #182784). This function uploads the audio via irisFetch directly,
   // so it does NOT pass through transcribeAudio()'s clamp — it was a second egress the
   // clamp could not see. Worse, it is reached AUTOMATICALLY when local whisper is merely
@@ -99,7 +105,11 @@ async function transcribeViaServer(absPath: string, language?: string, brandId?:
     // Name the dependency that is ACTUALLY missing. Telling someone to install whisper when
     // whisper is installed and ffmpeg is the broken one sends them to the wrong place — which
     // is what happened: three messages in a row, all true, none of them the problem.
-    const missing = localDepAdvice()
+    // Only diagnose here when nothing upstream already did. Reached from --remote the user
+    // has seen no local error at all and needs telling; reached from the local fallback the
+    // diagnosis is already on screen, and repeating the same paragraph reads as a second,
+    // different problem.
+    const missing = localAlreadyExplained ? null : localDepAdvice()
     prompts.log.error(
       "Transcription policy is 'sovereign' — audio was NOT uploaded.\n" +
         (missing ? `  ${missing}\n` : "") +
@@ -218,7 +228,7 @@ export async function runLocalWhisper(
     sp.stop(dim("Local transcription unavailable"))
     prompts.log.info(dim(localError))
 
-    const remote = await transcribeViaServer(abs, language, brandId)
+    const remote = await transcribeViaServer(abs, language, brandId, true)
     if (remote === null) {
       process.exitCode = 1 // #152292 — fail loudly so automation doesn't proceed on no transcript
       return false
