@@ -33,7 +33,7 @@ import {
   type CatalogEntry,
 } from "./integration-catalog"
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
-import { readIntegrationStores, type StoreRef } from "./integration-stores"
+import { readIntegrationStores, findStatusDisagreements, describeDisagreement, type StoreRef } from "./integration-stores"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
 import { openBrowser } from "../../util/browser"
@@ -819,19 +819,24 @@ const ListConnectedCommand = cmd({
     // "No active 'gmail' connection found. Run: iris connect gmail". Network healthy at the
     // time (freelabel.net/raichu both 2xx), so this is not an outage artefact.
     //
-    // WHERE THE ROWS ACTUALLY LIVE IS STILL OPEN. The obvious reading — they are fl-api's
-    // and iris-api has none — is contradicted by resolveAccountToIntegrationId above, which
-    // reads IRIS_API and whose #182862 note describes seeing two gmail connections there.
-    // So exec's 404 may come from later in execute-direct (a missing Composio account id,
-    // a resolveAction miss) rather than from an empty table. Deciding it needs an
-    // authenticated read of both endpoints, which this session could not perform.
+    // WHAT IT ACTUALLY IS, measured 2026-09-08 by reading iris-api authenticated:
+    // BOTH stores hold gmail rows, they are DIFFERENT rows, and they DISAGREE ON STATUS.
+    //   iris-api (iris_db) gmail id=11, id=116, +2 more -> ALL status=expired
+    //   fl-api             gmail id=3, id=14            -> both status=active
+    // execute-direct runs on iris-api and filters status='active', so it matches nothing and
+    // says "No active 'gmail' connection found". This listing read fl-api, saw active, and
+    // showed Gmail as connected. Neither lies about its own database; nothing compared them.
     //
-    // This fix does not rest on that question. Reading both stores and naming which one
-    // holds each row is more truthful than silently reading one, whichever way it resolves.
-    // Note the flag is `inExecStore`, not `executable`: absence from exec's store means exec
-    // cannot resolve the row, but presence is NOT a promise that it works. Claiming
-    // otherwise would repeat #178282 — "connected + verified" over an endpoint returning
-    // "not connected". #181361 tracks the gmail exec rail itself.
+    // (An earlier draft of this comment guessed the rows lived only in fl-api. That was wrong
+    // and is recorded here rather than quietly deleted, because the wrong guess is the reason
+    // the `inExecStore` flag below must stay a statement about WHICH STORE and never a claim
+    // that a row works.)
+    //
+    // This is the second face of #182615 — FlApi\Integration repointed at iris_db while every
+    // sibling model uses fl_api. Its first face was rows present in one database and absent
+    // from the other; this one is the same row-set drifting to different statuses. Fixing it
+    // properly means resolving the split, NOT mirroring rows into both, which #182615 says
+    // doubles the places a connection can rot. #181361 tracks the exec rail itself.
     //
     // That is the #181228 shape inverted — there a real connection was hidden, here a
     // phantom one is shown — and it is the more dangerous direction, because the advised
@@ -861,6 +866,16 @@ const ListConnectedCommand = cmd({
         `Only searched ${stores.length - read.unreachable.length} of ${stores.length} stores — could not reach ${read.unreachable.join(", ")}. This list may be incomplete.`,
       )
     }
+    // A type both stores hold but disagree about is the most confusing state this layer
+    // produces, and until 2026-09-08 no surface reported it. See findStatusDisagreements.
+    for (const d of findStatusDisagreements(read.rows ?? [])) {
+      prompts.log.warn(`Stores disagree — ${describeDisagreement(d)}`)
+      prompts.log.info(
+        dim("`integrations exec` believes iris-api. If that side says expired, RE-AUTH the existing"),
+      )
+      prompts.log.info(dim("connection; do not run `connect`, which mints another row instead of fixing this one."))
+    }
+
     if (read.unreachableByExecCount > 0) {
       prompts.log.warn(
         `${read.unreachableByExecCount} connection(s) are in fl-api's store only. \`integrations exec\` runs on iris-api and does not read that store, so it cannot resolve them.`,

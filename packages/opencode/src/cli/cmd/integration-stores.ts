@@ -94,3 +94,67 @@ export async function readIntegrationStores(
     unreachableByExecCount: rows.filter((r) => !r.inExecStore).length,
   }
 }
+
+export interface StatusDisagreement {
+  type: string
+  /** store label -> the statuses that store reports for this type */
+  byStore: Record<string, string[]>
+}
+
+/**
+ * Find integration types that BOTH stores hold but disagree about.
+ *
+ * This is the instrument that was missing on 2026-09-08. Measured that day for one user:
+ *
+ *   iris-api (iris_db) gmail id=11, id=116, +2 more  -> ALL status=expired
+ *   fl-api             gmail id=3, id=14             -> both status=active
+ *
+ * `execute-direct` runs on iris-api and filters `status='active'`, so it matched nothing and
+ * answered "No active 'gmail' connection found". `list-connected` read fl-api, saw active, and
+ * showed Gmail as connected. Neither was lying about its own database — and because no surface
+ * ever compared them, the contradiction was invisible for weeks while the advised remedy
+ * (`iris connect`) minted more rows.
+ *
+ * A connection that is simultaneously active and expired depending on which database you ask is
+ * the single most confusing state this layer can produce. It is a second face of #182615, whose
+ * first face was rows present in one database and absent from the other.
+ *
+ * Reporting it does not repair the split. It stops the split from being silent, which the
+ * integration epic (#182330) argues has to come first: "while they are broken you cannot trust
+ * any reading you take of the integration layer."
+ */
+export function findStatusDisagreements(rows: StoreRow[]): StatusDisagreement[] {
+  const byType = new Map<string, Map<string, Set<string>>>()
+
+  for (const row of rows) {
+    const type = String(row.type ?? "").toLowerCase()
+    if (!type) continue
+    const status = String(row.status ?? "unknown").toLowerCase()
+    if (!byType.has(type)) byType.set(type, new Map())
+    const stores = byType.get(type)!
+    if (!stores.has(row.store)) stores.set(row.store, new Set())
+    stores.get(row.store)!.add(status)
+  }
+
+  const out: StatusDisagreement[] = []
+  for (const [type, stores] of byType) {
+    // Only a type present in MORE THAN ONE store can disagree across stores.
+    if (stores.size < 2) continue
+    const distinct = new Set<string>()
+    for (const set of stores.values()) for (const s of set) distinct.add(s)
+    if (distinct.size < 2) continue
+
+    const byStore: Record<string, string[]> = {}
+    for (const [label, set] of stores) byStore[label] = [...set].sort()
+    out.push({ type, byStore })
+  }
+  return out.sort((a, b) => a.type.localeCompare(b.type))
+}
+
+/** One line a human can act on, naming both readings. */
+export function describeDisagreement(d: StatusDisagreement): string {
+  const parts = Object.entries(d.byStore)
+    .map(([store, statuses]) => `${store}=${statuses.join("/")}`)
+    .join("  vs  ")
+  return `${d.type}: ${parts}`
+}

@@ -146,3 +146,66 @@ describe("envelope shapes", () => {
     expect(rowsFromEnvelope(undefined)).toEqual([])
   })
 })
+
+// ============================================================================
+// Cross-store status disagreement (#184152, measured 2026-09-08)
+// ============================================================================
+
+import { findStatusDisagreements, describeDisagreement } from "../../src/cli/cmd/integration-stores"
+
+const row = (store: string, type: string, status: string, id: number) => ({
+  id, type, status, store, inExecStore: store === "iris-api",
+})
+
+describe("cross-store status disagreement (#184152)", () => {
+  test("THE MEASURED CASE — gmail active in fl-api, expired in iris-api", async () => {
+    // Exactly what was read on 2026-09-08. execute-direct filters status='active' on
+    // iris-api, matches nothing, and says "No active gmail connection found" — while the
+    // listing read fl-api and showed Gmail connected.
+    const rows = [
+      row("iris-api", "gmail", "expired", 11),
+      row("iris-api", "gmail", "expired", 116),
+      row("fl-api", "gmail", "active", 3),
+      row("fl-api", "gmail", "active", 14),
+    ]
+    const d = findStatusDisagreements(rows)
+    expect(d).toHaveLength(1)
+    expect(d[0].type).toBe("gmail")
+    expect(d[0].byStore["iris-api"]).toEqual(["expired"])
+    expect(d[0].byStore["fl-api"]).toEqual(["active"])
+    expect(describeDisagreement(d[0])).toContain("iris-api=expired")
+    expect(describeDisagreement(d[0])).toContain("fl-api=active")
+  })
+
+  test("agreement across stores is NOT reported", async () => {
+    const rows = [row("iris-api", "gmail", "active", 11), row("fl-api", "gmail", "active", 3)]
+    expect(findStatusDisagreements(rows)).toEqual([])
+  })
+
+  test("a type in only ONE store cannot disagree — that is the phantom case, not this one", () => {
+    const rows = [row("fl-api", "dropbox", "active", 5), row("fl-api", "dropbox", "expired", 6)]
+    // Differing statuses WITHIN one store is a different problem (stale duplicates, #182325)
+    // and must not be reported as the two-database contradiction.
+    expect(findStatusDisagreements(rows)).toEqual([])
+  })
+
+  test("several types disagreeing are all reported, sorted", () => {
+    const rows = [
+      row("iris-api", "gmail", "expired", 1),
+      row("fl-api", "gmail", "active", 2),
+      row("iris-api", "dropbox", "active", 3),
+      row("fl-api", "dropbox", "revoked", 4),
+    ]
+    expect(findStatusDisagreements(rows).map((d) => d.type)).toEqual(["dropbox", "gmail"])
+  })
+
+  test("rows with no type are ignored rather than grouped under empty string", () => {
+    const rows = [{ id: 1, status: "active", store: "fl-api", inExecStore: false } as any]
+    expect(findStatusDisagreements(rows)).toEqual([])
+  })
+
+  test("status is compared case-insensitively", () => {
+    const rows = [row("iris-api", "gmail", "ACTIVE", 1), row("fl-api", "gmail", "active", 2)]
+    expect(findStatusDisagreements(rows)).toEqual([])
+  })
+})
