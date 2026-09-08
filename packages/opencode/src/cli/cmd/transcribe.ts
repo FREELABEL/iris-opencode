@@ -13,7 +13,7 @@ import {
   highlight, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
-import { transcribeLocal } from "../lib/transcription"
+import { transcribeLocal, resolveFfmpeg } from "../lib/transcription"
 import { resolveSttPolicy } from "../lib/stt-policy"
 import { treatTranscript, listTreatments, structureWalkthrough } from "../lib/walkthrough"
 import {
@@ -71,6 +71,24 @@ async function fetchGlossary(brandId?: number): Promise<string | undefined> {
  * Returns null when the fallback is unavailable too, so the caller can fail loudly rather than
  * proceed on an empty transcript.
  */
+/**
+ * Which local dependency is actually missing — checked, not assumed.
+ *
+ * The old text always said "brew install whisper-cpp". On the machine that prompted this,
+ * whisper was installed and working; ffmpeg was present on PATH and could not load one of its
+ * libraries. So the advice pointed at the one thing that was fine.
+ */
+function localDepAdvice(): string | null {
+  const whisper = which("whisper-cli") || which("whisper-cpp")
+  const ff = resolveFfmpeg()
+  if (!whisper && !ff.bin) return `Install local transcription:  brew install whisper-cpp ffmpeg`
+  if (!whisper) return `Install local transcription:  brew install whisper-cpp`
+  if (!ff.bin) return ff.diagnosis || "ffmpeg is unavailable"
+  // Both present and working — whatever failed was not a missing dependency, and claiming
+  // otherwise would send someone to reinstall tools that are fine.
+  return null
+}
+
 async function transcribeViaServer(absPath: string, language?: string, brandId?: number): Promise<string | null> {
   // POLICY GATE (epic #182784). This function uploads the audio via irisFetch directly,
   // so it does NOT pass through transcribeAudio()'s clamp — it was a second egress the
@@ -78,9 +96,13 @@ async function transcribeViaServer(absPath: string, language?: string, brandId?:
   // missing, so the machine least able to transcribe locally is the one that silently
   // uploads. Refuse before reading the file, not after.
   if (resolveSttPolicy() === "sovereign") {
+    // Name the dependency that is ACTUALLY missing. Telling someone to install whisper when
+    // whisper is installed and ffmpeg is the broken one sends them to the wrong place — which
+    // is what happened: three messages in a row, all true, none of them the problem.
+    const missing = localDepAdvice()
     prompts.log.error(
       "Transcription policy is 'sovereign' — audio was NOT uploaded.\n" +
-        "  Install local transcription:  brew install whisper-cpp\n" +
+        (missing ? `  ${missing}\n` : "") +
         "  Or allow the server for this run:  IRIS_TRANSCRIPTION_POLICY=standard",
     )
     return null
