@@ -1495,7 +1495,7 @@ const LeadsUpdateCommand = cmd({
       .option("phone", { describe: "new phone", type: "string" })
       .option("company", { describe: "new company", type: "string" })
       .option("status", { describe: "new status (canonical CRM taxonomy)", type: "string", choices: LEAD_STATUSES })
-      .option("bloq-id", { alias: "bloq", describe: "CRM bloq ID to associate", type: "number" })
+      .option("bloq-id", { alias: "bloq", describe: "attach this lead to a bloq/project (same as `leads attach-bloq`)", type: "number" })
       .option("website", { describe: "website URL", type: "string" })
       .option("source", { describe: "lead source", type: "string" })
       .option("stage", { describe: "pipeline stage", type: "string" })
@@ -1626,8 +1626,40 @@ const LeadsUpdateCommand = cmd({
       const data = (await res.json()) as { data?: any }
       const l = data?.data ?? data
 
+      // --bloq-id has to ATTACH, not just ride along in the payload.
+      //
+      // The flag says "CRM bloq ID to associate" and for a long time it did not associate.
+      // `bloq_id` on this PUT is the legacy SINGULAR column; every association the product
+      // actually reads — `leads list`, the completeness check, the bloq's own lead list —
+      // comes from `bloq_ids`, which is a join written by the attach-bloq endpoint. So the
+      // PUT returned 200, the command printed the lead's name and status, and the
+      // association simply was not there. Nothing in that output was false; it just
+      // answered a narrower question than the one the flag had promised.
+      //
+      // Both writes are kept. The singular column still has readers (the completeness
+      // check falls back to `!!l.bloq_id`), and dropping it to fix this would trade one
+      // silent regression for another. The attach is what makes the flag honest.
+      //
+      // Deliberately ABOVE the `isJson` early return: a JSON caller was getting exactly the
+      // same no-op, and scripts are the callers least able to notice it.
+      let attachedBloq: number | null = null
+      let attachError: string | null = null
+      if (args["bloq-id"]) {
+        try {
+          const ar = await irisFetch(`/api/v1/leads/${leadId}/attach-bloq`, {
+            method: "POST",
+            body: JSON.stringify({ bloq_id: args["bloq-id"] }),
+          })
+          if (ar.ok) attachedBloq = Number(args["bloq-id"])
+          else attachError = `HTTP ${ar.status}`
+        } catch (e) {
+          attachError = e instanceof Error ? e.message : String(e)
+        }
+      }
+
       if (isJson) {
-        await writeJson(l)
+        await writeJson({ ...l, attached_bloq_id: attachedBloq, attach_error: attachError })
+        if (attachError) process.exitCode = 1
         return
       }
 
@@ -1637,6 +1669,15 @@ const LeadsUpdateCommand = cmd({
       printKV("ID", l.id)
       printKV("Name", l.name)
       printKV("Status", l.status)
+      // Print the association, so "did it attach?" is answered by the output rather than by
+      // a follow-up `leads get`. Silence here is what made the original bug survivable.
+      if (attachedBloq !== null) printKV("Attached bloq", attachedBloq)
+      if (attachError) {
+        printKV("Attach bloq", `FAILED (${attachError})`)
+        prompts.log.error(`The lead was updated but bloq ${args["bloq-id"]} was NOT attached.`)
+        prompts.log.error(`Retry with: iris leads attach-bloq ${leadId} ${args["bloq-id"]}`)
+        process.exitCode = 1
+      }
       printDivider()
 
       prompts.outro(dim(`iris leads get ${leadId}`))
