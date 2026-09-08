@@ -33,6 +33,7 @@ import {
   type CatalogEntry,
 } from "./integration-catalog"
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
+import { readIntegrationStores, type StoreRef } from "./integration-stores"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
 import { openBrowser } from "../../util/browser"
@@ -806,18 +807,65 @@ const ListConnectedCommand = cmd({
     // to re-run `connect`, and the retry created a second half-finished OAuth — which is the
     // single dominant cause of dead connections in the audit. The false negative did not just
     // mislead, it manufactured the failure it described.
-    let items: any[] | null = null
-    let failure: string | null = null
-    try {
-      const res = await irisFetch(`/api/v1/users/${userId}/integrations`)
-      if (res.ok) {
-        const data = (await res.json()) as any
-        items = [...(data?.connections ?? data?.data ?? data ?? [])]
-      } else {
-        failure = `the integrations API returned HTTP ${res.status}`
-      }
-    } catch (e) {
-      failure = e instanceof Error ? e.message : String(e)
+    // THERE ARE TWO INTEGRATION STORES, and this command read the wrong one (#184152).
+    // fl-api and iris-api each keep their own `integrations` table and both serve
+    // /api/v1/users/{id}/integrations. `irisFetch` defaults to FL_API despite its name, so
+    // the call below used to omit the base and silently read fl-api — while
+    // `execute-direct` runs on IRIS-API and resolves credentials from ITS table.
+    //
+    // MEASURED 2026-09-08: `list-connected` showed two Gmail rows, both status=active, one
+    // of them a client's (delegation auth, healthcare account) — while BOTH execution rails,
+    // `iris gmail inbox` and `integrations exec gmail read_emails|fetch_emails`, answered
+    // "No active 'gmail' connection found. Run: iris connect gmail". Network healthy at the
+    // time (freelabel.net/raichu both 2xx), so this is not an outage artefact.
+    //
+    // WHERE THE ROWS ACTUALLY LIVE IS STILL OPEN. The obvious reading — they are fl-api's
+    // and iris-api has none — is contradicted by resolveAccountToIntegrationId above, which
+    // reads IRIS_API and whose #182862 note describes seeing two gmail connections there.
+    // So exec's 404 may come from later in execute-direct (a missing Composio account id,
+    // a resolveAction miss) rather than from an empty table. Deciding it needs an
+    // authenticated read of both endpoints, which this session could not perform.
+    //
+    // This fix does not rest on that question. Reading both stores and naming which one
+    // holds each row is more truthful than silently reading one, whichever way it resolves.
+    // Note the flag is `inExecStore`, not `executable`: absence from exec's store means exec
+    // cannot resolve the row, but presence is NOT a promise that it works. Claiming
+    // otherwise would repeat #178282 — "connected + verified" over an endpoint returning
+    // "not connected". #181361 tracks the gmail exec rail itself.
+    //
+    // That is the #181228 shape inverted — there a real connection was hidden, here a
+    // phantom one is shown — and it is the more dangerous direction, because the advised
+    // fix is `connect`, and an abandoned OAuth retry is the dominant cause of dead
+    // connections in the audit. The false positive manufactures the failure it describes.
+    //
+    // So: read BOTH, label every row with the store holding it, and never report a bare
+    // negative. `sibling` on line 449 already passed IRIS_API explicitly; this agrees with it.
+    const stores: StoreRef[] = [
+      // `execute-direct` — where every `integrations exec` call lands — reads iris-api's
+      // table only. A row missing from there cannot be resolved by exec; a row present
+      // there is not thereby proven to work. The flag says which store, nothing more.
+      { label: "iris-api", base: IRIS_API, inExecStore: true },
+      { label: "fl-api", base: FL_API, inExecStore: false },
+    ]
+
+    const read = await readIntegrationStores(stores, async (base) => {
+      const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {}, base)
+      return { ok: res.ok, status: res.status, body: res.ok ? await res.json() : undefined }
+    })
+
+    const items: any[] | null = read.rows
+    const failure: string | null = read.failure
+
+    if (read.unreachable.length > 0 && !failure) {
+      prompts.log.warn(
+        `Only searched ${stores.length - read.unreachable.length} of ${stores.length} stores — could not reach ${read.unreachable.join(", ")}. This list may be incomplete.`,
+      )
+    }
+    if (read.unreachableByExecCount > 0) {
+      prompts.log.warn(
+        `${read.unreachableByExecCount} connection(s) are in fl-api's store only. \`integrations exec\` runs on iris-api and does not read that store, so it cannot resolve them.`,
+      )
+      prompts.log.info(dim("Do NOT re-run `connect` on the strength of this — an abandoned OAuth leaves a dead row behind."))
     }
 
     if (args.json) {
