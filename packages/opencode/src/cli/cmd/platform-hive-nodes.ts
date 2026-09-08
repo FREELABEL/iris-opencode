@@ -1,8 +1,12 @@
+import fs from "node:fs"
+import path from "node:path"
+import os from "node:os"
 import { cmd } from "./cmd"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
 import { resolveLocalNode } from "./hive-local-node"
 import { describeUptime } from "./hive-uptime"
+import { describeIsolation } from "./hive-isolation"
 import { exitCodeForResult, verdictForResult, renderOutput, fromHiveTask } from "./hive-script-result"
 
 // ============================================================================
@@ -122,8 +126,7 @@ const HiveNodesListCommand = cmd({
     // along. See hive-local-node.ts.
     let configNodeId: string | null = null
     try {
-      const fs = require("fs"), path = require("path")
-      const configPath = path.join(require("os").homedir(), ".iris", "config.json")
+      const configPath = path.join(os.homedir(), ".iris", "config.json")
       if (fs.existsSync(configPath)) {
         configNodeId = JSON.parse(fs.readFileSync(configPath, "utf-8")).node_id || null
       }
@@ -138,7 +141,7 @@ const HiveNodesListCommand = cmd({
     const local = resolveLocalNode({
       daemonNodeId,
       configNodeId,
-      hostname: require("os").hostname(),
+      hostname: os.hostname(),
       nodes: nodes.map((n) => ({ id: String(n.id), name: String(n.name) })),
     })
     const localNodeId = local.nodeId
@@ -202,6 +205,18 @@ const HiveNodesListCommand = cmd({
         // Online but silent about capabilities means an OLD daemon — say so plainly rather
         // than leaving a gap the reader fills in with "probably fine".
         console.log(`    ${UI.Style.TEXT_WARNING}⚠ daemon predates bridge_call — cannot serve local data sources; update it${UI.Style.TEXT_NORMAL}`)
+      }
+
+      // ── Whether scripts on this machine are CONTAINED. ─────────────────────────────
+      // The decision lives in describeIsolation() with its own tests; this only prints it.
+      const isoLine = describeIsolation((n as any).permissions?.isolation, n.connection_status === "online")
+      if (isoLine) {
+        const detail = isoLine.detail ? ` ${dim(`(${isoLine.detail})`)}` : ""
+        if (isoLine.tone === "warn") {
+          console.log(`    ${UI.Style.TEXT_WARNING}${isoLine.text}${UI.Style.TEXT_NORMAL}${detail}`)
+        } else {
+          console.log(`    ${dim(isoLine.text)}${isoLine.detail ? ` ${dim(isoLine.detail)}` : ""}`)
+        }
       }
     }
 
