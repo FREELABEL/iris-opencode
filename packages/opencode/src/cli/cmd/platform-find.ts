@@ -81,6 +81,44 @@ const KIND_LABEL: Record<string, string> = {
 }
 
 /**
+ * A SCORE ABOVE ZERO IS NOT EVIDENCE (#183511).
+ *
+ * The filter was `s > 0`, so anything with one incidental body mention survived. Measured
+ * 2026-09-09 against the words a client's agent actually used:
+ *
+ *     organizations           -> 4 hits, top: creative-value-migration
+ *     providers               -> 12 hits, top: bloq-sync / hive / PHONE providers
+ *     freeagent organizations -> 8 hits, top: pathways-caseload-audit
+ *
+ * NOT ONE QUERY RETURNED ZERO. The agent asked where organisations live, got twelve confident
+ * rows, followed them, found nothing, switched command family and repeated. Every step was
+ * correct given its inputs. A discovery tool that cannot say "no" turns one unanswerable
+ * question into an afternoon — and the honest answer was "that data is not reachable here".
+ *
+ * BOTH CONSTANTS ARE DERIVED FROM THE WEIGHTS IN score(), NOT PICKED:
+ *
+ *     body-only hit, ubiquitous term    rarity floor 2 + kind bonus 6  =  8
+ *     the WEAKEST name signal           name.includes 15 + kind 6      = 21
+ *
+ * Below 15, nothing about the entry's IDENTITY matched — only its prose, and only on a word
+ * common enough to be worthless. A RARE body term still scores up to ~28 and survives, which
+ * is exactly what the rarity weighting is for: "SiteFooter" in one guide must still win.
+ *
+ * The tail cut then drops results riding on a real hit's coat-tails: "provider" legitimately
+ * matches `hive providers`, and should not also return nine documents that say the word once.
+ */
+export const MIN_SIGNAL = 15
+export const TAIL_FRACTION = 0.25
+
+/** Which scored entries are actually evidence. Exported so the rule can be tested directly. */
+export function selectHits<T extends { s: number }>(scored: T[], limit = 12): T[] {
+  const kept = scored.filter((h) => h.s >= MIN_SIGNAL).sort((a, b) => b.s - a.s)
+  const best = kept[0]?.s ?? 0
+
+  return kept.filter((h) => h.s >= best * TAIL_FRACTION).slice(0, Math.max(1, limit))
+}
+
+/**
  * Score an entry against the query terms.
  *
  * Weighted so an EXACT capability name always outranks an incidental body mention —
@@ -203,11 +241,10 @@ export const PlatformFindCommand = cmd({
       rarity.set(t, df === 0 ? 0 : Math.max(2, Math.round(12 * Math.log10(total / df))))
     }
 
-    const hits = pool
-      .map((e) => ({ e, s: score(e, [...expanded], raw, rarity) }))
-      .filter((h) => h.s > 0)
-      .sort((a, b) => b.s - a.s)
-      .slice(0, Math.max(1, Number(args.limit) || 12))
+    const hits = selectHits(
+      pool.map((e) => ({ e, s: score(e, [...expanded], raw, rarity) })),
+      Number(args.limit) || 12,
+    )
 
     if (args.json) {
       console.log(JSON.stringify(
