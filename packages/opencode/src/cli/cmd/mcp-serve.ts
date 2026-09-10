@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util"
 import { cmd } from "./cmd"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
@@ -1002,7 +1003,10 @@ parts you did not mean to touch.`,
           const result = await execIris(cmdArgs)
 
           if (result.exitCode !== 0) {
-            const errMsg = result.stderr || result.stdout || "Command failed with no output"
+            // The child writes styled terminal output. Unstripped, the escape codes reach the
+            // calling agent as `[91m[1mError` and bury the message it needs to recover.
+            const errMsg =
+              stripVTControlCharacters(result.stderr || result.stdout).trim() || "Command failed with no output"
             let hint = ""
             if (errMsg.includes("401") || errMsg.includes("Unauthorized") || errMsg.includes("unauthenticated")) {
               hint = "\n\nHint: Try running `iris auth login` first, or set IRIS_API_KEY env var."
@@ -1010,7 +1014,8 @@ parts you did not mean to touch.`,
             return { content: [{ type: "text" as const, text: `${errMsg}${hint}` }], isError: true }
           }
 
-          const text = [result.stdout, result.stderr].filter(Boolean).join("\n").trim() || "(no output)"
+          const text =
+            stripVTControlCharacters([result.stdout, result.stderr].filter(Boolean).join("\n")).trim() || "(no output)"
           return { content: [{ type: "text" as const, text }] }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
