@@ -5710,6 +5710,10 @@ const LeadsPaymentGateCommand = cmd({
       })
       .option("term", { alias: "t", describe: "duration in months (for recurring)", type: "number" })
       .option("deposit", { describe: "deposit percentage (0-100)", type: "number" })
+      .option("setup-fee", {
+        describe: "one-time setup fee charged today on top of recurring billing (e.g. 1500) — not a deposit",
+        type: "number",
+      })
       .option("list-price", { describe: "original list price (shows strikethrough discount)", type: "number" })
       .option("discount", { describe: "discount percentage (0-100)", type: "number" })
       .option("fee", { describe: "processing fee % passed to client (e.g. 2.5)", type: "number" })
@@ -5731,6 +5735,7 @@ const LeadsPaymentGateCommand = cmd({
     if (args.interval) body.interval = args.interval
     if (args.term) body.duration_months = args.term
     if (args.deposit != null) body.deposit_percent = args.deposit
+    if (args["setup-fee"] != null) body.setup_fee = args["setup-fee"]
     if (args["list-price"]) body.list_price = args["list-price"]
     if (args.discount != null) body.discount_percent = args.discount
     if (args.fee != null || args["fee-flat"] != null) {

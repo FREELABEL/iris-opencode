@@ -1,241 +1,140 @@
 ---
 category: CRM & Sales
 level: intermediate
-tags: [crm, contracts, payments, billing]
-duration_min: 12
+tags: [crm, contracts, payments, billing, proposals]
+duration_min: 15
 prerequisites: [lead-to-proposal]
 ---
-# How to: Send a contract + invoice + payment gate to a lead
+# How to: Send a proposal, contract and payment link to a lead
 
 ## What this does
 
-Creates a unified deal flow for a lead: contract (scope of work + signature), proposal page (deliverables + line items), and Stripe payment checkout — all generated from one command. The lead receives links to sign the contract, review the proposal, and pay. Auto-reminders follow up at D+1, D+3, and D+7 if they haven't paid.
+One command turns a lead into a deal the client can close without you in the room: a **proposal
+page** they accept, a **client services agreement** they sign, and a **Stripe checkout** they pay.
+The deal closes itself once the contract is signed and the payment lands.
 
-This uses the **PaymentGateService** orchestrator which creates everything in one shot: the CustomRequest (invoice), the Atlas contract (signing page), the Stripe checkout session, and the outreach step with auto-reminders.
+## Before you start
 
-## Prerequisites
+- `iris auth login` done
+- The lead exists — `iris leads search "<name>"` and note the ID
+- A **catalogue package** for what you are selling. The gate refuses to create without one
+  (`package_required`): a payment that cannot say what was bought cannot be recorded.
 
-- Authenticated (`iris-login` complete — see `iris-login.md`)
-- A lead exists with a `lead_id` (e.g. lead 110)
-- Stripe connected on the platform (Settings → Integrations → Stripe) for real payments
-- (Optional) Deliverables attached to the lead via `iris leads deliverables`
-
-## The full deal flow
-
-```
-[1] CREATE INVOICE  →  [2] ATTACH DELIVERABLES  →  [3] SEND PAYMENT GATE
-         ↓                       ↓                          ↓
-   CustomRequest          CloudFile rows              PaymentGateService:
-   + line items           linked to invoice            - Contract (signing URL)
-   + pricing                                           - Proposal page
-                                                       - Stripe checkout
-                                                       - D+1/D+3/D+7 reminders
-```
-
-## Quick path (5 minutes — just invoice + pay link)
+## 1. Find or create the package
 
 ```bash
-# Create an invoice for the lead
-iris invoices create <lead_id> --price=5000 --title="Website Development Phase 2"
-
-# Generate the Stripe checkout link
-iris invoices checkout <invoice_id>
-
-# Send the payment email
-iris invoices send <invoice_id>
+iris leads packages <bloq_id>
 ```
 
-The lead gets a Stripe payment link. Simple but no scope of work or deliverables list.
-
-## Full path (contract + proposal + payment gate)
-
-### Step 1: Create deliverables (if not already done)
+Nothing fits? Create one. `-b` defaults to **monthly**, so pass it every time — a one-off job
+created without `-b one_time` becomes a monthly charge.
 
 ```bash
-# List existing deliverables
-iris leads deliverables <lead_id>
-
-# Create deliverables via SDK
-iris sdk:call leads.deliverables.create lead_id=<lead_id> \
-  title="Home Page Design" is_deliverable=true external_url="https://..."
+iris leads create-package <bloq_id> \
+  -n "Website Build + Hosting & Management" \
+  -a 250 -b monthly \
+  -f "Rebuilt from your design,Hosting and SSL,Monthly updates" \
+  -s "One line per deliverable. This text becomes the contract's Scope of Work."
 ```
 
-### Step 2: Create the payment gate (one command, creates everything)
+The package's **scope** replaces whatever you pass to the gate with `-s`, and its **price**
+replaces `-a`. Write the scope for the client: it is printed word for word in what they sign.
 
-The payment gate API endpoint orchestrates the full flow:
+## 2. Pick the deal shape
+
+| Deal | How |
+|---|---|
+| One-time job, paid upfront | package with `-b one_time` |
+| Retainer | package with `-b monthly`, gate with `--term <months>` |
+| Retainer, part paid upfront | add `--deposit <percent>` — a share of the total, not extra |
+| **Build fee plus monthly** | add `--setup-fee <amount>` — charged today, *on top of* the monthly |
+
+**Deposit or setup fee is the choice that matters.** On a $250/mo × 12 retainer, `--deposit 50`
+totals **$3,000**, with $1,500 of it paid today. `--setup-fee 1500` totals **$4,500**: $1,500 today,
+then $250 a month. Using a deposit to stand in for a build fee charges the right money and writes
+the wrong total into the contract.
+
+A setup fee needs recurring billing and a single package. It is refused on one-time gates
+(`setup_fee_requires_recurring`) and on selectable tiers (`setup_fee_not_supported_for_tiers`)
+rather than silently dropped.
+
+## 3. Create the gate
 
 ```bash
-# Via the platform API (the PaymentGateService orchestrator)
-curl -X POST "https://raichu.heyiris.io/api/v1/leads/<lead_id>/payment-gate" \
-  -H "Authorization: Bearer $IRIS_SDK_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "amount": 5000,
-    "scope": "Website development: home page, services page, training portal. Includes 2 rounds of revisions.",
-    "bloq_id": <your_bloq_id>,
-    "auto_send_reminders": true,
-    "user_id": <your_user_id>
-  }'
+iris leads payment-gate <lead_id> \
+  -p <package_id> -a <price> -s "see package" \
+  --term 12 --setup-fee 1500 \
+  --no-auto-remind
 ```
 
-This creates:
-- A **CustomRequest** (invoice) with the scope and amount
-- A **proposal page** at `https://freelabel.net/proposal/<token>` — shows scope, deliverables, line items, total, and a "Sign & Accept" form
-- A **contract** at `https://freelabel.net/sign/<token>` — 1099-style contractor agreement with digital signature
-- A **Stripe checkout session** — payment link
-- A **payment gate outreach step** on the lead's timeline
-- **3 auto-reminder steps** at D+1, D+3, and D+7
+`-a` and `-s` are still required by the command even though the package overrides them.
 
-The response contains all the URLs:
-```json
-{
-  "step": {
-    "data": {
-      "contract_signing_url": "https://freelabel.net/sign/abc123...",
-      "stripe_checkout_url": "https://...",
-      "proposal_url": "https://freelabel.net/proposal/def456..."
-    }
-  }
-}
-```
+**Reminders email the client.** Without `--no-auto-remind`, a reminder is scheduled to go out a
+day after the gate is created, with day-3 and day-7 reminders behind it. Turn them off when you
+want to hand the link over yourself; send one later with `iris deals remind <lead_id>`.
 
-### Step 3: Send to the client
+The command prints three URLs — **proposal**, **contract**, **Stripe**. Nothing has been sent yet.
 
-Share the URLs with the client. Options:
-- Email via `iris invoices send <invoice_id>`
-- Draft via macOS Mail: `iris integrations exec macos draft_email --params-file /tmp/deal-email.json`
-- Manually copy-paste the signing URL + checkout URL
+There is one open gate per lead. Creating a second returns the existing proposal instead. To start
+over: `iris leads delete-gate <lead_id>`.
 
-### Step 4: Track the deal status
+## 4. Read it before the client does
+
+Open the **contract** link. It records nothing until someone signs, so checking it is safe.
+Confirm:
+
+- the Scope of Work reads the way you would say it to the client
+- Compensation shows the setup fee, the monthly × term, and the total over the term
+- the Term runs to a real end date, with 30 days' notice on recurring deals
+
+Be careful with the **proposal** link: it records its first view, including yours.
+
+## 5. What the client does
+
+1. **Proposal** (`/proposal/<token>`) — scope, investment, and *Accept Proposal* with their typed name.
+2. **Contract** (`/sign/<token>`) — a Client Services Agreement with FreeLabel Inc. Typed name and a
+   consent box; the time, IP address and browser are recorded.
+3. **Pay** — Stripe checkout. With a setup fee they pay it today and the first monthly charge
+   follows one billing cycle later.
+
+They can pay before signing. The deal then waits on the signature.
+
+## 6. Track it to close
 
 ```bash
-# Check if they've signed and paid
-$ iris deals status <lead_id>
+iris leads deal-status <lead_id>    # signed? paid? all three URLs
+iris deals list                     # every open gate
+iris deals remind <lead_id>         # send the next reminder now
 ```
 
-Or via API:
-```bash
-curl "https://raichu.heyiris.io/api/v1/leads/<lead_id>/deal-status" \
-  -H "Authorization: Bearer $IRIS_SDK_TOKEN"
-```
+| Status | Meaning |
+|---|---|
+| `awaiting_both` | not signed, not paid |
+| `awaiting_payment` | signed, not paid |
+| `awaiting_contract` | paid, not signed |
+| `deal_closed` | signed and paid — the gate completes and any remaining reminders are cancelled |
 
-Shows: contract signed/pending, payment received/pending, reminders sent/total, auto-send on/off, and all URLs.
+## Know before you send
 
-When BOTH `contract_signed` AND `payment_received` are true, the payment gate step auto-completes and remaining reminders are cancelled.
-
-To send a reminder or recover a stale deal:
-```bash
-$ iris deals remind <lead_id>     # next pending D+1/D+3/D+7 reminder
-$ iris deals recover <lead_id>    # fire all remaining reminders (win-back)
-$ iris deals list                  # see all active deals at a glance
-```
-
-See `deals.md` for the full deal pipeline management guide.
-
-## What the client sees
-
-### Proposal page (`/proposal/{token}`)
-- Scope of work
-- Line items with pricing (if added via custom_request_items)
-- Deliverables list
-- Completeness score (0-100%)
-- "Sign & Accept" form (name + checkbox)
-- First view timestamp tracked automatically
-
-### Contract page (`/sign/{token}`)
-- Parties (your company + the client)
-- Term dates
-- Scope of work
-- Compensation breakdown
-- Standard clauses (IP, confidentiality, termination)
-- "Sign" form (name + agreement checkbox)
-- Signature recorded with IP + user agent + timestamp
-- Status badge: PENDING SIGNATURE → ACTIVE (after signing)
-
-### Stripe checkout
-- Standard Stripe checkout page with the amount
-- Connected to your Stripe account (payments go directly to you)
-
-## Adding line items to the invoice
-
-```bash
-# Add line items for detailed pricing breakdown
-curl -X POST "https://raichu.heyiris.io/api/v1/custom-requests/<invoice_id>/items" \
-  -H "Authorization: Bearer $IRIS_SDK_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "item_type": "service",
-    "description": "Home Page Design & Development",
-    "quantity": 1,
-    "unit_price": 2500,
-    "is_billable": true,
-    "is_taxable": true
-  }'
-
-# Set tax rate
-curl -X PATCH "https://raichu.heyiris.io/api/v1/custom-requests/<invoice_id>/tax-rate" \
-  -H "Authorization: Bearer $IRIS_SDK_TOKEN" \
-  -d '{"tax_rate": 8.25}'
-```
-
-Line items appear on the proposal page automatically. Item types: `service`, `product`, `hours`, `expense`, `discount`, `credit`, `adjustment`.
+- **Money lands in the platform Stripe account.** Gates created from the CLI or API do not route
+  through a Stripe Connect account.
+- **Changing the price afterwards does not change the checkout.** `iris leads update-gate` updates
+  the proposal's numbers, but the Stripe price was fixed when the gate was created. Delete the gate
+  and create a new one.
+- **The service provider on the contract is FreeLabel Inc.**
 
 ## Common errors
 
-### `iris leads packages <lead_id>` crashes with `$this->api undefined`
-
-**Known bug** — the PHP SDK's LeadsCommand has an uninitialized `$api` property on the packages/deal-status paths. Use the REST API directly (curl examples above) until this is fixed in the Node CLI.
-
-### Duplicate invoices
-
-If you accidentally created multiple invoices, list them:
-```bash
-iris leads invoices <lead_id>
-```
-Delete the duplicates via the API or the Bloq dashboard.
-
-### Stripe not connected
-
-Payment gates require Stripe. Check:
-```bash
-iris integrations list-connected
-```
-If Stripe isn't listed, connect it via the platform UI (Settings → Integrations → Stripe) or:
-```bash
-iris integrations connect stripe
-```
-
-## Key API endpoints (reference)
-
-```
-GET    /api/v1/deals/active                                # List all active payment gates (batch overview)
-POST   /api/v1/leads/{id}/payment-gate                    # Create payment gate (the orchestrator)
-GET    /api/v1/leads/{id}/deal-status                      # Check signing + payment status
-POST   /api/v1/leads/{id}/payment-gate/send-next-reminder  # Trigger next pending D+1/D+3/D+7 reminder
-POST   /api/v1/leads/{id}/payment-gate/{stepId}/toggle-reminders  # Enable/disable auto-reminders
-
-POST   /api/v1/leads/{id}/invoice/create                   # Create invoice (without payment gate)
-GET    /api/v1/leads/{id}/invoices                         # List lead's invoices
-POST   /api/v1/custom-requests/{id}/generate-checkout      # Generate Stripe checkout URL
-
-POST   /api/v1/custom-requests/{id}/items                  # Add line item
-PATCH  /api/v1/custom-requests/items/{id}                  # Update line item
-DELETE /api/v1/custom-requests/items/{id}                  # Remove line item
-PATCH  /api/v1/custom-requests/{id}/tax-rate               # Set tax rate
-
-GET    /api/v1/leads/{id}/deliverables                     # List deliverables
-POST   /api/v1/leads/{id}/deliverables                     # Create deliverable
-POST   /api/v1/leads/{id}/deliverables/send                # Email deliverables to client
-
-GET    /sign/{token}                                        # Contract signing page (public)
-POST   /sign/{token}                                        # Submit signature
-GET    /proposal/{token}                                    # Proposal view page (public)
-POST   /proposal/{token}                                    # Accept proposal
-```
+| Error | Fix |
+|---|---|
+| `package_required` | Pass `-p <package_id>`. Create one with `iris leads create-package`. |
+| `setup_fee_requires_recurring` | Setup fees ride on a subscription. For one-time work, put the fee in the amount. |
+| `setup_fee_not_supported_for_tiers` | Use a single `-p`, not `--packages`. |
+| "A payment gate already exists" | `iris leads deal-status <id>` shows it; `iris leads delete-gate <id>` replaces it. |
+| A one-off job shows `/month` | The package was created without `-b one_time`. Create a new package. |
 
 ## Related recipes
 
-- `iris-login.md` — must be authenticated first
-- `deals.md` — manage deals after creation: list pipeline, send reminders, win-back stale deals, heartbeat recovery
-- `lead-to-proposal.md` — the Atlas OS overview of the lead→deal flow
-- `outreach-campaign.md` — where most leads come from before they get invoiced
+- `lead-to-proposal.md` — the whole path from first conversation to paid
+- `deals.md` — the pipeline after creation: reminders, win-back, heartbeat recovery
+- `agreements-and-signing.md` — NDAs and BAAs, which gate access rather than sell
