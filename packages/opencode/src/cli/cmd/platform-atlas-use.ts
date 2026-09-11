@@ -1,7 +1,9 @@
 import { cmd } from "./cmd"
 import { FL_API, dim, bold } from "./iris-api"
-import { writeFileSync } from "fs"
+import { writeFileSync, readFileSync, existsSync } from "fs"
 import { EOL } from "os"
+import { join } from "path"
+import { atlasHome, isGranted, readPolicy, readManifest, shortHash } from "./platform-atlas-store"
 
 // ============================================================================
 // iris atlas use <ref> — pull one Atlas item's context into an agent.
@@ -28,7 +30,7 @@ import { EOL } from "os"
 // ============================================================================
 
 /** Accepts a bare uuid or any URL containing one. */
-function resolveRef(ref: string): string | null {
+export function resolveRef(ref: string): string | null {
   const s = (ref || "").trim()
   const uuid = s.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
   if (uuid) return uuid[0].toLowerCase()
@@ -42,10 +44,7 @@ function datasetToMarkdown(ds: any): string {
   if (!cols.length || !rows.length) return ""
 
   const cell = (v: any) => String(v ?? "").replace(/\|/g, "\\|")
-  const lines = [
-    `| ${cols.join(" | ")} |`,
-    `| ${cols.map(() => "---").join(" | ")} |`,
-  ]
+  const lines = [`| ${cols.join(" | ")} |`, `| ${cols.map(() => "---").join(" | ")} |`]
   for (const r of rows) {
     const vals = Array.isArray(r) ? r : cols.map((c) => (r as any)?.[c])
     lines.push(`| ${vals.map(cell).join(" | ")} |`)
@@ -60,7 +59,7 @@ function datasetToMarkdown(ds: any): string {
  * can tell where it came from without being told — the same provenance the shared
  * page shows, in the form a file can hold.
  */
-function buildMarkdown(item: any, url: string): string {
+export function buildMarkdown(item: any, url: string): string {
   const ctx = item?.context ?? {}
   const out: string[] = []
 
@@ -129,7 +128,17 @@ function buildMarkdown(item: any, url: string): string {
     out.push("")
   }
 
-  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n"
+  return (
+    out
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim() + "\n"
+  )
+}
+
+/** Said out loud everywhere the seal refuses something, so the claim never grows. */
+export function describeSeal(): string {
+  return "the seal is a CLI-level control: it stops this command, not the network or the filesystem"
 }
 
 export const AtlasUseCommand = cmd({
@@ -146,6 +155,11 @@ export const AtlasUseCommand = cmd({
       .option("json", { describe: "structured output instead of markdown", type: "boolean", default: false })
       .option("out", { describe: "write to a file instead of stdout", type: "string" })
       .option("quiet", { describe: "suppress the summary on stderr", type: "boolean", default: false })
+      .option("fresh", {
+        describe: "on a sealed machine, read from the cloud instead of the local pin",
+        type: "boolean",
+        default: false,
+      })
       .example("iris atlas use https://heyiris.io/n/<uuid>", "print the context")
       .example("iris atlas use <uuid> --out ctx.md", "save it for an agent to read")
       .example("iris atlas use <uuid> --json | jq .dataset", "script against the data"),
@@ -160,7 +174,69 @@ export const AtlasUseCommand = cmd({
       process.stderr.write(
         `Not a full reference: ${args.ref}${EOL}` +
           `Pass the item's public URL, or its full uuid.${EOL}` +
-          dim(`  iris atlas use https://heyiris.io/n/<uuid>`) + EOL,
+          dim(`  iris atlas use https://heyiris.io/n/<uuid>`) +
+          EOL,
+      )
+      process.exitCode = 1
+      return
+    }
+
+    // THE SEAL (epic #184607, component 7). On a sealed machine this command may
+    // only read what the machine was granted. This is the TOOL layer and nothing
+    // more — it does not stop curl, another binary, or a process that already has
+    // the bytes — so the refusal says which boundary it is, rather than implying a
+    // guarantee the CLI cannot make.
+    const home = atlasHome()
+    const sealed = readPolicy(home).sealed
+
+    // A SEALED machine serves a granted item from its own disk, not from the cloud.
+    // This is the point of the epic rather than a shortcut: "cognition is a deployed
+    // artifact" is only true if reading an item does not quietly become a live query
+    // whose answer can change under you mid-mission — and it is what makes this
+    // command keep working with the cloud unreachable. `--fresh` bypasses it, which
+    // is allowed for a GRANTED item because reading it was already granted.
+    if (sealed && isGranted(home, uuid) && !args.fresh) {
+      const pin = readManifest(home).pins[uuid]
+      const abs = join(home, pin.path)
+      if (existsSync(abs)) {
+        const local = readFileSync(abs, "utf8")
+        if (args.out) writeFileSync(args.out, local, "utf8")
+        else process.stdout.write(local)
+        if (!args.quiet)
+          process.stderr.write(
+            EOL +
+              bold(`  ${pin.title}`) +
+              EOL +
+              dim(`  served from this machine's pin @${shortHash(pin.sha256)} · sealed, no network`) +
+              EOL +
+              (args.out ? dim(`  written to ${args.out}`) + EOL : "") +
+              EOL,
+          )
+        return
+      }
+      // Granted, sealed, and the file is gone. Say that, rather than silently
+      // reaching for the cloud — a machine that repairs itself over the network is
+      // not a pinned machine, and the drift is the thing worth knowing.
+      process.stderr.write(
+        `Granted but not held: ${pin.path} is missing from this machine.${EOL}` +
+          dim(`  iris atlas status        see the drift`) +
+          EOL +
+          dim(`  iris atlas use ${uuid.slice(0, 8)}… --fresh   re-read from the cloud`) +
+          EOL,
+      )
+      process.exitCode = 1
+      return
+    }
+
+    if (sealed && !isGranted(home, uuid)) {
+      process.stderr.write(
+        `Sealed: this machine was not granted ${uuid}.${EOL}` +
+          dim(`  ${describeSeal()}`) +
+          EOL +
+          dim(`  iris atlas pins            what this machine holds`) +
+          EOL +
+          dim(`  iris atlas unseal          lift the seal (an operator decision, recorded)`) +
+          EOL,
       )
       process.exitCode = 1
       return
@@ -191,7 +267,8 @@ export const AtlasUseCommand = cmd({
     if (res.status === 401) {
       process.stderr.write(
         `That item is sealed behind a password.${EOL}` +
-          dim(`Open it in a browser to unseal: https://heyiris.io/n/${uuid}`) + EOL,
+          dim(`Open it in a browser to unseal: https://heyiris.io/n/${uuid}`) +
+          EOL,
       )
       process.exitCode = 1
       return
@@ -210,7 +287,9 @@ export const AtlasUseCommand = cmd({
       return
     }
 
-    const payload = args.json ? JSON.stringify(item, null, 2) + "\n" : buildMarkdown(item, `https://heyiris.io/n/${uuid}`)
+    const payload = args.json
+      ? JSON.stringify(item, null, 2) + "\n"
+      : buildMarkdown(item, `https://heyiris.io/n/${uuid}`)
 
     if (args.out) {
       writeFileSync(args.out, payload, "utf8")
@@ -231,9 +310,11 @@ export const AtlasUseCommand = cmd({
 
       process.stderr.write(
         EOL +
-          bold(`  ${item.title ?? "Untitled"}`) + EOL +
+          bold(`  ${item.title ?? "Untitled"}`) +
+          EOL +
           (where ? dim(`  ${where}`) + EOL : "") +
-          dim(`  ${bits.join(" · ")}`) + EOL +
+          dim(`  ${bits.join(" · ")}`) +
+          EOL +
           (args.out ? dim(`  written to ${args.out}`) + EOL : "") +
           EOL,
       )
