@@ -1,6 +1,16 @@
 import { cmd } from "./cmd"
 import { productCommand } from "./product-command"
 import { AtlasUseCommand } from "./platform-atlas-use"
+import {
+  AtlasPinCommand,
+  AtlasUnpinCommand,
+  AtlasPinsCommand,
+  AtlasStatusCommand,
+  AtlasUpdateCommand,
+  AtlasRollbackCommand,
+  AtlasSealCommand,
+  AtlasUnsealCommand,
+} from "./platform-atlas-pin"
 import { buildListEnvelope } from "./list-envelope"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import * as prompts from "./clack"
@@ -4077,5 +4087,13 @@ export const PlatformBloqsCommand = productCommand({
       .command(BloqsUnrelateCommand)
       .command(BloqsRelationsCommand)
       .command(AtlasUseCommand)
+      .command(AtlasPinCommand)
+      .command(AtlasUnpinCommand)
+      .command(AtlasPinsCommand)
+      .command(AtlasStatusCommand)
+      .command(AtlasUpdateCommand)
+      .command(AtlasRollbackCommand)
+      .command(AtlasSealCommand)
+      .command(AtlasUnsealCommand)
       .demandCommand(),
 })
