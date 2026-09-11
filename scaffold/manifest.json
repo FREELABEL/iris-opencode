@@ -357,6 +357,12 @@
       "purpose": "Watch a task while it runs instead of waiting for the result. Explains the live pane, and the two markers a reader would otherwise misread: a missed chunk (a gap that would look like continuous output) and dropped lines (the machine outrunning the wire)."
     },
     {
+      "src": "how-to/integration-tenancy.md",
+      "dest": "how-to/integration-tenancy.md",
+      "managed": true,
+      "purpose": "Share a credential with a team instead of one person: the project/org/brand/personal ladder, how to prove which tier resolved, and the fl_api vs iris_db integrations split that makes org-scoped credentials invisible to Genesis dashboards until consolidated."
+    },
+    {
       "src": "playbooks/agentic-loop/PLAYBOOK.md",
       "dest": "playbooks/agentic-loop/PLAYBOOK.md",
       "managed": true,
