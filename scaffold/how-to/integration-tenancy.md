@@ -1,5 +1,5 @@
 ---
-category: Integrations
+category: Infrastructure
 level: intermediate
 tags: [integrations, organizations, credentials, tenancy, oauth, migration]
 duration_min: 15
