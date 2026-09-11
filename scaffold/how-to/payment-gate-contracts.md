@@ -34,11 +34,30 @@ iris leads create-package <bloq_id> \
   -n "Website Build + Hosting & Management" \
   -a 250 -b monthly \
   -f "Rebuilt from your design,Hosting and SSL,Monthly updates" \
-  -s "One line per deliverable. This text becomes the contract's Scope of Work."
+  -s "$(cat scope.md)"
 ```
 
 The package's **scope** replaces whatever you pass to the gate with `-s`, and its **price**
-replaces `-a`. Write the scope for the client: it is printed word for word in what they sign.
+replaces `-a`. Write the scope for the client: it is printed in full on the proposal and in the
+contract they sign.
+
+### Write a rich scope
+
+The scope is **markdown**, rendered on the proposal page and again inside the contract, so the
+agreement carries exactly what the client read. Keep it in a file and pass `-s "$(cat scope.md)"`.
+
+- **Headings, lists and tables** — a deliverables table with a *Done when* column turns the scope
+  into something both sides can check off.
+- **Charts** — a ` ```mermaid ` fence draws a flowchart, site map or sequence diagram on the page.
+  `flowchart LR` stays legible in the document column; a wide `flowchart TD` shrinks until it can't
+  be read.
+- **Drawings** — a ` ```svg ` fence embeds a hand-drawn figure (a before/after comparison, a
+  timeline). It passes an allowlist: no scripts, no external links. To follow the page's light and
+  dark theme, style shapes with these classes instead of colours: `sv-box`, `sv-bad` (a gap, red),
+  `sv-good` (resolved, green), `sv-cap`, `sv-k`, `sv-v`, `sv-row`, `sv-mark`, `sv-bad-t`,
+  `sv-good-t`, `sv-line`, `sv-head`, `sv-grid`, `sv-bar`, `sv-bar-launch`.
+
+HTML typed into the scope is shown as text, never run.
 
 ## 2. Pick the deal shape
 
@@ -76,7 +95,19 @@ want to hand the link over yourself; send one later with `iris deals remind <lea
 The command prints three URLs — **proposal**, **contract**, **Stripe**. Nothing has been sent yet.
 
 There is one open gate per lead. Creating a second returns the existing proposal instead. To start
-over: `iris leads delete-gate <lead_id>`.
+over: `iris leads delete-gate <lead_id> --force`. Deleting a gate kills all three of its links —
+the proposal, the contract **and the payment link** — so nothing you sent earlier can still be
+signed or paid.
+
+### Change the scope without new links
+
+```bash
+iris leads update-gate <lead_id> -s "$(cat scope.md)"
+```
+
+This rewrites the scope on the proposal and in the contract **in place**. The links you already
+sent keep working and show the new scope. It is refused (`scope_locked`) once the client has
+accepted the proposal or signed the contract — at that point the words are what they agreed to.
 
 ## 4. Read it before the client does
 
@@ -119,8 +150,11 @@ iris deals remind <lead_id>         # send the next reminder now
 - **Money lands in the platform Stripe account.** Gates created from the CLI or API do not route
   through a Stripe Connect account.
 - **Changing the price afterwards does not change the checkout.** `iris leads update-gate` updates
-  the proposal's numbers, but the Stripe price was fixed when the gate was created. Delete the gate
-  and create a new one.
+  the proposal's numbers, but the Stripe price was fixed when the gate was created. For a new price,
+  delete the gate and create a new one. The scope is different: it edits in place (see above).
+- **Payment links refresh themselves.** A checkout link never expires; a stale Stripe session is
+  replaced on click, in the same shape (one-time or subscription). It stops working only when its
+  gate is deleted.
 - **The service provider on the contract is FreeLabel Inc.**
 
 ## Common errors
@@ -132,6 +166,9 @@ iris deals remind <lead_id>         # send the next reminder now
 | `setup_fee_not_supported_for_tiers` | Use a single `-p`, not `--packages`. |
 | "A payment gate already exists" | `iris leads deal-status <id>` shows it; `iris leads delete-gate <id>` replaces it. |
 | A one-off job shows `/month` | The package was created without `-b one_time`. Create a new package. |
+| `scope_locked` | The client has accepted or signed. Revised terms need a new gate. |
+| A chart shows as code | The fence must be exactly ` ```mermaid ` and the diagram must parse; an invalid chart is left as its source rather than an empty box. |
+| A drawing is missing | The ` ```svg ` fence was refused by the allowlist (a script, an external link, or no `<svg>` root). Refused drawings render as nothing, never as raw markup. |
 
 ## Related recipes
 
