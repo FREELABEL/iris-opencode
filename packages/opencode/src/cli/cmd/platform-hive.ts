@@ -2711,20 +2711,41 @@ const HivePeersCommand = cmd({
       const ok = await handleApiError(res, "List peer nodes")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      const json = (await res.json()) as { nodes: Array<Record<string, unknown>> }
+      // The endpoint now returns OFFLINE machines too (#184564), so "N node(s) online" would
+      // start counting asleep machines as online — a worse lie than the one being fixed. Count
+      // the two separately, and fall back to computing them so an older server still reports
+      // honestly.
+      const json = (await res.json()) as {
+        nodes: Array<Record<string, unknown>>
+        online_count?: number
+        total_count?: number
+      }
       const nodes = json.nodes || []
-      spinner.stop(`${nodes.length} node(s) online`)
+      const online = json.online_count ?? nodes.filter((n) => String(n.connection_status) === "online").length
+      const total = json.total_count ?? nodes.length
+      spinner.stop(`${online}/${total} machine(s) online`)
       printDivider()
 
-      if (nodes.length === 0) {
+      // THE WHOLE POINT: these are two different states needing two different actions, and they
+      // used to render identically as "No peer nodes online right now".
+      if (total === 0) {
         console.log()
-        console.log(dim("  No peer nodes online right now."))
+        console.log(dim("  This peer has no machines registered."))
+        console.log(dim("  They need to run:  iris hive connect"))
         console.log()
       } else {
+        if (online === 0) {
+          console.log()
+          console.log(dim(`  ${total} machine(s) registered, none online — their agent is not running.`))
+          console.log(dim("  They can check with:  iris hive doctor"))
+        }
         for (const n of nodes) {
+          const isOnline = String(n.connection_status) === "online"
           console.log()
           console.log(`  ${bold(String(n.name))}  ${dim(String(n.id))}`)
-          console.log(`    ${dim("status:")} ${success(String(n.connection_status))}  ${dim("active tasks:")} ${n.active_tasks}`)
+          // Never paint "offline" with the success colour — the status line has to be readable
+          // at a glance, and a green "offline" is how a dead machine looks healthy.
+          console.log(`    ${dim("status:")} ${isOnline ? success("online") : dim(String(n.connection_status))}  ${dim("active tasks:")} ${n.active_tasks}`)
           if (n.last_heartbeat_at) {
             console.log(`    ${dim("last seen:")} ${new Date(String(n.last_heartbeat_at)).toLocaleString()}`)
           }

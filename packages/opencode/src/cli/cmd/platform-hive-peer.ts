@@ -68,15 +68,30 @@ export async function resolveOwnOrPeerNode(userId: number, target: string): Prom
     connections?: Array<{ id: string; status: string; peer_name?: string | null }>
   }
 
+  // The peer endpoint now returns OFFLINE machines too (#184564), which is what lets a miss say
+  // WHY. Prefer an online match; fall back to an offline one and hand it back with its status so
+  // the caller can say "registered but offline" instead of the old "No node matching <name>",
+  // which was the same conflation one layer up.
+  let offlineHit: { node: ReachableNode; connectionId: string; peerName: string } | null = null
+
   for (const c of connections.filter((c) => c.status === "active")) {
     const r = await hiveFetch(`/api/v6/nodes/connections/${c.id}/nodes?user_id=${userId}`)
     if (!r.ok) continue
     const { nodes = [] } = (await r.json()) as { nodes?: ReachableNode[] }
-    const hit =
-      nodes.find((n) => n.id === target) ??
-      nodes.find((n) => n.name.toLowerCase() === t) ??
-      nodes.find((n) => n.name.toLowerCase().startsWith(t))
-    if (hit) return { kind: "peer", node: hit, connectionId: c.id, peerName: c.peer_name ?? "peer" }
+    const match = (ns: ReachableNode[]) =>
+      ns.find((n) => n.id === target) ??
+      ns.find((n) => n.name.toLowerCase() === t) ??
+      ns.find((n) => n.name.toLowerCase().startsWith(t))
+
+    const online = match(nodes.filter((n) => n.connection_status === "online"))
+    if (online) return { kind: "peer", node: online, connectionId: c.id, peerName: c.peer_name ?? "peer" }
+
+    const any = match(nodes)
+    if (any && !offlineHit) offlineHit = { node: any, connectionId: c.id, peerName: c.peer_name ?? "peer" }
+  }
+
+  if (offlineHit) {
+    return { kind: "peer", node: offlineHit.node, connectionId: offlineHit.connectionId, peerName: offlineHit.peerName }
   }
 
   return null
