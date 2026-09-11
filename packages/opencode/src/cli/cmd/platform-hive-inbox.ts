@@ -396,6 +396,15 @@ const HiveInboxSendCommand = cmd({
 
     let text = Array.isArray(argv.message) ? argv.message.join(" ") : String(argv.message ?? "")
     if (!text.trim()) {
+      // ONLY a real terminal gets a prompt (#184561). A non-TTY caller — an agent, a pipe, CI —
+      // used to reach prompts.text() and block forever on a stdin that never produces a line:
+      // measured as a HANG, not an error, which consumes the caller and emits no signal at all.
+      // --json means a machine is asking, so it never prompts either. This is the sibling of
+      // #184552, where the same shape exits 0 having silently discarded the message.
+      if (argv.json || !process.stdin.isTTY) {
+        console.error(`No message given. Pass it as an argument:\n  iris hive inbox send --target ${argv.target ?? "<node>"} "your message"`)
+        process.exit(1)
+      }
       const input = await prompts.text({ message: "Message:", placeholder: "Type your message..." })
       if (prompts.isCancel(input) || !input) { prompts.outro("Cancelled"); return }
       text = String(input)

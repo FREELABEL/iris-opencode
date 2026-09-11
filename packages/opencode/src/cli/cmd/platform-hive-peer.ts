@@ -98,6 +98,18 @@ export async function deliverToInbox(
   target: ResolvedTarget,
   d: InboxDelivery,
 ): Promise<{ ok: boolean; taskId?: string; error?: string }> {
+  // The task API caps `prompt` at 50,000 characters (NodeTaskController validation). Crossing it
+  // came back as a bare "HTTP 422" — a refusal that names neither the limit nor the offending
+  // field, so the caller cannot tell a too-long message from a broken endpoint. Check it here and
+  // say which limit was crossed and what to do instead.
+  const MAX_MESSAGE = 50_000
+  if (d.text.length > MAX_MESSAGE) {
+    return {
+      ok: false,
+      error: `message is ${d.text.length.toLocaleString()} characters; the limit is ${MAX_MESSAGE.toLocaleString()}. Send it as a file instead: iris hive send <file> --to ${target.node.name}`,
+    }
+  }
+
   const sender = await senderNodeName(userId)
   const json = (body: unknown): RequestInit => ({
     method: "POST",
