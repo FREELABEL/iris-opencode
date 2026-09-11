@@ -85,7 +85,7 @@ export const HiveHandoffCommand = cmd({
           title: `Handoff: ${item}`,
           prompt: note,
           config: {
-            sender_name: senderNodeName(),
+            sender_name: await senderNodeName(userId),
             hive_inbox: true,
             inbox_type: "job",
             handoff: { item },

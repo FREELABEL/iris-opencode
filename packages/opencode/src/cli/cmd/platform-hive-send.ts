@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { requireAuth, requireUserId, dim, bold, success, highlight, FL_API, writeJson } from "./iris-api"
 import { hiveFetch, fetchNodes } from "./platform-hive-nodes"
-import { deliverToInbox, resolveOwnOrPeerNode } from "./platform-hive-peer"
+import { deliverToInbox, resolveOwnOrPeerNode, senderNodeName } from "./platform-hive-peer"
 import { Auth } from "../../auth"
 import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from "fs"
 import { basename, join } from "path"
@@ -304,16 +304,9 @@ export const HiveSendCommand = cmd({
     const message = argv.message as string | undefined
     const type = detectType(content)
 
-    // Read sender node name from config
-    let senderName = "Unknown"
-    try {
-      const fs = require("fs")
-      const configPath = join(homedir(), ".iris", "config.json")
-      if (fs.existsSync(configPath)) {
-        const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
-        senderName = config.node_name || config.name || "Unknown"
-      }
-    } catch {}
+    // Sender name via the shared resolver. This used to read config.node_name directly, which
+    // does not exist in ~/.iris/config.json — so every `hive send` arrived as "From: Unknown".
+    const senderName = await senderNodeName(userId)
 
     // Resolve target nodes
     let targetNodes: { id: string; name: string }[]

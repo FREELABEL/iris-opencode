@@ -1,7 +1,7 @@
-import { hiveFetch, resolveNode } from "./platform-hive-nodes"
+import { hiveFetch, fetchNodes, resolveNode } from "./platform-hive-nodes"
 import { existsSync, readFileSync } from "fs"
 import { join } from "path"
-import { homedir } from "os"
+import { homedir, hostname } from "os"
 
 // ============================================================================
 // Reaching a node that may belong to someone else (epic #184516)
@@ -23,16 +23,29 @@ export type ResolvedTarget =
   | { kind: "own"; node: ReachableNode }
   | { kind: "peer"; node: ReachableNode; connectionId: string; peerName: string }
 
-/** The name this machine registered as — what the recipient sees in "From". */
-export function senderNodeName(): string {
+/**
+ * The name this machine registered as — what the recipient sees in "From".
+ *
+ * ~/.iris/config.json stores `node_id`, NOT a name (measured: its keys are api_url,
+ * default_bloq_id, node_api_key, node_id, user_id). Reading `node_name` therefore always missed
+ * and every message arrived as "From: Unknown" — the bug `iris hive send` has carried since it
+ * shipped. So: use a name if the config ever grows one, otherwise resolve node_id against the
+ * node list, and fall back to the hostname. Never "Unknown" — a recipient has to be able to tell
+ * who sent it, and the machine always has a name of some kind.
+ */
+export async function senderNodeName(userId?: number): Promise<string> {
   try {
     const p = join(homedir(), ".iris", "config.json")
     if (existsSync(p)) {
       const c = JSON.parse(readFileSync(p, "utf-8"))
-      return c.node_name || c.name || "Unknown"
+      if (c.node_name || c.name) return String(c.node_name || c.name)
+      if (c.node_id && userId) {
+        const me = (await fetchNodes(userId)).find((n) => n.id === c.node_id)
+        if (me?.name) return me.name
+      }
     }
-  } catch { /* fall through */ }
-  return "Unknown"
+  } catch { /* fall through to hostname */ }
+  return hostname().replace(/\.local$/, "")
 }
 
 /** Inbox TTL — the daemon skips deliveries past expires_at. 7 days, matching `hive send` text. */
@@ -85,7 +98,7 @@ export async function deliverToInbox(
   target: ResolvedTarget,
   d: InboxDelivery,
 ): Promise<{ ok: boolean; taskId?: string; error?: string }> {
-  const sender = senderNodeName()
+  const sender = await senderNodeName(userId)
   const json = (body: unknown): RequestInit => ({
     method: "POST",
     headers: { "Content-Type": "application/json" },
