@@ -2,7 +2,8 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { requireAuth, requireUserId, dim, bold, success, highlight, FL_API, writeJson } from "./iris-api"
-import { hiveFetch, fetchNodes, resolveNode } from "./platform-hive-nodes"
+import { hiveFetch, fetchNodes } from "./platform-hive-nodes"
+import { deliverToInbox, resolveOwnOrPeerNode } from "./platform-hive-peer"
 import { Auth } from "../../auth"
 import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from "fs"
 import { basename, join } from "path"
@@ -327,12 +328,35 @@ export const HiveSendCommand = cmd({
         process.exit(1)
       }
     } else {
-      const node = await resolveNode(userId, target)
-      if (!node) {
-        if (!argv.json) prompts.log.error(`No node matching "${target}". Run: iris hive nodes list`)
+      // Your own node, or a PEER's node behind an active connection (epic #184516). The peer path
+      // goes through the relay, which only carries text — so a file to a peer is refused here,
+      // plainly, rather than uploaded and never delivered.
+      const resolved = await resolveOwnOrPeerNode(userId, target)
+      if (!resolved) {
+        if (!argv.json) prompts.log.error(`No node matching "${target}" among your nodes or your peers' online nodes. Run: iris hive nodes list`)
         process.exit(1)
       }
-      targetNodes = [node]
+      if (resolved.kind === "peer") {
+        if (type === "file") {
+          if (!argv.json) prompts.log.error(`"${resolved.node.name}" belongs to ${resolved.peerName}. Files to a peer's node are not routed yet — send text or a link, or share the file another way.`)
+          else console.log(JSON.stringify({ success: false, error: "peer_file_unsupported" }))
+          process.exit(1)
+        }
+        const sp2 = argv.json ? null : prompts.spinner()
+        sp2?.start(`Sending to ${resolved.node.name} (${resolved.peerName})…`)
+        const r = await deliverToInbox(userId, resolved, {
+          text: type === "link" ? (message ? `${content}\n\n${message}` : content) : content,
+          inboxType: "message",
+        })
+        if (!r.ok) { sp2?.stop("Failed", 1); if (!argv.json) prompts.log.error(r.error ?? "send failed"); process.exit(1) }
+        sp2?.stop(success(`Sent to ${bold(resolved.node.name)} ${dim(`(${resolved.peerName}, via relay)`)}`))
+        appendOutboxHistory({ id: r.taskId ?? "", to_node: resolved.node.name, type, content: content.substring(0, 200), sent_at: new Date().toISOString(), via: "relay" })
+        if (argv.json) { await writeJson({ sent: 1, failed: 0, results: [{ task_id: r.taskId ?? "", node_name: resolved.node.name, ok: true, via: "relay" }] }); return }
+        console.log(`  ${dim("they read it with:")} iris hive inbox`)
+        prompts.outro("Done")
+        return
+      }
+      targetNodes = [resolved.node]
     }
 
     const sp = argv.json ? null : prompts.spinner()

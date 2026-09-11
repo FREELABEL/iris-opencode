@@ -37,6 +37,10 @@ import {
 import {
   HiveInboxCommand,
 } from "./platform-hive-inbox"
+// Agent-to-agent work (epic #184516): hand a work item to another agent's inbox, and decide
+// who may reach a machine at all.
+import { HiveHandoffCommand } from "./platform-hive-handoff"
+import { HiveAccessCommand } from "./platform-hive-access"
 import {
   HiveSearchCommand,
 } from "./platform-hive-search"
@@ -4732,6 +4736,8 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveSendCommand)
       .command(HiveSentCommand)
       .command(HiveInboxCommand)
+      .command(HiveHandoffCommand)
+      .command(HiveAccessCommand)
       .command(HiveSearchCommand)
       // IRIS Exchange — distributed task marketplace
       .command(ExchangeCommand)
