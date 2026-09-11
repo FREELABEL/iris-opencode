@@ -276,14 +276,24 @@ $HasNode = Get-Command node -ErrorAction SilentlyContinue
 $HasGit = Get-Command git -ErrorAction SilentlyContinue
 $BridgeDir = "$IRIS_DIR\bridge"
 
+# #184597 — remember whether the bridge was skipped, so the FINAL summary can tell the truth.
+# Without this the skip was announced once in DarkGray, then the install printed
+# "installed successfully!" in green and told the user to run `iris-daemon start` — a command
+# that cannot work, because the thing it needs is exactly what was skipped. A client lost two
+# hours to that sequence: the installer said it worked, so the missing daemon looked like a
+# broken product rather than an unmet prerequisite.
+$BridgeSkippedReason = $null
+
 if (-not $HasNode) {
     Write-StepSkipped "5/5" "Agent Bridge" "skipped (Node.js not found)"
     Send-InstallBeacon -EventType "install_step_skipped" -Step "agent_bridge" -Reason "node_missing"
     Write-Muted "Install Node.js to enable: https://nodejs.org"
+    $BridgeSkippedReason = "Node.js is not installed (https://nodejs.org)"
 } elseif (-not $HasGit) {
     Write-StepSkipped "5/5" "Agent Bridge" "skipped (Git not found)"
     Send-InstallBeacon -EventType "install_step_skipped" -Step "agent_bridge" -Reason "git_missing"
     Write-Muted "Install Git to enable: https://git-scm.com"
+    $BridgeSkippedReason = "Git is not installed (https://git-scm.com)"
 } else {
     $BridgeUpdated = $false
     if ((Test-Path "$BridgeDir\index.js") -and (Test-Path "$BridgeDir\daemon.js")) {
@@ -633,13 +643,27 @@ if ($UserPath -notlike "*$INSTALL_DIR*") {
 # ─── Final output ────────────────────────────────────────────────────────────
 
 Write-Host ""
-Send-InstallBeacon -EventType "install_success"
 
-Write-Host "IRIS Code installed successfully!" -ForegroundColor Green
+# #184597 — a partial install must not report itself as a complete one.
+if ($BridgeSkippedReason) {
+    Send-InstallBeacon -EventType "install_success_partial" -Step "agent_bridge" -Reason "bridge_skipped"
+    Write-Host "IRIS Code installed - but the Agent Bridge was SKIPPED." -ForegroundColor Yellow
+} else {
+    Send-InstallBeacon -EventType "install_success"
+    Write-Host "IRIS Code installed successfully!" -ForegroundColor Green
+}
+
 Write-Host ""
 Write-Host "  Binary:  $INSTALL_DIR\iris.exe" -ForegroundColor DarkGray
 Write-Host "  Version: $SpecificVersion" -ForegroundColor DarkGray
 Write-Host ""
+
+if ($BridgeSkippedReason) {
+    Write-Host "  The Hive daemon will NOT run on this machine yet." -ForegroundColor Yellow
+    Write-Host "  Reason: $BridgeSkippedReason" -ForegroundColor DarkGray
+    Write-Host "  Install it, then re-run this installer - or run: iris hive connect" -ForegroundColor DarkGray
+    Write-Host ""
+}
 
 if ($PathUpdated) {
     Write-Host "  PATH updated. Restart your terminal, then run:" -ForegroundColor DarkGray
