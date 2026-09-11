@@ -1892,7 +1892,11 @@ function scopeToTier(scope: string): ExposureTier {
  */
 async function currentTier(name: string): Promise<ExposureTier> {
   try {
-    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`)
+    // IRIS_API, not the default base. Playbooks live on the iris API; irisFetch defaults to
+    // FL_API, so this asked the wrong service and every lookup fell through to "private" —
+    // which made the publish gate treat every playbook as a widening and demand confirmation
+    // for changes that were not widening at all.
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(name)}`, {}, IRIS_API)
     if (!res.ok) return "private"
     const body = (await res.json()) as any
     return scopeToTier(String(body?.playbook?.scope ?? "private"))
@@ -1900,6 +1904,74 @@ async function currentTier(name: string): Promise<ExposureTier> {
     return "private"
   }
 }
+
+/**
+ * Take a published playbook back out of view.
+ *
+ * IT DOES NOT UNDO A PUBLISH, and the output says so. Anyone who already installed it has it;
+ * anything that crawled it has it. What this changes is what happens NEXT: the playbook leaves
+ * the marketplace listing, stops resolving for people who are not you, and can no longer be
+ * installed by a stranger who finds the name.
+ *
+ * Implemented as a narrowing to `private` rather than a delete, deliberately. The registry copy
+ * is what `iris playbook install` restores from and what `verify` compares against — deleting
+ * it to achieve "unpublished" would throw away the thing that lets you check the state you just
+ * asked for. Use `--scope local` on publish if you want a playbook that was never uploaded.
+ *
+ * Narrowing needs no confirmation. The gate on `publish` exists because widening is the
+ * irreversible direction; this one only ever removes reach.
+ */
+const UnpublishCommand = cmd({
+  command: "unpublish <name>",
+  describe: "take a playbook out of the marketplace — narrows it back to private (does NOT un-send it)",
+  builder: (yargs) =>
+    yargs
+      .positional("name", { type: "string", demandOption: true })
+      .option("json", { type: "boolean", default: false, describe: "JSON output" }),
+  async handler(args) {
+    await requireAuth()
+
+    // READ FOR REPORTING, NEVER AS A GATE.
+    //
+    // currentTier() answers "private" when it cannot tell — correct for publish, where an
+    // unknown state should err toward asking. It is exactly wrong here: it would turn a failed
+    // lookup into "already private, nothing to do" and silently leave a public playbook public.
+    // Measured — that is precisely what happened on the first run of this command, because the
+    // lookup was hitting the wrong service.
+    //
+    // Narrowing is always safe, so the write happens regardless and `before` only shapes the
+    // wording.
+    const before = await currentTier(String(args.name))
+
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(String(args.name))}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ scope: "private" }),
+    }, IRIS_API)
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "")
+      console.error(`  Could not unpublish: HTTP ${res.status} ${body.slice(0, 200)}`)
+      process.exitCode = 1
+      return
+    }
+
+    if (args.json) return void (await writeJson({ name: args.name, was: before, scope: "private", changed: true }))
+
+    console.log()
+    console.log(`  ${success("✓")} ${bold(String(args.name))} is now ${bold("private")}${before === "private" ? "" : dim(` (was ${before})`)}`)
+    console.log(`  ${dim("Delisted, and no longer installable by anyone but you.")}`)
+    console.log()
+    // The honest half. A command called "unpublish" invites the belief that it undid the
+    // publish, and it did not.
+    if (before === "public" || before === "unlisted") {
+      console.log(`  ${dim("This does NOT un-send it. Anyone who already installed it still has their copy,")}`)
+      console.log(`  ${dim("and anything that crawled it while it was reachable still has what it read.")}`)
+      console.log(`  ${dim("Change what matters — credentials, ids, internal names — rather than relying on this.")}`)
+      console.log()
+    }
+    console.log(`  ${dim(`Check it: `)}${"iris playbook verify " + args.name}`)
+  },
+})
 
 const PublishCommand = cmd({
   command: "publish <name>",
@@ -2587,6 +2659,7 @@ export const PlatformPlaybookCommand = cmd({
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
       .command(PublishCommand)
+      .command(UnpublishCommand)
       .command(PlaybookCheckPrivateCommand)
       .command(PlaybookDoctorCommand)
       .command(PlaybookVerifyCommand)
@@ -2648,6 +2721,7 @@ export const PlatformSkillCommand = cmd({
       .command(SkillRemoteCommand)
       .command(SkillReviewCommand)
       .command(PublishCommand)
+      .command(UnpublishCommand)
       .command(PlaybookCheckPrivateCommand)
       .command(PlaybookAvailableCommand)
       .command(PlaybookInstallCommand)
