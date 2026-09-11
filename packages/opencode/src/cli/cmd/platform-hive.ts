@@ -4652,10 +4652,15 @@ export const PlatformHiveCommand = productCommand({
   name: "hive",
   aliases: ["compute"],
   purpose:
-    "Hive — distributed compute: nodes, tasks, projects and peer connections",
-  keywords: ["hive", "compute", "node", "task", "mesh", "tailscale", "dispatch", "remote", "peer"],
-  howtos: ["hive-dispatch", "hive-tailscale", "remote-support-a-family-pc"],
-  playbooks: ["iris-hive"],
+    "Hive — your machines and the agents on them: enroll nodes, run work, and send messages and work items to another person's agent inbox",
+  keywords: [
+    "hive", "compute", "node", "task", "mesh", "tailscale", "dispatch", "remote", "peer",
+    // The agent-to-agent half (epic #184516). Without these, `iris find inbox` and every MCP
+    // agent miss the one capability a client is told to use by name: "check your hive inbox".
+    "inbox", "message", "handoff", "agent", "send", "invite", "access",
+  ],
+  howtos: ["hive-inbox", "hive-dispatch", "hive-tailscale", "remote-support-a-family-pc"],
+  playbooks: ["hive-inbox", "iris-hive"],
   builder: (yargs) =>
     yargs
       // LAN discovery (local utility — no API)
