@@ -54,6 +54,20 @@ export function inboxExpiresAt(days = 7): string {
 }
 
 /**
+ * The expiry to stamp on one delivery: the caller's TTL when given, otherwise the 7-day default.
+ *
+ * One helper for BOTH doors on purpose. Today the own-node branch stamps `expires_at` here and
+ * the peer branch relies on the relay stamping its own 7-day default server-side. Two places
+ * deciding the same thing is how they drift: a caller-supplied TTL has to be honoured on both
+ * paths or `--expires 1h` means one hour to your own machine and seven days to everyone else.
+ */
+export function expiresAtFor(d: InboxDelivery): string {
+  return d.ttlMs && d.ttlMs > 0
+    ? new Date(Date.now() + d.ttlMs).toISOString()
+    : inboxExpiresAt()
+}
+
+/**
  * Your own node first (exact id, then name, then prefix). Failing that, every node a peer has put
  * online behind an ACTIVE connection with you. A miss on both is null — never a guess.
  */
@@ -101,6 +115,18 @@ export interface InboxDelivery {
   text: string
   inboxType: "message" | "handoff"
   handoff?: Record<string, unknown>
+  /**
+   * How long this delivery stays deliverable, in milliseconds. Omitted = the 7-day default.
+   * Parse user input with `parseDuration` rather than inventing a second format.
+   *
+   * The recipient's daemon refuses to write an expired delivery into the inbox
+   * (task-executor.js TTL gate). That makes this a CONVENIENCE, not a control: it is enforced
+   * by the receiving machine, and the body is still retained server-side (#184632). Do not
+   * describe it to anyone as a security property until that is fixed.
+   */
+  ttlMs?: number
+  /** Delete the body and its manifest row on first read, rather than waiting for the TTL. */
+  burn?: boolean
 }
 
 /**
@@ -143,7 +169,8 @@ export async function deliverToInbox(
         sender_name: sender,
         hive_inbox: true,
         inbox_type: d.inboxType,
-        expires_at: inboxExpiresAt(),
+        expires_at: expiresAtFor(d),
+        ...(d.burn ? { burn: true } : {}),
         ...(d.handoff ? { handoff: d.handoff } : {}),
       },
       timeout_seconds: 30,
@@ -161,6 +188,12 @@ export async function deliverToInbox(
     params: {
       message: d.text,
       sender_name: sender,
+      // The relay already stamps a 7-day expires_at server-side; this is how a caller ASKS for
+      // a different one. It is inert until HiveNodeProxyController reads params.expires_at —
+      // until then the server's 7-day default wins and this parameter travels and is dropped,
+      // which looks identical to working. Ship both halves together.
+      expires_at: expiresAtFor(d),
+      ...(d.burn ? { burn: true } : {}),
       ...(d.handoff ? { handoff: d.handoff } : {}),
     },
   }))

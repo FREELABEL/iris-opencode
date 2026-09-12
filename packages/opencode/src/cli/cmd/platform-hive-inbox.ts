@@ -4,6 +4,9 @@ import { UI } from "../ui"
 import { dim, bold, success, highlight, writeJson, requireAuth, requireUserId } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import { deliverToInbox, resolveOwnOrPeerNode } from "./platform-hive-peer"
+// Reused rather than reimplemented: `7d`, `36h`, `90m`, `30s`, `2w`, bare number = days, and
+// null when unparseable. A second duration format would be a second thing to get wrong.
+import { parseDuration } from "./platform-atlas-store"
 import { existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, mkdirSync } from "fs"
 import { join, basename } from "path"
 import { homedir } from "os"
@@ -38,6 +41,11 @@ interface InboxItem {
   status?: string | null
   /** The executed job's output (truncated by the daemon). */
   result?: string | null
+  /**
+   * Burn-after-read: delete the body and this manifest row the first time the item is opened.
+   * Absent on everything written before this shipped, so `undefined` must behave as false.
+   */
+  burn?: boolean
 }
 
 /** What the list shows in the Name column: the work item for handoffs/jobs, a type tag for messages. */
@@ -98,6 +106,27 @@ async function sendReadReceipt(item: InboxItem) {
       body: JSON.stringify({ read_at: new Date().toISOString() }),
     })
   } catch { /* non-critical — read receipt is best-effort */ }
+}
+
+/**
+ * Burn-after-read: once a `burn` item has been opened, delete its body and drop its row.
+ *
+ * Deliberately destructive and deliberately silent about the content — the whole point is that
+ * there is nothing left to read a second time. It runs AFTER the item has been rendered, so the
+ * reader still sees it once; running it earlier would delete the thing the user asked for.
+ *
+ * `burn` is absent on every item written before this shipped, so undefined must behave as false.
+ */
+function burnIfRequested(item: InboxItem, items: InboxItem[]): void {
+  if (item.burn !== true) return
+  try {
+    const filePath = join(INBOX_DIR, item.file)
+    if (existsSync(filePath)) unlinkSync(filePath)
+  } catch {
+    /* the manifest row still goes — a body we could not unlink must not keep a readable row */
+  }
+  writeManifest(items.filter((i) => i.id !== item.id))
+  console.log(`  ${dim("burned — this item is gone and cannot be read again")}`)
 }
 
 /** Auto-prune items older than PRUNE_DAYS */
@@ -218,6 +247,8 @@ const HiveInboxOpenCommand = cmd({
       writeManifest(items)
       sendReadReceipt(item).catch(() => {})
     }
+    // Burn runs at the END of this handler (see the finally-style call after rendering), not
+    // here: deleting before the body is printed would destroy the thing being opened.
 
     if (item.type === "link" && item.url) {
       console.log(`  Opening: ${highlight(item.url)}`)
@@ -231,6 +262,9 @@ const HiveInboxOpenCommand = cmd({
       console.log(`  Opening: ${highlight(item.file)}`)
       try { execSync(`open "${filePath.replace(/"/g, '')}"`, { stdio: "ignore" }) } catch {}
     }
+
+    // Every path above has now shown the item, so this is the last honest moment to destroy it.
+    burnIfRequested(item, items)
   },
 })
 
@@ -260,6 +294,8 @@ const HiveInboxReadCommand = cmd({
       writeManifest(items)
       sendReadReceipt(item).catch(() => {})
     }
+    // Burn runs at the END of this handler (see the finally-style call after rendering), not
+    // here: deleting before the body is printed would destroy the thing being opened.
 
     if (item.type === "link") {
       console.log()
@@ -267,6 +303,10 @@ const HiveInboxReadCommand = cmd({
       console.log(`  ${highlight(item.url ?? "")}`)
       if (item.message) console.log(`  ${dim(item.message)}`)
       console.log()
+      // This path RETURNS early, so it needs its own burn. A single call at the bottom of the
+      // handler would silently spare every link — the failure would be "burn quietly did
+      // nothing for one type", which is indistinguishable from working.
+      burnIfRequested(item, items)
       return
     }
 
@@ -285,6 +325,9 @@ const HiveInboxReadCommand = cmd({
     console.log(readFileSync(filePath, "utf-8"))
     console.log(dim("  " + "─".repeat(60)))
     console.log()
+
+    // Body has been printed. Now it can go.
+    burnIfRequested(item, items)
   },
 })
 
@@ -384,6 +427,8 @@ const HiveInboxSendCommand = cmd({
     yargs
       .positional("message", { describe: "message text", type: "string" })
       .option("target", { alias: ["to", "t"], describe: "target node — yours, or a peer's", type: "string", demandOption: true })
+      .option("expires", { describe: "how long it stays deliverable: 30m, 4h, 7d (default 7d)", type: "string" })
+      .option("burn", { describe: "delete it from their inbox the first time it is read", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(argv) {
@@ -416,9 +461,27 @@ const HiveInboxSendCommand = cmd({
       process.exit(1)
     }
 
+    // Refuse an unparseable TTL rather than silently falling back to 7 days: "--expires soon"
+    // quietly becoming a week is the kind of accepted-and-ignored input this whole area has
+    // been full of.
+    let ttlMs: number | undefined
+    if (argv.expires !== undefined) {
+      const parsed = parseDuration(String(argv.expires))
+      if (parsed === null || parsed <= 0) {
+        console.error(`Could not read --expires "${argv.expires}". Use 30m, 4h, 7d, or a bare number of days.`)
+        process.exit(1)
+      }
+      ttlMs = parsed
+    }
+
     const sp = argv.json ? null : prompts.spinner()
     sp?.start(`Sending to ${target.node.name}…`)
-    const r = await deliverToInbox(userId, target, { text, inboxType: "message" })
+    const r = await deliverToInbox(userId, target, {
+      text,
+      inboxType: "message",
+      ttlMs,
+      burn: Boolean(argv.burn),
+    })
     if (!r.ok) { sp?.stop("Failed", 1); prompts.log.error(r.error ?? "send failed"); process.exit(1) }
 
     const via = target.kind === "peer" ? dim(` (${target.peerName}, via relay)`) : ""

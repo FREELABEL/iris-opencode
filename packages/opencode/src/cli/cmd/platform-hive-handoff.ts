@@ -4,6 +4,9 @@ import { UI } from "../ui"
 import { requireAuth, requireUserId, dim, bold, success, writeJson } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
 import { deliverToInbox, inboxExpiresAt, resolveOwnOrPeerNode, senderNodeName } from "./platform-hive-peer"
+// Reused rather than reimplemented: `7d`, `36h`, `90m`, `2w`, bare number = days, null when
+// unparseable. A second duration format would be a second thing to get wrong.
+import { parseDuration } from "./platform-atlas-store"
 
 // ============================================================================
 // iris hive handoff <item> --target <node> — hand a work item to an agent (epic #184516)
@@ -40,6 +43,8 @@ export const HiveHandoffCommand = cmd({
       .option("bloqItem", { describe: "bloq item id", type: "number" })
       .option("atlas", { describe: "Atlas ref, e.g. item:12345", type: "string" })
       .option("note", { alias: "m", describe: "what to do with it", type: "string" })
+      .option("expires", { describe: "how long it stays deliverable: 30m, 4h, 7d (default 7d)", type: "string" })
+      .option("burn", { describe: "delete it from their inbox the first time it is read", type: "boolean", default: false })
       .option("run", { describe: "execute on YOUR node now; the result lands in your inbox as a job", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
@@ -103,7 +108,23 @@ export const HiveHandoffCommand = cmd({
       return
     }
 
-    const r = await deliverToInbox(userId, target, { text: note, inboxType: "handoff", handoff: { item } })
+    let ttlMs: number | undefined
+    if (argv.expires !== undefined) {
+      const parsed = parseDuration(String(argv.expires))
+      if (parsed === null || parsed <= 0) {
+        console.error(`Could not read --expires "${argv.expires}". Use 30m, 4h, 7d, or a bare number of days.`)
+        process.exit(1)
+      }
+      ttlMs = parsed
+    }
+
+    const r = await deliverToInbox(userId, target, {
+      text: note,
+      inboxType: "handoff",
+      handoff: { item },
+      ttlMs,
+      burn: Boolean(argv.burn),
+    })
     if (!r.ok) { sp?.stop("Failed", 1); prompts.log.error(r.error ?? "send failed"); process.exit(1) }
 
     const via = target.kind === "peer" ? dim(` (${target.peerName}, via relay)`) : ""
