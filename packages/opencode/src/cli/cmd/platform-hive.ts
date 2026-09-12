@@ -2749,6 +2749,19 @@ const HivePeersCommand = cmd({
           if (n.last_heartbeat_at) {
             console.log(`    ${dim("last seen:")} ${new Date(String(n.last_heartbeat_at)).toLocaleString()}`)
           }
+          // WHAT IS THAT MACHINE RUNNING. "Does my teammate need to update?" was previously
+          // unanswerable from the only view you get of their fleet.
+          //
+          // ABSENCE IS THE INFORMATIVE CASE and must never render blank: a node that is ONLINE
+          // and reports no version is running a daemon too old to send one — which is exactly
+          // the machine you are looking for. Saying nothing there would hide the answer behind
+          // an empty space, the same way "0 node(s) online" once hid "never connected".
+          const peerVer = (n as any).daemon_version
+          if (peerVer) {
+            console.log(`    ${dim("daemon:")} ${peerVer}`)
+          } else if (isOnline) {
+            console.log(`    ${dim("daemon:")} ${dim("unknown — too old to report a version; they should run")} ${highlight("iris update")}`)
+          }
         }
         console.log()
       }
