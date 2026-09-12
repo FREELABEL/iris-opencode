@@ -140,7 +140,8 @@ export function buildMarkdown(item: any, url: string): string {
 
 /** Said out loud everywhere the seal refuses something, so the claim never grows. */
 export function describeSeal(): string {
-  return "the seal is a CLI-level control: it stops this command, not the network or the filesystem"
+  // Kept in one place and printed at every refusal, so the claim cannot quietly grow.
+  return "the seal stops THIS PROCESS — not curl, not another binary, and not a process that already holds the bytes"
 }
 
 export const AtlasUseCommand = cmd({
@@ -238,10 +239,7 @@ export const AtlasUseCommand = cmd({
       // not an address — there is no public endpoint that resolves one. Say so,
       // rather than 404ing and letting it look like the item is gone.
       process.stderr.write(
-        explainWrongRef(ref, "uuid") +
-          EOL +
-          dim(`  iris atlas use https://heyiris.io/n/<uuid>`) +
-          EOL,
+        explainWrongRef(ref, "uuid") + EOL + dim(`  iris atlas use https://heyiris.io/n/<uuid>`) + EOL,
       )
       process.exitCode = 1
       return
