@@ -95,7 +95,7 @@ $ iris atlas:datasets audit -s cases --json
 **Summary** shows totals, groupings, and sums:
 ```
   Total Records: 22
-  Sum (invoice_total): $120,000.00
+  Sum (invoice_total): $0.00   # example board — no real figures
   By stage_name:
     Treating                  16
     Negotiating                1

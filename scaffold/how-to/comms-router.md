@@ -74,11 +74,11 @@ cat > son-college-outreach.json <<'JSON'
 {
   "name": "College outreach — on behalf of <name>",
   "category": "cold_outreach",
-  "sender_name_override": "Jordan Mayo",
+  "sender_name_override": "A teammate",
   "sender_role_override": "Prospective Student",
-  "sender_email_override": "jordan@example.com",
+  "sender_email_override": "teammate@example.com",
   "sender_phone_override": "+15125551234",
-  "sender_calendar_override": "https://cal.example.com/jordan"
+  "sender_calendar_override": "https://cal.example.com/teammate"
 }
 JSON
 
@@ -110,13 +110,13 @@ sign as an identity that has not been established as yours.
 
 ```bash
 iris senders list                       # ✓ can send · ○ draft only
-iris senders create --name "Jordan Mayo" --email jordan@example.com --role "Prospective Student"
-iris senders verify jordan-mayo         # REQUIRED — created unverified, always
-iris senders bind jordan-mayo --channel apple_mail --value jordan@icloud.com
-iris senders bind jordan-mayo --channel email --value jordan@heyiris.io --primary
-iris senders prefer jordan-mayo --order email,apple_mail   # which provider it reaches for FIRST
-iris senders show jordan-mayo           # prints the rank: (primary), (2), …
-iris senders default jordan-mayo        # which IDENTITY is default — a different question
+iris senders create --name "A teammate" --email teammate@example.com --role "Prospective Student"
+iris senders verify teammate-alias         # REQUIRED — created unverified, always
+iris senders bind teammate-alias --channel apple_mail --value teammate@example.com
+iris senders bind teammate-alias --channel email --value teammate@example.com --primary
+iris senders prefer teammate-alias --order email,apple_mail   # which provider it reaches for FIRST
+iris senders show teammate-alias           # prints the rank: (primary), (2), …
+iris senders default teammate-alias        # which IDENTITY is default — a different question
 ```
 
 Then point a strategy at it — the sender wins over the six `sender_*_override` columns:

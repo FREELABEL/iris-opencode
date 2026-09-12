@@ -181,13 +181,13 @@ AI-generated production status emails — what you've built, what's next, what y
 ```bash
 # Single lead
 iris leads pulse <id> --recap --dry-run          # preview without sending
-iris leads pulse <id> --recap --to alex@freelabel.net  # send to yourself first
+iris leads pulse <id> --recap --to you@yourdomain.com  # send to yourself first
 iris leads pulse <id> --recap                    # send to the client
 iris leads pulse <id> --recap --force            # bypass 72h throttle
 
 # Bulk — all eligible leads
 iris leads pulse-all --recap --dry-run           # preview all
-iris leads pulse-all --recap --to alex@freelabel.net   # all to yourself
+iris leads pulse-all --recap --to you@yourdomain.com   # all to yourself
 iris leads pulse-all --recap --force             # bypass throttle for all
 ```
 
