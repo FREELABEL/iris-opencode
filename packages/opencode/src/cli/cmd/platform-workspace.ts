@@ -149,14 +149,18 @@ const SyncCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("bloqId", { type: "number", demandOption: true })
+      // boolean-negation is disabled globally (src/index.ts), so `--no-import` is NOT the
+      // negation of `--import` — it must be its own literal flag or the parser rejects the
+      // exact spelling the help text advertises (#184593, same defect in 6 places).
       .option("import", { type: "boolean", default: true, describe: "import unmatched Google employees as agents (default on; --no-import to skip)" })
+      .option("no-import", { type: "boolean", default: false, describe: "skip importing unmatched Google employees" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     prompts.intro("◈  Workspace · Sync")
     const data = await call("Sync workspace", `/api/v1/bloqs/${args.bloqId}/workspace/sync`, {
       method: "POST",
-      body: JSON.stringify({ import: !!args.import }),
+      body: JSON.stringify({ import: !!args.import && !args["no-import"] }),
     })
     if (!data) return
     const r = data?.data ?? data

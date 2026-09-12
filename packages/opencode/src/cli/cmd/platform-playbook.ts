@@ -2571,6 +2571,13 @@ const PlaybookInstallCommand = cmd({
       .positional("name", { type: "string", demandOption: true })
       .option("force", { type: "boolean", default: false, describe: "overwrite a local copy (discards local edits)" })
       .option("sync", { type: "boolean", default: true, describe: "also regenerate .claude/skills/ (--no-sync to skip)" })
+      // boolean-negation is disabled globally (src/index.ts), so `--no-sync` is NOT
+      // the negation of `--sync` — it has to be its own literal flag. Without this the
+      // help text advertised a flag the parser rejected, and the only working form was
+      // an undocumented `--sync=false` (#184593). That matters more than a typo: the
+      // default REGENERATES .claude/skills/, so in a shared checkout the flag that
+      // protects uncommitted skill edits was the one that would not parse.
+      .option("no-sync", { type: "boolean", default: false, describe: "skip regenerating .claude/skills/" })
       .option("json", { type: "boolean", default: false }),
   async handler(args) {
     const name = String(args.name)
@@ -2617,7 +2624,8 @@ const PlaybookInstallCommand = cmd({
     printKV("Path", file)
     printDivider()
 
-    if (args.sync) {
+    const syncSkills = args.sync && !args["no-sync"]
+    if (syncSkills) {
       // Reuse the existing writer rather than reimplementing the SKILL.md transform
       // (frontmatter rebuild, step-block stripping, usage hint) — one copy, one behaviour.
       //
@@ -2632,7 +2640,7 @@ const PlaybookInstallCommand = cmd({
       }
     }
 
-    prompts.outro(`${success("✓")} Installed ${highlight(name)}${args.sync ? " and synced to .claude/skills/" : ""}`)
+    prompts.outro(`${success("✓")} Installed ${highlight(name)}${syncSkills ? " and synced to .claude/skills/" : ""}`)
   },
 })
 

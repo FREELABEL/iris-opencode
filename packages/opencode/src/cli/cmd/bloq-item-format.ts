@@ -30,7 +30,10 @@ export function itemTitle(item: any): string {
  * typo tolerance belongs to the Typesense-backed search (#162213).
  */
 export function matchesSearchQuery(haystack: string, query: string): boolean {
-  const norm = (s: string) => String(s ?? "").normalize("NFC").toLowerCase()
+  const norm = (s: string) =>
+    String(s ?? "")
+      .normalize("NFC")
+      .toLowerCase()
   const hay = norm(haystack)
   const tokens = norm(query).split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return true
@@ -49,7 +52,9 @@ export function normalizeDueDate(input: string): string | null {
   const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$/)
   if (!m) return null
   const [, y, mo, d] = m
-  const year = Number(y), month = Number(mo), day = Number(d)
+  const year = Number(y),
+    month = Number(mo),
+    day = Number(d)
   if (month < 1 || month > 12 || day < 1 || day > 31) return null
   // Round-trip through UTC to reject impossible days (e.g. Feb 30, Apr 31).
   const dt = new Date(Date.UTC(year, month - 1, day))
@@ -77,4 +82,48 @@ export function itemContentPreview(item: any, max = 120): string {
     return pairs.join("  ").slice(0, max)
   }
   return String(c).slice(0, max)
+}
+
+/**
+ * An item's content as SCANNABLE TEXT — safe to `.match()`, `.test()` and print.
+ *
+ * `content` is a string for most items and an OBJECT for others (a dataset row, a
+ * form submission, a bug whose body was written as structured JSON). Every caller
+ * that reached for `item.content` and treated it as a string was one such item away
+ * from either a crash or the literal text "[object Object]".
+ *
+ * `iris bugs list` did both: the severity FILTER normalized it (JSON.stringify), the
+ * RENDERER did not, so listing the board died with
+ * `contentStr.match is not a function` after three rows — one sibling fixed, two not.
+ * That is why this lives here rather than at any one call site: three readers of the
+ * same field must share one predicate, or they will disagree exactly when it matters.
+ *
+ * Objects are rendered as `key: value` lines rather than JSON so that the prose
+ * inside them (the part a human or a regex is looking for) survives, instead of
+ * being buried in braces and escapes.
+ */
+export function itemContentText(item: any): string {
+  const c = item?.content ?? item?.description ?? ""
+  if (c == null) return ""
+  if (typeof c === "string") return c
+  if (typeof c !== "object") return String(c)
+
+  const lines: string[] = []
+  const walk = (obj: any, prefix = "") => {
+    if (Array.isArray(obj)) {
+      obj.forEach((v, i) => walk(v, `${prefix}[${i}]`))
+      return
+    }
+    if (obj && typeof obj === "object") {
+      for (const [k, v] of Object.entries(obj)) {
+        const key = prefix ? `${prefix}.${k}` : k
+        if (v && typeof v === "object") walk(v, key)
+        else if (v != null && String(v) !== "") lines.push(`${key}: ${String(v)}`)
+      }
+      return
+    }
+    if (obj != null) lines.push(`${prefix}: ${String(obj)}`)
+  }
+  walk(c)
+  return lines.join("\n")
 }

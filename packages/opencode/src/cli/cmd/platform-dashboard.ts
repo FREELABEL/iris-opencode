@@ -331,7 +331,11 @@ const AddAssistantCmd = cmd({
       .option("model", { describe: "model override (nano tiers)", type: "string", default: "gpt-4.1-nano" })
       .option("replace", { describe: "make the chat the page's sole content (keeps a banner if present)", type: "boolean", default: false })
       .option("nav", { describe: "point/activate this page's 'AI Assistant' nav item here", type: "boolean", default: false })
-      .option("publish", { describe: "publish after saving (use --no-publish for draft)", type: "boolean", default: true }),
+      // boolean-negation is disabled globally (src/index.ts), so `--no-publish` is NOT the
+      // negation of `--publish` — it must be its own literal flag or the parser rejects the
+      // exact spelling the help text advertises (#184593, same defect in 6 places).
+      .option("publish", { describe: "publish after saving (use --no-publish for draft)", type: "boolean", default: true })
+      .option("no-publish", { describe: "save as a draft instead of publishing", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
     const slug = args.slug as string
@@ -457,7 +461,7 @@ const AddAssistantCmd = cmd({
     }
 
     // 7. Publish + purge cache (default).
-    if (args.publish !== false) {
+    if (args.publish !== false && !args["no-publish"]) {
       sp.message("Publishing…")
       await dashFetch(`/api/v1/pages/${page.id}/publish`, { method: "POST" }).catch(() => {})
       await dashFetch("/api/internal/cache/purge-page", {

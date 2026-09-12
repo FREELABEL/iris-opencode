@@ -1,5 +1,11 @@
 import { describe, test, expect } from "bun:test"
-import { itemTitle, itemContentPreview, matchesSearchQuery, normalizeDueDate } from "./bloq-item-format"
+import {
+  itemTitle,
+  itemContentPreview,
+  itemContentText,
+  matchesSearchQuery,
+  normalizeDueDate,
+} from "./bloq-item-format"
 
 // =============================================================================
 // Bloq item rendering — regression for the `[object Object]` bug (IRIS bug)
@@ -145,5 +151,42 @@ describe("normalizeDueDate", () => {
     expect(normalizeDueDate("tomorrow")).toBeNull()
     expect(normalizeDueDate("07/22/2026")).toBeNull()
     expect(normalizeDueDate("")).toBeNull()
+  })
+})
+
+describe("itemContentText — three readers of one field must agree", () => {
+  /**
+   * `iris bugs list` died with `contentStr.match is not a function` after three rows
+   * (2026-09-11). The severity FILTER normalized object content; the RENDERER and the
+   * detail view did not. One sibling had been fixed, two had not, and the board could
+   * not page itself.
+   */
+  test("object content is scannable text, not a crash and not [object Object]", () => {
+    const item = { content: { correction: "FILING ERROR, REPAIRED", severity: "medium" } }
+    const text = itemContentText(item)
+    expect(() => text.match(/Severity:\s*(\w+)/i)).not.toThrow()
+    expect(text).not.toContain("[object Object]")
+    expect(text).toContain("FILING ERROR, REPAIRED")
+  })
+
+  test("string content passes through untouched — regexes over markdown still work", () => {
+    const body = "**Severity:** high\n\n### ✅ Resolution\nfixed in abc1234"
+    expect(itemContentText({ content: body })).toBe(body)
+  })
+
+  test("falls back to description, then to empty string", () => {
+    expect(itemContentText({ description: "from description" })).toBe("from description")
+    expect(itemContentText({})).toBe("")
+    expect(itemContentText(null)).toBe("")
+  })
+
+  test("nested objects and arrays are flattened, so prose inside them stays greppable", () => {
+    const text = itemContentText({ content: { meta: { severity: "high" }, tags: ["a", "b"] } })
+    expect(text).toContain("meta.severity: high")
+    expect(text).toContain("tags[0]: a")
+  })
+
+  test("empty and null fields are dropped rather than rendered as noise", () => {
+    expect(itemContentText({ content: { a: "keep", b: "", c: null } })).toBe("a: keep")
   })
 })

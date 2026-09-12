@@ -268,15 +268,112 @@ const HiveNodesShowCommand = cmd({
       console.log(`  ${dim("capabilities:")}      ${Object.keys(node.capabilities).join(", ")}`)
     }
     if (node.hardware_profile) {
-      const hw = node.hardware_profile as Record<string, unknown>
-      const cpu = hw.cpu_cores ?? hw.cpus ?? "?"
-      const mem = hw.memory_gb ?? hw.ram_gb ?? "?"
-      const os = hw.os ?? hw.platform ?? "?"
-      console.log(`  ${dim("hardware:")}          ${cpu} cores · ${mem}GB · ${os}`)
+      for (const line of formatHardware(node.hardware_profile)) {
+        console.log(`  ${dim(line.label.padEnd(18))}${line.value}`)
+      }
     }
     console.log()
   },
 })
+
+
+// ============================================================================
+// Hardware, rendered from the shape the daemon actually sends (#184614).
+//
+// The old renderer read a FLAT profile — `hw.cpu_cores`, `hw.memory_gb`, `hw.os`
+// — and the daemon has sent a NESTED one (`cpu.cores`, `memory.total_gb`,
+// `os.label`) since schema_version 2. So every node printed
+//
+//     hardware:   ? cores · ?GB · [object Object]
+//
+// on every field at once, identically on every machine. That is worse than
+// printing nothing: hardware is the reason to pick one node over another, and a
+// field that is present, wrong, and the same everywhere reads as "we do not
+// collect this" when in fact the daemon logs the right values at startup.
+//
+// `[object Object]` is the tell — a nested object concatenated instead of read.
+// Flat keys are kept as fallbacks so an older daemon still renders.
+// ============================================================================
+
+type HwLine = { label: string; value: string }
+
+/** "3h ago" for a detected_at stamp, or null when there isn't one to trust. */
+export function hwAge(detectedAt: unknown, now = new Date()): string | null {
+  if (!detectedAt) return null
+  const t = Date.parse(String(detectedAt))
+  if (Number.isNaN(t)) return null
+  const ms = now.getTime() - t
+  if (ms < 0) return null
+  const d = Math.floor(ms / 86400e3)
+  if (d > 0) return `${d}d ago`
+  const h = Math.floor(ms / 3600e3)
+  if (h > 0) return `${h}h ago`
+  const m = Math.floor(ms / 60e3)
+  return m > 0 ? `${m}m ago` : "just now"
+}
+
+function num(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN
+  return Number.isFinite(n) ? n : null
+}
+
+/** Exported for tests: the renderer is where this bug lived, so pin it. */
+export function formatHardware(profile: unknown): HwLine[] {
+  const hw = (profile ?? {}) as Record<string, any>
+  const lines: HwLine[] = []
+
+  const cpuModel = hw.cpu?.model ?? hw.cpu_model ?? null
+  const cores = num(hw.cpu?.cores ?? hw.cpu_cores ?? hw.cpus)
+  const memGb = num(hw.memory?.total_gb ?? hw.memory_gb ?? hw.ram_gb)
+  const osLabel =
+    hw.os?.label ??
+    [hw.os?.platform ?? hw.platform, hw.os?.arch ?? hw.arch].filter(Boolean).join("-") ??
+    null
+
+  const head = [
+    cpuModel ? String(cpuModel) : null,
+    cores !== null ? `${cores} cores` : null,
+    memGb !== null ? `${memGb}GB` : null,
+    osLabel || null,
+  ].filter(Boolean)
+  // Say "not reported" rather than "?" per field. A row of question marks looks
+  // like a broken renderer — which is exactly what it was, for long enough that
+  // it got filed as a bug instead of read as missing data.
+  lines.push({ label: "hardware:", value: head.length ? head.join(" · ") : "not reported by this node" })
+
+  const gpu = hw.gpu
+  if (gpu && gpu.available) {
+    const vram = num(gpu.vram_gb)
+    lines.push({
+      label: "gpu:",
+      value: [gpu.name ?? gpu.type ?? "present", vram !== null ? `${vram}GB` : null].filter(Boolean).join(" · "),
+    })
+  }
+
+  const diskFree = num(hw.disk?.available_gb)
+  const diskTotal = num(hw.disk?.total_gb)
+  if (diskFree !== null || diskTotal !== null) {
+    // The profile is detected once, at daemon start. Free space is the field most
+    // likely to have moved since, and a stale number presented as current is the
+    // same defect class as the one above — present, plausible, and wrong. Date it.
+    const age = hwAge(hw.detected_at)
+    lines.push({
+      label: "disk:",
+      value: `${diskFree ?? "?"}GB free${diskTotal !== null ? ` of ${diskTotal}GB` : ""}${age ? ` ${dim(`(measured ${age})`)}` : ""}`,
+    })
+  }
+
+  const ollama = hw.ollama
+  if (ollama?.available) {
+    const models: any[] = Array.isArray(ollama.models) ? ollama.models : []
+    lines.push({
+      label: "ollama:",
+      value: `${num(ollama.model_count) ?? models.length} model(s)${models.length ? ` — ${models.map((m) => m?.name).filter(Boolean).join(", ")}` : ""}`,
+    })
+  }
+
+  return lines
+}
 
 // ============================================================================
 // nodes (root)
@@ -309,7 +406,11 @@ const HiveRunCommand = cmd({
       .option("priority", { describe: "task priority 1-10 (higher = sooner)", type: "number" })
       .option("queue", { alias: "fire-and-forget", describe: "queue the task and exit immediately (don't wait for completion)", type: "boolean", default: false })
       .option("user-id", { describe: "user ID", type: "number" })
+      // boolean-negation is disabled globally (src/index.ts), so `--no-fail-fast` is NOT the
+      // negation of `--fail-fast` — it must be its own literal flag or the parser rejects the
+      // exact spelling the help text advertises (#184593, same defect in 6 places).
       .option("fail-fast", { describe: "stop at the first failing statement (`set -e`)", type: "boolean", default: true })
+      .option("no-fail-fast", { describe: "run every statement even after one fails (no `set -e`)", type: "boolean", default: false })
       .option("json", { describe: "JSON output (full task object)", type: "boolean", default: false }),
   async handler(argv) {
     await requireAuth()
@@ -343,7 +444,7 @@ const HiveRunCommand = cmd({
     // be silently forced, so a script written assuming shell semantics (e.g.
     // "run these three checks, report all three") could stop after the first
     // non-zero exit with no indication why (#182005).
-    const failFast = argv["fail-fast"] !== false
+    const failFast = argv["fail-fast"] !== false && !argv["no-fail-fast"]
     if (failFast && !command.startsWith("#!") && !argv.json) {
       console.log(dim("→ running with `set -e` (stop at first failure) — pass --no-fail-fast to disable"))
     }

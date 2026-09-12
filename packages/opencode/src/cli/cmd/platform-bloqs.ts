@@ -12,6 +12,7 @@ import {
   AtlasUnsealCommand,
 } from "./platform-atlas-pin"
 import { buildListEnvelope } from "./list-envelope"
+import { classifyRef, explainWrongRef } from "./reference-kind"
 import { federatedSearch, resolveSources, formatOutcomes } from "./federated-search"
 import * as prompts from "./clack"
 import { UI } from "../ui"
@@ -1327,6 +1328,46 @@ const BloqsAddItemCommand = cmd({
       }
     }
 
+    // VALIDATE THE DESTINATION BEFORE WRITING (#184604).
+    //
+    // Passing a list id that does not belong to this bloq used to return
+    // `{"success":true,"list_id":1783}` — while the item landed in a different list
+    // entirely. The echo is the defect, not the fallback: a script that trusts
+    // `list_id` keeps addressing a list that does not exist and keeps landing
+    // somewhere else, and every check it makes agrees with it, because it is
+    // comparing the response to what it SENT. That is the shape where verification
+    // cannot tell "wrote where I asked" from "wrote somewhere else".
+    //
+    // The work-the-epic playbook defaulted to list 1783 for months. Bloq 297 has six
+    // lists and 1783 is none of them.
+    let destinationList: { id: number; name?: string } | null = null
+    {
+      const listsRes = await irisFetch(`/api/v1/user/${userId}/bloqs/${args["bloq-id"]}/lists`)
+      if (listsRes.ok) {
+        const lists = ((await listsRes.json().catch(() => null)) as { data?: any[] } | null)?.data ?? []
+        if (Array.isArray(lists) && lists.length) {
+          const match = lists.find((l: any) => Number(l?.id) === Number(args["list-id"]))
+          if (!match) {
+            const known = lists.map((l: any) => `${l?.name ?? "untitled"} #${l?.id}`).join(" · ")
+            const emsg =
+              `List #${args["list-id"]} is not a list on bloq #${args["bloq-id"]}. Nothing was written.\n` +
+              `  This bloq's lists: ${known}`
+            // id + name ONLY. The lists endpoint returns every item nested inside every
+            // list; echoing it whole turned a one-line refusal into a 4MB response.
+            const choices = lists.map((l: any) => ({ id: Number(l?.id), name: l?.name ?? null }))
+            if (args.json) console.log(JSON.stringify({ success: false, error: emsg, lists: choices }))
+            else { prompts.log.error(emsg); prompts.outro("Done") }
+            process.exitCode = 2
+            return
+          }
+          destinationList = { id: Number(match.id), name: match.name }
+        }
+      }
+      // A lists endpoint that does not answer must NOT block the write — this is a
+      // guard against a wrong destination, not a new dependency for adding an item.
+      // It degrades to the old behaviour, and the response below says it was unverified.
+    }
+
     const spinner = args.json ? null : prompts.spinner()
     spinner?.start("Adding item…")
 
@@ -1375,7 +1416,23 @@ const BloqsAddItemCommand = cmd({
       // so add-item reported `id: null`. fl-api now single-nests; keep the deep path as a
       // fallback so the CLI still reports the id against an un-deployed API.
       const newItemId = addBody?.data?.id ?? addBody?.data?.data?.id ?? addBody?.id
-      if (args.json) { console.log(JSON.stringify({ success: true, id: newItemId ?? null, bloq_id: args["bloq-id"], list_id: args["list-id"] })); return }
+      // Report the write that HAPPENED, not the request that was made. `list_id` is
+      // the destination this command verified; when it could not verify one, it says
+      // so rather than echoing the caller's own input back as if it were a fact.
+      const writtenList = addBody?.data?.list_id ?? addBody?.data?.data?.list_id ?? destinationList?.id ?? null
+      if (args.json) {
+        console.log(
+          JSON.stringify({
+            success: true,
+            id: newItemId ?? null,
+            bloq_id: args["bloq-id"],
+            list_id: writtenList,
+            list_name: destinationList?.name ?? null,
+            list_verified: destinationList !== null,
+          }),
+        )
+        return
+      }
       spinner?.stop(`${success("✓")} Item added${newItemId ? ` (#${newItemId})` : ""}`)
       const hint = newItemId
         ? `iris bloqs get ${args["bloq-id"]}  |  iris bloqs share ${newItemId}  (publish + get a shareable link)`
@@ -1406,7 +1463,11 @@ const BloqsGetItemCommand = cmd({
   describe: "show one bloq item by id — title, list, and full content",
   builder: (yargs) =>
     yargs
-      .positional("item-id", { describe: "item ID to read", type: "number", demandOption: true })
+      // STRING, not number (#184599). `type: "number"` coerced a uuid to NaN, the
+      // request then 404'd, and the 404 branch below reported a PARSE failure as a
+      // permissions problem — "No item NaN visible to this account. Check whether the
+      // board is shared with you." A wrong cause costs more than a plain refusal.
+      .positional("item-id", { describe: "item ID to read (a plain number)", type: "string", demandOption: true })
       .option("content-only", { describe: "print just the content, for piping", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   // No --user-id here on purpose. Every sibling in this file that registers it feeds it to
@@ -1414,15 +1475,27 @@ const BloqsGetItemCommand = cmd({
   // the flag was accepted and silently ignored — a caller passing it got their OWN item back
   // with no hint the flag did nothing. Caught by the argv-mapping ratchet.
   async handler(args) {
+    // Classify BEFORE querying. An id shape this endpoint cannot take is not a
+    // visibility question, and asking the server about it produces an answer about
+    // the wrong thing.
+    const ref = classifyRef(args["item-id"])
+    if (ref.kind !== "item-id") {
+      const msg = explainWrongRef(ref, "item-id")
+      if (args.json) console.log(JSON.stringify({ success: false, error: msg, ref_kind: ref.kind }))
+      else prompts.log.error(msg)
+      process.exitCode = 2
+      return
+    }
+
     await requireAuth()
 
-    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${args["item-id"]}`)
+    const res = await irisFetch(`/api/v1/user/bloqs/list/item/${ref.value}`)
     if (!res.ok) {
       // 404 here means "no item with that id that you can see" — which is not the same as
       // "no such item". Say the version that is true.
       const msg =
         res.status === 404
-          ? `No item ${args["item-id"]} visible to this account. Check the id, or whether the board is shared with you.`
+          ? `No item ${ref.value} visible to this account. Check the id, or whether the board is shared with you.`
           : `HTTP ${res.status}`
       if (args.json) console.log(JSON.stringify({ success: false, error: msg }))
       else prompts.log.error(msg)

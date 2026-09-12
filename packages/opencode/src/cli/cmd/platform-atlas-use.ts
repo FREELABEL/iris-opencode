@@ -4,6 +4,8 @@ import { writeFileSync, readFileSync, existsSync } from "fs"
 import { EOL } from "os"
 import { join } from "path"
 import { atlasHome, isGranted, readPolicy, readManifest, shortHash } from "./platform-atlas-store"
+import { classifyRef, explainWrongRef } from "./reference-kind"
+import { irisFetch, requireAuth } from "./iris-api"
 
 // ============================================================================
 // iris atlas use <ref> — pull one Atlas item's context into an agent.
@@ -148,7 +150,7 @@ export const AtlasUseCommand = cmd({
   builder: (yargs) =>
     yargs
       .positional("ref", {
-        describe: "the item's public URL, or its uuid",
+        describe: "the item's public URL, its uuid, or a bloq item id",
         type: "string",
         demandOption: true,
       })
@@ -162,9 +164,73 @@ export const AtlasUseCommand = cmd({
       })
       .example("iris atlas use https://heyiris.io/n/<uuid>", "print the context")
       .example("iris atlas use <uuid> --out ctx.md", "save it for an agent to read")
-      .example("iris atlas use <uuid> --json | jq .dataset", "script against the data"),
+      .example("iris atlas use <uuid> --json | jq .dataset", "script against the data")
+      .example("iris atlas use 184598", "read a bloq item you own, by its id"),
 
   async handler(args: any) {
+    const ref = classifyRef(args.ref)
+
+    // A BLOQ ITEM ID is a legitimate reference (#184599): `get-item` takes one, and a
+    // user holding one reasonably expects its sibling to take it too. It resolves
+    // through the AUTHED endpoint rather than the public one, because an item id
+    // addresses a document you own — it is not a share link and may not be published.
+    if (ref.kind === "item-id") {
+      const home = atlasHome()
+      if (readPolicy(home).sealed) {
+        // A sealed machine reads what it was GRANTED, and grants are keyed by uuid.
+        // Resolving an arbitrary item id would reach past the seal by another name.
+        process.stderr.write(
+          `Sealed: this machine reads by pinned reference, and ${ref.value} is a bloq item id.${EOL}` +
+            dim(`  ${describeSeal()}`) +
+            EOL +
+            dim(`  iris atlas pins            what this machine holds`) +
+            EOL,
+        )
+        process.exitCode = 1
+        return
+      }
+      const token = await requireAuth()
+      if (!token) {
+        process.exitCode = 1
+        return
+      }
+      const r = await irisFetch(`/api/v1/user/bloqs/list/item/${ref.value}`)
+      if (!r.ok) {
+        process.stderr.write(
+          r.status === 404
+            ? `No item ${ref.value} visible to this account. Check the id, or whether the board is shared with you.${EOL}`
+            : `Request failed (${r.status}).${EOL}`,
+        )
+        process.exitCode = 1
+        return
+      }
+      const b: any = await r.json().catch(() => null)
+      const it = b?.data ?? b
+      if (!it) {
+        process.stderr.write(`Unexpected response shape reading item ${ref.value}${EOL}`)
+        process.exitCode = 1
+        return
+      }
+      const link = it.public_uuid ? `https://heyiris.io/n/${it.public_uuid}` : `bloq:item:${ref.value}`
+      const md = args.json ? JSON.stringify(it, null, 2) + "\n" : buildMarkdown(it, link)
+      if (args.out) writeFileSync(args.out, md, "utf8")
+      else process.stdout.write(md)
+      if (!args.quiet) {
+        process.stderr.write(
+          EOL +
+            bold(`  ${it.title ?? "Untitled"}`) +
+            EOL +
+            dim(
+              `  bloq item #${ref.value}${it.public_uuid ? "" : " · not published, read over your own credentials"}`,
+            ) +
+            EOL +
+            (args.out ? dim(`  written to ${args.out}`) + EOL : "") +
+            EOL,
+        )
+      }
+      return
+    }
+
     const uuid = resolveRef(args.ref)
 
     if (!uuid) {
@@ -172,8 +238,8 @@ export const AtlasUseCommand = cmd({
       // not an address — there is no public endpoint that resolves one. Say so,
       // rather than 404ing and letting it look like the item is gone.
       process.stderr.write(
-        `Not a full reference: ${args.ref}${EOL}` +
-          `Pass the item's public URL, or its full uuid.${EOL}` +
+        explainWrongRef(ref, "uuid") +
+          EOL +
           dim(`  iris atlas use https://heyiris.io/n/<uuid>`) +
           EOL,
       )
