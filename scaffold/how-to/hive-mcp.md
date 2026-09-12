@@ -66,14 +66,25 @@ knowing how they are launched.
 
 **4. Ask it what the server can do**
 
-Dispatch an `mcp_call` task with no tool named, and you get `tools/list`:
+An `mcp_call` with no tool named returns `tools/list` — the first end-to-end proof that the
+cloud dispatched, the node checked its allowlist, spawned the server, and answered:
 
-```json
-{ "type": "mcp_call",
-  "config": { "server": "argent" } }
+```bash
+iris hive tasks create --type mcp_call --node <name> --config '{"server":"argent"}'
 ```
 
+It waits for the result and prints it. Add `--queue` to dispatch and walk away
+(`iris hive tasks get <id>` reads it later).
+
 **5. Call a tool**
+
+```bash
+iris hive tasks create --type mcp_call --node <name> \
+  --config '{"server":"argent","tool":"list-devices","arguments":{},"timeout_ms":240000}'
+```
+
+Under it, that is one task of type `mcp_call` — the same thing the dashboard or an agent
+dispatches:
 
 ```json
 { "type": "mcp_call",
@@ -125,4 +136,5 @@ behind one router tool, rather than adding them to an agent's list wholesale.
 
 - `iris mcp add` / `iris mcp tools` — MCP servers for the CLI itself, not for a node
 - `iris hive nodes list` — which machines hold which servers
+- `iris hive tasks create` — dispatch ANY task type to a node, not just `mcp_call`
 - `iris hive run` — a shell command on a machine, when you do not need MCP at all
