@@ -12,30 +12,93 @@ set -euo pipefail
 PKG="packages/opencode/package.json"
 REPO="FREELABEL/iris-opencode"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# THE VERSION COMES FROM THE TAG. package.json is DERIVED.
+#
+# This script used to compute the next version from package.json, and that one
+# line produced thirteen releases' worth of drift:
+#
+#   package.json said 1.3.237   ·   the live tag was v1.3.250
+#
+# Every tag from v1.3.238 to v1.3.250 was cut on a commit where package.json
+# still read 1.3.237. It is not the source of truth and never was — the release
+# workflow derives the shipped version from the tag itself
+# (`version=${GITHUB_REF#refs/tags/v}` in .github/workflows/release.yml), so the
+# binary the world installs is named by the tag no matter what this file says.
+#
+# And the drift was SELF-REINFORCING. Reading the stale number made `--patch`
+# compute 1.3.238, which already existed, so the script aborted with "Tag already
+# exists" — and the only way to ship became tagging by hand, which skipped the
+# bump, which widened the drift. The workaround was the cause.
+#
+# So: read the highest tag that actually exists ON THE REMOTE, and write
+# package.json to match as an output. Local tags are not consulted — a checkout
+# that has not fetched (this one had only `vscode-*` tags) would otherwise
+# "discover" a much lower version and confidently reissue a released number.
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Must run from repo root
 if [ ! -f "$PKG" ]; then
-  echo "Error: Run from iris-code repo root"
+  echo "Error: Run from the iris-opencode repo root"
   exit 1
 fi
 
-# Must be on main branch
-BRANCH=$(git branch --show-current)
-if [ "$BRANCH" != "main" ]; then
-  echo "Error: Must be on main branch (currently on '$BRANCH')"
-  echo "Run: git checkout main && git pull"
-  exit 1
+CHECK_ONLY=false
+ASSUME_YES=false
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --check) CHECK_ONLY=true ;;
+    --yes|-y) ASSUME_YES=true ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+# The authoritative current version: what GitHub publishes as the LATEST RELEASE.
+#
+# NOT "the highest tag". This repo is a fork and still carries the upstream tag
+# lineages — 0.0.x through 1.18.x — so a naive semver sort answers 1.18.23, which
+# no one has ever installed. My first attempt at this fix did exactly that and
+# reported the drift as MINUS 214 patches, which is the only reason it got caught.
+#
+# The latest GitHub Release is the number `iris update` resolves and the number
+# `iris --version` prints on an installed binary, so it is the one the world means.
+LIVE=$(gh release view --repo "$REPO" --json tagName --jq '.tagName' 2>/dev/null | sed 's/^v//')
+
+if [ -z "$LIVE" ]; then
+  # Refusing is the only safe answer. Guessing from package.json is the bug this
+  # rewrite removes; guessing from the tag list picks a lineage nobody ships.
+  echo "Error: could not read the latest release from GitHub — refusing to guess a version."
+  echo "  Check: gh auth status, then re-run. To override: ./release.sh <explicit-version>"
+  exit 2
 fi
 
-# Read current version
-CURRENT=$(grep '"version"' "$PKG" | head -1 | sed 's/.*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/')
-IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+PKG_VERSION=$(grep '"version"' "$PKG" | head -1 | sed 's/.*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/')
+IFS='.' read -r MAJOR MINOR PATCH <<< "$LIVE"
 
-echo "Current version: $CURRENT"
+echo "Live version (latest published release): $LIVE"
+if [ "$PKG_VERSION" != "$LIVE" ]; then
+  if [ "${LIVE%.*}" = "${PKG_VERSION%.*}" ]; then
+    echo "  package.json says $PKG_VERSION — DRIFTED by $(( 10#${LIVE##*.} - 10#${PKG_VERSION##*.} )) release(s); it will be corrected."
+  else
+    echo "  package.json says $PKG_VERSION — a different line entirely; it will be corrected to the released value."
+  fi
+fi
+
+if [ "$CHECK_ONLY" = true ]; then
+  if [ "$PKG_VERSION" = "$LIVE" ]; then
+    echo "In sync. Next --patch would be $MAJOR.$MINOR.$((PATCH + 1))."
+  else
+    echo "Drifted. Next --patch would still be $MAJOR.$MINOR.$((PATCH + 1)) — computed from the TAG, not package.json."
+  fi
+  exit 0
+fi
 
 # Determine target version
 ARG="${1:-}"
 if [ -z "$ARG" ]; then
-  echo "Usage: ./release.sh [version|--patch|--minor|--major]"
+  echo "Usage: ./release.sh [version|--patch|--minor|--major] [--check] [--yes]"
   exit 1
 elif [ "$ARG" = "--patch" ]; then
   TARGET="$MAJOR.$MINOR.$((PATCH + 1))"
@@ -49,44 +112,90 @@ fi
 
 echo "Target version:  $TARGET"
 
-# Check tag doesn't already exist
-if git tag -l "v$TARGET" | grep -q "v$TARGET"; then
-  echo "Error: Tag v$TARGET already exists"
-  echo "Check: gh release view v$TARGET"
+# An explicit version must still be AHEAD of what is live. Reissuing a released
+# number silently republishes it to everyone running `iris update`.
+if [ "$(printf '%s\n%s\n' "$LIVE" "$TARGET" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" != "$TARGET" ] || [ "$TARGET" = "$LIVE" ]; then
+  echo "Error: $TARGET is not ahead of the live version $LIVE"
   exit 1
 fi
 
-# Check for clean working tree (allow untracked)
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "Error: Working tree has uncommitted changes"
-  echo "Commit or stash them first"
+# Must be on main
+BRANCH=$(git branch --show-current)
+if [ "$BRANCH" != "main" ]; then
+  echo "Error: Must be on main branch (currently on '$BRANCH')"
+  echo "  Note: this repo's GitHub DEFAULT branch is 'dev', but releases are cut from main."
+  exit 1
+fi
+
+# Check the tag does not already exist, locally or on the remote
+if git ls-remote --tags "https://github.com/$REPO.git" "refs/tags/v$TARGET" 2>/dev/null | grep -q .; then
+  echo "Error: Tag v$TARGET already exists on the remote"
+  exit 1
+fi
+
+# ONLY package.json needs to be clean — not the whole tree.
+#
+# Several sessions share this checkout and it is essentially never fully clean.
+# Demanding a spotless tree is what pushed people to tag by hand. The tag points
+# at HEAD, so uncommitted work elsewhere is not in the release either way; the
+# one file that MUST be unmodified is the one this script is about to write, so
+# another session's edit to it cannot be swept into the release commit.
+if ! git diff --quiet -- "$PKG" || ! git diff --cached --quiet -- "$PKG"; then
+  echo "Error: $PKG has uncommitted changes — commit or stash just that file first."
+  echo "  (Other dirty files are fine: the tag points at HEAD, which does not include them.)"
+  git --no-pager diff --stat -- "$PKG"
   exit 1
 fi
 
 echo ""
-echo "Will release: v$CURRENT → v$TARGET"
-echo "  1. Bump package.json"
-echo "  2. Commit + tag v$TARGET"
+echo "Will release: v$LIVE → v$TARGET"
+echo "  1. Write package.json to $TARGET (derived from the tag, not the source of it)"
+echo "  2. Commit that ONE file + tag v$TARGET"
 echo "  3. Push to origin main"
-echo "  4. CI builds binaries + creates GitHub Release"
+echo "  4. CI builds binaries + creates the GitHub Release"
 echo ""
-read -r -p "Proceed? [y/N] " CONFIRM
-if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
-  echo "Aborted"
-  exit 0
+if [ "$ASSUME_YES" != true ]; then
+  # A prompt with no terminal hangs forever and takes the release with it, so only
+  # ask when someone is actually there to answer.
+  if [ -t 0 ]; then
+    read -r -p "Proceed? [y/N] " CONFIRM
+    if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
+      echo "Aborted"
+      exit 0
+    fi
+  else
+    echo "Error: no terminal to confirm on. Re-run with --yes if that is what you intend."
+    exit 1
+  fi
 fi
 
 # 1. Bump version
-sed -i '' "s/\"version\": \"$CURRENT\"/\"version\": \"$TARGET\"/" "$PKG"
-echo "Bumped $PKG to $TARGET"
+sed -i '' "s/\"version\": \"$PKG_VERSION\"/\"version\": \"$TARGET\"/" "$PKG"
+if ! grep -q "\"version\": \"$TARGET\"" "$PKG"; then
+  echo "Error: failed to write $TARGET into $PKG (it said $PKG_VERSION) — nothing tagged."
+  exit 1
+fi
+echo "Wrote $PKG = $TARGET"
 
-# 2. Commit + tag
-git add "$PKG"
-git commit -m "v$TARGET"
+# 2. Commit + tag — EXPLICIT PATHSPEC.
+#
+# `git add "$PKG"` followed by a bare `git commit` commits the whole INDEX, and in
+# a checkout several sessions share that has repeatedly swept other people's staged
+# work into an unrelated commit. Naming the path confines it to this file.
+git commit -q -m "v$TARGET" -- "$PKG"
 git tag "v$TARGET"
 echo "Created commit + tag v$TARGET"
 
 # 3. Push
+#
+# Re-check RIGHT BEFORE pushing. Two releases cut minutes apart is not theoretical
+# here — `v1.3.230 — 229 taken by a concurrent release` is in this repo's history.
+# The window between the check above and this push is where that happens.
+if git ls-remote --tags "https://github.com/$REPO.git" "refs/tags/v$TARGET" 2>/dev/null | grep -q .; then
+  echo "Error: v$TARGET was published by someone else while this ran. Nothing pushed."
+  echo "  Undo locally:  git tag -d v$TARGET && git reset --hard HEAD~1   (only if HEAD is still your bump)"
+  exit 1
+fi
 git push origin main --tags
 echo "Pushed to origin main with tag v$TARGET"
 
@@ -187,7 +296,14 @@ echo "Run 'iris update' to install."
 
 # 5. Sync dev branch
 echo ""
-read -r -p "Sync dev branch with main? [y/N] " SYNC
+SYNC=n
+if [ "$ASSUME_YES" = true ]; then
+  SYNC=y
+elif [ -t 0 ]; then
+  read -r -p "Sync dev branch with main? [y/N] " SYNC
+else
+  echo "(no terminal — skipping dev sync; run: git checkout dev && git merge origin/main && git push origin dev)"
+fi
 if [ "$SYNC" = "y" ] || [ "$SYNC" = "Y" ]; then
   git checkout dev
   git pull origin dev
