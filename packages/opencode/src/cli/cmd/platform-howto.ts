@@ -481,6 +481,42 @@ function parseFrontMatter(raw: string): { meta: RecipeMeta; body: string } {
 }
 
 /** Typos in a closed set are an open set with extra steps — refuse at publish, name the options. */
+
+/**
+ * Put a title heading in, after any front-matter block.
+ *
+ * Exported because the bug it fixes (#184555) was invisible in the file: the content
+ * was all still there, just unparseable, and nothing rendered an error.
+ */
+export function injectTitle(content: string, title: string | null, name: string): string {
+  const heading = `# ${title || `How to: ${name.replace(/-/g, " ")}`}`
+
+  if (!content.startsWith("---\n")) {
+    return content.startsWith("# ") ? content : `${heading}\n\n${content}`
+  }
+
+  // Front-matter present: find where it closes and look for a heading AFTER it.
+  const end = content.indexOf("\n---", 4)
+  if (end === -1) return content // malformed; changing it would make it worse
+  const afterIdx = content.indexOf("\n", end + 1) + 1
+  const head = content.slice(0, afterIdx)
+  const body = content.slice(afterIdx)
+  if (/^\s*#\s/.test(body)) return content
+  return `${head}\n${heading}\n\n${body.replace(/^\n+/, "")}`
+}
+
+/** The closest valid category to a near-miss, so a refusal can point somewhere. */
+export function nearestCategory(input: string): string | null {
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z]/g, "")
+  const want = norm(input)
+  if (!want) return null
+  for (const c of CATEGORIES) {
+    const n = norm(c)
+    if (n === want || n.includes(want) || want.includes(n)) return c
+  }
+  return null
+}
+
 export function validateRecipeMeta(slug: string, meta: RecipeMeta): string[] {
   const errs: string[] = []
   if (meta.category && !(CATEGORIES as readonly string[]).includes(meta.category))
@@ -575,21 +611,47 @@ const HowToPublishCommand = cmd({
     console.log(dim(`  source  ${dir}`))
     console.log(dim(`  recipes ${recipes.length}`))
 
-    const metaErrors = recipes.flatMap((r) =>
-      validateRecipeMeta(r.slug, { category: r.category ?? undefined, level: r.level ?? undefined }),
-    )
-    if (metaErrors.length) {
-      prompts.log.error(`${metaErrors.length} recipe(s) have invalid front-matter — nothing published.`)
-      for (const e of metaErrors.slice(0, 10)) console.log(dim("    ") + e)
+    // PARTIAL PUBLISH, not fail-closed (#184556).
+    //
+    // One recipe with a single wrong category word ("Integrations") used to block all 59,
+    // including a client-facing how-to committed minutes earlier. From the author's side the
+    // failure is total and silent: you write a correct recipe, run publish, and nothing
+    // reaches the web because of a file you have never opened. The web index then stops
+    // receiving updates and nobody notices, because the command reports the BLOCKING file
+    // rather than the ones it just refused to ship.
+    //
+    // So: skip the invalid ones by name, publish the rest, and exit non-zero so a script
+    // still knows something is wrong. Same shape as #184544 (one malformed playbook breaking
+    // verify for every playbook).
+    const invalid = new Map<string, string[]>()
+    for (const r of recipes) {
+      const errs = validateRecipeMeta(r.slug, { category: r.category ?? undefined, level: r.level ?? undefined })
+      if (errs.length) invalid.set(r.slug, errs)
+    }
+    const publishable = recipes.filter((r) => !invalid.has(r.slug))
+
+    if (invalid.size) {
+      prompts.log.warn(`${invalid.size} recipe(s) SKIPPED for invalid front-matter — the rest still publish:`)
+      for (const [slug, errs] of [...invalid].slice(0, 10)) {
+        for (const e of errs) console.log(dim("    ") + e)
+        const cat = recipes.find((r) => r.slug === slug)?.category
+        const near = cat ? nearestCategory(cat) : null
+        if (near) console.log(dim("      did you mean: ") + highlight(near))
+      }
+      process.exitCode = 1
+    }
+
+    if (!publishable.length) {
+      prompts.log.error("Every recipe has invalid front-matter — nothing to publish.")
       prompts.outro("")
       return
     }
 
-    const tagged = recipes.filter((r) => r.category).length
-    if (tagged < recipes.length) {
-      console.log(dim(`  tagged  ${tagged}/${recipes.length}`) + warning(`  (${recipes.length - tagged} untagged)`))
+    const tagged = publishable.filter((r) => r.category).length
+    if (tagged < publishable.length) {
+      console.log(dim(`  tagged  ${tagged}/${publishable.length}`) + warning(`  (${publishable.length - tagged} untagged)`))
     } else {
-      console.log(dim(`  tagged  ${tagged}/${recipes.length}`))
+      console.log(dim(`  tagged  ${tagged}/${publishable.length}`))
     }
 
     if (args["dry-run"]) {
@@ -603,9 +665,9 @@ const HowToPublishCommand = cmd({
           for (const r of body?.data ?? []) live[r.slug] = r.updated_at ?? ""
         }
       } catch { /* offline is not an error for a dry run */ }
-      const fresh = recipes.filter((r) => !(r.slug in live))
+      const fresh = publishable.filter((r) => !(r.slug in live))
       printDivider()
-      console.log(`  ${bold(String(recipes.length))} would publish · ${bold(String(fresh.length))} not yet live`)
+      console.log(`  ${bold(String(publishable.length))} would publish · ${bold(String(fresh.length))} not yet live`)
       for (const r of fresh.slice(0, 12)) console.log(dim("    + ") + r.slug)
       warnStranded(dir)
       printDivider()
@@ -624,7 +686,7 @@ const HowToPublishCommand = cmd({
           // --cli-version — which makes the whole staleness/re-shoot primitive (HOWTO-04) free
           // the moment it is actually stamped.
           version: args["cli-version"] ?? Installation.VERSION,
-          recipes: recipes.map(
+          recipes: publishable.map(
             ({ slug, title, summary, body_md, category, level, tags, duration_min, prerequisites }) => ({
               slug,
               title,
@@ -731,10 +793,29 @@ const HowToAddCommand = cmd({
       return
     }
 
-    // Auto-prepend title heading if missing
-    if (!content.startsWith("# ")) {
-      const title = args.title || `How to: ${name.replace(/-/g, " ")}`
-      content = `# ${title}\n\n${content}`
+    // Inject a title heading if the recipe has none — WITHOUT stepping on front-matter.
+    //
+    // This used to test `content.startsWith("# ")`, so a file that correctly opened with
+    // `---` got a generated heading prepended ABOVE it (#184555). Front-matter must be the
+    // first thing in the file to parse at all, so the recipe silently lost its category,
+    // level, duration and real title — every one of them still present, ten lines down,
+    // and none of them visible. It listed as "hive-inbox — hive inbox" beside neighbours
+    // showing "[intermediate] 15m", and the only clue was the missing metadata.
+    content = injectTitle(content, args.title ? String(args.title) : null, name)
+
+    // Catch a bad category HERE, where one person can fix it, rather than at publish, where
+    // it blocks everyone (#184556). The category list is closed on purpose, and "Integrations"
+    // is the obvious name that is not on it — so say which valid one is closest instead of
+    // printing the list and walking away.
+    {
+      const { meta } = parseFrontMatter(content)
+      const catErrs = validateRecipeMeta(name, { category: meta.category, level: meta.level })
+      if (catErrs.length) {
+        for (const e of catErrs) prompts.log.warn(e)
+        const near = meta.category ? nearestCategory(meta.category) : null
+        if (near) console.log(dim("  Did you mean: ") + highlight(near))
+        console.log(dim("  Saved anyway — but `iris how-to publish` will skip this recipe until it is fixed."))
+      }
     }
 
     const exists = fs.existsSync(filePath)
@@ -752,6 +833,16 @@ const HowToAddCommand = cmd({
     if (repoDir) {
       console.log(dim("  Written to the repo, so it is version controlled and publishable."))
       console.log(dim("  Commit it, then: ") + highlight("iris how-to publish"))
+      console.log()
+      // TWO DIFFERENT CLAIMS, and only the second one blocks a teammate (#184553).
+      //
+      // A recipe can exist, render, and list — and still be invisible to `iris find`,
+      // because `find` reads capabilities.json, which is GENERATED. Measured: a how-to on
+      // spreadsheets was not returned for excel, spreadsheet, xlsx, csv or dropdown while
+      // `how-to view` rendered it perfectly. "Publish it to the website" and "the discovery
+      // layer cannot see it yet" sound like the same sentence and are not.
+      console.log(warning("  ⚠ `iris find` cannot see this yet — its index is generated, not live."))
+      console.log(dim("  Rebuild it with: ") + highlight("bun run capabilities") + dim("  (in the iris-code repo)"))
     } else {
       console.log(warning("  ⚠ LOCAL ONLY — this recipe cannot be published."))
       console.log(dim("  `publish` reads scaffold/how-to in the iris-code repo, not ~/.iris/how-to,"))

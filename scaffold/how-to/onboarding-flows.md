@@ -221,9 +221,9 @@ GET  /api/v1/onboarding/flows                           — List flows (filter b
 GET  /api/v1/onboarding/flows/{slug}/analytics          — Conversion analytics
 ```
 
-## Example: SaddlePass
+## Example: an equestrian marketplace
 
-The SaddlePass onboarding demonstrates all features:
+One live onboarding flow demonstrates all features:
 - 6 roles as card picker
 - Horse Owner path: basic info → horse baseball cards (15 fields, repeatable) → listing prefs
 - Barn Operator path: facility → disciplines checkboxes → amenities checkboxes → policies
@@ -232,4 +232,4 @@ The SaddlePass onboarding demonstrates all features:
 - Phone formatting on phone fields
 - Session resume via localStorage
 
-View it: `iris onboard-flows view saddlepass-onboarding`
+List the flows on your own account with: `iris onboard-flows list`

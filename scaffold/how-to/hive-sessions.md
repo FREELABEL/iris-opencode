@@ -1,5 +1,3 @@
-# How to: hive sessions
-
 ---
 category: Infrastructure
 level: beginner

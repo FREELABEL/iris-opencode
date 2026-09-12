@@ -1,3 +1,10 @@
+---
+category: Pages & Design
+level: beginner
+tags: [pages, genesis, privacy, visibility, gating, access]
+duration_min: 8
+---
+
 # Page privacy — who can see a Genesis page, and how to lock one down
 
 Written because an agent spent four commands and two minutes rediscovering this on a client's

@@ -1,7 +1,5 @@
-# How to: dashboards
-
 ---
-category: Building
+category: Pages & Design
 level: intermediate
 tags: [dashboards, genesis, atlas, hive, console, components]
 duration_min: 12
