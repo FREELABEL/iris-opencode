@@ -4,6 +4,7 @@ import { EOL } from "os"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { dirname, join } from "path"
 import { resolveRef, buildMarkdown, describeSeal } from "./platform-atlas-use"
+import { withAtlasUnsealed, describeSealScope } from "./platform-atlas-seal"
 import {
   atlasHome,
   readManifest,
@@ -39,7 +40,16 @@ import {
 // can fail a script, which is what keeps "frozen" from quietly meaning "stale".
 // ============================================================================
 
+/**
+ * The only path that reaches Atlas on a sealed machine, and only for the length of the
+ * call. Freshness is an OPERATION (ADR-02): the window opens because an operator asked
+ * for it, and closes again when the operation ends.
+ */
 async function fetchPublicItem(uuid: string): Promise<{ item?: any; error?: string }> {
+  return withAtlasUnsealed(`fetch ${uuid}`, () => fetchPublicItemInner(uuid))
+}
+
+async function fetchPublicItemInner(uuid: string): Promise<{ item?: any; error?: string }> {
   const url = `${FL_API}/api/v1/bloq/item/${uuid}`
   let res: Response
   try {

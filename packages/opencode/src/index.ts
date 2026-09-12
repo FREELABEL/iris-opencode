@@ -221,6 +221,20 @@ process.on("uncaughtException", (e) => {
   })
 })
 
+// THE ATLAS SEAL (epic #184607, component 7).
+//
+// Installed before any command runs, because the control has to cover commands nobody has
+// written yet — `platform-bloqs.ts` alone makes 63 network calls across ~30 atlas
+// subcommands, and gating them one by one is a denylist. On an unsealed machine this
+// installs nothing at all, so the sealed path is the only behaviour that can differ.
+try {
+  const { installSealedFetchGuard } = await import("./cli/cmd/platform-atlas-seal")
+  installSealedFetchGuard()
+} catch {
+  // A guard that cannot load must not take the CLI down with it. `atlas pins` reports
+  // whether the seal is in force, so a silent non-install is visible rather than assumed.
+}
+
 const rawArgs = hideBin(process.argv)
 
 const cli = yargs(rawArgs)
@@ -584,6 +598,16 @@ try {
   // silent, so it can neither delay nor break the command that triggered it.
   await Beacon.firstCommand(rawArgs[0])
 } catch (e) {
+  // A SEAL REFUSAL IS A DECISION, NOT A CRASH. The guard throws from inside fetch, so
+  // without this it surfaced as "Unexpected error, check log file" plus a stack trace — a
+  // control that cannot explain itself reads to an operator as a broken CLI rather than a
+  // working boundary. It is also not a fatal to report: beaconing every refusal as
+  // cli_command_error would make a machine doing exactly what it was configured to do look
+  // like the least healthy one in the fleet.
+  if (e instanceof Error && e.name === "SealedError") {
+    UI.error(e.message + EOL)
+    process.exitCode = 1
+  } else {
   let data: Record<string, any> = {}
   if (e instanceof NamedError) {
     const obj = e.toObject()
@@ -640,6 +664,7 @@ try {
     console.error(e)
   }
   process.exitCode = 1
+  }
 } finally {
   // Spans are buffered and coalesced on a 2s unref'd timer, which a CLI process
   // never lives long enough to reach — and process.exit() below discards the

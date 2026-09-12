@@ -335,6 +335,12 @@ export async function fetchWithRetry(
     try {
       return await fetchImpl(url, init)
     } catch (err) {
+      // A SEAL REFUSAL IS NOT A NETWORK ERROR. Retrying it three times and then
+      // re-throwing it as "Network request to … failed" turned a working control into
+      // what looked like an unreachable host — the operator is sent to check their
+      // connection for a machine that is doing exactly what it was configured to do,
+      // and the real reason ends up buried in the last clause of a wrapped message.
+      if (err instanceof Error && err.name === "SealedError") throw err
       lastErr = err
       if (attempt === attempts) break
       const backoffMs = 400 * attempt // 400ms, then 800ms
