@@ -4,7 +4,6 @@ level: intermediate
 tags: [pages, genesis, visibility, lead-capture, email-gate, funnel]
 duration_min: 10
 ---
-
 # Page visibility and the email/lead-capture gate
 
 Two INDEPENDENT controls. Confusing them will either expose a page or silently kill a

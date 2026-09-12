@@ -4,7 +4,6 @@ level: intermediate
 tags: [evals, writing, model-quality, judge, calibration, ai]
 duration_min: 15
 ---
-
 # Evaluate an AI writer (and calibrate the judge first)
 
 How to tell whether a model's output is any good, without trusting your own

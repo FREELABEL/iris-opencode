@@ -4,7 +4,6 @@ level: intermediate
 tags: [deck, pdf, remotion, artifact, genesis, cdn, brand-tokens]
 duration_min: 20
 ---
-
 # Ship a deck, a document, or a client artifact
 
 The whole pipeline: author → render → versioned PDF → CDN → shareable Genesis page.

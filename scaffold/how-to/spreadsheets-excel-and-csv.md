@@ -4,7 +4,6 @@ level: beginner
 tags: [excel, spreadsheet, csv, xlsx, datasets, ingest, import]
 duration_min: 12
 ---
-
 # Excel, spreadsheets and CSVs in IRIS — the five traps that cost a day
 
 Everything here was measured on 2026-09-11 building a 395-row client case audit. Each one

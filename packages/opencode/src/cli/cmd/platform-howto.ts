@@ -51,7 +51,9 @@ async function fetchRemoteRecipe(slug: string): Promise<string | null> {
   }
 }
 
-async function fetchRemoteRecipeList(): Promise<Array<{ name: string; title: string; meta: RecipeMeta; body: string }>> {
+async function fetchRemoteRecipeList(): Promise<
+  Array<{ name: string; title: string; meta: RecipeMeta; body: string }>
+> {
   try {
     const res = await irisFetch("/api/v1/how-tos?per_page=200", {}, IRIS_API)
     if (!res.ok) return []
@@ -89,8 +91,7 @@ async function listRecipes(): Promise<LocalRecipe[]> {
     const { meta, body } = parseFrontMatter(fs.readFileSync(fullPath, "utf-8"))
     const firstLine = body.split("\n").find((l: string) => l.startsWith("# "))
     const title =
-      meta.title ??
-      (firstLine ? firstLine.replace(/^#\s+/, "").replace(/^How to:\s*/i, "") : f.replace(".md", ""))
+      meta.title ?? (firstLine ? firstLine.replace(/^#\s+/, "").replace(/^How to:\s*/i, "") : f.replace(".md", ""))
     return { name: f.replace(".md", ""), title, path: fullPath, meta, body }
   })
 }
@@ -159,7 +160,9 @@ function levelTag(level?: string): string {
  * Body of `how-to list`, extracted so the bare `iris how-to` can reuse it
  * instead of duplicating the rendering (#178285).
  */
-export async function runList(opts: { category?: string; level?: string; tags?: string[]; sort?: string } = {}): Promise<void> {
+export async function runList(
+  opts: { category?: string; level?: string; tags?: string[]; sort?: string } = {},
+): Promise<void> {
   UI.empty()
   prompts.intro("◈  IRIS How-To Recipes")
 
@@ -202,8 +205,10 @@ export async function runList(opts: { category?: string; level?: string; tags?: 
       }
     } else {
       const sorted = recipes.slice()
-      if (opts.sort === "level") sorted.sort((a, b) => (LEVEL_RANK[a.meta.level ?? ""] ?? 99) - (LEVEL_RANK[b.meta.level ?? ""] ?? 99))
-      else if (opts.sort === "duration") sorted.sort((a, b) => (a.meta.duration_min ?? 9999) - (b.meta.duration_min ?? 9999))
+      if (opts.sort === "level")
+        sorted.sort((a, b) => (LEVEL_RANK[a.meta.level ?? ""] ?? 99) - (LEVEL_RANK[b.meta.level ?? ""] ?? 99))
+      else if (opts.sort === "duration")
+        sorted.sort((a, b) => (a.meta.duration_min ?? 9999) - (b.meta.duration_min ?? 9999))
       else sorted.sort((a, b) => a.title.localeCompare(b.title))
       for (const r of sorted) render(r)
       console.log()
@@ -252,8 +257,7 @@ const HowToViewCommand = cmd({
   command: "view <name>",
   aliases: ["read", "show"],
   describe: "display a how-to recipe",
-  builder: (y) =>
-    y.positional("name", { type: "string", demandOption: true, describe: "recipe name (without .md)" }),
+  builder: (y) => y.positional("name", { type: "string", demandOption: true, describe: "recipe name (without .md)" }),
   async handler(args) {
     const fs = await import("fs")
     const name = String(args.name).replace(/\.md$/, "")
@@ -356,8 +360,7 @@ const HowToSearchCommand = cmd({
   command: "search <query>",
   aliases: ["find", "grep"],
   describe: "search how-to recipes by keyword",
-  builder: (y) =>
-    y.positional("query", { type: "string", demandOption: true, describe: "search term" }),
+  builder: (y) => y.positional("query", { type: "string", demandOption: true, describe: "search term" }),
   async handler(args) {
     await runSearch(String(args.query))
   },
@@ -505,7 +508,49 @@ export function injectTitle(content: string, title: string | null, name: string)
   return `${head}\n${heading}\n\n${body.replace(/^\n+/, "")}`
 }
 
-/** The closest valid category to a near-miss, so a refusal can point somewhere. */
+/**
+ * The closest valid category to a near-miss, so a refusal can point somewhere.
+ *
+ * The list is closed on purpose — an extensible category list stops being navigation
+ * within a month — but a closed list invites specific wrong guesses, and #184556 named
+ * the one that actually happened: someone wrote "Integrations", which is an obvious
+ * category name and is not on it. Substring matching alone returns null for that, so the
+ * common wrong guesses are mapped explicitly. Naming the right answer is the difference
+ * between a refusal a person can act on and one that just prints nine options.
+ */
+const CATEGORY_ALIASES: Record<string, string> = {
+  integrations: "Infrastructure",
+  integration: "Infrastructure",
+  devops: "Infrastructure",
+  deployment: "Infrastructure",
+  ops: "Infrastructure",
+  api: "Infrastructure",
+  security: "Infrastructure",
+  building: "Pages & Design",
+  design: "Pages & Design",
+  pages: "Pages & Design",
+  genesis: "Pages & Design",
+  ai: "Agents & Automation",
+  agents: "Agents & Automation",
+  automation: "Agents & Automation",
+  workflows: "Agents & Automation",
+  data: "Data & Atlas",
+  atlas: "Data & Atlas",
+  crm: "CRM & Sales",
+  sales: "CRM & Sales",
+  leads: "CRM & Sales",
+  content: "Content & Media",
+  media: "Content & Media",
+  marketing: "Content & Media",
+  billing: "Finance",
+  payments: "Finance",
+  money: "Finance",
+  community: "Bounty & Community",
+  bounty: "Bounty & Community",
+  onboarding: "Getting Started",
+  basics: "Getting Started",
+}
+
 export function nearestCategory(input: string): string | null {
   const norm = (x: string) => x.toLowerCase().replace(/[^a-z]/g, "")
   const want = norm(input)
@@ -513,6 +558,11 @@ export function nearestCategory(input: string): string | null {
   for (const c of CATEGORIES) {
     const n = norm(c)
     if (n === want || n.includes(want) || want.includes(n)) return c
+  }
+  // Then the guesses people actually make. Checked AFTER exact/substring so a real
+  // category always wins over an alias.
+  for (const [alias, target] of Object.entries(CATEGORY_ALIASES)) {
+    if (want === alias || want.startsWith(alias) || alias.startsWith(want)) return target
   }
   return null
 }
@@ -526,6 +576,23 @@ export function validateRecipeMeta(slug: string, meta: RecipeMeta): string[] {
   return errs
 }
 
+/**
+ * A recipe's display title: front-matter title → first NON-EMPTY body line → slug.
+ *
+ * The middle step used to read `lines[0]` literally. Front-matter written as
+ * `---\n…\n---\n\n# Real Title` leaves a blank line there, so the title fell through to
+ * the SLUG and six recipes went out on the public index named after their filenames —
+ * "page-privacy", "article-evals", "spreadsheets-excel-and-csv" — with their real titles
+ * sitting one line below. Nothing errored. The cards were simply wrong.
+ *
+ * Exported so the rule is pinned by a test rather than by a directory of files.
+ */
+export function recipeTitle(metaTitle: string | undefined, body: string, slug: string): string {
+  if (metaTitle) return metaTitle
+  const firstLine = body.split("\n").find((l) => l.trim()) ?? ""
+  return firstLine.replace(/^#+\s*/, "").trim() || slug
+}
+
 function readRecipes(dir: string) {
   return readdirSync(dir)
     .filter((f) => f.endsWith(".md") && f !== "README.md")
@@ -536,7 +603,14 @@ function readRecipes(dir: string) {
       // Strip front-matter FIRST so every rule below sees exactly what it saw before this existed.
       const { meta, body: raw } = parseFrontMatter(rawFile)
       const lines = raw.split("\n")
-      const title = meta.title || (lines[0] || "").replace(/^#\s*/, "").trim() || slug
+      // The first NON-EMPTY line, not line 0.
+      //
+      // Front-matter written as `---\n…\n---\n\n# Real Title` leaves a blank line at
+      // lines[0], so the title fell through to the SLUG — six recipes published to the
+      // public index titled "page-privacy", "article-evals", "spreadsheets-excel-and-csv"
+      // while their real titles sat one line below. Nothing errored; the cards just went
+      // out named after their filenames.
+      const title = recipeTitle(meta.title, raw, slug)
       // First real PARAGRAPH becomes the card summary, not the first physical line.
       //
       // Two bugs lived here. Taking one line shipped `> **STOP — read the design standard
@@ -547,7 +621,9 @@ function readRecipes(dir: string) {
       const startIdx = rest.findIndex((l) => {
         const t = l.trim()
         if (!t) return false
-        return !t.startsWith("#") && !t.startsWith("```") && !t.startsWith(">") && !t.startsWith("|") && !t.startsWith("---")
+        return (
+          !t.startsWith("#") && !t.startsWith("```") && !t.startsWith(">") && !t.startsWith("|") && !t.startsWith("---")
+        )
       })
       let summary: string | null = null
       if (startIdx !== -1) {
@@ -558,10 +634,10 @@ function readRecipes(dir: string) {
         }
         const flat = para
           .join(" ")
-          .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")   // [text](url) -> text
+          .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // [text](url) -> text
           .replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, "$1") // **bold** / _em_ -> text
-          .replace(/`([^`]+)`/g, "$1")                  // `code` -> code
-          .replace(/[*_]{2,}/g, "")                     // a bold that opens and never closes
+          .replace(/`([^`]+)`/g, "$1") // `code` -> code
+          .replace(/[*_]{2,}/g, "") // a bold that opens and never closes
           .replace(/\s+/g, " ")
           .trim()
         // Cut on a sentence end if there is one in range, so a card never stops mid-clause.
@@ -649,7 +725,9 @@ const HowToPublishCommand = cmd({
 
     const tagged = publishable.filter((r) => r.category).length
     if (tagged < publishable.length) {
-      console.log(dim(`  tagged  ${tagged}/${publishable.length}`) + warning(`  (${publishable.length - tagged} untagged)`))
+      console.log(
+        dim(`  tagged  ${tagged}/${publishable.length}`) + warning(`  (${publishable.length - tagged} untagged)`),
+      )
     } else {
       console.log(dim(`  tagged  ${tagged}/${publishable.length}`))
     }
@@ -664,7 +742,9 @@ const HowToPublishCommand = cmd({
           const body: any = await res.json()
           for (const r of body?.data ?? []) live[r.slug] = r.updated_at ?? ""
         }
-      } catch { /* offline is not an error for a dry run */ }
+      } catch {
+        /* offline is not an error for a dry run */
+      }
       const fresh = publishable.filter((r) => !(r.slug in live))
       printDivider()
       console.log(`  ${bold(String(publishable.length))} would publish · ${bold(String(fresh.length))} not yet live`)
@@ -1004,7 +1084,11 @@ const HowToSocialCommand = cmd({
   builder: (y) =>
     y
       .positional("name", { type: "string", demandOption: true, describe: "recipe slug" })
-      .option("brand", { type: "string", default: "heyiris", describe: "brand slug — drives design tokens AND the call-to-action" })
+      .option("brand", {
+        type: "string",
+        default: "heyiris",
+        describe: "brand slug — drives design tokens AND the call-to-action",
+      })
       .option("url", {
         type: "string",
         describe: "canonical link for this recipe on the BRAND's own site (required for non-IRIS brands)",
@@ -1084,7 +1168,10 @@ const HowToSocialCommand = cmd({
     }
 
     // X caption. Kept under 280 including the link, and assembled from the recipe's own words.
-    const tagStr = (meta.tags ?? []).slice(0, 3).map((t) => `#${t.replace(/-/g, "")}`).join(" ")
+    const tagStr = (meta.tags ?? [])
+      .slice(0, 3)
+      .map((t) => `#${t.replace(/-/g, "")}`)
+      .join(" ")
     const lead = (lede ?? sections[0]?.text)?.split(/(?<=\.)\s/)[0] ?? ""
     // Never append a link we do not have. A caption ending in a bare newline is
     // survivable; one pointing at another company's docs is not.
@@ -1228,8 +1315,7 @@ const HowToRemoveCommand = cmd({
   command: "remove <name>",
   aliases: ["rm", "delete"],
   describe: "remove a how-to recipe",
-  builder: (y) =>
-    y.positional("name", { type: "string", demandOption: true }),
+  builder: (y) => y.positional("name", { type: "string", demandOption: true }),
   async handler(args) {
     const fs = await import("fs")
     const name = String(args.name).replace(/\.md$/, "")
@@ -1253,11 +1339,21 @@ const HowToRemoveCommand = cmd({
  * the default handler and the tests agree on the precedence rule.
  */
 export const HOWTO_SUBCOMMANDS = [
-  "list", "ls",
-  "view", "read", "show",
-  "search", "find", "grep",
-  "add", "create", "write", "save",
-  "remove", "rm", "delete",
+  "list",
+  "ls",
+  "view",
+  "read",
+  "show",
+  "search",
+  "find",
+  "grep",
+  "add",
+  "create",
+  "write",
+  "save",
+  "remove",
+  "rm",
+  "delete",
 ]
 
 /**
