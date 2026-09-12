@@ -1411,7 +1411,11 @@ const AgentsMessageCommand = cmd({
       .positional("content", { describe: "message text", type: "string", demandOption: true })
       .option("thread", { describe: "existing thread ID to post into", type: "string" })
       .option("to", { describe: "recipient agent ID/name — opens a new thread if --thread is omitted", type: "string" })
+      // boolean-negation is disabled globally (src/index.ts), so `--no-trigger` is NOT the
+      // negation of `--trigger` — it must be its own literal flag or the parser rejects the
+      // exact spelling the help text advertises (#184593, same defect in 6 places).
       .option("trigger", { describe: "let other agents auto-respond (use --no-trigger to suppress)", type: "boolean", default: true })
+      .option("no-trigger", { describe: "suppress auto-responses from other agents", type: "boolean", default: false })
       .option("json", { describe: "JSON output", type: "boolean", default: false })
       .option("user-id", { describe: "user ID (or IRIS_USER_ID env)", type: "number" }),
   async handler(args) {
@@ -1477,7 +1481,7 @@ const AgentsMessageCommand = cmd({
 
       const res = await irisFetch(
         `/api/threads/${threadId}/messages`,
-        { method: "POST", body: JSON.stringify(buildThreadMessageBody({ content: args.content as string, asAgentId: fromId, triggerResponses: args.trigger as boolean })) },
+        { method: "POST", body: JSON.stringify(buildThreadMessageBody({ content: args.content as string, asAgentId: fromId, triggerResponses: (args.trigger as boolean) && !args["no-trigger"] })) },
         IRIS_API,
       )
       const ok = await handleApiError(res, "Send message")

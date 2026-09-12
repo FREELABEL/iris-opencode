@@ -9,6 +9,7 @@ import { join, dirname } from "path"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { randomUUID } from "crypto"
 import { execSync } from "child_process"
+import { itemContentText } from "./bloq-item-format"
 
 // Bug reports go to bloq #297 (under user 193) via PUBLIC endpoint — no auth required
 const BUG_REPORT_ENDPOINT = "/api/v1/public/bug-report"
@@ -785,8 +786,7 @@ const ListCommand = cmd({
     const severityOf = (item: any): string => {
       // `content` is not always a string — some board items carry structured
       // content, and calling .match() on those threw once the scan reached them.
-      const raw = item.content ?? item.description ?? ""
-      const contentStr = typeof raw === "string" ? raw : JSON.stringify(raw)
+      const contentStr = itemContentText(item)
       const fromBody = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1]
       if (fromBody) return fromBody.toLowerCase()
       // Older reports carry severity only as a title prefix: "[CRITICAL] ...".
@@ -897,7 +897,7 @@ const ListCommand = cmd({
       }
     } else {
       for (const item of items) {
-        const contentStr = item.content ?? item.description ?? ""
+        const contentStr = itemContentText(item)
         const severity = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1] ?? ""
         const sevTag = severity ? `  [${severity.toUpperCase()}]` : ""
         const status = item.status ? `  ${dim(item.status)}` : ""
@@ -909,7 +909,7 @@ const ListCommand = cmd({
         console.log(`  ${bold(String(item.title))}  ${dim(`#${item.id}`)}${sevTag}${status}${fixTag}`)
         if (contentStr) {
           // Show first meaningful line (skip markdown headers)
-          const lines = String(contentStr).split("\n").filter((l: string) => l.trim() && !l.startsWith("**") && !l.startsWith("#"))
+          const lines = contentStr.split("\n").filter((l: string) => l.trim() && !l.startsWith("**") && !l.startsWith("#"))
           if (lines.length > 0) {
             console.log(`    ${dim(lines[0].slice(0, 100))}`)
           }
@@ -1000,7 +1000,7 @@ const ShowCommand = cmd({
       return
     }
 
-    const contentStr = found.content ?? found.description ?? ""
+    const contentStr = itemContentText(found)
     const severity = contentStr.match(/Severity:\*?\*?\s*(\w+)/i)?.[1] ?? ""
     const hasResolution = /###\s*✅?\s*Resolution/i.test(contentStr)
     const fixCommit = latestFixCommit(contentStr)
@@ -1014,7 +1014,7 @@ const ShowCommand = cmd({
     if (showBadge) meta.push(showBadge)
     if (meta.length) console.log(`  ${meta.join("  ")}`)
     printDivider()
-    console.log(contentStr ? String(contentStr) : dim("  (no description)"))
+    console.log(contentStr || dim("  (no description)"))
 
     // ATTRIBUTION — who this bug is credited to, and from which machine.
     //

@@ -28,6 +28,10 @@ export const McpInstallCommand = cmd({
         default: false,
         describe: "machine-readable output",
       })
+      // boolean-negation is disabled globally (src/index.ts), so `--no-trust` is NOT the
+      // negation of `--trust` — it must be its own literal flag or the parser rejects the
+      // exact spelling the help text advertises (#184593, same defect in 6 places).
+      .option("no-trust", { type: "boolean", default: false, describe: "skip adding the working folder to the trusted list" })
       .option("trust", {
         type: "boolean",
         default: true,
@@ -107,7 +111,7 @@ export const McpInstallCommand = cmd({
     // a trust entry the user sees a clean success here and then no IRIS tools at
     // all. Do it for them — a client should not have to hand-edit JSON, and a
     // placeholder path in documentation WILL be pasted verbatim (it was).
-    if (results.some((r) => r.client.id === "gemini" && r.action !== "error") && args.trust !== false) {
+    if (results.some((r) => r.client.id === "gemini" && r.action !== "error") && args.trust !== false && !args["no-trust"]) {
       const target = (args["trust-path"] as string) || process.cwd()
       try {
         const t = await McpClients.trustFolderForGemini(target)
