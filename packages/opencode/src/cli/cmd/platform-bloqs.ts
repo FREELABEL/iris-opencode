@@ -3650,15 +3650,45 @@ async function resolveMemberId(
 
   // Exact address only. A substring match here would grant board access to the wrong person,
   // which is not the kind of thing to be approximately right about.
-  const hit = rows.find((r) => String(r?.email ?? "").toLowerCase() === email.toLowerCase())
-  if (!hit) {
-    return {
-      error: rows.length
-        ? `No account with the exact address ${email} (search returned ${rows.length} near match(es)).`
-        : `No account found for ${email}.`,
-    }
+  const wanted = email.toLowerCase()
+  const hit = rows.find((r) => String(r?.email ?? "").toLowerCase() === wanted)
+  if (hit) return { id: Number(hit.id), email: String(hit.email) }
+
+  // THE SEARCH FINDS PEOPLE BY EMAIL AND DOES NOT RETURN THE EMAIL.
+  //
+  // /api/v1/users/search matches on the address and then answers with `email: null`:
+  //
+  //   { "id": 5365, "email": null, "full_name": "rdelgado", "user_name": "rdelgado" }
+  //
+  // So the comparison above was `"" === "rdelgado@vanguardhcs.com"` and this function
+  // reported "no account with the exact address" while holding the exact right row. Adding
+  // the same person by --user-id worked immediately.
+  //
+  // The cost is not a retry. The obvious reading of "no account" is that the person has not
+  // signed up, so you go and ask them to — and on 2026-09-12 the very next address tried,
+  // on the same domain, genuinely had no account. One existed and one did not, and this
+  // function said the same thing about both. A caller cannot tell "absent" from "I could
+  // not check", which is the failure this codebase keeps paying for.
+  //
+  // /api/v1/users/{id} DOES return the email, so confirm there rather than trusting a field
+  // the search declines to populate. The exact-match rule is preserved — the address must
+  // still match exactly, it is just read from a source that has it.
+  const unconfirmed = rows.filter((r) => r?.id != null && !String(r?.email ?? "").trim())
+  for (const row of unconfirmed.slice(0, 5)) {
+    const one = await irisFetch(`/api/v1/users/${Number(row.id)}`)
+    if (!one.ok) continue
+    const detail = (await one.json().catch(() => null)) as any
+    const found = String(detail?.email ?? detail?.data?.email ?? "").trim()
+    if (found.toLowerCase() === wanted) return { id: Number(row.id), email: found }
   }
-  return { id: Number(hit.id), email: String(hit.email) }
+
+  return {
+    error: rows.length
+      ? `No account with the exact address ${email}. The search returned ${rows.length} `
+        + `candidate(s) and none of them confirmed to that address — `
+        + `try --user-id, or check the spelling.`
+      : `No account found for ${email}. If they have never signed in, there is nothing to add yet.`,
+  }
 }
 
 const BloqsMembersCommand = cmd({
