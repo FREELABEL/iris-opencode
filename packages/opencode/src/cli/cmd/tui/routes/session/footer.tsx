@@ -5,6 +5,7 @@ import { useDirectory } from "../../context/directory"
 import { useConnected } from "../../component/dialog-model"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
+import { useHiveInbox } from "../../iris/hive-inbox"
 
 export function Footer() {
   const { theme } = useTheme()
@@ -19,6 +20,8 @@ export function Footer() {
   })
   const directory = useDirectory()
   const connected = useConnected()
+  // Hive messages arrive while you work and nothing announces them — see iris/hive-inbox.ts.
+  const inbox = useHiveInbox()
 
   const [store, setStore] = createStore({
     welcome: false,
@@ -61,6 +64,20 @@ export function Footer() {
               <text fg={theme.warning}>
                 <span style={{ fg: theme.warning }}>△</span> {permissions().length} Permission
                 {permissions().length > 1 ? "s" : ""}
+              </text>
+            </Show>
+            {/* Silent at zero on purpose: a badge that is always present stops being read.
+                `unread: null` means the manifest exists and could not be parsed — shown as a
+                distinct mark rather than as a comfortable 0. */}
+            <Show when={inbox().unreadable}>
+              <text fg={theme.error}>
+                <span style={{ fg: theme.error }}>✉</span> Hive inbox unreadable
+              </text>
+            </Show>
+            <Show when={(inbox().unread ?? 0) > 0}>
+              <text fg={theme.warning}>
+                <span style={{ fg: theme.warning }}>✉</span> {inbox().unread} Hive
+                <span style={{ fg: theme.textMuted }}> · hive inbox read</span>
               </text>
             </Show>
             <text fg={theme.text}>
