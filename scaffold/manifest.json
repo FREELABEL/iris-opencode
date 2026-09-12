@@ -385,6 +385,42 @@
       "dest": "playbooks/hive-secure-mesh/PLAYBOOK.md",
       "managed": true,
       "purpose": "Runnable SOP for the Hive + Tailscale secure mesh — onboard a machine, lock it down with a least-privilege ACL, connect, enroll it as a Hive node, and diagnose bottom-up. Companion to the hive-tailscale how-to, which explains the model; this is the half you run."
+    },
+    {
+      "src": "how-to/article-evals.md",
+      "dest": "how-to/article-evals.md",
+      "managed": true,
+      "purpose": "Score a published article against the evals that decide whether it ships."
+    },
+    {
+      "src": "how-to/booking-policy-per-item.md",
+      "dest": "how-to/booking-policy-per-item.md",
+      "managed": true,
+      "purpose": "Set charge mode and ID verification per bookable item."
+    },
+    {
+      "src": "how-to/entity-graph.md",
+      "dest": "how-to/entity-graph.md",
+      "managed": true,
+      "purpose": "Read the entity graph — how leads, tasks, invoices and items actually relate."
+    },
+    {
+      "src": "how-to/page-visibility-and-lead-capture-gate.md",
+      "dest": "how-to/page-visibility-and-lead-capture-gate.md",
+      "managed": true,
+      "purpose": "Decide who can open a page and what a visitor must give to get in — the gate and the visibility are different controls."
+    },
+    {
+      "src": "how-to/ship-a-deck-or-client-artifact.md",
+      "dest": "how-to/ship-a-deck-or-client-artifact.md",
+      "managed": true,
+      "purpose": "Produce a deck or client artifact that prints and exports correctly, not just one that looks right on screen."
+    },
+    {
+      "src": "how-to/spreadsheets-excel-and-csv.md",
+      "dest": "how-to/spreadsheets-excel-and-csv.md",
+      "managed": true,
+      "purpose": "Build and edit spreadsheets from the CLI — including the trap where regenerating a workbook silently strips dropdown validations."
     }
   ]
 }
