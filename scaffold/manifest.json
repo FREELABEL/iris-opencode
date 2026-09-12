@@ -45,6 +45,12 @@
       "purpose": "Sharing a bloq board safely — scoped invites (--scope-list/--scope-item/--scope-own), auditing and revoking links, and the two non-obvious exposures: the invite default is the WHOLE board, and scoping does NOT protect the CRM notes of attached lead contacts."
     },
     {
+      "src": "how-to/share-work-across-accounts.md",
+      "dest": "how-to/share-work-across-accounts.md",
+      "managed": true,
+      "purpose": "Someone on another account cannot open the work you sent them. The four ways to grant access narrowest-first — a scoped invite link, board membership (default is EDITOR, and it grants the whole board), a gated public link via --allowed-emails/--allowed-domains, and ungated --force which cannot be undone. Includes the handoff trap: the reference travels, the permission does not (#184654)."
+    },
+    {
       "src": "how-to/bloq-relations.md",
       "dest": "how-to/bloq-relations.md",
       "managed": true,
