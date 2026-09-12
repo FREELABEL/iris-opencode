@@ -4,7 +4,6 @@ level: intermediate
 tags: [booking, stripe, identity, inventory, charge-mode, policy]
 duration_min: 10
 ---
-
 # Per-item booking policy (charge mode + ID verification)
 
 Set how each item in a bookable inventory charges, and whether it needs identity

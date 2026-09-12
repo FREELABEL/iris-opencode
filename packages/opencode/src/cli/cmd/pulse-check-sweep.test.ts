@@ -1,7 +1,21 @@
 import { describe, expect, test } from "bun:test"
-import { keywordVariants, keywordPattern, topicSlug, toObservations, resolveRepoRoot, gitRepos, sweepImessage, sweepDiary, sweepFiles, sweepBloq, decodeAttributedBody, parseMailResponse, type SourceSweep } from "./pulse-check-sweep"
+import {
+  keywordVariants,
+  keywordPattern,
+  topicSlug,
+  toObservations,
+  resolveRepoRoot,
+  gitRepos,
+  sweepImessage,
+  sweepDiary,
+  sweepFiles,
+  sweepBloq,
+  decodeAttributedBody,
+  parseMailResponse,
+  type SourceSweep,
+} from "./pulse-check-sweep"
 import { execFileSync } from "child_process"
-import { mkdtempSync, rmSync } from "fs"
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 
@@ -68,7 +82,15 @@ describe("sweepBloq — a non-array `data` must never crash the sweep (#182191)"
       path.includes("content-items") ? fakeRes({ data: {} }) : fakeRes({ data: {} })
 
     await expect(
-      sweepBloq({ keyword: "no such board", repo: ".", windowDays: 30, limit: 6, sources: ["bloq"], apiFetch, userId: 1 }),
+      sweepBloq({
+        keyword: "no such board",
+        repo: ".",
+        windowDays: 30,
+        limit: 6,
+        sources: ["bloq"],
+        apiFetch,
+        userId: 1,
+      }),
     ).resolves.toMatchObject({ source: "bloq", items: [] })
   })
 
@@ -77,17 +99,35 @@ describe("sweepBloq — a non-array `data` must never crash the sweep (#182191)"
       path.includes("content-items") ? fakeRes({ data: {} }) : fakeRes({ data: [] })
 
     await expect(
-      sweepBloq({ keyword: "another miss", repo: ".", windowDays: 30, limit: 6, sources: ["bloq"], apiFetch, userId: 1 }),
+      sweepBloq({
+        keyword: "another miss",
+        repo: ".",
+        windowDays: 30,
+        limit: 6,
+        sources: ["bloq"],
+        apiFetch,
+        userId: 1,
+      }),
     ).resolves.toMatchObject({ source: "bloq", items: [] })
   })
 
   test("a real array of boards/rows still works (not just the empty case)", async () => {
     const apiFetch = async (path: string) =>
       path.includes("content-items")
-        ? fakeRes({ data: [{ id: 1, updated_at: new Date().toISOString(), list_name: "L", title: "creator os thread" }] })
+        ? fakeRes({
+            data: [{ id: 1, updated_at: new Date().toISOString(), list_name: "L", title: "creator os thread" }],
+          })
         : fakeRes({ data: [] })
 
-    const result = await sweepBloq({ keyword: "creator os", repo: ".", windowDays: 30, limit: 6, sources: ["bloq"], apiFetch, userId: 1 })
+    const result = await sweepBloq({
+      keyword: "creator os",
+      repo: ".",
+      windowDays: 30,
+      limit: 6,
+      sources: ["bloq"],
+      apiFetch,
+      userId: 1,
+    })
     expect(result.items.length).toBe(1)
   })
 })
@@ -161,18 +201,19 @@ describe("toObservations", () => {
   test("--include-context is what makes private text travel", () => {
     const items = [{ when: "2026-08-18T00:00:00.000Z", where: "me → +15551234567", text: "ship the portal" }]
 
-    const [shared] = toObservations(
-      "creator os",
-      [sweep({ source: "imessage", hits: 1, items })],
-      { ...base, includeContext: true },
-    )
+    const [shared] = toObservations("creator os", [sweep({ source: "imessage", hits: 1, items })], {
+      ...base,
+      includeContext: true,
+    })
 
     expect(shared.text).toContain("ship the portal")
     expect(shared.payload.content_included).toBe(true)
   })
 
   test("repo-born sources travel by default — they are already in a git history", () => {
-    const items = [{ when: "2026-08-19T00:00:00.000Z", where: "fl-iris-api@712816f0", text: "feat(creator-os): allowlist" }]
+    const items = [
+      { when: "2026-08-19T00:00:00.000Z", where: "fl-iris-api@712816f0", text: "feat(creator-os): allowlist" },
+    ]
 
     const [obs] = toObservations("creator os", [sweep({ source: "git", hits: 1, items })], base)
 
@@ -183,7 +224,11 @@ describe("toObservations", () => {
   test("every observation targets one entity, so a re-run updates rather than forks", () => {
     const observations = toObservations(
       "Creator OS",
-      [sweep({ source: "git", hits: 1 }), sweep({ source: "diary", hits: 1 }), sweep({ source: "email", searched: false, unavailableReason: "x" })],
+      [
+        sweep({ source: "git", hits: 1 }),
+        sweep({ source: "diary", hits: 1 }),
+        sweep({ source: "email", searched: false, unavailableReason: "x" }),
+      ],
       base,
     )
 
@@ -225,12 +270,42 @@ describe("resolveRepoRoot", () => {
     expect(deep).toBe(top)
   })
 
+  /**
+   * Built as a FIXTURE, not read off the developer's checkout.
+   *
+   * This assertion used to run `gitRepos(resolveRepoRoot(import.meta.dir))` and require more
+   * than one repo — true only when this CLI happens to sit inside the monorepo. On a
+   * standalone clone it returned exactly 1 and failed, so the test reported "gitlink
+   * discovery is broken" when the code was fine and only the directory layout differed.
+   * A test that asserts where someone keeps their files cannot distinguish a real
+   * regression from a different laptop.
+   */
   test("every nested repo is discovered from the resolved root", () => {
-    const repos = gitRepos(resolveRepoRoot(here)!)
-    // The parent plus its gitlinks — read from the index, since this monorepo
-    // has no .gitmodules at all.
-    expect(repos.length).toBeGreaterThan(1)
-    expect(new Set(repos).size).toBe(repos.length)
+    const dir = mkdtempSync(join(tmpdir(), "pulse-repos-"))
+    try {
+      const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, stdio: "pipe" })
+      const child = join(dir, "child")
+      mkdirSync(child)
+      for (const d of [dir, child]) {
+        git(d, "init", "-q")
+        git(d, "config", "user.email", "t@example.com")
+        git(d, "config", "user.name", "t")
+      }
+      writeFileSync(join(child, "f.txt"), "x")
+      git(child, "add", "-A")
+      git(child, "commit", "-qm", "child")
+      // A GITLINK: the parent records the child as mode 160000, with no .gitmodules —
+      // exactly the shape the monorepo has and the reason this reads the index.
+      git(dir, "add", "child")
+      git(dir, "commit", "-qm", "parent")
+
+      const repos = gitRepos(dir)
+      expect(repos.length).toBeGreaterThan(1)
+      expect(new Set(repos).size).toBe(repos.length)
+      expect(repos.some((r) => r.endsWith("/child"))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -249,11 +324,10 @@ describe("toObservations — Atlas source", () => {
     // A life atlas holds finances, health and family. Its titles are the most
     // private text any source in this sweep produces.
     const items = [{ when: "2026-08-22T00:00:00.000Z", where: "Finances #181468", text: "THE MONEY MAP" }]
-    const [obs] = toObservations(
-      "mayo life atlas",
-      [sweep({ source: "bloq", hits: 1, items })],
-      { includeContext: false, windowDays: 30 },
-    )
+    const [obs] = toObservations("mayo life atlas", [sweep({ source: "bloq", hits: 1, items })], {
+      includeContext: false,
+      windowDays: 30,
+    })
     expect(obs.text).toBeNull()
     expect(JSON.stringify(obs)).not.toContain("MONEY MAP")
     expect(obs.payload.locators[0].where).toBe("Finances #181468")
@@ -274,8 +348,7 @@ describe("toObservations — Atlas source", () => {
  */
 describe("sweepImessage — the three places a message's words live", () => {
   const APPLE_EPOCH = 978307200
-  const appleNs = (secondsAgo: number) =>
-    (Math.floor(Date.now() / 1000) - secondsAgo - APPLE_EPOCH) * 1_000_000_000
+  const appleNs = (secondsAgo: number) => (Math.floor(Date.now() / 1000) - secondsAgo - APPLE_EPOCH) * 1_000_000_000
 
   /** A plausible NSKeyedArchiver stream with the words buried in it. */
   const attributedBody = (text: string) =>
@@ -377,7 +450,8 @@ INSERT INTO message VALUES (4, ${appleNs(1800)}, 'dinner at 8', NULL, 1, 0);
 
 describe("decodeAttributedBody", () => {
   test("returns the sentence and drops the archiver's vocabulary", () => {
-    const raw = "\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84NSMutableAttributedString\x00\x84\x84\x08NSObject\x00\x85\x92\x84\x84\x84NSString\x01\x94\x84\x01+\x1bhere is the revenue ops deck\x86"
+    const raw =
+      "\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84NSMutableAttributedString\x00\x84\x84\x08NSObject\x00\x85\x92\x84\x84\x84NSString\x01\x94\x84\x01+\x1bhere is the revenue ops deck\x86"
     const out = decodeAttributedBody(raw)
     expect(out).toContain("here is the revenue ops deck")
     expect(out).not.toContain("NSString")
@@ -456,15 +530,46 @@ describe("PC-07 — collectors agree across spellings", () => {
   const repo = resolveRepoRoot(import.meta.dir)!
   const base = { repo, windowDays: 3650, limit: 500, sources: [] as any }
 
-  test("sweepDiary returns the SAME hits for a punctuated and a plain spelling", () => {
-    const a = sweepDiary({ ...base, keyword: "MAYO — Life Atlas" })
-    const b = sweepDiary({ ...base, keyword: "mayo life atlas" })
+  /**
+   * A fixture diary, because the originals grepped the DEVELOPER'S diary for a phrase that
+   * happened to be in it. On any checkout without that file they reported `searched: false`
+   * and 0 hits — which the assertions then read as "the collectors disagree", a logic
+   * failure, when the truth was "there was nothing to search". Absent is not zero, and a
+   * test that cannot tell them apart is the same defect it is guarding against.
+   */
+  function diaryFixture(): string {
+    const dir = mkdtempSync(join(tmpdir(), "pulse-diary-"))
+    execFileSync("git", ["init", "-q"], { cwd: dir, stdio: "pipe" })
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: dir, stdio: "pipe" })
+    execFileSync("git", ["config", "user.name", "t"], { cwd: dir, stdio: "pipe" })
+    mkdirSync(join(dir, "daily-diary"))
+    // One file spells it with an em dash, one plainly. Canonicalisation must find BOTH
+    // from EITHER spelling — that is the whole property under test.
+    writeFileSync(join(dir, "daily-diary", "2026-01-01-a.md"), "# One\n\nNotes on MAYO — Life Atlas today.\n")
+    writeFileSync(join(dir, "daily-diary", "2026-01-02-b.md"), "# Two\n\nmore mayo life atlas notes\n")
+    writeFileSync(join(dir, "daily-diary", "2026-01-03-c.md"), "# Three\n\nnothing relevant here\n")
+    execFileSync("git", ["add", "-A"], { cwd: dir, stdio: "pipe" })
+    execFileSync("git", ["commit", "-qm", "diary"], { cwd: dir, stdio: "pipe" })
+    return dir
+  }
 
-    expect(a.searched && b.searched).toBe(true)
-    // Set equality, not containment. Containment is what the variant list
-    // earned; equality is the actual requirement.
-    expect(new Set(a.items.map((i) => i.where))).toEqual(new Set(b.items.map((i) => i.where)))
-    expect(a.hits).toBe(b.hits)
+  test("sweepDiary returns the SAME hits for a punctuated and a plain spelling", () => {
+    const dir = diaryFixture()
+    try {
+      const f = { ...base, repo: dir }
+      const a = sweepDiary({ ...f, keyword: "MAYO — Life Atlas" })
+      const b = sweepDiary({ ...f, keyword: "mayo life atlas" })
+
+      expect(a.searched && b.searched).toBe(true)
+      // Set equality, not containment. Containment is what the variant list
+      // earned; equality is the actual requirement.
+      expect(new Set(a.items.map((i) => i.where))).toEqual(new Set(b.items.map((i) => i.where)))
+      expect(a.hits).toBe(b.hits)
+      // And it actually FOUND something — otherwise two empty sets would match forever.
+      expect(a.hits).toBeGreaterThan(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   // 30s: this greps every tracked file in every repo under the root, twice. It passes
@@ -482,15 +587,29 @@ describe("PC-07 — collectors agree across spellings", () => {
   test("the punctuated spelling still finds the em-dashed occurrences", () => {
     // The regression guard in the other direction: collapsing to a canonical
     // token form must not LOSE the hits the punctuated spelling used to find.
-    const a = sweepDiary({ ...base, keyword: "MAYO — Life Atlas" })
-    expect(a.hits).toBeGreaterThan(0)
+    const dir = diaryFixture()
+    try {
+      const a = sweepDiary({ ...base, repo: dir, keyword: "MAYO — Life Atlas" })
+      expect(a.searched).toBe(true)
+      expect(a.hits).toBeGreaterThan(0)
+      expect(a.items.some((i) => i.where.includes("2026-01-01-a"))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
 describe("parseMailResponse — a moved response key must not read as zero mail", () => {
   test("reads the envelope-index shape (emails / date_sent)", () => {
     const rows = parseMailResponse({
-      emails: [{ subject: "Your IRIS access code", sender: "alex@freelabel.net", sender_name: "FREELABEL", date_sent: "2026-08-23T16:27:25.000Z" }],
+      emails: [
+        {
+          subject: "Your IRIS access code",
+          sender: "alex@freelabel.net",
+          sender_name: "FREELABEL",
+          date_sent: "2026-08-23T16:27:25.000Z",
+        },
+      ],
       count: 1,
     })
     expect(rows).toHaveLength(1)
