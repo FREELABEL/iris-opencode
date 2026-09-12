@@ -145,46 +145,72 @@ models carry a docblock warning. Never merge them.
 
 ### Size the consolidation before moving anything
 
-Three **read-only** commands, run on **fl-iris-api**:
+All **read-only**, run on **fl-iris-api**:
 
 ```bash
-railway ssh -s fl-iris-api -- php artisan integrations:census           # what is in iris_db
-railway ssh -s fl-iris-api -- php artisan integrations:overlap          # same accounts on both sides?
-railway ssh -s fl-iris-api -- php artisan integrations:classify --rows  # business / agentic / ambiguous
+railway ssh -s fl-iris-api -- php artisan integrations:census                 # what is in iris_db
+railway ssh -s fl-iris-api -- php artisan integrations:overlap --explain      # same accounts on both sides?
+railway ssh -s fl-iris-api -- php artisan integrations:classify --rows        # business / agentic / ambiguous
+railway ssh -s fl-iris-api -- php artisan integrations:backfill-account-email --explain
 ```
 
-Snapshot on 2026-09-07 (re-run; these drift):
+Snapshot on 2026-09-12 (re-run; these drift):
 
-    census     86 rows · 9 users · 0 empty credentials
-    overlap    7 collisions · 32 only in iris · 9 only in fl_api · 34 iris rows with no email
+    overlap    iris_db 92 rows   composio 59 · email  2 · NEITHER 31
+               fl_api  30 rows   composio  3 · email  4 · NEITHER 23
+               matched pairs 1 · only iris 91 · only fl_api 29
     classify   60 business · 9 agentic · 17 ambiguous
-               56 of the 60 business rows have no account_email
+    backfill   0 of 87 emailless rows resolvable
 
 ### How to read those numbers
 
-- **Identity is `(type, account_email)`.** Not `id` — the tables have independent
-  sequences, so equal ids mean nothing. Not `credentials` — they are encrypted under
-  different app keys, so the same account has different ciphertext on each side, and
-  comparing them reports zero overlap on a table that overlaps completely.
-- **A collision on a blank email is not a match.** Six of the seven collisions were
-  `(type, '')` on both sides — the same *type*, not provably the same *account*. With 56 of
-  60 business rows lacking an email, "7 collisions" is a floor, not a total.
+- **Identity is a ladder, matched in two passes.** First
+  `composio_connected_account_id` — the same connected account carries the same id in both
+  databases, it needs no backfill, and fl-api stores it plainly (it is *not* in fl-api's
+  encrypted-field list). Then `(type, account_email)` over whatever is left.
+  **Two passes, not one key per row**: a row identified by composio id must still be able
+  to meet the same account identified by email on the other side. Keying each row by a
+  single rung hid exactly that case — `amayo@mypathwaysai.com` matched on email, then
+  vanished when the composio rung was added.
+- **Never `id`** — independent sequences, so equal ids mean nothing.
+- **Email alone does not work here.** A pass over all 87 emailless rows resolved **zero**.
+  Two thirds are Composio rows whose metadata carries no address; most of the rest
+  authenticate with an API key, which has no account holder to name. `backfill-account-email`
+  is kept for the rows that *can* be resolved, but it is not the blocker it looked like.
+- **A blank-on-blank "collision" is not a match.** An early version keyed unidentifiable
+  rows as `type|`, so two rows sharing only a *type* collided: six of seven reported
+  collisions were `(no email)` meeting `(no email)`. Unidentifiable rows are now ineligible
+  and counted on their own line.
+- **A zero needs a reason.** "No overlap" and "nothing was comparable" produce the same
+  zero, and they are opposite instructions. The report breaks down *both* sides by how they
+  can be identified, and says UNKNOWN rather than "it is a move" when nothing was comparable.
 - **An unrecognised type is ambiguous, never defaulted.** Defaulting sends a client's Jira
   into the agent database, or an internal `staff-management` service into the tenant
   credential store — and neither throws. The type map in `IntegrationsClassify` is a
   judgement, stated in one place so it can be argued with.
 
+### What the numbers actually say
+
+The two tables hold **largely disjoint populations**, so this is a move rather than a merge —
+for that reason, not because nothing was measured:
+
+- iris_db is 92 rows of Composio-backed user integrations.
+- fl_api is 30 rows dominated by **16 `social-*` rows with no credentials JSON at all**
+  (instagram, tiktok, x, linkedin, threads). Those are brand-scoped accounts resolving
+  through `Marketing\SocialAccountResolver` — the dormant brand tier. They never had an
+  iris counterpart and are not part of this.
+- Exactly **one** genuine duplicate: `google-drive iris#90 ↔ fl_api#11`.
+
 ### Order of operations
 
     1. rule on the ambiguous types            (vapi · macos · google-gemini are genuinely on the line)
-    2. backfill account_email on iris rows    the blocker — without it overlap is unknowable
-    3. re-run integrations:overlap            now the collision count is real
-    4. decide a winner rule for collisions
-    5. move BUSINESS rows only, no dual writes
-    6. point the creator path at fl_api for credentials
-    7. drop the iris copy once nothing reads it
+    2. decide the winner for the one real pair (google-drive iris#90 / fl_api#11)
+    3. move BUSINESS rows only, no dual writes
+    4. point the creator path at fl_api for credentials
+    5. drop the iris copy once nothing reads it
 
-As of 2026-09-07 **nothing has moved**. Steps 1–2 are open.
+As of 2026-09-12 **nothing has moved**. Steps 1–2 are open. The account_email backfill that
+used to sit at step 2 was measured and removed: it resolves nothing on this data.
 
 ## Gotchas
 
