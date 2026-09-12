@@ -123,18 +123,18 @@ Output:
 
 ```
 ID      Name                  Pulse  Billing     $/mo      Next Due     Days   Paid
-#10001  A. Whitfield          87     Active      $50       2026-06-01   25d    $50
-#10024  M. Delacroix          51     Active      $102.50   2026-05-18   11d    $39
-#10038  T. Vasquez            54     NO SUB      $250      --           --     $0
-#10061  K. Nakamura           17     No Gate     --        --           --     $0
+#10001  Example Client A      87     Active      $50       2026-06-01   25d    $50
+#10024  Example Client B      51     Active      $100      2026-05-18   11d    $40
+#10038  Example Client C      54     NO SUB      $250      --           --     $0
+#10061  Example Client D      17     No Gate     --        --           --     $0
 
 Billing
-MRR: $1,240.00  |  Total Collected: $9,600.00
-4 active subs  |  0 past due
+MRR: $0.00  |  Total Collected: $0.00
+0 active subs  |  0 past due
 
-10 NOT ON STRIPE
-  !  #75   T. Vasquez  https://heyiris.io/proposal/<token>...
-  !  #418  Haroon               https://heyiris.io/proposal/<token>...
+2 NOT ON STRIPE
+  !  #101  Example Client One   https://heyiris.io/proposal/<token>...
+  !  #102  Example Client Two   https://heyiris.io/proposal/<token>...
 ```
 
 ### Billing status meanings
@@ -206,7 +206,7 @@ iris leads pulse-all --prepare
 Output per lead:
 
 ```
-#10061  K. Nakamura      51/100  Pending
+#10061  Example Client D  51/100  Pending
         Tasks: 32 overdue · 72 pending · 0 done  |  Reqs: 0/2 passing  |  0/8 KB  |  mtg 90
         1. iris leads kb 10061 --generate
         2. iris leads requirements run 10061

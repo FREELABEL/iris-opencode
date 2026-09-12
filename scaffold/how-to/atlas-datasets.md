@@ -88,14 +88,14 @@ $ iris atlas:datasets audit -s cases --json
 
 **Records list** shows case ID, patient name, stage, and key fields inline:
 ```
-  #1  Ayesha Usman  CAS103544
-    dob: 1982-12-10  ·  stage_name: Negotiating  ·  severity: High
+  #1  Example Patient  CAS000001
+    dob: 1990-01-01  ·  stage_name: Negotiating  ·  severity: High
 ```
 
 **Summary** shows totals, groupings, and sums:
 ```
   Total Records: 22
-  Sum (invoice_total): $881,386.23
+  Sum (invoice_total): $120,000.00
   By stage_name:
     Treating                  16
     Negotiating                1
@@ -105,9 +105,9 @@ $ iris atlas:datasets audit -s cases --json
 **Audit** flags data quality issues by severity:
 ```
   WARNINGS (56)
-    ⚠️  CAS106139  services.Merge Health  $0 billing
+    ⚠️  CAS000002  services.<provider>  $0 billing
   INFO (3)
-    ℹ️  CAS112725  Dirshelle Washington  No services
+    ℹ️  CAS000003  Example Patient Two  No services
 ```
 
 ## Common errors

@@ -50,10 +50,10 @@ $ curl -s -X POST "https://raichu.heyiris.io/api/v1/atlas/datasets/cases/upsert"
     -H "Authorization: Bearer YOUR_TOKEN" \
     -H "Content-Type: application/json" \
     -d '{
-      "external_id": "CAS103544",
+      "external_id": "CAS000001",
       "data": {
-        "servis_case_id": "CAS103544",
-        "patient_name": "Ayesha Usman",
+        "servis_case_id": "CAS000001",
+        "patient_name": "Example Patient",
         "stage_name": "Negotiating",
         "invoice_total": 1940908
       }
@@ -85,7 +85,7 @@ DELETE /api/v1/atlas/datasets/{slug}/{id}     Soft delete record
 | dir | dir=desc | Sort direction (asc/desc) |
 | per_page | per_page=50 | Records per page (max 200) |
 | bloq_id | bloq_id=40 | Filter by bloq |
-| external_id | external_id=CAS103544 | Filter by external ID |
+| external_id | external_id=CAS000001 | Filter by external ID |
 
 ## Method 2: BloqItem Public Sharing (No Auth)
 
@@ -145,16 +145,16 @@ $ iris atlas:datasets schemas show cases
 # (via Servis AI sync or manual upsert)
 
 # 3. Build the page
-$ iris pages compose "Dashboard for Pathways Injury Consultants"
+$ iris pages compose "Dashboard for <your client>"
 
-# 4. Share the URL with Haroon
-# https://heyiris.io/p/pathways-dashboard
+# 4. Share the URL with the stakeholder who needs it
+# https://heyiris.io/p/<your-dashboard>
 
 # 5. Set up daily audit email
 $ iris schedules create \
     --agent=<cfo-agent-id> \
     --frequency=daily \
-    --prompt="Run audit on cases dataset, email summary to rdelgado@vanguardhcs.com"
+    --prompt="Run audit on cases dataset, email summary to finance@example.com"
 ```
 
 ## Security notes

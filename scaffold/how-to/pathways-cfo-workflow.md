@@ -8,7 +8,7 @@ prerequisites: [track-finances-atlas-ledger]
 # How to: Run the Pathways CFO Workflow (Service AI → Atlas → QuickBooks)
 
 ## What this does
-Pull case data from Servis AI, aggregate into Atlas datasets, run audits for data quality, and export to QuickBooks Desktop-compatible CSV. This is the end-to-end financial accounting pipeline for Pathways Injury Consultants.
+Pull case data from Servis AI, aggregate into Atlas datasets, run audits for data quality, and export to QuickBooks Desktop-compatible CSV. This is the end-to-end financial accounting pipeline for a healthcare-services tenant.
 
 ## Prerequisites
 - IRIS CLI authenticated
