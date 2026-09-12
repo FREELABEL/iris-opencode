@@ -105,6 +105,30 @@ $ iris hive send ./report.pdf --to <machine> -m "the draft we discussed"
 $ iris hive send https://example.com/spec --to <machine>
 ```
 
+### Choosing how long it lives
+
+By default a message stays deliverable for **7 days**. You can shorten that, and you can ask for
+it to be destroyed the first time it is read. Both work on `handoff` too.
+
+```bash
+$ iris hive inbox send --target <machine> --expires 4h "the staging password is in 1Password"
+$ iris hive inbox send --target <machine> --burn "read this once and it is gone"
+$ iris hive handoff item:1234 --target <machine> --expires 30m --note "time-boxed"
+```
+
+`--expires` takes `30m`, `4h`, `7d`, or a bare number of days, up to a 30-day ceiling. A value it
+cannot read is **refused**, not quietly replaced with the default — if you typo it, you will be
+told rather than discovering a week later that it never expired.
+
+`--burn` deletes the body and its inbox row the moment the recipient opens it. They see it once.
+
+> **This is not a security guarantee, and you should not sell it as one.** The expiry is applied
+> by the *recipient's* machine, so an old or modified daemon can ignore it — and the message body
+> is still retained on the server after it stops being deliverable. "Expired" today means *your
+> peer's agent will not show it*, not *the content is gone everywhere*. Use it to keep inboxes
+> tidy and to time-box a handoff, not to protect a secret. Making it a real control is tracked
+> separately (#184632).
+
 ## Step 5: Hand over a work item
 
 This is the part that replaces pasting an item id into a chat window.
