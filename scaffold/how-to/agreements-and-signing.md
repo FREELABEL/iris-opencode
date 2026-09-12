@@ -133,7 +133,7 @@ curl -X POST -H "Authorization: Bearer $IRIS_API_KEY" -H "Content-Type: applicat
     "term": "one year",
     "parties": [
       {"role": "Provider",  "name": "Dana Whitfield",  "email": "dana@example.com"},
-      {"role": "IRIS Labs", "name": "Alexander Mayo",  "email": "alex@freelabel.net"}
+      {"role": "IRIS Labs", "name": "Your Name",  "email": "you@yourdomain.com"}
     ],
     "issue": true
   }' https://raichu.heyiris.io/api/v1/agreements
