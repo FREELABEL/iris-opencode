@@ -55,7 +55,7 @@ import { DialogConfirm } from "@tui/ui/dialog-confirm"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
-import { Sidebar } from "./sidebar"
+import { Sidebar, SIDEBAR_WIDTHS, SIDEBAR_WIDTH_DEFAULT, clampSidebarWidth } from "./sidebar"
 import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import parsers from "../../../../../../parsers-config.ts"
 import { Clipboard } from "../../util/clipboard"
@@ -131,6 +131,19 @@ export function Session() {
 
   const dimensions = useTerminalDimensions()
   const [sidebar, setSidebar] = createSignal<"show" | "hide" | "auto">(kv.get("sidebar", "auto"))
+  // Width is a preference, not a constant: the panel carries anything from a node roster to
+  // full playbook descriptions, and how much room that deserves depends on the terminal and
+  // the person. Clamped on read so a stale or hand-edited value cannot render a 2-column panel.
+  const [sidebarWidth, setSidebarWidth] = createSignal(clampSidebarWidth(kv.get("sidebar_width", SIDEBAR_WIDTH_DEFAULT)))
+
+  /** Move one step along SIDEBAR_WIDTHS and remember it. Stops at the ends rather than wrapping. */
+  function stepSidebarWidth(direction: 1 | -1) {
+    const current = clampSidebarWidth(sidebarWidth())
+    const at = SIDEBAR_WIDTHS.indexOf(current as (typeof SIDEBAR_WIDTHS)[number])
+    const next = SIDEBAR_WIDTHS[Math.min(SIDEBAR_WIDTHS.length - 1, Math.max(0, at + direction))]
+    setSidebarWidth(next)
+    kv.set("sidebar_width", next)
+  }
   const [conceal, setConceal] = createSignal(true)
   const [showThinking, setShowThinking] = createSignal(kv.get("thinking_visibility", true))
   const [showTimestamps, setShowTimestamps] = createSignal(kv.get("timestamps", "hide") === "show")
@@ -148,7 +161,7 @@ export function Session() {
     if (sidebar() === "auto" && wide()) return true
     return false
   })
-  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
+  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? sidebarWidth() : 0) - 4)
 
   const scrollAcceleration = createMemo(() => {
     const tui = sync.data.config.tui
@@ -455,6 +468,26 @@ export function Session() {
         })
         if (sidebar() === "show") kv.set("sidebar", "auto")
         if (sidebar() === "hide") kv.set("sidebar", "hide")
+        dialog.clear()
+      },
+    },
+    {
+      // Two commands rather than a prompt for a number: the ladder is the set of widths that
+      // actually lay out, and stepping through it is the whole interaction.
+      title: "Sidebar wider",
+      value: "session.sidebar.wider",
+      category: "Session",
+      onSelect: (dialog) => {
+        stepSidebarWidth(1)
+        dialog.clear()
+      },
+    },
+    {
+      title: "Sidebar narrower",
+      value: "session.sidebar.narrower",
+      category: "Session",
+      onSelect: (dialog) => {
+        stepSidebarWidth(-1)
         dialog.clear()
       },
     },
@@ -1057,7 +1090,7 @@ export function Session() {
           <Toast />
         </box>
         <Show when={sidebarVisible()}>
-          <Sidebar sessionID={route.sessionID} />
+          <Sidebar sessionID={route.sessionID} width={sidebarWidth()} />
         </Show>
       </box>
     </context.Provider>

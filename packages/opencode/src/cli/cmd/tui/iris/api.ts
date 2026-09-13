@@ -1,7 +1,8 @@
 import { createSignal, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { irisFetch, resolveUserId } from "../../iris-api"
-import type { IrisAgent, IrisWorkflow, IrisWorkflowDetail, AtlasList, AtlasItem, IrisContact, IrisPage, IrisHiveSession } from "./types"
+import type { IrisAgent, IrisWorkflow, IrisWorkflowDetail, AtlasList, AtlasItem, IrisContact, IrisPage, IrisHiveNode, IrisHivePeer } from "./types"
+import { resolveLocalNode } from "../../hive-local-node"
 import { IRIS_API } from "../../iris-api"
 import os from "os"
 import path from "path"
@@ -32,7 +33,15 @@ interface IrisDataStore {
   contacts: IrisContact[]
   pages: IrisPage[]
   playbooks: IrisPlaybook[]
-  hiveSessions: IrisHiveSession[]
+  hiveNodes: IrisHiveNode[]
+  hivePeers: IrisHivePeer[]
+  /** Invites sent but not yet accepted — a real state, distinct from "no peers". */
+  hivePendingInvites: number
+  /**
+   * Whether the network numbers below were actually MEASURED. An empty roster and a failed
+   * fetch render identically unless this is checked, and "0 machines" is the reassuring one.
+   */
+  hiveStatus: DataStatus
 }
 
 function relativeTime(iso: string | null | undefined): string {
@@ -186,7 +195,10 @@ export function useIrisData() {
     contacts: [],
     pages: [],
     playbooks: [],
-    hiveSessions: [],
+    hiveNodes: [],
+    hivePeers: [],
+    hivePendingInvites: 0,
+    hiveStatus: "loading",
   })
 
   let _userId: number | null = null
@@ -291,22 +303,28 @@ export function useIrisData() {
         }
       } catch {}
 
-      // Playbooks. ATTACHED ones belong to this project and are the honest answer. When none
-      // are attached the tab would be empty, so the AVAILABLE set is shown instead — flagged
-      // attached:false so the UI can say so out loud. Showing 97 global playbooks under a
-      // project header without that label would repeat the exact bug this commit fixes for
-      // pages: a project-scoped panel quietly listing everything.
+      // Playbooks. BOTH lists, always, in one array flagged by scope — attached to this
+      // project first, then everything else the account can reach.
+      //
+      // This used to be either/or: attached ones, OR the global set as a fallback when nothing
+      // was attached. Both halves were wrong in the same way. With attachments you could no
+      // longer see or reach your own and the marketplace-published ones at all; without them a
+      // project-scoped panel listed all 97 globals under a one-line disclaimer. Scope belongs
+      // on every row, not in a notice you have to have read.
       try {
         const attached = attachedPbRes.ok ? await extractData(attachedPbRes) : []
-        if (Array.isArray(attached) && attached.length > 0) {
-          setData("playbooks", reconcile(mapPlaybooks(attached, true)))
-        } else if (allPbRes.ok) {
+        const attachedList = mapPlaybooks(Array.isArray(attached) ? attached : [], true)
+        const attachedNames = new Set(attachedList.map((p) => p.name))
+
+        let others: IrisPlaybook[] = []
+        if (allPbRes.ok) {
           const allJson = await allPbRes.json() as any
           const raw = allJson?.playbooks ?? allJson?.data ?? []
-          setData("playbooks", reconcile(mapPlaybooks(Array.isArray(raw) ? raw : [], false)))
-        } else {
-          setData("playbooks", reconcile([]))
+          // Minus the attached ones — the same playbook printed in both sections would read as
+          // two different playbooks with the same name.
+          others = mapPlaybooks(Array.isArray(raw) ? raw : [], false).filter((p) => !attachedNames.has(p.name))
         }
+        setData("playbooks", reconcile([...attachedList, ...others]))
       } catch {
         setData("playbooks", reconcile([]))
       }
@@ -514,33 +532,104 @@ export function useIrisData() {
     fetchBloqData(bloqId)
   }
 
-  // ── Hive sessions (local daemon bridge) ──
+  // ── Hive network: the machines on this account, and the peers linked to it ──
+  //
+  // This replaced a poll of the local daemon's tmux sessions. That poll worked, and what it
+  // reported was beside the point: tmux is how you drive one machine, and on a fleet of three
+  // online nodes the Hive tab said "No active tmux sessions". Same endpoints `iris hive nodes
+  // list` and `iris hive connections` use, so the tab and the CLI cannot disagree.
   const BRIDGE_URL = process.env.IRIS_BRIDGE_URL ?? "http://localhost:3200"
 
-  async function fetchHiveSessions() {
+  /** Which registered node is THIS machine — daemon first, config second, hostname last. */
+  async function detectLocalNode(nodes: { id: string; name: string }[]) {
+    let daemonNodeId: string | null = null
     try {
-      const res = await fetch(`${BRIDGE_URL}/daemon/tmux/sessions`, {
-        signal: AbortSignal.timeout(3000),
-      })
-      if (!res.ok) return
-      const json = (await res.json()) as { sessions: IrisHiveSession[] }
-      setData("hiveSessions", reconcile(json.sessions || []))
+      const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(1500) })
+      if (res.ok) daemonNodeId = ((await res.json()) as any)?.node_id ?? null
+    } catch {}
+    let configNodeId: string | null = null
+    try {
+      const fs = await import("fs")
+      const cfg = path.join(os.homedir(), ".iris", "config.json")
+      if (fs.existsSync(cfg)) configNodeId = JSON.parse(fs.readFileSync(cfg, "utf-8")).node_id || null
+    } catch {}
+    return resolveLocalNode({ daemonNodeId, configNodeId, hostname: os.hostname(), nodes })
+  }
+
+  async function fetchHiveNetwork() {
+    if (!_userId) return
+    try {
+      const [nodesRes, connsRes] = await Promise.all([
+        irisFetch(`/api/v6/nodes/?user_id=${_userId}`, {}, IRIS_API),
+        irisFetch(`/api/v6/nodes/connections/?user_id=${_userId}`, {}, IRIS_API),
+      ])
+
+      if (nodesRes.ok) {
+        const json = (await nodesRes.json()) as { nodes?: any[] }
+        const raw = json.nodes ?? []
+        const local = await detectLocalNode(raw.map((n) => ({ id: String(n.id), name: String(n.name) })))
+        setData(
+          "hiveNodes",
+          reconcile(
+            raw.map((n): IrisHiveNode => ({
+              id: String(n.id),
+              name: String(n.name ?? "unnamed"),
+              status: String(n.connection_status ?? "unknown"),
+              online: n.connection_status === "online",
+              lastHeartbeat: relativeTime(n.last_heartbeat_at),
+              activeTasks: Number(n.active_tasks ?? 0),
+              maxConcurrent: Number(n.max_concurrent ?? 0),
+              sessions: Array.isArray(n.active_sessions) ? n.active_sessions.length : 0,
+              isLocal: local.nodeId !== null && String(n.id) === local.nodeId,
+              localUncertain: local.uncertain,
+            })),
+          ),
+        )
+      }
+
+      if (connsRes.ok) {
+        const json = (await connsRes.json()) as { connections?: any[] }
+        const conns = json.connections ?? []
+        // A pending invite has no peer on the other end yet, so it is not a peer — but it is
+        // also not nothing, and silently dropping it makes an unaccepted invite look like a
+        // peer who never showed up. Counted separately.
+        const accepted = conns.filter((c) => c.status === "active" || c.peer_name)
+        setData(
+          "hivePeers",
+          reconcile(
+            accepted.map((c): IrisHivePeer => ({
+              id: String(c.id),
+              name: String(c.peer_name ?? "unnamed peer"),
+              status: String(c.status ?? "unknown"),
+              active: c.status === "active",
+              permissions: Object.entries(c.permissions ?? {})
+                .filter(([, v]) => v)
+                .map(([k]) => k)
+                .join(","),
+            })),
+          ),
+        )
+        setData("hivePendingInvites", conns.length - accepted.length)
+      }
+
+      setData("hiveStatus", nodesRes.status === 401 ? "no-auth" : nodesRes.ok ? "loaded" : "error")
     } catch {
-      // Daemon not running — clear sessions
-      if (data.hiveSessions.length > 0) setData("hiveSessions", [])
+      // Leave the last known roster in place and say the reading is stale. Zeroing it would
+      // report an empty Hive, which is the one answer that is never safe to guess.
+      setData("hiveStatus", "error")
     }
   }
 
   // Initial fetch
-  fetchBloqList()
-  fetchHiveSessions()
+  fetchBloqList().then(fetchHiveNetwork)
 
   // Poll every 30s — refresh data for current bloq
   const interval = setInterval(() => {
     if (data.selectedBloqId) fetchBloqData(data.selectedBloqId)
   }, 30_000)
-  // Poll hive sessions every 5s (local, fast)
-  const hiveInterval = setInterval(fetchHiveSessions, 5_000)
+  // The node roster is a network call and heartbeats are ~30s apart, so polling faster than
+  // that would cost requests to show the same numbers.
+  const hiveInterval = setInterval(fetchHiveNetwork, 30_000)
   onCleanup(() => {
     clearInterval(interval)
     clearInterval(hiveInterval)
