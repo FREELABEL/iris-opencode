@@ -15,6 +15,14 @@ export type ListScope = {
   total: number
   /** rows removed by the default Prospected filter */
   prospectedHidden: number
+  /**
+   * How the server picked the window, in words a reader can check — "most recently
+   * active", "newest", "by name". The report QUOTES this, it does not assume it
+   * (#184945). Saying "newest N of M" while the server ordered by something else is
+   * the same defect as not saying anything: a sentence about the data that is not a
+   * fact about the data. Defaults to the neutral "first" when the caller does not know.
+   */
+  ordering?: string
 }
 
 export type ScopeReport = {
@@ -30,12 +38,14 @@ export function describeListScope(s: ListScope): ScopeReport {
   // and inventing a negative remainder would be its own silent lie.
   const truncated = s.total > s.shown
 
+  const ordering = s.ordering && s.ordering.trim() ? s.ordering.trim() : "first"
+
   const notes: string[] = []
   if (s.prospectedHidden > 0) notes.push(`${s.prospectedHidden} Prospected hidden — use --all`)
-  if (truncated) notes.push(`newest ${s.shown} of ${s.total}`)
+  if (truncated) notes.push(`${ordering} ${s.shown} of ${s.total}`)
 
   const warnings: string[] = []
-  if (truncated) warnings.push(`TRUNCATED: newest ${s.shown} of ${s.total} by id`)
+  if (truncated) warnings.push(`TRUNCATED: ${ordering} ${s.shown} of ${s.total}`)
   if (s.prospectedHidden > 0) warnings.push(`FILTERED: ${s.prospectedHidden} Prospected hidden (pass --all)`)
   // Only when something was withheld. A clean answer that shouts about being clean
   // trains people to ignore the shout.
