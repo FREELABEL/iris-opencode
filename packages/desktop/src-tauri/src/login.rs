@@ -77,7 +77,8 @@ pub fn save_iris_token(app: AppHandle, token: String) -> Result<(), String> {
 /// Runs AFTER sign-in because the daemon needs a credential to register, and BACKGROUND
 /// because none of it should freeze the window — the app is usable while this proceeds.
 ///
-/// Every step is idempotent and self-checking: `install_cli` no-ops when the CLI is present,
+/// Every step is idempotent and self-checking: the CLI install is skipped when a platform CLI
+/// is already present (identity-checked, not merely a file at the path),
 /// `daemon install` refuses to reinstall over an existing daemon, and `register` is safe to
 /// repeat. So a re-login costs nothing, and a partial previous attempt is completed rather
 /// than duplicated.
@@ -88,10 +89,28 @@ fn finish_setup_in_background(app: AppHandle) {
         let step = |label: &str| {
             let _ = app.emit("setup-step", label);
         };
-        // The CLI first: the daemon verbs live in it. install_cli() uses the BUNDLED sidecar,
-        // so this needs no network and cannot be broken by a bad release URL.
+        // The CLI first: the daemon verbs live in it.
+        //
+        // This comment used to read "install_cli() uses the BUNDLED sidecar, so this needs no
+        // network and cannot be broken by a bad release URL." That was true, and it was the
+        // bug: the sidecar is opencode-core, so the step that made sign-in self-sufficient was
+        // the same step that removed the platform commands the daemon verbs below depend on
+        // (#183738). It now downloads the real CLI, and a bad release URL is the correct thing
+        // to fail on — better than succeeding with the wrong product.
+        //
+        // Gated on identity so the "every step is idempotent" promise above stays true: a
+        // re-login on a healthy machine costs nothing instead of re-downloading ~120MB.
+        // install_cli_inner() rather than the async command: this already runs on its own
+        // std::thread, so there is no runtime here to spawn onto.
         step("Installing the CLI");
-        match crate::cli::install_cli() {
+        let install = match crate::cli::cli_state() {
+            crate::cli::CliState::PlatformCli => {
+                println!("setup: cli -> already present, skipping install");
+                Ok(String::new())
+            }
+            _ => crate::cli::install_cli_inner(),
+        };
+        match install {
             Ok(msg) => println!("setup: cli -> {msg}"),
             Err(e) => {
                 eprintln!("setup: cli install failed: {e}");

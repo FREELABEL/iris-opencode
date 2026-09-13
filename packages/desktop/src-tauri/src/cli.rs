@@ -79,7 +79,7 @@ pub fn cli_state() -> CliState {
 const INSTALL_SCRIPT: &str = include_str!("../../../../install");
 
 /// Install the real IRIS CLI. Blocking; callers put it on a worker thread.
-fn install_cli_inner() -> Result<String, String> {
+pub(crate) fn install_cli_inner() -> Result<String, String> {
     if cfg!(not(unix)) {
         return Err("CLI installation is only supported on macOS & Linux".to_string());
     }
