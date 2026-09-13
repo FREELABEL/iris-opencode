@@ -384,6 +384,12 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // unrelated rows. Not board-scoped — sites are owned by a user OR a bloq.
     { id: "sites", label: "Sites", pane: "sites", path: (b) => `/iris/sites/${b}` },
   ],
+  playbooks: [
+    // "Which playbooks does this project use" and "what could I install" are different
+    // questions; one flat list of 128 was the wrong answer to both.
+    { id: "project", label: "Project", pane: "playbooks", path: (b) => `/iris/playbooks/${b}?view=project` },
+    { id: "marketplace", label: "Marketplace", pane: "playbooks", path: (b) => `/iris/playbooks/${b}?view=marketplace` },
+  ],
   integrations: [
     // A connected account is not automatically a board's to use. Narrowed server-side so the
     // footer counts the scope on screen — see rule 1 in NAVIGATION-TEMPLATE.md.
@@ -798,7 +804,13 @@ export function SessionIrisTab() {
     },
     async ([, name]) => {
       const res = await doFetch(`/iris/playbooks/doc/${encodeURIComponent(name)}`)
-      return (await res.json()) as { found: boolean; name: string; path: string; content: string }
+      return (await res.json()) as {
+        found: boolean
+        name: string
+        path: string
+        source: "local" | "published" | "none"
+        content: string
+      }
     },
   )
 
@@ -1165,25 +1177,20 @@ export function SessionIrisTab() {
                     <p class="text-12-regular text-text-weak py-2">Reading…</p>
                   </Match>
                   <Match when={playbookDoc.latest && !playbookDoc.latest!.found}>
-                    {/* NOT an error. It means this machine does not have it installed. */}
+                    {/* Neither copy exists: not installed here AND not published. */}
                     <p class="text-12-regular text-text-weak py-2">
-                      Not installed on this machine, so there is no local document to read.
+                      No document — this playbook is not installed on this machine and has not been
+                      published.
                       <br />
                       <span class="font-mono text-11-regular">iris playbook install {openRow()!.raw?.name}</span>
                     </p>
-                    <Show when={openRow()!.raw?.publicUrl}>
-                      <a
-                        href={openRow()!.raw.publicUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        class="text-11-regular text-text-interactive-base hover:underline"
-                      >
-                        Open the landing page instead
-                      </a>
-                    </Show>
                   </Match>
                   <Match when={playbookDoc.latest?.found}>
+                    {/* WHICH COPY you are reading. The local file and the published one can
+                        differ — that is the whole reason `playbook publish` can lie — so the
+                        source is stated rather than left to be assumed. */}
                     <p class="font-mono text-11-regular text-text-weaker pb-2 truncate" title={playbookDoc.latest!.path}>
+                      {playbookDoc.latest!.source === "local" ? "local · " : "published · "}
                       {playbookDoc.latest!.path}
                     </p>
                     <div class="iris-markdown text-12-regular" innerHTML={renderMarkdown(playbookDoc.latest!.content)} />
@@ -1592,21 +1599,43 @@ export function SessionIrisTab() {
 
               <Match when={pane() === "playbooks"}>
                 <For each={rows()}>
-                  {(pb) => (
-                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), pb))}>
-                      <div class="flex items-baseline gap-2">
-                        <span class="shrink-0" classList={{ "text-text-base": pb.attached, "text-text-weaker": !pb.attached }}>
-                          {pb.attached ? "★" : "·"}
-                        </span>
-                        <span class="text-12-regular text-text-base min-w-0 flex-1">{pb.name}</span>
-                        <Show when={pb.attached}>
-                          <span class="font-mono text-11-regular text-text-weaker shrink-0">this board</span>
-                        </Show>
-                      </div>
-                      <Show when={pb.description}>
-                        <p class="text-11-regular text-text-weak ps-4 pt-0.5 line-clamp-2">{pb.description}</p>
+                  {(pb, i) => (
+                    <>
+                      {/* NOT YOURS starts here. The server sorts owned first, so the boundary is
+                          the first row whose owner is not you — drawn once, as a heading, rather
+                          than badged on every row. A list that mixes them undifferentiated reads
+                          as "all of this is mine to change". */}
+                      <Show when={!pb.owned && (i() === 0 || rows()[i() - 1]?.owned)}>
+                        {/* NAMES THE OWNER rather than calling it "not yours".
+                            Every one of these on this account belongs to user 2945 — the same
+                            person's second login. "Not yours" would be a confident false
+                            statement about their own work; an account number is a fact they
+                            can act on. The boundary is drawn once, where the sort flips. */}
+                        <h4 class="text-11-regular text-text-weaker px-2 pt-3 pb-1 border-t border-border-weaker-base">
+                          Owned by another account
+                          {pb.ownerUserId ? ` · #${pb.ownerUserId}` : ""} — you can run these, not edit them
+                        </h4>
                       </Show>
-                    </button>
+                      <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), pb))}>
+                        <div class="flex items-baseline gap-2">
+                          <span class="shrink-0" classList={{ "text-text-base": pb.attached, "text-text-weaker": !pb.attached }}>
+                            {pb.attached ? "★" : "·"}
+                          </span>
+                          <span class="text-12-regular min-w-0 flex-1" classList={{ "text-text-base": pb.owned, "text-text-weak": !pb.owned }}>
+                            {pb.name}
+                          </span>
+                          <Show when={pb.hasLocal}>
+                            <span class="font-mono text-11-regular text-text-weaker shrink-0">installed</span>
+                          </Show>
+                          <Show when={pb.attached}>
+                            <span class="font-mono text-11-regular text-text-weaker shrink-0">this board</span>
+                          </Show>
+                        </div>
+                        <Show when={pb.description}>
+                          <p class="text-11-regular text-text-weak ps-4 pt-0.5 line-clamp-2">{pb.description}</p>
+                        </Show>
+                      </button>
+                    </>
                   )}
                 </For>
               </Match>

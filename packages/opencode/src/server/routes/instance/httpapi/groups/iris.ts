@@ -370,6 +370,12 @@ const PlaybooksResponse = Schema.Struct({
         Schema.Boolean,
         "~/.iris/playbooks/<name>/PLAYBOOK.md exists on THIS machine. Playbook content never leaves the machine, so the local document is richer than anything the API has.",
       ),
+      bloqId: described(Schema.optional(Schema.Finite), "The board it is filed against. 19 of 128 carry one."),
+      ownerUserId: Schema.optional(Schema.Finite),
+      owned: described(
+        Schema.Boolean,
+        "Whether the SIGNED-IN account owns it. A reading aid, not a boundary: a list mixing yours with other people's makes you assume all of it is yours to change.",
+      ),
     }).annotate({ identifier: "IrisPlaybook" }),
   ),
 }).annotate({ identifier: "IrisPlaybooksResponse" })
@@ -494,7 +500,13 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("playbooks", IrisPaths.playbooks, {
-        query: PageQuery,
+        query: Schema.Struct({
+          ...PageQuery.fields,
+          view: described(
+            Schema.optional(Schema.Literals(["all", "project", "marketplace"])),
+            "project = attached to this board or filed against it. marketplace = actually published (public or unlisted). `private` is neither: yours and unshared.",
+          ),
+        }),
         params: { bloqID: Schema.NumberFromString },
         success: described(PlaybooksResponse, "Playbooks, board-attached first then the account set"),
       }).annotateMerge(
@@ -511,8 +523,12 @@ export const IrisApi = HttpApi.make("iris").add(
           Schema.Struct({
             found: Schema.Boolean,
             name: Schema.String,
-            path: Schema.String,
-            content: described(Schema.String, "The PLAYBOOK.md, as markdown. Empty when not installed here."),
+            path: described(Schema.String, "The file path when local, the landing-page URL when published."),
+            source: described(
+              Schema.Literals(["local", "published", "none"]),
+              "Which copy this is. LOCAL wins: for a private playbook the file on disk is the only copy that exists.",
+            ),
+            content: described(Schema.String, "The playbook document, as markdown."),
           }).annotate({ identifier: "IrisPlaybookDoc" }),
           "One playbook's local document",
         ),
@@ -521,7 +537,7 @@ export const IrisApi = HttpApi.make("iris").add(
           identifier: "iris.playbookDoc",
           summary: "Read a playbook's local document",
           description:
-            "A FILE READ, not a request — which is exactly why it must come through the sidecar: playbook content never leaves the machine, and the webview cannot read the user's home directory. `found: false` means this machine does not have it installed, which is not an error.",
+            "Local file first, published copy second. The file read must come through the sidecar because playbook content never leaves the machine and the webview cannot read a home directory; the published fallback covers the 125 of 128 not installed here. NOT an iframe of the landing page: heyiris.io sends x-frame-options SAMEORIGIN, so embedding renders blank and reads as a broken panel.",
         }),
       ),
       HttpApiEndpoint.get("agentTasks", IrisPaths.agentTasks, {

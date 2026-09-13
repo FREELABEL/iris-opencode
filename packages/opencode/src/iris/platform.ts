@@ -1363,6 +1363,17 @@ export interface Playbook {
   publicUrl?: string
   installs?: number
   views?: number
+  /** The board it is filed against, when it is filed against one. 19 of 128 are. */
+  bloqId?: number
+  ownerUserId?: number
+  /**
+   * Whether the SIGNED-IN account owns it.
+   *
+   * Not a security boundary — the API already decides what it will hand over. It is a reading
+   * aid: a list mixing your playbooks with other people's, undifferentiated, makes you assume
+   * everything in it is yours to change.
+   */
+  owned: boolean
   /**
    * Whether ~/.iris/playbooks/<name>/PLAYBOOK.md exists on THIS machine.
    *
@@ -1371,6 +1382,40 @@ export interface Playbook {
    * can offer the document tab without a second round trip per row.
    */
   hasLocal: boolean
+}
+
+/**
+ * One playbook's document — local copy first, published copy second.
+ *
+ * LOCAL FIRST is not an optimisation. Playbook content never leaves the machine, so for a
+ * private playbook the file on disk is the only copy that exists; asking the API first would
+ * return nothing for exactly the ones you most want to read. Three of 128 are installed here.
+ *
+ * The API's detail endpoint carries `content` — the same markdown the public landing page
+ * renders — so the remaining 125 are readable too. An iframe of that page would NOT work:
+ * heyiris.io sends `x-frame-options: SAMEORIGIN`, so embedding it renders blank, which looks
+ * like a broken panel rather than a refused frame.
+ */
+export async function fetchPlaybookDoc(
+  name: string,
+): Promise<{ found: boolean; content: string; path: string; source: "local" | "published" | "none" }> {
+  const local = readPlaybookDoc(name)
+  if (local.found) return { ...local, source: "local" }
+
+  const safe = /^[a-zA-Z0-9._-]+$/.test(name) ? name : ""
+  if (!safe) return { found: false, content: "", path: local.path, source: "none" }
+  try {
+    const res = await irisFetch(`/api/v1/playbooks/${encodeURIComponent(safe)}`, IRIS_API)
+    if (!res.ok) return { found: false, content: "", path: local.path, source: "none" }
+    const json = (await res.json()) as any
+    const p = json?.playbook ?? json?.data ?? json
+    const content = typeof p?.content === "string" ? p.content : ""
+    return content
+      ? { found: true, content, path: String(p?.public_url ?? p?.canonical_url ?? ""), source: "published" }
+      : { found: false, content: "", path: local.path, source: "none" }
+  } catch {
+    return { found: false, content: "", path: local.path, source: "none" }
+  }
 }
 
 /** One playbook's local document, when this machine has it. */
@@ -1425,8 +1470,14 @@ function toPlaybook(x: any, attached: boolean): Playbook {
     installs: typeof x?.reach?.installs === "number" ? x.reach.installs : undefined,
     views: typeof x?.reach?.views === "number" ? x.reach.views : undefined,
     hasLocal: existsSync(path.join(homedir(), ".iris", "playbooks", name, "PLAYBOOK.md")),
+    bloqId: typeof x?.bloq_id === "number" ? x.bloq_id : undefined,
+    ownerUserId: typeof x?.owner_user_id === "number" ? x.owner_user_id : undefined,
+    owned: meId != null && Number(x?.owner_user_id) === meId,
   }
 }
+
+/** Who we are, for the `owned` flag. Set once per fetch rather than resolved per row. */
+let meId: number | null = null
 
 /**
  * Playbooks for a board, and the account's full set.
@@ -1436,13 +1487,16 @@ function toPlaybook(x: any, attached: boolean): Playbook {
  * wrong the same way: with attachments you could not reach your own or the marketplace ones at
  * all, and without them a board-scoped panel listed every global under a one-line disclaimer.
  */
-export async function fetchPlaybooks(bloqId: number): Promise<PlatformResult<{ playbooks: Playbook[] }>> {
+export type PlaybookView = "project" | "marketplace" | "all"
+
+export async function fetchPlaybooks(bloqId: number, view?: PlaybookView): Promise<PlatformResult<{ playbooks: Playbook[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { playbooks: [] } }
 
   const unknown = await unknownBloq(bloqId)
   if (unknown) return { measured: false, reason: unknown, data: { playbooks: [] } }
 
+  meId = userId
   try {
     const [attachedRes, allRes] = await Promise.all([
       irisFetch(`/api/v1/bloqs/${bloqId}/playbooks`),
@@ -1456,16 +1510,69 @@ export async function fetchPlaybooks(bloqId: number): Promise<PlatformResult<{ p
       return Array.isArray(d) ? d : (d?.data ?? [])
     }
 
-    const attached = (await unwrap(attachedRes)).map((x: any) => toPlaybook(x, true))
+    const rawAll = await unwrap(allRes)
+
+    /*
+     * OWNERSHIP BY NAME, for the board's own list.
+     *
+     * /api/v1/bloqs/{id}/playbooks does not return owner_user_id, so computing `owned` from
+     * that row alone made every board-attached playbook read as someone else's — the two
+     * Pathways playbooks on board 174 landed under a "Not yours" heading that was simply
+     * false. A missing field is not evidence of a different owner.
+     *
+     * The account list DOES carry the owner, so it is the authority; the board list only says
+     * which are attached.
+     */
+    const ownerByName = new Map<string, number>()
+    for (const x of rawAll) if (typeof x?.owner_user_id === "number") ownerByName.set(String(x?.name), x.owner_user_id)
+
+    const attached = (await unwrap(attachedRes)).map((x: any) =>
+      toPlaybook({ owner_user_id: ownerByName.get(String(x?.name)), ...x }, true),
+    )
     const names = new Set(attached.map((p: Playbook) => p.name))
-    const others = (await unwrap(allRes))
-      .map((x: any) => toPlaybook(x, false))
-      .filter((p: Playbook) => !names.has(p.name))
+    const others = rawAll.map((x: any) => toPlaybook(x, false)).filter((p: Playbook) => !names.has(p.name))
+
+    const everything = [...attached, ...others]
+
+    /*
+     * TWO VIEWS, because one list of 128 answered neither question.
+     *
+     * The panel showed every playbook on the account under a board heading — attached ones
+     * first and then 120-odd others, alphabetically, indistinguishable. "Which playbooks does
+     * this project use" and "what could I install" are different questions and the flat list
+     * was the wrong answer to both.
+     *
+     * PROJECT is attached-to-this-board OR filed against it (bloq_id). 19 of 128 carry a
+     * bloq_id at all.
+     * MARKETPLACE is what is actually published — public or unlisted. `private` is neither: it
+     * is yours and unshared, and listing it as marketplace would misdescribe 42 rows.
+     */
+    const want = view ?? "all"
+    const playbooks =
+      want === "project"
+        ? everything.filter((p) => p.attached || (p.bloqId != null && p.bloqId === bloqId))
+        : want === "marketplace"
+          ? everything.filter((p) => (p.scope === "public" || p.scope === "unlisted") && p.bloqId == null)
+          : everything
+
+    // YOURS FIRST, then everyone else's. The two are sorted apart rather than interleaved so a
+    // list mixing them cannot read as "all of this is mine to change".
+    playbooks.sort((a, b) =>
+      a.owned === b.owned
+        ? a.attached === b.attached
+          ? a.name.localeCompare(b.name)
+          : a.attached
+            ? -1
+            : 1
+        : a.owned
+          ? -1
+          : 1,
+    )
 
     return {
       measured: attachedRes.ok || allRes.ok,
       reason: attachedRes.ok ? undefined : `board playbooks unavailable (fl-api ${attachedRes.status})`,
-      data: { playbooks: [...attached, ...others] },
+      data: { playbooks },
     }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { playbooks: [] } }

@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, readPlaybookDoc } from "@/iris/platform"
+import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites, fetchAgentTasks, fetchPlaybookDoc } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -157,8 +157,11 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const playbooks = Effect.fn("IrisHttpApi.playbooks")(
-      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number } }) =>
-        Effect.promise(() => fetchPlaybooks(ctx.params.bloqID)).pipe(
+      (ctx: {
+        params: { bloqID: number }
+        query: { page?: number; perPage?: number; view?: "all" | "project" | "marketplace" }
+      }) =>
+        Effect.promise(() => fetchPlaybooks(ctx.params.bloqID, ctx.query.view)).pipe(
           Effect.map((r) => {
             const { items, meta } = pageOf(r, r.data.playbooks, ctx.query)
             return { ...meta, playbooks: items }
@@ -177,10 +180,9 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     /** Not paged: an agent holding more than a screenful of work is the exception, and the
      *  four sources are already capped upstream (500 item tasks, 200 each of the rest). */
     const playbookDoc = Effect.fn("IrisHttpApi.playbookDoc")((ctx: { params: { name: string } }) =>
-      Effect.sync(() => {
-        const r = readPlaybookDoc(ctx.params.name)
-        return { found: r.found, name: ctx.params.name, path: r.path, content: r.content }
-      }),
+      Effect.promise(() => fetchPlaybookDoc(ctx.params.name)).pipe(
+        Effect.map((r) => ({ found: r.found, name: ctx.params.name, path: r.path, source: r.source, content: r.content })),
+      ),
     )
 
     const agentTasks = Effect.fn("IrisHttpApi.agentTasks")(
