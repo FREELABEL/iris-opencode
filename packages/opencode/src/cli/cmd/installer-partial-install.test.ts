@@ -65,3 +65,64 @@ describe("#184597 — install.ps1 must not claim success after skipping the brid
     expect(warnIdx).toBeLessThan(cmdIdx)
   })
 })
+
+/**
+ * #184597 FIX 3 — a Windows node used to die at every reboot.
+ *
+ * macOS registers a real LaunchAgent (RunAtLoad + KeepAlive). install.ps1 registered
+ * NOTHING — zero references to schtasks, Register-ScheduledTask, the Startup folder or
+ * the Run key — so a Windows node worked until the first reboot and was then silently
+ * gone. That reads as an unreliable product rather than as "nothing ever asked it to
+ * start", which is the same misdirection as the skipped-bridge banner above.
+ *
+ * The BEHAVIOUR is tested by `script/test-install-autostart.ps1`, which runs the real
+ * function out of install.ps1 under pwsh with the Windows-only cmdlets mocked, and is
+ * mutation-checked (adding `-RunLevel Highest` makes it fail). These are the structural
+ * assertions that run everywhere, including machines with no pwsh.
+ */
+describe("#184597 FIX 3 — install.ps1 must register autostart", () => {
+  test("it registers autostart at all — the whole gap was that it did not", () => {
+    expect(PS1).toContain("Register-IrisAutostart")
+    expect(PS1).toMatch(/Register-ScheduledTask/)
+  })
+
+  test("at logon, and restarting if it stops — the LaunchAgent's two properties", () => {
+    expect(PS1).toMatch(/New-ScheduledTaskTrigger\s+-AtLogOn/)
+    expect(PS1).toMatch(/-RestartCount\s+\d/)
+  })
+
+  /**
+   * The plist this mirrors carries the rule in a comment: user-level ONLY, never
+   * /Library/LaunchDaemons. An installer that needs admin for an optional convenience
+   * is one clients stop running.
+   */
+  test("NEVER elevates and NEVER writes machine-wide state", () => {
+    // Assert on CODE, not prose. The first version of this matched the comment that
+    // STATES the rule — "no -RunLevel Highest, no HKLM" — and failed against a file
+    // that obeys it. A check that cannot tell a rule from its violation would have
+    // been switched off within a week, and then it would catch nothing.
+    const code = PS1.split("\n")
+      .filter((l) => !l.trim().startsWith("#"))
+      .join("\n")
+    expect(code).not.toMatch(/-RunLevel\s+Highest/)
+    expect(code).not.toMatch(/HKLM:/)
+  })
+
+  test("re-running the installer replaces the task instead of duplicating it", () => {
+    expect(PS1).toMatch(/Unregister-ScheduledTask/)
+  })
+
+  test("a failure is recorded for the summary, not swallowed", () => {
+    expect(PS1).toContain("$AutostartFailedReason")
+    // The summary must actually READ it — recording a reason nobody prints is the
+    // original defect with an extra variable.
+    expect(PS1).toMatch(/if\s*\(\s*\$AutostartFailedReason\s*\)/)
+    expect(PS1).toMatch(/will NOT restart automatically after a reboot/)
+  })
+
+  test("the weaker fallback is named as weaker, not reported as equivalent", () => {
+    // The Run key starts at logon but cannot restart a crashed process. Saying
+    // "autostart registered" for both would promise something one of them cannot do.
+    expect(PS1).toMatch(/will NOT restart if it stops/)
+  })
+})
