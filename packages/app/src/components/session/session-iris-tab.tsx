@@ -173,13 +173,14 @@ export function SessionIrisTab() {
   }
 
   return (
-    <div class="flex flex-col h-full min-h-0 gap-3 px-3 pb-3">
-      {/* The app's own SelectV2, not a native <select>. A raw OS dropdown in the middle of a
-          designed panel reads as something that fell in from another program — which is
-          exactly how it looked. */}
+    <div class="flex flex-col h-full min-h-0 gap-2 px-2 pb-2">
+      {/* The app's own SelectV2, not a native <select>: a raw OS dropdown cannot be themed and
+          read as something that fell in from another program. `inline` is the compact trigger
+          the sibling panel header uses for its "Git changes" dropdown — the point is to look
+          like the thing six inches to the left, not to look good on its own. */}
       <Show when={((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0}>
         <SelectV2
-          appearance="base"
+          appearance="inline"
           class="w-full"
           placement="bottom-start"
           gutter={6}
@@ -201,23 +202,23 @@ export function SessionIrisTab() {
         </For>
       </SegmentedControlV2>
 
-      <div class="flex-1 min-h-0 overflow-y-auto text-sm">
+      <div class="flex-1 min-h-0 overflow-y-auto">
         <Switch>
           <Match when={view() === "loading"}>
-            <p class="text-v2-text-text-weak">Loading…</p>
+            <p class="px-2 py-2 text-12-regular text-text-weak">Loading…</p>
           </Match>
 
           {/* NOT MEASURED. Never rendered as an empty surface — see surfaceView. */}
           <Match when={view() === "unreachable"}>
-            <p class="text-v2-text-text-weak">Could not reach IRIS — {(bloqs.latest ?? bloqs())?.reason ?? "unknown"}.</p>
+            <p class="px-2 py-2 text-12-regular text-text-weak">Could not reach IRIS — {(bloqs.latest ?? bloqs())?.reason ?? "unknown"}.</p>
           </Match>
           <Match when={view() === "surface-error"}>
-            <p class="text-v2-text-text-weak">Could not load {surface()} — {current()?.reason ?? "unknown"}.</p>
+            <p class="px-2 py-2 text-12-regular text-text-weak">Could not load {surface()} — {current()?.reason ?? "unknown"}.</p>
           </Match>
 
           <Match when={view() === "rows"}>
             <Show when={current()?.measured && current()?.reason}>
-              <p class="text-v2-text-text-weak pb-2">{current()!.reason}</p>
+              <p class="px-2 pb-2 text-12-regular text-text-weak">{current()!.reason}</p>
             </Show>
 
             <Switch>
@@ -225,20 +226,20 @@ export function SessionIrisTab() {
                 <For each={rows() as AtlasList[]}>
                   {(list) => (
                     <section class="mb-4">
-                      <header class="flex items-baseline gap-2 pb-1">
-                        <h3 class="text-v2-text-text-base font-medium">{list.name}</h3>
+                      <header class="flex items-baseline gap-2 px-2 pb-1 pt-1">
+                        <h3 class="text-12-medium text-text-base">{list.name}</h3>
                         {/* Counts in mono + tabular, so columns of numbers line up and read as data. */}
-                        <span class="font-mono tabular-nums text-[11px] text-v2-text-text-weak">
+                        <span class="font-mono tabular-nums text-11-regular text-text-weak">
                           {list.items.length}
                         </span>
                       </header>
                       <For each={list.items}>
                         {(item) => (
-                          <div class="flex gap-2 py-1 ps-1 border-s border-v2-border-border-weak">
-                            <span class="text-v2-text-text-weak shrink-0">
+                          <div class="flex gap-2 px-2 py-1">
+                            <span class="text-12-regular text-text-weak shrink-0">
                               {item.status === "completed" ? "✓" : "·"}
                             </span>
-                            <span class="text-v2-text-text-weak min-w-0">{item.title}</span>
+                            <span class="text-12-regular text-text-muted min-w-0">{item.title}</span>
                           </div>
                         )}
                       </For>
@@ -250,12 +251,12 @@ export function SessionIrisTab() {
               <Match when={surface() === "agents"}>
                 <For each={rows()}>
                   {(a) => (
-                    <div class="flex items-baseline gap-2 py-1.5 border-b border-v2-border-border-weak last:border-0">
-                      <span class="shrink-0" classList={{ "text-v2-icon-icon-accent": a.status === "healthy" }}>
+                    <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                      <span class="shrink-0" classList={{ "text-text-base": a.status === "healthy", "text-text-weak": a.status !== "healthy" }}>
                         ●
                       </span>
-                      <span class="text-v2-text-text-base min-w-0 flex-1">{a.name}</span>
-                      <span class="font-mono text-[11px] text-v2-text-text-weak shrink-0">
+                      <span class="text-12-regular text-text-base min-w-0 flex-1">{a.name}</span>
+                      <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">
                         {a.heartbeat ? (a.schedule ?? "heartbeat") : "on demand"}
                       </span>
                     </div>
@@ -266,11 +267,11 @@ export function SessionIrisTab() {
               <Match when={surface() === "leads"}>
                 <For each={rows()}>
                   {(l) => (
-                    <div class="flex items-baseline gap-2 py-1.5 border-b border-v2-border-border-weak last:border-0">
+                    <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
                       <span class="shrink-0">{l.hot ? "🔥" : "·"}</span>
-                      <span class="text-v2-text-text-base min-w-0 flex-1">{l.name}</span>
+                      <span class="text-12-regular text-text-base min-w-0 flex-1">{l.name}</span>
                       <Show when={l.status}>
-                        <span class="font-mono text-[11px] text-v2-text-text-weak shrink-0">{l.status}</span>
+                        <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">{l.status}</span>
                       </Show>
                     </div>
                   )}
@@ -280,16 +281,16 @@ export function SessionIrisTab() {
               <Match when={surface() === "pages"}>
                 <For each={rows()}>
                   {(pg) => (
-                    <div class="flex items-baseline gap-2 py-1.5 border-b border-v2-border-border-weak last:border-0">
+                    <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
                       <span
                         class="shrink-0"
-                        classList={{ "text-v2-icon-icon-accent": pg.status === "published" }}
+                        classList={{ "text-text-base": pg.status === "published", "text-text-weak": pg.status !== "published" }}
                       >
                         {pg.status === "published" ? "●" : "○"}
                       </span>
-                      <span class="text-v2-text-text-base min-w-0 flex-1">{pg.title}</span>
+                      <span class="text-12-regular text-text-base min-w-0 flex-1">{pg.title}</span>
                       <Show when={pg.slug}>
-                        <span class="font-mono text-[11px] text-v2-text-text-weak shrink-0">/{pg.slug}</span>
+                        <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">/{pg.slug}</span>
                       </Show>
                     </div>
                   )}
@@ -300,7 +301,7 @@ export function SessionIrisTab() {
 
           {/* Only reachable when measured===true — a genuine empty surface. */}
           <Match when={view() === "empty"}>
-            <p class="text-v2-text-text-weak">Nothing in {surface()} on this board.</p>
+            <p class="px-2 py-2 text-12-regular text-text-weak">Nothing in {surface()} on this board.</p>
           </Match>
         </Switch>
       </div>
