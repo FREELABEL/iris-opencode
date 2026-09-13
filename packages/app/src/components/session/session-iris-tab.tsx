@@ -232,11 +232,14 @@ export function SessionIrisTab() {
               <Dialog title="Board" description={`${all.length} boards`}>
                 <List
                   class="px-3"
-                  search={{ placeholder: "Search boards…", autofocus: true }}
+                  search={{ placeholder: "Search boards or #id…", autofocus: true }}
                   emptyMessage="No boards match."
                   key={(b) => String(b?.id ?? "")}
-                  items={() => all}
-                  filterKeys={["name"]}
+                  items={() => all.map((b) => ({ ...b, ref: `#${b.id}` }))}
+                  /* `ref` is in the filter keys so typing 674 finds the board. You refer to
+                     these by number everywhere else — commits, tickets, conversation — and a
+                     picker you can only search by name makes the number useless here. */
+                  filterKeys={["name", "ref"]}
                   onSelect={(b) => {
                     if (!b) return
                     choose(b.id)
@@ -247,7 +250,17 @@ export function SessionIrisTab() {
                     dialog.close()
                   }}
                 >
-                  {(b) => <span class="truncate">{b.name}</span>}
+                  {(b) => (
+                    <div class="w-full flex items-baseline gap-2 min-w-0">
+                      <span class="truncate">{b.name}</span>
+                      {/* AFTER the name, muted and mono. Leading with the number would make
+                          every row start with noise and wreck scanning; trailing keeps the
+                          names left-aligned and the ids in a column of their own. */}
+                      <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+                        {b.ref}
+                      </span>
+                    </div>
+                  )}
                 </List>
               </Dialog>
             ))
@@ -278,6 +291,12 @@ export function SessionIrisTab() {
           >
             ← Back
           </button>
+          <div class="flex items-baseline gap-2 px-2 pb-1">
+            <span class="text-12-medium text-text-strong min-w-0 truncate">{openItem()!.title}</span>
+            <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+              #{openItem()!.id}
+            </span>
+          </div>
           <div
             class="iris-markdown flex-1 min-h-0 overflow-y-auto px-2 pb-4 text-12-regular text-text-base"
             /* The body is the signed-in user's own Atlas content, fetched through their own
@@ -331,7 +350,10 @@ export function SessionIrisTab() {
                             <span class="text-12-regular text-text-weak shrink-0">
                               {item.status === "completed" ? "✓" : "·"}
                             </span>
-                            <span class="text-12-regular text-text-muted min-w-0">{item.title}</span>
+                            <span class="text-12-regular text-text-muted min-w-0 flex-1">{item.title}</span>
+                            <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+                              #{item.id}
+                            </span>
                           </button>
                         )}
                       </For>
