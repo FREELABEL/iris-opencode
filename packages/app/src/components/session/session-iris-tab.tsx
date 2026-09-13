@@ -225,7 +225,7 @@ export function SessionIrisTab() {
       <Show when={((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0}>
         <button
           type="button"
-          class="flex items-center gap-2 px-2 py-1 text-12-regular text-text-base hover:bg-background-element rounded text-start min-w-0"
+          class="flex items-center gap-2 px-2 py-1 text-12-regular text-text-base hover:bg-background-element rounded text-start min-w-0 cursor-pointer"
           onClick={() => {
             const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
             dialog.show(() => (
@@ -261,7 +261,7 @@ export function SessionIrisTab() {
       {/* full-width: the control is a FIXED 232px by default and four flex items inside it leave
           each label ~34px of room, so "Agents" and "Pages" were clipped on both sides. The
           modifier class exists in segmented-control-v2.css; there is no prop for it. */}
-      <SegmentedControlV2 class="segmented-control-v2--full-width shrink-0" value={surface()} onChange={(v) => v && chooseSurface(v as SurfaceId)}>
+      <SegmentedControlV2 class="segmented-control-v2--full-width iris-surfaces shrink-0" value={surface()} onChange={(v) => v && chooseSurface(v as SurfaceId)}>
         <For each={SURFACES}>
           {(def) => <SegmentedControlItemV2 value={def.id}>{def.label}</SegmentedControlItemV2>}
         </For>
@@ -273,7 +273,7 @@ export function SessionIrisTab() {
         <div class="flex-1 min-h-0 flex flex-col">
           <button
             type="button"
-            class="flex items-center gap-1 px-2 py-1 text-12-regular text-text-weak hover:text-text-base shrink-0 text-start"
+            class="flex items-center gap-1 px-2 py-1 text-12-regular text-text-weak hover:text-text-base shrink-0 text-start cursor-pointer"
             onClick={() => setOpenItem(null)}
           >
             ← Back
@@ -323,7 +323,7 @@ export function SessionIrisTab() {
                         {(item) => (
                           <button
                             type="button"
-                            class="w-full flex gap-2 px-2 py-1 text-start rounded hover:bg-background-element disabled:hover:bg-transparent"
+                            class="w-full flex gap-2 px-2 py-1 text-start rounded cursor-pointer hover:bg-background-element disabled:cursor-default disabled:hover:bg-transparent"
                             disabled={!item.content}
                             title={item.content ? undefined : "This item has no body to show"}
                             onClick={() => item.content && setOpenItem(item)}

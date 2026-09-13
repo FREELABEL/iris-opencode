@@ -18,11 +18,11 @@ describe("fleetLabel", () => {
   })
 
   test("a measured fleet counts online against total", () => {
-    expect(fleetLabel({ measured: true, nodes: [{ online: true }, { online: false }, { online: true }] })).toBe("2/3")
+    expect(fleetLabel({ measured: true, nodes: [{ online: true, name: "n" }, { online: false, name: "n" }, { online: true, name: "n" }] })).toBe("2/3")
   })
 
   test("a measured fleet that really is all down says so", () => {
-    expect(fleetLabel({ measured: true, nodes: [{ online: false }] })).toBe("0/1")
+    expect(fleetLabel({ measured: true, nodes: [{ online: false, name: "n" }] })).toBe("0/1")
   })
 })
 

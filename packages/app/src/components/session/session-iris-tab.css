@@ -83,3 +83,28 @@
   font-variant-numeric: tabular-nums;
 }
 .iris-markdown th { font-weight: var(--font-weight-medium, 500); }
+
+/*
+ * Drop the segmented control's ring, only here.
+ *
+ * segmented-control-v2.css draws a 0.5px box-shadow ring on the group and another on the
+ * pressed item. Every other tab strip in this window — "Review", "IRIS", the file tabs — is
+ * borderless, so the ring made this one control look like it came from a different app.
+ *
+ * Scoped to .iris-surfaces rather than edited at source: the component is shared, and a
+ * borderless segmented control is right HERE (sitting inside an already-bordered panel), not
+ * necessarily in a settings row where the ring is what separates it from the background.
+ */
+.iris-surfaces[data-slot="segmented-control-v2"] {
+  box-shadow: none;
+  background: transparent;
+}
+
+.iris-surfaces [data-slot="segmented-control-v2-item"] {
+  cursor: pointer;
+}
+
+.iris-surfaces [data-slot="segmented-control-v2-item"]:where([data-pressed]) {
+  box-shadow: none;
+  background: var(--background-element);
+}

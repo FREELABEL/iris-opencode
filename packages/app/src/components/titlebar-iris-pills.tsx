@@ -1,5 +1,6 @@
-import { createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js"
+import { createMemo, createResource, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { Portal } from "solid-js/web"
+import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { useServer } from "@/context/server"
 import { usePlatform } from "@/context/platform"
 import { useTitlebarRightMount } from "./titlebar"
@@ -21,11 +22,12 @@ import { useTitlebarRightMount } from "./titlebar"
 interface HiveState {
   measured: boolean
   reason?: string
-  nodes: { online: boolean }[]
+  nodes: { online: boolean; name: string }[]
 }
 interface InboxState {
   unread: number | null
   unreadable: boolean
+  from?: string
 }
 interface AuthState {
   signedIn: boolean
@@ -113,25 +115,63 @@ export function TitlebarIrisPills() {
   return (
     <Show when={mount()}>
       <Portal mount={mount()!}>
-        <div data-slot="iris-pills" class="flex shrink-0 items-center gap-2 mr-3 text-[11px] tabular-nums text-v2-text-text-weak">
-          <span data-slot="iris-fleet-pill" title={hive()?.measured === false ? `Fleet unreachable — ${hive()?.reason ?? "unknown"}` : "Hive machines online"}>
-            <span class="mr-1" classList={{ "text-v2-icon-icon-accent": (hive()?.nodes?.some((n) => n.online) ?? false) }}>
-              ●
+        <div
+          data-slot="iris-pills"
+          class="flex shrink-0 items-center gap-2 mr-3 text-[11px] tabular-nums text-v2-text-text-weak"
+        >
+          {/* Real tooltips, not the `title` attribute. A native tooltip takes about a second to
+              appear, cannot be styled, and is the reason these pills read as decoration: there
+              was no way to find out what "3/4" counted without asking someone. */}
+          <TooltipV2
+            placement="bottom"
+            value={
+              <Switch fallback={<>Hive machines online</>}>
+                <Match when={hive()?.measured === false}>
+                  <>Fleet unreachable — {hive()?.reason ?? "unknown"}</>
+                </Match>
+                <Match when={hive.loading && !hive.latest}>
+                  <>Checking the fleet…</>
+                </Match>
+                <Match when={hive()?.measured}>
+                  <>
+                    {hive()!.nodes.filter((n) => n.online).length} of {hive()!.nodes.length} Hive machines online
+                    {hive()!.nodes.length ? ` · ${hive()!.nodes.map((n) => n.name).join(", ")}` : ""}
+                  </>
+                </Match>
+              </Switch>
+            }
+          >
+            <span data-slot="iris-fleet-pill" class="cursor-default">
+              <span
+                class="mr-1"
+                classList={{ "text-v2-icon-icon-accent": (hive()?.nodes?.some((n) => n.online) ?? false) }}
+              >
+                ●
+              </span>
+              {fleetLabel(hive(), hive.loading)}
             </span>
-            {fleetLabel(hive(), hive.loading)}
-          </span>
-          {/* The credential warning outranks everything else here: a fleet count is useless
-              information if the app cannot talk to its API at all. Shown as a word, not an
-              icon, because the whole failure was that nothing said what was wrong. */}
+          </TooltipV2>
+
           <Show when={notice()}>
-            <span data-slot="iris-auth-pill" class="text-v2-text-text-danger" title={notice()!.hint}>
-              ⚠ {notice()!.text}
-            </span>
+            <TooltipV2 placement="bottom" value={<>{notice()!.hint}</>}>
+              <span data-slot="iris-auth-pill" class="text-v2-text-text-danger cursor-default">
+                ⚠ {notice()!.text}
+              </span>
+            </TooltipV2>
           </Show>
-          {/* Absent when there is nothing waiting. A permanent "0" is furniture; a number that
-              appears is a signal. */}
+
           <Show when={unread()}>
-            <span data-slot="iris-inbox-pill" title="Unread Hive messages — iris hive inbox read">✉ {unread()}</span>
+            <TooltipV2
+              placement="bottom"
+              value={
+                <>
+                  {unread()} unread Hive {unread() === "1" ? "message" : "messages"}
+                  {inbox()?.from ? ` · latest from ${inbox()!.from}` : ""} · read them with: iris hive inbox read
+                </>
+              }
+            >
+              <span data-slot="iris-inbox-pill" class="cursor-default">✉ {unread()}</span>
+            </TooltipV2>
           </Show>
         </div>
       </Portal>
