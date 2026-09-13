@@ -144,3 +144,62 @@ export function shouldFallBackToBridge(input: {
 export function deliveryTimeoutMs(opts: { submit?: boolean }): number {
   return opts.submit ? 180_000 : 8_000
 }
+
+/** One row of `GET /session` on a live server. Only the fields delivery actually needs. */
+export interface LiveSession {
+  id: string
+  title?: string
+  directory?: string
+}
+
+/**
+ * `GET /session` from a live server, or null.
+ *
+ * This is what lets `sessions send` work with the daemon DOWN. The bridge is only ever needed to
+ * RESOLVE a session id; delivery itself is a POST to a server that is already listening. Reading
+ * the list from that same server removes the bridge from the opencode path entirely.
+ *
+ * Null rather than throwing on anything that is not a JSON array — including the SPA's HTML,
+ * which these servers return with HTTP 200 for unknown paths.
+ */
+export async function fetchLiveSessions(base: string, timeoutMs = 4000): Promise<LiveSession[] | null> {
+  try {
+    const res = await fetch(`${base}/session`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return null
+    const body = await res.json()
+    return Array.isArray(body) ? (body as LiveSession[]) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve an id or prefix against a live session list.
+ *
+ * Mirrors the bridge resolver's semantics deliberately, so switching paths cannot change which
+ * session a given argument means: an EXACT id wins outright, a unique prefix resolves, and an
+ * ambiguous prefix is an ERROR that names the candidates rather than a pick. Mis-delivering a
+ * message is worse than refusing to deliver it.
+ *
+ * The exact-match-first rule is load-bearing: `ses_aaa111` can be a real id AND a prefix of
+ * `ses_aaa1119`. Prefix-only matching would refuse an unambiguous request.
+ */
+export function resolveSessionLive(
+  sessions: LiveSession[],
+  idPrefix: string,
+): { session: LiveSession } | { error: string } {
+  const want = (idPrefix ?? "").trim()
+  if (!want) return { error: "No session id given." }
+
+  const exact = sessions.find((s) => s.id === want)
+  if (exact) return { session: exact }
+
+  const matches = sessions.filter((s) => s.id.startsWith(want))
+  if (matches.length === 0) return { error: `No session matching '${want}'.` }
+  if (matches.length > 1) {
+    const list = matches.slice(0, 6).map((m) => m.id.slice(0, 12)).join(", ")
+    const more = matches.length > 6 ? `, +${matches.length - 6} more` : ""
+    return { error: `'${want}' matches ${matches.length} sessions: ${list}${more}. Use more characters.` }
+  }
+  return { session: matches[0] }
+}

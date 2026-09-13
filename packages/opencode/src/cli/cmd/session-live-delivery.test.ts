@@ -5,6 +5,8 @@ import {
   candidateServers,
   shouldFallBackToBridge,
   deliveryTimeoutMs,
+  resolveSessionLive,
+  fetchLiveSessions,
 } from "./session-live-delivery"
 
 /**
@@ -206,5 +208,76 @@ describe("timeouts — a model turn is not a notification", () => {
     try {
       expect(await deliverLive(s.url, SID, "x", 100, { submit: true })).toBe(false)
     } finally { s.stop() }
+  })
+})
+
+describe("resolveSessionLive — resolve without the bridge, same semantics as the bridge path", () => {
+  const S = [
+    { id: "ses_aaa111", title: "frontend work" },
+    { id: "ses_aaa222", title: "backend work" },
+    { id: "ses_bbb333", title: "docs" },
+  ]
+
+  test("an exact id resolves", () => {
+    const r = resolveSessionLive(S, "ses_bbb333")
+    expect("session" in r && r.session.id).toBe("ses_bbb333")
+  })
+
+  test("a unique prefix resolves", () => {
+    const r = resolveSessionLive(S, "ses_bbb")
+    expect("session" in r && r.session.id).toBe("ses_bbb333")
+  })
+
+  test("an ambiguous prefix REFUSES and names the candidates", () => {
+    const r = resolveSessionLive(S, "ses_aaa")
+    expect("error" in r).toBe(true)
+    if ("error" in r) {
+      expect(r.error).toContain("ses_aaa111")
+      expect(r.error).toContain("ses_aaa222")
+      expect(r.error).toContain("Use more characters")
+    }
+  })
+
+  test("an EXACT id wins even when it is also a prefix of another session", () => {
+    // Mis-delivery guard: `ses_aaa111` is a real id AND a prefix of `ses_aaa1119`. Treating it as
+    // ambiguous would refuse a perfectly unambiguous request; picking the longer one would
+    // deliver to the wrong session.
+    const withSuffix = [...S, { id: "ses_aaa1119", title: "later" }]
+    const r = resolveSessionLive(withSuffix, "ses_aaa111")
+    expect("session" in r && r.session.id).toBe("ses_aaa111")
+  })
+
+  test("no match says so", () => {
+    const r = resolveSessionLive(S, "ses_zzz")
+    expect("error" in r && r.error).toContain("No session")
+  })
+
+  test("an empty prefix is refused rather than matching everything", () => {
+    expect("error" in resolveSessionLive(S, "  ")).toBe(true)
+  })
+
+  test("an empty session list is not a crash", () => {
+    expect("error" in resolveSessionLive([], "ses_a")).toBe(true)
+  })
+})
+
+describe("fetchLiveSessions — reads the server, never the bridge", () => {
+  test("returns the array from GET /session", async () => {
+    const s = withServer(() => Response.json([{ id: "ses_x", title: "t" }]))
+    try {
+      const got = await fetchLiveSessions(s.url, 1000)
+      expect(got).toEqual([{ id: "ses_x", title: "t" }])
+    } finally { s.stop() }
+  })
+
+  test("HTML-200 (the SPA fallback) is not a session list", async () => {
+    const s = withServer(() => new Response("<!doctype html>", { headers: { "content-type": "text/html" } }))
+    try {
+      expect(await fetchLiveSessions(s.url, 1000)).toBeNull()
+    } finally { s.stop() }
+  })
+
+  test("an unreachable server returns null rather than throwing", async () => {
+    expect(await fetchLiveSessions("http://127.0.0.1:1", 300)).toBeNull()
   })
 })
