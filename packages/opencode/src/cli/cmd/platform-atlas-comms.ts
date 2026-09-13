@@ -53,13 +53,41 @@ async function resolveLead(idOrQuery: string): Promise<{ id: number; lead: any }
   return { id: leadId, lead: data?.data ?? data }
 }
 
+/**
+ * Every email address this lead is reachable at — not just the one in the `email` column.
+ *
+ * A lead has ONE primary email and any number of alternates in contact_info.emails, and the
+ * ingest only ever searched the primary. For anyone who writes from a different address than
+ * the one we filed them under, most of the relationship was invisible to the comms log, and
+ * invisible in the direction that looks like silence rather than like an error.
+ *
+ * Measured on lead #10394 (2026-09-12): 27 messages on the primary address the ingest reads,
+ * 43 on the two alternates it did not — 61% of the correspondence missing from a log that
+ * reported success. He is Apple-native and writes from iCloud; the address we had on file was
+ * his work one.
+ */
+function leadEmails(lead: any): string[] {
+  const ci = lead?.contact_info ?? {}
+  const raw = [lead?.email, ci?.email, ...(Array.isArray(ci?.emails) ? ci.emails : [])]
+
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const e of raw) {
+    const addr = String(e ?? "").trim().toLowerCase()
+    if (!addr || !addr.includes("@") || seen.has(addr)) continue
+    seen.add(addr)
+    out.push(addr)
+  }
+  return out
+}
+
 // ── iMessage ingestion (via shared lib) ──
 
 function ingestImessage(lead: any): any[] {
   const { searchByHandle, normalizeHandle } = require("../lib/imessage")
   const identifiers: string[] = []
   if (lead.phone) identifiers.push(normalizeHandle(lead.phone))
-  if (lead.email) identifiers.push(lead.email)
+  for (const addr of leadEmails(lead)) identifiers.push(addr)
   if (lead.instagram) identifiers.push(lead.instagram.replace("@", ""))
 
   if (identifiers.length === 0) return []
@@ -206,28 +234,57 @@ function ingestWhatsapp(lead: any): any[] {
 // ── Gmail ingestion (via bridge or integration) ──
 
 async function ingestGmail(lead: any): Promise<any[]> {
-  const email = lead.email
-  if (!email) return []
+  const emails = leadEmails(lead)
+  if (emails.length === 0) return []
+  const email = emails[0]
 
   try {
-    // Try bridge first (has full body)
-    const res = await fetch(`${BRIDGE_URL}/api/mail/search?from=${encodeURIComponent(email)}&days=90&limit=50&include_body=1`, {
-      signal: AbortSignal.timeout(5000),
-    })
-    if (res.ok) {
+    // One search PER ADDRESS. The bridge filters on a single `from`, so a lead with alternates
+    // needs one call each — searching only the primary is what left 61% of #10394's mail out of
+    // the log while the command reported success. The server dedups on external_message_id, so
+    // an address that overlaps another costs a round trip, not a duplicate row.
+    const collected: any[] = []
+    let anyOk = false
+
+    // AUTHENTICATE. The bridge requires X-Bridge-Key and this call never sent it, so every
+    // Apple Mail ingest got a 401, fell through to the Gmail fallback, and reported whatever
+    // that found as the whole answer. The Discord ingest in this same file has always done it
+    // correctly — mail simply never did. A 401 here is indistinguishable from "no messages"
+    // downstream, which is how a mailbox with 70 messages in it logged 1 and said "1 new".
+    const bridgeToken = getBridgeToken()
+    const bridgeHeaders: Record<string, string> = { Accept: "application/json" }
+    if (bridgeToken) bridgeHeaders["X-Bridge-Key"] = bridgeToken
+
+    for (const addr of emails) {
+      const res = await fetch(`${BRIDGE_URL}/api/mail/search?from=${encodeURIComponent(addr)}&days=90&limit=50&include_body=1`, {
+        headers: bridgeHeaders,
+        signal: AbortSignal.timeout(15000),
+      })
+      if (!res.ok) {
+        // Say which address and why. Falling through to a lesser source without a word is what
+        // made this invisible for months.
+        console.log(dim(`    apple_mail: ${addr} → bridge returned ${res.status}${res.status === 401 ? " (no/invalid X-Bridge-Key — run: iris bridge status)" : ""}`))
+        continue
+      }
+      anyOk = true
+
       const data = (await res.json()) as any
       const messages = data?.messages ?? []
-      return messages.map((m: any) => ({
-        direction: "inbound" as const,
-        from_identifier: m.sender || m.from || email,
-        subject: m.subject,
-        body: m.body || m.snippet,
-        sent_at: m.date,
-        external_message_id: m.messageId || m.id || `mail_${m.date}_${m.subject}`,
-        metadata: { source: "apple_mail" },
-        channel: "apple_mail", // override — this is Apple Mail, not Gmail API
-      }))
+      for (const m of messages) {
+        collected.push({
+          direction: "inbound" as const,
+          from_identifier: m.sender || m.from || addr,
+          subject: m.subject,
+          body: m.body || m.snippet,
+          sent_at: m.date,
+          external_message_id: m.messageId || m.id || `mail_${m.date}_${m.subject}`,
+          metadata: { source: "apple_mail", matched_address: addr },
+          channel: "apple_mail", // override — this is Apple Mail, not Gmail API
+        })
+      }
     }
+
+    if (anyOk) return collected
   } catch { /* bridge not running */ }
 
   // Fallback: Gmail API via fl-api integration
