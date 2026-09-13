@@ -427,6 +427,18 @@
       "dest": "how-to/hive-from-your-phone.md",
       "managed": true,
       "purpose": "Reach the Hive daemon from a phone via Apple Shortcuts/Siri over Tailscale — the endpoint table, which routes need X-Bridge-Key, and what publishing port 3200 exposes to everyone on the tailnet"
+    },
+    {
+      "src": "how-to/audit-and-enrich-a-client-contact-list.md",
+      "dest": "how-to/audit-and-enrich-a-client-contact-list.md",
+      "managed": true,
+      "purpose": "Recipe for auditing a client's CRM export for missing phone/email/website and enriching the gaps from the open web. Written from a real run of several hundred organisations on 22 search credits; step 4 is the decision that makes it cheap."
+    },
+    {
+      "src": "how-to/product-from-idea-to-published-page.md",
+      "dest": "how-to/product-from-idea-to-published-page.md",
+      "managed": true,
+      "purpose": "Recipe for taking a product from a spoken idea to a live URL inside IRIS alone — Atlas, Genesis and Hive, with agents on two machines passing work. Written from a session that did it, including where a step cost an hour."
     }
   ]
 }
