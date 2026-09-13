@@ -98,14 +98,44 @@ else
 fi
 
 # ── DAEMON privacy grants — inferred from ITS OWN logs, not measured ─────────
-LOG="$HOME/.iris/logs/daemon.stderr.log"
-if [ -f "$LOG" ]; then
-  emit daemon_log_bytes "$(wc -c < "$LOG" | tr -d ' ')"
-  emit daemon_denials "$(grep -ic 'authorization denied\|Full Disk Access\|Operation not permitted' "$LOG" 2>/dev/null | tr -d ' ')"
-  emit daemon_denial_last "$(grep -i 'authorization denied\|Full Disk Access\|Operation not permitted' "$LOG" 2>/dev/null | tail -1 | cut -c1-160)"
-else
-  emit daemon_log_bytes ""
-fi
+# READ WHERE THE WRITERS WRITE — there is more than one. This probed only
+# ~/.iris/logs/daemon.stderr.log (launchd's StandardErrorPath), while daemonctl's
+# unsupervised nohup fallback wrote ~/.iris/bridge/daemon.log. On a machine started by the
+# fallback the scanner read a 3.4KB file, found nothing, and printed "privacy denials
+# logged: none" with the real denials in the other file (#184929). daemonctl now writes the
+# plist paths in both modes, but old installs and old logs still exist, so scan every
+# location, count across all of them, and REPORT WHICH FILES WERE READ — a clean reading
+# that cannot name its source cannot be audited.
+#
+# THIS SCRIPT LIVES INSIDE A JS TEMPLATE LITERAL, so dollar-brace and the backtick are
+# forbidden even in a comment: String.raw suppresses ESCAPES, not SUBSTITUTIONS, so a shell
+# default-value expansion parses as a template substitution and a backtick ENDS the string.
+# The file then fails to BUILD — compile time, not probe time, taking the whole CLI with it.
+# Caught three times by bun build here. Use explicit if/else instead.
+DENIAL_RE='authorization denied|Full Disk Access|Operation not permitted|No permission to read'
+LOG_FOUND=""; LOG_BYTES=0; LOG_DENIALS=0; LOG_LAST=""
+for c in "$HOME/.iris/logs/daemon.stderr.log" \
+         "$HOME/.iris/logs/daemon.stdout.log" \
+         "$HOME/.iris/logs/daemon-error.log" \
+         "$HOME/.iris/bridge/daemon.log"; do
+  [ -f "$c" ] || continue
+  b="$(wc -c < "$c" 2>/dev/null | tr -d ' ')"
+  [ -n "$b" ] || b=0
+  # A file that exists but is empty is not evidence of anything. Counting it as "scanned"
+  # is how "looked in the wrong place" gets laundered into "there is nothing to find".
+  [ "$b" -gt 0 ] 2>/dev/null || continue
+  if [ -z "$LOG_FOUND" ]; then LOG_FOUND="$c"; else LOG_FOUND="$LOG_FOUND,$c"; fi
+  LOG_BYTES=$((LOG_BYTES + b))
+  d="$(grep -Eic "$DENIAL_RE" "$c" 2>/dev/null | tr -d ' ')"
+  [ -n "$d" ] || d=0
+  LOG_DENIALS=$((LOG_DENIALS + d))
+  [ "$d" -gt 0 ] 2>/dev/null && LOG_LAST="$(grep -Ei "$DENIAL_RE" "$c" 2>/dev/null | tail -1 | cut -c1-160)"
+done
+emit daemon_log_scanned "$HOME/.iris/logs/daemon.stderr.log,$HOME/.iris/logs/daemon.stdout.log,$HOME/.iris/logs/daemon-error.log,$HOME/.iris/bridge/daemon.log"
+emit daemon_log_paths "$LOG_FOUND"
+emit daemon_log_bytes "$([ -n "$LOG_FOUND" ] && echo "$LOG_BYTES")"
+emit daemon_denials "$LOG_DENIALS"
+emit daemon_denial_last "$LOG_LAST"
 `
 
 interface Reading {
@@ -162,6 +192,16 @@ export function judge(node: string, api: NodeVerdict["api"], r: Reading, expecte
     problems.push(
       `the DAEMON has been refused a macOS privacy grant ${denials} time(s) — it is blind to whatever that guards, and nothing in its capability set says so`,
     )
+  } else if (!r.daemon_log_bytes) {
+    // THREE STATES, NOT TWO. "no denials found" and "found no log to look in" used to print
+    // the same reassuring line. A scanner that cannot distinguish those is the bug in
+    // #184929, not a clean bill of health — so an unreadable/absent log is reported as
+    // UNKNOWN, and as a problem when the daemon is up and should have been writing one.
+    const msg =
+      `the daemon's privacy grants are UNKNOWN, not clean: no non-empty daemon log was found in any known location ` +
+      `(${(r.daemon_log_scanned ?? "").split(",").join(", ") || "no paths scanned"})`
+    if (r.daemon_pid) problems.push(msg)
+    else notes.push(msg)
   }
 
   if (r.ssh_fda === "denied") {
@@ -290,10 +330,15 @@ export async function runRemoteDoctor(argv: any) {
       console.log(`    ${dim("daemon grants (INFERRED from its own log — no API exists to ask another process):")}`)
       if (r.daemon_log_bytes) {
         const d = Number(r.daemon_denials ?? "0")
+        // Name the file and the byte count alongside the verdict. "none" read out of a
+        // 3.4KB stale log and "none" read out of 3.4MB of live log are different claims
+        // and used to print identically (#184929).
         console.log(`      privacy denials logged: ${d === 0 ? dim("none") : bold(String(d))}`)
+        console.log(`      read from: ${dim(`${r.daemon_log_paths || "?"} (${r.daemon_log_bytes} bytes)`)}`)
         if (d > 0 && r.daemon_denial_last) console.log(`      most recent: ${dim(r.daemon_denial_last)}`)
       } else {
-        console.log(`      ${dim("no daemon log found — cannot infer")}`)
+        console.log(`      ${bold("UNKNOWN")} — no non-empty daemon log in any known location`)
+        console.log(`      ${dim(`scanned: ${(r.daemon_log_scanned ?? "").split(",").join(", ") || "?"}`)}`)
       }
 
       for (const p of v.problems) console.log(`    ${bold("PROBLEM")}  ${p}`)

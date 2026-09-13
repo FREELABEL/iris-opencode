@@ -457,7 +457,16 @@ export const PlatformDoctorCommand = cmd({
             name: "Full Disk Access — iris-daemon",
             ok: false,
             detail: `denied for ${denied.join(", ")} — the daemon has its own grant, separate from your terminal`,
-            hint: "grant Full Disk Access to iris-daemon (not just your terminal), then: iris-daemon restart",
+            // "grant Full Disk Access to iris-daemon" named nothing you can drag into the
+            // panel, so it was read as "add your terminal" — which cannot work: launchd
+            // starts the daemon (io.heyiris.daemon → iris-daemon-wrapper.sh → exec node) and
+            // TCC grants are per-executable, so Terminal's grant covers what Terminal
+            // started (#184935). Name the binary, and say how to find it on this machine.
+            hint:
+              "add the daemon's own binary — `ps -o comm= -p \"$(pgrep -f 'bridge/daemon.js' | head -1)\"` — " +
+              "to System Settings → Privacy & Security → Full Disk Access (⇧⌘G to paste the path). " +
+              "Adding your terminal does NOT work: launchd starts the daemon, not your terminal. " +
+              "Then `iris-daemon restart` — TCC is resolved at process start, so a running daemon keeps the old answer.",
             category: "permission",
           })
         } else if (terminalOk) {
