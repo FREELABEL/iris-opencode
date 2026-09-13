@@ -193,6 +193,10 @@ export function SessionIrisTab() {
 
   // Loading ONLY on the first load. A refetch with a previous payload in hand is not a loading
   // state — treating it as one is what caused the flash.
+  /** Anything in flight — a first load OR a refetch. The bar is the only thing that reports a
+   *  refetch now that the content deliberately stays on screen through one. */
+  const busy = createMemo(() => bloqs.loading || data.loading)
+
   const firstLoad = createMemo(() => (data.loading && !data.latest) || (bloqs.loading && !bloqs.latest))
 
   const view = createMemo(() =>
@@ -229,7 +233,10 @@ export function SessionIrisTab() {
   }
 
   return (
-    <div class="flex flex-col h-full min-h-0 gap-2 px-2 pb-2">
+    <div class="relative flex flex-col h-full min-h-0 gap-2 px-2 pb-2">
+      <Show when={busy()}>
+        <div class="iris-activity" aria-hidden="true" />
+      </Show>
       {/* A SEARCHABLE dialog, not a dropdown.
           This account has 153 bloqs. A plain option list is the wrong control for that at any
           styling — you cannot find "KMG — Kristen Montero" by scrolling past a hundred and

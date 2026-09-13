@@ -156,3 +156,55 @@
   background: var(--background-element);
   color: var(--text-strong);
 }
+
+/*
+ * The activity line.
+ *
+ * A 1px indeterminate bar pinned to the top of the panel, shown whenever a fetch is in flight.
+ *
+ * WHY A BAR AND NOT A SPINNER IN THE CONTENT. The panel deliberately keeps the previous
+ * surface on screen during a refetch (resource.latest) so clicking between Atlas and Leads does
+ * not blink through nothing. That fix removed the only signal that anything was happening —
+ * click a tab, nothing moves for 400ms, and it reads as a dead button. This restores the signal
+ * without taking the content away again: it occupies no layout, so nothing shifts when it
+ * appears or goes.
+ */
+.iris-activity {
+  position: absolute;
+  top: 0;
+  inset-inline: 0;
+  height: 1px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.iris-activity::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  height: 1px;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--text-interactive-base), transparent);
+  animation: iris-activity-sweep 1.1s ease-in-out infinite;
+}
+
+@keyframes iris-activity-sweep {
+  0%   { inset-inline-start: -40%; }
+  100% { inset-inline-start: 100%; }
+}
+
+/*
+ * Reduced motion still needs to SAY something is happening — silence would be a worse answer
+ * than a still line. A slow opacity breath carries the same meaning without travel.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .iris-activity::after {
+    inset-inline-start: 0;
+    width: 100%;
+    animation: iris-activity-breathe 1.6s ease-in-out infinite;
+  }
+  @keyframes iris-activity-breathe {
+    0%, 100% { opacity: 0.25; }
+    50%      { opacity: 0.7; }
+  }
+}
