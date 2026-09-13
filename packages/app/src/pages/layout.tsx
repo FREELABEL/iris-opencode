@@ -83,6 +83,15 @@ import {
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
 
+/**
+ * The collapsed project rail's width — ONE value, because it was two.
+ *
+ * Kept in rem, which is what the layout has always used: it scales with the root font size,
+ * and a px literal would not. See #184875.
+ */
+const COLLAPSED_RAIL = "4rem"
+
+
 export default function LegacyLayout(props: ParentProps) {
   const serverSDK = useServerSDK()
   const [store, setStore, , ready] = persisted(
@@ -1701,9 +1710,14 @@ export default function LegacyLayout(props: ParentProps) {
   )
 
   createEffect(() => {
+    // COLLAPSED_RAIL, not a second literal. This line said 48px while the three places that
+    // actually lay the rail out said 4rem, so every dialog sat 16px off whenever the sidebar
+    // was collapsed. Expressed in the SAME UNIT deliberately: 4rem scales with the root font
+    // size and 64px does not, so "fixing" it to a pixel number would have quietly changed the
+    // layout for anyone running larger text. (#184875)
     document.documentElement.style.setProperty(
       "--dialog-left-margin",
-      `${layout.sidebar.opened() ? layout.sidebar.width() : 48}px`,
+      layout.sidebar.opened() ? `${layout.sidebar.width()}px` : COLLAPSED_RAIL,
     )
   })
 
@@ -2310,7 +2324,7 @@ export default function LegacyLayout(props: ParentProps) {
 
             <div
               class="hidden xl:block pointer-events-none absolute top-0 end-0 z-0 border-t border-border-weaker-base"
-              style={{ "inset-inline-start": "calc(4rem + 12px)" }}
+              style={{ "inset-inline-start": `calc(${COLLAPSED_RAIL} + 12px)` }}
             />
 
             <div class="xl:hidden">
@@ -2347,7 +2361,7 @@ export default function LegacyLayout(props: ParentProps) {
                   !state.sizing,
               }}
               style={{
-                "--main-left": layout.sidebar.opened() ? `${side()}px` : "4rem",
+                "--main-left": layout.sidebar.opened() ? `${side()}px` : COLLAPSED_RAIL,
               }}
             >
               <main
@@ -2395,7 +2409,7 @@ export default function LegacyLayout(props: ParentProps) {
                 "duration-180 ease-out": state.peeked && !layout.sidebar.opened(),
                 "duration-120 ease-in": !state.peeked || layout.sidebar.opened(),
               }}
-              style={{ "inset-inline-start": `calc(4rem + ${panel()}px)` }}
+              style={{ "inset-inline-start": `calc(${COLLAPSED_RAIL} + ${panel()}px)` }}
             >
               <div class="h-full w-px" style={{ "box-shadow": "var(--shadow-sidebar-overlay)" }} />
             </div>
