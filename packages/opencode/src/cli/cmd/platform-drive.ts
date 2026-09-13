@@ -149,7 +149,13 @@ async function walk(
 // that FAILS CLOSED. A confident wrong answer about where a file lives is worse
 // than no answer.
 
-const DRIVEFS_ROOT = nodePath.join(os.homedir(), "Library", "Application Support", "Google", "DriveFS")
+// Overridable so the fail-closed guard below can actually be demonstrated
+// failing. A guard nobody can make fail is indistinguishable from one that does
+// not work, and this one's whole job is to refuse a query when Google changes
+// its private schema.
+const DRIVEFS_ROOT =
+  process.env.IRIS_DRIVEFS_ROOT ||
+  nodePath.join(os.homedir(), "Library", "Application Support", "Google", "DriveFS")
 
 const REQUIRED_SCHEMA: Record<string, string[]> = {
   items: ["stable_id", "id", "local_title", "mime_type", "file_size", "modified_date", "trashed", "is_owner", "is_folder"],
@@ -305,7 +311,7 @@ async function runLocal(args: any, build: (db: Database) => LocalRow[]): Promise
 }
 
 export const PlatformDriveCommand = cmd({
-  command: "drive <action>",
+  command: "drive <action> [target..]",
   describe: "browse Google Drive including Shared Drives, or read the local index offline",
   builder: (y) =>
     y
@@ -313,6 +319,15 @@ export const PlatformDriveCommand = cmd({
         describe: "list-drives | tree | read | path | find | accounts",
         type: "string",
         choices: ["list-drives", "tree", "read", "path", "find", "accounts"],
+      })
+      // Without this, yargs strict mode rejects every trailing word with
+      // "Unknown argument", and `iris drive read <id>` has NEVER worked — the
+      // args._[1] fallback below it was unreachable from the day it was written
+      // for #178633. Only --file ever reached the handler.
+      .positional("target", {
+        describe: "file id(s) for `read`/`path`, or the search text for `find`",
+        type: "string",
+        array: true,
       })
       .option("file", { describe: "file id to read (drive read --file <id>)", type: "string" })
       .option("out", { describe: "write the exported text here instead of stdout", type: "string" })
@@ -348,7 +363,7 @@ export const PlatformDriveCommand = cmd({
           return
         }
 
-        const rest = (args._ ?? []).slice(1).map(String)
+        const rest = ((args.target as string[] | undefined) ?? []).map(String)
         if (args.action === "path") {
           if (!rest.length) {
             prompts.log.error("Which files? Pass ids:  iris drive path <file-id> [<file-id>...]")
@@ -384,7 +399,7 @@ export const PlatformDriveCommand = cmd({
       // only way to open one was `integrations exec google-drive read_doc`, which is not
       // discoverable from `iris drive` at all (#178633).
       if (args.action === "read") {
-        const fileId = (args.file as string) ?? (args._?.[1] as string)
+        const fileId = (args.file as string) ?? ((args.target as string[] | undefined) ?? [])[0]
         if (!fileId) {
           prompts.log.error("Which file? Pass an id:  iris drive read --file <file-id>")
           prompts.log.info(`Find one with:  ${bold("iris drive tree --ids")}`)
