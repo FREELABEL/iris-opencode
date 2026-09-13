@@ -248,7 +248,11 @@ export function SessionHeader() {
       // Mirrors openSessionContext (components/session-context-usage.tsx) step for step,
       // because that path is PROVEN to activate its tab in a browser and this one was not.
       // The source argument is the part that is easy to drop and is not decoration.
-      view().reviewPanel.open(view().reviewPanel.opened() ? "other" : "context-button")
+      // "other", NOT "context-button". That source is a claim about WHO opened the panel, and
+      // session-context-usage.tsx closes the panel again when the source is "context-button"
+      // and no other tabs are open. Borrowing it for the IRIS button made the panel open and
+      // immediately shut — which looked like the button doing nothing at all.
+      view().reviewPanel.open("other")
       if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
       void tabs().open("iris")
       tabs().setActive("iris")
