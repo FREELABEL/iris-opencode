@@ -280,6 +280,36 @@ export interface HiveNode {
   lastHeartbeat: string | null
   activeTasks: number
   maxConcurrent: number
+  /**
+   * The machine itself. All of this was already in the payload and being thrown away — "I
+   * should be able to see stats, RAM, what's installed" needed no new endpoint, only for the
+   * mapper to stop dropping the fields.
+   */
+  os?: string
+  cpu?: string
+  cores?: number
+  memoryGb?: number
+  diskTotalGb?: number
+  diskFreeGb?: number
+  daemonVersion?: string
+  uptimeSeconds?: number
+  tasksCompleted?: number
+  /** Which things this node can actually do — bash, docker, browser, python3, bridge_call. */
+  capabilities?: string[]
+  /** A machine that heartbeats once per restart looks healthy while crash-looping (#182434). */
+  recentRestarts?: number
+  transport?: string
+  tailscaleIp?: string
+  /**
+   * When the hardware profile was captured — NOT when the node last heartbeat.
+   *
+   * Measured 2026-09-13: a node reported `disk.available_gb: 0.1` from a profile detected at
+   * 00:45 while heartbeating at 20:46, twenty hours later, with 1.5 GB actually free. The
+   * heartbeat is live; the hardware snapshot is not, and rendering the two together with no
+   * timestamp turns a day-old reading into a current fact. Disk especially: "0.1 GB free" is
+   * an emergency if true now and noise if it is yesterday's.
+   */
+  hardwareDetectedAt?: string
 }
 
 export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode[] }>> {
@@ -298,6 +328,22 @@ export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode
       lastHeartbeat: n.last_heartbeat_at ?? null,
       activeTasks: Number(n.active_tasks ?? 0),
       maxConcurrent: Number(n.max_concurrent ?? 0),
+      os: n.hardware_profile?.os?.label ?? n.hardware_profile?.os?.platform ?? undefined,
+      cpu: n.hardware_profile?.cpu?.model ?? undefined,
+      cores: n.hardware_profile?.cpu?.cores ?? undefined,
+      memoryGb: n.hardware_profile?.memory?.total_gb ?? undefined,
+      diskTotalGb: n.hardware_profile?.disk?.total_gb ?? undefined,
+      diskFreeGb: n.hardware_profile?.disk?.available_gb ?? undefined,
+      daemonVersion: n.daemon_version ?? undefined,
+      uptimeSeconds: typeof n.uptime_seconds === "number" ? n.uptime_seconds : undefined,
+      tasksCompleted: typeof n.total_tasks_completed === "number" ? n.total_tasks_completed : undefined,
+      capabilities: Object.entries(n.capabilities ?? {})
+        .filter(([, v]) => v)
+        .map(([k]) => k),
+      recentRestarts: Array.isArray(n.recent_restarts) ? n.recent_restarts.length : undefined,
+      transport: n.transport?.default_rail ?? undefined,
+      tailscaleIp: n.tailscale_ip ?? undefined,
+      hardwareDetectedAt: n.hardware_profile?.detected_at ?? undefined,
     }))
     return { measured: true, data: { nodes } }
   } catch (e) {

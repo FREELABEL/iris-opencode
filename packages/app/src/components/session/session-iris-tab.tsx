@@ -71,6 +71,18 @@ const fieldsOf = (pairs: [string, unknown][]): [string, string][] =>
  * fields and maybe a command", and five near-identical panels would drift apart the first time
  * one of them got a fix.
  */
+/** "20h ago" — plain, so a stale reading announces its own age. */
+function relativeAge(iso: string): string | undefined {
+  const t = new Date(iso).getTime()
+  if (!Number.isFinite(t)) return undefined
+  const mins = Math.floor((Date.now() - t) / 60000)
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
 function describeRow(surface: string, r: any): { title: string; fields: [string, string][]; command?: string } | null {
   if (surface === "agents")
     return {
@@ -104,17 +116,35 @@ function describeRow(surface: string, r: any): { title: string; fields: [string,
       ]),
       command: r.slug ? `iris pages view ${r.slug}` : undefined,
     }
-  if (surface === "hive")
+  if (surface === "hive") {
+    const hrs = r.uptimeSeconds != null ? Math.floor(r.uptimeSeconds / 3600) : undefined
     return {
       title: r.name,
       fields: fieldsOf([
-        ["id", r.id], ["status", r.status], ["online", r.online],
+        ["status", r.status], ["online", r.online],
         // "0/3" on the row meant active tasks over capacity and said so nowhere.
         ["running tasks", r.activeTasks], ["max concurrent", r.maxConcurrent],
-        ["last heartbeat", r.lastHeartbeat],
+        // The hardware block is a SNAPSHOT and says when it was taken. Without that, a
+        // twenty-hour-old "0.1 GB free" reads as an emergency happening right now.
+        ["hardware as of", r.hardwareDetectedAt ? relativeAge(r.hardwareDetectedAt) : undefined],
+        ["machine", [r.cpu, r.cores ? `${r.cores} cores` : null].filter(Boolean).join(" · ")],
+        ["memory", r.memoryGb ? `${r.memoryGb} GB` : undefined],
+        // Disk free is here because a full disk is the failure that looks like everything else
+        // breaking at once, and nothing in this fleet reported it until someone went looking.
+        ["disk", r.diskTotalGb ? `${r.diskFreeGb ?? "?"} GB free of ${r.diskTotalGb} GB` : undefined],
+        ["os", r.os], ["daemon", r.daemonVersion],
+        ["uptime", hrs != null ? (hrs >= 1 ? `${hrs}h` : `${Math.floor((r.uptimeSeconds ?? 0) / 60)}m`) : undefined],
+        // A crash-looping daemon heartbeats once per restart, so it never misses one and reads
+        // as healthy. The restart count is what separates "up for hours" from "dying nightly".
+        ["restarts seen", r.recentRestarts],
+        ["tasks completed", r.tasksCompleted],
+        ["can run", (r.capabilities ?? []).join(", ")],
+        ["transport", r.transport], ["tailnet ip", r.tailscaleIp],
+        ["last heartbeat", r.lastHeartbeat], ["id", r.id],
       ]),
       command: `iris hive nodes show ${r.id}`,
     }
+  }
   if (surface === "playbooks")
     return {
       title: r.name,
