@@ -48,5 +48,6 @@ describe("normalizeSurface", () => {
   test("a known surface survives", () => {
     expect(normalizeSurface("leads")).toBe("leads")
     expect(normalizeSurface("pages")).toBe("pages")
+    expect(normalizeSurface("hive")).toBe("hive")
   })
 })

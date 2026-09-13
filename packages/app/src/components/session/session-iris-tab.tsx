@@ -92,6 +92,10 @@ const SURFACES = [
   { id: "agents", label: "Agents", path: (b: number) => `/iris/agents/${b}` },
   { id: "leads", label: "Leads", path: (b: number) => `/iris/leads/${b}` },
   { id: "pages", label: "Pages", path: (b: number) => `/iris/pages/${b}` },
+  // Hive is NOT bloq-scoped — machines belong to the account, not to a board — so its path
+  // ignores the argument. Kept in the same list anyway so the switcher stays one mechanism;
+  // a second code path for one surface is how surfaces drift apart.
+  { id: "hive", label: "Hive", path: (_b: number) => `/iris/hive` },
 ] as const
 
 type SurfaceId = (typeof SURFACES)[number]["id"]
@@ -186,7 +190,7 @@ export function SessionIrisTab() {
   const rows = createMemo<any[]>(() => {
     const d = current()
     if (!d) return []
-    const key = surface() === "atlas" ? "lists" : surface()
+    const key = surface() === "atlas" ? "lists" : surface() === "hive" ? "nodes" : surface()
     const v = d[key]
     return Array.isArray(v) ? v : []
   })
@@ -410,6 +414,25 @@ export function SessionIrisTab() {
                       <Show when={l.status}>
                         <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">{l.status}</span>
                       </Show>
+                    </div>
+                  )}
+                </For>
+              </Match>
+
+              <Match when={surface() === "hive"}>
+                <For each={rows()}>
+                  {(n) => (
+                    <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                      <span
+                        class="shrink-0"
+                        classList={{ "text-text-base": n.online, "text-text-weak": !n.online }}
+                      >
+                        {n.online ? "●" : "○"}
+                      </span>
+                      <span class="text-12-regular text-text-base min-w-0 flex-1">{n.name}</span>
+                      <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">
+                        {n.activeTasks}/{n.maxConcurrent}
+                      </span>
                     </div>
                   )}
                 </For>

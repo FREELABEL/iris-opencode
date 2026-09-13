@@ -208,3 +208,17 @@
     50%      { opacity: 0.7; }
   }
 }
+
+/*
+ * Descenders. segmented-control-v2.css sets `line-height: 100%` on the item and
+ * `overflow: hidden` on the label, so at 13px the line box is exactly 13px tall and the tail of
+ * a "g" — Agents, Pages — is cut off by the label's own clipping. Widening the control did not
+ * help because the problem was never horizontal.
+ *
+ * A line box with room, inside a 28px item that still centres it. overflow stays hidden so long
+ * labels still ellipsize horizontally.
+ */
+.iris-surfaces [data-slot="segmented-control-v2-item"],
+.iris-surfaces [data-slot="segmented-control-v2-item-label"] {
+  line-height: 1.45;
+}
