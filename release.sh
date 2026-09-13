@@ -2,12 +2,27 @@
 set -euo pipefail
 
 # IRIS CLI Release Script
-# Usage: ./release.sh [version|--patch|--minor|--major]
-# Examples:
-#   ./release.sh 1.3.38
-#   ./release.sh --patch    # 1.3.37 → 1.3.38
-#   ./release.sh --minor    # 1.3.37 → 1.4.0
-#   ./release.sh --major    # 1.3.37 → 2.0.0
+#
+# Usage: ./release.sh [version|--patch|--minor|--major] [--check] [--yes]
+#
+#   ./release.sh --check     what is live, how far package.json has drifted, and what
+#                            --patch would pick. Changes nothing. Safe to run any time.
+#   ./release.sh --patch     1.3.251 -> 1.3.252
+#   ./release.sh --minor     1.3.251 -> 1.4.0
+#   ./release.sh --major     1.3.251 -> 2.0.0
+#   ./release.sh 1.3.252     an explicit version (must be AHEAD of what is live)
+#   --yes                    skip the confirmations. With no terminal and no --yes it
+#                            REFUSES rather than blocking forever on a prompt.
+#
+# THE VERSION COMES FROM THE LATEST PUBLISHED GITHUB RELEASE, not from package.json.
+# package.json is written as an OUTPUT and repairs itself here. It had drifted 13
+# releases behind before this was fixed, because reading it made --patch compute a tag
+# that already existed, which made people tag by hand, which skipped the bump. See the
+# long comment below: the workaround was the cause.
+#
+# Releases are cut from `main`, which is also the GitHub default branch as of
+# 2026-09-13. Before that the default was `dev` — an unrelated history — so a plain
+# clone got code that never shipped.
 
 PKG="packages/opencode/package.json"
 REPO="FREELABEL/iris-opencode"
