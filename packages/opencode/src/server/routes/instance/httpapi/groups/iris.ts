@@ -31,6 +31,7 @@ const AtlasItem = Schema.Struct({
   type: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
+  content: Schema.optional(described(Schema.String, "The item body, as markdown.")),
 }).annotate({ identifier: "IrisAtlasItem" })
 
 const AtlasResponse = Schema.Struct({

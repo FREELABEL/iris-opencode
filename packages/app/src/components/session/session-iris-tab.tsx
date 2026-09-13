@@ -1,4 +1,6 @@
-import { createMemo, createResource, createSignal, For, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, Show, Switch } from "solid-js"
+import { marked } from "marked"
+import "./session-iris-tab.css"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
@@ -21,10 +23,17 @@ import { usePlatform } from "@/context/platform"
  * server sends `measured` for this reason; throwing it away here would put the bug back.
  */
 
+interface AtlasItem {
+  id: number
+  title: string
+  type?: string
+  status?: string
+  content?: string
+}
 interface AtlasList {
   id: number
   name: string
-  items: { id: number; title: string; type?: string; status?: string }[]
+  items: AtlasItem[]
 }
 
 /** Whatever the active surface returned, beside its measured flags. */
@@ -32,6 +41,21 @@ type SurfacePayload = Measured & Record<string, unknown>
 interface Measured {
   measured: boolean
   reason?: string
+}
+
+/**
+ * Markdown -> HTML, synchronously.
+ *
+ * `marked` is already an app dependency. The MarkedProvider in @opencode-ai/ui is not mounted
+ * anywhere in this app, so useMarked() would throw — that provider adds shiki highlighting and
+ * katex, which this panel does not need to read a board item.
+ */
+function renderMarkdown(md: string): string {
+  try {
+    return marked.parse(md, { async: false }) as string
+  } catch {
+    return ""
+  }
 }
 
 const LAST_BLOQ_KEY = "iris.panel.bloq"
@@ -165,6 +189,17 @@ export function SessionIrisTab() {
     () => (bloqs.latest ?? bloqs())?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
   )
 
+  /** The item being read, if any. Opening one replaces the list; there is no second panel. */
+  const [openItem, setOpenItem] = createSignal<AtlasItem | null>(null)
+
+  // Leaving the surface or the board must close the reader — otherwise you switch to Leads and
+  // are still looking at an Atlas item.
+  createEffect(() => {
+    surface()
+    activeBloq()
+    setOpenItem(null)
+  })
+
   function chooseSurface(id: SurfaceId) {
     setSurface(id)
     try {
@@ -232,7 +267,28 @@ export function SessionIrisTab() {
         </For>
       </SegmentedControlV2>
 
-      <div class="flex-1 min-h-0 overflow-y-auto">
+      {/* THE READER. Replaces the list rather than opening beside it: the panel is ~500px wide
+          and a master/detail split inside that leaves neither half readable. */}
+      <Show when={openItem()}>
+        <div class="flex-1 min-h-0 flex flex-col">
+          <button
+            type="button"
+            class="flex items-center gap-1 px-2 py-1 text-12-regular text-text-weak hover:text-text-base shrink-0 text-start"
+            onClick={() => setOpenItem(null)}
+          >
+            ← Back
+          </button>
+          <div
+            class="iris-markdown flex-1 min-h-0 overflow-y-auto px-2 pb-4 text-12-regular text-text-base"
+            /* The body is the signed-in user's own Atlas content, fetched through their own
+               sidecar — not third-party input. marked does not sanitise, so this would need a
+               sanitiser the moment this panel renders anything someone else authored. */
+            innerHTML={renderMarkdown(openItem()!.content ?? "")}
+          />
+        </div>
+      </Show>
+
+      <div class="flex-1 min-h-0 overflow-y-auto" classList={{ hidden: !!openItem() }}>
         <Switch>
           <Match when={view() === "loading"}>
             <p class="px-2 py-2 text-12-regular text-text-weak">Loading…</p>
@@ -265,12 +321,18 @@ export function SessionIrisTab() {
                       </header>
                       <For each={list.items}>
                         {(item) => (
-                          <div class="flex gap-2 px-2 py-1">
+                          <button
+                            type="button"
+                            class="w-full flex gap-2 px-2 py-1 text-start rounded hover:bg-background-element disabled:hover:bg-transparent"
+                            disabled={!item.content}
+                            title={item.content ? undefined : "This item has no body to show"}
+                            onClick={() => item.content && setOpenItem(item)}
+                          >
                             <span class="text-12-regular text-text-weak shrink-0">
                               {item.status === "completed" ? "✓" : "·"}
                             </span>
                             <span class="text-12-regular text-text-muted min-w-0">{item.title}</span>
-                          </div>
+                          </button>
                         )}
                       </For>
                     </section>

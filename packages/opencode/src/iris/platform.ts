@@ -233,6 +233,8 @@ export interface AtlasItem {
   type?: string
   status?: string
   description?: string
+  /** The item's body. This is the thing a person actually opens an item to read. */
+  content?: string
 }
 export interface AtlasList {
   id: number
@@ -261,6 +263,7 @@ export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists
         type: i.type ?? undefined,
         status: i.status ?? undefined,
         description: i.description || undefined,
+        content: i.content || undefined,
       })),
     }))
     return { measured: true, data: { lists } }

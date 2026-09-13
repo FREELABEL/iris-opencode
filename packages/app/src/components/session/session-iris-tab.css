@@ -1,0 +1,85 @@
+/*
+ * Styles for rendered Atlas item bodies.
+ *
+ * Scoped under .iris-markdown deliberately. The markdown comes out of `marked` as bare
+ * <h1>/<p>/<ul>/<pre>, and unscoped element rules in an app this size leak into every other
+ * surface that happens to use the same tags.
+ *
+ * Colours come from the theme's existing --markdown-* variables, which the app already defines
+ * for exactly this content, rather than a second palette invented here.
+ */
+.iris-markdown {
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.iris-markdown > :first-child {
+  margin-top: 0;
+}
+
+.iris-markdown h1,
+.iris-markdown h2,
+.iris-markdown h3,
+.iris-markdown h4 {
+  color: var(--markdown-heading);
+  font-weight: var(--font-weight-medium, 500);
+  margin: 1.1em 0 0.4em;
+  line-height: 1.3;
+}
+.iris-markdown h1 { font-size: 15px; }
+.iris-markdown h2 { font-size: 14px; }
+.iris-markdown h3,
+.iris-markdown h4 { font-size: 13px; }
+
+.iris-markdown p { margin: 0.55em 0; }
+
+.iris-markdown strong { color: var(--markdown-strong); font-weight: var(--font-weight-medium, 500); }
+.iris-markdown em { color: var(--markdown-emph); font-style: italic; }
+
+.iris-markdown a { color: var(--markdown-link-text); text-decoration: underline; }
+
+.iris-markdown ul,
+.iris-markdown ol { margin: 0.5em 0; padding-inline-start: 1.25em; }
+.iris-markdown li { margin: 0.2em 0; }
+.iris-markdown ul > li::marker { color: var(--markdown-list-item); }
+.iris-markdown ol > li::marker { color: var(--markdown-list-enumeration); }
+
+.iris-markdown blockquote {
+  margin: 0.6em 0;
+  padding-inline-start: 0.75em;
+  border-inline-start: 2px solid var(--markdown-block-quote);
+  color: var(--text-muted);
+}
+
+.iris-markdown code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.92em;
+  color: var(--markdown-code);
+}
+
+.iris-markdown pre {
+  margin: 0.6em 0;
+  padding: 0.6em 0.7em;
+  border-radius: 6px;
+  background: var(--background-element);
+  overflow-x: auto;   /* code is the one thing allowed its own horizontal scroll */
+}
+.iris-markdown pre code { color: inherit; }
+
+.iris-markdown hr {
+  margin: 1em 0;
+  border: 0;
+  border-top: 1px solid var(--markdown-horizontal-rule);
+  opacity: 0.4;
+}
+
+/* Tables scroll rather than forcing the whole panel sideways. */
+.iris-markdown table { display: block; overflow-x: auto; border-collapse: collapse; margin: 0.6em 0; }
+.iris-markdown th,
+.iris-markdown td {
+  border: 1px solid var(--border-weaker-base);
+  padding: 0.3em 0.5em;
+  text-align: start;
+  font-variant-numeric: tabular-nums;
+}
+.iris-markdown th { font-weight: var(--font-weight-medium, 500); }
