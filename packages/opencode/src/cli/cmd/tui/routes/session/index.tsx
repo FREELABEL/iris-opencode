@@ -134,7 +134,26 @@ export function Session() {
   // Width is a preference, not a constant: the panel carries anything from a node roster to
   // full playbook descriptions, and how much room that deserves depends on the terminal and
   // the person. Clamped on read so a stale or hand-edited value cannot render a 2-column panel.
-  const [sidebarWidth, setSidebarWidth] = createSignal(clampSidebarWidth(kv.get("sidebar_width", SIDEBAR_WIDTH_DEFAULT)))
+  const [sidebarWidth, setSidebarWidth] = createSignal(
+    clampSidebarWidth(kv.get("sidebar_width", SIDEBAR_WIDTH_DEFAULT)),
+  )
+
+  /**
+   * Collapse or restore the panel, and remember which.
+   *
+   * Shared by the command palette and the click target in the sidebar's own header. The
+   * keybind existed long before anything on screen admitted it did, so the sidebar read as
+   * fixed furniture.
+   */
+  function toggleSidebar() {
+    setSidebar((prev) => {
+      if (prev === "auto") return sidebarVisible() ? "hide" : "show"
+      if (prev === "show") return "hide"
+      return "show"
+    })
+    if (sidebar() === "show") kv.set("sidebar", "auto")
+    if (sidebar() === "hide") kv.set("sidebar", "hide")
+  }
 
   /** Move one step along SIDEBAR_WIDTHS and remember it. Stops at the ends rather than wrapping. */
   function stepSidebarWidth(direction: 1 | -1) {
@@ -161,7 +180,16 @@ export function Session() {
     if (sidebar() === "auto" && wide()) return true
     return false
   })
-  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? sidebarWidth() : 0) - 4)
+  // AFTER sidebarVisible, not before: createMemo runs its body immediately, so a memo that
+  // reads a const declared further down throws "Cannot access 'sidebarVisible' before
+  // initialization" at mount — and the typecheck passes on it, because TDZ is a runtime rule.
+  // This crashed the TUI on launch exactly once, which is the only reason it is written down.
+  const collapsedHandleVisible = createMemo(() => !sidebarVisible() && !session()?.parentID)
+  // A collapsed sidebar still occupies the handle's 3 columns, and the transcript has to know
+  // that or it lays out underneath it.
+  const contentWidth = createMemo(
+    () => dimensions().width - (sidebarVisible() ? sidebarWidth() : collapsedHandleVisible() ? 3 : 0) - 4,
+  )
 
   const scrollAcceleration = createMemo(() => {
     const tui = sync.data.config.tui
@@ -461,13 +489,7 @@ export function Session() {
       keybind: "sidebar_toggle",
       category: "Session",
       onSelect: (dialog) => {
-        setSidebar((prev) => {
-          if (prev === "auto") return sidebarVisible() ? "hide" : "show"
-          if (prev === "show") return "hide"
-          return "show"
-        })
-        if (sidebar() === "show") kv.set("sidebar", "auto")
-        if (sidebar() === "hide") kv.set("sidebar", "hide")
+        toggleSidebar()
         dialog.clear()
       },
     },
@@ -1090,7 +1112,18 @@ export function Session() {
           <Toast />
         </box>
         <Show when={sidebarVisible()}>
-          <Sidebar sessionID={route.sessionID} width={sidebarWidth()} />
+          <Sidebar sessionID={route.sessionID} width={sidebarWidth()} onCollapse={toggleSidebar} />
+        </Show>
+        <Show when={collapsedHandleVisible()}>
+          <box
+            backgroundColor={theme.backgroundPanel}
+            width={3}
+            paddingTop={1}
+            paddingLeft={1}
+            onMouseDown={toggleSidebar}
+          >
+            <text fg={theme.textMuted}>‹</text>
+          </box>
         </Show>
       </box>
     </context.Provider>

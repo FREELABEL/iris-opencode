@@ -161,7 +161,12 @@ export function useHiveInbox(intervalMs = 5000) {
 
   function tick() {
     try {
-      const sig = existsSync(MANIFEST) ? (() => { const s = statSync(MANIFEST); return `${s.mtimeMs}:${s.size}` })() : "none"
+      const sig = existsSync(MANIFEST)
+        ? (() => {
+            const s = statSync(MANIFEST)
+            return `${s.mtimeMs}:${s.size}`
+          })()
+        : "none"
       if (sig === lastSig) return
       lastSig = sig
       setState(readHiveInbox())

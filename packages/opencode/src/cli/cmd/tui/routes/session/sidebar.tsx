@@ -23,14 +23,17 @@ import { useHiveInbox } from "../../iris/hive-inbox"
  * which is why the conversation looked clipped beside it. One value now drives both, it is
  * chosen by the person using it, and it persists.
  */
-export const SIDEBAR_WIDTHS = [40, 50, 60, 72, 84] as const
-export const SIDEBAR_WIDTH_DEFAULT = 50
+export const SIDEBAR_WIDTHS = [44, 56, 68, 80, 92] as const
+export const SIDEBAR_WIDTH_DEFAULT = 68
 
 export function clampSidebarWidth(width: number): number {
   // A width outside the ladder (a hand-edited kv value, an older build's number) must not put
   // the panel off-screen or at two columns. Snap to the nearest step we know renders.
   if (!Number.isFinite(width)) return SIDEBAR_WIDTH_DEFAULT
-  return SIDEBAR_WIDTHS.reduce((best, w) => (Math.abs(w - width) < Math.abs(best - width) ? w : best), SIDEBAR_WIDTH_DEFAULT)
+  return SIDEBAR_WIDTHS.reduce(
+    (best, w) => (Math.abs(w - width) < Math.abs(best - width) ? w : best),
+    SIDEBAR_WIDTH_DEFAULT,
+  )
 }
 
 type SidebarTab = "agents" | "playbooks" | "contacts" | "pages" | "atlas" | "session" | "hive"
@@ -52,7 +55,7 @@ function normalizeTab(value: unknown): SidebarTab {
   return TABS.includes(value as SidebarTab) ? (value as SidebarTab) : "atlas"
 }
 
-export function Sidebar(props: { sessionID: string; width?: number }) {
+export function Sidebar(props: { sessionID: string; width?: number; onCollapse?: () => void }) {
   const sync = useSync()
   const { theme } = useTheme()
   const session = createMemo(() => sync.session.get(props.sessionID)!)
@@ -116,13 +119,13 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
   })
 
   const heartbeatAgents = createMemo(() =>
-    iris.data.agents.filter((a) => a.type === "heartbeat" && matchesSearch(a.name))
+    iris.data.agents.filter((a) => a.type === "heartbeat" && matchesSearch(a.name)),
   )
   const standardAgents = createMemo(() =>
-    iris.data.agents.filter((a) => a.type === "standard" && matchesSearch(a.name))
+    iris.data.agents.filter((a) => a.type === "standard" && matchesSearch(a.name)),
   )
   const filteredPlaybooks = createMemo(() =>
-    iris.data.playbooks.filter((p) => matchesSearch(p.name) || matchesSearch(p.description))
+    iris.data.playbooks.filter((p) => matchesSearch(p.name) || matchesSearch(p.description)),
   )
 
   const attachedPlaybooks = createMemo(() => filteredPlaybooks().filter((p) => p.attached))
@@ -147,7 +150,9 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
           </text>
         </box>
         <Show when={pb.description}>
-          <text fg={theme.textMuted} wrapMode="word">{pb.description}</text>
+          <text fg={theme.textMuted} wrapMode="word">
+            {pb.description}
+          </text>
         </Show>
       </box>
     )
@@ -164,14 +169,12 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
       .filter((list) => list.name.toLowerCase().includes(q) || list.items.length > 0)
   })
   const filteredContacts = createMemo(() =>
-    iris.data.contacts.filter((c) => matchesSearch(c.name) || matchesSearch(c.email ?? "") || matchesSearch(c.company ?? ""))
+    iris.data.contacts.filter(
+      (c) => matchesSearch(c.name) || matchesSearch(c.email ?? "") || matchesSearch(c.company ?? ""),
+    ),
   )
-  const filteredPages = createMemo(() =>
-    iris.data.pages.filter((p) => matchesSearch(p.title) || matchesSearch(p.slug))
-  )
-  const filteredBloqs = createMemo(() =>
-    iris.data.bloqList.filter((b) => matchesSearch(b.name))
-  )
+  const filteredPages = createMemo(() => iris.data.pages.filter((p) => matchesSearch(p.title) || matchesSearch(p.slug)))
+  const filteredBloqs = createMemo(() => iris.data.bloqList.filter((b) => matchesSearch(b.name)))
   const [activeContact, setActiveContact] = createSignal<IrisContact | null>(null)
   const cost = createMemo(() => {
     const total = messages().reduce((sum, x) => sum + (x.role === "assistant" ? x.cost : 0), 0)
@@ -196,8 +199,7 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
     ({ active: theme.success, idle: theme.textMuted, paused: theme.warning, error: theme.error })[status] ??
     theme.textMuted
 
-
-    theme.textMuted
+  theme.textMuted
 
   return (
     <Show when={session()}>
@@ -211,9 +213,26 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
       >
         {/* IRIS brand header + bloq selector */}
         <box flexShrink={0} paddingBottom={1}>
-          <text fg={theme.accent}>
-            <b>◈ IRIS</b>
-          </text>
+          {/* The collapse control lives here because this is where you are looking when you
+              want the space back. The keybind (<leader>b) and the command palette entry both
+              predate this and neither was visible, so the panel read as fixed furniture. */}
+          <box flexDirection="row" gap={1}>
+            <text fg={theme.accent}>
+              <b>◈ IRIS</b>
+            </text>
+            <box flexGrow={1} />
+            <Show when={props.onCollapse}>
+              <text
+                flexShrink={0}
+                fg={hoveredRowId() === "collapse" ? theme.accent : theme.textMuted}
+                onMouseOver={() => setHoveredRowId("collapse")}
+                onMouseOut={() => hoveredRowId() === "collapse" && setHoveredRowId(null)}
+                onMouseDown={() => props.onCollapse?.()}
+              >
+                {"› hide"}
+              </text>
+            </Show>
+          </box>
           <Show when={iris.data.bloqList.length > 0}>
             <box
               onMouseDown={() => {
@@ -249,7 +268,8 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                         }}
                       >
                         <text fg={isSelected() || isHovered() ? theme.accent : theme.textMuted}>
-                          {isSelected() ? "● " : "○ "}{bloq.name}
+                          {isSelected() ? "● " : "○ "}
+                          {bloq.name}
                         </text>
                       </box>
                     )
@@ -286,11 +306,17 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
           <box
             flexShrink={0}
             paddingBottom={2}
-            onMouseDown={() => { searchInput?.focus() }}
+            onMouseDown={() => {
+              searchInput?.focus()
+            }}
           >
             <input
-              ref={(r) => { searchInput = r }}
-              onInput={(e) => { setSearchQuery(e) }}
+              ref={(r) => {
+                searchInput = r
+              }}
+              onInput={(e) => {
+                setSearchQuery(e)
+              }}
               focusedBackgroundColor={theme.backgroundElement}
               cursorColor={theme.accent}
               focusedTextColor={theme.text}
@@ -323,11 +349,7 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                 <box gap={1}>
                   {/* Heartbeat agents */}
                   <box>
-                    <box
-                      flexDirection="row"
-                      gap={1}
-                      onMouseDown={() => setExpanded("heartbeat", !expanded.heartbeat)}
-                    >
+                    <box flexDirection="row" gap={1} onMouseDown={() => setExpanded("heartbeat", !expanded.heartbeat)}>
                       <text fg={theme.text}>{expanded.heartbeat ? "▼" : "▶"}</text>
                       <text fg={theme.text}>
                         <b>Heartbeat</b>
@@ -375,11 +397,7 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
 
                   {/* Standard agents */}
                   <box>
-                    <box
-                      flexDirection="row"
-                      gap={1}
-                      onMouseDown={() => setExpanded("standard", !expanded.standard)}
-                    >
+                    <box flexDirection="row" gap={1} onMouseDown={() => setExpanded("standard", !expanded.standard)}>
                       <text fg={theme.text}>{expanded.standard ? "▼" : "▶"}</text>
                       <text fg={theme.text}>
                         <b>Agents</b>
@@ -510,7 +528,10 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                       <box paddingTop={1}>
                         <text fg={theme.textMuted}>Status: {contact().status ?? "None"}</text>
                         <text fg={theme.textMuted}>Source: {contact().source ?? "Unknown"}</text>
-                        <text fg={theme.textMuted}>Score: {contact().leadScore}{contact().isHot ? " 🔥" : ""}</text>
+                        <text fg={theme.textMuted}>
+                          Score: {contact().leadScore}
+                          {contact().isHot ? " 🔥" : ""}
+                        </text>
                       </box>
                     </box>
                   )}
@@ -534,9 +555,13 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                               <text flexShrink={0} fg={contact.isHot ? theme.warning : theme.success}>
                                 •
                               </text>
-                              <text fg={hovered() ? theme.accent : theme.text}>{contact.name} <span style={{ fg: theme.textMuted }}>#{contact.id}</span></text>
+                              <text fg={hovered() ? theme.accent : theme.text}>
+                                {contact.name} <span style={{ fg: theme.textMuted }}>#{contact.id}</span>
+                              </text>
                               <Show when={contact.status}>
-                                <text flexShrink={0} fg={theme.textMuted}>{contact.status}</text>
+                                <text flexShrink={0} fg={theme.textMuted}>
+                                  {contact.status}
+                                </text>
                               </Show>
                             </box>
                             <Show when={contact.email || contact.company}>
@@ -567,8 +592,7 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                     {(page) => {
                       const key = `pg-${page.id}`
                       const hovered = () => hoveredRowId() === key
-                      const statusColor = () =>
-                        page.status === "published" ? theme.success : theme.textMuted
+                      const statusColor = () => (page.status === "published" ? theme.success : theme.textMuted)
                       return (
                         <box
                           backgroundColor={hovered() ? theme.backgroundElement : undefined}
@@ -584,8 +608,7 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                             </text>
                           </box>
                           <text fg={theme.textMuted}>
-                            {"   "}
-                            /{page.slug}  ·  v{page.version}  ·  {page.updatedAt}
+                            {"   "}/{page.slug} · v{page.version} · {page.updatedAt}
                           </text>
                         </box>
                       )
@@ -629,12 +652,16 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                       </Show>
                       <Show when={doc().description}>
                         <box paddingTop={1}>
-                          <text fg={theme.textMuted} wrapMode="word">{doc().description}</text>
+                          <text fg={theme.textMuted} wrapMode="word">
+                            {doc().description}
+                          </text>
                         </box>
                       </Show>
                       <Show when={doc().content}>
                         <box paddingTop={1}>
-                          <text fg={theme.text} wrapMode="word">{doc().content}</text>
+                          <text fg={theme.text} wrapMode="word">
+                            {doc().content}
+                          </text>
                         </box>
                       </Show>
                       <Show when={!doc().content && !doc().description}>
@@ -675,17 +702,29 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                                     <box
                                       flexDirection="row"
                                       gap={1}
-                                      backgroundColor={hoveredItemId() === item.id ? theme.backgroundElement : undefined}
+                                      backgroundColor={
+                                        hoveredItemId() === item.id ? theme.backgroundElement : undefined
+                                      }
                                       onMouseOver={() => setHoveredItemId(item.id)}
                                       onMouseOut={() => hoveredItemId() === item.id && setHoveredItemId(null)}
                                       onMouseDown={() => setActiveDoc(item)}
                                     >
-                                      <text flexShrink={0} fg={item.status === "active" ? theme.success : theme.textMuted}>
+                                      <text
+                                        flexShrink={0}
+                                        fg={item.status === "active" ? theme.success : theme.textMuted}
+                                      >
                                         {item.status === "completed" ? "✓" : "·"}
                                       </text>
-                                      <text fg={hoveredItemId() === item.id ? theme.accent : theme.text} wrapMode="word">{item.title}</text>
+                                      <text
+                                        fg={hoveredItemId() === item.id ? theme.accent : theme.text}
+                                        wrapMode="word"
+                                      >
+                                        {item.title}
+                                      </text>
                                       <Show when={item.type}>
-                                        <text flexShrink={0} fg={theme.textMuted}>{item.type}</text>
+                                        <text flexShrink={0} fg={theme.textMuted}>
+                                          {item.type}
+                                        </text>
                                       </Show>
                                     </box>
                                   )}
@@ -738,12 +777,14 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                         command, ready to run, instead of a template to fill in. */}
                     <Show when={(inbox().unread ?? 0) > 0}>
                       <text fg={theme.textMuted}>
-                        {"  read: iris hive inbox read "}{firstUnread()}
+                        {"  read: iris hive inbox read "}
+                        {firstUnread()}
                       </text>
                     </Show>
                     <Show when={inbox().items.length > 6}>
                       <text fg={theme.textMuted}>
-                        {"  showing 6 of "}{inbox().items.length}
+                        {"  showing 6 of "}
+                        {inbox().items.length}
                       </text>
                     </Show>
                     <For each={inbox().items.slice(0, 6)}>
@@ -753,13 +794,20 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                             <text flexShrink={0} fg={item.read ? theme.textMuted : theme.warning}>
                               {item.read ? " " : "●"}
                             </text>
-                            <text flexShrink={0} fg={theme.textMuted}>{item.index}</text>
+                            <text flexShrink={0} fg={theme.textMuted}>
+                              {item.index}
+                            </text>
                             <text fg={item.read ? theme.textMuted : theme.text} wrapMode="word">
                               {item.from}
                             </text>
-                            <text flexShrink={0} fg={theme.textMuted}>{item.age}</text>
+                            <text flexShrink={0} fg={theme.textMuted}>
+                              {item.age}
+                            </text>
                           </box>
-                          <text fg={theme.textMuted} wrapMode="word">{"  "}{item.label}</text>
+                          <text fg={theme.textMuted} wrapMode="word">
+                            {"  "}
+                            {item.label}
+                          </text>
                         </box>
                       )}
                     </For>
@@ -799,7 +847,9 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                             <text flexShrink={0} fg={node.online ? theme.success : theme.textMuted}>
                               {node.online ? "●" : "○"}
                             </text>
-                            <text fg={theme.text} wrapMode="word">{node.name}</text>
+                            <text fg={theme.text} wrapMode="word">
+                              {node.name}
+                            </text>
                             {/* "(you?)" when the match came from a hostname guess — macOS
                                 renames hosts on mDNS collision, so this can be wrong. */}
                             <Show when={node.isLocal}>
@@ -829,9 +879,7 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                         <text fg={theme.text}>
                           <b>Peers</b>
                         </text>
-                        <text fg={theme.textMuted}>
-                          {iris.data.hivePeers.filter((p) => p.active).length} active
-                        </text>
+                        <text fg={theme.textMuted}>{iris.data.hivePeers.filter((p) => p.active).length} active</text>
                       </box>
                       <For each={iris.data.hivePeers}>
                         {(peer) => (
@@ -839,9 +887,13 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                             <text flexShrink={0} fg={peer.active ? theme.success : theme.textMuted}>
                               {peer.active ? "●" : "○"}
                             </text>
-                            <text fg={theme.text} wrapMode="word">{peer.name}</text>
+                            <text fg={theme.text} wrapMode="word">
+                              {peer.name}
+                            </text>
                             <Show when={peer.permissions}>
-                              <text flexShrink={0} fg={theme.textMuted}>{peer.permissions}</text>
+                              <text flexShrink={0} fg={theme.textMuted}>
+                                {peer.permissions}
+                              </text>
                             </Show>
                           </box>
                         )}
@@ -884,9 +936,7 @@ export function Sidebar(props: { sessionID: string; width?: number }) {
                         </text>
                       </box>
                       <Show when={todo().length <= 2 || expanded.todo}>
-                        <For each={todo()}>
-                          {(item) => <TodoItem status={item.status} content={item.content} />}
-                        </For>
+                        <For each={todo()}>{(item) => <TodoItem status={item.status} content={item.content} />}</For>
                       </Show>
                     </box>
                   </Show>

@@ -1,7 +1,17 @@
 import { createSignal, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { irisFetch, resolveUserId } from "../../iris-api"
-import type { IrisAgent, IrisWorkflow, IrisWorkflowDetail, AtlasList, AtlasItem, IrisContact, IrisPage, IrisHiveNode, IrisHivePeer } from "./types"
+import type {
+  IrisAgent,
+  IrisWorkflow,
+  IrisWorkflowDetail,
+  AtlasList,
+  AtlasItem,
+  IrisContact,
+  IrisPage,
+  IrisHiveNode,
+  IrisHivePeer,
+} from "./types"
 import { resolveLocalNode } from "../../hive-local-node"
 import { IRIS_API } from "../../iris-api"
 import os from "os"
@@ -180,7 +190,7 @@ function mapContacts(leads: any[]): IrisContact[] {
 
 async function extractData(res: Response): Promise<any[]> {
   if (!res.ok) return []
-  const json = await res.json() as any
+  const json = (await res.json()) as any
   return json?.data ?? json ?? []
 }
 
@@ -232,9 +242,7 @@ export function useIrisData() {
       // block runs ONCE for the user, before any project is selected, so the Pages tab showed
       // every page the account owns and could never change when you switched projects. Every
       // other tab fetches per-bloq. Pages now does too — see fetchBloqData.
-      const [bloqRes] = await Promise.all([
-        irisFetch(`/api/v1/user/${_userId}/bloqs?simplified=true`),
-      ])
+      const [bloqRes] = await Promise.all([irisFetch(`/api/v1/user/${_userId}/bloqs?simplified=true`)])
       if (bloqRes.status === 401) {
         setData("status", "no-auth")
         return
@@ -258,26 +266,27 @@ export function useIrisData() {
     if (!_userId) return
 
     try {
-      const [bloqDetailRes, agentsRes, workflowsRes, jobsRes, leadsRes, pagesRes, attachedPbRes, allPbRes] = await Promise.all([
-        irisFetch(`/api/v1/user/${_userId}/bloqs/${bloqId}`),
-        irisFetch(`/api/v1/users/${_userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
-        irisFetch(`/api/v1/users/${_userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`),
-        irisFetch(`/api/v1/users/${_userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
-        irisFetch(`/api/v1/users/${_userId}/leads?bloq_id=${bloqId}&per_page=50`),
-        // PAGES, now scoped to the selected project. owner_type+owner_id is a NARROWING
-        // filter fl-api's PageController::index already supports (its own comment: "never a
-        // widening one"), and iris-api's /v1/pages is a pass-through proxy that forwards the
-        // query verbatim, so it reaches the filter untouched.
-        irisFetch(`/api/v1/pages?user_id=${_userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`, {}, IRIS_API),
-        // PLAYBOOKS attached to this project, and the available set as a labelled fallback.
-        irisFetch(`/api/v1/bloqs/${bloqId}/playbooks`),
-        irisFetch(`/api/v1/playbooks`, {}, IRIS_API),
-      ])
+      const [bloqDetailRes, agentsRes, workflowsRes, jobsRes, leadsRes, pagesRes, attachedPbRes, allPbRes] =
+        await Promise.all([
+          irisFetch(`/api/v1/user/${_userId}/bloqs/${bloqId}`),
+          irisFetch(`/api/v1/users/${_userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
+          irisFetch(`/api/v1/users/${_userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`),
+          irisFetch(`/api/v1/users/${_userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
+          irisFetch(`/api/v1/users/${_userId}/leads?bloq_id=${bloqId}&per_page=50`),
+          // PAGES, now scoped to the selected project. owner_type+owner_id is a NARROWING
+          // filter fl-api's PageController::index already supports (its own comment: "never a
+          // widening one"), and iris-api's /v1/pages is a pass-through proxy that forwards the
+          // query verbatim, so it reaches the filter untouched.
+          irisFetch(`/api/v1/pages?user_id=${_userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`, {}, IRIS_API),
+          // PLAYBOOKS attached to this project, and the available set as a labelled fallback.
+          irisFetch(`/api/v1/bloqs/${bloqId}/playbooks`),
+          irisFetch(`/api/v1/playbooks`, {}, IRIS_API),
+        ])
 
       // Extract atlas from single-bloq detail response
       try {
         if (bloqDetailRes.ok) {
-          const bloqJson = await bloqDetailRes.json() as any
+          const bloqJson = (await bloqDetailRes.json()) as any
           const bloqData = bloqJson?.data ?? bloqJson
           setData("atlas", reconcile(extractAtlas(bloqData)))
         }
@@ -297,7 +306,7 @@ export function useIrisData() {
       // Pages, scoped to this bloq.
       try {
         if (pagesRes.ok) {
-          const pagesJson = await pagesRes.json() as any
+          const pagesJson = (await pagesRes.json()) as any
           const rawPages = pagesJson?.data?.data ?? pagesJson?.data ?? []
           setData("pages", reconcile(mapPages(rawPages)))
         }
@@ -318,7 +327,7 @@ export function useIrisData() {
 
         let others: IrisPlaybook[] = []
         if (allPbRes.ok) {
-          const allJson = await allPbRes.json() as any
+          const allJson = (await allPbRes.json()) as any
           const raw = allJson?.playbooks ?? allJson?.data ?? []
           // Minus the attached ones — the same playbook printed in both sections would read as
           // two different playbooks with the same name.
@@ -339,7 +348,9 @@ export function useIrisData() {
     const bloq = data.bloqList.find((b) => b.id === data.selectedBloqId)
     if (!bloq) {
       import("fs").then((fs) => {
-        try { fs.unlinkSync(PLATFORM_CONTEXT_PATH) } catch {}
+        try {
+          fs.unlinkSync(PLATFORM_CONTEXT_PATH)
+        } catch {}
       })
       return
     }
@@ -358,7 +369,10 @@ export function useIrisData() {
       lines.push(`### Lists (${data.atlas.length} total, ${totalItems} items)`)
       for (const list of data.atlas) {
         if (list.items.length === 0) continue
-        const preview = list.items.slice(0, 3).map((i) => i.title).join(", ")
+        const preview = list.items
+          .slice(0, 3)
+          .map((i) => i.title)
+          .join(", ")
         const more = list.items.length > 3 ? ` +${list.items.length - 3} more` : ""
         lines.push(`- ${list.name} (${list.items.length}): ${preview}${more}`)
       }
@@ -408,7 +422,7 @@ export function useIrisData() {
     try {
       const res = await irisFetch(`/api/v1/users/${_userId}/bloqs/workflows/${workflowId}`)
       if (!res.ok) return null
-      const raw = await res.json() as any
+      const raw = (await res.json()) as any
       const wf = raw?.data ?? raw
       let status: IrisWorkflowDetail["status"] = "idle"
       if (wf.status === "running") status = "running"
@@ -506,15 +520,15 @@ export function useIrisData() {
     }
 
     lines.push(`\n### Instructions`)
-    lines.push(`You have this workflow loaded. Use the steps, schema, and tools above to execute or reason about this workflow. If it has input_schema, ask the user for required inputs before running. Use \`iris workflows run ${wf.id}\` to execute it, or run the steps manually if needed.`)
+    lines.push(
+      `You have this workflow loaded. Use the steps, schema, and tools above to execute or reason about this workflow. If it has input_schema, ask the user for required inputs before running. Use \`iris workflows run ${wf.id}\` to execute it, or run the steps manually if needed.`,
+    )
 
     // Append to existing platform-context.md
     const content = lines.join("\n")
     import("fs").then((fs) => {
       try {
-        const existing = fs.existsSync(PLATFORM_CONTEXT_PATH)
-          ? fs.readFileSync(PLATFORM_CONTEXT_PATH, "utf-8")
-          : ""
+        const existing = fs.existsSync(PLATFORM_CONTEXT_PATH) ? fs.readFileSync(PLATFORM_CONTEXT_PATH, "utf-8") : ""
         // Remove any previous "Active Workflow" section
         const cleaned = existing.replace(/\n## Active Workflow:[\s\S]*$/, "")
         fs.writeFileSync(PLATFORM_CONTEXT_PATH, cleaned + content)
@@ -571,18 +585,20 @@ export function useIrisData() {
         setData(
           "hiveNodes",
           reconcile(
-            raw.map((n): IrisHiveNode => ({
-              id: String(n.id),
-              name: String(n.name ?? "unnamed"),
-              status: String(n.connection_status ?? "unknown"),
-              online: n.connection_status === "online",
-              lastHeartbeat: relativeTime(n.last_heartbeat_at),
-              activeTasks: Number(n.active_tasks ?? 0),
-              maxConcurrent: Number(n.max_concurrent ?? 0),
-              sessions: Array.isArray(n.active_sessions) ? n.active_sessions.length : 0,
-              isLocal: local.nodeId !== null && String(n.id) === local.nodeId,
-              localUncertain: local.uncertain,
-            })),
+            raw.map(
+              (n): IrisHiveNode => ({
+                id: String(n.id),
+                name: String(n.name ?? "unnamed"),
+                status: String(n.connection_status ?? "unknown"),
+                online: n.connection_status === "online",
+                lastHeartbeat: relativeTime(n.last_heartbeat_at),
+                activeTasks: Number(n.active_tasks ?? 0),
+                maxConcurrent: Number(n.max_concurrent ?? 0),
+                sessions: Array.isArray(n.active_sessions) ? n.active_sessions.length : 0,
+                isLocal: local.nodeId !== null && String(n.id) === local.nodeId,
+                localUncertain: local.uncertain,
+              }),
+            ),
           ),
         )
       }
@@ -597,16 +613,18 @@ export function useIrisData() {
         setData(
           "hivePeers",
           reconcile(
-            accepted.map((c): IrisHivePeer => ({
-              id: String(c.id),
-              name: String(c.peer_name ?? "unnamed peer"),
-              status: String(c.status ?? "unknown"),
-              active: c.status === "active",
-              permissions: Object.entries(c.permissions ?? {})
-                .filter(([, v]) => v)
-                .map(([k]) => k)
-                .join(","),
-            })),
+            accepted.map(
+              (c): IrisHivePeer => ({
+                id: String(c.id),
+                name: String(c.peer_name ?? "unnamed peer"),
+                status: String(c.status ?? "unknown"),
+                active: c.status === "active",
+                permissions: Object.entries(c.permissions ?? {})
+                  .filter(([, v]) => v)
+                  .map(([k]) => k)
+                  .join(","),
+              }),
+            ),
           ),
         )
         setData("hivePendingInvites", conns.length - accepted.length)
@@ -634,7 +652,9 @@ export function useIrisData() {
     clearInterval(interval)
     clearInterval(hiveInterval)
     import("fs").then((fs) => {
-      try { fs.unlinkSync(PLATFORM_CONTEXT_PATH) } catch {}
+      try {
+        fs.unlinkSync(PLATFORM_CONTEXT_PATH)
+      } catch {}
     })
   })
 
