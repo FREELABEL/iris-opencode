@@ -421,6 +421,12 @@
       "dest": "how-to/spreadsheets-excel-and-csv.md",
       "managed": true,
       "purpose": "Build and edit spreadsheets from the CLI — including the trap where regenerating a workbook silently strips dropdown validations."
+    },
+    {
+      "src": "how-to/hive-from-your-phone.md",
+      "dest": "how-to/hive-from-your-phone.md",
+      "managed": true,
+      "purpose": "Reach the Hive daemon from a phone via Apple Shortcuts/Siri over Tailscale — the endpoint table, which routes need X-Bridge-Key, and what publishing port 3200 exposes to everyone on the tailnet"
     }
   ]
 }
