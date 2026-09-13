@@ -1,18 +1,25 @@
 import { invoke } from "@tauri-apps/api/core"
 import { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/menu"
 import { type as ostype } from "@tauri-apps/plugin-os"
+import { getCurrentWindow } from "@tauri-apps/api/window"
 
 import { getUpdateMode, runUpdater, setUpdateMode, UPDATER_ENABLED } from "./updater"
 import type { UpdateMode } from "./update-policy"
 import { installCli, irisAction } from "./cli"
 
 export async function createMenu() {
-  if (ostype() !== "macos") return
+  // This used to begin `if (ostype() !== "macos") return`, which is why Windows had no menu at
+  // all — not a missing File submenu, the whole menu was skipped. A client saw an update
+  // prompt, had no menu to act on it, and asked whether she saw a File menu said "I don't see
+  // it." She was right, and so was the code: there was nothing to see.
+  const isMac = ostype() === "macos"
 
   const menu = await Menu.new({
     items: [
       await Submenu.new({
-        text: "IRIS",
+        // On macOS this is the bold app menu beside the Apple logo. Windows and Linux have no
+        // such menu, so the same items live under File — the menu she went looking for.
+        text: isMac ? "IRIS" : "File",
         items: [
           await PredefinedMenuItem.new({
             item: { About: null },
@@ -68,18 +75,16 @@ export async function createMenu() {
           await PredefinedMenuItem.new({
             item: "Separator",
           }),
-          await PredefinedMenuItem.new({
-            item: "Hide",
-          }),
-          await PredefinedMenuItem.new({
-            item: "HideOthers",
-          }),
-          await PredefinedMenuItem.new({
-            item: "ShowAll",
-          }),
-          await PredefinedMenuItem.new({
-            item: "Separator",
-          }),
+          // Hide / Hide Others / Show All are macOS application concepts with no Windows or
+          // Linux equivalent. Omitted there rather than rendered as dead entries.
+          ...(isMac
+            ? [
+                await PredefinedMenuItem.new({ item: "Hide" }),
+                await PredefinedMenuItem.new({ item: "HideOthers" }),
+                await PredefinedMenuItem.new({ item: "ShowAll" }),
+                await PredefinedMenuItem.new({ item: "Separator" }),
+              ]
+            : []),
           await PredefinedMenuItem.new({
             item: "Quit",
           }),
@@ -136,7 +141,14 @@ export async function createMenu() {
       }),
     ],
   })
-  menu.setAsAppMenu()
+  // setAsAppMenu is macOS semantics: one menu bar owned by the application. On Windows and
+  // Linux a menu belongs to a WINDOW, and setAsAppMenu quietly does nothing there — which would
+  // leave this fix looking applied while changing nothing on screen.
+  if (isMac) {
+    await menu.setAsAppMenu()
+  } else {
+    await menu.setAsWindowMenu(getCurrentWindow())
+  }
 }
 
 /**
