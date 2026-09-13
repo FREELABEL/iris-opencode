@@ -77,6 +77,7 @@ import { PlatformReleaseCommand } from "./cli/cmd/platform-release"
 import { PlatformAnnounceCommand } from "./cli/cmd/platform-announce"
 import { PlatformBroadcastCommand } from "./cli/cmd/platform-broadcast"
 import { PlatformHiveCommand } from "./cli/cmd/platform-hive"
+import { PlatformNodeCommand } from "./cli/cmd/platform-node"
 import { VaultCommandExport } from "./cli/cmd/platform-vault"
 import { PlatformClipsCommand } from "./cli/cmd/platform-clips"
 import { PlatformPostCommand } from "./cli/cmd/platform-post"
@@ -358,6 +359,7 @@ const cli = yargs(rawArgs)
   .command(reg(PlatformAnnounceCommand))
   .command(reg(PlatformBroadcastCommand))
   .command(reg(PlatformHiveCommand))
+  .command(reg(PlatformNodeCommand))
   // Also reachable as `iris hive vault` — that is its home, next to `hive fs`, the primitive
   // it is built on; splitting one domain (moving bytes between your nodes) across two
   // namespaces is worse than either placement alone. Kept top-level as well because a vault
