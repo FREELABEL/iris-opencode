@@ -270,6 +270,77 @@ if (Test-Path $McpConfig) {
     Write-Muted "Config at ~\.iris\mcp.json (enable when MCP servers are ready)"
 }
 
+# ─── Fetching the daemon WITHOUT git ─────────────────────────────────────────
+#
+# Git was a hard install prerequisite and it was only ever moving bytes:
+# `git clone` on first install, `git pull` on update. Nothing read the history,
+# nothing used a submodule, nothing needed a working tree. A client without Git
+# got Step 5 skipped entirely — no Hive node — for a capability they never used.
+#
+# GitHub serves the same tree as a zip over plain HTTPS, so the dependency goes.
+#
+# NOTE Git is still required AT RUNTIME by two features — reference-repo indexing
+# and exchange/bounty tasks. Removing it from the installer does not remove it from
+# the product; it stops it blocking an install that would otherwise work fine. Those
+# two paths name Git themselves when it is missing.
+function Install-IrisDaemonSource {
+    param(
+        [Parameter(Mandatory)][string]$BridgeDir,
+        [string]$Url = "https://github.com/FREELABEL/iris-daemon/archive/refs/heads/main.zip"
+    )
+
+    $result = [pscustomobject]@{ Ok = $false; Updated = $false; Reason = $null }
+
+    # State that belongs to the MACHINE, not the repo. An update must not eat it.
+    # Measured on a real install: .git (from the old clone-based installs),
+    # daemon.log, node_modules, test-results.
+    $preserve = @('node_modules', 'daemon.log', 'bridge.log', 'test-results', '.git', '.env')
+
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("iris-daemon-" + [guid]::NewGuid().ToString("N"))
+    $zip = "$tmp.zip"
+    try {
+        New-Item -ItemType Directory -Path $tmp -Force -ErrorAction Stop | Out-Null
+
+        # DOWNLOAD AND EXTRACT TO A TEMP DIR FIRST, then move into place.
+        # `git clone` failing halfway left a partial bridge directory behind that the
+        # next run treated as installed — "already installed, updating..." over a tree
+        # with no daemon.js. Staging means a failed download leaves the existing
+        # install exactly as it was.
+        $ProgressPreference = 'SilentlyContinue'   # the progress bar makes this ~10x slower
+        Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing -ErrorAction Stop
+        Expand-Archive -Path $zip -DestinationPath $tmp -Force -ErrorAction Stop
+
+        # GitHub wraps the tree in one directory named <repo>-<branch>.
+        $root = Get-ChildItem -Path $tmp -Directory | Select-Object -First 1
+        if (-not $root) { throw "the archive contained no directory" }
+
+        # Refuse an archive that is not the daemon rather than overwriting a working
+        # install with whatever was served. A 200 that returns an error page is still a 200.
+        if (-not (Test-Path (Join-Path $root.FullName "daemon.js"))) {
+            throw "the downloaded archive has no daemon.js — refusing to overwrite the install"
+        }
+
+        $result.Updated = Test-Path (Join-Path $BridgeDir "daemon.js")
+        New-Item -ItemType Directory -Path $BridgeDir -Force -ErrorAction Stop | Out-Null
+
+        # Remove only the files the repo owns; leave preserved entries untouched.
+        Get-ChildItem -Path $BridgeDir -Force -ErrorAction SilentlyContinue | Where-Object {
+            $preserve -notcontains $_.Name
+        } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+        Copy-Item -Path (Join-Path $root.FullName "*") -Destination $BridgeDir -Recurse -Force -ErrorAction Stop
+
+        $result.Ok = $true
+        return $result
+    } catch {
+        $result.Reason = $_.Exception.Message
+        return $result
+    } finally {
+        Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $zip -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ─── Autostart: keep the node alive across reboots (#184597, FIX 3) ──────────
 #
 # WHAT WAS WRONG. macOS registers a real LaunchAgent — RunAtLoad so the daemon
@@ -362,7 +433,10 @@ function Register-IrisAutostart {
 # ─── Step 5: Agent Bridge ────────────────────────────────────────────────────
 
 $HasNode = Get-Command node -ErrorAction SilentlyContinue
-$HasGit = Get-Command git -ErrorAction SilentlyContinue
+# NOTE: no $HasGit gate any more. Git was only ever used to `clone`/`pull` the daemon;
+# the installer now fetches an HTTPS archive, so a machine without Git installs fine.
+# (The telemetry beacon still reports has_git — knowing who HAS it is useful, because
+# reference-repo indexing and exchange tasks do still need it at runtime.)
 $BridgeDir = "$IRIS_DIR\bridge"
 
 # #184597 — remember whether the bridge was skipped, so the FINAL summary can tell the truth.
@@ -381,30 +455,21 @@ if (-not $HasNode) {
     Send-InstallBeacon -EventType "install_step_skipped" -Step "agent_bridge" -Reason "node_missing"
     Write-Muted "Install Node.js to enable: https://nodejs.org"
     $BridgeSkippedReason = "Node.js is not installed (https://nodejs.org)"
-} elseif (-not $HasGit) {
-    Write-StepSkipped "5/5" "Agent Bridge" "skipped (Git not found)"
-    Send-InstallBeacon -EventType "install_step_skipped" -Step "agent_bridge" -Reason "git_missing"
-    Write-Muted "Install Git to enable: https://git-scm.com"
-    $BridgeSkippedReason = "Git is not installed (https://git-scm.com)"
 } else {
-    $BridgeUpdated = $false
-    if ((Test-Path "$BridgeDir\index.js") -and (Test-Path "$BridgeDir\daemon.js")) {
-        Write-Host "      Bridge already installed, updating..." -ForegroundColor DarkGray
+    # NO GIT. One code path for install and update — the old one had two, and the
+    # update branch ran `git pull` inside a directory the install branch had created
+    # with `git clone`, so a client whose clone half-failed got "already installed,
+    # updating..." forever over a tree with no daemon in it.
+    $Fetch = Install-IrisDaemonSource -BridgeDir $BridgeDir
+    $BridgeUpdated = $Fetch.Updated
+    if (-not $Fetch.Ok) {
+        Write-StepSkipped "5/5" "Agent Bridge" "could not download"
+        Write-Muted $Fetch.Reason
+        $BridgeSkippedReason = "the daemon could not be downloaded ($($Fetch.Reason))"
+    } else {
         Push-Location $BridgeDir
-        git pull --quiet 2>$null
         npm install --production --silent 2>$null
         Pop-Location
-        $BridgeUpdated = $true
-    } else {
-        try {
-            git clone --quiet https://github.com/FREELABEL/iris-daemon.git $BridgeDir 2>$null
-            Push-Location $BridgeDir
-            npm install --production --silent 2>$null
-            Pop-Location
-        } catch {
-            Write-StepSkipped "5/5" "Agent Bridge" "could not download"
-            Write-Muted "Try manually: git clone https://github.com/FREELABEL/iris-daemon.git ~\.iris\bridge"
-        }
     }
 
     if (Test-Path "$BridgeDir\index.js") {

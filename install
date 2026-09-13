@@ -1329,6 +1329,70 @@ fi
 
 # ─── Component 5: Coding Agent Bridge + Hive Daemon ─────────────────────────
 
+# ─── Fetch the daemon source WITHOUT git ─────────────────────────────────────
+#
+# Git was a hard prerequisite and only ever moved bytes: clone on install, pull on
+# update. Nothing read the history. A client without Git got no Hive node at all.
+#
+# Git IS still needed at RUNTIME by two features (reference-repo indexing and
+# exchange/bounty tasks) — those name it themselves when it is missing. This only
+# stops it blocking an install that would otherwise work.
+#
+# Stages into a temp dir and only then moves into place, so a failed download leaves
+# an existing install exactly as it was. The old code `rm -rf`'d first and re-cloned,
+# which turned a network blip into a wiped node_modules.
+BRIDGE_FETCH_ERROR=""
+fetch_daemon_source() {
+    fetch_repo_archive \
+        "${IRIS_DAEMON_ARCHIVE_URL:-https://github.com/FREELABEL/iris-daemon/archive/refs/heads/main.tar.gz}" \
+        "$1" "daemon.js"
+}
+
+# url, dest, sentinel — the file that must exist in the archive for it to be the
+# right thing. A 200 that serves an error page is still a 200.
+fetch_repo_archive() {
+    local url="$1"
+    local dest="$2"
+    local sentinel="$3"
+    local tmp; tmp="$(mktemp -d 2>/dev/null)" || { BRIDGE_FETCH_ERROR="could not create a temp directory"; return 1; }
+    BRIDGE_FETCH_ERROR=""
+
+    if ! curl -fsSL --max-time 180 "$url" -o "$tmp/daemon.tar.gz" 2>/dev/null; then
+        BRIDGE_FETCH_ERROR="could not download $url"
+        rm -rf "$tmp"; return 1
+    fi
+    if ! tar -xzf "$tmp/daemon.tar.gz" -C "$tmp" 2>/dev/null; then
+        BRIDGE_FETCH_ERROR="the downloaded archive could not be extracted"
+        rm -rf "$tmp"; return 1
+    fi
+
+    # GitHub wraps the tree in one <repo>-<branch> directory.
+    local root; root="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    # A 200 that serves an error page is still a 200. Refuse anything that is not the
+    # daemon rather than overwriting a working install with it.
+    if [ -z "$root" ] || [ ! -f "$root/$sentinel" ]; then
+        BRIDGE_FETCH_ERROR="the downloaded archive has no $sentinel — refusing to overwrite the install"
+        rm -rf "$tmp"; return 1
+    fi
+
+    mkdir -p "$dest"
+    # Remove only what the repo owns. node_modules, logs, .git from older clone-based
+    # installs, and .env belong to the machine.
+    local keep
+    for entry in "$dest"/* "$dest"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        keep=0
+        case "$(basename "$entry")" in
+            node_modules|daemon.log|bridge.log|test-results|.git|.env) keep=1 ;;
+        esac
+        [ "$keep" -eq 1 ] || rm -rf "$entry"
+    done
+
+    cp -R "$root"/. "$dest"/ 2>/dev/null || { BRIDGE_FETCH_ERROR="could not copy the daemon into $dest"; rm -rf "$tmp"; return 1; }
+    rm -rf "$tmp"
+    return 0
+}
+
 install_bridge() {
     # Requires Node.js
     if ! command -v node >/dev/null 2>&1; then
@@ -1342,38 +1406,29 @@ install_bridge() {
     local bridge_dir="$HOME/.iris/bridge"
     local bridge_updated=false
 
-    if [ -d "$bridge_dir" ] && [ -f "$bridge_dir/index.js" ] && [ -f "$bridge_dir/daemon.js" ]; then
-        # Update existing installation
-        print_message info "${MUTED}Bridge already installed, updating...${NC}"
-        if ! (cd "$bridge_dir" && git reset --hard HEAD 2>/dev/null && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null); then
-            # git pull failed (dirty tree, conflicts, detached HEAD) — nuke and re-clone
-            print_message info "${MUTED}Bridge update failed, re-cloning...${NC}"
-            rm -rf "$bridge_dir"
-            git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null && \
-                (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || true
-        fi
-        # Safety check: if daemon.js still has stale DO URL, force re-clone
-        if grep -q 'ondigitalocean\.app' "$bridge_dir/daemon.js" 2>/dev/null; then
-            print_message info "${MUTED}Stale daemon detected, re-cloning...${NC}"
-            rm -rf "$bridge_dir"
-            git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null && \
-                (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || true
-        fi
+    # NO GIT — one path for install and update.
+    #
+    # This was three paths: `git pull`, a `rm -rf` + re-clone when the pull failed, and
+    # another `rm -rf` + re-clone when daemon.js still held a stale DigitalOcean URL.
+    # Each `rm -rf "$bridge_dir"` also destroyed node_modules and daemon.log, so the
+    # recovery path was the expensive one. And the whole thing needed Git, which was
+    # only ever moving bytes — nothing read the history.
+    if [ -f "$bridge_dir/daemon.js" ]; then
         bridge_updated=true
-    else
-        # Fresh clone from public repo
-        if git clone --quiet https://github.com/FREELABEL/iris-daemon.git "$bridge_dir" 2>/dev/null; then
-            (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || {
-                print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
-            }
-            if [ ! -d "$bridge_dir/node_modules/dotenv" ]; then
-                print_message warning "${ORANGE}Bridge dependencies incomplete. Run: cd ~/.iris/bridge && npm install${NC}"
-            fi
-        else
-            print_message info "${MUTED}[5/7] Agent Bridge .......................... could not download${NC}"
-            print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-daemon.git ~/.iris/bridge"
-            return 0
-        fi
+        print_message info "${MUTED}Bridge already installed, updating...${NC}"
+    fi
+
+    if ! fetch_daemon_source "$bridge_dir"; then
+        print_message info "${MUTED}[5/7] Agent Bridge .......................... could not download${NC}"
+        print_message info "${MUTED}      ${NC}${BRIDGE_FETCH_ERROR:-the daemon archive could not be downloaded}"
+        return 0
+    fi
+
+    (cd "$bridge_dir" && npm install --production --silent 2>/dev/null) || {
+        print_message warning "${ORANGE}npm install had issues — bridge may need manual setup${NC}"
+    }
+    if [ ! -d "$bridge_dir/node_modules/dotenv" ]; then
+        print_message warning "${ORANGE}Bridge dependencies incomplete. Run: cd ~/.iris/bridge && npm install${NC}"
     fi
 
     # Create bridgectl convenience script
@@ -1434,10 +1489,13 @@ has_node_key() {
 
 case "${1:-status}" in
     start)
-        # Auto-update daemon code before starting
-        if [ -d "$BRIDGE_DIR/.git" ]; then
-            (cd "$BRIDGE_DIR" && git pull --quiet 2>/dev/null && npm install --production --silent 2>/dev/null) || true
-        fi
+        # NO auto-update on start.
+        #
+        # This used to `git pull` whenever $BRIDGE_DIR/.git existed, so starting the
+        # daemon could silently change the code that was about to run. It also only
+        # ever fired for clone-based installs, so after the move to archive fetching
+        # some nodes would self-update on start and others never would — the worst of
+        # both. Updating is now an explicit operation: `iris node install`.
         # Fix stale API URLs in config (pre-Railway migration)
         if [ -f "$IRIS_CONFIG" ] && grep -qE 'ondigitalocean\.app|main\.heyiris\.io|apiv2\.heyiris\.io' "$IRIS_CONFIG" 2>/dev/null; then
             echo "Fixing stale API URL in config..."
@@ -2435,17 +2493,17 @@ install_remotion() {
 
     local remotion_dir="$HOME/.iris/remotion"
 
-    if [ -d "$remotion_dir/.git" ]; then
-        # Update existing installation
-        (cd "$remotion_dir" && git pull --quiet 2>/dev/null) || true
-        print_message info "${MUTED}      Compositions updated from upstream${NC}"
+    if [ -d "$remotion_dir" ] && [ -f "$remotion_dir/package.json" ]; then
+        if fetch_repo_archive "https://github.com/FREELABEL/iris-remotion/archive/refs/heads/main.tar.gz" "$remotion_dir" "package.json"; then
+            print_message info "${MUTED}      Compositions updated from upstream${NC}"
+        fi
     else
-        # Fresh clone (source only — NO npm install, that's lazy)
-        if git clone --quiet --depth 1 https://github.com/FREELABEL/iris-remotion.git "$remotion_dir" 2>/dev/null; then
+        # Fresh fetch (source only — NO npm install, that's lazy). No git needed.
+        if fetch_repo_archive "https://github.com/FREELABEL/iris-remotion/archive/refs/heads/main.tar.gz" "$remotion_dir" "package.json"; then
             : # success
         else
             print_message info "${MUTED}[7/7] Remotion ............................. could not download${NC}"
-            print_message info "${MUTED}      Try manually: ${NC}git clone https://github.com/FREELABEL/iris-remotion.git ~/.iris/remotion"
+            print_message info "${MUTED}      Retry with: ${NC}iris node install --remotion"
             return 0
         fi
     fi
@@ -2519,10 +2577,29 @@ case "${1:-help}" in
         if [ -f "$REMOTION_DIR/package.json" ]; then
             OLD_HASH=$(md5 -q "$REMOTION_DIR/package.json" 2>/dev/null || md5sum "$REMOTION_DIR/package.json" 2>/dev/null | cut -d' ' -f1 || echo "")
         fi
-        (cd "$REMOTION_DIR" && git pull 2>&1) || {
-            echo "git pull failed. Try manually: cd ~/.iris/remotion && git pull"
-            exit 1
-        }
+        # No git. Stage into a temp dir, verify it is really the compositions, then
+        # swap — so a failed download leaves the working copy alone. node_modules and
+        # any local renders are preserved.
+        TMP=$(mktemp -d) || { echo "could not create a temp directory"; exit 1; }
+        if ! curl -fsSL --max-time 180 "https://github.com/FREELABEL/iris-remotion/archive/refs/heads/main.tar.gz" -o "$TMP/r.tar.gz" 2>/dev/null; then
+            echo "Could not download the compositions. Check your connection and retry."
+            rm -rf "$TMP"; exit 1
+        fi
+        tar -xzf "$TMP/r.tar.gz" -C "$TMP" 2>/dev/null || { echo "The download could not be extracted."; rm -rf "$TMP"; exit 1; }
+        SRC=$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | head -1)
+        if [ -z "$SRC" ] || [ ! -f "$SRC/package.json" ]; then
+            echo "That download was not the Remotion compositions — leaving your copy alone."
+            rm -rf "$TMP"; exit 1
+        fi
+        for entry in "$REMOTION_DIR"/* "$REMOTION_DIR"/.[!.]*; do
+            [ -e "$entry" ] || continue
+            case "$(basename "$entry")" in
+                node_modules|out|renders|.env|.git) ;;
+                *) rm -rf "$entry" ;;
+            esac
+        done
+        cp -R "$SRC"/. "$REMOTION_DIR"/ 2>/dev/null || { echo "Could not update $REMOTION_DIR"; rm -rf "$TMP"; exit 1; }
+        rm -rf "$TMP"
         NEW_HASH=$(md5 -q "$REMOTION_DIR/package.json" 2>/dev/null || md5sum "$REMOTION_DIR/package.json" 2>/dev/null | cut -d' ' -f1 || echo "")
         if [ -d "$REMOTION_DIR/node_modules" ] && [ "$OLD_HASH" != "$NEW_HASH" ]; then
             echo "Dependencies changed — reinstalling..."
