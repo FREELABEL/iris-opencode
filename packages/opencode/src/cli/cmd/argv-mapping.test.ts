@@ -81,7 +81,14 @@ export function findUnreadOptions(src: string): Array<{ command: string; option:
     // and the whole suite reported a clean zero. A guard that passes by never looking is
     // precisely the defect this file exists to prevent.
     const sigAt = b.indexOf(hm[0])
-    const handler = b.slice(sigAt + hm[0].length)
+    // An `as any` cast sits BETWEEN the parameter and the property: `(args as any).hydrate`.
+    // The literal string `args.hydrate` never appears, so a handler that reads every one of its
+    // options this way looks like it reads none of them. That is a false NEGATIVE on a handler
+    // that parses cleanly, and four false POSITIVES once a block boundary shifts and the command
+    // is checked for the first time (pulse's --hydrate/--to/--force/--recap, all genuinely read).
+    // Strip the cast so the same read patterns apply. Removing `as any` from the allow-list is
+    // the real fix to the code; until then the guard has to see through it.
+    const handler = b.slice(sigAt + hm[0].length).replace(/\(\s*(\w+)\s+as\s+any\s*\)/g, "$1")
     // Skip matches that sit inside a `//` comment. blocks() strips comments for BRACE
     // matching but hands back the raw text, so a comment naming an option registers as
     // one. That produced a false positive on `pages rollback --version`, flagged by the
@@ -134,6 +141,27 @@ describe("argv mapping", () => {
       })`
     const found = findUnreadOptions(bug).map((v) => v.option).sort()
     expect(found).toEqual(["fresh", "thread"])
+  })
+
+  // Regression: `leads pulse --hydrate/--to/--force/--recap` are all read, but through an
+  // `as any` cast — `(args as any).hydrate`. The literal `args.hydrate` never appears, so a
+  // handler that reads every option this way looked like it read NONE of them. The guard
+  // reported four working flags as dead the first time the command's block was parsed cleanly.
+  test("it sees an option read through an `as any` cast", () => {
+    const ok = `
+      export const C = cmd({
+        command: "pulse <id>",
+        builder: (y) => y
+          .option("hydrate", { type: "boolean" })
+          .option("to", { type: "string" }),
+        async handler(args) {
+          const id = Number(args.id)
+          if (!(args as any).hydrate) return
+          const sendTo = (args as any).to ?? "x"
+          console.log(id, sendTo)
+        },
+      })`
+    expect(findUnreadOptions(ok)).toEqual([])
   })
 
   // Regression: three false positives against platform-vault, whose handlers read --user
@@ -221,22 +249,10 @@ describe("argv mapping", () => {
   "platform-integrations.ts · list · --all",
   "platform-leads.ts · sync-calendar <id> · --account",
   "platform-leads.ts · enrich · --queue",
-  "platform-leads.ts · list · --json",
-  "platform-leads.ts · create <name> · --json",
-  "platform-leads.ts · view <id> · --json",
-  "platform-leads.ts · create <lead-id> · --json",
-  "platform-leads.ts · list <lead-id> · --json",
-  "platform-leads.ts · summary <lead-id> · --json",
-  "platform-leads.ts · delete <lead-id> · --json",
-  "platform-leads.ts · all · --json",
-  "platform-leads.ts · schedule <lead-id> · --json",
   "platform-loop.ts · run <name> [skillArgs..] · --yes",
   "platform-mint.ts · import <file> · --json",
   "platform-outreach-approve.ts · approve [id] · --json",
   "platform-outreach-approve.ts · approve · --id",
-  "platform-pages.ts · search <query> · --limit",
-  "platform-pages.ts · search <query> · --page",
-  "platform-pages.ts · search <query> · --json",
   "platform-profile.ts · memberships <slug> · --force",
   "platform-profile.ts · enrich <slug> · --platform",
   "platform-run.ts · connect <type> · --client-id",
