@@ -245,7 +245,11 @@ export function SessionHeader() {
     // Three steps, not one: open the panel, put "iris" in the tab list, select it. The tab
     // only renders once it is in the list, so any two of the three shows nothing.
     onIrisOpen: () => {
-      view().reviewPanel.open("other")
+      // Mirrors openSessionContext (components/session-context-usage.tsx) step for step,
+      // because that path is PROVEN to activate its tab in a browser and this one was not.
+      // The source argument is the part that is easy to drop and is not decoration.
+      view().reviewPanel.open(view().reviewPanel.opened() ? "other" : "context-button")
+      if (layout.fileTree.opened() && layout.fileTree.tab() !== "all") layout.fileTree.setTab("all")
       void tabs().open("iris")
       tabs().setActive("iris")
     },

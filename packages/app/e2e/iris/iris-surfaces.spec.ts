@@ -72,7 +72,14 @@ test.describe("iris surfaces render", () => {
     expect(errors.filter((e) => /iris/i.test(e))).toEqual([])
   })
 
-  // KNOWN FAILING, deliberately not deleted. The IRIS chip appears in the panel's tab strip and
+  // KNOWN FAILING, deliberately not deleted. Narrowed further 2026-09-13: when the panel is
+  // opened via the Context button, the strip contains [data-slot='tabs-trigger'] elements and
+  // Context activates correctly. When opened via the IRIS button, that selector matches ZERO
+  // elements even though "Review" and "IRIS" chips are plainly on screen — so the panel is
+  // rendering its review-v2 layout, whose chips are not Tabs triggers, and the Tabs.Content
+  // this tab lives in is never mounted. Mirroring openSessionContext step for step (including
+  // the "context-button" source) did not change it. That is the next thread to pull.
+  // ORIGINAL NOTE: The IRIS chip appears in the panel's tab strip and
   // its CONTENT never activates: instrumenting the panel showed `all: "iris"` but
   // `tabs().active() === "review"` at render, so createSessionTabs' activeTab() falls through to
   // the review branch. Something resets active to "review" after the button sets it to "iris" —
