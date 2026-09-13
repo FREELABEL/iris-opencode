@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { fetchAtlas, fetchBloqs, fetchHiveNodes } from "@/iris/platform"
+import { fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -25,6 +25,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
+    const inbox = Effect.fn("IrisHttpApi.inbox")(() => Effect.sync(() => fetchInbox()))
+
     const atlas = Effect.fn("IrisHttpApi.atlas")((ctx: { params: { bloqID: number } }) =>
       Effect.promise(() => fetchAtlas(ctx.params.bloqID)).pipe(
         Effect.map((r) => ({ measured: r.measured, reason: r.reason, lists: r.data.lists })),
@@ -37,6 +39,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("bloqs", bloqs).handle("atlas", atlas).handle("hive", hive)
+    return handlers.handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("hive", hive)
   }),
 )

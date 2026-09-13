@@ -66,10 +66,21 @@ const BloqsResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisBloqsResponse" })
 
+const InboxResponse = Schema.Struct({
+  unread: described(
+    Schema.NullOr(Schema.Finite),
+    "Unread count. NULL means not measured — render it as a dash, never as zero.",
+  ),
+  total: Schema.Finite,
+  from: Schema.optional(Schema.String),
+  unreadable: described(Schema.Boolean, "The manifest exists and could not be parsed. A fault, not an empty inbox."),
+}).annotate({ identifier: "IrisInboxResponse" })
+
 const root = "/iris"
 
 export const IrisPaths = {
   bloqs: `${root}/bloqs`,
+  inbox: `${root}/inbox`,
   atlas: `${root}/atlas/:bloqID`,
   hive: `${root}/hive`,
 } as const
@@ -85,6 +96,16 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List bloqs",
           description:
             "Every bloq on the account, for a project picker. The desktop app has no bloq concept of its own and six platform surfaces are bloq-scoped, so without this a caller has to hardcode an id.",
+        }),
+      ),
+      HttpApiEndpoint.get("inbox", IrisPaths.inbox, {
+        success: described(InboxResponse, "Hive inbox state"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.inbox",
+          summary: "Hive inbox state",
+          description:
+            "Unread count from the local inbox manifest. A file read, not a request — which is why it must come through the sidecar: the webview cannot read the user's home directory.",
         }),
       ),
       HttpApiEndpoint.get("atlas", IrisPaths.atlas, {

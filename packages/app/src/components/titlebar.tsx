@@ -39,6 +39,7 @@ import type { PromptSession } from "@/context/prompt"
 import "./titlebar.css"
 import { newTabTooltipKeybind } from "./command-tooltip-keybind"
 import { normalizeSessionInfo } from "@/utils/session"
+import { TitlebarIrisPills } from "./titlebar-iris-pills"
 
 const legacyTitlebarHeight = 40
 const v2TitlebarHeight = 36
@@ -188,6 +189,9 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
       }}
       data-tauri-drag-region
     >
+      {/* Portals itself into #opencode-titlebar-right, so one mount covers both the v2 and
+          legacy clusters — only one of them is in the DOM at a time. */}
+      <TitlebarIrisPills />
       <Switch>
         <Match when={useV2Titlebar()}>
           {(_) => {

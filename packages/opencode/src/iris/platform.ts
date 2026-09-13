@@ -302,3 +302,87 @@ export async function fetchBloqs(): Promise<PlatformResult<{ bloqs: Bloq[] }>> {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { bloqs: [] } }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hive inbox — a local file, not an API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The inbox is pull-based and nothing announces it.
+ *
+ * On 2026-09-11 four messages that changed what a client's agent was building sat unread until
+ * someone said "run iris hive inbox read" out loud on a call. The channel worked perfectly. The
+ * only broken part was that a person had to already know a message existed.
+ *
+ * The daemon has already delivered and written these, so this is a file read, not a request —
+ * which is why it can be polled cheaply and why it must go through the sidecar: a webview
+ * cannot read the user's home directory.
+ */
+export interface InboxState {
+  /** Unread count. Null means NOT MEASURED — never render it as zero. */
+  unread: number | null
+  total: number
+  /** The most recent unread sender, for a one-line hint. */
+  from?: string
+  /** The manifest exists and could not be parsed. A real fault, not an empty inbox. */
+  unreadable: boolean
+}
+
+interface ManifestRow {
+  read?: boolean
+  from_user?: string
+  from_node?: string
+  received_at?: string
+}
+
+/**
+ * Count unread from the manifest's raw text.
+ *
+ * Pure, and separate from the file read, so the counting rules can be tested without a
+ * filesystem — the rules are where the bugs are: a corrupt manifest must not read as empty,
+ * and a partially corrupt one must not silently undercount.
+ */
+export function countInbox(raw: string): InboxState {
+  const lines = raw.split("\n").filter((l) => l.trim())
+  if (!lines.length) return { unread: 0, total: 0, unreadable: false }
+
+  let unread = 0
+  let bad = 0
+  let from: string | undefined
+  let newest = ""
+
+  for (const line of lines) {
+    let row: ManifestRow
+    try {
+      row = JSON.parse(line) as ManifestRow
+    } catch {
+      bad++
+      continue
+    }
+    if (row.read) continue
+    unread++
+    const at = String(row.received_at ?? "")
+    if (at >= newest) {
+      newest = at
+      from = row.from_user ?? row.from_node
+    }
+  }
+
+  // Every line unparseable is a CORRUPT manifest, not an empty one.
+  if (bad && bad === lines.length) return { unread: null, total: lines.length, unreadable: true }
+
+  return { unread, total: lines.length, from, unreadable: false }
+}
+
+export function fetchInbox(): InboxState {
+  const manifest = path.join(homedir(), ".iris", "hive", "inbox", ".manifest.jsonl")
+  // No file means this machine has never received anything. A genuine zero, not a failure.
+  if (!existsSync(manifest)) return { unread: 0, total: 0, unreadable: false }
+  try {
+    return countInbox(readFileSync(manifest, "utf-8"))
+  } catch {
+    // Present and unreadable is not the same as empty, and reporting zero here is the exact
+    // failure this codebase keeps paying for.
+    return { unread: null, total: 0, unreadable: true }
+  }
+}
