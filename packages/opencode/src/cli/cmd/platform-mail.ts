@@ -3,7 +3,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { printDivider, printKV, dim, bold, success, BRIDGE_URL, bridgeFetch, writeJson } from "./iris-api"
 import { mailRows } from "./mail-response"
-import { routerSend, describeSend } from "./comms-send"
+import { routerSend, describeSend, recordDirectSend } from "./comms-send"
 
 // macOS Apple Mail integration via IRIS Bridge (localhost:3200)
 // Bridge endpoint: GET /api/mail/search?from=X&subject=X&days=N&limit=N&include_body=1&max_body=N
@@ -276,8 +276,8 @@ const MailSendCommand = cmd({
 
     prompts.log.warn(
       args.draft
-        ? "Draft mode — composing direct via the bridge (nothing is sent, and nothing is logged to comms)."
-        : "Attachment/cc/from set — sending direct via the bridge (not logged to comms).",
+        ? "Draft mode — composing direct via the bridge (nothing is sent, so nothing is logged)."
+        : "Attachment/cc/from set — sending direct via the bridge (transport only; the send is recorded to comms afterwards).",
     )
 
     const payload: any = {
@@ -309,6 +309,29 @@ const MailSendCommand = cmd({
     // Mail.app sent or merely opened the window.
     const body = (await res.json().catch(() => ({}))) as { mode?: string }
     const drafted = body.mode === "draft"
+
+    // The bridge carried it; the ledger still has to hear about it. Only for a real send — a
+    // draft has not gone anywhere, and logging one would put a message on a lead's record that
+    // they never received.
+    if (!drafted) {
+      const logged = await recordDirectSend({
+        toHandle: args.to,
+        channel: "apple_mail",
+        subject: args.subject,
+        message: args.body,
+        origin: "cli.mail.direct",
+      })
+
+      if (logged.ok) {
+        prompts.log.info(`Recorded to comms${logged.commId ? ` as comm #${logged.commId}` : ""} on lead #${logged.leadId}`)
+      } else {
+        // Loud, and with the reason. The whole point of this path is that a send nobody
+        // recorded must never again look like a send that went fine.
+        prompts.log.error(`SENT BUT NOT LOGGED — ${logged.error}`)
+        prompts.log.warn(`Record it by hand:  iris atlas:comms log <lead> --channel apple_mail --direction outbound --message "..." --subject "${args.subject}"`)
+      }
+    }
+
     prompts.outro(
       drafted
         ? `${success("✓")} Draft opened in Mail.app for ${args.to}${attachments.length ? ` with ${attachments.length} attachment(s)` : ""} — nothing sent`

@@ -244,6 +244,30 @@ export function parseGuidance(markdownBody: string): string {
   return idx >= markdownBody.length ? "" : markdownBody.slice(idx).trim()
 }
 
+/**
+ * The prompt an `ai` step will ACTUALLY send.
+ *
+ * One function because this rule used to live in two places that disagreed. The validator
+ * accepted a step when `body || code` was set; the dispatch site sent `body` alone. A step
+ * whose prompt lived in a tagged fence — the form the publishing guide tells authors to
+ * write — therefore validated clean and then POSTed nothing, and the vendor answered
+ * "Invalid value for 'content': expected a string, got null" on a playbook the local
+ * validator had just called valid.
+ *
+ * The two rules were not even equivalent in their disagreement: the validator tested
+ * truthiness (`!step.body`) while dispatch tested `body?.trim()`, so a whitespace-only body
+ * passed validation and still sent an empty prompt.
+ *
+ * Both callers now ask this function, so "validates" and "will send something" cannot drift
+ * apart again — the invariant is structural rather than maintained by hand.
+ *
+ * Body wins when both are present: prose under the heading is the authored prompt, and the
+ * fence is its payload.
+ */
+export function aiPromptFrom(body?: string | null, code?: string | null): string {
+  return body?.trim() ? body : (code ?? "")
+}
+
 export function parseSteps(markdownBody: string): StepDef[] {
   const steps: StepDef[] = []
   const matches = [...markdownBody.matchAll(STEP_HEADING)]
@@ -1829,7 +1853,7 @@ export async function executeSkill(
           // test` had just called valid, which sends the author to debug the model instead
           // of their fence. Body wins when both are present: prose is the authored prompt
           // and the fence is then its payload.
-          const aiPrompt = interpolatedBody?.trim() ? interpolatedBody : (interpolatedCode ?? "")
+          const aiPrompt = aiPromptFrom(interpolatedBody, interpolatedCode)
           lastResult = await executeAi(aiPrompt, aiModel, context)
           break
         }
@@ -2210,7 +2234,7 @@ export function validatePlan(plan: SkillPlan): ValidationIssue[] {
       issues.push({ level: "error", message: "schedule step requires cron expression", stepId: step.id })
     }
 
-    if (step.mode === "ai" && !step.body && !step.code) {
+    if (step.mode === "ai" && !aiPromptFrom(step.body, step.code).trim()) {
       issues.push({ level: "error", message: "AI step has no prompt body", stepId: step.id })
     }
 
