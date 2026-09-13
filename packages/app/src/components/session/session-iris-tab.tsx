@@ -192,7 +192,10 @@ export function SessionIrisTab() {
       </Show>
 
       {/* Pills, matching the segmented controls used elsewhere in the app. */}
-      <SegmentedControlV2 class="shrink-0" value={surface()} onChange={(v) => v && chooseSurface(v as SurfaceId)}>
+      {/* full-width: the control is a FIXED 232px by default and four flex items inside it leave
+          each label ~34px of room, so "Agents" and "Pages" were clipped on both sides. The
+          modifier class exists in segmented-control-v2.css; there is no prop for it. */}
+      <SegmentedControlV2 class="segmented-control-v2--full-width shrink-0" value={surface()} onChange={(v) => v && chooseSurface(v as SurfaceId)}>
         <For each={SURFACES}>
           {(def) => <SegmentedControlItemV2 value={def.id}>{def.label}</SegmentedControlItemV2>}
         </For>
