@@ -1,5 +1,7 @@
 import { createMemo, createResource, createSignal, For, Match, Show, Switch } from "solid-js"
-import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
+import { Dialog } from "@opencode-ai/ui/dialog"
+import { List } from "@opencode-ai/ui/list"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { SegmentedControlV2, SegmentedControlItemV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
@@ -83,6 +85,7 @@ export function surfaceView(input: {
 }
 
 export function SessionIrisTab() {
+  const dialog = useDialog()
   const serverSDK = useServerSDK()
   const platform = usePlatform()
 
@@ -158,6 +161,10 @@ export function SessionIrisTab() {
     surfaceView({ loading: firstLoad(), bloqs: bloqs.latest ?? bloqs(), data: current(), rows: rows() }),
   )
 
+  const activeBloqName = createMemo(
+    () => (bloqs.latest ?? bloqs())?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
+  )
+
   function chooseSurface(id: SurfaceId) {
     setSurface(id)
     try {
@@ -174,25 +181,40 @@ export function SessionIrisTab() {
 
   return (
     <div class="flex flex-col h-full min-h-0 gap-2 px-2 pb-2">
-      {/* The app's own SelectV2, not a native <select>: a raw OS dropdown cannot be themed and
-          read as something that fell in from another program. `inline` is the compact trigger
-          the sibling panel header uses for its "Git changes" dropdown — the point is to look
-          like the thing six inches to the left, not to look good on its own. */}
+      {/* A SEARCHABLE dialog, not a dropdown.
+          This account has 153 bloqs. A plain option list is the wrong control for that at any
+          styling — you cannot find "KMG — Kristen Montero" by scrolling past a hundred and
+          fifty siblings. `List` is the app's filtered-list primitive and gives search for
+          free; dialog-select-mcp and dialog-select-file are the same shape, so this is the
+          house answer to "pick one of many" rather than a new idea. */}
       <Show when={((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0}>
-        <SelectV2
-          appearance="inline"
-          class="w-full"
-          placement="bottom-start"
-          gutter={6}
-          options={(bloqs.latest ?? bloqs())!.bloqs}
-          current={(bloqs.latest ?? bloqs())!.bloqs.find((b) => b.id === activeBloq())}
-          value={(b) => String(b.id)}
-          label={(b) => b.name}
-          onSelect={(b) => b && choose(b.id)}
-        />
+        <button
+          type="button"
+          class="flex items-center gap-2 px-2 py-1 text-12-regular text-text-base hover:bg-background-element rounded text-start min-w-0"
+          onClick={() => {
+            const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
+            dialog.show(() => (
+              <Dialog title="Board" description={`${all.length} boards`}>
+                <List
+                  class="px-3"
+                  search={{ placeholder: "Search boards…", autofocus: true }}
+                  emptyMessage="No boards match."
+                  key={(b) => String(b?.id ?? "")}
+                  items={() => all}
+                  filterKeys={["name"]}
+                  onSelect={(b) => b && choose(b.id)}
+                >
+                  {(b) => <span class="truncate">{b.name}</span>}
+                </List>
+              </Dialog>
+            ))
+          }}
+        >
+          <span class="truncate">{activeBloqName()}</span>
+          <span class="text-text-weak shrink-0">⌄</span>
+        </button>
       </Show>
 
-      {/* Pills, matching the segmented controls used elsewhere in the app. */}
       {/* full-width: the control is a FIXED 232px by default and four flex items inside it leave
           each label ~34px of room, so "Agents" and "Pages" were clipped on both sides. The
           modifier class exists in segmented-control-v2.css; there is no prop for it. */}
