@@ -105,7 +105,7 @@ export function SessionIrisTab() {
     })(),
   )
 
-  const activeBloq = createMemo(() => selected() ?? bloqs()?.bloqs?.[0]?.id)
+  const activeBloq = createMemo(() => selected() ?? (bloqs.latest ?? bloqs())?.bloqs?.[0]?.id)
 
   const [surface, setSurface] = createSignal<SurfaceId>(
     (() => {
@@ -129,17 +129,31 @@ export function SessionIrisTab() {
     },
   )
 
+  /**
+   * The LAST GOOD payload, not the in-flight one.
+   *
+   * `data()` is undefined while a refetch is in flight, so switching surfaces emptied the panel
+   * for the length of a network round trip — reported as "everything goes black and then it
+   * shows again". `data.latest` keeps the previous value until the new one lands, which is the
+   * whole point of it. The panel now swaps content instead of blinking through nothing.
+   */
+  const current = createMemo(() => data.latest ?? data())
+
   /** The rows of whichever surface is active — every response names its own array. */
   const rows = createMemo<any[]>(() => {
-    const d = data()
+    const d = current()
     if (!d) return []
     const key = surface() === "atlas" ? "lists" : surface()
     const v = d[key]
     return Array.isArray(v) ? v : []
   })
 
+  // Loading ONLY on the first load. A refetch with a previous payload in hand is not a loading
+  // state — treating it as one is what caused the flash.
+  const firstLoad = createMemo(() => (data.loading && !data.latest) || (bloqs.loading && !bloqs.latest))
+
   const view = createMemo(() =>
-    surfaceView({ loading: data.loading || bloqs.loading, bloqs: bloqs(), data: data(), rows: rows() }),
+    surfaceView({ loading: firstLoad(), bloqs: bloqs.latest ?? bloqs(), data: current(), rows: rows() }),
   )
 
   function chooseSurface(id: SurfaceId) {
@@ -159,13 +173,13 @@ export function SessionIrisTab() {
   return (
     <div class="flex flex-col h-full min-h-0 gap-2 px-3 pb-3 text-sm">
       <div class="flex items-center gap-2 flex-wrap">
-        <Show when={(bloqs()?.bloqs?.length ?? 0) > 0}>
+        <Show when={((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0}>
           <select
             class="bg-transparent border border-border rounded px-2 py-1 text-sm min-w-0 flex-1"
             value={activeBloq() ?? ""}
             onChange={(e) => choose(Number(e.currentTarget.value))}
           >
-            <For each={bloqs()!.bloqs}>{(b) => <option value={b.id}>{b.name}</option>}</For>
+            <For each={(bloqs.latest ?? bloqs())!.bloqs}>{(b) => <option value={b.id}>{b.name}</option>}</For>
           </select>
         </Show>
       </div>
@@ -197,17 +211,17 @@ export function SessionIrisTab() {
 
           {/* NOT MEASURED. Never rendered as an empty surface — see surfaceView. */}
           <Match when={view() === "unreachable"}>
-            <p class="text-text-muted">Could not reach IRIS — {bloqs()?.reason ?? "unknown"}.</p>
+            <p class="text-text-muted">Could not reach IRIS — {(bloqs.latest ?? bloqs())?.reason ?? "unknown"}.</p>
           </Match>
           <Match when={view() === "surface-error"}>
-            <p class="text-text-muted">Could not load {surface()} — {data()?.reason ?? "unknown"}.</p>
+            <p class="text-text-muted">Could not load {surface()} — {current()?.reason ?? "unknown"}.</p>
           </Match>
 
           <Match when={view() === "rows"}>
             {/* A partial answer says so: agents can load while their schedules do not, and
                 "no schedules" and "schedules unavailable" are different facts. */}
-            <Show when={data()?.measured && data()?.reason}>
-              <p class="text-text-muted pb-2">{data()!.reason}</p>
+            <Show when={current()?.measured && current()?.reason}>
+              <p class="text-text-muted pb-2">{current()!.reason}</p>
             </Show>
 
             <Switch>
