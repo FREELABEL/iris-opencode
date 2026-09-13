@@ -202,7 +202,15 @@ export function SessionIrisTab() {
                   key={(b) => String(b?.id ?? "")}
                   items={() => all}
                   filterKeys={["name"]}
-                  onSelect={(b) => b && choose(b.id)}
+                  onSelect={(b) => {
+                    if (!b) return
+                    choose(b.id)
+                    // Close it. A picker that stays open after you have picked leaves you
+                    // looking at a list of things you did not choose, with the result hidden
+                    // behind it — dialog-select-mcp does not close because it is a TOGGLE
+                    // list you keep working in, and copying its shape brought that along.
+                    dialog.close()
+                  }}
                 >
                   {(b) => <span class="truncate">{b.name}</span>}
                 </List>
