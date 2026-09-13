@@ -206,6 +206,42 @@ const AuthResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisAuthResponse" })
 
+const SchemaFieldSchema = Schema.Struct({
+  key: described(Schema.String, "The key in a record's `data` map — what a table column reads."),
+  label: Schema.String,
+  type: Schema.String,
+  sortable: Schema.optional(Schema.Boolean),
+  filterable: Schema.optional(Schema.Boolean),
+  visibility: described(
+    Schema.optional(Schema.String),
+    "\"phi\" marks protected health information. Carried so a table can LABEL the column rather than rendering it like any other.",
+  ),
+}).annotate({ identifier: "IrisSchemaField" })
+
+const RecordsResponse = Schema.Struct({
+  ...Measured,
+  ...Paged,
+  schema: Schema.Struct({
+    id: Schema.Finite,
+    slug: Schema.String,
+    name: Schema.String,
+    version: Schema.optional(Schema.Finite),
+  }).annotate({ identifier: "IrisRecordSchemaStub" }),
+  columns: described(
+    Schema.Array(SchemaFieldSchema),
+    "From the SCHEMA, not inferred from the rows — a column inferred from data disappears the moment every row on the page has it null.",
+  ),
+  rows: Schema.Array(
+    Schema.Struct({
+      id: Schema.Finite,
+      externalId: Schema.optional(Schema.String),
+      status: Schema.optional(Schema.String),
+      updatedAt: Schema.optional(Schema.String),
+      data: described(Schema.Record(Schema.String, Schema.Unknown), "The record's fields, keyed like the columns."),
+    }).annotate({ identifier: "IrisRecordRow" }),
+  ),
+}).annotate({ identifier: "IrisRecordsResponse" })
+
 const SchemasResponse = Schema.Struct({
   ...Measured,
   ...Paged,
@@ -217,7 +253,8 @@ const SchemasResponse = Schema.Struct({
       version: Schema.optional(Schema.Finite),
       isSystem: Schema.Boolean,
       scope: Schema.Literals(["board", "account"]),
-      fields: Schema.Array(Schema.Struct({ name: Schema.String, type: Schema.String })),
+      fields: Schema.Array(SchemaFieldSchema),
+      displayField: Schema.optional(Schema.String),
     }).annotate({ identifier: "IrisSchema" }),
   ),
 }).annotate({ identifier: "IrisSchemasResponse" })
@@ -263,6 +300,7 @@ export const IrisPaths = {
   schemas: `${root}/schemas/:bloqID`,
   playbooks: `${root}/playbooks/:bloqID`,
   integrations: `${root}/integrations`,
+  records: `${root}/records/:slug`,
   hive: `${root}/hive`,
 } as const
 
@@ -375,6 +413,18 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List playbooks",
           description:
             "BOTH the board's attached playbooks and the account's full set, each flagged. Never one or the other — the TUI shipped either/or and each half hid something.",
+        }),
+      ),
+      HttpApiEndpoint.get("records", IrisPaths.records, {
+        query: PageQuery,
+        params: { slug: Schema.String },
+        success: described(RecordsResponse, "One page of a dataset's records, with its columns"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.records",
+          summary: "List dataset records",
+          description:
+            "The table behind an Atlas schema. Paged UPSTREAM — fl-api is Laravel-paginated, so this asks for the page the caller wants rather than pulling a 19,000-row dataset through the sidecar to show twenty-five lines.",
         }),
       ),
       HttpApiEndpoint.get("integrations", IrisPaths.integrations, {

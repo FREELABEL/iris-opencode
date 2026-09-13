@@ -91,7 +91,15 @@ function relativeAge(iso: string): string | undefined {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
-function describeRow(surface: string, r: any): { title: string; fields: [string, string][]; command?: string } | null {
+function describeRow(
+  surface: string,
+  r: any,
+): { title: string; fields: [string, string][]; command?: string; raw?: any; pane?: string } | null {
+  const out = describeFields(surface, r)
+  return out ? { ...out, raw: r, pane: surface } : null
+}
+
+function describeFields(surface: string, r: any): { title: string; fields: [string, string][]; command?: string } | null {
   if (surface === "agents")
     return {
       title: r.name,
@@ -186,7 +194,11 @@ function describeRow(surface: string, r: any): { title: string; fields: [string,
       title: r.name,
       fields: fieldsOf([
         ["slug", r.slug], ["scope", r.scope], ["version", r.version], ["system", r.isSystem],
-        ["fields", (r.fields ?? []).map((f: any) => `${f.name}:${f.type}`).join(", ")],
+        ["display field", r.displayField],
+        ["fields", (r.fields ?? []).map((f: any) => `${f.key}:${f.type}`).join(", ")],
+        // Said out loud rather than left to the column list: some of these datasets carry PHI,
+        // and which ones is not something to make someone infer.
+        ["phi fields", (r.fields ?? []).filter((f: any) => f.visibility === "phi").map((f: any) => f.key).join(", ")],
       ]),
       command: r.slug ? `iris atlas:datasets records list --schema ${r.slug}` : undefined,
     }
@@ -300,6 +312,58 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
   ],
 }
 
+/**
+ * LEVEL THREE — the tabs INSIDE a record.
+ *
+ * Every one of these records is three things at once and the panel only ever showed the first:
+ * a set of readable facts, the raw thing underneath, and — for the ones that are published or
+ * queryable — the actual content. A page has a live URL nobody could see from here; a schema
+ * has 7,964 rows nobody could see from here.
+ *
+ * `info` is always present and always first, so a detail never opens on a tab that turns out to
+ * be empty. The rest are declared per pane rather than probed, because "does this record have a
+ * preview" is a fact about the KIND of record, not about the instance.
+ */
+export interface DetailTab {
+  id: string
+  label: string
+}
+const DETAIL_TABS: Record<string, readonly DetailTab[]> = {
+  schemas: [
+    { id: "info", label: "Info" },
+    // The database table. This is the one that turns a schema from a description of data into
+    // the data.
+    { id: "records", label: "Records" },
+    { id: "json", label: "JSON" },
+  ],
+  pages: [
+    { id: "info", label: "Info" },
+    { id: "preview", label: "Preview" },
+    { id: "json", label: "JSON" },
+  ],
+  agents: [
+    { id: "info", label: "Info" },
+    { id: "json", label: "JSON" },
+  ],
+  integrations: [
+    { id: "info", label: "Info" },
+    { id: "json", label: "JSON" },
+  ],
+}
+const DEFAULT_DETAIL_TABS: readonly DetailTab[] = [{ id: "info", label: "Info" }]
+
+export function detailTabsFor(pane: string): readonly DetailTab[] {
+  return DETAIL_TABS[pane] ?? DEFAULT_DETAIL_TABS
+}
+
+/** A cell value, rendered so an empty one is visibly empty rather than the string "undefined". */
+export function cellText(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—"
+  if (typeof v === "boolean") return v ? "yes" : "no"
+  if (typeof v === "object") return JSON.stringify(v)
+  return String(v)
+}
+
 /** A persisted surface from an older build must not render a blank panel. */
 export function normalizeSurface(value: unknown): SurfaceId {
   return SURFACES.some((s) => s.id === value) ? (value as SurfaceId) : "atlas"
@@ -338,9 +402,23 @@ export function surfaceView(input: {
   bloqs?: Measured
   rows?: unknown[]
   data?: Measured | undefined
+  /** Which pane the held payload was fetched for, and which pane is on screen. */
+  dataPane?: string
+  pane?: string
 }): "loading" | "unreachable" | "surface-error" | "rows" | "empty" {
   if (input.loading) return "loading"
   if (input.bloqs && !input.bloqs.measured) return "unreachable"
+  /*
+   * A payload from the PREVIOUS pane is not an answer about this one.
+   *
+   * `data.latest` deliberately holds the old payload through a refetch so the panel does not
+   * blink through nothing. That is right when both panes name their rows the same way, and
+   * actively wrong when they do not: switching Hive › Machines to Hive › Inbox left the
+   * machines payload in hand, which has no `items` key, so the panel rendered "Nothing in
+   * Hive › Inbox" — a confident false statement about data it had not looked at yet. Worse
+   * than the blank it replaced, because a blank does not claim anything.
+   */
+  if (input.pane && input.dataPane && input.dataPane !== input.pane) return "loading"
   if (input.data && !input.data.measured) return "surface-error"
   if (input.rows?.length) return "rows"
   return "empty"
@@ -413,7 +491,9 @@ export function SessionIrisTab() {
       const url = path(id)
       const sep = url.includes("?") ? "&" : "?"
       const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=25`)
-      const next = (await res.json()) as SurfacePayload
+      // Stamped with the pane it was fetched FOR, so a held payload can be told apart from an
+      // answer about what is currently on screen. See surfaceView.
+      const next = { ...((await res.json()) as SurfacePayload), __pane: which } as SurfacePayload
 
       // APPEND rather than replace when we asked for a later page of the same surface. The
       // previous value is the earlier pages; dropping it would make "Load more" a "Replace".
@@ -444,6 +524,8 @@ export function SessionIrisTab() {
   const rows = createMemo<any[]>(() => {
     const d = current()
     if (!d) return []
+    // Never read rows out of another pane's payload — the keys differ and the answer is empty.
+    if (d["__pane"] && d["__pane"] !== pane()) return []
     const key = arrayKeyFor(pane())
     const v = d[key]
     return Array.isArray(v) ? v : []
@@ -458,7 +540,14 @@ export function SessionIrisTab() {
   const firstLoad = createMemo(() => (data.loading && !data.latest) || (bloqs.loading && !bloqs.latest))
 
   const view = createMemo(() =>
-    surfaceView({ loading: firstLoad(), bloqs: bloqs.latest ?? bloqs(), data: current(), rows: rows() }),
+    surfaceView({
+      loading: firstLoad(),
+      bloqs: bloqs.latest ?? bloqs(),
+      data: current(),
+      rows: rows(),
+      dataPane: current()?.["__pane"] as string | undefined,
+      pane: pane(),
+    }),
   )
 
   const activeBloqName = createMemo(
@@ -467,8 +556,56 @@ export function SessionIrisTab() {
 
   /** A non-Atlas row being inspected. Atlas has its own reader because it has a BODY; the rest
    *  are records, so they get a field list rather than prose. */
-  const [openRow, setOpenRow] = createSignal<{ title: string; fields: [string, string][]; command?: string } | null>(
-    null,
+  const [openRow, setOpenRow] = createSignal<{
+    title: string
+    fields: [string, string][]
+    command?: string
+    /** The raw record — JSON, Preview and Records all read it rather than the flattened fields. */
+    raw?: any
+    /** Which pane it came from, which is what decides its detail tabs. */
+    pane?: string
+  } | null>(null)
+
+  const [detailTab, setDetailTab] = createSignal("info")
+  const detailTabs = createMemo(() => detailTabsFor(openRow()?.pane ?? ""))
+
+  // A record always opens on Info. Carrying the previous record's tab over lands you on
+  // "Records" for a page that has none, which renders as a broken detail rather than a choice.
+  createEffect(() => {
+    openRow()
+    setDetailTab("info")
+  })
+
+  /**
+   * The records table for the open schema.
+   *
+   * Its own resource and its own page cursor: this is a second, independent list living inside
+   * a row of the first, and sharing the outer `page` signal would make "next page of records"
+   * also ask for the next page of schemas.
+   */
+  const [recordPage, setRecordPage] = createSignal(1)
+  createEffect(() => {
+    openRow()
+    setRecordPage(1)
+  })
+  const [records] = createResource(
+    () => {
+      const r = openRow()
+      const slug = r?.raw?.slug
+      return r?.pane === "schemas" && detailTab() === "records" && slug
+        ? ([base(), String(slug), recordPage()] as const)
+        : undefined
+    },
+    async ([, slug, pageNo]) => {
+      const res = await doFetch(`/iris/records/${encodeURIComponent(slug)}?page=${pageNo}&perPage=25`)
+      return (await res.json()) as Measured & {
+        columns: { key: string; label: string; type: string; visibility?: string }[]
+        rows: { id: number; data: Record<string, unknown>; updatedAt?: string }[]
+        total: number | null
+        totalIsExact: boolean
+        hasMore: boolean
+      }
+    },
   )
 
   /** The item being read, if any. Opening one replaces the list; there is no second panel. */
@@ -639,28 +776,178 @@ export function SessionIrisTab() {
           >
             ← Back
           </button>
-          <div class="flex-1 min-h-0 overflow-y-auto px-2 pb-4">
-            <h3 class="text-13-medium text-text-strong pb-2">{openRow()!.title}</h3>
-            <Show when={openRow()!.command}>
-              <button
-                type="button"
-                class="w-full text-start font-mono text-11-regular px-2 py-1.5 mb-3 rounded bg-background-element text-text-base cursor-pointer hover:text-text-strong"
-                title="Click to copy"
-                onClick={() => navigator.clipboard?.writeText(openRow()!.command!)}
-              >
-                {openRow()!.command}
-              </button>
-            </Show>
-            <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-              <For each={openRow()!.fields}>
-                {([k, v]) => (
-                  <>
-                    <dt class="text-11-regular text-text-weaker">{k}</dt>
-                    <dd class="text-12-regular text-text-base min-w-0 break-words">{v}</dd>
-                  </>
+          <h3 class="text-13-medium text-text-strong px-2 pb-1.5 shrink-0">{openRow()!.title}</h3>
+
+          {/* LEVEL 3 — chips, because levels 1 and 2 are already a plate and a rule, and a
+              third thing drawn like either of them stops the stack reading as a hierarchy.
+              Rendered only when there is more than one, so a record with nothing but Info does
+              not grow a decorative single-tab row. */}
+          <Show when={detailTabs().length > 1}>
+            <div class="iris-detailnav shrink-0" role="tablist" aria-label={`${openRow()!.title} views`}>
+              <For each={detailTabs()}>
+                {(t) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={detailTab() === t.id}
+                    class="iris-detailnav__item"
+                    classList={{ "iris-detailnav__item--active": detailTab() === t.id }}
+                    onClick={() => setDetailTab(t.id)}
+                  >
+                    {t.label}
+                  </button>
                 )}
               </For>
-            </dl>
+            </div>
+          </Show>
+
+          <div class="flex-1 min-h-0 overflow-auto px-2 pb-4">
+            <Switch>
+              <Match when={detailTab() === "info"}>
+                <Show when={openRow()!.command}>
+                  <button
+                    type="button"
+                    class="w-full text-start font-mono text-11-regular px-2 py-1.5 mb-3 rounded bg-background-element text-text-base cursor-pointer hover:text-text-strong"
+                    title="Click to copy"
+                    onClick={() => navigator.clipboard?.writeText(openRow()!.command!)}
+                  >
+                    {openRow()!.command}
+                  </button>
+                </Show>
+                <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                  <For each={openRow()!.fields}>
+                    {([k, v]) => (
+                      <>
+                        <dt class="text-11-regular text-text-weaker">{k}</dt>
+                        <dd class="text-12-regular text-text-base min-w-0 break-words">{v}</dd>
+                      </>
+                    )}
+                  </For>
+                </dl>
+              </Match>
+
+              {/* The raw record. What the info tab flattens, in the shape the API actually
+                  returned — the thing you need when a field is missing and you want to know
+                  whether the server omitted it or this panel dropped it. */}
+              <Match when={detailTab() === "json"}>
+                <button
+                  type="button"
+                  class="mb-2 px-2 py-0.5 rounded text-11-regular text-text-weak hover:text-text-base hover:bg-background-element cursor-pointer"
+                  onClick={() => navigator.clipboard?.writeText(JSON.stringify(openRow()!.raw, null, 2))}
+                >
+                  Copy JSON
+                </button>
+                <pre class="iris-json text-11-regular">{JSON.stringify(openRow()!.raw, null, 2)}</pre>
+              </Match>
+
+              {/* The page itself. An unpublished page has no URL to show, and saying so beats
+                  an iframe pointed at nothing. */}
+              <Match when={detailTab() === "preview"}>
+                <Show
+                  when={openRow()!.raw?.url}
+                  fallback={
+                    <p class="text-12-regular text-text-weak py-2">
+                      No public URL yet — this page is {openRow()!.raw?.status ?? "unpublished"}.
+                    </p>
+                  }
+                >
+                  <div class="flex items-baseline gap-2 pb-2">
+                    <a
+                      href={openRow()!.raw.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      class="text-11-regular text-text-interactive-base hover:underline truncate"
+                    >
+                      {openRow()!.raw.url}
+                    </a>
+                  </div>
+                  <iframe
+                    src={openRow()!.raw.url}
+                    class="iris-preview"
+                    title={openRow()!.title}
+                    sandbox="allow-scripts allow-same-origin"
+                  />
+                </Show>
+              </Match>
+
+              {/* THE TABLE. Columns from the schema, rows from the dataset, paged upstream. */}
+              <Match when={detailTab() === "records"}>
+                <Switch>
+                  <Match when={records.loading && !records.latest}>
+                    <p class="text-12-regular text-text-weak py-2">Loading records…</p>
+                  </Match>
+                  <Match when={records.latest && !records.latest!.measured}>
+                    <p class="text-12-regular text-text-weak py-2">
+                      Could not load records — {records.latest!.reason ?? "unknown"}.
+                    </p>
+                  </Match>
+                  <Match when={(records.latest?.rows?.length ?? 0) === 0}>
+                    <p class="text-12-regular text-text-weak py-2">This dataset has no records.</p>
+                  </Match>
+                  <Match when={records.latest}>
+                    <div class="iris-table-wrap">
+                      <table class="iris-table">
+                        <thead>
+                          <tr>
+                            <th class="iris-table__num">id</th>
+                            <For each={records.latest!.columns}>
+                              {(c) => (
+                                <th title={`${c.key} · ${c.type}`}>
+                                  {c.label}
+                                  {/* PHI is named on the column, not left to be inferred from
+                                      the content. */}
+                                  <Show when={c.visibility === "phi"}>
+                                    <span class="iris-table__phi">phi</span>
+                                  </Show>
+                                </th>
+                              )}
+                            </For>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <For each={records.latest!.rows}>
+                            {(r) => (
+                              <tr>
+                                <td class="iris-table__num">{r.id}</td>
+                                <For each={records.latest!.columns}>
+                                  {(c) => (
+                                    <td
+                                      class="iris-table__cell"
+                                      classList={{ "iris-table__num": c.type === "number" || c.type === "integer" }}
+                                      title={cellText(r.data[c.key])}
+                                    >
+                                      {cellText(r.data[c.key])}
+                                    </td>
+                                  )}
+                                </For>
+                              </tr>
+                            )}
+                          </For>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div class="flex items-center gap-2 py-2 text-11-regular text-text-weaker">
+                      <span class="font-mono tabular-nums">
+                        {pageSummary({
+                          shown: (recordPage() - 1) * 25 + records.latest!.rows.length,
+                          env: records.latest as unknown as PageEnvelope,
+                        })}
+                      </span>
+                      <Show when={records.latest!.hasMore}>
+                        <button
+                          type="button"
+                          class="ms-auto px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
+                          disabled={records.loading}
+                          onClick={() => setRecordPage((n) => n + 1)}
+                        >
+                          {records.loading ? "Loading…" : "Next page"}
+                        </button>
+                      </Show>
+                    </div>
+                  </Match>
+                </Switch>
+              </Match>
+            </Switch>
           </div>
         </div>
       </Show>

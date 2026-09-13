@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchSchemas } from "@/iris/platform"
+import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -166,6 +166,32 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
+    /**
+     * Records do NOT go through pageOf.
+     *
+     * Everything else here holds the whole list and slices it; this one is paged by fl-api, so
+     * the envelope is built from the upstream's meta instead. Running it through pageOf would
+     * slice a 25-row page down to a 25-row page and report `total` as 25 — a number that looks
+     * right and says the dataset has 25 rows in it.
+     */
+    const records = Effect.fn("IrisHttpApi.records")(
+      (ctx: { params: { slug: string }; query: { page?: number; perPage?: number } }) =>
+        Effect.promise(() => fetchRecords(ctx.params.slug, ctx.query)).pipe(
+          Effect.map((r) => ({
+            measured: r.measured,
+            reason: r.reason,
+            page: r.data.page,
+            perPage: r.data.perPage,
+            total: r.measured ? r.data.total : null,
+            totalIsExact: r.measured ? r.data.totalIsExact : false,
+            hasMore: r.measured ? r.data.hasMore : false,
+            schema: r.data.schema,
+            columns: r.data.columns,
+            rows: r.data.rows,
+          })),
+        ),
+    )
+
     const integrations = Effect.fn("IrisHttpApi.integrations")(
       (ctx: { query: { page?: number; perPage?: number } }) =>
         Effect.promise(() => fetchIntegrations()).pipe(
@@ -186,6 +212,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

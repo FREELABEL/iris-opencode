@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { normalizeSurface, resolvePane, surfaceView } from "./session-iris-tab"
+import { cellText, detailTabsFor, normalizeSurface, resolvePane, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -94,5 +94,69 @@ describe("resolvePane", () => {
     const r = resolvePane("hive", "inbox")
     expect(r.pane).toBe("inbox")
     expect(r.path(674)).toBe("/iris/inbox")
+  })
+})
+
+describe("a held payload from another pane", () => {
+  test("is never rendered as an empty answer about the pane on screen", () => {
+    // Measured in the browser: Hive › Machines -> Hive › Inbox showed "Nothing in Hive › Inbox"
+    // for the length of the fetch. `data.latest` holds the previous payload so the panel does
+    // not blink through nothing, which is right when both panes name their rows the same way
+    // and a confident lie when they do not — machines arrive as `nodes`, inbox as `items`.
+    expect(
+      surfaceView({
+        loading: false,
+        bloqs: { measured: true },
+        data: { measured: true },
+        rows: [],
+        dataPane: "hive",
+        pane: "inbox",
+      }),
+    ).toBe("loading")
+  })
+
+  test("an empty answer about the CURRENT pane is still reachable", () => {
+    // The guard must not swallow genuine emptiness, or it trades one wrong state for another.
+    expect(
+      surfaceView({
+        loading: false,
+        bloqs: { measured: true },
+        data: { measured: true },
+        rows: [],
+        dataPane: "inbox",
+        pane: "inbox",
+      }),
+    ).toBe("empty")
+  })
+})
+
+describe("detailTabsFor", () => {
+  test("info is always present and always first", () => {
+    // A detail that opens on a tab with nothing in it reads as broken.
+    for (const pane of ["schemas", "pages", "agents", "leads", "hive", "nonsense"]) {
+      expect(detailTabsFor(pane)[0].id).toBe("info")
+    }
+  })
+
+  test("a schema offers its records and a page offers its preview", () => {
+    expect(detailTabsFor("schemas").map((t) => t.id)).toContain("records")
+    expect(detailTabsFor("pages").map((t) => t.id)).toContain("preview")
+    // And not the other way around — a page has no dataset behind it.
+    expect(detailTabsFor("pages").map((t) => t.id)).not.toContain("records")
+  })
+})
+
+describe("cellText", () => {
+  test("an absent value is visibly absent, never the word undefined", () => {
+    expect(cellText(undefined)).toBe("—")
+    expect(cellText(null)).toBe("—")
+    expect(cellText("")).toBe("—")
+  })
+
+  test("false is a VALUE, not an absence", () => {
+    // The bug this exists to prevent: a falsy check renders `false` as "—", so a boolean column
+    // shows a blank for every record where the answer is no.
+    expect(cellText(false)).toBe("no")
+    expect(cellText(0)).toBe("0")
   })
 })

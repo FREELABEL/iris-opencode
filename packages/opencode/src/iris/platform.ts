@@ -29,6 +29,7 @@
 import { existsSync, readFileSync } from "fs"
 import { homedir } from "os"
 import path from "path"
+import { clampPaging, DEFAULT_PER_PAGE } from "./pagination"
 
 /**
  * Where `auth.json` lives — derived, not imported.
@@ -763,6 +764,24 @@ export function checkAuth(): AuthState {
 }
 
 
+export interface SchemaField {
+  /** The key in a record's `data` map — what a table column reads. */
+  key: string
+  /** The human label, when the schema gives one. Falls back to the key. */
+  label: string
+  type: string
+  sortable?: boolean
+  filterable?: boolean
+  /**
+   * "phi" marks a field the platform treats as protected health information.
+   *
+   * Carried through so a table can LABEL it rather than rendering PHI in a column that looks
+   * like any other. Filtering happens upstream against the caller's token; this flag is about
+   * telling the person what they are looking at.
+   */
+  visibility?: string
+}
+
 export interface Schema {
   id: number
   name: string
@@ -771,7 +790,9 @@ export interface Schema {
   isSystem: boolean
   /** board = defined on this board · account = available everywhere. */
   scope: "board" | "account"
-  fields: { name: string; type: string }[]
+  fields: SchemaField[]
+  /** The field a record is named by, when the schema nominates one. */
+  displayField?: string
 }
 
 /**
@@ -783,6 +804,38 @@ export interface Schema {
  * every schema they own under a board heading — the same shape as the Pages bug this panel
  * already fixed once.
  */
+/**
+ * The field list out of a schema's `fields` blob.
+ *
+ * Two shapes in the wild and both have to work: the current one nests the array under
+ * `fields.fields`, and older rows are a flat key->definition map. Guessing one would have been
+ * fine until the day it met the other.
+ */
+export function readSchemaFields(blob: unknown): SchemaField[] {
+  const b = blob as any
+  const arr = Array.isArray(b?.fields) ? b.fields : Array.isArray(b) ? b : null
+  if (arr) {
+    return arr
+      .filter((f: any) => f && (f.key ?? f.name))
+      .map((f: any) => ({
+        key: String(f.key ?? f.name),
+        label: String(f.label ?? f.key ?? f.name),
+        type: String(f.type ?? "string"),
+        sortable: f.sortable === true ? true : undefined,
+        filterable: f.filterable === true ? true : undefined,
+        visibility: typeof f.visibility === "string" ? f.visibility : undefined,
+      }))
+  }
+  // The legacy map. `display_field` is metadata about the schema, not a field of it.
+  return Object.entries(b ?? {})
+    .filter(([name]) => name !== "display_field")
+    .map(([name, def]: [string, any]) => ({
+      key: name,
+      label: name,
+      type: String(def?.type ?? (typeof def === "string" ? def : "?")),
+    }))
+}
+
 export async function fetchSchemas(bloqId: number): Promise<PlatformResult<{ schemas: Schema[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { schemas: [] } }
@@ -808,10 +861,12 @@ export async function fetchSchemas(bloqId: number): Promise<PlatformResult<{ sch
         version: typeof r.version === "number" ? r.version : undefined,
         isSystem: Boolean(r.is_system),
         scope: r.bloq_id == null ? ("account" as const) : ("board" as const),
-        fields: Object.entries(r.fields ?? {}).map(([name, def]: [string, any]) => ({
-          name,
-          type: String(def?.type ?? def ?? "?"),
-        })),
+        // `r.fields` is a WRAPPER — `{ fields: [...], display_field: "subject" }` — not a
+        // key->type map. Reading it as one produced a column literally named "fields" whose
+        // type was every field object stringified: "[object Object],[object Object],…". It
+        // rendered, so nothing failed; it was simply nonsense on screen for every schema.
+        fields: readSchemaFields(r.fields),
+        displayField: typeof r.fields?.display_field === "string" ? r.fields.display_field : undefined,
       }))
     return { measured: true, data: { schemas } }
   } catch (e) {
@@ -819,6 +874,120 @@ export async function fetchSchemas(bloqId: number): Promise<PlatformResult<{ sch
   }
 }
 
+
+export interface RecordRow {
+  id: number
+  externalId?: string
+  status?: string
+  updatedAt?: string
+  /** The record's own field map, keyed the same way the schema's `key`s are. */
+  data: Record<string, unknown>
+}
+
+export interface RecordPage {
+  schema: { id: number; slug: string; name: string; version?: number }
+  columns: SchemaField[]
+  rows: RecordRow[]
+  page: number
+  perPage: number
+  total: number | null
+  totalIsExact: boolean
+  hasMore: boolean
+}
+
+/**
+ * One page of a dataset's RECORDS — the table behind a schema.
+ *
+ * PAGED UPSTREAM, not here. fl-api's `atlas/datasets/{slug}` is Laravel-paginated, so this asks
+ * for the page the caller wants and passes the meta back. Fetching everything and slicing it
+ * locally would pull a 19,000-row dataset through the sidecar to show twenty-five lines.
+ *
+ * The COLUMNS come from the schema, not from the first row's keys. Inferring them from data is
+ * the version that looks right until it meets a record with a null field, at which point the
+ * column silently disappears for the whole table.
+ */
+export async function fetchRecords(
+  slug: string,
+  opts: { page?: number; perPage?: number } = {},
+): Promise<PlatformResult<RecordPage>> {
+  const empty: RecordPage = {
+    schema: { id: 0, slug, name: slug },
+    columns: [],
+    rows: [],
+    page: 1,
+    perPage: DEFAULT_PER_PAGE,
+    total: null,
+    totalIsExact: false,
+    hasMore: false,
+  }
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: empty }
+
+  const { page, perPage } = clampPaging(opts)
+  try {
+    const res = await irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(slug)}?page=${page}&per_page=${perPage}`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { ...empty, page, perPage } }
+    const json = (await res.json()) as any
+    const d = json?.data ?? json
+    const recs = d?.records ?? {}
+    const list: any[] = Array.isArray(recs?.data) ? recs.data : Array.isArray(recs) ? recs : []
+
+    // The schema definition travels with the records on this endpoint, but only as a stub —
+    // id/slug/name/version, no fields. The columns come from the schema list instead.
+    const stub = d?.schema ?? {}
+    const total = typeof recs?.total === "number" ? recs.total : null
+
+    const rows: RecordRow[] = list.map((r: any) => ({
+      id: Number(r?.id),
+      externalId: typeof r?.external_id === "string" ? r.external_id : undefined,
+      status: typeof r?.status === "string" ? r.status : undefined,
+      updatedAt: typeof r?.updated_at === "string" ? r.updated_at : undefined,
+      data: r?.data && typeof r.data === "object" ? r.data : {},
+    }))
+
+    return {
+      measured: true,
+      data: {
+        schema: {
+          id: Number(stub?.id ?? 0),
+          slug: String(stub?.slug ?? slug),
+          name: String(stub?.name ?? slug),
+          version: typeof stub?.version === "number" ? stub.version : undefined,
+        },
+        columns: await columnsFor(slug),
+        rows,
+        page,
+        perPage,
+        total,
+        // Laravel gives a real total, so it is exact whenever present.
+        totalIsExact: total != null,
+        hasMore: total != null ? page * perPage < total : rows.length >= perPage,
+      },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { ...empty, page, perPage } }
+  }
+}
+
+/**
+ * The column definitions for one dataset.
+ *
+ * Read from the schema list because the records endpoint's schema stub carries no fields. A
+ * miss returns an empty list rather than throwing: a table with no declared columns falls back
+ * to the keys it can see, which is worse than the schema but better than no table.
+ */
+async function columnsFor(slug: string): Promise<SchemaField[]> {
+  try {
+    const res = await irisFetch(`/api/v1/atlas/schemas`)
+    if (!res.ok) return []
+    const json = (await res.json()) as any
+    const raw = json?.schemas ?? json?.data ?? json
+    const row = (Array.isArray(raw) ? raw : []).find((r: any) => String(r?.slug) === slug)
+    return row ? readSchemaFields(row.fields) : []
+  } catch {
+    return []
+  }
+}
 
 export interface Integration {
   id: string

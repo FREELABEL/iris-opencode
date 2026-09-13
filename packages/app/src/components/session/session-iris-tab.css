@@ -324,3 +324,137 @@
   color: var(--text-strong);
   border-bottom-color: var(--text-interactive-base);
 }
+
+/*
+ * LEVEL 3 — the tabs inside a record.
+ *
+ * Chips. Level 1 is a filled plate and level 2 is a rule underneath, so a third strip drawn
+ * like either of them collapses the stack back into one flat menu. Smaller type too: this one
+ * is scoped to a single record, not to the whole panel, and the size says so.
+ */
+.iris-detailnav {
+  display: flex;
+  gap: 4px;
+  padding: 0 8px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.iris-detailnav::-webkit-scrollbar {
+  display: none;
+}
+.iris-detailnav__item {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-weak);
+  background: transparent;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.iris-detailnav__item:hover {
+  color: var(--text-base);
+  background: var(--background-element);
+}
+.iris-detailnav__item--active {
+  color: var(--text-strong);
+  background: var(--background-element);
+}
+
+/*
+ * THE DATA TABLE.
+ *
+ * A real table, not a stack of key/value rows: the point of a dataset is comparing values DOWN
+ * a column, and a field list per record makes that impossible by construction.
+ *
+ * It scrolls horizontally inside its own box. The panel is ~500px and these datasets run to
+ * eight or more columns, so something has to give — either the table scrolls or every cell is
+ * sixty pixels wide. The header stays put while the rows move, because a column of email
+ * addresses with the heading scrolled away is just a column of strings.
+ */
+.iris-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 4px;
+}
+.iris-table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-size: 11px;
+}
+.iris-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: start;
+  font-weight: 500;
+  color: var(--text-weak);
+  background: var(--background-panel, var(--background-element));
+  padding: 5px 8px;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-weaker-base);
+}
+.iris-table td {
+  padding: 4px 8px;
+  color: var(--text-base);
+  border-bottom: 1px solid var(--border-weaker-base);
+  vertical-align: top;
+}
+.iris-table tr:last-child td {
+  border-bottom: 0;
+}
+.iris-table tbody tr:hover td {
+  background: var(--background-element);
+}
+/*
+ * Cells are CLAMPED, not wrapped. One 400-character `snippet` sets the row height for every
+ * other column on that row, and a table whose rows are each a different height cannot be
+ * scanned. The full value is in the title attribute.
+ */
+.iris-table__cell {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Numbers in mono + tabular so digits line up in a column and read as data. */
+.iris-table__num {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-weaker);
+  text-align: end;
+  white-space: nowrap;
+}
+.iris-table__phi {
+  margin-inline-start: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-weaker);
+  border: 1px solid var(--border-weaker-base);
+}
+
+/* Raw JSON. Wraps rather than scrolls: a deep object is easier to read broken than truncated. */
+.iris-json {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-base);
+  margin: 0;
+}
+
+/* The live page. Fills the detail area — a preview you have to scroll to see is not a preview. */
+.iris-preview {
+  width: 100%;
+  height: 70vh;
+  min-height: 320px;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: 4px;
+  background: #fff;
+}
