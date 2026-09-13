@@ -11,6 +11,7 @@ import { useKV } from "../../context/kv"
 import { TodoItem } from "../../component/todo-item"
 import { useIrisData } from "../../iris/api"
 import type { IrisAgent, AtlasItem, IrisContact, IrisPage } from "../../iris/types"
+import { useHiveInbox } from "../../iris/hive-inbox"
 
 type SidebarTab = "agents" | "playbooks" | "contacts" | "pages" | "atlas" | "session" | "hive"
 
@@ -36,6 +37,9 @@ export function Sidebar(props: { sessionID: string }) {
 
   const [activeTab, setActiveTab] = createSignal<SidebarTab>("atlas")
   const iris = useIrisData()
+  // Polls ~/.iris/hive/inbox/.manifest.jsonl — a stat() every few seconds, and a read only
+  // when it actually changed. Local file, no network. See iris/hive-inbox.ts.
+  const inbox = useHiveInbox()
   const [bloqPickerOpen, setBloqPickerOpen] = createSignal(false)
   const [expandedLists, setExpandedLists] = createSignal<Set<number>>(new Set())
   const [activeDoc, setActiveDoc] = createSignal<AtlasItem | null>(null)
@@ -639,6 +643,37 @@ export function Sidebar(props: { sessionID: string }) {
               {/* ── HIVE ── */}
               <Match when={activeTab() === "hive"}>
                 <box gap={1}>
+                  {/* INBOX FIRST. The tmux session list below is about machines you are
+                      driving; the inbox is about work someone has sent YOU, and that is the
+                      thing nobody was seeing. On 2026-09-11 four messages that changed what a
+                      client's agent was building sat unread until someone said "run iris hive
+                      inbox read" out loud on a call. */}
+                  <box>
+                    <box flexDirection="row" gap={1}>
+                      <text fg={theme.text}>
+                        <b>Inbox</b>
+                      </text>
+                      <Switch>
+                        {/* unread === null means the manifest exists and could not be read.
+                            Rendering that as 0 would look exactly like a healthy empty inbox. */}
+                        <Match when={inbox().unreadable}>
+                          <text fg={theme.error}>unreadable</text>
+                        </Match>
+                        <Match when={(inbox().unread ?? 0) > 0}>
+                          <text fg={theme.warning}>{inbox().unread} unread</text>
+                        </Match>
+                        <Match when={true}>
+                          <text fg={theme.textMuted}>nothing waiting</text>
+                        </Match>
+                      </Switch>
+                    </box>
+                    <Show when={(inbox().unread ?? 0) > 0}>
+                      <text fg={theme.textMuted}>
+                        {"  "}from {inbox().from || "a peer"} · read: iris hive inbox read
+                      </text>
+                    </Show>
+                  </box>
+
                   <Show
                     when={iris.data.hiveSessions.length > 0}
                     fallback={
