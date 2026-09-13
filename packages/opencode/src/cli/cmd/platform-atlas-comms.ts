@@ -246,11 +246,26 @@ async function ingestGmail(lead: any): Promise<any[]> {
     const collected: any[] = []
     let anyOk = false
 
+    // AUTHENTICATE. The bridge requires X-Bridge-Key and this call never sent it, so every
+    // Apple Mail ingest got a 401, fell through to the Gmail fallback, and reported whatever
+    // that found as the whole answer. The Discord ingest in this same file has always done it
+    // correctly — mail simply never did. A 401 here is indistinguishable from "no messages"
+    // downstream, which is how a mailbox with 70 messages in it logged 1 and said "1 new".
+    const bridgeToken = getBridgeToken()
+    const bridgeHeaders: Record<string, string> = { Accept: "application/json" }
+    if (bridgeToken) bridgeHeaders["X-Bridge-Key"] = bridgeToken
+
     for (const addr of emails) {
       const res = await fetch(`${BRIDGE_URL}/api/mail/search?from=${encodeURIComponent(addr)}&days=90&limit=50&include_body=1`, {
-        signal: AbortSignal.timeout(5000),
+        headers: bridgeHeaders,
+        signal: AbortSignal.timeout(15000),
       })
-      if (!res.ok) continue
+      if (!res.ok) {
+        // Say which address and why. Falling through to a lesser source without a word is what
+        // made this invisible for months.
+        console.log(dim(`    apple_mail: ${addr} → bridge returned ${res.status}${res.status === 401 ? " (no/invalid X-Bridge-Key — run: iris bridge status)" : ""}`))
+        continue
+      }
       anyOk = true
 
       const data = (await res.json()) as any
