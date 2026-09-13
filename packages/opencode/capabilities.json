@@ -6701,7 +6701,7 @@
       "describe": "list leads",
       "aliases": [],
       "run": "iris leads list",
-      "haystack": "leads list ls list leads status filter by status search search query limit max results bloq-id filter by bloq/project id all include prospected leads (hidden by default) json json output"
+      "haystack": "leads list ls list leads status filter by status search search query limit max results bloq-id filter by bloq/project id all include prospected leads (hidden by default) sort order the whole book before paging — activity is what you almost always want json json output"
     },
     {
       "kind": "command",
