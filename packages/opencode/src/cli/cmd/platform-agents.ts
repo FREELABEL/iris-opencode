@@ -1205,7 +1205,7 @@ const AgentsBulkDeleteCommand = cmd({
 
 const AgentsAssignCommand = cmd({
   command: "assign <agent-id>",
-  describe: "assign an agent to a bloq, task, or lead task",
+  describe: "assign an agent to a bloq, item, task, or lead task",
   builder: (yargs) =>
     yargs
       .positional("agent-id", { type: "number", demandOption: true, describe: "agent ID to assign" })
@@ -1214,9 +1214,11 @@ const AgentsAssignCommand = cmd({
       .option("task", { type: "number", describe: "assign to a BloqItemTask by ID" })
       .option("lead-task", { type: "number", describe: "assign to a LeadTask by ID (requires --lead-id)" })
       .option("lead-id", { type: "number", describe: "lead ID (required with --lead-task)" })
+      .option("item", { type: "number", describe: "assign to a bloq/atlas ITEM by ID (opens a task on it)" })
+      .option("title", { type: "string", describe: "title for the task --item opens (default: 'Assigned to <agent>')" })
       .check((argv) => {
-        if (!argv.bloq && argv.workspace === undefined && !argv.task && !argv["lead-task"]) {
-          throw new Error("Specify at least one target: --bloq, --workspace, --task, or --lead-task")
+        if (!argv.bloq && argv.workspace === undefined && !argv.task && !argv["lead-task"] && !argv.item) {
+          throw new Error("Specify at least one target: --bloq, --workspace, --item, --task, or --lead-task")
         }
         if (argv["lead-task"] && !argv["lead-id"]) {
           throw new Error("--lead-task requires --lead-id")
@@ -1286,14 +1288,54 @@ const AgentsAssignCommand = cmd({
           method: "POST",
           body: JSON.stringify({ agent_id: agentId }),
         })
-        // If approve doesn't work for just assignment, try direct update
+        // A failure here used to log a warning and fall through WITHOUT stopping the spinner
+        // or setting an exit code, so a refused assignment was indistinguishable from a
+        // completed one. Fail loudly instead.
         if (!res.ok) {
-          prompts.log.warn("Direct task assignment not yet supported via API — use iris leads tasks assign instead")
+          spinner.stop(`Could not assign to task #${args.task} (HTTP ${res.status})`, 1)
+          prompts.log.warn(
+            "This path posts to an APPROVE endpoint, which is not an assignment API.\n" +
+              "To put an agent on a work item, prefer:  iris agents assign " +
+              agentId +
+              " --item <itemId>",
+          )
+          process.exitCode = 1
         } else {
           spinner.stop(success(`✓ Agent #${agentId} assigned to task #${args.task}`))
         }
       } catch (err) {
         spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    // Assign to a bloq/atlas ITEM.
+    //
+    // There is deliberately no agent_id column on bloq_items. "This agent is on that item" is
+    // expressed as a task on the item carrying the agent — the primitive that already exists,
+    // already works, and is already what `iris agents tasks` reads back. A second column would
+    // have to be kept in sync with the tasks forever, and the first time the two disagreed
+    // nobody could say which was right.
+    if (args.item) {
+      const itemId = args.item as number
+      const title = (args.title as string) || `Assigned to agent #${agentId}`
+      spinner.start(`Assigning agent #${agentId} to item #${itemId}…`)
+      try {
+        const res = await irisFetch(`/api/v1/user/bloqs/list/item/${itemId}/tasks`, {
+          method: "POST",
+          body: JSON.stringify({ title, agent_id: agentId, status: "todo" }),
+        })
+        const ok = await handleApiError(res, "Assign to item")
+        if (ok) {
+          spinner.stop(success(`✓ Agent #${agentId} assigned to item #${itemId}`))
+          prompts.log.info(`See it with:  iris agents tasks ${agentId}`)
+        } else {
+          spinner.stop("Failed", 1)
+          process.exitCode = 1
+        }
+      } catch (err) {
+        spinner.stop("Error", 1)
+        process.exitCode = 1
         prompts.log.error(err instanceof Error ? err.message : String(err))
       }
     }
@@ -1320,6 +1362,99 @@ const AgentsAssignCommand = cmd({
       }
     }
 
+    prompts.outro("Done")
+  },
+})
+
+/**
+ * What is this agent holding?
+ *
+ * Assignment was write-only before this. You could hand an agent a task, a lead task, a
+ * scheduled job or a whole board, and nothing — no CLI command, no API route — would tell you
+ * so afterwards. Work you can give to someone but cannot then see is work that gets done twice
+ * or not at all.
+ *
+ * Backed by GET /api/v1/agents/{id}/tasks, which aggregates all four sources. The older
+ * .../bloqs/{bloqId}/agents/tasks route is bloq-scoped AND returns ScheduledJobs rather than
+ * work assignments, so it answers a different question.
+ */
+const AgentsTasksCommand = cmd({
+  command: "tasks <agent-id>",
+  describe: "show everything assigned to an agent — items, leads, schedules, boards",
+  builder: (yargs) =>
+    yargs
+      .positional("agent-id", { type: "number", demandOption: true, describe: "agent ID" })
+      .option("all", { type: "boolean", default: false, describe: "include completed work" })
+      .option("json", { type: "boolean", default: false, describe: "raw JSON" }),
+  async handler(args) {
+    UI.empty()
+    if (!(await requireAuth())) {
+      prompts.outro("Done")
+      return
+    }
+    const agentId = args["agent-id"] as number
+    const spinner = prompts.spinner()
+    spinner.start(`Reading agent #${agentId}'s queue…`)
+    try {
+      const res = await irisFetch(`/api/v1/agents/${agentId}/tasks${args.all ? "?include_done=1" : ""}`)
+      if (!(await handleApiError(res, "Agent tasks"))) {
+        spinner.stop("Failed", 1)
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+      const body = (await res.json()) as any
+      const d = body?.data ?? body
+      spinner.stop("")
+
+      if (args.json) {
+        UI.println(JSON.stringify(d, null, 2))
+        prompts.outro("Done")
+        return
+      }
+
+      const c = d?.counts ?? {}
+      UI.println(`  ${d?.agent?.name ?? `Agent #${agentId}`}  ${dim(`#${agentId}`)}`)
+      UI.empty()
+
+      // An empty queue is a real answer and must not look like a failed read.
+      if (!c.total && !c.heartbeat_bloqs) {
+        UI.println(`  ${dim("Nothing assigned.")}`)
+        UI.println(`  ${dim(`Put it on something:  iris agents assign ${agentId} --item <itemId>`)}`)
+        prompts.outro("Done")
+        return
+      }
+
+      const section = (label: string, rows: any[], fmt: (r: any) => string) => {
+        if (!rows?.length) return
+        UI.println(`  ${label}  ${dim(String(rows.length))}`)
+        for (const r of rows.slice(0, 40)) UI.println(`    ${fmt(r)}`)
+        if (rows.length > 40) UI.println(`    ${dim(`… ${rows.length - 40} more`)}`)
+        UI.empty()
+      }
+
+      section("ITEMS", d.item_tasks ?? [], (t) => {
+        const where = t.item_title ? `${t.item_title}` : `item #${t.item_id}`
+        const due = t.due_date ? dim(`  due ${String(t.due_date).slice(0, 10)}`) : ""
+        const st = t.is_completed ? dim("[done]") : `[${t.status ?? "todo"}]`
+        return `${st} ${t.title}  ${dim("on")} ${where}${due}`
+      })
+      section("LEADS", d.lead_tasks ?? [], (t) => {
+        const st = t.is_completed ? dim("[done]") : "[open]"
+        return `${st} ${t.title}  ${dim(`lead #${t.lead_id}`)}`
+      })
+      section("SCHEDULED", d.scheduled_jobs ?? [], (j) => {
+        const next = j.next_run_at ? dim(`  next ${String(j.next_run_at).slice(0, 16).replace("T", " ")}`) : ""
+        return `${j.title}  ${dim(j.frequency ?? "")}${next}`
+      })
+      section("BOARDS (heartbeat)", d.heartbeat_bloqs ?? [], (b) => `${b.name}  ${dim(`#${b.bloq_id}`)}`)
+
+      if (!d?.includes_completed) UI.println(`  ${dim("Open work only — add --all for completed.")}`)
+    } catch (err) {
+      spinner.stop("Error", 1)
+      process.exitCode = 1
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
     prompts.outro("Done")
   },
 })
@@ -1639,6 +1774,7 @@ export const PlatformAgentsCommand = cmd({
       .command(AgentsChatCommand)
       .command(AgentsProveCommand)
       .command(AgentsAssignCommand)
+      .command(AgentsTasksCommand)
       .command(AgentsMessageCommand)
       .command(AgentsInboxCommand)
       .command(AgentsThreadCommand)
