@@ -28,15 +28,27 @@ interface InboxState {
   unreadable: boolean
 }
 
-/** How the fleet pill reads. Pure so the "never show zero for unmeasured" rule is testable. */
-export function fleetLabel(hive: HiveState | undefined): string {
+/**
+ * How the fleet pill reads.
+ *
+ * THREE states, not two — and the third is the one I got wrong and a browser caught.
+ * `fleetLabel` used to return "—" both while the first fetch was in flight and when it had
+ * failed, so for the first second of every launch the pill claimed the fleet was unreachable.
+ * It is the same mistake this whole change set is built to avoid, made one level down: a
+ * not-yet-measured value rendered as a measured verdict. Two consecutive e2e runs disagreed —
+ * "●3/4" then "●—" — which is exactly how an intermittent-looking bug announces a real one.
+ */
+export function fleetLabel(hive: HiveState | undefined, loading = false): string {
+  if (loading && !hive) return "·"
   if (!hive || !hive.measured) return "—"
   return `${hive.nodes.filter((n) => n.online).length}/${hive.nodes.length}`
 }
 
 /** How the inbox pill reads. Null unread is not zero; zero is simply not shown. */
-export function inboxLabel(inbox: InboxState | undefined): string | null {
-  if (!inbox) return null
+export function inboxLabel(inbox: InboxState | undefined, loading = false): string | null {
+  // Nothing at all while loading: the inbox pill's resting state is already absent, so there is
+  // no placeholder to get wrong. Only a resolved unreadable manifest earns a dash.
+  if (loading || !inbox) return null
   if (inbox.unreadable || inbox.unread === null) return "—"
   return inbox.unread > 0 ? String(inbox.unread) : null
 }
@@ -66,22 +78,22 @@ export function TitlebarIrisPills() {
   const [hive] = createResource(key, async () => (await (await doFetch("/iris/hive")).json()) as HiveState)
   const [inbox] = createResource(key, async () => (await (await doFetch("/iris/inbox")).json()) as InboxState)
 
-  const unread = createMemo(() => inboxLabel(inbox()))
+  const unread = createMemo(() => inboxLabel(inbox(), inbox.loading))
 
   return (
     <Show when={mount()}>
       <Portal mount={mount()!}>
-        <div class="flex shrink-0 items-center gap-2 mr-3 text-[11px] tabular-nums text-v2-text-text-weak">
-          <span title={hive()?.measured === false ? `Fleet unreachable — ${hive()?.reason ?? "unknown"}` : "Hive machines online"}>
+        <div data-slot="iris-pills" class="flex shrink-0 items-center gap-2 mr-3 text-[11px] tabular-nums text-v2-text-text-weak">
+          <span data-slot="iris-fleet-pill" title={hive()?.measured === false ? `Fleet unreachable — ${hive()?.reason ?? "unknown"}` : "Hive machines online"}>
             <span class="mr-1" classList={{ "text-v2-icon-icon-accent": (hive()?.nodes?.some((n) => n.online) ?? false) }}>
               ●
             </span>
-            {fleetLabel(hive())}
+            {fleetLabel(hive(), hive.loading)}
           </span>
           {/* Absent when there is nothing waiting. A permanent "0" is furniture; a number that
               appears is a signal. */}
           <Show when={unread()}>
-            <span title="Unread Hive messages — iris hive inbox read">✉ {unread()}</span>
+            <span data-slot="iris-inbox-pill" title="Unread Hive messages — iris hive inbox read">✉ {unread()}</span>
           </Show>
         </div>
       </Portal>

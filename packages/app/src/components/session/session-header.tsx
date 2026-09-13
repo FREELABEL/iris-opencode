@@ -242,6 +242,13 @@ export function SessionHeader() {
     reviewVisible: isDesktop(),
     reviewOpened: view().reviewPanel.opened(),
     onReviewToggle: () => view().reviewPanel.toggle(),
+    // Three steps, not one: open the panel, put "iris" in the tab list, select it. The tab
+    // only renders once it is in the list, so any two of the three shows nothing.
+    onIrisOpen: () => {
+      view().reviewPanel.open("other")
+      void tabs().open("iris")
+      tabs().setActive("iris")
+    },
   }))
 
   const selectApp = (app: OpenApp) => {
@@ -538,6 +545,8 @@ export function SessionHeader() {
 }
 
 type SessionHeaderV2ActionsState = {
+  /** Opens the IRIS panel tab. See onIrisOpen below — it must do all three steps. */
+  onIrisOpen: () => void
   statusVisible: boolean
   statusLabel: string
   reviewLabel: string
@@ -552,6 +561,21 @@ function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
 
   return (
     <div class="flex items-center gap-2">
+      {/* IRIS. This lives in the V2 actions row AND in the legacy row below, because the two
+          headers are separate components and only one renders. Putting it in the legacy branch
+          alone is exactly the bug a browser caught: typecheck green, unit tests green, button
+          nowhere on screen. */}
+      <IconButtonV2
+        type="button"
+        variant="ghost-muted"
+        size="large"
+        class="!w-9 shrink-0"
+        onClick={props.state.onIrisOpen}
+        aria-label="IRIS"
+        title="IRIS — Atlas, agents, leads, pages"
+      >
+        <Icon size="small" name="bullet-list" />
+      </IconButtonV2>
       <Show when={props.state.statusVisible}>
         <Tooltip placement="bottom" value={props.state.statusLabel}>
           <StatusPopoverV2 />

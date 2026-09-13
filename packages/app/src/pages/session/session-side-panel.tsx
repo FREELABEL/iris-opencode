@@ -601,6 +601,31 @@ export function SessionSidePanel(props: {
                                   : language.t("session.tab.review")}
                               </Tabs.Trigger>
                             </Show>
+                            {/* Also here, not only in the strip above. This file renders TWO tab
+                                strips — legacy and v2 — and only one is live. Adding the tab to
+                                one of them is a bug that typechecks, unit-tests green and shows
+                                nothing on screen; it cost a browser run to find, twice, because
+                                the session HEADER has the same shape. */}
+                            <Show when={irisOpen()}>
+                              <Tabs.Trigger
+                                value="iris"
+                                closeButton={
+                                  <IconButton
+                                    icon="close-small"
+                                    variant="ghost"
+                                    class="h-5 w-5"
+                                    onClick={() => tabs().close("iris")}
+                                    aria-label={language.t("common.closeTab")}
+                                  />
+                                }
+                                hideCloseButton
+                                onMiddleClick={() => tabs().close("iris")}
+                              >
+                                <div class="flex items-center gap-2">
+                                  <div>IRIS</div>
+                                </div>
+                              </Tabs.Trigger>
+                            </Show>
                             <Show when={contextOpen()}>
                               <Tabs.Trigger
                                 value="context"
@@ -744,6 +769,14 @@ export function SessionSidePanel(props: {
                                   {language.t("session.files.selectToOpen")}
                                 </div>
                               </div>
+                            </div>
+                          </Tabs.Content>
+                        </Show>
+
+                        <Show when={activeTab() === "iris"}>
+                          <Tabs.Content value="iris" class="flex flex-col h-full overflow-hidden contain-strict">
+                            <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
+                              <SessionIrisTab />
                             </div>
                           </Tabs.Content>
                         </Show>
