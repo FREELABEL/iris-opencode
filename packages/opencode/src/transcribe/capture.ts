@@ -40,7 +40,13 @@ function inputArgs(device?: string): string[] {
     case "linux":
       return ["-f", "alsa", "-i", device ?? "default"]
     default:
-      throw new TranscribeError(`Microphone capture is not supported on ${process.platform} yet.`)
+      // Reached only when the WEBVIEW could not capture either — on a Chromium webview
+      // (Windows/Linux) the client records in-page and never calls this, which is why there is
+      // no dshow/wasapi branch here. If you are seeing this on Windows, the webview was denied
+      // the microphone and that is the thing to fix, not this switch.
+      throw new TranscribeError(
+        `Sidecar microphone capture is not implemented on ${process.platform}. Dictation records in the app window on this platform; if you are seeing this, the window was denied microphone access.`,
+      )
   }
 }
 
@@ -54,9 +60,16 @@ export function startCapture(device?: string): { startedAt: number } {
 
   const ffmpeg = resolveBin("ffmpeg")
   if (!ffmpeg) {
-    throw new TranscribeError(
-      "Recording needs ffmpeg, which was not found (looked on PATH and in /opt/homebrew/bin, /usr/local/bin, /opt/local/bin). Install it with: brew install ffmpeg",
-    )
+    // Name a remedy that exists on THIS operating system. The previous message said
+    // "brew install ffmpeg" unconditionally, so a Windows user was sent to install a tool with
+    // a package manager that is not there — advice that looks actionable and cannot work.
+    const hint =
+      process.platform === "darwin"
+        ? "Install it with: brew install ffmpeg"
+        : process.platform === "win32"
+          ? "Install it with: winget install Gyan.FFmpeg  (then restart IRIS)"
+          : "Install it with your package manager, e.g. apt install ffmpeg"
+    throw new TranscribeError(`Recording needs ffmpeg, which was not found. ${hint}`)
   }
 
   const dir = mkdtempSync(join(tmpdir(), "iris-dictate-"))
