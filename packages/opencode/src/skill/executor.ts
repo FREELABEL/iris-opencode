@@ -1856,7 +1856,32 @@ export async function executeSkill(
             .filter(([, r]) => r.status === "success" && r.output)
             .map(([id, r]) => `[${id}]: ${r.output.slice(0, 2000)}`)
             .join("\n\n")
-          const aiModel = stepH.model ?? "gpt-4o-mini"
+          // An UNRESOLVED `model:` header used to reach the platform proxy as a literal and
+          // come back as somebody else's 404 (#184963). `model: ${{args.model}}` became
+          // `iris/${{args.model}}` -> model_not_found, every dependent step was then skipped,
+          // and 6 of 8 steps of an audit ran as nothing while the only visible error blamed
+          // the model. The author goes looking at model names; the cause is an argument.
+          //
+          // interpolateStepHeaders keeps an unresolved header AS WRITTEN on purpose, so the
+          // downstream resolver can name the unmatched value. That is right for `node:`,
+          // whose resolver does exactly that. `model:` has no resolver of ours — its
+          // "resolver" is a vendor HTTP status — so the naming has to happen here.
+          const aiModelRaw = stepH.model ?? "gpt-4o-mini"
+          if (aiModelRaw.includes("${")) {
+            const ref = aiModelRaw.match(/\$\{\{?\s*([^}]+?)\s*\}?\}/)?.[1] ?? aiModelRaw
+            lastResult = {
+              output:
+                `[Step: ${step.id}] FAILED: the \`model:\` header did not resolve — it is still ` +
+                `\`${aiModelRaw}\`.\n` +
+                `\`${ref}\` had no value at run time. Declare it under \`args:\` with a ` +
+                `\`default:\`, or pass it when you run the playbook.\n` +
+                `Running anyway would ask the provider for a model literally named ` +
+                `"${aiModelRaw}", which returns model_not_found and reads as a model problem.`,
+              exit_code: 1,
+            }
+            break
+          }
+          const aiModel = aiModelRaw
           // The validator accepts `body || code` ("AI step has no prompt body" fires only
           // when BOTH are empty), so honour the same contract here. This used to pass
           // `interpolatedBody` alone, which meant a step whose prompt lives in a tagged
