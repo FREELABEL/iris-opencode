@@ -3,6 +3,8 @@ import { UI } from "../ui"
 import * as prompts from "./clack"
 import { $ } from "bun"
 import os from "os"
+import fs from "fs/promises"
+import { existsSync } from "fs"
 
 export const InstallAppCommand = {
   command: "install-app",
@@ -91,24 +93,52 @@ export const InstallAppCommand = {
     const spinner = prompts.spinner()
     spinner.start("Downloading IRIS desktop app...")
 
-    const result = await $`
-      tmpdir=$(mktemp -d) &&
-      curl -sL --fail -o "$tmpdir/IRIS-app.zip" "${appUrl}" 2>/dev/null &&
-      rm -rf "${appPath}" 2>/dev/null;
-      mkdir -p "${appDir}" &&
-      unzip -q "$tmpdir/IRIS-app.zip" -d "${appDir}" 2>/dev/null &&
-      rm -rf "$tmpdir" &&
-      xattr -cr "${appPath}" 2>/dev/null;
-      test -d "${appPath}" && echo "installed"
-    `.nothrow().quiet().text()
+    // NOT a multi-line `$` template. Bun's `$` is its own shell, not bash, and it cannot parse
+    // a script opening with `tmpdir=$(mktemp -d) &&` across newlines. The throw happens at PARSE
+    // time, before a single byte is downloaded, so `iris desktop` died on every macOS machine
+    // with "expected a command or assignment" and never reached the network. Reproduced down to
+    // a three-line probe: the same error, at the same BunShell offset.
+    //
+    // The Windows branch above already had the right shape — fetch + Bun.write, no shell at all
+    // for the transfer — so this mirrors it. Shell is used only for unzip and xattr, as SINGLE
+    // commands, which Bun's parser does handle.
+    //
+    // The old version also wrapped every step in `2>/dev/null` and `.nothrow()`, so a 404, a
+    // full disk and a corrupt archive all produced the identical "Download failed". Each failure
+    // now names itself; a disk with no space left is a real cause here, not a hypothetical.
+    let installed = false
+    let failure = ""
+    try {
+      const res = await fetch(appUrl)
+      if (!res.ok) throw new Error(`HTTP ${res.status} from ${appUrl}`)
 
-    if (result.includes("installed")) {
+      const tmpZip = `${os.tmpdir()}/IRIS-app-${process.pid}-${Date.now()}.zip`
+      await Bun.write(tmpZip, res)
+
+      await fs.rm(appPath, { recursive: true, force: true })
+      await fs.mkdir(appDir, { recursive: true })
+
+      const unzip = await $`unzip -q ${tmpZip} -d ${appDir}`.nothrow().quiet()
+      if (unzip.exitCode !== 0) {
+        throw new Error(`unzip failed (exit ${unzip.exitCode}) — ${unzip.stderr.toString().trim() || "no stderr"}`)
+      }
+
+      await $`xattr -cr ${appPath}`.nothrow().quiet()
+      await fs.rm(tmpZip, { force: true })
+
+      installed = existsSync(appPath)
+      if (!installed) failure = `the archive unpacked but ${appPath} was not created`
+    } catch (e) {
+      failure = e instanceof Error ? e.message : String(e)
+    }
+
+    if (installed) {
       spinner.stop("Desktop app installed")
       prompts.log.success(`Installed to ~/Applications/IRIS.app`)
       prompts.log.info("Launch from Spotlight or open ~/Applications/IRIS.app")
     } else {
-      spinner.stop("Download failed", 1)
-      prompts.log.error("Could not download the desktop app")
+      spinner.stop("Install failed", 1)
+      prompts.log.error(`Could not install the desktop app: ${failure}`)
       prompts.log.info(`The release may not be published yet at:`)
       prompts.log.info(`  ${appUrl}`)
       prompts.log.info("")
