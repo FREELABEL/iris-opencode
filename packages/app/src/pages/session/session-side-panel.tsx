@@ -31,7 +31,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import FileTree from "@/components/file-tree"
 import { normalizeFileTreeV2Path } from "@/components/file-tree-v2-model"
 import { SessionContextUsage } from "@/components/session-context-usage"
-import { SessionAtlasTab } from "@/components/session/session-atlas-tab"
+import { SessionIrisTab } from "@/components/session/session-iris-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
 const reviewTabPanelID = "session-side-panel-review-tabpanel"
@@ -183,7 +183,7 @@ export function SessionSidePanel(props: {
     fileBrowser: () => !!props.fileBrowserState,
   })
   const contextOpen = tabState.contextOpen
-  const atlasOpen = tabState.atlasOpen
+  const irisOpen = tabState.irisOpen
   const openFileOpen = tabState.openFileOpen
   const panelTabs = tabState.panelTabs
   const openedTabs = tabState.openedTabs
@@ -365,23 +365,23 @@ export function SessionSidePanel(props: {
                                   </div>
                                 </Tabs.Trigger>
                               </Show>
-                              <Show when={atlasOpen()}>
+                              <Show when={irisOpen()}>
                                 <Tabs.Trigger
-                                  value="atlas"
+                                  value="iris"
                                   closeButton={
                                     <IconButton
                                       icon="close-small"
                                       variant="ghost"
                                       class="h-5 w-5"
-                                      onClick={() => tabs().close("atlas")}
+                                      onClick={() => tabs().close("iris")}
                                       aria-label={language.t("common.closeTab")}
                                     />
                                   }
                                   hideCloseButton
-                                  onMiddleClick={() => tabs().close("atlas")}
+                                  onMiddleClick={() => tabs().close("iris")}
                                 >
                                   <div class="flex items-center gap-2">
-                                    <div>Atlas</div>
+                                    <div>IRIS</div>
                                   </div>
                                 </Tabs.Trigger>
                               </Show>
@@ -512,10 +512,10 @@ export function SessionSidePanel(props: {
                             </Tabs.Content>
                           </Show>
 
-                          <Show when={activeTab() === "atlas"}>
-                            <Tabs.Content value="atlas" class="flex flex-col h-full overflow-hidden contain-strict">
+                          <Show when={activeTab() === "iris"}>
+                            <Tabs.Content value="iris" class="flex flex-col h-full overflow-hidden contain-strict">
                               <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                                <SessionAtlasTab />
+                                <SessionIrisTab />
                               </div>
                             </Tabs.Content>
                           </Show>

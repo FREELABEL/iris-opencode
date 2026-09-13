@@ -35,7 +35,7 @@ export const createSessionTabs = (input: TabsInput) => {
   const contextOpen = createMemo(() => input.tabs().active() === "context" || input.tabs().all().includes("context"))
   // Atlas mirrors context exactly: a named panel tab that is not a file, so it must be excluded
   // from panelTabs (which is the FILE tab list) and named in activeTab/closableTab.
-  const atlasOpen = createMemo(() => input.tabs().active() === "atlas" || input.tabs().all().includes("atlas"))
+  const irisOpen = createMemo(() => input.tabs().active() === "iris" || input.tabs().all().includes("iris"))
   const openFileOpen = createMemo(
     () =>
       fileBrowser() &&
@@ -48,7 +48,7 @@ export const createSessionTabs = (input: TabsInput) => {
         .tabs()
         .all()
         .flatMap((tab) => {
-          if (tab === "context" || tab === "review" || tab === "atlas") return []
+          if (tab === "context" || tab === "review" || tab === "iris") return []
           if (tab === SESSION_OPEN_FILE_TAB && !fileBrowser()) return []
           const value = input.pathFromTab(tab) ? input.normalizeTab(tab) : tab
           if (seen.has(value)) return []
@@ -65,7 +65,7 @@ export const createSessionTabs = (input: TabsInput) => {
   const activeTab = createMemo(() => {
     const active = input.tabs().active()
     if (active === "context") return active
-    if (active === "atlas") return active
+    if (active === "iris") return active
     if (active === SESSION_OPEN_FILE_TAB && openFileOpen()) return active
     if (active === "review" && review()) return active
     if (active && input.pathFromTab(active)) return input.normalizeTab(active)
@@ -73,7 +73,7 @@ export const createSessionTabs = (input: TabsInput) => {
     const first = openedTabs()[0]
     if (first) return first
     if (contextOpen()) return "context"
-    if (atlasOpen()) return "atlas"
+    if (irisOpen()) return "iris"
     if (review() && hasReview()) return "review"
     return "empty"
   })
@@ -85,7 +85,7 @@ export const createSessionTabs = (input: TabsInput) => {
   const closableTab = createMemo(() => {
     const active = activeTab()
     if (active === "context") return active
-    if (active === "atlas") return active
+    if (active === "iris") return active
     if (active === SESSION_OPEN_FILE_TAB && openFileOpen()) return active
     if (!openedTabs().includes(active)) return
     return active
@@ -93,7 +93,7 @@ export const createSessionTabs = (input: TabsInput) => {
 
   return {
     contextOpen,
-    atlasOpen,
+    irisOpen,
     openFileOpen,
     panelTabs,
     openedTabs,

@@ -478,9 +478,9 @@ export function SessionHeader() {
                         </Button>
                       </TooltipKeybind>
 
-                      {/* Atlas. First IRIS platform surface in the desktop app — it opens the
+                      {/* IRIS. The account surfaces — Atlas, agents, leads, pages — it opens the
                           panel and selects the tab, the same three steps the context button
-                          takes, because the tab only renders once "atlas" is in the tab list.
+                          takes, because the tab only renders once "iris" is in the tab list.
                           No keybind yet: TooltipKeybind wants one that exists, and inventing a
                           binding is a separate decision from adding the surface. */}
                       <Button
@@ -488,11 +488,11 @@ export function SessionHeader() {
                         class="titlebar-icon w-8 h-6 p-0 box-border"
                         onClick={() => {
                           view().reviewPanel.open("other")
-                          void tabs().open("atlas")
-                          tabs().setActive("atlas")
+                          void tabs().open("iris")
+                          tabs().setActive("iris")
                         }}
-                        aria-label="Atlas"
-                        title="Atlas"
+                        aria-label="IRIS"
+                        title="IRIS — Atlas, agents, leads, pages"
                       >
                         <div class="relative flex items-center justify-center size-4">
                           <Icon size="small" name="bullet-list" class="text-icon-weak" />

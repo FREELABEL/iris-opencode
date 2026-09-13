@@ -213,7 +213,7 @@ describe("createSessionTabs", () => {
   })
 })
 
-describe("createSessionTabs — atlas", () => {
+describe("createSessionTabs — iris", () => {
   const make = (all: string[], active?: string) => {
     const [state] = createStore({ active: active as string | undefined, all })
     const tabs = createMemo(() => ({ active: () => state.active, all: () => state.all }))
@@ -228,20 +228,20 @@ describe("createSessionTabs — atlas", () => {
 
   test("atlas is a named tab, not a file tab", () => {
     createRoot((dispose) => {
-      const r = make(["atlas", "file:///a.ts"])
+      const r = make(["iris", "file:///a.ts"])
       // The bug this guards: panelTabs is the FILE list. A named tab leaking into it gets
-      // rendered twice — once as itself, once as a file with a path of "atlas".
+      // rendered twice — once as itself, once as a file with a path of "iris".
       expect(r.openedTabs()).toEqual(["file:///a.ts"])
-      expect(r.atlasOpen()).toBe(true)
+      expect(r.irisOpen()).toBe(true)
       dispose()
     })
   })
 
   test("an active atlas tab stays active and stays closable", () => {
     createRoot((dispose) => {
-      const r = make(["atlas"], "atlas")
-      expect(r.activeTab()).toBe("atlas")
-      expect(r.closableTab()).toBe("atlas")
+      const r = make(["iris"], "iris")
+      expect(r.activeTab()).toBe("iris")
+      expect(r.closableTab()).toBe("iris")
       dispose()
     })
   })
@@ -249,17 +249,17 @@ describe("createSessionTabs — atlas", () => {
   test("open-but-not-active atlas is only reached after files and context", () => {
     createRoot((dispose) => {
       // A file wins — you clicked it last.
-      expect(make(["atlas", "file:///a.ts"]).activeTab()).toBe("file:///a.ts")
+      expect(make(["iris", "file:///a.ts"]).activeTab()).toBe("file:///a.ts")
       dispose()
     })
     createRoot((dispose) => {
       // Context wins over atlas when both are open and neither is active: context is the
       // pre-existing default and adding a surface must not silently displace it.
-      expect(make(["atlas", "context"]).activeTab()).toBe("context")
+      expect(make(["iris", "context"]).activeTab()).toBe("context")
       dispose()
     })
     createRoot((dispose) => {
-      expect(make(["atlas"]).activeTab()).toBe("atlas")
+      expect(make(["iris"]).activeTab()).toBe("iris")
       dispose()
     })
   })
@@ -267,7 +267,7 @@ describe("createSessionTabs — atlas", () => {
   test("no atlas tab means nothing changes", () => {
     createRoot((dispose) => {
       const r = make(["context"])
-      expect(r.atlasOpen()).toBe(false)
+      expect(r.irisOpen()).toBe(false)
       expect(r.activeTab()).toBe("context")
       dispose()
     })
