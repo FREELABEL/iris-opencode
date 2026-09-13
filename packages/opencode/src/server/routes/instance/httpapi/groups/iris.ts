@@ -322,6 +322,13 @@ const IntegrationsResponse = Schema.Struct({
       status: Schema.String,
       connected: Schema.Boolean,
       account: Schema.optional(Schema.String),
+      scope: described(
+        Schema.Literals(["project", "organization", "user"]),
+        "DERIVED: bloq_id -> project, organization_id -> organization, else personal.",
+      ),
+      type: described(Schema.optional(Schema.String), "Provider key, e.g. gmail. What an icon is chosen from."),
+      lastTested: Schema.optional(Schema.String),
+      lastError: described(Schema.optional(Schema.String), "Why it is failing. A red dot with no reason is not actionable."),
     }).annotate({ identifier: "IrisIntegration" }),
   ),
 }).annotate({ identifier: "IrisIntegrationsResponse" })
@@ -379,8 +386,8 @@ export const IrisPaths = {
   pages: `${root}/pages/:bloqID`,
   schemas: `${root}/schemas/:bloqID`,
   playbooks: `${root}/playbooks/:bloqID`,
-  integrations: `${root}/integrations`,
-  records: `${root}/records/:slug`,
+  integrations: `${root}/integrations/:bloqID`,
+  records: `${root}/records/:bloqID/:slug`,
   sites: `${root}/sites/:bloqID`,
   agentTasks: `${root}/agents/:agentID/tasks`,
   playbookDoc: `${root}/playbooks/doc/:name`,
@@ -543,24 +550,31 @@ export const IrisApi = HttpApi.make("iris").add(
       ),
       HttpApiEndpoint.get("records", IrisPaths.records, {
         query: PageQuery,
-        params: { slug: Schema.String },
+        params: { bloqID: Schema.NumberFromString, slug: Schema.String },
         success: described(RecordsResponse, "One page of a dataset's records, with its columns"),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "iris.records",
           summary: "List dataset records",
           description:
-            "The table behind an Atlas schema. Paged UPSTREAM — fl-api is Laravel-paginated, so this asks for the page the caller wants rather than pulling a 19,000-row dataset through the sidecar to show twenty-five lines.",
+            "The table behind an Atlas schema, and the dataset MUST belong to :bloqID — this took a bare slug once and returned 2,157 patient records from a board the caller was not on. Paged UPSTREAM — fl-api is Laravel-paginated, so this asks for the page the caller wants rather than pulling a 19,000-row dataset through the sidecar to show twenty-five lines.",
         }),
       ),
       HttpApiEndpoint.get("integrations", IrisPaths.integrations, {
-        query: PageQuery,
+        params: { bloqID: Schema.NumberFromString },
+        query: Schema.Struct({
+          ...PageQuery.fields,
+          scope: described(
+            Schema.optional(Schema.Literals(["all", "project", "organization", "user"])),
+            "Narrowed SERVER-side, before paging, so total counts the scope you are looking at.",
+          ),
+        }),
         success: described(IntegrationsResponse, "The account's integrations, connected first"),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "iris.integrations",
           summary: "List integrations",
-          description: "Not board-scoped — a connected account is connected for the whole account. Connected ones sort first.",
+          description: "Scoped three ways: project, organization, user. A connected account is not automatically a board to use. Failing rows sort FIRST so the one you opened the list to find is not buried under two dozen healthy ones.",
         }),
       ),
       HttpApiEndpoint.get("hive", IrisPaths.hive, {

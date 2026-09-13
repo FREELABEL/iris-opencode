@@ -916,7 +916,7 @@ export interface RecordPage {
  */
 export async function fetchRecords(
   slug: string,
-  opts: { page?: number; perPage?: number } = {},
+  opts: { page?: number; perPage?: number; bloqId?: number } = {},
 ): Promise<PlatformResult<RecordPage>> {
   const empty: RecordPage = {
     schema: { id: 0, slug, name: slug },
@@ -933,6 +933,30 @@ export async function fetchRecords(
 
   const { page, perPage } = clampPaging(opts)
   try {
+    /*
+     * THE DATASET MUST BELONG TO THE BOARD YOU ARE ON.
+     *
+     * This route took a slug and nothing else. Measured 2026-09-13: asking it for `cases` with
+     * no board context returned 2,157 patient records — patient_name, gender, attorney,
+     * law_firm, bill_amount, date_of_injury — from a board the caller was not looking at. The
+     * schemas LIST had just been narrowed to the board, which made the panel look scoped while
+     * the door behind it stayed open; a narrowed index over an unnarrowed fetch is not scoping,
+     * it is a hidden link.
+     *
+     * Resolved from the same schema list the columns come from, so the check and the column
+     * definitions cannot disagree about which dataset this is.
+     */
+    const defn = await schemaRow(slug)
+    if (!defn) return { measured: false, reason: `no dataset "${slug}"`, data: { ...empty, page, perPage } }
+    if (opts.bloqId != null && Number(defn.bloq_id) !== opts.bloqId) {
+      // A REFUSAL, not an empty result. "0 rows" would read as "this dataset is empty".
+      return {
+        measured: false,
+        reason: `"${slug}" belongs to another board`,
+        data: { ...empty, page, perPage },
+      }
+    }
+
     const res = await irisFetch(`/api/v1/atlas/datasets/${encodeURIComponent(slug)}?page=${page}&per_page=${perPage}`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { ...empty, page, perPage } }
     const json = (await res.json()) as any
@@ -962,7 +986,7 @@ export async function fetchRecords(
           name: String(stub?.name ?? slug),
           version: typeof stub?.version === "number" ? stub.version : undefined,
         },
-        columns: await columnsFor(slug),
+        columns: readSchemaFields(defn.fields),
         rows,
         page,
         perPage,
@@ -978,22 +1002,21 @@ export async function fetchRecords(
 }
 
 /**
- * The column definitions for one dataset.
+ * One schema row, by slug — the source of BOTH the board check and the column definitions.
  *
- * Read from the schema list because the records endpoint's schema stub carries no fields. A
- * miss returns an empty list rather than throwing: a table with no declared columns falls back
- * to the keys it can see, which is worse than the schema but better than no table.
+ * One lookup rather than two on purpose: if the authorisation check and the columns came from
+ * different reads they could disagree about which dataset this is, and the failure mode of that
+ * disagreement is showing one board's data under another board's column headings.
  */
-async function columnsFor(slug: string): Promise<SchemaField[]> {
+async function schemaRow(slug: string): Promise<any | null> {
   try {
     const res = await irisFetch(`/api/v1/atlas/schemas`)
-    if (!res.ok) return []
+    if (!res.ok) return null
     const json = (await res.json()) as any
     const raw = json?.schemas ?? json?.data ?? json
-    const row = (Array.isArray(raw) ? raw : []).find((r: any) => String(r?.slug) === slug)
-    return row ? readSchemaFields(row.fields) : []
+    return (Array.isArray(raw) ? raw : []).find((r: any) => String(r?.slug) === slug) ?? null
   } catch {
-    return []
+    return null
   }
 }
 
@@ -1212,6 +1235,8 @@ export async function fetchAgentTasks(
   }
 }
 
+export type IntegrationScope = "project" | "organization" | "user"
+
 export interface Integration {
   id: string
   name: string
@@ -1220,6 +1245,19 @@ export interface Integration {
   status: string
   connected: boolean
   account?: string
+  /**
+   * WHOSE credential this is.
+   *
+   * A connected account is not automatically the whole account's business: a board may use a
+   * project credential, an org credential belongs to the organisation, and a user credential is
+   * personal. Flattening the three made a board look like it had credentials it cannot use.
+   */
+  scope: IntegrationScope
+  /** The provider key — "gmail", "social-instagram". What an icon is chosen from. */
+  type?: string
+  lastTested?: string
+  /** Why it is failing, when it is. A red dot with no reason is not actionable. */
+  lastError?: string
 }
 
 /**
@@ -1229,30 +1267,64 @@ export interface Integration {
  * takes no id. 97 of them here, which is why the UI sorts connected ones first: a list that
  * long is only useful if the answer to "what is actually wired up" is at the top.
  */
-export async function fetchIntegrations(): Promise<PlatformResult<{ integrations: Integration[] }>> {
+/**
+ * The account's integrations, narrowed by SCOPE.
+ *
+ * `scope` filters here rather than in the client, for the reason every list in this file does:
+ * filtering rows the client already holds leaves the footer counting the unfiltered set, so
+ * "12 of 25" sits under three rows and describes something else.
+ *
+ * Scope is DERIVED, because the API does not state it: a row with bloq_id belongs to that
+ * board, a row with organization_id to the org, and everything else is personal. Today all 25
+ * on this account are personal — which is worth seeing rather than hiding, since it means no
+ * board has a credential of its own.
+ */
+export async function fetchIntegrations(
+  opts: { bloqId?: number; scope?: IntegrationScope | "all" } = {},
+): Promise<PlatformResult<{ integrations: Integration[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { integrations: [] } }
 
   try {
-    const res = await irisFetch(`/api/v1/users/${userId}/integrations`)
+    const res = await irisFetch(`/api/v1/users/${userId}/integrations?per_page=200`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { integrations: [] } }
     const json = (await res.json()) as any
     const raw = json?.integrations ?? json?.data ?? json
     const rows = Array.isArray(raw) ? raw : []
-    const integrations: Integration[] = rows.map((r: any) => {
+    const all: Integration[] = rows.map((r: any) => {
       const status = String(r.status ?? r.local_status ?? "unknown")
       return {
         id: String(r.id ?? r.name ?? ""),
-        name: String(r.name ?? r.provider ?? "unnamed"),
-        provider: r.provider ?? undefined,
+        name: String(r.name ?? r.provider ?? r.type ?? "unnamed"),
+        provider: r.provider ?? r.type ?? undefined,
         category: r.category ?? undefined,
         status,
         connected: status === "connected" || status === "active" || Boolean(r.connected_account_id),
         account: r.account_email ?? undefined,
+        scope: r.bloq_id != null ? "project" : r.organization_id != null ? "organization" : "user",
+        type: r.type ?? undefined,
+        lastTested: r.last_tested ?? undefined,
+        lastError: r.last_error ? String(r.last_error).slice(0, 400) : undefined,
       }
     })
-    // Connected first, then by name. The interesting half of 97 rows is the connected half.
-    integrations.sort((a, b) => (a.connected === b.connected ? a.name.localeCompare(b.name) : a.connected ? -1 : 1))
+
+    const want = opts.scope ?? "all"
+    const integrations =
+      want === "all"
+        ? all
+        : all.filter((i) =>
+            want === "project"
+              ? // A PROJECT credential means this board's, not "any board's".
+                i.scope === "project" && (opts.bloqId == null || Number(rows.find((r: any) => String(r.id) === i.id)?.bloq_id) === opts.bloqId)
+              : i.scope === want,
+          )
+
+    // Broken first, then connected, then by name. A row that is failing is the one you opened
+    // this list to find; burying it under two dozen healthy ones is how it stays broken.
+    integrations.sort((a, b) => {
+      const rank = (i: Integration) => (i.status === "error" ? 0 : i.connected ? 1 : 2)
+      return rank(a) === rank(b) ? a.name.localeCompare(b.name) : rank(a) - rank(b)
+    })
     return { measured: true, data: { integrations } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { integrations: [] } }

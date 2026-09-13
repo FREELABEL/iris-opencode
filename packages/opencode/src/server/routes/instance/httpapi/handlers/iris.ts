@@ -201,8 +201,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const records = Effect.fn("IrisHttpApi.records")(
-      (ctx: { params: { slug: string }; query: { page?: number; perPage?: number } }) =>
-        Effect.promise(() => fetchRecords(ctx.params.slug, ctx.query)).pipe(
+      (ctx: { params: { bloqID: number; slug: string }; query: { page?: number; perPage?: number } }) =>
+        Effect.promise(() => fetchRecords(ctx.params.slug, { ...ctx.query, bloqId: ctx.params.bloqID })).pipe(
           Effect.map((r) => ({
             measured: r.measured,
             reason: r.reason,
@@ -219,8 +219,11 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
     )
 
     const integrations = Effect.fn("IrisHttpApi.integrations")(
-      (ctx: { query: { page?: number; perPage?: number } }) =>
-        Effect.promise(() => fetchIntegrations()).pipe(
+      (ctx: {
+        params: { bloqID: number }
+        query: { page?: number; perPage?: number; scope?: "all" | "project" | "organization" | "user" }
+      }) =>
+        Effect.promise(() => fetchIntegrations({ bloqId: ctx.params.bloqID, scope: ctx.query.scope })).pipe(
           Effect.map((r) => {
             const { items, meta } = pageOf(r, r.data.integrations, ctx.query)
             return { ...meta, integrations: items }

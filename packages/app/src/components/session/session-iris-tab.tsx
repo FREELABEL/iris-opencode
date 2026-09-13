@@ -315,7 +315,7 @@ const SURFACES = [
   // a second code path for one surface is how surfaces drift apart.
   { id: "hive", label: "Hive", path: (_b: number) => `/iris/hive` },
   { id: "playbooks", label: "Playbooks", path: (b: number) => `/iris/playbooks/${b}` },
-  { id: "integrations", label: "Integrations", path: (_b: number) => `/iris/integrations` },
+  { id: "integrations", label: "Integrations", path: (b: number) => `/iris/integrations/${b}` },
 ] as const
 
 type SurfaceId = (typeof SURFACES)[number]["id"]
@@ -731,12 +731,15 @@ export function SessionIrisTab() {
     () => {
       const r = openRow()
       const slug = r?.raw?.slug
-      return r?.pane === "schemas" && detailTab() === "records" && slug
-        ? ([base(), String(slug), recordPage()] as const)
+      const b = activeBloq()
+      return r?.pane === "schemas" && detailTab() === "records" && slug && b
+        ? ([base(), Number(b), String(slug), recordPage()] as const)
         : undefined
     },
-    async ([, slug, pageNo]) => {
-      const res = await doFetch(`/iris/records/${encodeURIComponent(slug)}?page=${pageNo}&perPage=25`)
+    // The BOARD is in the path, not decoration: the server refuses a dataset that belongs
+    // elsewhere, and it can only do that if we say which board we are asking as.
+    async ([, bloqID, slug, pageNo]) => {
+      const res = await doFetch(`/iris/records/${bloqID}/${encodeURIComponent(slug)}?page=${pageNo}&perPage=25`)
       return (await res.json()) as Measured & {
         columns: { key: string; label: string; type: string; visibility?: string }[]
         rows: { id: number; data: Record<string, unknown>; updatedAt?: string }[]
@@ -1202,6 +1205,18 @@ export function SessionIrisTab() {
                     <p class="text-12-regular text-text-weak py-2">This dataset has no records.</p>
                   </Match>
                   <Match when={records.latest}>
+                    {/* ABSENCE OF A PHI FLAG IS NOT A CLAIM OF SAFETY.
+                        `cases` declares no visibility on any column, and one of them is
+                        patient_name. Rendering those identically to columns that explicitly
+                        declare "public" turns "nobody said" into "it is fine", which is the
+                        exact three-states-as-two mistake this panel exists to avoid. */}
+                    <Show when={records.latest!.columns.some((c) => !c.visibility)}>
+                      <p class="text-11-regular text-text-weaker pb-2">
+                        {records.latest!.columns.filter((c) => !c.visibility).length} of{" "}
+                        {records.latest!.columns.length} columns declare no visibility — unlabelled is
+                        not the same as safe to share.
+                      </p>
+                    </Show>
                     <div class="iris-table-wrap">
                       <table class="iris-table">
                         <thead>
