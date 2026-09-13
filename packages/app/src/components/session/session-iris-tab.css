@@ -595,3 +595,33 @@
   color: var(--text-strong);
   border-color: var(--border-weak-base);
 }
+
+/*
+ * The brand mark inside the integration chip.
+ *
+ * Sits ON TOP of the monogram rather than replacing it: logo.dev answers 200 with its own
+ * generic glyph for an unknown name, so onerror only fires on a network failure — and a row
+ * that loses its logo to a dropped request should still say which service it is.
+ */
+.iris-int__logo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 5px;
+  object-fit: contain;
+  background: var(--background-element);
+}
+.iris-int__mark {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Attribution — small, present, and a real link. */
+.iris-attr a {
+  color: var(--text-weaker);
+  text-decoration: underline;
+}
+.iris-attr a:hover {
+  color: var(--text-base);
+}

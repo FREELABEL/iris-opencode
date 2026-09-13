@@ -329,7 +329,12 @@ const IntegrationsResponse = Schema.Struct({
       type: described(Schema.optional(Schema.String), "Provider key, e.g. gmail. What an icon is chosen from."),
       lastTested: Schema.optional(Schema.String),
       lastError: described(Schema.optional(Schema.String), "Why it is failing. A red dot with no reason is not actionable."),
+      logoUrl: described(Schema.optional(Schema.String), "Brand mark from the platform's Logo.dev catalogue. Absent is normal."),
     }).annotate({ identifier: "IrisIntegration" }),
+  ),
+  attribution: described(
+    Schema.optional(Schema.String),
+    "Logo.dev credit, as HTML. A CONDITION of the free tier — travels with the logos so the marks cannot be shown without it.",
   ),
 }).annotate({ identifier: "IrisIntegrationsResponse" })
 

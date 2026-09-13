@@ -1258,6 +1258,56 @@ export interface Integration {
   lastTested?: string
   /** Why it is failing, when it is. A red dot with no reason is not actionable. */
   lastError?: string
+  /** The brand mark, from the platform's own Logo.dev catalogue. Absent is normal. */
+  logoUrl?: string
+}
+
+/**
+ * The platform's integration logo map — the same one the public Genesis integrations page uses.
+ *
+ * NOT constructed here. iris-api serves `logos` keyed by our own integration types alongside a
+ * `logo_attribution` string, because attribution is a CONDITION of the Logo.dev free tier. One
+ * source means the desktop cannot end up showing marks without the credit that pays for them.
+ *
+ * Fetched from IRIS_API, not FL_API: /api/v1/integrations/catalog is 200 on freelabel.net and
+ * 404 on raichu.
+ */
+let _logoCache: { logos: Record<string, string>; attribution?: string } | null = null
+export async function fetchIntegrationLogos(): Promise<{ logos: Record<string, string>; attribution?: string }> {
+  if (_logoCache) return _logoCache
+  try {
+    const res = await irisFetch(`/api/v1/integrations/catalog`, IRIS_API)
+    if (!res.ok) return { logos: {} }
+    const j = (await res.json()) as any
+    const logos = j?.logos && typeof j.logos === "object" ? (j.logos as Record<string, string>) : {}
+    // CACHE ONLY A SUCCESS.
+    //
+    // The first version cached the failure too, so a single unlucky call at boot — the network
+    // not up yet, a slow DNS — pinned an empty map for the life of the process and every
+    // integration lost its logo until a restart. Observed exactly that: the platform function
+    // returned 80 logos while the running server served logoUrl: null for all 25 rows.
+    //
+    // A failure is a reason to try again, never a result to remember.
+    if (!Object.keys(logos).length) return { logos: {} }
+    return (_logoCache = { logos, attribution: typeof j?.logo_attribution === "string" ? j.logo_attribution : undefined })
+  } catch {
+    return { logos: {} }
+  }
+}
+
+/**
+ * The best mark for one integration type.
+ *
+ * `social-instagram` maps to a /name/ lookup in the catalogue, which renders a generic monogram
+ * rather than the Instagram mark — while a plain `instagram` key with the real logo sits in the
+ * same map. So a "social-<brand>" type prefers the bare brand when one exists. Measured: that
+ * turns Instagram, Facebook, Twitter/X, YouTube, Reddit and Twitch from monograms into logos.
+ */
+export function logoFor(logos: Record<string, string>, type: string | undefined): string | undefined {
+  if (!type) return undefined
+  const brand = type.startsWith("social-") ? type.slice("social-".length) : ""
+  const aliased = brand === "x" ? "twitter" : brand
+  return (aliased && logos[aliased]) || logos[type] || undefined
 }
 
 /**
@@ -1281,10 +1331,11 @@ export interface Integration {
  */
 export async function fetchIntegrations(
   opts: { bloqId?: number; scope?: IntegrationScope | "all" } = {},
-): Promise<PlatformResult<{ integrations: Integration[] }>> {
+): Promise<PlatformResult<{ integrations: Integration[]; attribution?: string }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { integrations: [] } }
 
+  const logoMap = await fetchIntegrationLogos()
   try {
     const res = await irisFetch(`/api/v1/users/${userId}/integrations?per_page=200`)
     if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { integrations: [] } }
@@ -1305,6 +1356,7 @@ export async function fetchIntegrations(
         type: r.type ?? undefined,
         lastTested: r.last_tested ?? undefined,
         lastError: r.last_error ? String(r.last_error).slice(0, 400) : undefined,
+        logoUrl: logoFor(logoMap.logos, r.type ?? undefined),
       }
     })
 
@@ -1325,7 +1377,7 @@ export async function fetchIntegrations(
       const rank = (i: Integration) => (i.status === "error" ? 0 : i.connected ? 1 : 2)
       return rank(a) === rank(b) ? a.name.localeCompare(b.name) : rank(a) - rank(b)
     })
-    return { measured: true, data: { integrations } }
+    return { measured: true, data: { integrations, attribution: logoMap.attribution } }
   } catch (e) {
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { integrations: [] } }
   }

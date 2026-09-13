@@ -228,7 +228,7 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         Effect.promise(() => fetchIntegrations({ bloqId: ctx.params.bloqID, scope: ctx.query.scope })).pipe(
           Effect.map((r) => {
             const { items, meta } = pageOf(r, r.data.integrations, ctx.query)
-            return { ...meta, integrations: items }
+            return { ...meta, integrations: items, attribution: r.data.attribution }
           }),
         ),
     )

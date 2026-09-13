@@ -488,6 +488,22 @@ const PROVIDER_MARKS: Record<string, string> = {
   calendar: "31",
   drive: "Dr",
 }
+/**
+ * The best mark for one integration type — mirrors the sidecar's own resolution.
+ *
+ * Exported and tested here because the CHOICE is the part that can be wrong: `social-instagram`
+ * maps to a /name/ lookup that renders a generic glyph, while the real Instagram mark sits in
+ * the same map under a plain key. Never constructs a URL: the token belongs to the platform's
+ * payload, and building one here would let the panel show marks without the attribution that is
+ * a condition of using them.
+ */
+export function logoFor(logos: Record<string, string>, type: string | undefined): string | undefined {
+  if (!type) return undefined
+  const brand = type.startsWith("social-") ? type.slice("social-".length) : ""
+  const aliased = brand === "x" ? "twitter" : brand
+  return (aliased && logos[aliased]) || logos[type] || undefined
+}
+
 export function providerMark(type: string | undefined, name: string): string {
   const brand = String(type ?? "").split("-").pop() ?? ""
   if (PROVIDER_MARKS[brand]) return PROVIDER_MARKS[brand]
@@ -1656,6 +1672,22 @@ export function SessionIrisTab() {
                         }}
                         title={i.type ?? i.name}
                       >
+                        {/* The real brand mark when the platform has one, the monogram when it
+                            does not. The monogram sits UNDERNEATH rather than being replaced:
+                            logo.dev answers 200 with its own generic glyph for an unknown name,
+                            so `onerror` fires only on a network failure — and a row that loses
+                            its mark to a dropped request should still say which service it is. */}
+                        <Show when={i.logoUrl}>
+                          <img
+                            class="iris-int__logo"
+                            src={i.logoUrl}
+                            alt=""
+                            aria-hidden="true"
+                            loading="lazy"
+                            decoding="async"
+                            onError={(e) => e.currentTarget.remove()}
+                          />
+                        </Show>
                         {providerMark(i.type, i.name)}
                       </span>
                       <span class="min-w-0 flex-1">
@@ -1730,6 +1762,16 @@ export function SessionIrisTab() {
             </p>
           </Match>
         </Switch>
+
+        {/* Logo.dev attribution. A CONDITION of the free tier, so it renders from the same
+            payload that supplies the marks — the panel cannot show logos without the credit.
+            The string is the platform's own, served beside the logo map. */}
+        <Show when={pane() === "integrations" && (current() as any)?.attribution}>
+          <p
+            class="iris-attr px-2 pb-2 text-11-regular text-text-weaker"
+            innerHTML={(current() as any).attribution}
+          />
+        </Show>
 
         {/* The shared footer. Says how many of how many, and offers the next page only when the
             server said there is one — never as a permanent button that sometimes does nothing. */}

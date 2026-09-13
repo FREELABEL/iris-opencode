@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, normalizeSurface, providerMark, resolvePane, surfaceView } from "./session-iris-tab"
+import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, logoFor, normalizeSurface, providerMark, resolvePane, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -238,5 +238,35 @@ describe("itemCommands", () => {
   test("a placeholder is visibly a placeholder, not a plausible value", () => {
     const assign = itemCommands(1).find((c) => c.label === "assign")!
     expect(assign.cmd).toContain("<agent-id>")
+  })
+})
+
+describe("logoFor", () => {
+  const logos = {
+    "social-instagram": "https://img.logo.dev/name/social%20instagram?token=x",
+    instagram: "https://img.logo.dev/instagram.com?token=x",
+    twitter: "https://img.logo.dev/x.com?token=x",
+    gmail: "https://img.logo.dev/google.com?token=x",
+  }
+
+  test("prefers the real brand over the platform's /name/ monogram", () => {
+    // social-instagram maps to a /name/ lookup, which renders a generic glyph while the real
+    // Instagram mark sits in the same map under a plain key.
+    expect(logoFor(logos, "social-instagram")).toBe(logos.instagram)
+  })
+
+  test("social-x resolves to twitter, which is where x.com lives", () => {
+    expect(logoFor(logos, "social-x")).toBe(logos.twitter)
+  })
+
+  test("a non-social type uses its own entry", () => {
+    expect(logoFor(logos, "gmail")).toBe(logos.gmail)
+  })
+
+  test("absent is undefined, never a constructed URL", () => {
+    // The token belongs to the platform's payload. Building URLs here would mean the panel
+    // could show marks without the attribution that pays for them.
+    expect(logoFor(logos, "tradovate")).toBeUndefined()
+    expect(logoFor(logos, undefined)).toBeUndefined()
   })
 })
