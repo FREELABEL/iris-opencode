@@ -52,6 +52,11 @@
 "service": "iris-api"
 },
 {
+"method": "POST",
+"uri": "/agent-inbox/send",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/agent/{}",
 "service": "iris-api"
@@ -254,6 +259,11 @@
 {
 "method": "POST",
 "uri": "/api/instagram/{}/seed",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/integrations/my-health",
 "service": "iris-api"
 },
 {
@@ -1057,6 +1067,11 @@
 "service": "iris-api"
 },
 {
+"method": "GET",
+"uri": "/api/v1/agents/{}/tasks",
+"service": "fl-api"
+},
+{
 "method": "POST",
 "uri": "/api/v1/agents/{}/terminate",
 "service": "iris-api"
@@ -1484,6 +1499,11 @@
 {
 "method": "GET",
 "uri": "/api/v1/atlas/customer-auth/gate-state",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/atlas/customer-auth/platform-session",
 "service": "fl-api"
 },
 {
@@ -4857,6 +4877,11 @@
 "service": "iris-api"
 },
 {
+"method": "GET",
+"uri": "/api/v1/genesis/components/catalogue/{}",
+"service": "iris-api"
+},
+{
 "method": "POST",
 "uri": "/api/v1/genesis/components/compile",
 "service": "iris-api"
@@ -5149,6 +5174,21 @@
 {
 "method": "POST",
 "uri": "/api/v1/integrations/execute",
+"service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/integrations/health",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/integrations/health/brokered",
+"service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/integrations/health/{}",
 "service": "fl-api"
 },
 {
@@ -7369,7 +7409,7 @@
 {
 "method": "GET",
 "uri": "/api/v1/organizations",
-"service": "iris-api"
+"service": "fl-api"
 },
 {
 "method": "POST",
@@ -8015,6 +8055,41 @@
 "method": "GET",
 "uri": "/api/v1/playground/agents/{}",
 "service": "fl-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/preview/sessions",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/preview/sessions/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/preview/{}/data/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/preview/{}/data/{}",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v1/preview/{}/data/{}/{}",
+"service": "iris-api"
+},
+{
+"method": "PATCH",
+"uri": "/api/v1/preview/{}/data/{}/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/preview/{}/render",
+"service": "iris-api"
 },
 {
 "method": "POST",
@@ -8913,6 +8988,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/public/models",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/public/okf/{}/bundle.tar.gz",
 "service": "fl-api"
 },
@@ -9138,6 +9218,21 @@
 },
 {
 "method": "GET",
+"uri": "/api/v1/public/scripts",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/public/scripts/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/public/scripts/{}/asset",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/v1/public/station/next",
 "service": "fl-api"
 },
@@ -9337,8 +9432,33 @@
 "service": "iris-api"
 },
 {
+"method": "DELETE",
+"uri": "/api/v1/scripts/{}/assets",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/scripts/{}/assets",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/scripts/{}/assets",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/scripts/{}/doctor",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/scripts/{}/publish",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/scripts/{}/unpublish",
 "service": "iris-api"
 },
 {
@@ -10259,11 +10379,6 @@
 {
 "method": "POST",
 "uri": "/api/v1/twilio/release-recommended",
-"service": "iris-api"
-},
-{
-"method": "POST",
-"uri": "/api/v1/twilio/webhook",
 "service": "iris-api"
 },
 {
@@ -12192,6 +12307,36 @@
 "service": "fl-api"
 },
 {
+"method": "POST",
+"uri": "/api/v1/users/{}/graph/assert",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/users/{}/graph/entity/{}",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/users/{}/graph/link",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/users/{}/graph/predicates",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v1/users/{}/graph/sweep",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v1/users/{}/graph/whois/{}",
+"service": "iris-api"
+},
+{
 "method": "GET",
 "uri": "/api/v1/users/{}/heartbeat",
 "service": "fl-api"
@@ -13133,6 +13278,11 @@
 },
 {
 "method": "POST",
+"uri": "/api/v6/channels/email/agent",
+"service": "iris-api"
+},
+{
+"method": "POST",
 "uri": "/api/v6/channels/email/inbound",
 "service": "iris-api"
 },
@@ -13453,6 +13603,11 @@
 },
 {
 "method": "GET",
+"uri": "/api/v6/node-agent/scripts/{}/assets",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/api/v6/node-agent/tasks/pending",
 "service": "iris-api"
 },
@@ -13474,6 +13629,11 @@
 {
 "method": "GET",
 "uri": "/api/v6/node-agent/tasks/{}/credentials",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/node-agent/tasks/{}/output",
 "service": "iris-api"
 },
 {
@@ -13707,8 +13867,33 @@
 "service": "iris-api"
 },
 {
+"method": "DELETE",
+"uri": "/api/v6/nodes/{}/organization",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/nodes/{}/organization",
+"service": "iris-api"
+},
+{
 "method": "POST",
 "uri": "/api/v6/nodes/{}/regenerate-key",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/api/v6/nodes/{}/users",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/api/v6/nodes/{}/users",
+"service": "iris-api"
+},
+{
+"method": "DELETE",
+"uri": "/api/v6/nodes/{}/users/{}",
 "service": "iris-api"
 },
 {
@@ -14023,6 +14208,11 @@
 },
 {
 "method": "POST",
+"uri": "/api/webhooks/twilio/sms",
+"service": "iris-api"
+},
+{
+"method": "POST",
 "uri": "/api/webhooks/vagaro",
 "service": "iris-api"
 },
@@ -14124,6 +14314,11 @@
 {
 "method": "GET",
 "uri": "/atlas",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/atlas/classic",
 "service": "iris-api"
 },
 {
@@ -14992,6 +15187,11 @@
 "service": "iris-api"
 },
 {
+"method": "GET",
+"uri": "/p/integrations/{}",
+"service": "iris-api"
+},
+{
 "method": "DELETE",
 "uri": "/p/iris-downloads",
 "service": "iris-api"
@@ -15488,8 +15688,48 @@
 },
 {
 "method": "GET",
+"uri": "/start",
+"service": "iris-api"
+},
+{
+"method": "GET",
 "uri": "/storage/{}",
 "service": "fl-api"
+},
+{
+"method": "GET",
+"uri": "/studio/components",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/studio/components",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/studio/components/compile",
+"service": "iris-api"
+},
+{
+"method": "POST",
+"uri": "/studio/components/preview/sessions",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/studio/components/preview/{}/data/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/studio/components/{}",
+"service": "iris-api"
+},
+{
+"method": "GET",
+"uri": "/studio/components/{}/usage",
+"service": "iris-api"
 },
 {
 "method": "GET",

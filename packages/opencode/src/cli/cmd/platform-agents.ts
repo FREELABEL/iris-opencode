@@ -1396,7 +1396,10 @@ const AgentsTasksCommand = cmd({
     const spinner = prompts.spinner()
     spinner.start(`Reading agent #${agentId}'s queue…`)
     try {
-      const res = await irisFetch(`/api/v1/agents/${agentId}/tasks${args.all ? "?include_done=1" : ""}`)
+      // Keep the query OUT of the path template: routes:check reads the template literal as
+      // the endpoint, and an inlined query string makes it read `/tasks{}`, which matches no route.
+      const qs = args.all ? "?include_done=1" : ""
+      const res = await irisFetch(`/api/v1/agents/${agentId}/tasks` + qs)
       if (!(await handleApiError(res, "Agent tasks"))) {
         spinner.stop("Failed", 1)
         process.exitCode = 1
