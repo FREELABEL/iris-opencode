@@ -1,6 +1,7 @@
 import { cmd } from "./cmd"
 import { requireAuth, requireUserId, writeJson, dim, bold, success } from "./iris-api"
 import { hiveFetch } from "./platform-hive-nodes"
+import os from "os"
 
 /**
  * `iris hive sessions` — what AI sessions are running across your fleet.
@@ -229,7 +230,15 @@ const SendInputCommand = cmd({
         type: "session_message",
         title: `send-input to ${label(s)}`,
         prompt: String(argv.message),
-        config: { session_id: s.session_id, provider: s.provider, message: String(argv.message) },
+        // PROVENANCE (#182785): name the machine this came FROM. Without it the message lands
+        // looking exactly like something the recipient typed, and the node id the daemon falls
+        // back to is a UUID no human recognises.
+        config: {
+          session_id: s.session_id,
+          provider: s.provider,
+          message: String(argv.message),
+          from: os.hostname().replace(/\.local$/, ""),
+        },
       }),
     })
 
