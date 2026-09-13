@@ -271,3 +271,34 @@ export async function fetchHiveNodes(): Promise<PlatformResult<{ nodes: HiveNode
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { nodes: [] } }
   }
 }
+
+export interface Bloq {
+  id: number
+  name: string
+}
+
+/**
+ * The account's bloqs — what a project picker would offer.
+ *
+ * The desktop app has no bloq concept at all, and six of the seven TUI surfaces are
+ * bloq-scoped, so without this the Atlas tab would have to hardcode an id. A hardcoded id is
+ * the kind of thing that ships, works for whoever wrote it, and is wrong for everyone else.
+ */
+export async function fetchBloqs(): Promise<PlatformResult<{ bloqs: Bloq[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { bloqs: [] } }
+
+  try {
+    const res = await irisFetch(`/api/v1/user/${userId}/bloqs?simplified=true`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { bloqs: [] } }
+    const json = (await res.json()) as any
+    const raw = json?.data ?? json?.bloqs ?? []
+    const bloqs: Bloq[] = (Array.isArray(raw) ? raw : []).map((b: any) => ({
+      id: Number(b.id),
+      name: String(b.name ?? "Untitled"),
+    }))
+    return { measured: true, data: { bloqs } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { bloqs: [] } }
+  }
+}

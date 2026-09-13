@@ -49,7 +49,9 @@ export function openSessionTab(current: SessionTabState, tab: string): SessionTa
     }
   }
 
-  if (tab === "context") {
+  // Named panel tabs, not files: they pin to the front of the strip and never take part in the
+  // preview-tab dance below, which is about replacing a single italicised file tab.
+  if (tab === "context" || tab === "atlas") {
     return {
       tabs: { all: [tab, ...current.tabs.all.filter((item) => item !== tab)], active: tab },
       preview,

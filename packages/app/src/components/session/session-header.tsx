@@ -146,7 +146,7 @@ export function SessionHeader() {
   const settings = useSettings()
   const sync = useSync()
   const terminal = useTerminal()
-  const { params, view } = useSessionLayout()
+  const { params, view, tabs } = useSessionLayout()
 
   const projectDirectory = createMemo(() => decode64(params.dir) ?? "")
   const project = createMemo(() => {
@@ -477,6 +477,27 @@ export function SessionHeader() {
                           <Icon size="small" name={view().reviewPanel.opened() ? "review-active" : "review"} />
                         </Button>
                       </TooltipKeybind>
+
+                      {/* Atlas. First IRIS platform surface in the desktop app — it opens the
+                          panel and selects the tab, the same three steps the context button
+                          takes, because the tab only renders once "atlas" is in the tab list.
+                          No keybind yet: TooltipKeybind wants one that exists, and inventing a
+                          binding is a separate decision from adding the surface. */}
+                      <Button
+                        variant="ghost"
+                        class="titlebar-icon w-8 h-6 p-0 box-border"
+                        onClick={() => {
+                          view().reviewPanel.open("other")
+                          void tabs().open("atlas")
+                          tabs().setActive("atlas")
+                        }}
+                        aria-label="Atlas"
+                        title="Atlas"
+                      >
+                        <div class="relative flex items-center justify-center size-4">
+                          <Icon size="small" name="bullet-list" class="text-icon-weak" />
+                        </div>
+                      </Button>
 
                       <TooltipKeybind
                         title={language.t("command.fileTree.toggle")}

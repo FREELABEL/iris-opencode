@@ -31,6 +31,7 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import FileTree from "@/components/file-tree"
 import { normalizeFileTreeV2Path } from "@/components/file-tree-v2-model"
 import { SessionContextUsage } from "@/components/session-context-usage"
+import { SessionAtlasTab } from "@/components/session/session-atlas-tab"
 
 const reviewTabID = "session-side-panel-review-tab"
 const reviewTabPanelID = "session-side-panel-review-tabpanel"
@@ -182,6 +183,7 @@ export function SessionSidePanel(props: {
     fileBrowser: () => !!props.fileBrowserState,
   })
   const contextOpen = tabState.contextOpen
+  const atlasOpen = tabState.atlasOpen
   const openFileOpen = tabState.openFileOpen
   const panelTabs = tabState.panelTabs
   const openedTabs = tabState.openedTabs
@@ -363,6 +365,26 @@ export function SessionSidePanel(props: {
                                   </div>
                                 </Tabs.Trigger>
                               </Show>
+                              <Show when={atlasOpen()}>
+                                <Tabs.Trigger
+                                  value="atlas"
+                                  closeButton={
+                                    <IconButton
+                                      icon="close-small"
+                                      variant="ghost"
+                                      class="h-5 w-5"
+                                      onClick={() => tabs().close("atlas")}
+                                      aria-label={language.t("common.closeTab")}
+                                    />
+                                  }
+                                  hideCloseButton
+                                  onMiddleClick={() => tabs().close("atlas")}
+                                >
+                                  <div class="flex items-center gap-2">
+                                    <div>Atlas</div>
+                                  </div>
+                                </Tabs.Trigger>
+                              </Show>
                               <Show when={contextOpen()}>
                                 <Tabs.Trigger
                                   value="context"
@@ -486,6 +508,14 @@ export function SessionSidePanel(props: {
                                     {language.t("session.files.selectToOpen")}
                                   </div>
                                 </div>
+                              </div>
+                            </Tabs.Content>
+                          </Show>
+
+                          <Show when={activeTab() === "atlas"}>
+                            <Tabs.Content value="atlas" class="flex flex-col h-full overflow-hidden contain-strict">
+                              <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
+                                <SessionAtlasTab />
                               </div>
                             </Tabs.Content>
                           </Show>

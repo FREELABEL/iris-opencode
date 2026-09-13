@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { fetchAtlas, fetchHiveNodes } from "@/iris/platform"
+import { fetchAtlas, fetchBloqs, fetchHiveNodes } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -19,6 +19,12 @@ import { RootHttpApi } from "../api"
  */
 export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers) =>
   Effect.gen(function* () {
+    const bloqs = Effect.fn("IrisHttpApi.bloqs")(() =>
+      Effect.promise(() => fetchBloqs()).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, bloqs: r.data.bloqs })),
+      ),
+    )
+
     const atlas = Effect.fn("IrisHttpApi.atlas")((ctx: { params: { bloqID: number } }) =>
       Effect.promise(() => fetchAtlas(ctx.params.bloqID)).pipe(
         Effect.map((r) => ({ measured: r.measured, reason: r.reason, lists: r.data.lists })),
@@ -31,6 +37,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("atlas", atlas).handle("hive", hive)
+    return handlers.handle("bloqs", bloqs).handle("atlas", atlas).handle("hive", hive)
   }),
 )

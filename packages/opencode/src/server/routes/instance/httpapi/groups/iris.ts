@@ -59,9 +59,17 @@ const HiveResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisHiveResponse" })
 
+const BloqsResponse = Schema.Struct({
+  ...Measured,
+  bloqs: Schema.Array(
+    Schema.Struct({ id: Schema.Finite, name: Schema.String }).annotate({ identifier: "IrisBloq" }),
+  ),
+}).annotate({ identifier: "IrisBloqsResponse" })
+
 const root = "/iris"
 
 export const IrisPaths = {
+  bloqs: `${root}/bloqs`,
   atlas: `${root}/atlas/:bloqID`,
   hive: `${root}/hive`,
 } as const
@@ -69,6 +77,16 @@ export const IrisPaths = {
 export const IrisApi = HttpApi.make("iris").add(
   HttpApiGroup.make("iris")
     .add(
+      HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {
+        success: described(BloqsResponse, "The account's bloqs"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.bloqs",
+          summary: "List bloqs",
+          description:
+            "Every bloq on the account, for a project picker. The desktop app has no bloq concept of its own and six platform surfaces are bloq-scoped, so without this a caller has to hardcode an id.",
+        }),
+      ),
       HttpApiEndpoint.get("atlas", IrisPaths.atlas, {
         params: { bloqID: Schema.NumberFromString },
         success: described(AtlasResponse, "Atlas lists and items for one bloq"),
