@@ -568,3 +568,64 @@ export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages
     return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { pages: [] } }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Credential detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Can the app actually authenticate — and if not, WHICH way is it broken?
+ *
+ * Asked because of a real failure: a machine that had run `iris auth login`, with a valid key
+ * sitting in auth.json, sent a message and got
+ *
+ *     Unauthorized: Provide a Bearer token in the Authorization header
+ *
+ * rendered raw into the transcript, with no prompt to sign in and no hint about what was
+ * missing. The key was there. The PROVIDER could not see it: `/api/provider` configures the
+ * iris provider as `apiKey: "{env:IRIS_API_KEY}"`, which resolves from `process.env` only,
+ * and nothing bridges the auth store to the environment.
+ *
+ * So "are you signed in?" is the wrong question, and answering it is what produced a silent
+ * failure: the honest answer was YES and chat was still broken. The question that predicts
+ * the 401 is "can the code that makes the request see a credential?" — which is why
+ * `providerCanSee` is separate from `signedIn` rather than one boolean.
+ */
+export interface AuthState {
+  /** A credential exists somewhere we know to look (auth store, env, sdk .env, config.json). */
+  signedIn: boolean
+  /** Where it came from, for a diagnostic that points at the right file. */
+  source: string
+  /**
+   * Whether the AI provider can read a key. This is the one that predicts whether chat works,
+   * because the provider reads process.env and nothing else.
+   */
+  providerCanSee: boolean
+  /**
+   * The three-state verdict the UI renders.
+   *  - "ready"        chat will authenticate
+   *  - "signed-out"   no credential anywhere — prompt a login
+   *  - "unreachable-credential"  signed in, but the provider cannot see it. NOT a login
+   *    problem; sending someone to sign in again would "fix" nothing and waste their time.
+   */
+  verdict: "ready" | "signed-out" | "unreachable-credential"
+}
+
+export function describeAuth(input: { storedToken: string | null; source: string; envKey: string | undefined }): AuthState {
+  const signedIn = Boolean(input.storedToken)
+  const providerCanSee = Boolean(input.envKey)
+  return {
+    signedIn,
+    source: input.source,
+    providerCanSee,
+    verdict: providerCanSee ? "ready" : signedIn ? "unreachable-credential" : "signed-out",
+  }
+}
+
+export function checkAuth(): AuthState {
+  return describeAuth({
+    storedToken: resolveToken(),
+    source: tokenSource(),
+    envKey: process.env.IRIS_API_KEY,
+  })
+}

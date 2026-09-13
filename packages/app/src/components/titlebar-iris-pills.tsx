@@ -27,6 +27,33 @@ interface InboxState {
   unread: number | null
   unreadable: boolean
 }
+interface AuthState {
+  signedIn: boolean
+  source: string
+  providerCanSee: boolean
+  verdict: "ready" | "signed-out" | "unreachable-credential"
+}
+
+/**
+ * What to SAY about a broken credential — and it is two different sentences, because it is two
+ * different problems and one of them is not a login problem at all.
+ *
+ * The failure this exists for: a machine with a valid key in its auth store sent a message and
+ * got "Unauthorized: Provide a Bearer token in the Authorization header" printed raw into the
+ * transcript, with nothing offering a sign-in. Answering "are you signed in?" would have said
+ * YES and explained nothing. Telling that person to log in again would have "fixed" nothing
+ * and cost them ten minutes.
+ */
+export function authNotice(auth: AuthState | undefined): { text: string; hint: string } | null {
+  if (!auth || auth.verdict === "ready") return null
+  if (auth.verdict === "signed-out") {
+    return { text: "Sign in", hint: "Not signed in — run: iris auth login" }
+  }
+  return {
+    text: "Key unreachable",
+    hint: `Signed in via ${auth.source}, but the AI provider reads IRIS_API_KEY from the environment and it is unset. Signing in again will not help.`,
+  }
+}
 
 /**
  * How the fleet pill reads.
@@ -77,6 +104,9 @@ export function TitlebarIrisPills() {
 
   const [hive] = createResource(key, async () => (await (await doFetch("/iris/hive")).json()) as HiveState)
   const [inbox] = createResource(key, async () => (await (await doFetch("/iris/inbox")).json()) as InboxState)
+  const [auth] = createResource(key, async () => (await (await doFetch("/iris/auth")).json()) as AuthState)
+
+  const notice = createMemo(() => authNotice(auth()))
 
   const unread = createMemo(() => inboxLabel(inbox(), inbox.loading))
 
@@ -90,6 +120,14 @@ export function TitlebarIrisPills() {
             </span>
             {fleetLabel(hive(), hive.loading)}
           </span>
+          {/* The credential warning outranks everything else here: a fleet count is useless
+              information if the app cannot talk to its API at all. Shown as a word, not an
+              icon, because the whole failure was that nothing said what was wrong. */}
+          <Show when={notice()}>
+            <span data-slot="iris-auth-pill" class="text-v2-text-text-danger" title={notice()!.hint}>
+              ⚠ {notice()!.text}
+            </span>
+          </Show>
           {/* Absent when there is nothing waiting. A permanent "0" is furniture; a number that
               appears is a signal. */}
           <Show when={unread()}>

@@ -119,9 +119,23 @@ const PagesResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisPagesResponse" })
 
+const AuthResponse = Schema.Struct({
+  signedIn: described(Schema.Boolean, "A credential exists somewhere we know to look."),
+  source: Schema.String,
+  providerCanSee: described(
+    Schema.Boolean,
+    "Whether the AI provider can read a key. THIS is what predicts whether chat works — the provider reads process.env and nothing else.",
+  ),
+  verdict: described(
+    Schema.Literals(["ready", "signed-out", "unreachable-credential"]),
+    "unreachable-credential means signed in but the provider cannot see it — do NOT prompt a re-login for that.",
+  ),
+}).annotate({ identifier: "IrisAuthResponse" })
+
 const root = "/iris"
 
 export const IrisPaths = {
+  auth: `${root}/auth`,
   bloqs: `${root}/bloqs`,
   inbox: `${root}/inbox`,
   atlas: `${root}/atlas/:bloqID`,
@@ -134,6 +148,16 @@ export const IrisPaths = {
 export const IrisApi = HttpApi.make("iris").add(
   HttpApiGroup.make("iris")
     .add(
+      HttpApiEndpoint.get("auth", IrisPaths.auth, {
+        success: described(AuthResponse, "Whether the app can authenticate, and which way it is broken"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.auth",
+          summary: "Credential state",
+          description:
+            "Three states, not two. A key can exist in the auth store and still be invisible to the provider, which is why a signed-in machine could send a message and get a raw 401 with no prompt.",
+        }),
+      ),
       HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {
         success: described(BloqsResponse, "The account's bloqs"),
       }).annotateMerge(

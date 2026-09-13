@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchPages } from "@/iris/platform"
+import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchPages } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -24,6 +24,8 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         Effect.map((r) => ({ measured: r.measured, reason: r.reason, bloqs: r.data.bloqs })),
       ),
     )
+
+    const auth = Effect.fn("IrisHttpApi.auth")(() => Effect.sync(() => checkAuth()))
 
     const inbox = Effect.fn("IrisHttpApi.inbox")(() => Effect.sync(() => fetchInbox()))
 
@@ -57,6 +59,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
-    return handlers.handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("hive", hive)
   }),
 )
