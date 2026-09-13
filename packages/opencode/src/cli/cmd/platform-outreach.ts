@@ -6,6 +6,7 @@ import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, handleApiError, printDivider, printKV, dim, bold, success, highlight, writeJson } from "./iris-api"
 import { OutreachApproveGroup } from "./platform-outreach-approve"
+import { ScriptGroup } from "./platform-outreach-script"
 
 // ============================================================================
 // Outreach Strategy Commands — list, show, create, update, delete
@@ -291,5 +292,6 @@ export const PlatformOutreachCommand = productCommand({
       // neither audience has to know where it "really" lives — see offers.ts.
       .command(OffersGroup)
       .command(LicenceGroup)
+      .command(ScriptGroup)
       .demandCommand(),
 })

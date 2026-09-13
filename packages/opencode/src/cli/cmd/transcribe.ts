@@ -13,9 +13,15 @@ import {
   highlight, writeJson } from "./iris-api"
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs"
-import { transcribeLocal } from "../lib/transcription"
+import { transcribeLocal, resolveFfmpeg } from "../lib/transcription"
 import { resolveSttPolicy } from "../lib/stt-policy"
-import { treatTranscript, listTreatments } from "../lib/walkthrough"
+import { treatTranscript, listTreatments, structureWalkthrough } from "../lib/walkthrough"
+import {
+  serverTranscriptVerdict,
+  transcriptFileName,
+  treatmentWarning,
+  isStructuredTreatment,
+} from "../lib/transcribe-outcome"
 import { homedir, tmpdir } from "os"
 import { join, basename, extname, resolve } from "path"
 
@@ -65,16 +71,48 @@ async function fetchGlossary(brandId?: number): Promise<string | undefined> {
  * Returns null when the fallback is unavailable too, so the caller can fail loudly rather than
  * proceed on an empty transcript.
  */
-async function transcribeViaServer(absPath: string, language?: string, brandId?: number): Promise<string | null> {
+/**
+ * Which local dependency is actually missing — checked, not assumed.
+ *
+ * The old text always said "brew install whisper-cpp". On the machine that prompted this,
+ * whisper was installed and working; ffmpeg was present on PATH and could not load one of its
+ * libraries. So the advice pointed at the one thing that was fine.
+ */
+function localDepAdvice(): string | null {
+  const whisper = which("whisper-cli") || which("whisper-cpp")
+  const ff = resolveFfmpeg()
+  if (!whisper && !ff.bin) return `Install local transcription:  brew install whisper-cpp ffmpeg`
+  if (!whisper) return `Install local transcription:  brew install whisper-cpp`
+  if (!ff.bin) return ff.diagnosis || "ffmpeg is unavailable"
+  // Both present and working — whatever failed was not a missing dependency, and claiming
+  // otherwise would send someone to reinstall tools that are fine.
+  return null
+}
+
+async function transcribeViaServer(
+  absPath: string,
+  language?: string,
+  brandId?: number,
+  /** The local failure was already explained to the user — do not say it twice. */
+  localAlreadyExplained = false,
+): Promise<string | null> {
   // POLICY GATE (epic #182784). This function uploads the audio via irisFetch directly,
   // so it does NOT pass through transcribeAudio()'s clamp — it was a second egress the
   // clamp could not see. Worse, it is reached AUTOMATICALLY when local whisper is merely
   // missing, so the machine least able to transcribe locally is the one that silently
   // uploads. Refuse before reading the file, not after.
   if (resolveSttPolicy() === "sovereign") {
+    // Name the dependency that is ACTUALLY missing. Telling someone to install whisper when
+    // whisper is installed and ffmpeg is the broken one sends them to the wrong place — which
+    // is what happened: three messages in a row, all true, none of them the problem.
+    // Only diagnose here when nothing upstream already did. Reached from --remote the user
+    // has seen no local error at all and needs telling; reached from the local fallback the
+    // diagnosis is already on screen, and repeating the same paragraph reads as a second,
+    // different problem.
+    const missing = localAlreadyExplained ? null : localDepAdvice()
     prompts.log.error(
       "Transcription policy is 'sovereign' — audio was NOT uploaded.\n" +
-        "  Install local transcription:  brew install whisper-cpp\n" +
+        (missing ? `  ${missing}\n` : "") +
         "  Or allow the server for this run:  IRIS_TRANSCRIPTION_POLICY=standard",
     )
     return null
@@ -190,7 +228,7 @@ export async function runLocalWhisper(
     sp.stop(dim("Local transcription unavailable"))
     prompts.log.info(dim(localError))
 
-    const remote = await transcribeViaServer(abs, language, brandId)
+    const remote = await transcribeViaServer(abs, language, brandId, true)
     if (remote === null) {
       process.exitCode = 1 // #152292 — fail loudly so automation doesn't proceed on no transcript
       return false
@@ -227,13 +265,49 @@ async function finishTranscript(
   // transcript where the reader expects it, and the untouched original next to it. A rewrite
   // you cannot compare against the original is one you cannot audit, and this path handles
   // clinical dictation.
-  const treated = await treatTranscript(text, treatment ?? "raw")
   const rawText = text
-  text = treated.text
+  let treatedChanged = false
+
+  // #183798 — someone reaches for --local precisely when the recording is sensitive, and the
+  // most natural pairing on the whole command is --local --treatment meeting. The audio does
+  // stay on the machine; the TEXT does not. Saying so at the moment it happens is the minimum;
+  // whether --local should refuse, or run treatments on-device, is a product decision.
+  if (treatment && treatment !== "raw" && !asJson) {
+    prompts.log.info(dim(`Sending the transcript text to the server for the '${treatment}' treatment. The audio stays on this machine.`))
+  }
+
+  if (isStructuredTreatment(treatment)) {
+    // sop and playbook are produced by /walkthrough/structure, not /walkthrough/treat. Sending
+    // them to /treat is what made them 422 and silently fall back to the raw transcript
+    // (#183796) — the treatment was never unsupported, just routed to the wrong endpoint.
+    try {
+      const structured = await structureWalkthrough(text, treatment as "sop" | "playbook")
+      text = structured.markdown
+      treatedChanged = true
+    } catch (e) {
+      // structureWalkthrough throws with the server's own message, which distinguishes "your
+      // input is unusable" from "we could not produce a document". Pass it through rather than
+      // losing the recording — but SAY so, which is the half that was missing.
+      if (!asJson) prompts.log.warn(e instanceof Error ? e.message : String(e))
+    }
+  } else {
+    const treated = await treatTranscript(text, treatment ?? "raw")
+    text = treated.text
+    treatedChanged = treated.changed
+  }
+  // treatTranscript returns the ORIGINAL on any failure, which is the right trade — losing a
+  // recording because a tidy-up pass failed would be far worse. But an unannounced fallback is
+  // indistinguishable from "your recording was already tidy" (#183796), and the reader then acts
+  // on a document that is not the one they asked for.
+  const treatNote = treatmentWarning(treatment, treatedChanged)
+  if (treatNote && !asJson) prompts.log.warn(treatNote)
   // Output location (#152293): default to ~/.iris/transcripts — NOT the CWD (it littered
   // git repos). Honor --output (dir or file). Skip the file entirely for --json with no
   // explicit --output, since the JSON already carries the text.
-  const name = `${basename(abs, extname(abs))}-transcript.txt`
+  // A URL has no basename to take a name from, which is how --output came to be dropped
+  // entirely on the server paths (#183797). transcriptFileName handles both, and guarantees the
+  // result cannot escape the directory it is about to be joined onto.
+  const name = sourceUrl ? transcriptFileName(sourceUrl) : `${basename(abs, extname(abs))}-transcript.txt`
   let txtPath: string | null
   if (output) {
     txtPath = existsSync(output) && statSync(output).isDirectory() ? join(output, name) : output
@@ -245,7 +319,7 @@ async function finishTranscript(
     txtPath = join(dir, name)
   }
   if (txtPath) writeFileSync(txtPath, text)
-  if (txtPath && treated.changed) {
+  if (txtPath && treatedChanged) {
     writeFileSync(txtPath.replace(/(\.[^.]+)?$/, ".raw$1"), rawText)
   }
 
@@ -444,7 +518,7 @@ export const PlatformTranscribeCommand = cmd({
       .option("local", {
         type: "boolean",
         default: false,
-        describe: "Force local offline transcription via whisper.cpp",
+        describe: "Transcribe the AUDIO on-device via whisper.cpp. Note this does not make the whole run offline — a --treatment still sends the resulting text to the server",
       })
       .option("remote", {
         type: "boolean",
@@ -544,7 +618,7 @@ export const PlatformTranscribeCommand = cmd({
       }
       dlSpinner.stop("Downloaded")
 
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined, args.brand ? Number(args.brand) : undefined, false, args.treatment as string | undefined)
 
       // Cleanup temp file
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
@@ -560,38 +634,46 @@ export const PlatformTranscribeCommand = cmd({
         const spinner = prompts.spinner()
         spinner.start("Transcribing on server…")
         const tool = await invokeTranscribeTool(url, userId)
-        if (tool.ok) {
+        // `ok` is the transport's verdict, not the content's. A 200 carrying an empty transcript
+        // used to read as success here: it printed nothing, ignored --output, and exited 0
+        // (#183797). Falling through to the local download is the useful answer, not an error.
+        const verdict = serverTranscriptVerdict(tool)
+        if (verdict.kind === "finish") {
           const data = tool.data
           spinner.stop("Done")
 
-          if (args.json) {
-            await writeJson(data)
-            prompts.outro("Done")
-            return
-          }
-
-          const text = data?.text ?? ""
           const provider = data?.provider ?? "?"
           const wordCount = data?.word_count ?? 0
           const duration = data?.duration_seconds ?? 0
           const cached = data?.cached ? success("(cached)") : dim("(fresh)")
           const transcriptUrl = data?.transcript_url
 
-          printDivider()
-          console.log(`  ${bold("Provider:")}  ${highlight(provider)} ${cached}`)
-          console.log(`  ${bold("Words:")}     ${wordCount}`)
-          console.log(`  ${bold("Duration:")}  ~${duration}s`)
-          if (transcriptUrl) {
-            console.log(`  ${bold("CDN:")}       ${highlight(transcriptUrl)}`)
+          if (!args.json) {
+            printDivider()
+            console.log(`  ${bold("Provider:")}  ${highlight(provider)} ${cached}`)
+            console.log(`  ${bold("Words:")}     ${wordCount}`)
+            console.log(`  ${bold("Duration:")}  ~${duration}s`)
+            if (transcriptUrl) {
+              console.log(`  ${bold("CDN:")}       ${highlight(transcriptUrl)}`)
+            }
           }
-          printDivider()
-          console.log()
-          console.log(text)
-          console.log()
+
+          // Through the SAME finisher as every other route, so --output, --treatment, the raw
+          // sidecar and the knowledge-base sync do not depend on which engine produced the text.
+          await finishTranscript(
+            url,
+            verdict.text,
+            String(provider),
+            !!args.json,
+            url,
+            args.output as string | undefined,
+            url,
+            args.treatment as string | undefined,
+          )
           prompts.outro("Done")
           return
         }
-        spinner.stop("Server path unavailable — falling back to local", 1)
+        spinner.stop(`Server path unavailable — ${verdict.reason}. Falling back to local`, 1)
       }
 
       // YouTube server failed → download locally + whisper
@@ -606,7 +688,7 @@ export const PlatformTranscribeCommand = cmd({
         return
       }
       dlSpinner.stop("Downloaded")
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined, args.brand ? Number(args.brand) : undefined, false, args.treatment as string | undefined)
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
       prompts.outro("Done")
       return
@@ -621,7 +703,7 @@ export const PlatformTranscribeCommand = cmd({
       const videoPath = await downloadVideoLocally(url)
       if (!videoPath) { dlSpinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       dlSpinner.stop("Downloaded")
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined, args.brand ? Number(args.brand) : undefined, false, args.treatment as string | undefined)
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
       prompts.outro("Done")
       return
@@ -632,14 +714,16 @@ export const PlatformTranscribeCommand = cmd({
     spinner.start("Transcribing on server…")
 
     const tool = await invokeTranscribeTool(url, userId)
-    if (!tool.ok) {
-      spinner.stop("Server path unavailable — trying local", 1)
+    // Same trap as the YouTube path: a 200 with no text is not a transcript (#183797).
+    const verdict = serverTranscriptVerdict(tool)
+    if (verdict.kind === "fallback") {
+      spinner.stop(`Server path unavailable — ${verdict.reason}. Trying local`, 1)
       const dlSpinner = prompts.spinner()
       dlSpinner.start("Downloading…")
       const videoPath = await downloadVideoLocally(url)
       if (!videoPath) { dlSpinner.stop("Failed", 1); process.exitCode = 1; prompts.outro("Done"); return }
       dlSpinner.stop("Downloaded")
-      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined)
+      await runLocalWhisper(videoPath, args.language as string | undefined, !!args.json, url, args.output as string | undefined, args.brand ? Number(args.brand) : undefined, false, args.treatment as string | undefined)
       try { spawnSync("rm", ["-f", videoPath]) } catch {}
       prompts.outro("Done")
       return
@@ -648,24 +732,27 @@ export const PlatformTranscribeCommand = cmd({
     const data = tool.data
     spinner.stop("Done")
 
-    if (args.json) {
-      await writeJson(data)
-      prompts.outro("Done")
-      return
-    }
-
-    const text = data?.text ?? ""
     const provider = data?.provider ?? "?"
     const wordCount = data?.word_count ?? 0
     const duration = data?.duration_seconds ?? 0
-    printDivider()
-    console.log(`  ${bold("Provider:")}  ${highlight(provider)}`)
-    console.log(`  ${bold("Words:")}     ${wordCount}`)
-    console.log(`  ${bold("Duration:")}  ~${duration}s`)
-    printDivider()
-    console.log()
-    console.log(text)
-    console.log()
+    if (!args.json) {
+      printDivider()
+      console.log(`  ${bold("Provider:")}  ${highlight(provider)}`)
+      console.log(`  ${bold("Words:")}     ${wordCount}`)
+      console.log(`  ${bold("Duration:")}  ~${duration}s`)
+    }
+
+    // Through the shared finisher — --output and --treatment were dropped here too.
+    await finishTranscript(
+      url,
+      verdict.text,
+      String(provider),
+      !!args.json,
+      url,
+      args.output as string | undefined,
+      url,
+      args.treatment as string | undefined,
+    )
     prompts.outro("Done")
   },
 })

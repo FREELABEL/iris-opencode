@@ -2973,6 +2973,351 @@ const LeadsSyncCommsCommand = cmd({
   },
 })
 
+/**
+ * `--recap` has four possible endings and, before #184934, none of them were legible:
+ * a send that was accepted without an id, a send that failed, a run inside the throttle
+ * window, and a lead with no mailbox all left the same handful of dim() lines at the
+ * bottom of an ordinary pulse scorecard. "Did an email go out?" could not be answered
+ * from the output. Every branch below now records where it stopped, so the caller can
+ * print one unmissable line (printRecapOutcome) or hand the record to --json.
+ *
+ * "queued" is deliberately not "sent": quicksend can accept a message and return no
+ * id, and reporting that as sent is the phantom-success this file refuses elsewhere
+ * (see extractCalendarEvent). The transport is untouched — the same
+ * outreach/quicksend endpoint the command has always posted to.
+ *
+ * Lives at module scope, and not inline where it used to run, because --json returns
+ * before the TUI sections and its payload needs the outcome too (#184933).
+ */
+type RecapOutcome = {
+  requested: boolean
+  state: "sent" | "queued" | "failed" | "not_attempted"
+  recipient: string | null
+  detail: string | null
+}
+
+type RecapContext = {
+  leadId: number
+  lead: any
+  name: string
+  email: string
+  dealHealth: any
+  leadTasks: any[]
+  activities: any[]
+  pulseReadiness: any
+  channels: any[]
+  recap: boolean
+  force: boolean
+  to?: string
+  dryRun: boolean
+}
+
+async function runLeadRecap(ctx: RecapContext): Promise<RecapOutcome> {
+  const { leadId, lead, name, email, dealHealth, leadTasks, activities, pulseReadiness, channels } = ctx
+  const outcome: RecapOutcome = { requested: !!ctx.recap, state: "not_attempted", recipient: null, detail: null }
+  if (!outcome.requested) return outcome
+
+  const RECAP_WINDOW_HOURS = 72 // 3 days
+
+  // No mailbox is a third state, not a silent no-op: the block used to be skipped
+  // entirely and --recap produced no output at all for these leads.
+  if (!email) {
+    outcome.detail = "lead has no email address"
+    return outcome
+  }
+  if (email.endsWith("@instagram.com") || email.endsWith("@twitter.com")) {
+    outcome.detail = `${email} is a social handle, not a mailbox`
+    return outcome
+  }
+
+  // Determine last outreach timestamp (same logic as hydrate)
+  let lastRecapOutreach: Date | null = null
+  const commsSignalRecap = pulseReadiness?.signals?.comms_freshness ?? {}
+  if (commsSignalRecap.last_outbound_at) {
+    lastRecapOutreach = new Date(commsSignalRecap.last_outbound_at)
+  }
+  if (channels) {
+    for (const ch of channels) {
+      for (const msg of ch.messages ?? []) {
+        const isOutbound =
+          ch.name === "iMessage"
+            ? msg.from_me
+            : ch.name === "Gmail"
+              ? !(msg.from ?? "").toLowerCase().includes(email.toLowerCase())
+              : false
+        if (isOutbound) {
+          const msgDate = new Date(msg.ts ?? msg.date ?? 0)
+          if (!lastRecapOutreach || msgDate > lastRecapOutreach) lastRecapOutreach = msgDate
+        }
+      }
+    }
+  }
+
+  const hoursSinceLastRecap = lastRecapOutreach
+    ? (Date.now() - lastRecapOutreach.getTime()) / (1000 * 60 * 60)
+    : Infinity
+
+  console.log()
+  if (hoursSinceLastRecap < RECAP_WINDOW_HOURS && !ctx.force) {
+    const nextIn = Math.ceil(RECAP_WINDOW_HOURS - hoursSinceLastRecap)
+    outcome.detail = `throttled — last outreach ${Math.floor(hoursSinceLastRecap)}h ago, next eligible in ${nextIn}h (use --force)`
+    console.log(
+      `  ${dim(`Recap: last outreach ${Math.floor(hoursSinceLastRecap)}h ago — next eligible in ${nextIn}h`)}  ${dim("(use --force to override)")}`,
+    )
+    return outcome
+  }
+
+  console.log(`  ${bold("Recap")}`)
+  console.log(
+    `  ${UI.Style.TEXT_WARNING}Last outreach: ${lastRecapOutreach ? `${Math.floor(hoursSinceLastRecap)}h ago` : "never"}${UI.Style.TEXT_NORMAL}  ${dim(`(${RECAP_WINDOW_HOURS}h window)`)}`,
+  )
+
+  try {
+    // Fetch extra context for recap
+    const [onboardRes, reqSummaryRes] = await Promise.allSettled([
+      irisFetch(`/api/v1/leads/${leadId}/onboarding`),
+      irisFetch(`/api/v1/leads/${leadId}/requirements/summary`),
+    ])
+
+    const onboardData = onboardRes.status === "fulfilled" && onboardRes.value?.ok
+      ? ((await onboardRes.value.json()) as any)?.data ?? null
+      : null
+    const reqData = reqSummaryRes.status === "fulfilled" && reqSummaryRes.value?.ok
+      ? ((await reqSummaryRes.value.json()) as any)?.data ?? null
+      : null
+
+    // Build recap sections
+    const firstName = (lead.name ?? lead.first_name ?? "").split(" ")[0] || "there"
+    const scopeShort = (dealHealth?.scope ?? "our services").slice(0, 120)
+
+    // Onboarding summary
+    let onboardingSummary = ""
+    if (onboardData) {
+      const steps = onboardData.steps ?? onboardData.items ?? []
+      const done = steps.filter((s: any) => s.completed || s.status === "complete")
+      const total = steps.length
+      const doneNames = done.map((s: any) => s.name ?? s.title ?? "").filter(Boolean).slice(0, 5).join(", ")
+      onboardingSummary = total > 0
+        ? `Onboarding ${Math.round((done.length / total) * 100)}% complete (${done.length}/${total}). Done: ${doneNames || "N/A"}.`
+        : ""
+    }
+
+    // Requirements summary
+    let reqSummary = ""
+    if (reqData) {
+      const passing = reqData.passing ?? reqData.passed ?? 0
+      const total = reqData.total ?? 0
+      reqSummary = total > 0 ? `Deliverables: ${passing}/${total} passing.` : ""
+    }
+
+    // KB summary from pulse
+    const kbSignal = pulseReadiness?.signals?.knowledge_completeness ?? {}
+    const kbDocs = kbSignal.docs_count ?? 0
+    const kbTotal = kbSignal.total_expected ?? 8
+    const kbSummary = `Knowledge base: ${kbDocs}/${kbTotal} sections populated.`
+
+    // Tasks summary
+    const completedTasks = leadTasks.filter((t: any) => t.status === "completed" || t.completed)
+    const pendingTasks = leadTasks.filter((t: any) => t.status === "pending" || t.status === "in_progress" || (!t.completed && t.status !== "completed"))
+    const pendingNames = pendingTasks.slice(0, 3).map((t: any) => `'${(t.title ?? t.name ?? "").slice(0, 40)}'`).join(", ")
+    const tasksSummary = leadTasks.length > 0
+      ? `Tasks: ${completedTasks.length} completed, ${pendingTasks.length} pending.${pendingNames ? ` Pending: ${pendingNames}` : ""}`
+      : ""
+
+    // Recent notes (from activities)
+    const noteActivities = activities.filter((a: any) => a.type === "note" || a.activity_type === "note").slice(0, 3)
+    const recentNotes = noteActivities.map((n: any) => (n.title ?? n.description ?? n.content ?? "").slice(0, 60)).filter(Boolean).join("; ")
+
+    const aiPrompt = [
+      `Production status update email to ${firstName} re: "${scopeShort}".`,
+      `Client: ${name} (${lead.company ?? ""}).`,
+      onboardingSummary,
+      reqSummary,
+      kbSummary,
+      tasksSummary,
+      recentNotes ? `Notes: ${recentNotes}` : "",
+      `Focus ONLY on production progress — what we built, what's next, what we need from them.`,
+      `Do NOT mention pricing, payments, invoices, billing, or agreements.`,
+      `Under 300 words. Warm but professional.`,
+      `No pulse scores or internal metrics. Sign off as "IRIS AI — on behalf of the IRIS team"`,
+    ].filter(Boolean).join("\n").slice(0, 995)
+
+    const bloqId = (lead.bloq_ids ?? [])[0] ?? 40
+    const genRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/generate-email`, {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: aiPrompt,
+        tone: "professional",
+        include_cta: true,
+        max_length: "short",
+        bloq_id: bloqId,
+        strategy_template_id: 37,
+      }),
+    })
+
+    if (!genRes.ok) {
+      const errBody = (await genRes.json().catch(() => ({}))) as any
+      outcome.state = "failed"
+      outcome.detail = `AI generation failed: ${errBody.message ?? errBody.error ?? genRes.status}`
+      console.log(`  ${dim(outcome.detail)}`)
+      return outcome
+    }
+
+    const genData = (await genRes.json()) as any
+    const draft = genData.draft ?? genData.data?.draft ?? genData.data ?? genData
+    const emailSubject = draft.subject ?? `Project Update — ${scopeShort}`
+    const emailBody = draft.body ?? draft.message ?? draft.content ?? ""
+
+    if (!emailBody) {
+      outcome.state = "failed"
+      outcome.detail = "AI returned an empty draft — nothing to send"
+      console.log(`  ${dim(outcome.detail)}`)
+      return outcome
+    }
+
+    const sendTo = ctx.to ?? email
+    const isRedirected = !!ctx.to
+    outcome.recipient = sendTo
+
+    // Preview
+    console.log(
+      `  ${dim("To:")} ${sendTo}${isRedirected ? `  ${highlight("(redirected from " + email + ")")}` : ""}`,
+    )
+    console.log(`  ${dim("Subject:")} ${emailSubject}`)
+    console.log(`  ${dim("─".repeat(50))}`)
+    for (const line of emailBody.split("\n")) {
+      console.log(`  ${dim(line)}`)
+    }
+    console.log(`  ${dim("─".repeat(50))}`)
+    console.log()
+
+    if (ctx.dryRun) {
+      outcome.detail = "dry run — draft generated, nothing sent (drop --dry-run to send)"
+      console.log(`  ${highlight("DRY RUN — recap email NOT sent")}`)
+      console.log(`  ${dim("Remove --dry-run to send")}`)
+      return outcome
+    }
+
+    const qsBody: Record<string, unknown> = {
+      channel: "email",
+      message: emailBody,
+      subject: emailSubject,
+      bloq_id: bloqId,
+      strategy_template_id: 37,
+    }
+    if (isRedirected) qsBody.test_email = sendTo
+
+    const qsRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/quicksend`, {
+      method: "POST",
+      body: JSON.stringify(qsBody),
+    })
+
+    if (!qsRes.ok) {
+      const errBody = (await qsRes.json().catch(() => ({}))) as any
+      outcome.state = "failed"
+      outcome.detail = `send failed: ${errBody.message ?? qsRes.status}`
+      console.log(`  ${dim(outcome.detail)}`)
+      return outcome
+    }
+
+    const qsData = (await qsRes.json()) as any
+    if (qsData.success || qsData.message_id) {
+      outcome.state = "sent"
+      outcome.detail = qsData.message_id ? `message ${qsData.message_id}` : null
+    } else if (qsData.status === "pending_approval") {
+      outcome.state = "queued"
+      outcome.detail = "queued for approval — review: iris leads outreach approve"
+    } else {
+      // Accepted, but with no id and no status to stand behind. Not a send.
+      outcome.state = "queued"
+      outcome.detail = "accepted by quicksend with no message id — delivery unconfirmed"
+    }
+    return outcome
+  } catch (e: any) {
+    outcome.state = "failed"
+    outcome.detail = `recap error: ${e?.message ?? String(e)}`
+    console.log(`  ${dim(outcome.detail)}`)
+    return outcome
+  }
+}
+
+/**
+ * The one line a --recap run must leave behind (#184934). Not dim(): the whole
+ * complaint was that the answer was there and invisible.
+ */
+function printRecapOutcome(o: RecapOutcome): void {
+  if (!o.requested) return
+  console.log()
+  if (o.state === "sent") {
+    console.log(`  ${success(`✓ Recap email sent to ${o.recipient}`)}${o.detail ? `  ${dim(o.detail)}` : ""}`)
+  } else if (o.state === "queued") {
+    console.log(`  ${highlight("⚠ Recap email NOT confirmed sent")}  ${dim(o.detail ?? "delivery unconfirmed")}`)
+  } else if (o.state === "failed") {
+    console.log(`  ${danger(`✗ Recap email FAILED`)}  ${dim(o.detail ?? "unknown error")}`)
+  } else {
+    console.log(`  ${highlight("○ No recap email sent")}  ${dim(o.detail ?? "not attempted")}`)
+  }
+}
+
+/**
+ * Hold stdout shut so a `--json` command emits its JSON document and nothing else (#184933).
+ *
+ * `iris leads pulse <id> --json | jq` failed because the whole formatted scorecard
+ * printed first and the JSON arrived after it. The pulse handler has ~190 stdout call
+ * sites (137 `console.log`, 47 `printKV`, 2 `printDivider`) plus helpers it calls, so
+ * gating each one is not something a reader can verify — this closes the channel once,
+ * for everything, and `open()` lifts it for the single JSON write.
+ *
+ * Patching `process.stdout.write` is NOT sufficient on its own: under Bun `console.log`
+ * goes straight to fd 1 and ignores the patch (measured — a patched `write` still let
+ * `console.log` through, while `console.info` leaked even after `console.log` was
+ * stubbed), so every stdout-bound console method is stubbed by name too. `console.warn`
+ * and `console.error` are left alone: they already go to stderr, and the pulse handler
+ * deliberately uses `console.error` for stack traces (#104244).
+ *
+ * Nothing is rerouted to stderr — `prompts.*` already writes there in a pipe (see
+ * clack.ts), so the diagnostics a scripted caller used to get are unchanged.
+ *
+ * It is closed again after `open()` and never reopened for the rest of the process: the
+ * handler's last act under --json is the JSON write, and anything printed after it would
+ * land behind a document the consumer is already parsing.
+ */
+type StdoutGate = {
+  /** Restore stdout, run `fn`, close it again. */
+  open<T>(fn: () => Promise<T>): Promise<T>
+}
+
+function muteStdout(): StdoutGate {
+  const origWrite = process.stdout.write.bind(process.stdout)
+  const stdoutConsoleMethods = ["log", "info", "debug", "dir", "table", "group", "groupEnd"] as const
+  // Capture the real implementations ONCE, at construction. Re-reading them inside close()
+  // means a nested open() saves the STUBS as the originals, and restore() then installs a
+  // no-op permanently — stdout muted for the rest of the process. Nothing nests today (two
+  // call sites, neither inside the other), which is exactly when this is cheap to rule out.
+  const origConsole = new Map<string, unknown>(stdoutConsoleMethods.map((m) => [m, (console as any)[m]]))
+
+  const close = () => {
+    process.stdout.write = ((..._args: unknown[]) => true) as typeof process.stdout.write
+    for (const m of stdoutConsoleMethods) (console as any)[m] = () => {}
+  }
+  const restore = () => {
+    process.stdout.write = origWrite as typeof process.stdout.write
+    for (const [m, fn] of origConsole) (console as any)[m] = fn
+  }
+
+  close()
+  return {
+    async open<T>(fn: () => Promise<T>): Promise<T> {
+      restore()
+      try {
+        return await fn()
+      } finally {
+        close()
+      }
+    },
+  }
+}
+
 const LeadsPulseCommand = cmd({
   command: "pulse <id>",
   aliases: ["inbox", "incoming"],
@@ -3001,12 +3346,25 @@ const LeadsPulseCommand = cmd({
       })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
+    const isJson = args.json === true
+
     UI.empty()
 
+    // requireAuth answers --json with its own error object on stdout (#180540), so the
+    // stdout gate goes up *after* it — muting it here would replace a message carrying
+    // the fix with a poorer one of ours.
     const token = await requireAuth()
     if (!token) {
       prompts.outro("Done")
       return
+    }
+
+    // #184933 — from here down, close stdout under --json and open it only for the JSON
+    // write, so `… --json | jq` receives one document and nothing else.
+    const gate = isJson ? muteStdout() : null
+    const emitJson = async (payload: unknown) => {
+      if (!gate) return
+      await gate.open(() => writeJson(payload))
     }
 
     let leadId = Number(args.id)
@@ -3021,6 +3379,7 @@ const LeadsPulseCommand = cmd({
         if (!searchRes.ok) {
           spinner.stop("Search failed", 1)
           process.exitCode = 1
+          await emitJson({ success: false, error: `Lead search failed (${searchRes.status})`, query: String(args.id) })
           prompts.outro("Done")
           return
         }
@@ -3029,12 +3388,26 @@ const LeadsPulseCommand = cmd({
         if (matches.length === 0) {
           spinner.stop("No leads found", 1)
           process.exitCode = 1
+          await emitJson({ success: false, error: "No lead matched that query", query: String(args.id) })
           prompts.outro("Done")
           return
         }
         if (matches.length === 1) {
           leadId = matches[0].id
           spinner.stop(`Found: ${matches[0].name ?? matches[0].email ?? `#${leadId}`}`)
+        } else if (isJson) {
+          // A --json caller cannot answer the picker below, and with stdout closed it would
+          // not even see it — so ambiguity is reported as data (#184933).
+          spinner.stop(`${matches.length} matches`, 1)
+          process.exitCode = 1
+          await emitJson({
+            success: false,
+            error: `${matches.length} leads matched — pass an id`,
+            query: String(args.id),
+            matches: matches.map((l: any) => ({ id: l.id, name: l.name ?? null, email: l.email ?? null, company: l.company ?? null, status: l.status ?? null })),
+          })
+          prompts.outro("Done")
+          return
         } else if (isNonInteractive()) {
           // Non-TTY / parallel context — auto-pick first match with warning (#55742)
           leadId = matches[0].id
@@ -3065,7 +3438,9 @@ const LeadsPulseCommand = cmd({
       } catch (err) {
         spinner.stop("Error", 1)
         process.exitCode = 1
-        prompts.log.error(err instanceof Error ? err.message : String(err))
+        const detail = err instanceof Error ? err.message : String(err)
+        prompts.log.error(detail)
+        await emitJson({ success: false, error: `Lead lookup failed: ${detail}`, query: String(args.id) })
         prompts.outro("Done")
         return
       }
@@ -3079,7 +3454,12 @@ const LeadsPulseCommand = cmd({
     try {
       // Step 1: Fetch lead details (#55722 — exit non-zero if lead not found)
       const res = await irisFetch(`/api/v1/leads/${leadId}`)
-      const ok = await handleApiError(res, "Get lead")
+      // Opened through the gate because handleApiError writes the house-standard
+      // `{success:false,…}` error to stdout under --json (#180540) — that answer is
+      // better than anything we would substitute for it.
+      const ok = gate
+        ? await gate.open(() => handleApiError(res, "Get lead"))
+        : await handleApiError(res, "Get lead")
       if (!ok) {
         spinner.stop("Failed", 1)
         process.exitCode = 1
@@ -3092,6 +3472,7 @@ const LeadsPulseCommand = cmd({
       if (!lead || !lead.id) {
         spinner.stop("Lead not found", 1)
         process.exitCode = 1
+        await emitJson({ success: false, error: `Lead #${leadId} not found`, lead_id: leadId })
         prompts.outro("Done")
         return
       }
@@ -3249,14 +3630,44 @@ const LeadsPulseCommand = cmd({
           printKV("Pulse", bandLabel[band] ?? `${ps}/100  ${band}`)
         }
 
-        // Sparkline — 8 most recent snapshots, oldest left, newest right.
-        const history: Array<{ score: number }> = pulseReadiness.history ?? []
-        if (history.length >= 2) {
-          const blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-          const chronological = [...history].reverse() // history is newest-first
-          const recent = chronological.slice(-8)
-          const sparkline = recent.map((h) => blocks[Math.min(7, Math.max(0, Math.floor(h.score / 12.5)))]).join("")
-          printKV("Trend", `${dim(sparkline)}  ${dim(`(${history.length} snapshots)`)}`)
+        // Sparkline — one point per DAY, oldest left, newest right.
+        //
+        // #184932 — this used to plot one bar per history row and label it "N snapshots",
+        // and the count climbed 2, 3, 4, 5… on consecutive runs. The rows are not periodic:
+        // GET /leads/{id}/readiness calls ClientReadinessService::snapshot(), which INSERTs
+        // a readiness_runs row on every request, so a row means "someone ran pulse", not
+        // "a day passed". Eight flat bars read as a week of stability when they were eight
+        // runs in one afternoon.
+        //
+        // The write lives server-side, so the fix is here on the read side: bucket by
+        // calendar day and keep each day's latest score. No history is discarded — every
+        // day present in the 30 rows the API returns still contributes its point; repeated
+        // runs within a day collapse to that day's current score, which is what a point in
+        // time means. Rows without a timestamp (older API responses) can't be bucketed, so
+        // they fall back to per-run bars labelled honestly as runs.
+        const history: Array<{ score: number; created_at?: string }> = pulseReadiness.history ?? []
+        const blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+        const bar = (score: number) => blocks[Math.min(7, Math.max(0, Math.floor(score / 12.5)))]
+        const chronological = [...history].reverse() // API returns newest-first
+        const dated = chronological.filter((h) => typeof h.created_at === "string" && h.created_at)
+
+        if (dated.length > 0) {
+          const byDay = new Map<string, number>()
+          for (const h of dated) byDay.set(String(h.created_at).slice(0, 10), h.score) // later run that day wins
+          const days = [...byDay.keys()].sort()
+          const runsNote = `${history.length} run${history.length === 1 ? "" : "s"}`
+          if (days.length >= 2) {
+            const sparkline = days
+              .slice(-8)
+              .map((d) => bar(byDay.get(d)!))
+              .join("")
+            printKV("Trend", `${dim(sparkline)}  ${dim(`(${days.length} days, ${runsNote})`)}`)
+          } else {
+            printKV("Trend", dim(`one day of history so far  (${runsNote})`))
+          }
+        } else if (history.length >= 2) {
+          const sparkline = chronological.slice(-8).map((h) => bar(h.score)).join("")
+          printKV("Trend", `${dim(sparkline)}  ${dim(`(${history.length} runs — undated, not one per day)`)}`)
         }
 
         // Per-signal breakdown — color-coded with effective weights.
@@ -4253,15 +4664,42 @@ const LeadsPulseCommand = cmd({
         }
       }
 
-      // JSON output
-      if (args.json) {
-        console.log(
-          JSON.stringify(
-            { lead, dealHealth, stripeData, tasks: leadTasks, score: leadScore, activities, outreachSteps, workflows: leadWorkflows, productUsage, channels },
-            null,
-            2,
-          ),
-        )
+      // Recap arguments, shared by the --json path (which returns just below) and the
+      // TUI path at the bottom of the handler.
+      const recapCtx: RecapContext = {
+        leadId,
+        lead,
+        name,
+        email,
+        dealHealth,
+        leadTasks,
+        activities,
+        pulseReadiness,
+        channels,
+        recap: !!(args as any).recap,
+        force: !!(args as any).force,
+        to: (args as any).to,
+        dryRun: !!((args as any)["dry-run"] || (args as any).dryRun),
+      }
+
+      // JSON output — the recap runs before the emit so its outcome is a field rather
+      // than printed text, which is the half of #184934 that --json owns. Previously
+      // `--recap --json` returned here and never attempted the recap at all.
+      if (isJson) {
+        const recap = await runLeadRecap(recapCtx)
+        await emitJson({
+          lead,
+          dealHealth,
+          stripeData,
+          tasks: leadTasks,
+          score: leadScore,
+          activities,
+          outreachSteps,
+          workflows: leadWorkflows,
+          productUsage,
+          channels,
+          recap,
+        })
         prompts.outro("Done")
         return
       }
@@ -5089,203 +5527,8 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
       }
 
       // ── Recap: professional status update email for any lead with email ──
-      const RECAP_WINDOW_HOURS = 72 // 3 days
-      if (email && !email.endsWith("@instagram.com") && !email.endsWith("@twitter.com")) {
-        // Determine last outreach timestamp (same logic as hydrate)
-        let lastRecapOutreach: Date | null = null
-        const commsSignalRecap = pulseReadiness?.signals?.comms_freshness ?? {}
-        if (commsSignalRecap.last_outbound_at) {
-          lastRecapOutreach = new Date(commsSignalRecap.last_outbound_at)
-        }
-        if (channels) {
-          for (const ch of channels) {
-            for (const msg of ch.messages ?? []) {
-              const isOutbound =
-                ch.name === "iMessage"
-                  ? msg.from_me
-                  : ch.name === "Gmail"
-                    ? !(msg.from ?? "").toLowerCase().includes(email.toLowerCase())
-                    : false
-              if (isOutbound) {
-                const msgDate = new Date(msg.ts ?? msg.date ?? 0)
-                if (!lastRecapOutreach || msgDate > lastRecapOutreach) lastRecapOutreach = msgDate
-              }
-            }
-          }
-        }
-
-        const hoursSinceLastRecap = lastRecapOutreach ? (Date.now() - lastRecapOutreach.getTime()) / (1000 * 60 * 60) : Infinity
-        const forceRecap = !!(args as any).force
-
-        if ((args as any).recap) {
-          console.log()
-          if (hoursSinceLastRecap >= RECAP_WINDOW_HOURS || forceRecap) {
-            console.log(`  ${bold("Recap")}`)
-            console.log(
-              `  ${UI.Style.TEXT_WARNING}Last outreach: ${lastRecapOutreach ? `${Math.floor(hoursSinceLastRecap)}h ago` : "never"}${UI.Style.TEXT_NORMAL}  ${dim(`(${RECAP_WINDOW_HOURS}h window)`)}`,
-            )
-
-            try {
-              // Fetch extra context for recap
-              const [onboardRes, reqSummaryRes] = await Promise.allSettled([
-                irisFetch(`/api/v1/leads/${leadId}/onboarding`),
-                irisFetch(`/api/v1/leads/${leadId}/requirements/summary`),
-              ])
-
-              const onboardData = onboardRes.status === "fulfilled" && onboardRes.value?.ok
-                ? ((await onboardRes.value.json()) as any)?.data ?? null
-                : null
-              const reqData = reqSummaryRes.status === "fulfilled" && reqSummaryRes.value?.ok
-                ? ((await reqSummaryRes.value.json()) as any)?.data ?? null
-                : null
-
-              // Build recap sections
-              const firstName = (lead.name ?? lead.first_name ?? "").split(" ")[0] || "there"
-              const scopeShort = (dealHealth?.scope ?? "our services").slice(0, 120)
-              const amount = dealHealth?.amount ?? ""
-              const proposalLink = dealHealth?.proposal_url ?? ""
-              const contractLink = dealHealth?.contract_signing_url ?? ""
-
-              // Onboarding summary
-              let onboardingSummary = ""
-              if (onboardData) {
-                const steps = onboardData.steps ?? onboardData.items ?? []
-                const done = steps.filter((s: any) => s.completed || s.status === "complete")
-                const total = steps.length
-                const doneNames = done.map((s: any) => s.name ?? s.title ?? "").filter(Boolean).slice(0, 5).join(", ")
-                onboardingSummary = total > 0
-                  ? `Onboarding ${Math.round((done.length / total) * 100)}% complete (${done.length}/${total}). Done: ${doneNames || "N/A"}.`
-                  : ""
-              }
-
-              // Requirements summary
-              let reqSummary = ""
-              if (reqData) {
-                const passing = reqData.passing ?? reqData.passed ?? 0
-                const total = reqData.total ?? 0
-                reqSummary = total > 0 ? `Deliverables: ${passing}/${total} passing.` : ""
-              }
-
-              // KB summary from pulse
-              const kbSignal = pulseReadiness?.signals?.knowledge_completeness ?? {}
-              const kbDocs = kbSignal.docs_count ?? 0
-              const kbTotal = kbSignal.total_expected ?? 8
-              const kbSummary = `Knowledge base: ${kbDocs}/${kbTotal} sections populated.`
-
-              // Tasks summary
-              const completedTasks = leadTasks.filter((t: any) => t.status === "completed" || t.completed)
-              const pendingTasks = leadTasks.filter((t: any) => t.status === "pending" || t.status === "in_progress" || (!t.completed && t.status !== "completed"))
-              const pendingNames = pendingTasks.slice(0, 3).map((t: any) => `'${(t.title ?? t.name ?? "").slice(0, 40)}'`).join(", ")
-              const tasksSummary = leadTasks.length > 0
-                ? `Tasks: ${completedTasks.length} completed, ${pendingTasks.length} pending.${pendingNames ? ` Pending: ${pendingNames}` : ""}`
-                : ""
-
-              // Recent notes (from activities)
-              const noteActivities = activities.filter((a: any) => a.type === "note" || a.activity_type === "note").slice(0, 3)
-              const recentNotes = noteActivities.map((n: any) => (n.title ?? n.description ?? n.content ?? "").slice(0, 60)).filter(Boolean).join("; ")
-
-              const aiPrompt = [
-                `Production status update email to ${firstName} re: "${scopeShort}".`,
-                `Client: ${name} (${lead.company ?? ""}).`,
-                onboardingSummary,
-                reqSummary,
-                kbSummary,
-                tasksSummary,
-                recentNotes ? `Notes: ${recentNotes}` : "",
-                `Focus ONLY on production progress — what we built, what's next, what we need from them.`,
-                `Do NOT mention pricing, payments, invoices, billing, or agreements.`,
-                `Under 300 words. Warm but professional.`,
-                `No pulse scores or internal metrics. Sign off as "IRIS AI — on behalf of the IRIS team"`,
-              ].filter(Boolean).join("\n").slice(0, 995)
-
-              const bloqId = (lead.bloq_ids ?? [])[0] ?? 40
-              const genRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/generate-email`, {
-                method: "POST",
-                body: JSON.stringify({
-                  prompt: aiPrompt,
-                  tone: "professional",
-                  include_cta: true,
-                  max_length: "short",
-                  bloq_id: bloqId,
-                  strategy_template_id: 37,
-                }),
-              })
-
-              if (!genRes.ok) {
-                const errBody = await genRes.json().catch(() => ({}))
-                console.log(`  ${dim(`AI generation failed: ${errBody.message ?? errBody.error ?? genRes.status}`)}`)
-              } else {
-                const genData = (await genRes.json()) as any
-                const draft = genData.draft ?? genData.data?.draft ?? genData.data ?? genData
-                const emailSubject = draft.subject ?? `Project Update — ${scopeShort}`
-                const emailBody = draft.body ?? draft.message ?? draft.content ?? ""
-
-                if (!emailBody) {
-                  console.log(`  ${dim("AI returned empty draft — skipping")}`)
-                } else {
-                  const sendTo = (args as any).to ?? email
-                  const isRedirected = !!(args as any).to
-
-                  // Preview
-                  console.log(
-                    `  ${dim("To:")} ${sendTo}${isRedirected ? `  ${highlight("(redirected from " + email + ")")}` : ""}`,
-                  )
-                  console.log(`  ${dim("Subject:")} ${emailSubject}`)
-                  console.log(`  ${dim("─".repeat(50))}`)
-                  for (const line of emailBody.split("\n")) {
-                    console.log(`  ${dim(line)}`)
-                  }
-                  console.log(`  ${dim("─".repeat(50))}`)
-                  console.log()
-
-                  if ((args as any)["dry-run"] || (args as any).dryRun) {
-                    console.log(`  ${highlight("DRY RUN — recap email NOT sent")}`)
-                    console.log(`  ${dim("Remove --dry-run to send")}`)
-                  } else {
-                    const qsBody: Record<string, unknown> = {
-                      channel: "email",
-                      message: emailBody,
-                      subject: emailSubject,
-                      bloq_id: bloqId,
-                      strategy_template_id: 37,
-                    }
-                    if (isRedirected) qsBody.test_email = sendTo
-
-                    const qsRes = await irisFetch(`/api/v1/leads/${leadId}/outreach/quicksend`, {
-                      method: "POST",
-                      body: JSON.stringify(qsBody),
-                    })
-
-                    if (qsRes.ok) {
-                      const qsData = (await qsRes.json()) as any
-                      if (qsData.success || qsData.message_id) {
-                        console.log(`  ${success("Sent recap email")}  ${dim("to " + sendTo)}`)
-                      } else if (qsData.status === "pending_approval") {
-                        console.log(
-                          `  ${highlight("Recap draft queued for approval")}  ${dim("review: iris leads outreach approve")}`,
-                        )
-                      } else {
-                        console.log(`  ${dim("Recap queued")}`)
-                      }
-                    } else {
-                      const errBody = await qsRes.json().catch(() => ({}))
-                      console.log(`  ${dim(`Send failed: ${errBody.message ?? qsRes.status}`)}`)
-                    }
-                  }
-                }
-              }
-            } catch (e: any) {
-              console.log(`  ${dim(`Recap error: ${e.message}`)}`)
-            }
-          } else {
-            const nextIn = Math.ceil(RECAP_WINDOW_HOURS - hoursSinceLastRecap)
-            console.log()
-            console.log(
-              `  ${dim(`Recap: last outreach ${Math.floor(hoursSinceLastRecap)}h ago — next eligible in ${nextIn}h`)}  ${dim("(use --force to override)")}`,
-            )
-          }
-        }
-      }
+      // Outcome-reporting lives in runLeadRecap / printRecapOutcome (#184934).
+      printRecapOutcome(await runLeadRecap(recapCtx))
 
       console.log()
       printDivider()
@@ -5299,6 +5542,9 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
       prompts.log.error(errMsg)
       // Always print stack trace so MCP/piped contexts don't swallow errors (#104244)
       if (errStack) console.error(dim(errStack))
+      // …and under --json still leave a parseable document on stdout, so a scripted
+      // caller gets an error object rather than empty input (#184933).
+      await emitJson({ success: false, error: `Pulse failed: ${errMsg}`, lead_id: leadId })
       prompts.outro("Done")
     }
   },
@@ -5954,6 +6200,10 @@ const LeadsPaymentGateCommand = cmd({
       })
       .option("term", { alias: "t", describe: "duration in months (for recurring)", type: "number" })
       .option("deposit", { describe: "deposit percentage (0-100)", type: "number" })
+      .option("setup-fee", {
+        describe: "one-time setup fee charged today on top of recurring billing (e.g. 1500) — not a deposit",
+        type: "number",
+      })
       .option("list-price", { describe: "original list price (shows strikethrough discount)", type: "number" })
       .option("discount", { describe: "discount percentage (0-100)", type: "number" })
       .option("fee", { describe: "processing fee % passed to client (e.g. 2.5)", type: "number" })
@@ -5975,6 +6225,7 @@ const LeadsPaymentGateCommand = cmd({
     if (args.interval) body.interval = args.interval
     if (args.term) body.duration_months = args.term
     if (args.deposit != null) body.deposit_percent = args.deposit
+    if (args["setup-fee"] != null) body.setup_fee = args["setup-fee"]
     if (args["list-price"]) body.list_price = args["list-price"]
     if (args.discount != null) body.discount_percent = args.discount
     if (args.fee != null || args["fee-flat"] != null) {

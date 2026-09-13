@@ -10,7 +10,31 @@ import { useDirectory } from "../../context/directory"
 import { useKV } from "../../context/kv"
 import { TodoItem } from "../../component/todo-item"
 import { useIrisData } from "../../iris/api"
+import type { IrisPlaybook } from "../../iris/api"
 import type { IrisAgent, AtlasItem, IrisContact, IrisPage } from "../../iris/types"
+import { useHiveInbox } from "../../iris/hive-inbox"
+
+/**
+ * How wide the panel is, and who decides.
+ *
+ * It used to be two different numbers: this file rendered the box at 80 while
+ * routes/session/index.tsx reserved 42 when computing the transcript's width. The main column
+ * therefore laid itself out as if the sidebar were 38 columns narrower than it actually is,
+ * which is why the conversation looked clipped beside it. One value now drives both, it is
+ * chosen by the person using it, and it persists.
+ */
+export const SIDEBAR_WIDTHS = [44, 56, 68, 80, 92] as const
+export const SIDEBAR_WIDTH_DEFAULT = 68
+
+export function clampSidebarWidth(width: number): number {
+  // A width outside the ladder (a hand-edited kv value, an older build's number) must not put
+  // the panel off-screen or at two columns. Snap to the nearest step we know renders.
+  if (!Number.isFinite(width)) return SIDEBAR_WIDTH_DEFAULT
+  return SIDEBAR_WIDTHS.reduce(
+    (best, w) => (Math.abs(w - width) < Math.abs(best - width) ? w : best),
+    SIDEBAR_WIDTH_DEFAULT,
+  )
+}
 
 type SidebarTab = "agents" | "playbooks" | "contacts" | "pages" | "atlas" | "session" | "hive"
 
@@ -26,7 +50,12 @@ const TAB_LABELS: Record<SidebarTab, string> = {
 
 const TABS: SidebarTab[] = ["atlas", "agents", "hive", "contacts", "playbooks", "pages", "session"]
 
-export function Sidebar(props: { sessionID: string }) {
+/** A persisted tab name from an older build (or a hand-edited kv) must not render nothing. */
+function normalizeTab(value: unknown): SidebarTab {
+  return TABS.includes(value as SidebarTab) ? (value as SidebarTab) : "atlas"
+}
+
+export function Sidebar(props: { sessionID: string; width?: number; onCollapse?: () => void }) {
   const sync = useSync()
   const { theme } = useTheme()
   const session = createMemo(() => sync.session.get(props.sessionID)!)
@@ -34,8 +63,16 @@ export function Sidebar(props: { sessionID: string }) {
   const todo = createMemo(() => sync.data.todo[props.sessionID] ?? [])
   const messages = createMemo(() => sync.data.message[props.sessionID] ?? [])
 
-  const [activeTab, setActiveTab] = createSignal<SidebarTab>("atlas")
+  const kv = useKV()
+  // The tab you were last on, not always Atlas. Somebody watching the Hive had to re-select
+  // it on every launch, which is how a panel gets ignored.
+  const [activeTab, setActiveTab] = createSignal<SidebarTab>(normalizeTab(kv.get("sidebar_tab", "atlas")))
   const iris = useIrisData()
+  // Polls ~/.iris/hive/inbox/.manifest.jsonl — a stat() every few seconds, and a read only
+  // when it actually changed. Local file, no network. See iris/hive-inbox.ts.
+  const inbox = useHiveInbox()
+  /** The manifest number of the top unread row — the same number `hive inbox read` takes. */
+  const firstUnread = createMemo(() => inbox().items.find((i) => !i.read)?.index ?? 1)
   const [bloqPickerOpen, setBloqPickerOpen] = createSignal(false)
   const [expandedLists, setExpandedLists] = createSignal<Set<number>>(new Set())
   const [activeDoc, setActiveDoc] = createSignal<AtlasItem | null>(null)
@@ -82,14 +119,45 @@ export function Sidebar(props: { sessionID: string }) {
   })
 
   const heartbeatAgents = createMemo(() =>
-    iris.data.agents.filter((a) => a.type === "heartbeat" && matchesSearch(a.name))
+    iris.data.agents.filter((a) => a.type === "heartbeat" && matchesSearch(a.name)),
   )
   const standardAgents = createMemo(() =>
-    iris.data.agents.filter((a) => a.type === "standard" && matchesSearch(a.name))
+    iris.data.agents.filter((a) => a.type === "standard" && matchesSearch(a.name)),
   )
   const filteredPlaybooks = createMemo(() =>
-    iris.data.playbooks.filter((p) => matchesSearch(p.name) || matchesSearch(p.description))
+    iris.data.playbooks.filter((p) => matchesSearch(p.name) || matchesSearch(p.description)),
   )
+
+  const attachedPlaybooks = createMemo(() => filteredPlaybooks().filter((p) => p.attached))
+  const globalPlaybooks = createMemo(() => filteredPlaybooks().filter((p) => !p.attached))
+
+  /** One playbook row. Shared so the two sections cannot drift apart visually. */
+  const playbookRow = (pb: IrisPlaybook) => {
+    const key = `pb-${pb.name}`
+    const hovered = () => hoveredRowId() === key
+    return (
+      <box
+        backgroundColor={hovered() ? theme.backgroundElement : undefined}
+        onMouseOver={() => setHoveredRowId(key)}
+        onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
+      >
+        <box flexDirection="row" gap={1}>
+          <text flexShrink={0} fg={pb.attached ? theme.accent : theme.textMuted}>
+            {pb.attached ? "*" : "-"}
+          </text>
+          <text fg={hovered() ? theme.accent : theme.text} wrapMode="word">
+            {pb.name}
+          </text>
+        </box>
+        <Show when={pb.description}>
+          <text fg={theme.textMuted} wrapMode="word">
+            {pb.description}
+          </text>
+        </Show>
+      </box>
+    )
+  }
+
   const filteredAtlas = createMemo(() => {
     const q = searchQuery().toLowerCase()
     if (!q) return iris.data.atlas
@@ -101,14 +169,12 @@ export function Sidebar(props: { sessionID: string }) {
       .filter((list) => list.name.toLowerCase().includes(q) || list.items.length > 0)
   })
   const filteredContacts = createMemo(() =>
-    iris.data.contacts.filter((c) => matchesSearch(c.name) || matchesSearch(c.email ?? "") || matchesSearch(c.company ?? ""))
+    iris.data.contacts.filter(
+      (c) => matchesSearch(c.name) || matchesSearch(c.email ?? "") || matchesSearch(c.company ?? ""),
+    ),
   )
-  const filteredPages = createMemo(() =>
-    iris.data.pages.filter((p) => matchesSearch(p.title) || matchesSearch(p.slug))
-  )
-  const filteredBloqs = createMemo(() =>
-    iris.data.bloqList.filter((b) => matchesSearch(b.name))
-  )
+  const filteredPages = createMemo(() => iris.data.pages.filter((p) => matchesSearch(p.title) || matchesSearch(p.slug)))
+  const filteredBloqs = createMemo(() => iris.data.bloqList.filter((b) => matchesSearch(b.name)))
   const [activeContact, setActiveContact] = createSignal<IrisContact | null>(null)
   const cost = createMemo(() => {
     const total = messages().reduce((sum, x) => sum + (x.role === "assistant" ? x.cost : 0), 0)
@@ -128,30 +194,62 @@ export function Sidebar(props: { sessionID: string }) {
   })
 
   const directory = useDirectory()
-  const kv = useKV()
 
   const agentColor = (status: IrisAgent["status"]) =>
     ({ active: theme.success, idle: theme.textMuted, paused: theme.warning, error: theme.error })[status] ??
     theme.textMuted
 
-
-    theme.textMuted
+  theme.textMuted
 
   return (
     <Show when={session()}>
       <box
         backgroundColor={theme.backgroundPanel}
-        width={80}
+        width={clampSidebarWidth(props.width ?? SIDEBAR_WIDTH_DEFAULT)}
         paddingTop={1}
         paddingBottom={1}
         paddingLeft={2}
         paddingRight={2}
       >
+        {/* WHY EVERY BIT OF CHROME AROUND THE SCROLLBOX CARRIES zIndex.
+            opentui writes its mouse hit grid from each renderable's OWN bounds —
+            `addToHitGrid(this.x, this.y, this.width, this.height, this.num)` in
+            @opentui/core — and nothing clips that to the parent's viewport. A scrollbox
+            scrolls by setting `content.translateY = -scrollTop`, so once you scroll the
+            content's box extends above the viewport (and below it, being taller), and its
+            hit region silently covers the tabs, the search field and the footer. They keep
+            rendering and stop being clickable: measured 2026-09-12, one wheel click still
+            let you hit a tab, twelve did not.
+            Hit IDs are written in z-order and the last write wins, so lifting the chrome
+            above the scrollbox is the whole fix. It changes nothing visually — the viewport
+            already clips the DRAW correctly; only the hit grid was wrong. */}
         {/* IRIS brand header + bloq selector */}
-        <box flexShrink={0} paddingBottom={1}>
-          <text fg={theme.accent}>
-            <b>◈ IRIS</b>
-          </text>
+        <box flexShrink={0} zIndex={1} paddingBottom={1}>
+          {/* The collapse control lives here because this is where you are looking when you
+              want the space back. The keybind (<leader>b) and the command palette entry both
+              predate this and neither was visible, so the panel read as fixed furniture. */}
+          <box flexDirection="row" gap={1}>
+            <text fg={theme.accent}>
+              <b>◈ IRIS</b>
+            </text>
+            <box flexGrow={1} />
+            <Show when={props.onCollapse}>
+              {/* A filled background on hover, not just a colour change on the glyphs. In a
+                  terminal there is no cursor shape to tell you a thing is clickable, so the
+                  block of colour IS the affordance. */}
+              <box
+                flexShrink={0}
+                paddingLeft={1}
+                paddingRight={1}
+                backgroundColor={hoveredRowId() === "collapse" ? theme.backgroundElement : undefined}
+                onMouseOver={() => setHoveredRowId("collapse")}
+                onMouseOut={() => hoveredRowId() === "collapse" && setHoveredRowId(null)}
+                onMouseDown={() => props.onCollapse?.()}
+              >
+                <text fg={hoveredRowId() === "collapse" ? theme.accent : theme.textMuted}>{"› hide"}</text>
+              </box>
+            </Show>
+          </box>
           <Show when={iris.data.bloqList.length > 0}>
             <box
               onMouseDown={() => {
@@ -187,7 +285,8 @@ export function Sidebar(props: { sessionID: string }) {
                         }}
                       >
                         <text fg={isSelected() || isHovered() ? theme.accent : theme.textMuted}>
-                          {isSelected() ? "● " : "○ "}{bloq.name}
+                          {isSelected() ? "● " : "○ "}
+                          {bloq.name}
                         </text>
                       </box>
                     )
@@ -202,13 +301,14 @@ export function Sidebar(props: { sessionID: string }) {
         </box>
 
         {/* Tab bar */}
-        <box flexShrink={0} flexDirection="row" gap={2} paddingBottom={1}>
+        <box flexShrink={0} zIndex={1} flexDirection="row" gap={2} paddingBottom={1}>
           <For each={TABS}>
             {(tab) => (
               <text
                 fg={activeTab() === tab ? theme.accent : theme.textMuted}
                 onMouseDown={() => {
                   setActiveTab(tab)
+                  kv.set("sidebar_tab", tab)
                   setSearchQuery("")
                 }}
               >
@@ -222,12 +322,19 @@ export function Sidebar(props: { sessionID: string }) {
         <Show when={activeTab() !== "session"}>
           <box
             flexShrink={0}
+            zIndex={1}
             paddingBottom={2}
-            onMouseDown={() => { searchInput?.focus() }}
+            onMouseDown={() => {
+              searchInput?.focus()
+            }}
           >
             <input
-              ref={(r) => { searchInput = r }}
-              onInput={(e) => { setSearchQuery(e) }}
+              ref={(r) => {
+                searchInput = r
+              }}
+              onInput={(e) => {
+                setSearchQuery(e)
+              }}
               focusedBackgroundColor={theme.backgroundElement}
               cursorColor={theme.accent}
               focusedTextColor={theme.text}
@@ -260,11 +367,7 @@ export function Sidebar(props: { sessionID: string }) {
                 <box gap={1}>
                   {/* Heartbeat agents */}
                   <box>
-                    <box
-                      flexDirection="row"
-                      gap={1}
-                      onMouseDown={() => setExpanded("heartbeat", !expanded.heartbeat)}
-                    >
+                    <box flexDirection="row" gap={1} onMouseDown={() => setExpanded("heartbeat", !expanded.heartbeat)}>
                       <text fg={theme.text}>{expanded.heartbeat ? "▼" : "▶"}</text>
                       <text fg={theme.text}>
                         <b>Heartbeat</b>
@@ -312,11 +415,7 @@ export function Sidebar(props: { sessionID: string }) {
 
                   {/* Standard agents */}
                   <box>
-                    <box
-                      flexDirection="row"
-                      gap={1}
-                      onMouseDown={() => setExpanded("standard", !expanded.standard)}
-                    >
+                    <box flexDirection="row" gap={1} onMouseDown={() => setExpanded("standard", !expanded.standard)}>
                       <text fg={theme.text}>{expanded.standard ? "▼" : "▶"}</text>
                       <text fg={theme.text}>
                         <b>Agents</b>
@@ -369,40 +468,41 @@ export function Sidebar(props: { sessionID: string }) {
                   <text fg={theme.textMuted}>No matches for "{searchQuery()}"</text>
                 </Show>
 
-                {/* SAY WHICH LIST THIS IS. When nothing is attached to the selected project we
-                    fall back to the available set, and a project-scoped panel silently listing
-                    everything is the exact bug just fixed for Pages. This makes the difference
-                    visible rather than implied. */}
-                <Show when={iris.data.playbooks.length > 0 && !iris.data.playbooks[0].attached}>
-                  <text fg={theme.textMuted}>Available — none attached to this project</text>
-                </Show>
-
+                {/* TWO SECTIONS, NOT A FALLBACK. This project's playbooks on top, then
+                    everything else the account can reach. It used to show one or the other,
+                    which meant a project with attachments could not reach its own user-scoped
+                    or marketplace playbooks at all, and a project without them listed all the
+                    globals under a single disclaimer line. Each row's scope is now visible
+                    from the section it sits in. */}
                 <box gap={1}>
-                  <For each={filteredPlaybooks()}>
-                    {(pb) => {
-                      const key = `pb-${pb.name}`
-                      const hovered = () => hoveredRowId() === key
-                      return (
-                        <box
-                          backgroundColor={hovered() ? theme.backgroundElement : undefined}
-                          onMouseOver={() => setHoveredRowId(key)}
-                          onMouseOut={() => hoveredRowId() === key && setHoveredRowId(null)}
-                        >
-                          <box flexDirection="row" gap={1}>
-                            <text flexShrink={0} fg={pb.attached ? theme.accent : theme.textMuted}>
-                              {pb.attached ? "*" : "-"}
-                            </text>
-                            <text fg={hovered() ? theme.accent : theme.text} wrapMode="word">
-                              {pb.name}
-                            </text>
-                          </box>
-                          <Show when={pb.description}>
-                            <text fg={theme.textMuted} wrapMode="word">{pb.description}</text>
-                          </Show>
-                        </box>
-                      )
-                    }}
-                  </For>
+                  <Show when={attachedPlaybooks().length > 0}>
+                    <box gap={1}>
+                      <box flexDirection="row" gap={1}>
+                        <text fg={theme.text}>
+                          <b>This project</b>
+                        </text>
+                        <text fg={theme.textMuted}>{attachedPlaybooks().length}</text>
+                      </box>
+                      <For each={attachedPlaybooks()}>{playbookRow}</For>
+                    </box>
+                  </Show>
+
+                  <Show when={globalPlaybooks().length > 0}>
+                    <box gap={1}>
+                      <box flexDirection="row" gap={1}>
+                        <text fg={theme.text}>
+                          <b>All playbooks</b>
+                        </text>
+                        <text fg={theme.textMuted}>{globalPlaybooks().length}</text>
+                      </box>
+                      {/* Only worth saying when the section above is empty — otherwise the
+                          header already tells you which list you are in. */}
+                      <Show when={attachedPlaybooks().length === 0}>
+                        <text fg={theme.textMuted}>none attached to this project</text>
+                      </Show>
+                      <For each={globalPlaybooks()}>{playbookRow}</For>
+                    </box>
+                  </Show>
                 </box>
               </Match>
 
@@ -446,7 +546,10 @@ export function Sidebar(props: { sessionID: string }) {
                       <box paddingTop={1}>
                         <text fg={theme.textMuted}>Status: {contact().status ?? "None"}</text>
                         <text fg={theme.textMuted}>Source: {contact().source ?? "Unknown"}</text>
-                        <text fg={theme.textMuted}>Score: {contact().leadScore}{contact().isHot ? " 🔥" : ""}</text>
+                        <text fg={theme.textMuted}>
+                          Score: {contact().leadScore}
+                          {contact().isHot ? " 🔥" : ""}
+                        </text>
                       </box>
                     </box>
                   )}
@@ -470,9 +573,13 @@ export function Sidebar(props: { sessionID: string }) {
                               <text flexShrink={0} fg={contact.isHot ? theme.warning : theme.success}>
                                 •
                               </text>
-                              <text fg={hovered() ? theme.accent : theme.text}>{contact.name} <span style={{ fg: theme.textMuted }}>#{contact.id}</span></text>
+                              <text fg={hovered() ? theme.accent : theme.text}>
+                                {contact.name} <span style={{ fg: theme.textMuted }}>#{contact.id}</span>
+                              </text>
                               <Show when={contact.status}>
-                                <text flexShrink={0} fg={theme.textMuted}>{contact.status}</text>
+                                <text flexShrink={0} fg={theme.textMuted}>
+                                  {contact.status}
+                                </text>
                               </Show>
                             </box>
                             <Show when={contact.email || contact.company}>
@@ -503,8 +610,7 @@ export function Sidebar(props: { sessionID: string }) {
                     {(page) => {
                       const key = `pg-${page.id}`
                       const hovered = () => hoveredRowId() === key
-                      const statusColor = () =>
-                        page.status === "published" ? theme.success : theme.textMuted
+                      const statusColor = () => (page.status === "published" ? theme.success : theme.textMuted)
                       return (
                         <box
                           backgroundColor={hovered() ? theme.backgroundElement : undefined}
@@ -520,8 +626,7 @@ export function Sidebar(props: { sessionID: string }) {
                             </text>
                           </box>
                           <text fg={theme.textMuted}>
-                            {"   "}
-                            /{page.slug}  ·  v{page.version}  ·  {page.updatedAt}
+                            {"   "}/{page.slug} · v{page.version} · {page.updatedAt}
                           </text>
                         </box>
                       )
@@ -565,12 +670,16 @@ export function Sidebar(props: { sessionID: string }) {
                       </Show>
                       <Show when={doc().description}>
                         <box paddingTop={1}>
-                          <text fg={theme.textMuted} wrapMode="word">{doc().description}</text>
+                          <text fg={theme.textMuted} wrapMode="word">
+                            {doc().description}
+                          </text>
                         </box>
                       </Show>
                       <Show when={doc().content}>
                         <box paddingTop={1}>
-                          <text fg={theme.text} wrapMode="word">{doc().content}</text>
+                          <text fg={theme.text} wrapMode="word">
+                            {doc().content}
+                          </text>
                         </box>
                       </Show>
                       <Show when={!doc().content && !doc().description}>
@@ -611,17 +720,29 @@ export function Sidebar(props: { sessionID: string }) {
                                     <box
                                       flexDirection="row"
                                       gap={1}
-                                      backgroundColor={hoveredItemId() === item.id ? theme.backgroundElement : undefined}
+                                      backgroundColor={
+                                        hoveredItemId() === item.id ? theme.backgroundElement : undefined
+                                      }
                                       onMouseOver={() => setHoveredItemId(item.id)}
                                       onMouseOut={() => hoveredItemId() === item.id && setHoveredItemId(null)}
                                       onMouseDown={() => setActiveDoc(item)}
                                     >
-                                      <text flexShrink={0} fg={item.status === "active" ? theme.success : theme.textMuted}>
+                                      <text
+                                        flexShrink={0}
+                                        fg={item.status === "active" ? theme.success : theme.textMuted}
+                                      >
                                         {item.status === "completed" ? "✓" : "·"}
                                       </text>
-                                      <text fg={hoveredItemId() === item.id ? theme.accent : theme.text} wrapMode="word">{item.title}</text>
+                                      <text
+                                        fg={hoveredItemId() === item.id ? theme.accent : theme.text}
+                                        wrapMode="word"
+                                      >
+                                        {item.title}
+                                      </text>
                                       <Show when={item.type}>
-                                        <text flexShrink={0} fg={theme.textMuted}>{item.type}</text>
+                                        <text flexShrink={0} fg={theme.textMuted}>
+                                          {item.type}
+                                        </text>
                                       </Show>
                                     </box>
                                   )}
@@ -639,41 +760,171 @@ export function Sidebar(props: { sessionID: string }) {
               {/* ── HIVE ── */}
               <Match when={activeTab() === "hive"}>
                 <box gap={1}>
-                  <Show
-                    when={iris.data.hiveSessions.length > 0}
-                    fallback={
-                      <text fg={theme.textMuted}>No active tmux sessions</text>
-                    }
-                  >
-                    <For each={iris.data.hiveSessions}>
-                      {(session) => (
-                        <box>
+                  {/* INBOX FIRST. The roster below is the machines you can reach; the inbox is
+                      work someone has sent YOU, and that is the thing nobody was seeing. On
+                      2026-09-11 four messages that changed what a client's agent was building
+                      sat unread until someone said "run iris hive inbox read" out loud on a
+                      call. Listing them beats printing that instruction again. */}
+                  <box>
+                    <box flexDirection="row" gap={1}>
+                      <text fg={theme.text}>
+                        <b>Inbox</b>
+                      </text>
+                      <Switch>
+                        {/* unread === null means the manifest exists and could not be read.
+                            Rendering that as 0 would look exactly like a healthy empty inbox. */}
+                        <Match when={inbox().unreadable}>
+                          <text fg={theme.error}>unreadable</text>
+                        </Match>
+                        <Match when={(inbox().unread ?? 0) > 0}>
+                          <text fg={theme.warning}>{inbox().unread} unread</text>
+                        </Match>
+                        <Match when={true}>
+                          <text fg={theme.textMuted}>nothing waiting</text>
+                        </Match>
+                      </Switch>
+                    </box>
+                    {/* Above the list, not below it: a <For> and a static sibling do not
+                        render in source order here — the sibling came out first — so these
+                        lines sit where they actually appear.
+
+                        And the command names a REAL number, not a placeholder. "read <n>"
+                        was the obvious wording and could not be written: the text renderer
+                        treats "<" as markup and escapes it, so it printed "read &lt;n>" on
+                        screen. Naming the first unread item is better anyway — it is the
+                        command, ready to run, instead of a template to fill in. */}
+                    <Show when={(inbox().unread ?? 0) > 0}>
+                      <text fg={theme.textMuted}>
+                        {"  read: iris hive inbox read "}
+                        {firstUnread()}
+                      </text>
+                    </Show>
+                    <Show when={inbox().items.length > 6}>
+                      <text fg={theme.textMuted}>
+                        {"  showing 6 of "}
+                        {inbox().items.length}
+                      </text>
+                    </Show>
+                    <For each={inbox().items.slice(0, 6)}>
+                      {(item) => (
+                        <box paddingLeft={2}>
                           <box flexDirection="row" gap={1}>
-                            <text fg={theme.text}>
-                              <b>{session.name}</b>
+                            <text flexShrink={0} fg={item.read ? theme.textMuted : theme.warning}>
+                              {item.read ? " " : "●"}
                             </text>
-                            <text fg={theme.textMuted}>
-                              {session.panes.length} pane{session.panes.length !== 1 ? "s" : ""}
+                            <text flexShrink={0} fg={theme.textMuted}>
+                              {item.index}
+                            </text>
+                            <text fg={item.read ? theme.textMuted : theme.text} wrapMode="word">
+                              {item.from}
+                            </text>
+                            <text flexShrink={0} fg={theme.textMuted}>
+                              {item.age}
                             </text>
                           </box>
-                          <For each={session.panes}>
-                            {(pane, i) => {
-                              const prefix = i() === session.panes.length - 1 ? "└─" : "├─"
-                              const roleLabel = pane.role || `pane ${pane.index}`
-                              return (
-                                <text fg={theme.textMuted}>
-                                  {"  "}{prefix} [{pane.index}] {roleLabel}  {pane.command || "—"}
-                                </text>
-                              )
-                            }}
-                          </For>
+                          <text fg={theme.textMuted} wrapMode="word">
+                            {"  "}
+                            {item.label}
+                          </text>
                         </box>
                       )}
                     </For>
+                  </box>
+
+                  {/* MACHINES. This used to be a list of local tmux sessions, which is about
+                      driving one machine and said "No active tmux sessions" on a fleet of three
+                      online nodes. Same endpoint as `iris hive nodes list`. */}
+                  <box>
+                    <box flexDirection="row" gap={1}>
+                      <text fg={theme.text}>
+                        <b>Machines</b>
+                      </text>
+                      <Switch>
+                        {/* An errored fetch must never render as "0 online" — that is the one
+                            answer that looks fine and is unverified. */}
+                        <Match when={iris.data.hiveStatus === "loading"}>
+                          <text fg={theme.textMuted}>checking…</text>
+                        </Match>
+                        <Match when={iris.data.hiveStatus === "no-auth"}>
+                          <text fg={theme.textMuted}>not connected</text>
+                        </Match>
+                        <Match when={iris.data.hiveStatus === "error"}>
+                          <text fg={theme.error}>unreachable</text>
+                        </Match>
+                        <Match when={true}>
+                          <text fg={theme.textMuted}>
+                            {iris.data.hiveNodes.filter((n) => n.online).length}/{iris.data.hiveNodes.length} online
+                          </text>
+                        </Match>
+                      </Switch>
+                    </box>
+                    <For each={iris.data.hiveNodes}>
+                      {(node) => (
+                        <box paddingLeft={2}>
+                          <box flexDirection="row" gap={1}>
+                            <text flexShrink={0} fg={node.online ? theme.success : theme.textMuted}>
+                              {node.online ? "●" : "○"}
+                            </text>
+                            <text fg={theme.text} wrapMode="word">
+                              {node.name}
+                            </text>
+                            {/* "(you?)" when the match came from a hostname guess — macOS
+                                renames hosts on mDNS collision, so this can be wrong. */}
+                            <Show when={node.isLocal}>
+                              <text flexShrink={0} fg={theme.success}>
+                                {node.localUncertain ? "(you?)" : "(you)"}
+                              </text>
+                            </Show>
+                          </box>
+                          <text fg={theme.textMuted}>
+                            {"  "}
+                            {node.activeTasks}/{node.maxConcurrent} tasks
+                            {node.sessions > 0 ? ` · ${node.sessions} sessions` : ""}
+                            {node.lastHeartbeat ? ` · ${node.lastHeartbeat}` : " · never seen"}
+                          </text>
+                        </box>
+                      )}
+                    </For>
+                    <Show when={iris.data.hiveStatus === "loaded" && iris.data.hiveNodes.length === 0}>
+                      <text fg={theme.textMuted}>{"  "}no machines registered</text>
+                    </Show>
+                  </box>
+
+                  {/* PEERS — other people's Hives linked to this one. */}
+                  <Show when={iris.data.hivePeers.length > 0 || iris.data.hivePendingInvites > 0}>
+                    <box>
+                      <box flexDirection="row" gap={1}>
+                        <text fg={theme.text}>
+                          <b>Peers</b>
+                        </text>
+                        <text fg={theme.textMuted}>{iris.data.hivePeers.filter((p) => p.active).length} active</text>
+                      </box>
+                      <For each={iris.data.hivePeers}>
+                        {(peer) => (
+                          <box paddingLeft={2} flexDirection="row" gap={1}>
+                            <text flexShrink={0} fg={peer.active ? theme.success : theme.textMuted}>
+                              {peer.active ? "●" : "○"}
+                            </text>
+                            <text fg={theme.text} wrapMode="word">
+                              {peer.name}
+                            </text>
+                            <Show when={peer.permissions}>
+                              <text flexShrink={0} fg={theme.textMuted}>
+                                {peer.permissions}
+                              </text>
+                            </Show>
+                          </box>
+                        )}
+                      </For>
+                      {/* An invite nobody accepted is not a peer, and not nothing either. */}
+                      <Show when={iris.data.hivePendingInvites > 0}>
+                        <text fg={theme.textMuted}>
+                          {"  "}◌ {iris.data.hivePendingInvites} invite
+                          {iris.data.hivePendingInvites === 1 ? "" : "s"} pending
+                        </text>
+                      </Show>
+                    </box>
                   </Show>
-                  <text fg={theme.textMuted}>
-                    attach: iris hive attach
-                  </text>
                 </box>
               </Match>
 
@@ -703,9 +954,7 @@ export function Sidebar(props: { sessionID: string }) {
                         </text>
                       </box>
                       <Show when={todo().length <= 2 || expanded.todo}>
-                        <For each={todo()}>
-                          {(item) => <TodoItem status={item.status} content={item.content} />}
-                        </For>
+                        <For each={todo()}>{(item) => <TodoItem status={item.status} content={item.content} />}</For>
                       </Show>
                     </box>
                   </Show>
@@ -760,7 +1009,7 @@ export function Sidebar(props: { sessionID: string }) {
         </scrollbox>
 
         {/* Footer */}
-        <box flexShrink={0} gap={1} paddingTop={1}>
+        <box flexShrink={0} zIndex={1} gap={1} paddingTop={1}>
           <text>
             <span style={{ fg: theme.textMuted }}>{directory().split("/").slice(0, -1).join("/")}/</span>
             <span style={{ fg: theme.text }}>{directory().split("/").at(-1)}</span>

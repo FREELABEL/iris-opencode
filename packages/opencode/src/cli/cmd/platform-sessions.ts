@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { bridgeFetch, dim, bold, highlight, success, writeJson } from "./iris-api"
 import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import { firstArray } from "../../util/array"
+import { candidateServers, deliverLive, shouldFallBackToBridge, deliveryTimeoutMs, fetchLiveSessions, resolveSessionLive } from "./session-live-delivery"
 
 // ============================================================================
 // iris sessions — see and steer the AI sessions running on this machine (#181239)
@@ -283,11 +284,12 @@ const SendCommand = cmd({
       .positional("id", { type: "string", describe: "session id or prefix" })
       .positional("message", { type: "string", describe: "the message to send" })
       .option("provider", { type: "string" })
+      .option("url", { type: "string", describe: "session server to deliver through (default: $IRIS_SERVER, else http://127.0.0.1:4096)" })
+      .option("submit", { type: "boolean", default: false, describe: "also make their agent take a turn (spends THEIR tokens). Off by default." })
       .option("json", { type: "boolean", default: false }),
   async handler(args: any) {
     UI.empty()
     prompts.intro("◈  Send to Session")
-    if (!(await requireBridge())) { prompts.outro("Done"); return }
 
     const message = String(args.message ?? "").trim()
     if (message === "") {
@@ -295,6 +297,73 @@ const SendCommand = cmd({
       prompts.outro("Done")
       return
     }
+
+    // ── LIVE PATH ─────────────────────────────────────────────────────────────────────────
+    // Tried BEFORE the bridge, and without it. The bridge is only ever needed to RESOLVE a
+    // session id; delivery is a POST to a server that is already listening. Reading the list
+    // from that same server removes the bridge from the opencode path entirely, so this works
+    // with the daemon down — which is when you most want to message another session.
+    if (args.provider !== "claude-code") {
+      const candidates = candidateServers({ url: args.url, env: process.env })
+      for (const base of candidates) {
+        const sessions = await fetchLiveSessions(base)
+        if (!sessions) continue
+
+        const hit = resolveSessionLive(sessions, String(args.id))
+        if ("error" in hit) {
+          // An AMBIGUOUS id is a user error, not a reason to try another mechanism: resolving
+          // it again against the bridge could pick a different session from a different list.
+          if (hit.error.includes("matches")) {
+            prompts.log.error(hit.error)
+            process.exitCode = 1
+            prompts.outro("Done")
+            return
+          }
+          // Not found HERE — it may be a claude-code session, so let the bridge try.
+          break
+        }
+
+        const name = (hit.session.title ?? "").trim() || "(unnamed)"
+        console.log(`  ${dim("to:")} ${name} ${dim(`(opencode · ${hit.session.id.slice(0, 12)})`)}`)
+
+        const sp = prompts.spinner()
+        sp.start("Sending…")
+        if (args.submit) sp.message("Running their agent's turn…")
+        const ok = await deliverLive(base, hit.session.id, message, deliveryTimeoutMs({ submit: Boolean(args.submit) }), {
+          submit: Boolean(args.submit),
+        })
+        if (ok) {
+          sp.stop("Sent")
+          if (args.json) { await writeJson({ ok: true, via: "live", server: base, session_id: hit.session.id }); prompts.outro("Done"); return }
+          console.log(`  ${success("✓")} ${dim("delivered live via")} ${base}`)
+          if (!args.submit) console.log(`  ${dim("no model turn was spent — pass --submit to make their agent act")}`)
+          prompts.outro(dim(`iris sessions history ${hit.session.id.slice(0, 8)}`))
+          return
+        }
+        sp.stop("Failed", 1)
+        prompts.log.error(`Live delivery to ${base} failed for session ${hit.session.id.slice(0, 12)}.`)
+        if (args.submit) prompts.log.info(dim("--submit waits for the whole turn; a long turn can still be running."))
+        prompts.log.info(dim(`Check with: iris sessions history ${hit.session.id.slice(0, 8)}`))
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+
+      // A named server that holds nothing is a hard failure — never a silent downgrade to the
+      // bridge, which spent 180s on a known-broken path after the user had named a target.
+      if (!shouldFallBackToBridge({ explicitUrl: args.url ?? null, liveFound: false })) {
+        prompts.log.error(`No live session server at ${args.url} holds session '${String(args.id)}'.`)
+        prompts.log.info(dim("Drop --url to try $IRIS_SERVER and the default http://127.0.0.1:4096."))
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+    }
+
+    // ── BRIDGE PATH ───────────────────────────────────────────────────────────────────────
+    // claude-code has no live server, so it still needs the daemon. Reached only after the
+    // live path declined, so the bridge is no longer a precondition for the common case.
+    if (!(await requireBridge())) { prompts.outro("Done"); return }
 
     const resolved = await resolveSession(String(args.id), args.provider ?? null)
     if ("error" in resolved) { prompts.log.error(resolved.error); prompts.outro("Done"); return }
@@ -308,6 +377,7 @@ const SendCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Sending…")
+
     const res = await bridgeFetch(`/api/sessions/${provider}/${row.session_id}/message`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

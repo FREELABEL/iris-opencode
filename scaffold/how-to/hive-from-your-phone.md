@@ -104,6 +104,21 @@ curl -H "X-Bridge-Key: $(cat ~/.iris/bridge-token)" \
      https://<machine>.<tailnet>.ts.net/hive/inbox
 ```
 
+## The easy way: the built-in page
+
+Before building anything, open this on the phone:
+
+```
+https://<machine>.<tailnet>.ts.net/hive/ui
+```
+
+It is a page the daemon serves: unread count, the message list, tap to expand
+the full body. It asks for the bridge key once and keeps it in that browser.
+**Add to Home Screen** and it behaves like an app.
+
+It is read-only — see "What this does NOT give you" below. Build a Shortcut when
+you want Siri, or a one-tap answer without opening anything.
+
 ## Step 4 — build the Shortcut
 
 **"Check my Hive"** — three actions:

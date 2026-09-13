@@ -15,6 +15,13 @@ other machine you own. You release it when you are done, and it stops costing mo
 This is different from a Hive task, which borrows a machine you already have for a few seconds.
 A rental is yours until you release it.
 
+There is a page that explains the product, and a wizard if you would rather click than type:
+
+- **https://freelabel.net/p/hive-marketplace** — what you are renting and how you know it worked
+- **https://elon.freelabel.net/dashboard/hive** — the Rent tab: provider, name, enrolment, done
+
+The rest of this covers the terminal.
+
 ## Prerequisites
 
 - `iris auth login`
@@ -62,8 +69,24 @@ iris hive rentals
 
 ```
     id  name                   provider      status     hive
-     7  my-box                 railway       active     hive node
+     7  my-box                 railway       active     in your hive
+     8  render-box             railway       active     starting up
+     9  old-box                railway       active     not reporting
 ```
+
+**The last column is what the machine confirmed, not what you asked for.** Renting a machine and
+having a machine are different events, and the column distinguishes them:
+
+| | |
+|---|---|
+| `in your hive` | it checked in within the last five minutes — the only state that means it works |
+| `starting up` | rented, never checked in. Still booting, or the install did not take |
+| `not reporting` | it was checking in and stopped. Different from never having started |
+| `no node linked` | something was lost between renting and registering; nothing can reach it |
+| `plain box` | you rented with `--no-hive`. An absence with a reason |
+
+It used to print `hive node` for anything rented with enrolment requested, which meant a machine
+that never booted looked exactly like one taking work.
 
 **5. Release it when you are done**
 
@@ -98,11 +121,19 @@ check, and retry. A release that fails is reported as a failure on purpose — i
 to say "released" and leave you paying.
 
 **The machine is not in `iris hive nodes list`**
-Either it is still starting, or it was rented with `--no-hive`. `iris hive rentals` shows which:
-a rental that declined enrolment reads *not enrolled* rather than simply being absent.
+`iris hive rentals` says which of the four reasons it is. `starting up` means give it a minute;
+if it stays there, the machine booted without the agent — check you did not pass a custom
+`--image` that lacks it. `plain box` means you asked for that with `--no-hive`. `not reporting`
+means it worked and stopped, which is the one worth looking at.
+
+**I passed my own `--image` and the machine never appeared**
+An explicit image is always honoured, and we cannot tell from outside whether yours contains the
+IRIS agent. If it does not, the machine boots, bills, and never joins. Leave `--image` off to get
+the default agent image, or make sure your own is built from it.
 
 ## Related
 
 - `iris hive run` — run a command on any machine in your Hive
 - `iris hive selftest <node>` — prove a machine's transport actually works
 - `iris hive nodes list` — every machine in your Hive, rented or your own
+- **https://freelabel.net/p/hive-marketplace** — the page to send someone who has not used it

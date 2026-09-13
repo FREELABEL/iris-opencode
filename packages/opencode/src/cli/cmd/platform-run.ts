@@ -29,9 +29,11 @@ import { IntegrationsHealthCommand, IntegrationsTestCommand } from "./integratio
 import {
   normalizeCatalog, normalizeEntry, findEntry, isOAuthEntry, requiredFields,
   missingRequired, parseFieldFlags, connectCommandHint, groupByCategory,
+  isKnownIntegration, hasNothingToCollect,
   type CatalogEntry,
 } from "./integration-catalog"
 import { isLocalOAuthProvider, runLocalOAuthConnect } from "./integration-oauth-connect"
+import { readIntegrationStores, findStatusDisagreements, describeDisagreement, type StoreRef } from "./integration-stores"
 import { PathwaysCommand } from "./platform-integrations-pathways"
 import { firstArray } from "../../util/array"
 import { openBrowser } from "../../util/browser"
@@ -176,8 +178,39 @@ const COMPOSIO_APIKEY_TOOLKITS: Record<string, string> = {
   perplexity: "perplexity_api_key",
 }
 
-function isIntegration(t: string): boolean {
-  return INTEGRATION_TYPES.includes(t.toLowerCase())
+/**
+ * Is this an integration, according to the SERVER — with the compiled-in array as a fast path
+ * and a fallback.
+ *
+ * #182712 replaced the hardcoded catalog with the live registry for `list-available` and
+ * `connect`, and left `exec` reading the array. So a connector could be listed by
+ * `list-available`, connectable, and still un-executable, because the compiled-in array had never
+ * heard of it: `exec <type> <fn>` fell through to the V6 system-tool branch, which DISCARDS the
+ * function argument and asks for a tool by the bare type name. Measured 2026-09-06 on reclaim:
+ *
+ *     iris integrations exec reclaim list_tasks   ->  "Unknown tool: reclaim"
+ *     iris integrations exec reclaim.list_tasks   ->  works
+ *
+ * The array holds 41 types; the registry holds 95. Everything in the gap fails this way, and it
+ * fails with the SAME message a genuinely unregistered type produces — so a correctly built
+ * connector cannot be told apart from a missing one.
+ *
+ * Checking the array first keeps the common case network-free; only an unrecognised target pays
+ * for a lookup, and if the registry is unreachable we are exactly where we were before.
+ */
+async function isIntegrationLive(t: string): Promise<boolean> {
+  const wanted = String(t ?? "").trim().toLowerCase()
+  if (!wanted) return false
+
+  // Fast path: no network for anything the binary already knows.
+  if (isKnownIntegration(wanted, INTEGRATION_TYPES, SLUG_ALIASES, [])) return true
+
+  try {
+    const { entries } = await loadCatalog()
+    return isKnownIntegration(wanted, INTEGRATION_TYPES, SLUG_ALIASES, entries)
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -774,18 +807,80 @@ const ListConnectedCommand = cmd({
     // to re-run `connect`, and the retry created a second half-finished OAuth — which is the
     // single dominant cause of dead connections in the audit. The false negative did not just
     // mislead, it manufactured the failure it described.
-    let items: any[] | null = null
-    let failure: string | null = null
-    try {
-      const res = await irisFetch(`/api/v1/users/${userId}/integrations`)
-      if (res.ok) {
-        const data = (await res.json()) as any
-        items = [...(data?.connections ?? data?.data ?? data ?? [])]
-      } else {
-        failure = `the integrations API returned HTTP ${res.status}`
-      }
-    } catch (e) {
-      failure = e instanceof Error ? e.message : String(e)
+    // THERE ARE TWO INTEGRATION STORES, and this command read the wrong one (#184152).
+    // fl-api and iris-api each keep their own `integrations` table and both serve
+    // /api/v1/users/{id}/integrations. `irisFetch` defaults to FL_API despite its name, so
+    // the call below used to omit the base and silently read fl-api — while
+    // `execute-direct` runs on IRIS-API and resolves credentials from ITS table.
+    //
+    // MEASURED 2026-09-08: `list-connected` showed two Gmail rows, both status=active, one
+    // of them a client's (delegation auth, healthcare account) — while BOTH execution rails,
+    // `iris gmail inbox` and `integrations exec gmail read_emails|fetch_emails`, answered
+    // "No active 'gmail' connection found. Run: iris connect gmail". Network healthy at the
+    // time (freelabel.net/raichu both 2xx), so this is not an outage artefact.
+    //
+    // WHAT IT ACTUALLY IS, measured 2026-09-08 by reading iris-api authenticated:
+    // BOTH stores hold gmail rows, they are DIFFERENT rows, and they DISAGREE ON STATUS.
+    //   iris-api (iris_db) gmail id=11, id=116, +2 more -> ALL status=expired
+    //   fl-api             gmail id=3, id=14            -> both status=active
+    // execute-direct runs on iris-api and filters status='active', so it matches nothing and
+    // says "No active 'gmail' connection found". This listing read fl-api, saw active, and
+    // showed Gmail as connected. Neither lies about its own database; nothing compared them.
+    //
+    // (An earlier draft of this comment guessed the rows lived only in fl-api. That was wrong
+    // and is recorded here rather than quietly deleted, because the wrong guess is the reason
+    // the `inExecStore` flag below must stay a statement about WHICH STORE and never a claim
+    // that a row works.)
+    //
+    // This is the second face of #182615 — FlApi\Integration repointed at iris_db while every
+    // sibling model uses fl_api. Its first face was rows present in one database and absent
+    // from the other; this one is the same row-set drifting to different statuses. Fixing it
+    // properly means resolving the split, NOT mirroring rows into both, which #182615 says
+    // doubles the places a connection can rot. #181361 tracks the exec rail itself.
+    //
+    // That is the #181228 shape inverted — there a real connection was hidden, here a
+    // phantom one is shown — and it is the more dangerous direction, because the advised
+    // fix is `connect`, and an abandoned OAuth retry is the dominant cause of dead
+    // connections in the audit. The false positive manufactures the failure it describes.
+    //
+    // So: read BOTH, label every row with the store holding it, and never report a bare
+    // negative. `sibling` on line 449 already passed IRIS_API explicitly; this agrees with it.
+    const stores: StoreRef[] = [
+      // `execute-direct` — where every `integrations exec` call lands — reads iris-api's
+      // table only. A row missing from there cannot be resolved by exec; a row present
+      // there is not thereby proven to work. The flag says which store, nothing more.
+      { label: "iris-api", base: IRIS_API, inExecStore: true },
+      { label: "fl-api", base: FL_API, inExecStore: false },
+    ]
+
+    const read = await readIntegrationStores(stores, async (base) => {
+      const res = await irisFetch(`/api/v1/users/${userId}/integrations`, {}, base)
+      return { ok: res.ok, status: res.status, body: res.ok ? await res.json() : undefined }
+    })
+
+    const items: any[] | null = read.rows
+    const failure: string | null = read.failure
+
+    if (read.unreachable.length > 0 && !failure) {
+      prompts.log.warn(
+        `Only searched ${stores.length - read.unreachable.length} of ${stores.length} stores — could not reach ${read.unreachable.join(", ")}. This list may be incomplete.`,
+      )
+    }
+    // A type both stores hold but disagree about is the most confusing state this layer
+    // produces, and until 2026-09-08 no surface reported it. See findStatusDisagreements.
+    for (const d of findStatusDisagreements(read.rows ?? [])) {
+      prompts.log.warn(`Stores disagree — ${describeDisagreement(d)}`)
+      prompts.log.info(
+        dim("`integrations exec` believes iris-api. If that side says expired, RE-AUTH the existing"),
+      )
+      prompts.log.info(dim("connection; do not run `connect`, which mints another row instead of fixing this one."))
+    }
+
+    if (read.unreachableByExecCount > 0) {
+      prompts.log.warn(
+        `${read.unreachableByExecCount} connection(s) are in fl-api's store only. \`integrations exec\` runs on iris-api and does not read that store, so it cannot resolve them.`,
+      )
+      prompts.log.info(dim("Do NOT re-run `connect` on the strength of this — an abandoned OAuth leaves a dead row behind."))
     }
 
     if (args.json) {
@@ -1172,12 +1267,78 @@ const ConnectCommand = cmd({
         if (args["api-key"] && requiredFields(entry).length === 1) {
           provided[requiredFields(entry)[0].name] = String(args["api-key"])
         }
+        // …and for an entry that declares NO fields at all, where typing the flag is itself
+        // the statement of what the credential is called. Without this the flag is silently
+        // ignored on exactly the connectors that need it most.
+        if (args["api-key"] && requiredFields(entry).length === 0) {
+          provided.api_key = String(args["api-key"])
+        }
+
+        // A non-OAuth connector that declares no credential fields collects nothing, so
+        // `missing` is empty, the prompt never fires, and we POST `credentials: {}` — which
+        // the API rejects as 422 and the CLI reports as "Could not store the credential",
+        // blaming storage for a value that was never gathered.
+        //
+        // Measured 2026-09-06 against the live registry: EIGHT connectors are in this state —
+        // 1password, apollo, cloudflare-api-key, google-gemini, mailjet, mercury, reclaim,
+        // vapi — because their `config/integrations/<type>.yml` declares `auth: {type: api_key}`
+        // with no `fields:` block. Every one of them fails at the moment of connecting, which
+        // is the worst possible moment to be told something vague.
+        //
+        // We cannot invent the field names (mailjet needs api_key AND api_secret; guessing a
+        // single `api_key` would store a half-credential that fails later, somewhere else).
+        // So: refuse, say exactly what is wrong and where, and name the two commands that do
+        // work today.
+        if (hasNothingToCollect(entry, provided)) {
+          prompts.log.error(
+            `${entry.name} declares ${highlight(entry.authType)} authentication but no credential fields, `
+            + `so there is nothing to ask you for.`,
+          )
+          console.log()
+          console.log(`  ${dim("This is a gap in the connector's config/integrations/" + entry.type + ".yml — it needs an auth.fields block.")}`)
+          console.log()
+          if (entry.setupUrl) {
+            console.log(`  ${dim("Get your key:")} ${highlight(entry.setupUrl)}`)
+            console.log()
+          }
+          console.log(`  ${dim("Meanwhile, name the field yourself:")}`)
+          console.log(`    ${highlight(`iris integrations connect ${entry.type} --field api_key=<value>`)}`)
+          console.log(`    ${highlight(`iris integrations setup-native ${entry.type} --key <value>`)}`)
+          console.log()
+          process.exitCode = 1
+          prompts.outro("Done")
+          return
+        }
 
         let missing = missingRequired(entry, provided)
 
         if (missing.length > 0 && process.stdin.isTTY && !args.json) {
           console.log()
           console.log(`  ${entry.name} uses ${highlight(entry.authType)} authentication.`)
+
+          // WHERE TO GET THE KEY, at the moment we ask for it.
+          //
+          // `auth.setup_url` was already declared by 18 connectors and read by NOTHING —
+          // not this CLI, not iris-api. So the answer to "where do I get this?" existed,
+          // in version control, and never reached the one screen where it is needed. Same
+          // for the per-field `help_text`, which 13 of 14 connectors write and the catalog
+          // used to drop on the floor.
+          if (entry.setupUrl) {
+            console.log()
+            console.log(`  ${dim("Get your key:")} ${highlight(entry.setupUrl)}`)
+
+            const open = await prompts.confirm({ message: "Open it in your browser?", initialValue: true })
+            if (prompts.isCancel(open)) {
+              process.exitCode = 1
+              prompts.outro("Cancelled")
+              return
+            }
+            if (open && !openBrowser(entry.setupUrl)) {
+              // A browser that will not open is not a reason to stop — the URL is on screen.
+              console.log(`  ${dim("Could not open a browser. Copy the link above.")}`)
+            }
+          }
+
           console.log()
           for (const f of missing) {
             if (f.description) console.log(`  ${dim(f.description)}`)
@@ -1783,7 +1944,7 @@ const ExecCommand = cmd({
     }
 
     try {
-      if (isIntegration(target)) {
+      if (await isIntegrationLive(target)) {
         if (!fn) {
           // Show available functions for this integration
           const functions = INTEGRATION_FUNCTIONS[target] ?? INTEGRATION_FUNCTIONS[SLUG_ALIASES[target] ?? ""]

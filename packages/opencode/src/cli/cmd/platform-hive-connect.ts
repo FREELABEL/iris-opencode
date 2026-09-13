@@ -300,8 +300,33 @@ const HiveConnectCommand = cmd({
 
     const ctl = daemonCtl()
     if (!ctl) {
-      prompts.log.warn(`Daemon binary not found. Install it: ${dim(installHint())}`)
-      prompts.log.info(`Then run: ${dim("iris daemon start")}`)
+      // #184597 — say WHY the daemon is missing, or this advice is a LOOP.
+      //
+      // installHint() points at the installer. On Windows the installer is exactly what
+      // skipped the bridge, because Node.js was absent. So: installer skips Step 5 and
+      // prints "installed successfully!", user runs `iris hive connect`, connect says
+      // "Daemon binary not found, install it: <re-run the installer>", the installer skips
+      // Step 5 again. Nothing anywhere in that circle names Node.js. Measured on a client's
+      // Windows machine 2026-09-11 — roughly two hours lost going round it.
+      let hasNode = true
+      try {
+        execSync(platform() === "win32" ? "where node" : "command -v node", {
+          stdio: "ignore",
+          timeout: 3000,
+        })
+      } catch {
+        hasNode = false
+      }
+
+      if (!hasNode) {
+        prompts.log.error("Node.js is not installed, so the Hive daemon cannot run on this machine.")
+        prompts.log.info(
+          `Install it: ${dim("https://nodejs.org")}  ·  then re-run: ${dim("iris hive connect")}`,
+        )
+      } else {
+        prompts.log.warn(`Daemon binary not found. Install it: ${dim(installHint())}`)
+        prompts.log.info(`Then run: ${dim("iris daemon start")}`)
+      }
       prompts.outro("Done")
       return
     }

@@ -831,6 +831,67 @@ if [[ "$no_modify_path" != "true" ]]; then
     fi
 fi
 
+# Persist a directory on PATH for FUTURE shells by appending to ~/.iris/env — the one
+# sourceable file the block above already wired into the user's shell config.
+#
+# #184930: install_node used to end with `add_to_path "$config_file" ... 2>/dev/null || true`.
+# No function of that name has ever existed in this script — grep found exactly one hit in
+# 3,011 lines, the call itself — and the redirect swallowed "command not found". So a fresh
+# install put Node on PATH for the installer's own session and nowhere else: the daemon then
+# died on the next reboot with `node` not found, while `iris-daemon start` still reported
+# success. ("$config_file" was also unbound under `set -u` whenever --no-modify-path was
+# passed, so the dead call had a second way to fail.)
+#
+# Appending here rather than editing .zshrc again on purpose: a second writer to shell
+# configs is how the first one stops being trustworthy. One mechanism, one file.
+persist_path_in_iris_env() {
+    local dir="$1"
+
+    if [ ! -f "$IRIS_ENV_FILE" ]; then
+        print_message warning "Could not put $dir on PATH: $IRIS_ENV_FILE is missing."
+        print_message info "  Add this to your shell config by hand: export PATH=\"$dir:\$PATH\""
+        return 1
+    fi
+
+    if grep -qF "$dir" "$IRIS_ENV_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    if [ "$current_shell" = "fish" ]; then
+        {
+            printf '\n'
+            printf 'if not contains "%s" $PATH\n' "$dir"
+            printf '    set -gx PATH "%s" $PATH\n' "$dir"
+            printf 'end\n'
+        } >> "$IRIS_ENV_FILE" 2>/dev/null || true
+    else
+        {
+            printf '\n'
+            printf 'case ":${PATH}:" in\n'
+            printf '    *:"%s":*) ;;\n' "$dir"
+            printf '    *) export PATH="%s:$PATH" ;;\n' "$dir"
+            printf 'esac\n'
+        } >> "$IRIS_ENV_FILE" 2>/dev/null || true
+    fi
+
+    # Read it back. The append is the claim; this is the observation.
+    if ! grep -qF "$dir" "$IRIS_ENV_FILE" 2>/dev/null; then
+        print_message warning "Could not write PATH setup to $IRIS_ENV_FILE."
+        print_message info "  Add this to your shell config by hand: export PATH=\"$dir:\$PATH\""
+        return 1
+    fi
+
+    # --no-modify-path means nothing sources ~/.iris/env automatically, so the line above
+    # is inert for new shells. Say so rather than letting the user find out at reboot.
+    if [ "$no_modify_path" = "true" ]; then
+        print_message warning "--no-modify-path: $dir is on PATH for this session only."
+        print_message info "  Add \`. \"$IRIS_ENV_FILE\"\` to your shell config to make it permanent."
+        return 1
+    fi
+
+    return 0
+}
+
 # ─── Node.js ──────────────────────────────────────────────────────────────────
 #
 # The Hive bridge/daemon needs Node. This script never installed it, never checked for it,
@@ -869,7 +930,12 @@ install_node() {
 
     if [ -x "$NODE_HOME/bin/node" ]; then
         export PATH="$NODE_HOME/bin:$PATH"
-        node_ok && return 0
+        # Re-runs land here. Persist on this path too: otherwise a second install over an
+        # already-unpacked Node leaves future shells exactly as broken as the first one did.
+        if node_ok; then
+            persist_path_in_iris_env "$NODE_HOME/bin" || true
+            return 0
+        fi
     fi
 
     node_url="https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$os-$arch.tar.gz"
@@ -888,7 +954,9 @@ install_node() {
     rm -rf "$node_tmp"
 
     export PATH="$NODE_HOME/bin:$PATH"
-    add_to_path "$config_file" "export PATH=$NODE_HOME/bin:\$PATH" 2>/dev/null || true
+    if ! persist_path_in_iris_env "$NODE_HOME/bin"; then
+        print_message warning "  Until then the Hive daemon will die on reboot: node will not be on PATH."
+    fi
     node_ok
 }
 
@@ -1427,12 +1495,20 @@ case "${1:-status}" in
         LBL="io.heyiris.daemon"
         PLIST="$HOME/Library/LaunchAgents/$LBL.plist"
         if [ -f "$PLIST" ] && command -v launchctl >/dev/null 2>&1; then
-            if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null \
-               || launchctl load "$PLIST" 2>/dev/null; then
-                sleep 2
+            # Same lesson as #184931 one layer up: launchctl's exit code is not evidence.
+            # This used to print "Daemon started (launchd)" off a zero from `load`, which
+            # returns zero for jobs it never registered. Wait for the socket instead.
+            LC_ERR=$(launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>&1) \
+              || LC_ERR=$(launchctl load -w "$PLIST" 2>&1) || true
+            for _ in 1 2 3 4 5; do
+                [ -S "$SOCK" ] && break
+                sleep 1
+            done
+            if [ -S "$SOCK" ]; then
                 echo "Daemon started (launchd)"
                 exit 0
             fi
+            echo "launchd did not bring the daemon up${LC_ERR:+ ($(printf '%s' "$LC_ERR" | head -1))} — starting it unsupervised."
         fi
 
         nohup node "$BRIDGE_DIR/daemon.js" > "$BRIDGE_DIR/daemon.log" 2>&1 &
@@ -1594,12 +1670,23 @@ DCTL
     ln -sf "$bridge_dir/daemonctl" "$INSTALL_DIR/iris-daemon"
 
     # ── macOS LaunchAgent: auto-start daemon on login ──
+    #
+    # #184931: this block used to finish with `launchctl load "$plist_dest" 2>/dev/null || true`
+    # and the summary below printed "Auto-start: enabled (starts on login)" unconditionally.
+    # A client whose clone shipped without installers/macos/ was told auto-start was enabled
+    # for a plist that was never written and a job launchd had never heard of. The defect is
+    # a status line that cannot say "no"; the discarded stderr only hid it.
+    local autostart_ok="false"
+    local autostart_reason=""
+
     if [ "$(uname)" = "Darwin" ]; then
         local plist_name="io.heyiris.daemon.plist"
+        local plist_label="io.heyiris.daemon"
         local plist_src="$bridge_dir/installers/macos/$plist_name"
         local plist_dest="$HOME/Library/LaunchAgents/$plist_name"
         local wrapper_src="$bridge_dir/installers/macos/iris-daemon-wrapper.sh"
         local wrapper_dest="$HOME/.iris/iris-daemon-wrapper.sh"
+        local lc_err=""
 
         # Copy and configure wrapper script
         if [ -f "$wrapper_src" ]; then
@@ -1609,15 +1696,49 @@ DCTL
             chmod 755 "$wrapper_dest"
         fi
 
-        # Install plist with HOME path substitution
-        if [ -f "$plist_src" ]; then
-            sed "s|__HOME__|$HOME|g" "$plist_src" > "$plist_dest"
-            # Also fix daemon path to bridge
-            sed -i '' "s|/.iris/daemon|/.iris/bridge|g" "$plist_dest" 2>/dev/null || true
+        if ! command -v launchctl >/dev/null 2>&1; then
+            autostart_reason="launchctl not found"
+        elif [ ! -f "$plist_src" ]; then
+            # This is the case that printed "enabled" for a client in the bug report.
+            autostart_reason="plist template missing from this build ($plist_src)"
+        elif [ ! -f "$wrapper_src" ]; then
+            autostart_reason="daemon wrapper missing from this build ($wrapper_src)"
+        else
+            mkdir -p "$HOME/Library/LaunchAgents" 2>/dev/null || true
 
-            # Load (unload first if already loaded)
-            launchctl unload "$plist_dest" 2>/dev/null || true
-            launchctl load "$plist_dest" 2>/dev/null || true
+            # Install plist with HOME path substitution
+            if ! sed "s|__HOME__|$HOME|g" "$plist_src" > "$plist_dest" 2>/dev/null; then
+                autostart_reason="could not write $plist_dest"
+            else
+                # Also fix daemon path to bridge
+                sed -i '' "s|/.iris/daemon|/.iris/bridge|g" "$plist_dest" 2>/dev/null || true
+
+                if command -v plutil >/dev/null 2>&1 && ! plutil -lint "$plist_dest" >/dev/null 2>&1; then
+                    autostart_reason="generated plist is malformed ($plist_dest)"
+                else
+                    # bootout first: `bootstrap` refuses a label that is already loaded.
+                    launchctl bootout "gui/$(id -u)/$plist_label" 2>/dev/null \
+                      || launchctl unload "$plist_dest" 2>/dev/null || true
+
+                    # Keep stderr. "Load failed: 5: Input/output error" is the whole diagnosis,
+                    # and 2>/dev/null is what made this bug invisible for as long as it was.
+                    # -w on the legacy fallback so a previously-disabled job is re-enabled.
+                    lc_err=$(launchctl bootstrap "gui/$(id -u)" "$plist_dest" 2>&1) \
+                      || lc_err=$(launchctl load -w "$plist_dest" 2>&1) \
+                      || true
+
+                    # Ask launchd what it has, rather than trusting the exit code: legacy
+                    # `launchctl load` returns 0 for jobs it never actually registered.
+                    if launchctl list 2>/dev/null | grep -q "$plist_label"; then
+                        autostart_ok="true"
+                    else
+                        autostart_reason="launchd did not register $plist_label"
+                        if [ -n "$lc_err" ]; then
+                            autostart_reason="$autostart_reason — $(printf '%s' "$lc_err" | head -1)"
+                        fi
+                    fi
+                fi
+            fi
         fi
     fi
 
@@ -1637,7 +1758,15 @@ DCTL
     print_message info "${MUTED}      Bridge:  ${NC}iris-bridge start|stop|status"
     print_message info "${MUTED}      Daemon:  ${NC}iris-daemon start|stop|status|register${MUTED} (Hive compute node)${NC}"
     if [ "$(uname)" = "Darwin" ]; then
-        print_message info "${MUTED}      Auto-start: ${NC}enabled${MUTED} (starts on login)${NC}"
+        if [ "$autostart_ok" = "true" ]; then
+            print_message info "${MUTED}      Auto-start: ${NC}enabled${MUTED} (starts on login)${NC}"
+        else
+            # Deliberately a warning, not a failure: the CLI is fully usable without the
+            # daemon — only Hive compute needs it — so aborting the install would be worse
+            # than saying plainly that this one piece did not get set up.
+            print_message warning "      Auto-start: ${ORANGE}not enabled${NC} — ${autostart_reason:-unknown reason}"
+            print_message info "${MUTED}      Start the daemon yourself when you need it: ${NC}iris-daemon start"
+        fi
     fi
 }
 

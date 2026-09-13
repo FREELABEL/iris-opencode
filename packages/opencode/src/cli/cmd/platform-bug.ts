@@ -504,6 +504,65 @@ async function submitBug(args: {
 // Commands
 // ============================================================================
 
+/**
+ * Where did the title come from, and did argv actually collapse?
+ *
+ * yargs folds `--title "x"` into the SAME array as the `title..` positional, so `args.title`
+ * cannot tell an explicit flag from sprayed words. Provenance has to be recovered from argv.
+ *
+ * MEASURED against this builder (#184937), and the results are why the old predicate was
+ * pointed the wrong way:
+ *
+ *   --title "leads tasks list --json has a null status"
+ *     -> title ["leads tasks list --json has a null status"]   json undefined
+ *   report "search returns 0" daycare --json TX 78634          <- the collapse we fear
+ *     -> title ["search returns 0","daycare","TX","78634"]      json TRUE
+ *
+ * In the collapse, `--json` is CONSUMED as a flag and is gone from the title array. So a scan
+ * of the title for `--`-shaped tokens cannot see the damage — while an explicit `--title` whose
+ * prose happens to mention `--json` trips it every time. The guard fired only on the safe case
+ * and never on the dangerous one, and it made every bug titled after the flag that causes it
+ * unfileable — disproportionately the reports about flags.
+ *
+ * The signal that DOES separate them: in a collapse, positional words appear AFTER an option
+ * flag. Nothing legitimate puts a bare title word after `--json`.
+ */
+export function titleProvenance(argv: string[]): {
+  explicit?: string
+  collapsed?: { flag: string; strayAfter: string }
+} {
+  // Only look at tokens belonging to this subcommand.
+  const start = argv.findIndex((a) => a === "report" || a === "submit" || a === "new")
+  const rest = start >= 0 ? argv.slice(start + 1) : argv
+  const stop = rest.indexOf("--")
+  const toks = stop >= 0 ? rest.slice(0, stop) : rest
+
+  // An explicit --title is verbatim by construction: one argv element, nothing can have slid
+  // into it. Accept it and skip the collapse check entirely.
+  const i = toks.findIndex((t) => t === "--title")
+  if (i >= 0 && toks[i + 1] !== undefined) return { explicit: toks[i + 1] }
+  const eq = toks.find((t) => t.startsWith("--title="))
+  if (eq) return { explicit: eq.slice("--title=".length) }
+
+  // Positional form. Options that take a VALUE consume the next token, so skip it — otherwise
+  // `-d body` would look like a stray word after a flag.
+  const VALUED = new Set([
+    "--description", "-d", "--severity", "-s", "--command", "-c", "--error", "-e",
+    "--title", "--bounty", "--reporter-lead", "--reporter-user", "--reporter-name",
+  ])
+  let seenFlag: string | undefined
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k]
+    if (t.startsWith("-") && t.length > 1) {
+      if (VALUED.has(t)) k++
+      else seenFlag = t
+      continue
+    }
+    if (seenFlag) return { collapsed: { flag: seenFlag, strayAfter: t } }
+  }
+  return {}
+}
+
 const ReportCommand = cmd({
   command: "report [title..]",
   aliases: ["submit", "new"],
@@ -567,12 +626,17 @@ const ReportCommand = cmd({
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     // Combine positional title words + any passthrough args (after --)
+
     // This handles cases like: iris bug report "--something broke" where yargs
     // would otherwise treat --something as a flag
     const titleParts: string[] = []
     if (Array.isArray(args.title)) titleParts.push(...args.title.map(String))
     if (Array.isArray(args["--"])) titleParts.push(...args["--"].map(String))
-    let title = titleParts.join(" ").trim() || undefined
+    const prov = titleProvenance(process.argv)
+    // An explicit --title wins over the folded array. It also has to: yargs DROPS the flag's
+    // value outright when positionals are present too (`report foo bar --title baz` yields
+    // ["foo","bar"]), so reading the array alone silently discards what the author typed.
+    let title = (prov.explicit ?? titleParts.join(" ")).trim() || undefined
 
     // NOTE: yargs folds `--title "x"` into the SAME array as the positional, so there is no
     // separate string branch to read here — verified, `--title x` yields ["x"]. The flag is
@@ -593,22 +657,26 @@ const ReportCommand = cmd({
     // exists. Confirmed by counter-example: #180691 was filed by this same command and stores
     // "person's push" with the apostrophe intact. So this guard aims at what argv can still
     // see — flag-shaped tokens that landed in a title, and titles too long to be titles.
-    if (title) {
+    if (title && !prov.explicit) {
+      // Only the POSITIONAL form can collapse, and the evidence is a bare word sitting after
+      // an option flag — not a `--` substring in the prose. See titleProvenance().
+      const c = prov.collapsed
+      // An unknown flag-shaped token yargs left in the positional array is still worth
+      // refusing: it means the author wrote a flag we do not have, and the title now carries it.
       const flagLike = titleParts.find((p) => /^--?[A-Za-z]/.test(p))
-      const absorbed = ["--description", "--severity", "--command", "--error", "--json", "--bounty"].find((f) =>
-        title!.includes(f),
-      )
 
-      if (flagLike || absorbed) {
+      if (c || flagLike) {
         console.error(`\n  ${bold("Refusing to file: the title absorbed a flag.")}`)
-        console.error(`  Saw: ${dim(flagLike ?? absorbed!)}`)
+        if (c) console.error(`  Saw: ${dim(`"${c.strayAfter}" came after ${c.flag}`)}`)
+        else console.error(`  Saw: ${dim(flagLike!)}`)
         console.error(`  Assembled title: ${dim(title)}`)
         console.error("")
-        console.error(`  This almost always means the shell quoting collapsed and description`)
-        console.error(`  text slid into the title. Filing it would store a corrupted report`)
-        console.error(`  that still looks complete.`)
+        console.error(`  The shell quoting collapsed: words after ${dim(c ? c.flag : "a flag")} were read as`)
+        console.error(`  title instead of staying in the value they belonged to. Filing it would`)
+        console.error(`  store a corrupted report that still looks complete.`)
         console.error("")
         console.error(`  Fix: ${dim(`iris bug report --title "short title" --description "$(cat body.txt)"`)}`)
+        console.error(`  ${dim("(--title is taken verbatim — a title may name a flag.)")}`)
         console.error("")
         process.exitCode = 1
         return

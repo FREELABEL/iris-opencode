@@ -244,6 +244,9 @@ workaround — which is why it leads with the warning rather than the happy path
 
 ## Related recipes
 
+- `share-work-across-accounts.md` — the other direction: a *named person on another account*
+  cannot open an item you sent them. Board membership, gated public links, and the handoff trap
+  where the reference travels but the permission does not.
 - `bloq-relations.md` — linking bloqs into a project hierarchy
 - `meetings.md` — filing call records onto a bloq (a common source of internal material)
 - `pages.md` — publishing content deliberately, rather than as a side effect

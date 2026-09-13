@@ -101,6 +101,13 @@ const MsgSendCommand = cmd({
     // Resolve message text (positional array or interactive prompt)
     let messageText = Array.isArray(args.message) ? args.message.join(" ") : (args.message || "")
     if (!messageText.trim()) {
+      // Prompt only when a human is actually present. Without this a piped or agent caller
+      // blocks forever on a stdin that never produces a line — the same defect measured in
+      // `iris hive inbox send` (#184561), which this command has carried since it shipped.
+      if (!process.stdin.isTTY) {
+        console.error(`No message given. Pass it as an argument:\n  iris msg send ${args.name ?? "<node>"} "your message"`)
+        process.exit(1)
+      }
       const input = await prompts.text({ message: "Message:", placeholder: "Type your message..." })
       if (prompts.isCancel(input) || !input) { prompts.outro("Cancelled"); return }
       messageText = String(input)

@@ -1,7 +1,7 @@
 import { spawnSync } from "child_process"
 import { existsSync, mkdirSync, readFileSync } from "fs"
 import { homedir } from "os"
-import { join, basename, resolve } from "path"
+import { join, basename, resolve, dirname } from "path"
 import { irisFetch, FL_API } from "../cmd/iris-api"
 import {
   auditTranscription,
@@ -53,6 +53,106 @@ export interface TranscriptionResult {
 }
 
 /**
+ * Find an ffmpeg that ACTUALLY RUNS, not one that merely exists.
+ *
+ * `which ffmpeg` is the wrong question, and it is the same mistake this repo already fixed in
+ * probeIsolation(): a binary can be on PATH and fail the moment it loads. Measured on a real
+ * machine — Homebrew upgraded x265 from soname 215 to 217 without rebuilding ffmpeg, so:
+ *
+ *   dyld: Library not loaded: /opt/homebrew/opt/x265/lib/libx265.215.dylib
+ *
+ * `which` returned a path, the presence check passed, the conversion then failed with its
+ * stderr discarded, and the user was told "ffmpeg conversion failed" plus a suggestion to
+ * install whisper — which was already installed and was never the problem. Three layers of
+ * true-but-useless.
+ *
+ * So: run `-version` on each candidate and take the first that answers. Candidates beyond PATH
+ * are ones already present on the machine — a second Homebrew cellar, or a bundle that ships
+ * its own dylibs beside it (Remotion, ffmpeg-static). Nothing is installed and nothing is
+ * downloaded; this only reaches for what is already there.
+ */
+export interface FfmpegResolution {
+  bin: string | null
+  /** Extra env the binary needs — a bundled build wants its sibling dylibs on the path. */
+  env?: NodeJS.ProcessEnv
+  /** When bin is null: what was actually wrong, in the words the fix needs. */
+  diagnosis?: string
+}
+
+function ffmpegRuns(bin: string, env?: NodeJS.ProcessEnv): { ok: boolean; err: string } {
+  const r = spawnSync(bin, ["-version"], {
+    encoding: "utf8",
+    timeout: 10_000,
+    env: env ? { ...process.env, ...env } : process.env,
+  })
+  if (r.status === 0) return { ok: true, err: "" }
+  const err = [r.stderr, (r.error as Error | undefined)?.message].filter(Boolean).join(" ").trim()
+  return { ok: false, err }
+}
+
+/** A dyld failure names the library it wanted; that name IS the remedy. */
+export function explainLoadFailure(err: string): string | null {
+  const m = err.match(/Library not loaded:\s*(\S+)/)
+  if (!m) return null
+  const lib = m[1].split("/").pop() || m[1]
+  const pkg = lib.replace(/^lib/, "").replace(/\.\d+\.dylib$/, "").replace(/\.dylib$/, "")
+  return (
+    `ffmpeg is installed but cannot load ${lib}. ` +
+    `That library was upgraded without rebuilding ffmpeg against it. ` +
+    `Fix: brew reinstall ffmpeg  (or: brew reinstall ${pkg} && brew reinstall ffmpeg)`
+  )
+}
+
+export function resolveFfmpeg(): FfmpegResolution {
+  const candidates: Array<{ bin: string; env?: NodeJS.ProcessEnv }> = []
+
+  const onPath = which("ffmpeg")
+  if (onPath) candidates.push({ bin: onPath })
+
+  for (const p of ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]) {
+    if (p !== onPath && existsSync(p)) candidates.push({ bin: p })
+  }
+
+  // Bundled builds that carry their own dylibs beside them, which is exactly why they survive
+  // a broken system ffmpeg. Walked up from the working directory rather than checked only in
+  // it: in a monorepo the bundle usually sits at a root several levels above wherever the
+  // command was actually run. Bounded, and it never descends — searching the disk for a binary
+  // to execute is not a thing a transcription command should do.
+  const RELATIVE_BUNDLES = [
+    "node_modules/@remotion/compositor-darwin-arm64/ffmpeg",
+    "node_modules/@remotion/compositor-darwin-x64/ffmpeg",
+    "node_modules/ffmpeg-static/ffmpeg",
+  ]
+  let dir = process.cwd()
+  for (let up = 0; up < 6; up++) {
+    for (const rel of RELATIVE_BUNDLES) {
+      const p = join(dir, rel)
+      if (existsSync(p)) candidates.push({ bin: p, env: { DYLD_LIBRARY_PATH: dirname(p) } })
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+
+  let firstFailure = ""
+  for (const c of candidates) {
+    const { ok, err } = ffmpegRuns(c.bin, c.env)
+    if (ok) return { bin: c.bin, env: c.env }
+    if (!firstFailure) firstFailure = err
+  }
+
+  if (candidates.length === 0) {
+    return { bin: null, diagnosis: "ffmpeg not found. Install: brew install ffmpeg" }
+  }
+  return {
+    bin: null,
+    diagnosis:
+      explainLoadFailure(firstFailure) ||
+      `ffmpeg is present but will not run: ${firstFailure.slice(-300) || "no error reported"}`,
+  }
+}
+
+/**
  * On-device transcription via whisper.cpp. Returns the transcript text.
  * Throws on missing deps / conversion / transcription failure. Writes only to
  * a tmp dir and cleans up (callers decide where, if anywhere, to persist).
@@ -64,10 +164,13 @@ export async function transcribeLocal(
   const abs = resolve(audioPath)
   if (!existsSync(abs)) throw new Error(`File not found: ${abs}`)
 
-  const ffmpeg = which("ffmpeg")
+  const ff = resolveFfmpeg()
+  // whisper-cli is what Homebrew's whisper-cpp formula actually installs; whisper-cpp is the
+  // older name. Both accepted — this one was already right.
   const whisper = which("whisper-cli") || which("whisper-cpp")
-  if (!ffmpeg) throw new Error("ffmpeg not found. Install: brew install ffmpeg")
+  if (!ff.bin) throw new Error(ff.diagnosis || "ffmpeg unavailable")
   if (!whisper) throw new Error("Local transcription requires whisper-cpp. Install: brew install whisper-cpp")
+  const ffmpeg = ff.bin
 
   // Ensure model
   const modelDir = join(homedir(), ".whisper")
@@ -90,9 +193,17 @@ export async function transcribeLocal(
     const conv = spawnSync(
       ffmpeg,
       ["-y", "-i", abs, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wavPath],
-      { stdio: "ignore", timeout: LOCAL_TIMEOUT_MS },
+      // NOT stdio:"ignore". That discarded the one thing that explained the failure — the dyld
+      // error naming the library ffmpeg could not load — and left the user with four words.
+      { encoding: "utf8", timeout: LOCAL_TIMEOUT_MS, env: ff.env ? { ...process.env, ...ff.env } : process.env },
     )
-    if (conv.status !== 0 || !existsSync(wavPath)) throw new Error("ffmpeg conversion failed")
+    if (conv.status !== 0 || !existsSync(wavPath)) {
+      const detail = (conv.stderr || "").trim()
+      throw new Error(
+        explainLoadFailure(detail) ||
+          `ffmpeg could not convert this audio${detail ? `: ${detail.slice(-400)}` : ""}`,
+      )
+    }
 
     const outBase = join(work, "transcript")
     const args = ["-m", modelPath, "-otxt", "-of", outBase]

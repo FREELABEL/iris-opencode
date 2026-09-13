@@ -37,10 +37,13 @@ const ListCmd = cmd({
     y
       .option("search", { describe: "filter by slug, name, prop, emit or slot", type: "string" })
       .option("stale", { describe: "only components compiled by an older compiler", type: "boolean", default: false })
+      .option("public", { describe: "browse the shared catalogue — everything anyone published — instead of your own shelf", type: "boolean", default: false })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args: any) {
     await requireAuth()
-    const res = await api(BASE)
+    // One endpoint, two shelves. ?visibility=public is what makes `install` usable at all:
+    // you cannot install from a catalogue you have no way to read.
+    const res = await api(args.public ? `${BASE}?visibility=public` : BASE)
     if (!res.ok) { handleApiError(res, "list components"); return }
     const body = await res.json()
 
@@ -66,7 +69,11 @@ const ListCmd = cmd({
     }
     for (const c of rows) {
       const staleTag = c.stale ? `  ${UI.Style.TEXT_WARNING}stale · ${c.compilerVersion}${UI.Style.TEXT_NORMAL}` : ""
-      UI.println(`  ${bold(c.slug)}${staleTag}`)
+      // The id is shown ONLY when browsing the catalogue, because that is the only place it is
+      // needed: two authors can both publish "chat-stage", so a slug does not name one row.
+      const idTag = args.public ? dim(`  #${c.id}`) : ""
+      UI.println(`  ${bold(c.slug)}${idTag}${staleTag}`)
+      if (args.public && c.author) UI.println(dim(`    by ${c.author}${c.authorHandle ? ` (@${c.authorHandle})` : ""}`))
       if (c.description) UI.println(dim(`    ${c.description}`))
       if (c.props?.length) UI.println(dim(`    props   ${c.props.join(" · ")}`))
       if (c.emits?.length) UI.println(dim(`    emits   ${c.emits.join(" · ")}`))
@@ -76,7 +83,9 @@ const ListCmd = cmd({
     const staleCount = (body.components ?? []).filter((c: any) => c.stale).length
     UI.println(dim(`  ${rows.length} shown · ${(body.components ?? []).length} total`
       + (staleCount ? ` · ${staleCount} compiled by an older compiler` : "")))
-    UI.println(dim(`  iris genesis components show <slug>   ·   usage <slug>`))
+    UI.println(dim(args.public
+      ? `  iris genesis library install <slug>   —   copy one into your own library`
+      : `  iris genesis components show <slug>   ·   usage <slug>`))
   },
 })
 
@@ -497,6 +506,152 @@ const MergeCmd = cmd({
   },
 })
 
+/**
+ * `install` — take a copy of someone else's published component into your own library.
+ *
+ * WHY A COPY AND NOT A REFERENCE. A reference would mean the author can change what renders on
+ * your page, from their account, without you doing anything — a supply chain you did not agree
+ * to, on a surface your client sees. A copy is yours: it cannot change underneath you, and the
+ * cost is that you do not get their fixes automatically. That trade is the right way round for
+ * a page you are responsible for.
+ *
+ * THE INSTALLED COPY IS PRIVATE, ALWAYS. Installing a public component does not republish it
+ * under your name. Visibility is deliberately NOT sent here, so the server's rule applies —
+ * absent means private for a new component — and re-listing it is a separate deliberate act.
+ * Inheriting `public` would turn one install into a second listing of someone else's work,
+ * attributed to you.
+ *
+ * IT REFUSES TO CLOBBER. If you already own that slug, this stops: overwriting silently would
+ * replace a component every page of yours already names, which is exactly the (user_id, slug)
+ * collision store() was hardened against. `--as` renames, `--force` overwrites on purpose.
+ */
+const InstallCmd = cmd({
+  command: "install <slug>",
+  aliases: ["add", "fork"],
+  describe: "copy a component from the public catalogue into your own library",
+  builder: (y: any) =>
+    y
+      .positional("slug", { describe: "slug from the public catalogue (or an id, when a slug is ambiguous)", type: "string", demandOption: true })
+      .option("id", { describe: "install this exact catalogue id — required when two authors published the same slug", type: "number" })
+      .option("as", { describe: "install under a different slug in your library", type: "string" })
+      .option("force", { describe: "overwrite a component you already own with this slug", type: "boolean", default: false })
+      .option("json", { describe: "output as JSON", type: "boolean", default: false }),
+  async handler(args: any) {
+    await requireAuth()
+
+    // ── resolve which row to install ────────────────────────────────────────────────────
+    // An id names exactly one component; a slug names one only if a single author published
+    // it. Resolving an ambiguous slug by picking the newest would install a stranger's
+    // component under a name the caller believed meant something else.
+    let id: number | undefined = args.id
+    let listed: any = undefined
+
+    if (!id) {
+      const numeric = /^[0-9]+$/.test(String(args.slug))
+      if (numeric) {
+        id = Number(args.slug)
+      } else {
+        const res = await api(`${BASE}?visibility=public`)
+        if (!res.ok) { handleApiError(res, "read the public catalogue"); process.exitCode = 1; return }
+        const rows = firstArray((await res.json()).components) ?? []
+        const matches = rows.filter((c: any) => c.slug === args.slug)
+
+        if (matches.length === 0) {
+          UI.println("")
+          UI.println(`  nothing public is called ${bold(args.slug)}.`)
+          UI.println(dim("    iris genesis library list --public      — what is available"))
+          UI.println(dim("  A component is private until its author publishes it with --scope public."))
+          process.exitCode = 1
+          return
+        }
+
+        if (matches.length > 1) {
+          // Ambiguity is reported, never resolved by guessing.
+          UI.println("")
+          UI.println(`  ${bold(matches.length + " authors")} have published a component called ${bold(args.slug)}.`)
+          printDivider()
+          for (const m of matches) {
+            UI.println(`  ${dim("#" + m.id)}  ${m.author ?? "unknown author"}${m.authorHandle ? dim(` (@${m.authorHandle})`) : ""}`)
+            if (m.description) UI.println(dim(`      ${m.description}`))
+          }
+          printDivider()
+          UI.println(dim(`  Name one:  iris genesis library install ${args.slug} --id ${matches[0].id}`))
+          process.exitCode = 1
+          return
+        }
+
+        listed = matches[0]
+        id = matches[0].id
+      }
+    }
+
+    // ── fetch it ────────────────────────────────────────────────────────────────────────
+    const res = await api(`${BASE}/catalogue/${id}`)
+    if (!res.ok) { handleApiError(res, `read catalogue component ${id}`); process.exitCode = 1; return }
+    const c = await res.json()
+
+    if (typeof c.source !== "string" || c.source === "") {
+      UI.println("")
+      UI.println(`  ${bold(c.slug ?? String(id))} has no stored source, so there is nothing to install.`)
+      process.exitCode = 1
+      return
+    }
+
+    const target = String(args.as ?? c.slug)
+
+    // ── refuse to clobber ───────────────────────────────────────────────────────────────
+    // Checked BEFORE writing rather than relying on the store call, so the refusal can say
+    // what already lives there and offer the two ways forward.
+    if (!args.force) {
+      const mine = await api(`${BASE}/${target}`)
+      if (mine.ok) {
+        const existing = await mine.json().catch(() => ({}))
+        UI.println("")
+        UI.println(`  you already have a component called ${bold(target)}.`)
+        if (existing?.description) UI.println(dim(`    ${existing.description}`))
+        UI.println("")
+        UI.println(dim("  Installing over it would change every page of yours that names this slug."))
+        UI.println(dim(`    iris genesis library install ${args.slug} --as ${target}-2   — keep both`))
+        UI.println(dim(`    iris genesis library install ${args.slug} --force            — replace yours`))
+        if (args.json) writeJson({ ok: false, reason: "slug-taken", slug: target })
+        process.exitCode = 1
+        return
+      }
+    }
+
+    // ── store it as your own ────────────────────────────────────────────────────────────
+    // No `visibility` field: the server reads its absence as private for a new component.
+    // See the docblock — inheriting public would re-list someone else's work under your name.
+    const stored = await api(BASE, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        slug: target,
+        name: c.name ?? target,
+        description: c.description ?? "",
+        source: stripComponentHeader(c.source),
+        replace: Boolean(args.force),
+      }),
+    })
+
+    if (!stored.ok) { handleApiError(stored, `install ${target}`); process.exitCode = 1; return }
+    const body = await stored.json()
+
+    const author = c.author ?? listed?.author ?? "an unknown author"
+    UI.println("")
+    UI.println(`  ${success("installed")}  ${bold(target)}${target !== c.slug ? dim(`  (published as ${c.slug})`) : ""}`)
+    UI.println(dim(`    by ${author}${c.authorHandle ? ` (@${c.authorHandle})` : ""}  ·  catalogue #${id}`))
+    // Say the two things that are true and surprising: it is yours now, and it is not listed.
+    UI.println(dim("    your copy is private, and does not change when the author changes theirs"))
+    const declared = body?.artifact?.declared ?? c.artifact?.declared ?? {}
+    for (const [k, v] of Object.entries({ props: declared.props, emits: declared.emits, slots: declared.slots })) {
+      if (Array.isArray(v) && v.length) UI.println(dim(`    ${k.padEnd(7)} ${v.join(" · ")}`))
+    }
+    UI.println(dim(`  ${highlight(`iris genesis library pull ${target}`)} — edit it locally`))
+    if (args.json) writeJson({ ok: true, slug: target, installedFrom: { id, slug: c.slug, author } })
+  },
+})
+
 const PublishCmd = cmd({
   command: "publish <slug>",
   aliases: ["push", "create"],
@@ -509,9 +664,29 @@ const PublishCmd = cmd({
       .option("description", { describe: "one line describing what it is for", type: "string" })
       .option("dry-run", { describe: "compile only — report errors and slots, publish nothing", type: "boolean", default: false })
       .option("force", { describe: "publish even if someone else changed the component since you pulled it", type: "boolean", default: false })
+      // No DEFAULT on purpose. Omitting it keeps whatever scope the component already had, and
+      // a new component starts private. A default of "private" here would look identical but
+      // behave differently: it would send private on every ordinary republish and quietly pull
+      // a public component back out of the catalogue.
+      .option("scope", { describe: "private (default for a new component) | public — listed in the shared catalogue. Omit to keep the current scope", type: "string", choices: ["private", "public"] })
+      // Same no-default rule as --scope, and for a sharper reason: a default here decides
+      // what something COSTS. Omitting it keeps whatever the component already had.
+      .option("access", { describe: "free (default for a new component) | paid — requires --price. Omit to keep the current access", type: "string", choices: ["free", "paid"] })
+      .option("price", { describe: "price in whole currency units, e.g. --price 25 for $25.00. Only meaningful with --access paid", type: "number" })
       .option("json", { describe: "output as JSON", type: "boolean", default: false }),
   async handler(args: any) {
     await requireAuth()
+
+    // Caught here as well as server-side: this is the one mistake whose cost is a component
+    // listed at a price its author did not choose, and a round trip is not needed to see it.
+    if (args.access === "paid" && !(typeof args.price === "number" && args.price > 0)) {
+      UI.println("")
+      UI.println("  --access paid needs a price.")
+      UI.println(dim(`    iris genesis library publish ${args.slug} --file ${args.file} --scope public --access paid --price 25`))
+      UI.println(dim("  Nothing was published."))
+      process.exitCode = 1
+      return
+    }
 
     const file = Bun.file(args.file)
     if (!(await file.exists())) {
@@ -582,6 +757,19 @@ const PublishCmd = cmd({
         ...(pulledFrom && pulledFrom.hash && pulledFrom.hash !== "none" && !args.force
           ? { expected_hash: pulledFrom.hash }
           : {}),
+        // Sent only when asked for. The server reads an absent visibility as "unchanged", which
+        // is the behaviour every existing caller needs — the studio republishes on every save
+        // and has no opinion about scope.
+        ...(args.scope ? { visibility: args.scope } : {}),
+        // Likewise for price. Absent means unchanged; the server refuses paid-without-a-price
+        // rather than picking a reading of it.
+        ...(args.access ? { access_type: args.access } : {}),
+        ...(typeof args.price === "number" && !Number.isNaN(args.price)
+          // Whole units in, cents out. The CLI takes dollars because that is what a person
+          // means by a price, and rounds ONCE here rather than letting a float reach the
+          // column that gets charged.
+          ? { price_cents: Math.round(args.price * 100) }
+          : {}),
       }),
     })
 
@@ -618,6 +806,13 @@ const PublishCmd = cmd({
 
     UI.println("")
     UI.println(`  ${success("published")}  ${bold(args.slug)}${body.version ? dim(`  v${body.version}`) : ""}`)
+    // Say the price back. A publish that silently accepted a figure is how the wrong one ships.
+    if (body.accessType === "paid") {
+      const dollars = ((body.priceCents ?? 0) / 100).toFixed(2)
+      UI.println(dim(`    paid · $${dollars}`)
+        + (body.listing ? dim(`  ·  listing ${body.listing.slug} — ${body.listing.status.replace("_", " ")}`) : ""))
+      if (!body.listing) UI.println(dim("    not listed — a component is only listed once it is public, paid and priced"))
+    }
     for (const line of shape) UI.println(dim(`    ${line}`))
     // Every page naming this slug renders the NEW artifact from now on. Say so here rather
     // than letting it be discovered on a page nobody was looking at.
@@ -780,6 +975,7 @@ export const LibraryCmd = cmd({
       .command(DiffCmd)
       .command(MergeCmd)
       .command(PublishCmd)
+      .command(InstallCmd)
       .command(ListCmd)
       .command(ShowCmd)
       .command(UsageCmd)

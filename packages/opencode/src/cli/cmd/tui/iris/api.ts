@@ -1,7 +1,18 @@
 import { createSignal, onCleanup } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { irisFetch, resolveUserId } from "../../iris-api"
-import type { IrisAgent, IrisWorkflow, IrisWorkflowDetail, AtlasList, AtlasItem, IrisContact, IrisPage, IrisHiveSession } from "./types"
+import type {
+  IrisAgent,
+  IrisWorkflow,
+  IrisWorkflowDetail,
+  AtlasList,
+  AtlasItem,
+  IrisContact,
+  IrisPage,
+  IrisHiveNode,
+  IrisHivePeer,
+} from "./types"
+import { resolveLocalNode } from "../../hive-local-node"
 import { IRIS_API } from "../../iris-api"
 import os from "os"
 import path from "path"
@@ -32,7 +43,15 @@ interface IrisDataStore {
   contacts: IrisContact[]
   pages: IrisPage[]
   playbooks: IrisPlaybook[]
-  hiveSessions: IrisHiveSession[]
+  hiveNodes: IrisHiveNode[]
+  hivePeers: IrisHivePeer[]
+  /** Invites sent but not yet accepted — a real state, distinct from "no peers". */
+  hivePendingInvites: number
+  /**
+   * Whether the network numbers below were actually MEASURED. An empty roster and a failed
+   * fetch render identically unless this is checked, and "0 machines" is the reassuring one.
+   */
+  hiveStatus: DataStatus
 }
 
 function relativeTime(iso: string | null | undefined): string {
@@ -171,7 +190,7 @@ function mapContacts(leads: any[]): IrisContact[] {
 
 async function extractData(res: Response): Promise<any[]> {
   if (!res.ok) return []
-  const json = await res.json() as any
+  const json = (await res.json()) as any
   return json?.data ?? json ?? []
 }
 
@@ -186,7 +205,10 @@ export function useIrisData() {
     contacts: [],
     pages: [],
     playbooks: [],
-    hiveSessions: [],
+    hiveNodes: [],
+    hivePeers: [],
+    hivePendingInvites: 0,
+    hiveStatus: "loading",
   })
 
   let _userId: number | null = null
@@ -220,9 +242,7 @@ export function useIrisData() {
       // block runs ONCE for the user, before any project is selected, so the Pages tab showed
       // every page the account owns and could never change when you switched projects. Every
       // other tab fetches per-bloq. Pages now does too — see fetchBloqData.
-      const [bloqRes] = await Promise.all([
-        irisFetch(`/api/v1/user/${_userId}/bloqs?simplified=true`),
-      ])
+      const [bloqRes] = await Promise.all([irisFetch(`/api/v1/user/${_userId}/bloqs?simplified=true`)])
       if (bloqRes.status === 401) {
         setData("status", "no-auth")
         return
@@ -246,26 +266,27 @@ export function useIrisData() {
     if (!_userId) return
 
     try {
-      const [bloqDetailRes, agentsRes, workflowsRes, jobsRes, leadsRes, pagesRes, attachedPbRes, allPbRes] = await Promise.all([
-        irisFetch(`/api/v1/user/${_userId}/bloqs/${bloqId}`),
-        irisFetch(`/api/v1/users/${_userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
-        irisFetch(`/api/v1/users/${_userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`),
-        irisFetch(`/api/v1/users/${_userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
-        irisFetch(`/api/v1/users/${_userId}/leads?bloq_id=${bloqId}&per_page=50`),
-        // PAGES, now scoped to the selected project. owner_type+owner_id is a NARROWING
-        // filter fl-api's PageController::index already supports (its own comment: "never a
-        // widening one"), and iris-api's /v1/pages is a pass-through proxy that forwards the
-        // query verbatim, so it reaches the filter untouched.
-        irisFetch(`/api/v1/pages?user_id=${_userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`, {}, IRIS_API),
-        // PLAYBOOKS attached to this project, and the available set as a labelled fallback.
-        irisFetch(`/api/v1/bloqs/${bloqId}/playbooks`),
-        irisFetch(`/api/v1/playbooks`, {}, IRIS_API),
-      ])
+      const [bloqDetailRes, agentsRes, workflowsRes, jobsRes, leadsRes, pagesRes, attachedPbRes, allPbRes] =
+        await Promise.all([
+          irisFetch(`/api/v1/user/${_userId}/bloqs/${bloqId}`),
+          irisFetch(`/api/v1/users/${_userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
+          irisFetch(`/api/v1/users/${_userId}/bloqs/workflows?bloq_id=${bloqId}&per_page=20`),
+          irisFetch(`/api/v1/users/${_userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
+          irisFetch(`/api/v1/users/${_userId}/leads?bloq_id=${bloqId}&per_page=50`),
+          // PAGES, now scoped to the selected project. owner_type+owner_id is a NARROWING
+          // filter fl-api's PageController::index already supports (its own comment: "never a
+          // widening one"), and iris-api's /v1/pages is a pass-through proxy that forwards the
+          // query verbatim, so it reaches the filter untouched.
+          irisFetch(`/api/v1/pages?user_id=${_userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`, {}, IRIS_API),
+          // PLAYBOOKS attached to this project, and the available set as a labelled fallback.
+          irisFetch(`/api/v1/bloqs/${bloqId}/playbooks`),
+          irisFetch(`/api/v1/playbooks`, {}, IRIS_API),
+        ])
 
       // Extract atlas from single-bloq detail response
       try {
         if (bloqDetailRes.ok) {
-          const bloqJson = await bloqDetailRes.json() as any
+          const bloqJson = (await bloqDetailRes.json()) as any
           const bloqData = bloqJson?.data ?? bloqJson
           setData("atlas", reconcile(extractAtlas(bloqData)))
         }
@@ -285,28 +306,34 @@ export function useIrisData() {
       // Pages, scoped to this bloq.
       try {
         if (pagesRes.ok) {
-          const pagesJson = await pagesRes.json() as any
+          const pagesJson = (await pagesRes.json()) as any
           const rawPages = pagesJson?.data?.data ?? pagesJson?.data ?? []
           setData("pages", reconcile(mapPages(rawPages)))
         }
       } catch {}
 
-      // Playbooks. ATTACHED ones belong to this project and are the honest answer. When none
-      // are attached the tab would be empty, so the AVAILABLE set is shown instead — flagged
-      // attached:false so the UI can say so out loud. Showing 97 global playbooks under a
-      // project header without that label would repeat the exact bug this commit fixes for
-      // pages: a project-scoped panel quietly listing everything.
+      // Playbooks. BOTH lists, always, in one array flagged by scope — attached to this
+      // project first, then everything else the account can reach.
+      //
+      // This used to be either/or: attached ones, OR the global set as a fallback when nothing
+      // was attached. Both halves were wrong in the same way. With attachments you could no
+      // longer see or reach your own and the marketplace-published ones at all; without them a
+      // project-scoped panel listed all 97 globals under a one-line disclaimer. Scope belongs
+      // on every row, not in a notice you have to have read.
       try {
         const attached = attachedPbRes.ok ? await extractData(attachedPbRes) : []
-        if (Array.isArray(attached) && attached.length > 0) {
-          setData("playbooks", reconcile(mapPlaybooks(attached, true)))
-        } else if (allPbRes.ok) {
-          const allJson = await allPbRes.json() as any
+        const attachedList = mapPlaybooks(Array.isArray(attached) ? attached : [], true)
+        const attachedNames = new Set(attachedList.map((p) => p.name))
+
+        let others: IrisPlaybook[] = []
+        if (allPbRes.ok) {
+          const allJson = (await allPbRes.json()) as any
           const raw = allJson?.playbooks ?? allJson?.data ?? []
-          setData("playbooks", reconcile(mapPlaybooks(Array.isArray(raw) ? raw : [], false)))
-        } else {
-          setData("playbooks", reconcile([]))
+          // Minus the attached ones — the same playbook printed in both sections would read as
+          // two different playbooks with the same name.
+          others = mapPlaybooks(Array.isArray(raw) ? raw : [], false).filter((p) => !attachedNames.has(p.name))
         }
+        setData("playbooks", reconcile([...attachedList, ...others]))
       } catch {
         setData("playbooks", reconcile([]))
       }
@@ -321,7 +348,9 @@ export function useIrisData() {
     const bloq = data.bloqList.find((b) => b.id === data.selectedBloqId)
     if (!bloq) {
       import("fs").then((fs) => {
-        try { fs.unlinkSync(PLATFORM_CONTEXT_PATH) } catch {}
+        try {
+          fs.unlinkSync(PLATFORM_CONTEXT_PATH)
+        } catch {}
       })
       return
     }
@@ -340,7 +369,10 @@ export function useIrisData() {
       lines.push(`### Lists (${data.atlas.length} total, ${totalItems} items)`)
       for (const list of data.atlas) {
         if (list.items.length === 0) continue
-        const preview = list.items.slice(0, 3).map((i) => i.title).join(", ")
+        const preview = list.items
+          .slice(0, 3)
+          .map((i) => i.title)
+          .join(", ")
         const more = list.items.length > 3 ? ` +${list.items.length - 3} more` : ""
         lines.push(`- ${list.name} (${list.items.length}): ${preview}${more}`)
       }
@@ -390,7 +422,7 @@ export function useIrisData() {
     try {
       const res = await irisFetch(`/api/v1/users/${_userId}/bloqs/workflows/${workflowId}`)
       if (!res.ok) return null
-      const raw = await res.json() as any
+      const raw = (await res.json()) as any
       const wf = raw?.data ?? raw
       let status: IrisWorkflowDetail["status"] = "idle"
       if (wf.status === "running") status = "running"
@@ -488,15 +520,15 @@ export function useIrisData() {
     }
 
     lines.push(`\n### Instructions`)
-    lines.push(`You have this workflow loaded. Use the steps, schema, and tools above to execute or reason about this workflow. If it has input_schema, ask the user for required inputs before running. Use \`iris workflows run ${wf.id}\` to execute it, or run the steps manually if needed.`)
+    lines.push(
+      `You have this workflow loaded. Use the steps, schema, and tools above to execute or reason about this workflow. If it has input_schema, ask the user for required inputs before running. Use \`iris workflows run ${wf.id}\` to execute it, or run the steps manually if needed.`,
+    )
 
     // Append to existing platform-context.md
     const content = lines.join("\n")
     import("fs").then((fs) => {
       try {
-        const existing = fs.existsSync(PLATFORM_CONTEXT_PATH)
-          ? fs.readFileSync(PLATFORM_CONTEXT_PATH, "utf-8")
-          : ""
+        const existing = fs.existsSync(PLATFORM_CONTEXT_PATH) ? fs.readFileSync(PLATFORM_CONTEXT_PATH, "utf-8") : ""
         // Remove any previous "Active Workflow" section
         const cleaned = existing.replace(/\n## Active Workflow:[\s\S]*$/, "")
         fs.writeFileSync(PLATFORM_CONTEXT_PATH, cleaned + content)
@@ -514,38 +546,115 @@ export function useIrisData() {
     fetchBloqData(bloqId)
   }
 
-  // ── Hive sessions (local daemon bridge) ──
+  // ── Hive network: the machines on this account, and the peers linked to it ──
+  //
+  // This replaced a poll of the local daemon's tmux sessions. That poll worked, and what it
+  // reported was beside the point: tmux is how you drive one machine, and on a fleet of three
+  // online nodes the Hive tab said "No active tmux sessions". Same endpoints `iris hive nodes
+  // list` and `iris hive connections` use, so the tab and the CLI cannot disagree.
   const BRIDGE_URL = process.env.IRIS_BRIDGE_URL ?? "http://localhost:3200"
 
-  async function fetchHiveSessions() {
+  /** Which registered node is THIS machine — daemon first, config second, hostname last. */
+  async function detectLocalNode(nodes: { id: string; name: string }[]) {
+    let daemonNodeId: string | null = null
     try {
-      const res = await fetch(`${BRIDGE_URL}/daemon/tmux/sessions`, {
-        signal: AbortSignal.timeout(3000),
-      })
-      if (!res.ok) return
-      const json = (await res.json()) as { sessions: IrisHiveSession[] }
-      setData("hiveSessions", reconcile(json.sessions || []))
+      const res = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(1500) })
+      if (res.ok) daemonNodeId = ((await res.json()) as any)?.node_id ?? null
+    } catch {}
+    let configNodeId: string | null = null
+    try {
+      const fs = await import("fs")
+      const cfg = path.join(os.homedir(), ".iris", "config.json")
+      if (fs.existsSync(cfg)) configNodeId = JSON.parse(fs.readFileSync(cfg, "utf-8")).node_id || null
+    } catch {}
+    return resolveLocalNode({ daemonNodeId, configNodeId, hostname: os.hostname(), nodes })
+  }
+
+  async function fetchHiveNetwork() {
+    if (!_userId) return
+    try {
+      const [nodesRes, connsRes] = await Promise.all([
+        irisFetch(`/api/v6/nodes/?user_id=${_userId}`, {}, IRIS_API),
+        irisFetch(`/api/v6/nodes/connections/?user_id=${_userId}`, {}, IRIS_API),
+      ])
+
+      if (nodesRes.ok) {
+        const json = (await nodesRes.json()) as { nodes?: any[] }
+        const raw = json.nodes ?? []
+        const local = await detectLocalNode(raw.map((n) => ({ id: String(n.id), name: String(n.name) })))
+        setData(
+          "hiveNodes",
+          reconcile(
+            raw.map(
+              (n): IrisHiveNode => ({
+                id: String(n.id),
+                name: String(n.name ?? "unnamed"),
+                status: String(n.connection_status ?? "unknown"),
+                online: n.connection_status === "online",
+                lastHeartbeat: relativeTime(n.last_heartbeat_at),
+                activeTasks: Number(n.active_tasks ?? 0),
+                maxConcurrent: Number(n.max_concurrent ?? 0),
+                sessions: Array.isArray(n.active_sessions) ? n.active_sessions.length : 0,
+                isLocal: local.nodeId !== null && String(n.id) === local.nodeId,
+                localUncertain: local.uncertain,
+              }),
+            ),
+          ),
+        )
+      }
+
+      if (connsRes.ok) {
+        const json = (await connsRes.json()) as { connections?: any[] }
+        const conns = json.connections ?? []
+        // A pending invite has no peer on the other end yet, so it is not a peer — but it is
+        // also not nothing, and silently dropping it makes an unaccepted invite look like a
+        // peer who never showed up. Counted separately.
+        const accepted = conns.filter((c) => c.status === "active" || c.peer_name)
+        setData(
+          "hivePeers",
+          reconcile(
+            accepted.map(
+              (c): IrisHivePeer => ({
+                id: String(c.id),
+                name: String(c.peer_name ?? "unnamed peer"),
+                status: String(c.status ?? "unknown"),
+                active: c.status === "active",
+                permissions: Object.entries(c.permissions ?? {})
+                  .filter(([, v]) => v)
+                  .map(([k]) => k)
+                  .join(","),
+              }),
+            ),
+          ),
+        )
+        setData("hivePendingInvites", conns.length - accepted.length)
+      }
+
+      setData("hiveStatus", nodesRes.status === 401 ? "no-auth" : nodesRes.ok ? "loaded" : "error")
     } catch {
-      // Daemon not running — clear sessions
-      if (data.hiveSessions.length > 0) setData("hiveSessions", [])
+      // Leave the last known roster in place and say the reading is stale. Zeroing it would
+      // report an empty Hive, which is the one answer that is never safe to guess.
+      setData("hiveStatus", "error")
     }
   }
 
   // Initial fetch
-  fetchBloqList()
-  fetchHiveSessions()
+  fetchBloqList().then(fetchHiveNetwork)
 
   // Poll every 30s — refresh data for current bloq
   const interval = setInterval(() => {
     if (data.selectedBloqId) fetchBloqData(data.selectedBloqId)
   }, 30_000)
-  // Poll hive sessions every 5s (local, fast)
-  const hiveInterval = setInterval(fetchHiveSessions, 5_000)
+  // The node roster is a network call and heartbeats are ~30s apart, so polling faster than
+  // that would cost requests to show the same numbers.
+  const hiveInterval = setInterval(fetchHiveNetwork, 30_000)
   onCleanup(() => {
     clearInterval(interval)
     clearInterval(hiveInterval)
     import("fs").then((fs) => {
-      try { fs.unlinkSync(PLATFORM_CONTEXT_PATH) } catch {}
+      try {
+        fs.unlinkSync(PLATFORM_CONTEXT_PATH)
+      } catch {}
     })
   })
 

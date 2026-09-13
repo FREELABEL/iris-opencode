@@ -270,20 +270,122 @@ if (Test-Path $McpConfig) {
     Write-Muted "Config at ~\.iris\mcp.json (enable when MCP servers are ready)"
 }
 
+# ─── Autostart: keep the node alive across reboots (#184597, FIX 3) ──────────
+#
+# WHAT WAS WRONG. macOS registers a real LaunchAgent — RunAtLoad so the daemon
+# starts at login, KeepAlive so it comes back if it dies. Windows registered
+# NOTHING: install.ps1 contained zero references to schtasks, Register-ScheduledTask,
+# the Startup folder or the Run key. A Windows node therefore worked until the first
+# reboot and was then silently gone, which reads as "the product is flaky" rather
+# than "nothing ever asked it to start".
+#
+# WHY A SCHEDULED TASK AND NOT THE RUN KEY. The Run key is simpler and needs no
+# elevation, but it only launches once and never restarts a crashed process — it
+# mirrors RunAtLoad and drops KeepAlive. A per-user scheduled task gives both. The
+# Run key remains the FALLBACK for machines where the ScheduledTasks module is
+# absent, and when it is used the summary says which one you got, because "it will
+# restart if it crashes" is a promise the fallback cannot keep.
+#
+# NEVER ELEVATED. The plist this mirrors carries a comment — "user-level ONLY,
+# never /Library/LaunchDaemons" — because a compromised agent should reach no
+# further than the user's own home. So: no -RunLevel Highest, no HKLM, no
+# system-wide task store. A task that needs admin to install is also a task most
+# clients simply will not have, and an installer that demands elevation for an
+# optional convenience is one people stop running.
+function Register-IrisAutostart {
+    param(
+        [Parameter(Mandatory)][string]$DaemonCmd,   # full path to iris-daemon.cmd
+        [string]$TaskName = "IRIS Hive Node"
+    )
+
+    # Returns a result object rather than writing output or throwing: the caller
+    # decides how to report, and the FINAL summary needs the reason. Swallowing the
+    # failure here is exactly the #184597 shape — a skip nobody hears about.
+    $result = [pscustomobject]@{ Ok = $false; Method = $null; Reason = $null }
+
+    if (-not (Test-Path $DaemonCmd)) {
+        $result.Reason = "the daemon launcher was not installed, so there is nothing to start"
+        return $result
+    }
+
+    # 1. Preferred: a per-user scheduled task (at logon + restart on failure).
+    if (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue) {
+        try {
+            # Idempotent: re-running the installer must replace, never duplicate.
+            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+
+            $action   = New-ScheduledTaskAction -Execute $DaemonCmd -Argument "start"
+            $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+            # RestartCount/RestartInterval are the KeepAlive equivalent. StartWhenAvailable
+            # covers a machine that was asleep at the scheduled moment.
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+                                                    -DontStopIfGoingOnBatteries `
+                                                    -StartWhenAvailable `
+                                                    -RestartCount 3 `
+                                                    -RestartInterval (New-TimeSpan -Minutes 1) `
+                                                    -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+            # -User without -RunLevel Highest => runs as this user, no elevation prompt.
+            Register-ScheduledTask -TaskName $TaskName `
+                                   -Action $action `
+                                   -Trigger $trigger `
+                                   -Settings $settings `
+                                   -User $env:USERNAME `
+                                   -Description "Starts the IRIS Hive compute node at logon and restarts it if it stops." `
+                                   -Force -ErrorAction Stop | Out-Null
+
+            $result.Ok = $true
+            $result.Method = "scheduled-task"
+            return $result
+        } catch {
+            # Fall through to the Run key. Keep the reason: if the fallback also fails,
+            # the user should see why the better option was not used.
+            $result.Reason = $_.Exception.Message
+        }
+    } else {
+        $result.Reason = "the ScheduledTasks module is not available"
+    }
+
+    # 2. Fallback: HKCU Run key. Starts at logon, does NOT restart on crash.
+    try {
+        $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+        if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force -ErrorAction Stop | Out-Null }
+        Set-ItemProperty -Path $runKey -Name "IRISHiveNode" -Value "`"$DaemonCmd`" start" -ErrorAction Stop
+        $result.Ok = $true
+        $result.Method = "run-key"
+        return $result
+    } catch {
+        $result.Reason = "$($result.Reason); and the Run key could not be written: $($_.Exception.Message)".TrimStart('; ')
+        return $result
+    }
+}
+
 # ─── Step 5: Agent Bridge ────────────────────────────────────────────────────
 
 $HasNode = Get-Command node -ErrorAction SilentlyContinue
 $HasGit = Get-Command git -ErrorAction SilentlyContinue
 $BridgeDir = "$IRIS_DIR\bridge"
 
+# #184597 — remember whether the bridge was skipped, so the FINAL summary can tell the truth.
+# Without this the skip was announced once in DarkGray, then the install printed
+# "installed successfully!" in green and told the user to run `iris-daemon start` — a command
+# that cannot work, because the thing it needs is exactly what was skipped. A client lost two
+# hours to that sequence: the installer said it worked, so the missing daemon looked like a
+# broken product rather than an unmet prerequisite.
+$BridgeSkippedReason = $null
+# Same reasoning as above, for autostart: a node that will not come back after a
+# reboot must not be reported as a node that will.
+$AutostartFailedReason = $null
+
 if (-not $HasNode) {
     Write-StepSkipped "5/5" "Agent Bridge" "skipped (Node.js not found)"
     Send-InstallBeacon -EventType "install_step_skipped" -Step "agent_bridge" -Reason "node_missing"
     Write-Muted "Install Node.js to enable: https://nodejs.org"
+    $BridgeSkippedReason = "Node.js is not installed (https://nodejs.org)"
 } elseif (-not $HasGit) {
     Write-StepSkipped "5/5" "Agent Bridge" "skipped (Git not found)"
     Send-InstallBeacon -EventType "install_step_skipped" -Step "agent_bridge" -Reason "git_missing"
     Write-Muted "Install Git to enable: https://git-scm.com"
+    $BridgeSkippedReason = "Git is not installed (https://git-scm.com)"
 } else {
     $BridgeUpdated = $false
     if ((Test-Path "$BridgeDir\index.js") -and (Test-Path "$BridgeDir\daemon.js")) {
@@ -384,6 +486,22 @@ echo Usage: iris-daemon {start^|stop^|status^|share^|unshare^|register^|logs}
         }
         Write-Muted "Bridge: iris-bridge start|stop|status"
         Write-Muted "Daemon: iris-daemon start|stop|status|register (Hive compute node)"
+
+        # Register autostart so the node survives a reboot (#184597 FIX 3).
+        $Autostart = Register-IrisAutostart -DaemonCmd "$INSTALL_DIR\iris-daemon.cmd"
+        if ($Autostart.Ok) {
+            if ($Autostart.Method -eq 'scheduled-task') {
+                Write-Muted "Autostart: registered (starts at logon, restarts if it stops)"
+            } else {
+                # Say which one you got. "It restarts if it crashes" is a promise the
+                # Run key cannot keep, and a summary that implies it would be lying.
+                Write-Muted "Autostart: registered via the Run key (starts at logon; will NOT restart if it stops)"
+            }
+            Send-InstallBeacon -EventType "install_step_ok" -Step "autostart" -Reason $Autostart.Method
+        } else {
+            $AutostartFailedReason = $Autostart.Reason
+            Send-InstallBeacon -EventType "install_step_skipped" -Step "autostart" -Reason "register_failed"
+        }
     }
 }
 
@@ -633,13 +751,34 @@ if ($UserPath -notlike "*$INSTALL_DIR*") {
 # ─── Final output ────────────────────────────────────────────────────────────
 
 Write-Host ""
-Send-InstallBeacon -EventType "install_success"
 
-Write-Host "IRIS Code installed successfully!" -ForegroundColor Green
+# #184597 — a partial install must not report itself as a complete one.
+if ($BridgeSkippedReason) {
+    Send-InstallBeacon -EventType "install_success_partial" -Step "agent_bridge" -Reason "bridge_skipped"
+    Write-Host "IRIS Code installed - but the Agent Bridge was SKIPPED." -ForegroundColor Yellow
+} else {
+    Send-InstallBeacon -EventType "install_success"
+    Write-Host "IRIS Code installed successfully!" -ForegroundColor Green
+}
+
 Write-Host ""
 Write-Host "  Binary:  $INSTALL_DIR\iris.exe" -ForegroundColor DarkGray
 Write-Host "  Version: $SpecificVersion" -ForegroundColor DarkGray
 Write-Host ""
+
+if ($BridgeSkippedReason) {
+    Write-Host "  The Hive daemon will NOT run on this machine yet." -ForegroundColor Yellow
+    Write-Host "  Reason: $BridgeSkippedReason" -ForegroundColor DarkGray
+    Write-Host "  Install it, then re-run this installer - or run: iris hive connect" -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+if ($AutostartFailedReason) {
+    Write-Host "  This node will NOT restart automatically after a reboot." -ForegroundColor Yellow
+    Write-Host "  Reason: $AutostartFailedReason" -ForegroundColor DarkGray
+    Write-Host "  Start it by hand after each reboot with: iris-daemon start" -ForegroundColor DarkGray
+    Write-Host ""
+}
 
 if ($PathUpdated) {
     Write-Host "  PATH updated. Restart your terminal, then run:" -ForegroundColor DarkGray

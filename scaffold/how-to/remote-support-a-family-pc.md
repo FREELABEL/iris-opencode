@@ -149,3 +149,8 @@ Desktop did not get switched off by an update.
   including ACLs, tags, and `iris hive vpn serve`
 - `iris how-to hive-dispatch` — the daemon rail, for running agent work on a machine rather
   than sitting at it
+- `iris how-to hive-inbox` — sending work to the agent **on** that machine instead of driving
+  the screen yourself. Read its **On Windows** section first: the daemon needs Node.js and the
+  installer does not currently say so, `iris` is "not recognised" until you open a *new*
+  terminal, and PowerShell's execution policy can block the shim. Those three are the usual
+  reason a Windows machine connects to the tailnet fine and still has no working agent.

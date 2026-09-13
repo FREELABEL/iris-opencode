@@ -43,6 +43,10 @@ export class McpOAuthProvider implements OAuthClientProvider {
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: this.config.clientSecret ? "client_secret_post" : "none",
+      // The SDK transports call auth() without a scope and fall back to this field, so a
+      // configured scope that is not surfaced here is never sent. X's authorize endpoint
+      // rejects a request with no scope, and it does not support dynamic registration either.
+      ...(this.config.scope ? { scope: this.config.scope } : {}),
     }
   }
 

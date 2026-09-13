@@ -2,7 +2,7 @@ import { cmd } from "./cmd"
 import * as prompts from "./clack"
 import { UI } from "../ui"
 import { irisFetch, requireAuth, printDivider, bold, dim, highlight } from "./iris-api"
-import { ensureYtDlp, which, downloadAudioMp3 } from "./download"
+import { ensureYtDlp, which, downloadAudioMp3, retagMp3, id3Key } from "./download"
 import { analyzeAudio } from "./audio-analysis"
 import { existsSync, mkdirSync, statSync } from "fs"
 import { join, basename } from "path"
@@ -61,6 +61,25 @@ function fsSlug(s: string, max = 80): string {
  */
 async function uploadTrack(mp3Path: string, t: PlaylistTrack): Promise<{ ok: boolean; trackId?: number; error?: string }> {
   try {
+    // Beatbox: compute BPM/key/Camelot/energy from the file and send with the import.
+    //
+    // Analyse and write the tags BEFORE the file is read into the form. We computed all of
+    // this and then threw it away at the file level: the numbers reached the API while the
+    // MP3 itself stayed unanalysed, so the track landed in Mixxx/Serato/rekordbox with no
+    // BPM or key and had to be re-analysed by hand. Tagging here means the bytes we upload
+    // AND the local DJ set both carry TBPM/TKEY.
+    const analysis = analyzeAudio(mp3Path)
+    if (analysis) {
+      const ffmpeg = which("ffmpeg")
+      if (ffmpeg) {
+        retagMp3(ffmpeg, mp3Path, {
+          bpm: analysis.bpm,
+          key: id3Key(analysis.key),
+          camelot: analysis.camelot,
+        })
+      }
+    }
+
     const form = new FormData()
     form.append("audio", Bun.file(mp3Path), basename(mp3Path))
     form.append("spotify_id", t.spotifyId)
@@ -70,8 +89,6 @@ async function uploadTrack(mp3Path: string, t: PlaylistTrack): Promise<{ ok: boo
     if (t.albumArt) form.append("album_art", t.albumArt)
     if (t.spotifyUrl) form.append("spotify_url", t.spotifyUrl)
 
-    // Beatbox: compute BPM/key/Camelot/energy from the file and send with the import.
-    const analysis = analyzeAudio(mp3Path)
     if (analysis) {
       form.append("bpm", String(analysis.bpm))
       form.append("musical_key", analysis.key)

@@ -1,3 +1,4 @@
+import fs from "node:fs"
 import { cmd } from "./cmd"
 import { productCommand } from "./product-command"
 import * as prompts from "./clack"
@@ -12,7 +13,18 @@ import {
   HiveNodesCommandExport,
   HiveRunCommandExport,
   fetchNodes,
+  resolveNode,
 } from "./platform-hive-nodes"
+import {
+  buildTaskPayload,
+  checkTaskRequest,
+  describeApiError,
+  describeTask,
+  exitCodeForStatus,
+  parseConfigArg,
+  pickResultPayload,
+  TERMINAL_STATUSES,
+} from "./hive-task-create"
 import { HiveFilesCommandExport } from "./platform-hive-files"
 import { runRemoteDoctor } from "./platform-hive-doctor"
 import { HiveSelftestCommandExport } from "./platform-hive-selftest"
@@ -37,6 +49,10 @@ import {
 import {
   HiveInboxCommand,
 } from "./platform-hive-inbox"
+// Agent-to-agent work (epic #184516): hand a work item to another agent's inbox, and decide
+// who may reach a machine at all.
+import { HiveHandoffCommand } from "./platform-hive-handoff"
+import { HiveAccessCommand } from "./platform-hive-access"
 import {
   HiveSearchCommand,
 } from "./platform-hive-search"
@@ -1010,23 +1026,196 @@ function timeAgo(iso: string | null | undefined): string {
 
 const HiveTasksCommand = cmd({
   command: "tasks [subcommand] [task-id]",
-  describe: "list pending/running tasks on your node",
+  describe: "list, inspect or CREATE tasks on your nodes (create dispatches any task type)",
   builder: (yargs) =>
     yargs
-      .positional("subcommand", { describe: "get or logs", type: "string" })
+      .positional("subcommand", { describe: "create, get or logs", type: "string" })
       .positional("task-id", { describe: "task ID (for get/logs)", type: "string" })
       .option("status", { describe: "filter by status", type: "string", choices: ["pending", "running", "completed", "failed", "all"], default: "all" })
-      .option("type", { describe: "filter by task type (discover, som_batch, etc.)", type: "string" })
+      .option("type", { describe: "task type — filters the list, or names what to dispatch with `create` (mcp_call, remotion, browser_agent, discover…)", type: "string" })
       .option("history", { describe: "include completed tasks (last 48h)", type: "boolean", default: false })
       .option("since", { describe: "time window (e.g. 24h, 7d)", type: "string", default: "48h" })
       .option("limit", { describe: "max tasks to show", type: "number", default: 20 })
       .option("tail", { describe: "lines of output to show (for logs)", type: "number", default: 50 })
-      .option("user-id", { describe: "user ID", type: "number" }),
+      // ── create ──
+      .option("node", { describe: "(create) node name or id to run it on — PINNED unless --allow-fallback", type: "string" })
+      .option("config", { describe: "(create) the task's config as JSON, or @file.json", type: "string" })
+      .option("prompt", { describe: "(create) the task's prompt — the payload for types like sandbox_execute or discover", type: "string" })
+      .option("title", { describe: "(create) title shown in the dashboard", type: "string" })
+      .option("timeout", { describe: "(create) timeout in seconds (30–3600)", type: "number" })
+      .option("priority", { describe: "(create) priority 1-10 (higher = sooner)", type: "number" })
+      .option("queue", { alias: "fire-and-forget", describe: "(create) queue it and exit instead of waiting for the result", type: "boolean", default: false })
+      .option("allow-fallback", { describe: "(create) let another node take it if the named one cannot", type: "boolean", default: false })
+      .option("requires", { describe: "(create) only run on a node advertising this capability (repeatable)", type: "string", array: true })
+      .option("json", { describe: "(create) JSON output (the full task object)", type: "boolean", default: false })
+      .option("user-id", { describe: "user ID", type: "number" })
+      .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\"}'", "ask a node's MCP server what tools it has")
+      .example("iris hive tasks create --type mcp_call --node studio --config '{\"server\":\"argent\",\"tool\":\"list_devices\"}'", "call one tool and print the result"),
   async handler(args) {
     UI.empty()
     const sub = args.subcommand as string | undefined
     const extraArgs = args._ as string[]
     const userId = await requireUserId(args["user-id"] as number | undefined)
+
+    // ── iris hive tasks create ──
+    //
+    // The API has accepted thirty task types since it shipped; the CLI could create two of them
+    // (`hive run` → sandbox_execute, `scripts run` → user_script). Everything else had to be
+    // POSTed by hand, which is why the hive-mcp playbook had "dispatch this from your own
+    // client" written into the middle of it.
+    if (sub === "create" || sub === "new") {
+      if (!userId) process.exit(1)
+      const type = String(args.type ?? "").trim()
+      const parsedConfig = parseConfigArg(args.config as string | undefined, (p) => fs.readFileSync(p, "utf-8"))
+      if (!parsedConfig.ok) {
+        prompts.log.error(parsedConfig.error)
+        if (parsedConfig.hint) console.log(dim(`  ${parsedConfig.hint}`))
+        process.exit(1)
+      }
+      const config = parsedConfig.config
+
+      const check = checkTaskRequest({ type, prompt: args.prompt as string | undefined, config })
+      if (!check.ok) {
+        prompts.log.error(check.error)
+        if (check.hint) console.log(dim(`  ${check.hint}`))
+        process.exit(1)
+      }
+
+      // Resolve the node BEFORE dispatching, and refuse an offline one when we are going to
+      // wait: a pinned task to a machine that is not there sits pending until it times out,
+      // which looks exactly like a task that is running.
+      let nodeId: string | undefined
+      let nodeName: string | undefined
+      const target = args.node as string | undefined
+      if (target) {
+        const node = await resolveNode(userId, String(target))
+        if (!node) {
+          prompts.log.error(`No node matching "${target}". Run: iris hive nodes list`)
+          process.exit(1)
+        }
+        nodeId = node.id
+        nodeName = node.name
+        if (node.connection_status !== "online") {
+          const msg = `Node "${node.name}" is ${node.connection_status} (last heartbeat ${timeAgo(node.last_heartbeat_at)})`
+          if (!args.queue) {
+            prompts.log.error(`${msg} — it cannot take this task now.`)
+            console.log(dim("  Pass --queue to leave it pending until that machine comes back, or --allow-fallback to let another node take it."))
+            process.exit(2)
+          }
+          prompts.log.warn(`${msg} — queueing anyway; it will run when the node reconnects.`)
+        }
+      }
+
+      const payload = buildTaskPayload({
+        userId,
+        type,
+        nodeId,
+        prompt: args.prompt as string | undefined,
+        title: args.title as string | undefined,
+        config,
+        timeoutSec: args.timeout as number | undefined,
+        priority: args.priority as number | undefined,
+        allowFallback: Boolean(args["allow-fallback"]),
+        requiredCapabilities: firstArray(args.requires as string[] | undefined),
+      })
+
+      if (!args.json) {
+        console.log(`${dim("→")} ${bold(describeTask(type, config))}${nodeName ? ` on ${bold(nodeName)}` : dim(" (any capable node)")}`)
+      }
+
+      const createRes = await hiveFetch("/api/v6/nodes/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+      if (!createRes.ok) {
+        prompts.log.error(describeApiError(createRes.status, await createRes.text().catch(() => "")))
+        process.exit(1)
+      }
+
+      const created = (await createRes.json()) as { task: { id: string; status: string }; dispatched?: boolean }
+      const taskId = created.task.id
+
+      if (args.queue) {
+        if (args.json) {
+          await writeJson({ task_id: taskId, status: created.task.status, dispatched: created.dispatched ?? false })
+          return
+        }
+        console.log(`${success("✓")} queued ${bold(taskId)}  status=${created.task.status}`)
+        console.log(dim(`  Result later:  iris hive tasks get ${taskId}`))
+        return
+      }
+
+      // Wait. The bound is the task's own timeout plus slack, so a node that never answers ends
+      // as a timeout here rather than a poll loop that runs forever.
+      const timeoutSec = Number(payload.timeout_seconds ?? 300)
+      const deadline = Date.now() + (timeoutSec + 30) * 1000
+      let lastStatus = created.task.status
+      let final: Record<string, unknown> | null = null
+      if (!args.json) console.log(`${dim("→")} task ${taskId.slice(0, 8)}  status=${lastStatus}  ${dim("waiting…")}`)
+
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1500))
+        const r = await hiveFetch(`/api/v6/nodes/tasks/${taskId}?user_id=${userId}`)
+        if (!r.ok) {
+          prompts.log.error(`Poll failed: HTTP ${r.status}`)
+          console.log(dim(`  The task was created — read it with: iris hive tasks get ${taskId}`))
+          process.exit(1)
+        }
+        const body = (await r.json()) as { task: Record<string, unknown> }
+        const t = body.task
+        const st = String(t.status ?? "")
+        if (!args.json && st !== lastStatus) {
+          console.log(`${dim("→")} status=${st}${t.progress ? `  ${t.progress}%` : ""}`)
+          lastStatus = st
+        }
+        if (TERMINAL_STATUSES.has(st)) { final = t; break }
+      }
+
+      if (!final) {
+        prompts.log.error(`Still not finished after ${timeoutSec + 30}s. The task is not cancelled — read it with: iris hive tasks get ${taskId}`)
+        process.exit(124)
+      }
+
+      if (args.json) {
+        await writeJson(final)
+        process.exitCode = exitCodeForStatus(String(final.status ?? ""))
+        return
+      }
+
+      const answer = pickResultPayload(final)
+      console.log()
+      if (answer.kind === "none") {
+        // A node that returned nothing at all is a real outcome and used to be invisible
+        // (#181633) — it is named here rather than rendered as a blank success.
+        console.log(dim("  (the node returned no result)"))
+      } else {
+        console.log(bold(answer.kind === "json" ? "─── result ───" : "─── output ───"))
+        const lines = answer.text.split("\n")
+        const shown = lines.slice(-500)
+        if (lines.length > shown.length) console.log(dim(`  … ${lines.length - shown.length} earlier lines truncated`))
+        console.log(shown.join("\n"))
+      }
+      if (answer.stderr) {
+        console.log(bold("─── stderr ───"))
+        console.log(answer.stderr.split("\n").slice(-200).join("\n"))
+      }
+      if (final.error) {
+        console.log(bold("─── error ───"))
+        console.log(`\x1b[31m${String(final.error).slice(0, 2000)}\x1b[0m`)
+      }
+      console.log()
+      const st = String(final.status ?? "unknown")
+      const exitLabel = typeof answer.exitCode === "number" ? `  ${dim("exit=")}${answer.exitCode}` : ""
+      console.log(`  ${taskStatusBadge(st)}${exitLabel}  ${dim("duration=")}${formatDuration(final.duration_ms as number)}  ${dim(taskId)}`)
+      // WHERE it ran, when the node says. With --allow-fallback that can be a different machine
+      // than the one named, and a result read as coming from the wrong machine is worse than no
+      // result — the node's own name is the only honest answer to "who did this".
+      if (answer.node) console.log(`  ${dim("ran on")} ${answer.node}`)
+      const code = exitCodeForStatus(st)
+      if (code !== 0) process.exit(code)
+      return
+    }
 
     // ── iris hive tasks get <id> ──
     if (sub === "get" || sub === "logs") {
@@ -2707,22 +2896,56 @@ const HivePeersCommand = cmd({
       const ok = await handleApiError(res, "List peer nodes")
       if (!ok) { spinner.stop("Failed", 1); prompts.outro("Done"); return }
 
-      const json = (await res.json()) as { nodes: Array<Record<string, unknown>> }
+      // The endpoint now returns OFFLINE machines too (#184564), so "N node(s) online" would
+      // start counting asleep machines as online — a worse lie than the one being fixed. Count
+      // the two separately, and fall back to computing them so an older server still reports
+      // honestly.
+      const json = (await res.json()) as {
+        nodes: Array<Record<string, unknown>>
+        online_count?: number
+        total_count?: number
+      }
       const nodes = json.nodes || []
-      spinner.stop(`${nodes.length} node(s) online`)
+      const online = json.online_count ?? nodes.filter((n) => String(n.connection_status) === "online").length
+      const total = json.total_count ?? nodes.length
+      spinner.stop(`${online}/${total} machine(s) online`)
       printDivider()
 
-      if (nodes.length === 0) {
+      // THE WHOLE POINT: these are two different states needing two different actions, and they
+      // used to render identically as "No peer nodes online right now".
+      if (total === 0) {
         console.log()
-        console.log(dim("  No peer nodes online right now."))
+        console.log(dim("  This peer has no machines registered."))
+        console.log(dim("  They need to run:  iris hive connect"))
         console.log()
       } else {
+        if (online === 0) {
+          console.log()
+          console.log(dim(`  ${total} machine(s) registered, none online — their agent is not running.`))
+          console.log(dim("  They can check with:  iris hive doctor"))
+        }
         for (const n of nodes) {
+          const isOnline = String(n.connection_status) === "online"
           console.log()
           console.log(`  ${bold(String(n.name))}  ${dim(String(n.id))}`)
-          console.log(`    ${dim("status:")} ${success(String(n.connection_status))}  ${dim("active tasks:")} ${n.active_tasks}`)
+          // Never paint "offline" with the success colour — the status line has to be readable
+          // at a glance, and a green "offline" is how a dead machine looks healthy.
+          console.log(`    ${dim("status:")} ${isOnline ? success("online") : dim(String(n.connection_status))}  ${dim("active tasks:")} ${n.active_tasks}`)
           if (n.last_heartbeat_at) {
             console.log(`    ${dim("last seen:")} ${new Date(String(n.last_heartbeat_at)).toLocaleString()}`)
+          }
+          // WHAT IS THAT MACHINE RUNNING. "Does my teammate need to update?" was previously
+          // unanswerable from the only view you get of their fleet.
+          //
+          // ABSENCE IS THE INFORMATIVE CASE and must never render blank: a node that is ONLINE
+          // and reports no version is running a daemon too old to send one — which is exactly
+          // the machine you are looking for. Saying nothing there would hide the answer behind
+          // an empty space, the same way "0 node(s) online" once hid "never connected".
+          const peerVer = (n as any).daemon_version
+          if (peerVer) {
+            console.log(`    ${dim("daemon:")} ${peerVer}`)
+          } else if (isOnline) {
+            console.log(`    ${dim("daemon:")} ${dim("unknown — too old to report a version; they should run")} ${highlight("iris update")}`)
           }
         }
         console.log()
@@ -4648,10 +4871,15 @@ export const PlatformHiveCommand = productCommand({
   name: "hive",
   aliases: ["compute"],
   purpose:
-    "Hive — distributed compute: nodes, tasks, projects and peer connections",
-  keywords: ["hive", "compute", "node", "task", "mesh", "tailscale", "dispatch", "remote", "peer"],
-  howtos: ["hive-dispatch", "hive-tailscale", "remote-support-a-family-pc"],
-  playbooks: ["iris-hive"],
+    "Hive — your machines and the agents on them: enroll nodes, run work, and send messages and work items to another person's agent inbox",
+  keywords: [
+    "hive", "compute", "node", "task", "mesh", "tailscale", "dispatch", "remote", "peer",
+    // The agent-to-agent half (epic #184516). Without these, `iris find inbox` and every MCP
+    // agent miss the one capability a client is told to use by name: "check your hive inbox".
+    "inbox", "message", "handoff", "agent", "send", "invite", "access",
+  ],
+  howtos: ["hive-inbox", "hive-dispatch", "hive-tailscale", "remote-support-a-family-pc"],
+  playbooks: ["hive-inbox", "iris-hive"],
   builder: (yargs) =>
     yargs
       // LAN discovery (local utility — no API)
@@ -4732,6 +4960,8 @@ export const PlatformHiveCommand = productCommand({
       .command(HiveSendCommand)
       .command(HiveSentCommand)
       .command(HiveInboxCommand)
+      .command(HiveHandoffCommand)
+      .command(HiveAccessCommand)
       .command(HiveSearchCommand)
       // IRIS Exchange — distributed task marketplace
       .command(ExchangeCommand)
