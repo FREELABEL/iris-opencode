@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, Show, Switch } from "solid-js"
 import { marked } from "marked"
 import "./session-iris-tab.css"
+import { pageSummary, type PageEnvelope } from "./use-paged-surface"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
@@ -37,7 +38,7 @@ interface AtlasList {
 }
 
 /** Whatever the active surface returned, beside its measured flags. */
-type SurfacePayload = Measured & Record<string, unknown>
+type SurfacePayload = Measured & { [key: string]: unknown }
 interface Measured {
   measured: boolean
   reason?: string
@@ -50,6 +51,13 @@ interface Measured {
  * anywhere in this app, so useMarked() would throw — that provider adds shiki highlighting and
  * katex, which this panel does not need to read a board item.
  */
+/** Which array key a surface's response uses. One mapping, used by both the reader and paging. */
+function arrayKeyFor(surface: string): string {
+  if (surface === "atlas") return "lists"
+  if (surface === "hive") return "nodes"
+  return surface
+}
+
 function renderMarkdown(md: string): string {
   try {
     return marked.parse(md, { async: false }) as string
@@ -170,12 +178,26 @@ export function SessionIrisTab() {
   const [data] = createResource(
     () => {
       const id = activeBloq()
-      return id ? ([base(), id, surface()] as const) : undefined
+      return id ? ([base(), id, surface(), page()] as const) : undefined
     },
-    async ([, id, which]) => {
+    async ([, id, which, pageNo], info): Promise<SurfacePayload> => {
       const def = SURFACES.find((s) => s.id === which)!
-      const res = await doFetch(def.path(id))
-      return (await res.json()) as SurfacePayload
+      const sep = def.path(id).includes("?") ? "&" : "?"
+      const res = await doFetch(`${def.path(id)}${sep}page=${pageNo}&perPage=25`)
+      const next = (await res.json()) as SurfacePayload
+
+      // APPEND rather than replace when we asked for a later page of the same surface. The
+      // previous value is the earlier pages; dropping it would make "Load more" a "Replace".
+      // Annotated: the resource's own value type is still being inferred here, so info.value
+      // lands as {} and every index below would be an implicit any.
+      const prev = (info.refetching ? undefined : info.value) as SurfacePayload | undefined
+      if (pageNo > 1 && prev) {
+        const key = arrayKeyFor(which)
+        const a = Array.isArray(prev[key]) ? (prev[key] as unknown[]) : []
+        const b = Array.isArray(next[key]) ? (next[key] as unknown[]) : []
+        return { ...next, [key]: [...a, ...b] } as SurfacePayload
+      }
+      return next
     },
   )
 
@@ -193,7 +215,7 @@ export function SessionIrisTab() {
   const rows = createMemo<any[]>(() => {
     const d = current()
     if (!d) return []
-    const key = surface() === "atlas" ? "lists" : surface() === "hive" ? "nodes" : surface()
+    const key = arrayKeyFor(surface())
     const v = d[key]
     return Array.isArray(v) ? v : []
   })
@@ -217,12 +239,18 @@ export function SessionIrisTab() {
   /** The item being read, if any. Opening one replaces the list; there is no second panel. */
   const [openItem, setOpenItem] = createSignal<AtlasItem | null>(null)
 
+  /** Accumulated pages. Reset whenever the surface or board changes — see the effect below. */
+  const [page, setPage] = createSignal(1)
+
   // Leaving the surface or the board must close the reader — otherwise you switch to Leads and
   // are still looking at an Atlas item.
   createEffect(() => {
     surface()
     activeBloq()
     setOpenItem(null)
+    // Paging resets with the thing being paged. Without this, switching surface while on page 3
+    // asks the next surface for ITS page 3 and silently skips its first rows.
+    setPage(1)
   })
 
   function chooseSurface(id: SurfaceId) {
@@ -527,6 +555,26 @@ export function SessionIrisTab() {
             <p class="px-2 py-2 text-12-regular text-text-weak">Nothing in {surface()} on this board.</p>
           </Match>
         </Switch>
+
+        {/* The shared footer. Says how many of how many, and offers the next page only when the
+            server said there is one — never as a permanent button that sometimes does nothing. */}
+        <Show when={view() === "rows"}>
+          <div class="flex items-center gap-2 px-2 py-2 text-11-regular text-text-weaker">
+            <Show when={pageSummary({ shown: rows().length, env: current() as PageEnvelope | undefined })}>
+              {(text) => <span class="font-mono tabular-nums">{text()}</span>}
+            </Show>
+            <Show when={(current() as PageEnvelope | undefined)?.hasMore}>
+              <button
+                type="button"
+                class="ms-auto px-2 py-0.5 rounded cursor-pointer text-text-weak hover:text-text-base hover:bg-background-element"
+                disabled={data.loading}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                {data.loading ? "Loading…" : "Load more"}
+              </button>
+            </Show>
+          </div>
+        </Show>
       </div>
     </div>
   )

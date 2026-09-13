@@ -20,6 +20,26 @@ import { described } from "./metadata"
  * "0 online" for exactly this reason; putting the distinction in the wire format means the next
  * UI cannot accidentally drop it.
  */
+/**
+ * The pagination envelope every /iris list carries.
+ *
+ * `total` is nullable on purpose: null means the upstream never said how many exist, and a
+ * client must not render that as zero. `totalIsExact` says whether the number can be stated
+ * flatly ("127 playbooks") or only as a floor ("127 so far") — see iris/pagination.ts.
+ */
+const Paged = {
+  page: Schema.Finite,
+  perPage: Schema.Finite,
+  total: described(Schema.NullOr(Schema.Finite), "NULL means not measured. Never render it as zero."),
+  totalIsExact: Schema.Boolean,
+  hasMore: Schema.Boolean,
+}
+
+const PageQuery = Schema.Struct({
+  page: Schema.optional(Schema.NumberFromString),
+  perPage: Schema.optional(Schema.NumberFromString),
+})
+
 const Measured = {
   measured: described(Schema.Boolean, "False means NOT MEASURED. Do not render the data as an empty result."),
   reason: Schema.optional(described(Schema.String, "Why it could not be measured — an HTTP status, or that nobody is signed in.")),
@@ -36,6 +56,7 @@ const AtlasItem = Schema.Struct({
 
 const AtlasResponse = Schema.Struct({
   ...Measured,
+  ...Paged,
   lists: Schema.Array(
     Schema.Struct({
       id: Schema.Finite,
@@ -47,6 +68,7 @@ const AtlasResponse = Schema.Struct({
 
 const HiveResponse = Schema.Struct({
   ...Measured,
+  ...Paged,
   nodes: Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -62,6 +84,7 @@ const HiveResponse = Schema.Struct({
 
 const BloqsResponse = Schema.Struct({
   ...Measured,
+  ...Paged,
   bloqs: Schema.Array(
     Schema.Struct({ id: Schema.Finite, name: Schema.String }).annotate({ identifier: "IrisBloq" }),
   ),
@@ -79,6 +102,7 @@ const InboxResponse = Schema.Struct({
 
 const AgentsResponse = Schema.Struct({
   ...Measured,
+  ...Paged,
   agents: Schema.Array(
     Schema.Struct({
       id: Schema.Finite,
@@ -98,6 +122,7 @@ const AgentsResponse = Schema.Struct({
 
 const LeadsResponse = Schema.Struct({
   ...Measured,
+  ...Paged,
   leads: Schema.Array(
     Schema.Struct({
       id: Schema.Finite,
@@ -119,6 +144,7 @@ const LeadsResponse = Schema.Struct({
 
 const PagesResponse = Schema.Struct({
   ...Measured,
+  ...Paged,
   pages: Schema.Array(
     Schema.Struct({
       id: Schema.Finite,
@@ -151,6 +177,7 @@ const AuthResponse = Schema.Struct({
 
 const SchemasResponse = Schema.Struct({
   ...Measured,
+  ...Paged,
   schemas: Schema.Array(
     Schema.Struct({
       id: Schema.Finite,
@@ -166,6 +193,7 @@ const SchemasResponse = Schema.Struct({
 
 const IntegrationsResponse = Schema.Struct({
   ...Measured,
+  ...Paged,
   integrations: Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -181,6 +209,7 @@ const IntegrationsResponse = Schema.Struct({
 
 const PlaybooksResponse = Schema.Struct({
   ...Measured,
+  ...Paged,
   playbooks: Schema.Array(
     Schema.Struct({
       name: Schema.String,
@@ -220,6 +249,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("bloqs", IrisPaths.bloqs, {
+        query: PageQuery,
         success: described(BloqsResponse, "The account's bloqs"),
       }).annotateMerge(
         OpenApi.annotations({
@@ -240,6 +270,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("atlas", IrisPaths.atlas, {
+        query: PageQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(AtlasResponse, "Atlas lists and items for one bloq"),
       }).annotateMerge(
@@ -251,6 +282,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("agents", IrisPaths.agents, {
+        query: PageQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(AgentsResponse, "Agents on this bloq, merged with their schedules"),
       }).annotateMerge(
@@ -262,6 +294,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("leads", IrisPaths.leads, {
+        query: PageQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(LeadsResponse, "Leads on this bloq"),
       }).annotateMerge(
@@ -272,6 +305,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("pages", IrisPaths.pages, {
+        query: PageQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(PagesResponse, "Pages owned by this bloq"),
       }).annotateMerge(
@@ -282,6 +316,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("schemas", IrisPaths.schemas, {
+        query: PageQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(SchemasResponse, "Atlas dataset schemas on this board"),
       }).annotateMerge(
@@ -293,6 +328,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("playbooks", IrisPaths.playbooks, {
+        query: PageQuery,
         params: { bloqID: Schema.NumberFromString },
         success: described(PlaybooksResponse, "Playbooks, board-attached first then the account set"),
       }).annotateMerge(
@@ -304,6 +340,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("integrations", IrisPaths.integrations, {
+        query: PageQuery,
         success: described(IntegrationsResponse, "The account's integrations, connected first"),
       }).annotateMerge(
         OpenApi.annotations({
@@ -313,6 +350,7 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("hive", IrisPaths.hive, {
+        query: PageQuery,
         success: described(HiveResponse, "Registered Hive machines"),
       }).annotateMerge(
         OpenApi.annotations({
