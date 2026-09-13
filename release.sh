@@ -134,6 +134,35 @@ if [ "$(printf '%s\n%s\n' "$LIVE" "$TARGET" | sort -t. -k1,1n -k2,2n -k3,3n | ta
   exit 1
 fi
 
+# THE COMMIT YOU ARE TAGGING MUST BE WHAT IS ON main.
+#
+# v1.3.256 was cut from a checkout FOUR COMMITS BEHIND origin/main and nothing said
+# so. The version was right, the branch was right, the tests were green — and the
+# release shipped without the four things that had landed that day, including a fix
+# clients were waiting on. Every other check in this script passed, because none of
+# them looked at whether the local tree was current.
+#
+# A release built from a stale checkout is indistinguishable from a good one until
+# somebody asks "is my change in it?" — which is exactly the question that found this.
+git fetch origin main --quiet 2>/dev/null || true
+if git rev-parse --verify origin/main >/dev/null 2>&1; then
+  BEHIND=$(git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
+  AHEAD=$(git rev-list --count origin/main..HEAD 2>/dev/null || echo 0)
+  if [ "${BEHIND:-0}" -gt 0 ]; then
+    echo "Error: this checkout is $BEHIND commit(s) BEHIND origin/main — refusing to cut a release that omits them."
+    echo ""
+    git --no-pager log --oneline HEAD..origin/main | head -10 | sed 's/^/  missing: /'
+    echo ""
+    echo "  Fix:  git pull --ff-only origin main   then re-run"
+    exit 1
+  fi
+  if [ "${AHEAD:-0}" -gt 0 ]; then
+    echo "Error: this checkout is $AHEAD commit(s) AHEAD of origin/main — push them first, or they ship untagged."
+    git --no-pager log --oneline origin/main..HEAD | head -10 | sed 's/^/  unpushed: /'
+    exit 1
+  fi
+fi
+
 # Must be on main
 BRANCH=$(git branch --show-current)
 if [ "$BRANCH" != "main" ]; then
