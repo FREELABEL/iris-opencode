@@ -268,3 +268,59 @@
   flex: 0 0 auto;
   padding: 0 10px;
 }
+
+/*
+ * LEVEL 2 — the sub-navigation under a surface.
+ *
+ * THE POINT OF THIS FILE'S EXISTENCE IS THAT IT DOES NOT LOOK LIKE THE STRIP ABOVE IT.
+ * The segmented control is a filled plate: pick from it and the whole panel changes subject.
+ * This is a rule underneath: pick from it and you stay where you are, looking at the same
+ * subject a different way. Elon's console draws exactly this distinction — mode as a plate,
+ * section as an underline — and the two are only legible as a hierarchy because they are
+ * drawn differently. Two plates stacked is a single eight-item menu that happens to wrap.
+ *
+ * So: no background, no border box, no radius. One hairline across the full width, and the
+ * active item's own 2px segment of it in the interactive colour.
+ */
+.iris-subnav {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  /* The rule the active item sits on. Full width, so it reads as a baseline for the row
+     rather than as an underline attached to one word. */
+  box-shadow: inset 0 -1px 0 var(--border-weaker-base);
+  /* Same escape as the strip above: more sub-views than fit must scroll, not clip. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.iris-subnav::-webkit-scrollbar {
+  display: none;
+}
+
+.iris-subnav__item {
+  appearance: none;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 4px 8px 6px;
+  font-size: 12px;
+  /* 1.45, not 100% — at 12px a line-box the height of the em-square clips the descender of a
+     'g', which is how the strip above shipped clipped twice before anyone measured it. */
+  line-height: 1.45;
+  color: var(--text-weak);
+  /* The active marker is a border on the item itself, so it tracks the label's width.
+     Transparent on the inactive ones so nothing shifts by 2px when you select one. */
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.12s ease;
+}
+
+.iris-subnav__item:hover {
+  color: var(--text-base);
+}
+
+.iris-subnav__item--active {
+  color: var(--text-strong);
+  border-bottom-color: var(--text-interactive-base);
+}

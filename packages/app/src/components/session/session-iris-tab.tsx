@@ -51,11 +51,19 @@ interface Measured {
  * anywhere in this app, so useMarked() would throw — that provider adds shiki highlighting and
  * katex, which this panel does not need to read a board item.
  */
-/** Which array key a surface's response uses. One mapping, used by both the reader and paging. */
-function arrayKeyFor(surface: string): string {
-  if (surface === "atlas") return "lists"
-  if (surface === "hive") return "nodes"
-  return surface
+/**
+ * Which array key a PANE's response uses. One mapping, used by both the reader and paging.
+ *
+ * Keyed on the pane rather than the top-level surface because two panes now live under one
+ * surface — Atlas holds Lists and Schemas, Hive holds Machines and Inbox — and those return
+ * `lists`, `schemas`, `nodes` and `items` respectively. Keying this on the surface would have
+ * read `d["atlas"]` for the schemas pane and found nothing, which renders as an empty board.
+ */
+function arrayKeyFor(pane: string): string {
+  if (pane === "atlas") return "lists"
+  if (pane === "hive") return "nodes"
+  if (pane === "inbox") return "items"
+  return pane
 }
 
 /** Non-empty fields only — a detail panel full of "—" teaches nothing. */
@@ -145,6 +153,19 @@ function describeRow(surface: string, r: any): { title: string; fields: [string,
       command: `iris hive nodes show ${r.id}`,
     }
   }
+  if (surface === "inbox")
+    return {
+      title: r.label,
+      fields: fieldsOf([
+        ["from", r.from], ["type", r.type], ["read", r.read],
+        ["received", r.receivedAt ? relativeAge(r.receivedAt) : undefined],
+        ["manifest position", r.index],
+      ]),
+      // `index` is the MANIFEST position, not the position in the list above — the list is
+      // sorted unread-first, so the two differ the moment anything has been read. This command
+      // takes the manifest number, so printing the row's position would open a different message.
+      command: `iris hive inbox read ${r.index}`,
+    }
   if (surface === "playbooks")
     return {
       title: r.name,
@@ -196,6 +217,16 @@ const ChevronDown = () => (
 
 const LAST_BLOQ_KEY = "iris.panel.bloq"
 const LAST_SURFACE_KEY = "iris.panel.surface"
+/**
+ * A MAP of surface -> sub-view, not a single value.
+ *
+ * Elon's console keeps one scalar for the section it is on and resets it on every reload, and
+ * the consequence is the thing people complain about most: you are looking at Hive › Inbox,
+ * you check a machine under Atlas, you come back, and you are on Machines again. Storing the
+ * choice per surface makes each surface remember where you were in it, which is what you
+ * expect from a tab you left open.
+ */
+const LAST_SUBVIEW_KEY = "iris.panel.subviews"
 
 /**
  * FOUR SURFACES, ONE TAB — and that is a width decision, not a shortcut.
@@ -220,14 +251,78 @@ const SURFACES = [
   { id: "hive", label: "Hive", path: (_b: number) => `/iris/hive` },
   { id: "playbooks", label: "Playbooks", path: (b: number) => `/iris/playbooks/${b}` },
   { id: "integrations", label: "Integrations", path: (_b: number) => `/iris/integrations` },
-  { id: "schemas", label: "Schemas", path: (b: number) => `/iris/schemas/${b}` },
 ] as const
 
 type SurfaceId = (typeof SURFACES)[number]["id"]
 
+interface SubView {
+  id: string
+  label: string
+  /** Which renderer draws it, and therefore which array key its payload uses. */
+  pane: string
+  path: (bloqID: number) => string
+}
+
+/**
+ * LEVEL TWO. Schemas used to be a ninth top-level tab; it is a way of looking at Atlas.
+ *
+ * Two rules, both learned from Elon's console rather than invented here:
+ *
+ * 1. A sub-view is a DIFFERENT ENDPOINT, never a filter applied to rows already on screen.
+ *    Filtering a page client-side leaves the footer counting the unfiltered set, so "12 of 40"
+ *    sits under nine rows and describes something else. Where a narrower view was wanted and no
+ *    endpoint existed — Agents by schedule — the narrowing was added to the server instead, in
+ *    front of the paging, so `total` stays a true statement about what you are looking at.
+ *
+ * 2. Level two does NOT get a second plate. Elon draws the mode switcher as a filled segmented
+ *    control and the section switcher as a rule underneath, and that difference is the only
+ *    thing telling you which of the two you are about to change. Two identical-looking strips
+ *    stacked is a menu with no hierarchy in it.
+ *
+ * Deliberately NOT copied from Elon: its `badge: count > 0 ? count : null`, which renders zero,
+ * unknown and errored as the same blank tab.
+ */
+const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
+  atlas: [
+    { id: "lists", label: "Lists", pane: "atlas", path: (b) => `/iris/atlas/${b}` },
+    { id: "schemas", label: "Schemas", pane: "schemas", path: (b) => `/iris/schemas/${b}` },
+  ],
+  agents: [
+    { id: "all", label: "All", pane: "agents", path: (b) => `/iris/agents/${b}` },
+    { id: "scheduled", label: "Scheduled", pane: "agents", path: (b) => `/iris/agents/${b}?mode=scheduled` },
+    { id: "ondemand", label: "On demand", pane: "agents", path: (b) => `/iris/agents/${b}?mode=ondemand` },
+  ],
+  hive: [
+    { id: "machines", label: "Machines", pane: "hive", path: () => `/iris/hive` },
+    // The inbox was the original ask — "I want to see the inbox and all of the other machines
+    // on the network in this tab". It belongs under Hive, not beside it: it is Hive traffic.
+    { id: "inbox", label: "Inbox", pane: "inbox", path: () => `/iris/inbox` },
+  ],
+}
+
 /** A persisted surface from an older build must not render a blank panel. */
 export function normalizeSurface(value: unknown): SurfaceId {
   return SURFACES.some((s) => s.id === value) ? (value as SurfaceId) : "atlas"
+}
+
+/**
+ * Level one plus level two -> the endpoint AND the renderer, resolved together.
+ *
+ * One resolver rather than two lookups, because the failure mode of two is that they disagree:
+ * fetch `/iris/schemas/674` and draw it with the Atlas renderer and you get an empty panel over
+ * a full response. An unknown or missing sub-view falls back to the first, so a value persisted
+ * by an older build cannot strand anyone on a blank pane.
+ */
+export function resolvePane(
+  surface: SurfaceId,
+  sub: string | undefined,
+): { sub?: SubView; pane: string; path: (b: number) => string } {
+  const list = SUBVIEWS[surface]
+  if (list?.length) {
+    const chosen = list.find((s) => s.id === sub) ?? list[0]
+    return { sub: chosen, pane: chosen.pane, path: chosen.path }
+  }
+  return { pane: surface, path: SURFACES.find((s) => s.id === surface)!.path }
 }
 
 /**
@@ -289,15 +384,35 @@ export function SessionIrisTab() {
     })(),
   )
 
+  // Remembered PER SURFACE — see LAST_SUBVIEW_KEY. A malformed or missing entry is not an
+  // error worth surfacing; resolvePane falls back to the first sub-view of whatever you open.
+  const [subviews, setSubviews] = createSignal<Record<string, string>>(
+    (() => {
+      try {
+        const raw = JSON.parse(localStorage.getItem(LAST_SUBVIEW_KEY) ?? "{}")
+        return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, string>) : {}
+      } catch {
+        return {}
+      }
+    })(),
+  )
+
+  const resolved = createMemo(() => resolvePane(surface(), subviews()[surface()]))
+  /** Which renderer draws the rows, and which array key they arrive under. */
+  const pane = createMemo(() => resolved().pane)
+
   const [data] = createResource(
     () => {
       const id = activeBloq()
-      return id ? ([base(), id, surface(), page()] as const) : undefined
+      // The sub-view is IN the key. Without it, switching Atlas › Lists to Atlas › Schemas
+      // changes nothing the resource can see and the old rows stay on screen under the new tab.
+      return id ? ([base(), id, surface(), resolved().sub?.id ?? "", page()] as const) : undefined
     },
-    async ([, id, which, pageNo], info): Promise<SurfacePayload> => {
-      const def = SURFACES.find((s) => s.id === which)!
-      const sep = def.path(id).includes("?") ? "&" : "?"
-      const res = await doFetch(`${def.path(id)}${sep}page=${pageNo}&perPage=25`)
+    async ([, id, , , pageNo], info): Promise<SurfacePayload> => {
+      const { pane: which, path } = resolved()
+      const url = path(id)
+      const sep = url.includes("?") ? "&" : "?"
+      const res = await doFetch(`${url}${sep}page=${pageNo}&perPage=25`)
       const next = (await res.json()) as SurfacePayload
 
       // APPEND rather than replace when we asked for a later page of the same surface. The
@@ -325,11 +440,11 @@ export function SessionIrisTab() {
    */
   const current = createMemo(() => data.latest ?? data())
 
-  /** The rows of whichever surface is active — every response names its own array. */
+  /** The rows of whichever pane is active — every response names its own array. */
   const rows = createMemo<any[]>(() => {
     const d = current()
     if (!d) return []
-    const key = arrayKeyFor(surface())
+    const key = arrayKeyFor(pane())
     const v = d[key]
     return Array.isArray(v) ? v : []
   })
@@ -366,6 +481,9 @@ export function SessionIrisTab() {
   // are still looking at an Atlas item.
   createEffect(() => {
     surface()
+    // The sub-view too: Hive › Machines to Hive › Inbox is as much a change of subject as
+    // Hive to Atlas is, and leaving a machine's detail panel open over the inbox is nonsense.
+    resolved().sub?.id
     activeBloq()
     setOpenItem(null)
     setOpenRow(null)
@@ -380,6 +498,28 @@ export function SessionIrisTab() {
       localStorage.setItem(LAST_SURFACE_KEY, id)
     } catch {}
   }
+
+  function chooseSub(id: string) {
+    const next = { ...subviews(), [surface()]: id }
+    setSubviews(next)
+    try {
+      localStorage.setItem(LAST_SUBVIEW_KEY, JSON.stringify(next))
+    } catch {}
+  }
+
+  /**
+   * What to call the thing on screen, in a sentence.
+   *
+   * Also the place the scoping gets told the truth: Hive machines and Integrations belong to the
+   * ACCOUNT, and the empty state said "Nothing in hive on this board" about both of them — a
+   * sentence that describes a filter which does not exist.
+   */
+  const paneLabel = createMemo(() => {
+    const s = SURFACES.find((x) => x.id === surface())!
+    const sv = resolved().sub
+    return sv ? `${s.label} › ${sv.label}` : s.label
+  })
+  const boardScoped = createMemo(() => surface() !== "hive" && surface() !== "integrations")
 
   function choose(id: number) {
     setSelected(id)
@@ -458,6 +598,33 @@ export function SessionIrisTab() {
           {(def) => <SegmentedControlItemV2 value={def.id}>{def.label}</SegmentedControlItemV2>}
         </For>
       </SegmentedControlV2>
+
+      {/* LEVEL 2 — a rule underneath, deliberately NOT a second plate.
+          The filled segmented control above says "which product surface"; this says "which way
+          of looking at it". Drawn the same way, the two strips read as one eight-item menu that
+          happens to wrap, and nothing tells you that picking from the lower one keeps you where
+          you are. Rendered only where a surface has sub-views, so the panel does not grow a
+          permanent empty row. */}
+      <Show when={SUBVIEWS[surface()]}>
+        {(list) => (
+          <div class="iris-subnav shrink-0" role="tablist" aria-label={`${paneLabel()} views`}>
+            <For each={list()}>
+              {(sv) => (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={resolved().sub?.id === sv.id}
+                  class="iris-subnav__item"
+                  classList={{ "iris-subnav__item--active": resolved().sub?.id === sv.id }}
+                  onClick={() => chooseSub(sv.id)}
+                >
+                  {sv.label}
+                </button>
+              )}
+            </For>
+          </div>
+        )}
+      </Show>
 
       {/* THE RECORD PANEL — for the surfaces whose rows are records rather than prose.
           Every field, plus the command that does something with it. The command is selectable
@@ -540,7 +707,7 @@ export function SessionIrisTab() {
             <p class="px-2 py-2 text-12-regular text-text-weak">Could not reach IRIS — {(bloqs.latest ?? bloqs())?.reason ?? "unknown"}.</p>
           </Match>
           <Match when={view() === "surface-error"}>
-            <p class="px-2 py-2 text-12-regular text-text-weak">Could not load {surface()} — {current()?.reason ?? "unknown"}.</p>
+            <p class="px-2 py-2 text-12-regular text-text-weak">Could not load {paneLabel()} — {current()?.reason ?? "unknown"}.</p>
           </Match>
 
           <Match when={view() === "rows"}>
@@ -549,7 +716,7 @@ export function SessionIrisTab() {
             </Show>
 
             <Switch>
-              <Match when={surface() === "atlas"}>
+              <Match when={pane() === "atlas"}>
                 <For each={rows() as AtlasList[]}>
                   {(list) => (
                     <section class="mb-4">
@@ -584,10 +751,10 @@ export function SessionIrisTab() {
                 </For>
               </Match>
 
-              <Match when={surface() === "agents"}>
+              <Match when={pane() === "agents"}>
                 <For each={rows()}>
                   {(a) => (
-                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), a))}>
+                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), a))}>
                       <span class="shrink-0" classList={{ "text-text-base": a.status === "healthy", "text-text-weak": a.status !== "healthy" }}>
                         ●
                       </span>
@@ -600,10 +767,10 @@ export function SessionIrisTab() {
                 </For>
               </Match>
 
-              <Match when={surface() === "leads"}>
+              <Match when={pane() === "leads"}>
                 <For each={rows()}>
                   {(l) => (
-                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), l))}>
+                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), l))}>
                       <span class="shrink-0">{l.hot ? "🔥" : "·"}</span>
                       <span class="text-12-regular text-text-base min-w-0 flex-1">{l.name}</span>
                       <Show when={l.status}>
@@ -614,10 +781,10 @@ export function SessionIrisTab() {
                 </For>
               </Match>
 
-              <Match when={surface() === "hive"}>
+              <Match when={pane() === "hive"}>
                 <For each={rows()}>
                   {(n) => (
-                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), n))}>
+                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), n))}>
                       <span
                         class="shrink-0"
                         classList={{ "text-text-base": n.online, "text-text-weak": !n.online }}
@@ -633,10 +800,39 @@ export function SessionIrisTab() {
                 </For>
               </Match>
 
-              <Match when={surface() === "playbooks"}>
+              <Match when={pane() === "inbox"}>
+                <For each={rows()}>
+                  {(m) => (
+                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow("inbox", m))}>
+                      <div class="flex items-baseline gap-2">
+                        {/* Filled means UNREAD — the one thing you are scanning this list for. */}
+                        <span class="shrink-0" classList={{ "text-text-base": !m.read, "text-text-weaker": m.read }}>
+                          {m.read ? "○" : "●"}
+                        </span>
+                        <span
+                          class="text-12-regular min-w-0 flex-1 truncate"
+                          classList={{ "text-text-strong": !m.read, "text-text-weak": m.read }}
+                        >
+                          {m.label}
+                        </span>
+                        {/* The manifest number, shown because it is the argument you need to
+                            read the thing — and because it is NOT the row's position here. */}
+                        <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">{m.index}</span>
+                      </div>
+                      <p class="text-11-regular text-text-weaker ps-4 pt-0.5 truncate">
+                        {m.from}
+                        {m.receivedAt ? ` · ${relativeAge(m.receivedAt)}` : ""}
+                        {m.type && m.type !== "file" ? ` · ${m.type}` : ""}
+                      </p>
+                    </button>
+                  )}
+                </For>
+              </Match>
+
+              <Match when={pane() === "playbooks"}>
                 <For each={rows()}>
                   {(pb) => (
-                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), pb))}>
+                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), pb))}>
                       <div class="flex items-baseline gap-2">
                         <span class="shrink-0" classList={{ "text-text-base": pb.attached, "text-text-weaker": !pb.attached }}>
                           {pb.attached ? "★" : "·"}
@@ -654,10 +850,10 @@ export function SessionIrisTab() {
                 </For>
               </Match>
 
-              <Match when={surface() === "integrations"}>
+              <Match when={pane() === "integrations"}>
                 <For each={rows()}>
                   {(i) => (
-                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), i))}>
+                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), i))}>
                       <span class="shrink-0" classList={{ "text-text-base": i.connected, "text-text-weak": !i.connected }}>
                         {i.connected ? "●" : "○"}
                       </span>
@@ -670,10 +866,10 @@ export function SessionIrisTab() {
                 </For>
               </Match>
 
-              <Match when={surface() === "schemas"}>
+              <Match when={pane() === "schemas"}>
                 <For each={rows()}>
                   {(sc) => (
-                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), sc))}>
+                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), sc))}>
                       <div class="flex items-baseline gap-2">
                         <span class="text-12-regular text-text-base min-w-0 flex-1">{sc.name}</span>
                         {/* Scope is shown because 40 of these belong to the account, not the
@@ -693,10 +889,10 @@ export function SessionIrisTab() {
                 </For>
               </Match>
 
-              <Match when={surface() === "pages"}>
+              <Match when={pane() === "pages"}>
                 <For each={rows()}>
                   {(pg) => (
-                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), pg))}>
+                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), pg))}>
                       <span
                         class="shrink-0"
                         classList={{ "text-text-base": pg.status === "published", "text-text-weak": pg.status !== "published" }}
@@ -716,7 +912,9 @@ export function SessionIrisTab() {
 
           {/* Only reachable when measured===true — a genuine empty surface. */}
           <Match when={view() === "empty"}>
-            <p class="px-2 py-2 text-12-regular text-text-weak">Nothing in {surface()} on this board.</p>
+            <p class="px-2 py-2 text-12-regular text-text-weak">
+              Nothing in {paneLabel()}{boardScoped() ? " on this board" : ""}.
+            </p>
           </Match>
         </Switch>
 

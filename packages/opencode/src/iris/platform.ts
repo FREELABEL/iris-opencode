@@ -397,6 +397,16 @@ export async function fetchBloqs(): Promise<PlatformResult<{ bloqs: Bloq[] }>> {
  * which is why it can be polled cheaply and why it must go through the sidecar: a webview
  * cannot read the user's home directory.
  */
+export interface InboxItem {
+  /** 1-based manifest position — the number `iris hive inbox read <n>` takes. */
+  index: number
+  read: boolean
+  type: string
+  from: string
+  receivedAt?: string
+  label: string
+}
+
 export interface InboxState {
   /** Unread count. Null means NOT MEASURED — never render it as zero. */
   unread: number | null
@@ -405,6 +415,16 @@ export interface InboxState {
   from?: string
   /** The manifest exists and could not be parsed. A real fault, not an empty inbox. */
   unreadable: boolean
+  /** Unread first, then newest first. Empty when unreadable — the flag says which. */
+  items: InboxItem[]
+  /**
+   * Manifest lines we could not parse and therefore are NOT in `items`.
+   *
+   * A partially corrupt manifest used to undercount in silence: the rows simply were not
+   * there and the panel looked like a shorter, healthy inbox. Non-zero here means the list
+   * you are reading is incomplete, and the UI says so out loud.
+   */
+  unparsed: number
 }
 
 interface ManifestRow {
@@ -412,6 +432,12 @@ interface ManifestRow {
   from_user?: string
   from_node?: string
   received_at?: string
+  type?: string
+  message?: string
+  original_name?: string
+  file?: string
+  item?: string | null
+  status?: string | null
 }
 
 /**
@@ -421,23 +447,43 @@ interface ManifestRow {
  * filesystem — the rules are where the bugs are: a corrupt manifest must not read as empty,
  * and a partially corrupt one must not silently undercount.
  */
+/** What the row shows: the work item for a handoff, the text for a message, else the filename. */
+function describeInbox(row: Record<string, any>): string {
+  const type = row.type ?? "file"
+  if (type === "handoff" || type === "job") return `${row.item ?? "?"}${row.status ? ` [${row.status}]` : ""}`
+  if (type === "message") return row.message ?? "(no text)"
+  return row.original_name ?? row.file ?? "?"
+}
+
 export function countInbox(raw: string): InboxState {
   const lines = raw.split("\n").filter((l) => l.trim())
-  if (!lines.length) return { unread: 0, total: 0, unreadable: false }
+  if (!lines.length) return { unread: 0, total: 0, unreadable: false, items: [], unparsed: 0 }
 
   let unread = 0
   let bad = 0
   let from: string | undefined
   let newest = ""
+  const items: InboxItem[] = []
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
     let row: ManifestRow
     try {
-      row = JSON.parse(line) as ManifestRow
+      row = JSON.parse(lines[i]) as ManifestRow
     } catch {
       bad++
       continue
     }
+    // The index is the MANIFEST position, not the position in this array — it is what
+    // `iris hive inbox read <n>` takes, and renumbering the rows we kept would print a number
+    // that opens a different message.
+    items.push({
+      index: i + 1,
+      read: Boolean(row.read),
+      type: row.type ?? "file",
+      from: row.from_node ?? row.from_user ?? "a peer",
+      receivedAt: row.received_at,
+      label: describeInbox(row),
+    })
     if (row.read) continue
     unread++
     const at = String(row.received_at ?? "")
@@ -448,21 +494,25 @@ export function countInbox(raw: string): InboxState {
   }
 
   // Every line unparseable is a CORRUPT manifest, not an empty one.
-  if (bad && bad === lines.length) return { unread: null, total: lines.length, unreadable: true }
+  if (bad && bad === lines.length)
+    return { unread: null, total: lines.length, unreadable: true, items: [], unparsed: bad }
 
-  return { unread, total: lines.length, from, unreadable: false }
+  // Unread first, then newest first: what is waiting on you outranks what you have seen.
+  items.sort((a, b) => (a.read === b.read ? b.index - a.index : a.read ? 1 : -1))
+
+  return { unread, total: lines.length, from, unreadable: false, items, unparsed: bad }
 }
 
 export function fetchInbox(): InboxState {
   const manifest = path.join(homedir(), ".iris", "hive", "inbox", ".manifest.jsonl")
   // No file means this machine has never received anything. A genuine zero, not a failure.
-  if (!existsSync(manifest)) return { unread: 0, total: 0, unreadable: false }
+  if (!existsSync(manifest)) return { unread: 0, total: 0, unreadable: false, items: [], unparsed: 0 }
   try {
     return countInbox(readFileSync(manifest, "utf-8"))
   } catch {
     // Present and unreadable is not the same as empty, and reporting zero here is the exact
     // failure this codebase keeps paying for.
-    return { unread: null, total: 0, unreadable: true }
+    return { unread: null, total: 0, unreadable: true, items: [], unparsed: 0 }
   }
 }
 

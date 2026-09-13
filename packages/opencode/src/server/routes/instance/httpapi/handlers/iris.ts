@@ -60,7 +60,34 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
 
     const auth = Effect.fn("IrisHttpApi.auth")(() => Effect.sync(() => checkAuth()))
 
-    const inbox = Effect.fn("IrisHttpApi.inbox")(() => Effect.sync(() => fetchInbox()))
+    /**
+     * The inbox goes through the same envelope as every list, for one reason: the panel renders
+     * it with the same code. A second shape here would mean a second "is there more", and the
+     * whole point of the pagination service is that there is exactly one.
+     *
+     * `measured` is false when the manifest is UNREADABLE — present and unparseable, which is a
+     * fault, not an empty inbox. A partially unparseable one still counts what it can, and says
+     * how much is missing in `reason` rather than quietly returning a shorter list.
+     */
+    const inbox = Effect.fn("IrisHttpApi.inbox")(
+      (ctx: { query: { page?: number; perPage?: number } }) =>
+        Effect.sync(() => {
+          const r = fetchInbox()
+          const { items, meta } = pageOf(
+            {
+              measured: !r.unreadable,
+              reason: r.unreadable
+                ? "the inbox manifest could not be parsed"
+                : r.unparsed
+                  ? `${r.unparsed} manifest ${r.unparsed === 1 ? "line" : "lines"} could not be read and ${r.unparsed === 1 ? "is" : "are"} missing below`
+                  : undefined,
+            },
+            r.items,
+            ctx.query,
+          )
+          return { ...meta, unread: r.unread, from: r.from, unreadable: r.unreadable, items }
+        }),
+    )
 
     const atlas = Effect.fn("IrisHttpApi.atlas")(
       (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number } }) =>
@@ -72,11 +99,28 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
+    /**
+     * `mode` narrows BEFORE paging.
+     *
+     * Filtering the page the client already holds would make "12 of 40" mean "12 of 40 agents,
+     * of which some unknown number are scheduled" — a count that describes a different set from
+     * the rows under it. Narrowing here keeps `total` a true statement about what is on screen.
+     */
     const agents = Effect.fn("IrisHttpApi.agents")(
-      (ctx: { params: { bloqID: number }; query: { page?: number; perPage?: number } }) =>
+      (ctx: {
+        params: { bloqID: number }
+        query: { page?: number; perPage?: number; mode?: "all" | "scheduled" | "ondemand" }
+      }) =>
         Effect.promise(() => fetchAgents(ctx.params.bloqID)).pipe(
           Effect.map((r) => {
-            const { items, meta } = pageOf(r, r.data.agents, ctx.query)
+            const mode = ctx.query.mode ?? "all"
+            const all =
+              mode === "scheduled"
+                ? r.data.agents.filter((a) => a.heartbeat)
+                : mode === "ondemand"
+                  ? r.data.agents.filter((a) => !a.heartbeat)
+                  : r.data.agents
+            const { items, meta } = pageOf(r, all, ctx.query)
             return { ...meta, agents: items }
           }),
         ),

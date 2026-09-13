@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { normalizeSurface, surfaceView } from "./session-iris-tab"
+import { normalizeSurface, resolvePane, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -49,5 +49,50 @@ describe("normalizeSurface", () => {
     expect(normalizeSurface("leads")).toBe("leads")
     expect(normalizeSurface("pages")).toBe("pages")
     expect(normalizeSurface("hive")).toBe("hive")
+  })
+})
+
+describe("resolvePane", () => {
+  test("a surface with no sub-views resolves to itself", () => {
+    const r = resolvePane("leads", undefined)
+    expect(r.sub).toBeUndefined()
+    expect(r.pane).toBe("leads")
+    expect(r.path(674)).toBe("/iris/leads/674")
+  })
+
+  test("the pane and the endpoint come from the SAME sub-view", () => {
+    // The failure this prevents: fetch /iris/schemas/674 and draw it with the Atlas renderer,
+    // which reads `lists` from a payload whose array is called `schemas`. A full response
+    // rendered as an empty board — the shape of bug that reads as "my data is gone".
+    const r = resolvePane("atlas", "schemas")
+    expect(r.pane).toBe("schemas")
+    expect(r.path(674)).toBe("/iris/schemas/674")
+  })
+
+  test("no sub-view chosen yet lands on the first one, not on nothing", () => {
+    expect(resolvePane("hive", undefined).sub?.id).toBe("machines")
+    expect(resolvePane("hive", undefined).path(674)).toBe("/iris/hive")
+  })
+
+  test("a sub-view persisted by an older build cannot strand you on a blank pane", () => {
+    // localStorage outlives the build that wrote it. "schemas" was a TOP-LEVEL surface before
+    // it moved under Atlas, so this exact string is sitting in real installs today.
+    expect(resolvePane("hive", "schemas").sub?.id).toBe("machines")
+    expect(resolvePane("atlas", "nonsense").pane).toBe("atlas")
+  })
+
+  test("agent modes narrow on the SERVER, in the query string", () => {
+    // Not a client-side filter over rows already fetched: that leaves the footer counting the
+    // unfiltered set, so "12 of 40" sits under nine rows and describes a different set.
+    expect(resolvePane("agents", "scheduled").path(674)).toBe("/iris/agents/674?mode=scheduled")
+    expect(resolvePane("agents", "ondemand").path(674)).toBe("/iris/agents/674?mode=ondemand")
+    // Every agent mode still draws with the agents renderer — same rows, narrower set.
+    expect(resolvePane("agents", "ondemand").pane).toBe("agents")
+  })
+
+  test("the hive inbox is a different endpoint AND a different renderer", () => {
+    const r = resolvePane("hive", "inbox")
+    expect(r.pane).toBe("inbox")
+    expect(r.path(674)).toBe("/iris/inbox")
   })
 })

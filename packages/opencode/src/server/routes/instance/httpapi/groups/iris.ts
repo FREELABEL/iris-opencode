@@ -108,13 +108,27 @@ const BloqsResponse = Schema.Struct({
 }).annotate({ identifier: "IrisBloqsResponse" })
 
 const InboxResponse = Schema.Struct({
+  ...Measured,
+  ...Paged,
   unread: described(
     Schema.NullOr(Schema.Finite),
     "Unread count. NULL means not measured — render it as a dash, never as zero.",
   ),
-  total: Schema.Finite,
   from: Schema.optional(Schema.String),
   unreadable: described(Schema.Boolean, "The manifest exists and could not be parsed. A fault, not an empty inbox."),
+  items: described(
+    Schema.Array(
+      Schema.Struct({
+        index: described(Schema.Finite, "1-based MANIFEST position — the number `iris hive inbox read <n>` takes."),
+        read: Schema.Boolean,
+        type: Schema.String,
+        from: Schema.String,
+        receivedAt: Schema.optional(Schema.String),
+        label: Schema.String,
+      }).annotate({ identifier: "IrisInboxItem" }),
+    ),
+    "Unread first, then newest first.",
+  ),
 }).annotate({ identifier: "IrisInboxResponse" })
 
 const AgentsResponse = Schema.Struct({
@@ -277,13 +291,14 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("inbox", IrisPaths.inbox, {
-        success: described(InboxResponse, "Hive inbox state"),
+        query: PageQuery,
+        success: described(InboxResponse, "Hive inbox state, and the messages themselves"),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "iris.inbox",
           summary: "Hive inbox state",
           description:
-            "Unread count from the local inbox manifest. A file read, not a request — which is why it must come through the sidecar: the webview cannot read the user's home directory.",
+            "Unread count AND the messages, from the local inbox manifest. A file read, not a request — which is why it must come through the sidecar: the webview cannot read the user's home directory. `total` counts the items returned; `reason` says so when some manifest lines could not be parsed and are therefore missing from the list.",
         }),
       ),
       HttpApiEndpoint.get("atlas", IrisPaths.atlas, {
@@ -299,7 +314,13 @@ export const IrisApi = HttpApi.make("iris").add(
         }),
       ),
       HttpApiEndpoint.get("agents", IrisPaths.agents, {
-        query: PageQuery,
+        query: Schema.Struct({
+          ...PageQuery.fields,
+          mode: described(
+            Schema.optional(Schema.Literals(["all", "scheduled", "ondemand"])),
+            "Narrowed SERVER-SIDE, before paging — so `total` counts the agents in this mode, not all of them. Filtering a page on the client would report the page's leftovers as the whole set.",
+          ),
+        }),
         params: { bloqID: Schema.NumberFromString },
         success: described(AgentsResponse, "Agents on this bloq, merged with their schedules"),
       }).annotateMerge(
