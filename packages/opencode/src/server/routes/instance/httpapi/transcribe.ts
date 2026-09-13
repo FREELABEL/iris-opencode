@@ -31,6 +31,43 @@ import { stripNonSpeech } from "@/transcribe/local"
  * Loopback-only for the same reason /transcribe is: a microphone the network can start is a
  * microphone the network can listen through.
  */
+/**
+ * Transcribe with the best available engine.
+ *
+ * Grok first, on-device whisper as the fallback. Measured on identical audio, same machine:
+ * local base.en heard "Southern transcription", grok heard "Sovereign transcription". The 0.3s
+ * grok costs is nothing against being wrong.
+ *
+ * IRIS_TRANSCRIBE_PROVIDER=local forces on-device, which is what anything under a PHI policy
+ * must use — remote means the audio leaves the machine.
+ *
+ * Shared by /transcribe and /dictate/stop deliberately. Those are two CAPTURE paths (the
+ * webview records, or the sidecar does) with ONE transcription policy. When the choice lived in
+ * /dictate/stop alone, audio captured in the webview silently skipped Grok — the same words
+ * transcribed worse purely because of which process recorded them.
+ */
+async function transcribeBest(
+  audio: Uint8Array,
+  filename: string,
+  language?: string,
+): Promise<{ text: string; provider: string }> {
+  const prefer = process.env["IRIS_TRANSCRIBE_PROVIDER"]?.trim().toLowerCase()
+  const remote = prefer === "local" ? null : readRemoteConfig()
+
+  if (remote) {
+    try {
+      const r = await transcribeRemote(audio, remote, { filename })
+      return { text: stripNonSpeech(r.text), provider: r.provider }
+    } catch {
+      // Never fail a dictation because the network did. Falling through to the on-device model
+      // is worse words, not no words.
+    }
+  }
+
+  const result = await transcribeLocal(audio, { filename, language })
+  return { text: stripNonSpeech(result.text), provider: result.provider }
+}
+
 export const dictateRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     yield* router.add("POST", "/dictate/start", () =>
@@ -67,30 +104,16 @@ export const dictateRoute = HttpRouter.use((router) =>
 
           // GROK FIRST, local as the fallback.
           //
-          // Measured on identical audio: local base.en heard "Southern transcription", grok
-          // heard "Sovereign transcription". The 0.3s grok costs is nothing against being
-          // wrong. Set IRIS_TRANSCRIBE_PROVIDER=local to force on-device — which is what
-          // anything under a PHI policy should do, since remote means the audio leaves.
-          const prefer = process.env["IRIS_TRANSCRIBE_PROVIDER"]?.trim().toLowerCase()
-          const remote = prefer === "local" ? null : readRemoteConfig()
-
-          if (remote) {
-            try {
-              const r = await transcribeRemote(audio, remote, { filename: "dictation.wav" })
-              return HttpServerResponse.jsonUnsafe({
-                text: stripNonSpeech(r.text),
-                provider: r.provider,
-                ms,
-                peak,
-              })
-            } catch {
-              // Never fail the dictation because the network did. Falling through to the
-              // on-device model is worse words, not no words.
-            }
-          }
-
-          const result = await transcribeLocal(audio, { filename: "dictation.wav" })
-          return HttpServerResponse.jsonUnsafe({ text: result.text, provider: result.provider, ms, peak })
+          const best = await transcribeBest(audio, "dictation.wav")
+          return HttpServerResponse.jsonUnsafe({
+            text: best.text,
+            provider: best.provider,
+            ms,
+            peak,
+            // Which process recorded this. The two capture paths fail in completely different
+            // ways and a transcript alone cannot tell you which one ran.
+            capture: "sidecar",
+          })
         },
         catch: (e) => (e instanceof TranscribeError ? e : new TranscribeError(String(e))),
       }).pipe(
@@ -150,10 +173,13 @@ export const transcribeRoute = HttpRouter.use((router) =>
 
       const result = yield* Effect.tryPromise({
         try: () =>
-          transcribeLocal(audio, {
-            filename: url.searchParams.get("filename") ?? "dictation.webm",
-            language: url.searchParams.get("language") ?? undefined,
-          }),
+          // Same engine choice as /dictate/stop — see transcribeBest. Audio captured in the
+          // WEBVIEW lands here, and used to get on-device whisper only.
+          transcribeBest(
+            audio,
+            url.searchParams.get("filename") ?? "dictation.wav",
+            url.searchParams.get("language") ?? undefined,
+          ),
         // The message from local.ts already names the fix ("brew install whisper-cpp"), so
         // it is surfaced verbatim rather than flattened into "transcription failed".
         catch: (e) => (e instanceof TranscribeError ? e : new TranscribeError(String(e))),
