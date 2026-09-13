@@ -124,13 +124,35 @@
 .iris-surfaces[data-slot="segmented-control-v2"] {
   box-shadow: none;
   background: transparent;
+
+  /*
+   * Room for the focus ring, and nothing clipping it.
+   *
+   * The component is a fixed 28px tall and its items draw `outline: 2px` at `outline-offset:
+   * 1px` when focused — 3px outside the box on every side. With the group exactly as tall as
+   * its items, the bottom of that ring landed outside the control and was cut off, which is
+   * what you see as a flat-bottomed pill.
+   *
+   * `height: auto` + symmetric padding keeps the items vertically centred (they still set
+   * their own 28px) while giving the ring somewhere to live.
+   */
+  height: auto;
+  padding: 4px 0;
+  overflow: visible;
 }
 
 .iris-surfaces [data-slot="segmented-control-v2-item"] {
   cursor: pointer;
 }
 
+/* Hover reads before you commit; pressed is the same fill, one step stronger. */
+.iris-surfaces [data-slot="segmented-control-v2-item"]:where(:hover):not([data-pressed]) {
+  background: var(--background-element);
+  color: var(--text-base);
+}
+
 .iris-surfaces [data-slot="segmented-control-v2-item"]:where([data-pressed]) {
   box-shadow: none;
   background: var(--background-element);
+  color: var(--text-strong);
 }

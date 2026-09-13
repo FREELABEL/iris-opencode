@@ -58,6 +58,20 @@ function renderMarkdown(md: string): string {
   }
 }
 
+/**
+ * The board picker's chevron.
+ *
+ * Was the text character "⌄", which is a glyph with its own baseline and side bearings: it sat
+ * low, would not align with the label, and rendered at whatever size the font felt like. This
+ * is the same 16px currentColor SVG select-v2 uses for its own trigger, so the two look like
+ * the same control.
+ */
+const ChevronDown = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" class="shrink-0">
+    <path d="M5 6.5L8 9.5L11 6.5" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+)
+
 const LAST_BLOQ_KEY = "iris.panel.bloq"
 const LAST_SURFACE_KEY = "iris.panel.surface"
 
@@ -225,7 +239,7 @@ export function SessionIrisTab() {
       <Show when={((bloqs.latest ?? bloqs())?.bloqs?.length ?? 0) > 0}>
         <button
           type="button"
-          class="flex items-center gap-2 px-2 py-1 text-12-regular text-text-base hover:bg-background-element rounded text-start min-w-0 cursor-pointer"
+          class="flex items-center gap-1 px-2 py-1 text-12-regular text-text-base hover:bg-background-element rounded text-start min-w-0 cursor-pointer"
           onClick={() => {
             const all = (bloqs.latest ?? bloqs())?.bloqs ?? []
             dialog.show(() => (
@@ -267,7 +281,9 @@ export function SessionIrisTab() {
           }}
         >
           <span class="truncate">{activeBloqName()}</span>
-          <span class="text-text-weak shrink-0">⌄</span>
+          <span class="text-text-weak flex items-center shrink-0">
+            <ChevronDown />
+          </span>
         </button>
       </Show>
 
