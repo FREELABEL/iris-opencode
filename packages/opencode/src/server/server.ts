@@ -63,6 +63,40 @@ export namespace Server {
 
   let _url: URL | undefined
   let _corsWhitelist: string[] = []
+
+  /**
+   * Who may make a cross-origin request to this server.
+   *
+   * This is the only thing standing between a page the user happens to visit and their sessions.
+   * The server binds 127.0.0.1, so a remote host cannot reach it — but a browser on this machine
+   * can, and `/session` answers without credentials. What stops a write is that an unknown origin
+   * gets NO `Access-Control-Allow-Origin` back, so the preflight fails and the browser never
+   * sends the POST. (A no-preflight `text/plain` POST is separately rejected 415.)
+   *
+   * A real control resting on one returned value, so it is a named function with tests rather
+   * than an inline closure: an edit that returned `input` unconditionally would open every
+   * session on the machine to any page, and nothing would have failed.
+   *
+   * Returning undefined = refuse.
+   */
+  export function corsOrigin(input: string | undefined | null, whitelist: string[] = []): string | undefined {
+    if (!input) return
+
+    if (input.startsWith("http://localhost:")) return input
+    if (input.startsWith("http://127.0.0.1:")) return input
+    if (input === "tauri://localhost" || input === "http://tauri.localhost") return input
+
+    // *.opencode.ai (https only, adjust if needed)
+    if (/^https:\/\/([a-z0-9-]+\.)*opencode\.ai$/.test(input)) {
+      return input
+    }
+    if (whitelist.includes(input)) {
+      return input
+    }
+
+    return
+  }
+
   // The hostname the server actually bound to. /transcribe refuses unless this is loopback:
   // --mdns flips the bind to 0.0.0.0, and an audio endpoint reachable from the LAN is a
   // microphone reachable from the LAN. Recorded at listen() rather than checked per-request
@@ -243,23 +277,7 @@ iris traces          what your agents did</pre>
       })
       .use(
         cors({
-          origin(input) {
-            if (!input) return
-
-            if (input.startsWith("http://localhost:")) return input
-            if (input.startsWith("http://127.0.0.1:")) return input
-            if (input === "tauri://localhost" || input === "http://tauri.localhost") return input
-
-            // *.opencode.ai (https only, adjust if needed)
-            if (/^https:\/\/([a-z0-9-]+\.)*opencode\.ai$/.test(input)) {
-              return input
-            }
-            if (_corsWhitelist.includes(input)) {
-              return input
-            }
-
-            return
-          },
+          origin: (input) => corsOrigin(input, _corsWhitelist),
         }),
       )
       .get(
