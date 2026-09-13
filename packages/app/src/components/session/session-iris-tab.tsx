@@ -58,6 +58,90 @@ function arrayKeyFor(surface: string): string {
   return surface
 }
 
+/** Non-empty fields only — a detail panel full of "—" teaches nothing. */
+const fieldsOf = (pairs: [string, unknown][]): [string, string][] =>
+  pairs
+    .filter(([, v]) => v !== undefined && v !== null && v !== "" && !(typeof v === "number" && Number.isNaN(v)))
+    .map(([k, v]) => [k, typeof v === "boolean" ? (v ? "yes" : "no") : String(v)])
+
+/**
+ * What clicking a row opens, per surface.
+ *
+ * One describer rather than five detail components: every one of these is "a record with some
+ * fields and maybe a command", and five near-identical panels would drift apart the first time
+ * one of them got a fix.
+ */
+function describeRow(surface: string, r: any): { title: string; fields: [string, string][]; command?: string } | null {
+  if (surface === "agents")
+    return {
+      title: r.name,
+      fields: fieldsOf([
+        ["id", r.id], ["status", r.status], ["model", r.model], ["active", r.active],
+        ["mode", r.heartbeat ? "heartbeat" : "on demand"], ["schedule", r.schedule],
+        ["last run", r.lastRun], ["consecutive failures", r.failures], ["created", r.createdAt],
+        ["description", r.description],
+      ]),
+      command: `iris agents show ${r.id}`,
+    }
+  if (surface === "leads")
+    return {
+      title: r.name,
+      fields: fieldsOf([
+        ["id", r.id], ["status", r.status], ["company", r.company], ["email", r.email],
+        ["score", r.score], ["hot", r.hot], ["type", r.type],
+        ["city", r.city], ["country", r.country], ["replied", r.repliedAt],
+        ["keywords", r.keywords], ["created", r.createdAt],
+      ]),
+      command: `iris leads show ${r.id}`,
+    }
+  if (surface === "pages")
+    return {
+      title: r.title,
+      fields: fieldsOf([
+        ["id", r.id], ["slug", r.slug], ["status", r.status], ["version", r.version],
+        ["visibility", r.visibility], ["requires auth", r.requiresAuth], ["category", r.category],
+        ["published", r.publishedAt], ["updated", r.updatedAt], ["url", r.url],
+      ]),
+      command: r.slug ? `iris pages view ${r.slug}` : undefined,
+    }
+  if (surface === "hive")
+    return {
+      title: r.name,
+      fields: fieldsOf([
+        ["id", r.id], ["status", r.status], ["online", r.online],
+        // "0/3" on the row meant active tasks over capacity and said so nowhere.
+        ["running tasks", r.activeTasks], ["max concurrent", r.maxConcurrent],
+        ["last heartbeat", r.lastHeartbeat],
+      ]),
+      command: `iris hive nodes show ${r.id}`,
+    }
+  if (surface === "playbooks")
+    return {
+      title: r.name,
+      fields: fieldsOf([["attached to this board", r.attached], ["description", r.description]]),
+      command: `iris playbook run ${r.name}`,
+    }
+  if (surface === "integrations")
+    return {
+      title: r.name,
+      fields: fieldsOf([
+        ["id", r.id], ["provider", r.provider], ["category", r.category],
+        ["status", r.status], ["connected", r.connected], ["account", r.account],
+      ]),
+      command: r.provider ? `iris connect ${r.provider}` : undefined,
+    }
+  if (surface === "schemas")
+    return {
+      title: r.name,
+      fields: fieldsOf([
+        ["slug", r.slug], ["scope", r.scope], ["version", r.version], ["system", r.isSystem],
+        ["fields", (r.fields ?? []).map((f: any) => `${f.name}:${f.type}`).join(", ")],
+      ]),
+      command: r.slug ? `iris atlas:datasets records list --schema ${r.slug}` : undefined,
+    }
+  return null
+}
+
 function renderMarkdown(md: string): string {
   try {
     return marked.parse(md, { async: false }) as string
@@ -236,6 +320,12 @@ export function SessionIrisTab() {
     () => (bloqs.latest ?? bloqs())?.bloqs?.find((b) => b.id === activeBloq())?.name ?? "Select a board",
   )
 
+  /** A non-Atlas row being inspected. Atlas has its own reader because it has a BODY; the rest
+   *  are records, so they get a field list rather than prose. */
+  const [openRow, setOpenRow] = createSignal<{ title: string; fields: [string, string][]; command?: string } | null>(
+    null,
+  )
+
   /** The item being read, if any. Opening one replaces the list; there is no second panel. */
   const [openItem, setOpenItem] = createSignal<AtlasItem | null>(null)
 
@@ -248,6 +338,7 @@ export function SessionIrisTab() {
     surface()
     activeBloq()
     setOpenItem(null)
+    setOpenRow(null)
     // Paging resets with the thing being paged. Without this, switching surface while on page 3
     // asks the next surface for ITS page 3 and silently skips its first rows.
     setPage(1)
@@ -338,6 +429,45 @@ export function SessionIrisTab() {
         </For>
       </SegmentedControlV2>
 
+      {/* THE RECORD PANEL — for the surfaces whose rows are records rather than prose.
+          Every field, plus the command that does something with it. The command is selectable
+          and copies on click, because "what do I type to act on this" was the actual question
+          behind "nothing happens when I click it". */}
+      <Show when={openRow()}>
+        <div class="flex-1 min-h-0 flex flex-col">
+          <button
+            type="button"
+            class="flex items-center gap-1 px-2 py-1 text-11-regular text-text-weak hover:text-text-base shrink-0 text-start cursor-pointer"
+            onClick={() => setOpenRow(null)}
+          >
+            ← Back
+          </button>
+          <div class="flex-1 min-h-0 overflow-y-auto px-2 pb-4">
+            <h3 class="text-13-medium text-text-strong pb-2">{openRow()!.title}</h3>
+            <Show when={openRow()!.command}>
+              <button
+                type="button"
+                class="w-full text-start font-mono text-11-regular px-2 py-1.5 mb-3 rounded bg-background-element text-text-base cursor-pointer hover:text-text-strong"
+                title="Click to copy"
+                onClick={() => navigator.clipboard?.writeText(openRow()!.command!)}
+              >
+                {openRow()!.command}
+              </button>
+            </Show>
+            <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+              <For each={openRow()!.fields}>
+                {([k, v]) => (
+                  <>
+                    <dt class="text-11-regular text-text-weaker">{k}</dt>
+                    <dd class="text-12-regular text-text-base min-w-0 break-words">{v}</dd>
+                  </>
+                )}
+              </For>
+            </dl>
+          </div>
+        </div>
+      </Show>
+
       {/* THE READER. Replaces the list rather than opening beside it: the panel is ~500px wide
           and a master/detail split inside that leaves neither half readable. */}
       <Show when={openItem()}>
@@ -349,8 +479,12 @@ export function SessionIrisTab() {
           >
             ← Back
           </button>
+          {/* A BREADCRUMB, not a title. Atlas bodies almost always open with their own "# H1",
+              so printing the item title here too rendered it twice at the same size — which is
+              exactly the flat hierarchy that made these unreadable. The markdown's H1 is the
+              title; this row is just where you are and what to quote. */}
           <div class="flex items-baseline gap-2 px-2 pb-1">
-            <span class="text-12-medium text-text-strong min-w-0 truncate">{openItem()!.title}</span>
+            <span class="text-11-regular text-text-weaker min-w-0 truncate">{openItem()!.title}</span>
             <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
               #{openItem()!.id}
             </span>
@@ -365,7 +499,7 @@ export function SessionIrisTab() {
         </div>
       </Show>
 
-      <div class="flex-1 min-h-0 overflow-y-auto" classList={{ hidden: !!openItem() }}>
+      <div class="flex-1 min-h-0 overflow-y-auto" classList={{ hidden: !!openItem() || !!openRow() }}>
         <Switch>
           <Match when={view() === "loading"}>
             <p class="px-2 py-2 text-12-regular text-text-weak">Loading…</p>
@@ -423,7 +557,7 @@ export function SessionIrisTab() {
               <Match when={surface() === "agents"}>
                 <For each={rows()}>
                   {(a) => (
-                    <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), a))}>
                       <span class="shrink-0" classList={{ "text-text-base": a.status === "healthy", "text-text-weak": a.status !== "healthy" }}>
                         ●
                       </span>
@@ -431,7 +565,7 @@ export function SessionIrisTab() {
                       <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">
                         {a.heartbeat ? (a.schedule ?? "heartbeat") : "on demand"}
                       </span>
-                    </div>
+                    </button>
                   )}
                 </For>
               </Match>
@@ -439,13 +573,13 @@ export function SessionIrisTab() {
               <Match when={surface() === "leads"}>
                 <For each={rows()}>
                   {(l) => (
-                    <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), l))}>
                       <span class="shrink-0">{l.hot ? "🔥" : "·"}</span>
                       <span class="text-12-regular text-text-base min-w-0 flex-1">{l.name}</span>
                       <Show when={l.status}>
                         <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">{l.status}</span>
                       </Show>
-                    </div>
+                    </button>
                   )}
                 </For>
               </Match>
@@ -453,7 +587,7 @@ export function SessionIrisTab() {
               <Match when={surface() === "hive"}>
                 <For each={rows()}>
                   {(n) => (
-                    <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), n))}>
                       <span
                         class="shrink-0"
                         classList={{ "text-text-base": n.online, "text-text-weak": !n.online }}
@@ -464,7 +598,7 @@ export function SessionIrisTab() {
                       <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">
                         {n.activeTasks}/{n.maxConcurrent}
                       </span>
-                    </div>
+                    </button>
                   )}
                 </For>
               </Match>
@@ -472,7 +606,7 @@ export function SessionIrisTab() {
               <Match when={surface() === "playbooks"}>
                 <For each={rows()}>
                   {(pb) => (
-                    <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), pb))}>
                       <div class="flex items-baseline gap-2">
                         <span class="shrink-0" classList={{ "text-text-base": pb.attached, "text-text-weaker": !pb.attached }}>
                           {pb.attached ? "★" : "·"}
@@ -485,7 +619,7 @@ export function SessionIrisTab() {
                       <Show when={pb.description}>
                         <p class="text-11-regular text-text-weak ps-4 pt-0.5 line-clamp-2">{pb.description}</p>
                       </Show>
-                    </div>
+                    </button>
                   )}
                 </For>
               </Match>
@@ -493,7 +627,7 @@ export function SessionIrisTab() {
               <Match when={surface() === "integrations"}>
                 <For each={rows()}>
                   {(i) => (
-                    <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), i))}>
                       <span class="shrink-0" classList={{ "text-text-base": i.connected, "text-text-weak": !i.connected }}>
                         {i.connected ? "●" : "○"}
                       </span>
@@ -501,7 +635,7 @@ export function SessionIrisTab() {
                       <span class="font-mono text-11-regular text-text-weaker shrink-0">
                         {i.account || i.category || i.status}
                       </span>
-                    </div>
+                    </button>
                   )}
                 </For>
               </Match>
@@ -509,7 +643,7 @@ export function SessionIrisTab() {
               <Match when={surface() === "schemas"}>
                 <For each={rows()}>
                   {(sc) => (
-                    <div class="px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), sc))}>
                       <div class="flex items-baseline gap-2">
                         <span class="text-12-regular text-text-base min-w-0 flex-1">{sc.name}</span>
                         {/* Scope is shown because 40 of these belong to the account, not the
@@ -524,7 +658,7 @@ export function SessionIrisTab() {
                           {sc.fields.map((f: any) => f.name).join(" · ")}
                         </p>
                       </Show>
-                    </div>
+                    </button>
                   )}
                 </For>
               </Match>
@@ -532,7 +666,7 @@ export function SessionIrisTab() {
               <Match when={surface() === "pages"}>
                 <For each={rows()}>
                   {(pg) => (
-                    <div class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0">
+                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(surface(), pg))}>
                       <span
                         class="shrink-0"
                         classList={{ "text-text-base": pg.status === "published", "text-text-weak": pg.status !== "published" }}
@@ -543,7 +677,7 @@ export function SessionIrisTab() {
                       <Show when={pg.slug}>
                         <span class="font-mono tabular-nums text-11-regular text-text-weak shrink-0">/{pg.slug}</span>
                       </Show>
-                    </div>
+                    </button>
                   )}
                 </For>
               </Match>
