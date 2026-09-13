@@ -206,6 +206,26 @@ const AuthResponse = Schema.Struct({
   ),
 }).annotate({ identifier: "IrisAuthResponse" })
 
+const SitesResponse = Schema.Struct({
+  ...Measured,
+  ...Paged,
+  sites: Schema.Array(
+    Schema.Struct({
+      id: Schema.Finite,
+      name: Schema.String,
+      slug: Schema.String,
+      status: Schema.String,
+      pagesCount: described(Schema.Finite, "Attached pages. A site with one page is usually a mistake."),
+      homePageId: Schema.optional(Schema.Finite),
+      requiresAuth: Schema.Boolean,
+      owner: described(Schema.optional(Schema.String), "\"bloq 174\" or \"user 193\" — the list mixes both."),
+      description: Schema.optional(Schema.String),
+      updatedAt: Schema.optional(Schema.String),
+      navItems: Schema.Array(Schema.Struct({ label: Schema.String, url: Schema.String })),
+    }).annotate({ identifier: "IrisSite" }),
+  ),
+}).annotate({ identifier: "IrisSitesResponse" })
+
 const SchemaFieldSchema = Schema.Struct({
   key: described(Schema.String, "The key in a record's `data` map — what a table column reads."),
   label: Schema.String,
@@ -301,6 +321,7 @@ export const IrisPaths = {
   playbooks: `${root}/playbooks/:bloqID`,
   integrations: `${root}/integrations`,
   records: `${root}/records/:slug`,
+  sites: `${root}/sites`,
   hive: `${root}/hive`,
 } as const
 
@@ -413,6 +434,17 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "List playbooks",
           description:
             "BOTH the board's attached playbooks and the account's full set, each flagged. Never one or the other — the TUI shipped either/or and each half hid something.",
+        }),
+      ),
+      HttpApiEndpoint.get("sites", IrisPaths.sites, {
+        query: PageQuery,
+        success: described(SitesResponse, "The account's sites, published first"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.sites",
+          summary: "List sites",
+          description:
+            "A site groups pages under shared navigation, and owns settings, a contact-form inbox and a comms thread that a page does not have. Listing only pages made all of that invisible and made a nine-page site look like nine unrelated rows. NOT board-filtered: sites are owned by a user OR a bloq and the endpoint mixes both, so narrowing by board would hide every account-level site.",
         }),
       ),
       HttpApiEndpoint.get("records", IrisPaths.records, {

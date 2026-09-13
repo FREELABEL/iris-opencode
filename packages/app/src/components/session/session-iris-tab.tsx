@@ -161,6 +161,17 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
       command: `iris hive nodes show ${r.id}`,
     }
   }
+  if (surface === "sites")
+    return {
+      title: r.name,
+      fields: fieldsOf([
+        ["id", r.id], ["slug", r.slug], ["status", r.status],
+        ["pages", r.pagesCount], ["home page", r.homePageId],
+        ["owner", r.owner], ["requires auth", r.requiresAuth],
+        ["description", r.description], ["updated", r.updatedAt],
+      ]),
+      command: r.slug ? `iris pages sites show ${r.slug}` : undefined,
+    }
   if (surface === "inbox")
     return {
       title: r.label,
@@ -304,6 +315,14 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     { id: "scheduled", label: "Scheduled", pane: "agents", path: (b) => `/iris/agents/${b}?mode=scheduled` },
     { id: "ondemand", label: "On demand", pane: "agents", path: (b) => `/iris/agents/${b}?mode=ondemand` },
   ],
+  pages: [
+    { id: "pages", label: "Pages", pane: "pages", path: (b) => `/iris/pages/${b}` },
+    // A SITE IS NOT A PAGE. It groups pages under shared navigation and owns settings, a
+    // contact-form inbox and a comms thread that a page does not have at all. Showing only
+    // pages made every one of those invisible and made a nine-page site look like nine
+    // unrelated rows. Not board-scoped — sites are owned by a user OR a bloq.
+    { id: "sites", label: "Sites", pane: "sites", path: () => `/iris/sites` },
+  ],
   hive: [
     { id: "machines", label: "Machines", pane: "hive", path: () => `/iris/hive` },
     // The inbox was the original ask — "I want to see the inbox and all of the other machines
@@ -339,6 +358,15 @@ const DETAIL_TABS: Record<string, readonly DetailTab[]> = {
   pages: [
     { id: "info", label: "Info" },
     { id: "preview", label: "Preview" },
+    { id: "json", label: "JSON" },
+  ],
+  sites: [
+    { id: "info", label: "Info" },
+    // The site's own navigation, as links. NOT a "Preview" tab: every published site 404s at
+    // its documented public route /s/{slug} on both hosts, while the pages it links to serve
+    // fine. An iframe pointed at that would render a 404 and look like a broken preview rather
+    // than the routing gap it is.
+    { id: "sitepages", label: "Pages" },
     { id: "json", label: "JSON" },
   ],
   agents: [
@@ -870,6 +898,33 @@ export function SessionIrisTab() {
                 </Show>
               </Match>
 
+              {/* The site's navigation, as links you can actually open. Each entry is a
+                  /p/<slug> page, which serves fine — it is the site route itself that does not. */}
+              <Match when={detailTab() === "sitepages"}>
+                <Show
+                  when={(openRow()!.raw?.navItems?.length ?? 0) > 0}
+                  fallback={
+                    <p class="text-12-regular text-text-weak py-2">
+                      This site has {openRow()!.raw?.pagesCount ?? 0} page(s) attached but no navigation defined.
+                    </p>
+                  }
+                >
+                  <For each={openRow()!.raw.navItems}>
+                    {(n: any) => (
+                      <a
+                        href={`https://heyiris.io${n.url}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        class="flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 hover:bg-background-element"
+                      >
+                        <span class="text-12-regular text-text-base min-w-0 flex-1">{n.label}</span>
+                        <span class="shrink-0 font-mono text-11-regular text-text-weaker">{n.url}</span>
+                      </a>
+                    )}
+                  </For>
+                </Show>
+              </Match>
+
               {/* THE TABLE. Columns from the schema, rows from the dataset, paged upstream. */}
               <Match when={detailTab() === "records"}>
                 <Switch>
@@ -1082,6 +1137,31 @@ export function SessionIrisTab() {
                       <span class="font-mono tabular-nums text-11-regular text-text-weaker shrink-0">
                         {n.activeTasks}/{n.maxConcurrent}
                       </span>
+                    </button>
+                  )}
+                </For>
+              </Match>
+
+              <Match when={pane() === "sites"}>
+                <For each={rows()}>
+                  {(st) => (
+                    <button type="button" class="w-full text-start px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow("sites", st))}>
+                      <div class="flex items-baseline gap-2">
+                        <span class="shrink-0" classList={{ "text-text-base": st.status === "published", "text-text-weak": st.status !== "published" }}>
+                          {st.status === "published" ? "●" : "○"}
+                        </span>
+                        <span class="text-12-regular text-text-base min-w-0 flex-1">{st.name}</span>
+                        {/* The page count IS the reason a site exists. Leading with it says
+                            what kind of thing this row is at a glance. */}
+                        <span class="shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
+                          {st.pagesCount}p
+                        </span>
+                      </div>
+                      <p class="text-11-regular text-text-weaker ps-4 pt-0.5 truncate">
+                        /{st.slug}
+                        {st.owner ? ` · ${st.owner}` : ""}
+                        {st.requiresAuth ? " · gated" : ""}
+                      </p>
                     </button>
                   )}
                 </For>

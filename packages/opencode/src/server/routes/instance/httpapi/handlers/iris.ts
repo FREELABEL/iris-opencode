@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { paginate } from "@/iris/pagination"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas } from "@/iris/platform"
+import { checkAuth, fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchIntegrations, fetchPages, fetchPlaybooks, fetchRecords, fetchSchemas, fetchSites } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -174,6 +174,16 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
      * slice a 25-row page down to a 25-row page and report `total` as 25 — a number that looks
      * right and says the dataset has 25 rows in it.
      */
+    const sites = Effect.fn("IrisHttpApi.sites")(
+      (ctx: { query: { page?: number; perPage?: number } }) =>
+        Effect.promise(() => fetchSites()).pipe(
+          Effect.map((r) => {
+            const { items, meta } = pageOf(r, r.data.sites, ctx.query)
+            return { ...meta, sites: items }
+          }),
+        ),
+    )
+
     const records = Effect.fn("IrisHttpApi.records")(
       (ctx: { params: { slug: string }; query: { page?: number; perPage?: number } }) =>
         Effect.promise(() => fetchRecords(ctx.params.slug, ctx.query)).pipe(
@@ -212,6 +222,6 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
         ),
     )
 
-    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("records", records).handle("integrations", integrations).handle("hive", hive)
+    return handlers.handle("auth", auth).handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("schemas", schemas).handle("playbooks", playbooks).handle("sites", sites).handle("records", records).handle("integrations", integrations).handle("hive", hive)
   }),
 )

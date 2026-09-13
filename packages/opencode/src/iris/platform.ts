@@ -989,6 +989,80 @@ async function columnsFor(slug: string): Promise<SchemaField[]> {
   }
 }
 
+export interface SiteNavItem {
+  label: string
+  url: string
+}
+
+export interface Site {
+  id: number
+  name: string
+  slug: string
+  status: string
+  /** How many pages are attached. The whole point of a site is that it has more than one. */
+  pagesCount: number
+  homePageId?: number
+  requiresAuth: boolean
+  /** "bloq 174" / "user 193" — sites are owned by either, and the list mixes both. */
+  owner?: string
+  description?: string
+  updatedAt?: string
+  navItems: SiteNavItem[]
+}
+
+/**
+ * The account's SITES — the other half of what the Pages surface was showing as one thing.
+ *
+ * A site is not a page. It groups pages under shared navigation and a theme, and it owns things
+ * a page does not have at all: attached pages in an order, settings, a contact-form inbox and a
+ * comms thread. Listing only pages made every one of those invisible, and made a nine-page site
+ * look like nine unrelated rows.
+ *
+ * NOT filtered to the current board. Sites are owned by a user OR a bloq and the endpoint mixes
+ * both, so filtering by board would hide every account-level site behind an empty panel — the
+ * same mistake the schemas list already made once. The owner is labelled instead.
+ */
+export async function fetchSites(): Promise<PlatformResult<{ sites: Site[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { sites: [] } }
+
+  try {
+    const res = await irisFetch(`/api/v1/sites`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { sites: [] } }
+    const json = (await res.json()) as any
+    const rows = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : []
+
+    const sites: Site[] = rows.map((r: any) => ({
+      id: Number(r.id),
+      name: String(r.name ?? r.slug ?? "unnamed"),
+      slug: String(r.slug ?? ""),
+      status: String(r.status ?? "unknown"),
+      pagesCount: Number(r.pages_count ?? 0),
+      homePageId: typeof r.home_page_id === "number" ? r.home_page_id : undefined,
+      requiresAuth: Boolean(r.requires_auth),
+      owner:
+        r.owner_type && r.owner_id != null
+          ? `${r.owner_type} ${r.owner_id}`
+          : r.projects_bloq_id != null
+            ? `bloq ${r.projects_bloq_id}`
+            : undefined,
+      description: typeof r.description === "string" && r.description ? r.description : undefined,
+      updatedAt: typeof r.updated_at === "string" ? r.updated_at : undefined,
+      navItems: (Array.isArray(r.nav_items) ? r.nav_items : [])
+        .filter((n: any) => n && typeof n.url === "string")
+        .map((n: any) => ({ label: String(n.label ?? n.url), url: String(n.url) })),
+    }))
+
+    // Published first, then the biggest. A draft with one page is the least useful row here.
+    sites.sort((a, b) =>
+      a.status === b.status ? b.pagesCount - a.pagesCount : a.status === "published" ? -1 : b.status === "published" ? 1 : 0,
+    )
+    return { measured: true, data: { sites } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { sites: [] } }
+  }
+}
+
 export interface Integration {
   id: string
   name: string
