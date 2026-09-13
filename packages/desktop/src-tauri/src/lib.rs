@@ -490,6 +490,41 @@ fn seed_iris_provider() {
             providers.insert("iris".to_string(), iris.clone());
             changed = true;
         }
+    } else if let Some(models) = providers
+        .get_mut("iris")
+        .and_then(|p| p.as_object_mut())
+        .and_then(|p| p.get_mut("models"))
+        .and_then(|m| m.as_object_mut())
+    {
+        // REPAIR EXACTLY ONE THING, AND ONLY BECAUSE IT IS PROVABLY OUR OWN DAMAGE.
+        //
+        // The provider namespaces its model keys downstream, so a key written as
+        // "iris/glm-5.2" yields the id "iris/iris/glm-5.2" — a second picker entry for a
+        // model already in the list. That is #183776, and main's provider.ts strips the
+        // prefix for exactly this reason ("Every duplicate in the picker was this").
+        // Our seed file shipped pre-prefixed keys until 2026-09-12, so we wrote them.
+        // Measured on one machine that day: 20 seeded models, 20 `iris/iris/*` duplicates.
+        //
+        // "Never touch an existing iris entry" remains the rule for everything else —
+        // baseURL, apiKey, the user's own additions. This case is distinguishable from a
+        // user's choice with certainty: a key carrying its own provider's name as a prefix
+        // cannot have been typed deliberately AND worked. Leaving it costs every existing
+        // install a permanently doubled picker, because the seeder would never look again.
+        let prefixed: Vec<String> = models
+            .keys()
+            .filter(|k| k.starts_with("iris/"))
+            .cloned()
+            .collect();
+        for key in prefixed {
+            let Some(value) = models.remove(&key) else {
+                continue;
+            };
+            let fixed = key.trim_start_matches("iris/").to_string();
+            // If the correct key is already present, the prefixed one was the duplicate and
+            // dropping it is the whole point. or_insert keeps the good entry either way.
+            models.entry(fixed).or_insert(value);
+            changed = true;
+        }
     }
 
     if !changed {

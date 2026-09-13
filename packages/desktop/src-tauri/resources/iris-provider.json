@@ -9,84 +9,84 @@
         "apiKey": "{env:IRIS_API_KEY}"
       },
       "models": {
-        "iris/iris-ai": {
-          "name": "Iris Ai",
+        "iris-ai": {
+          "name": "IRIS AI",
           "tools": true
         },
-        "iris/iris-ai-reasoning": {
-          "name": "Iris Ai Reasoning",
+        "iris-ai-reasoning": {
+          "name": "IRIS AI Reasoning",
           "tools": true
         },
-        "iris/grok-4.3": {
+        "grok-4.3": {
           "name": "Grok 4.3",
           "tools": true
         },
-        "iris/gpt-4o-mini": {
-          "name": "Gpt 4O Mini",
+        "gpt-4o-mini": {
+          "name": "GPT-4o Mini",
           "tools": true
         },
-        "iris/gpt-4.1-nano": {
-          "name": "Gpt 4.1 Nano",
+        "gpt-4.1-nano": {
+          "name": "GPT-4.1 Nano",
           "tools": true
         },
-        "iris/gpt-5-nano": {
-          "name": "Gpt 5 Nano",
+        "gpt-5-nano": {
+          "name": "GPT-5 Nano",
           "tools": true
         },
-        "iris/gpt-5.4-nano": {
-          "name": "Gpt 5.4 Nano",
+        "gpt-5.4-nano": {
+          "name": "GPT-5.4 Nano",
           "tools": true
         },
-        "iris/gpt-5.6-luna": {
-          "name": "Gpt 5.6 Luna",
+        "gpt-5.6-luna": {
+          "name": "GPT-5.6 Luna",
           "tools": true
         },
-        "iris/gpt-5.6-terra": {
-          "name": "Gpt 5.6 Terra",
+        "gpt-5.6-terra": {
+          "name": "GPT-5.6 Terra",
           "tools": true
         },
-        "iris/gpt-5.6-sol": {
-          "name": "Gpt 5.6 Sol",
+        "gpt-5.6-sol": {
+          "name": "GPT-5.6 Sol",
           "tools": true
         },
-        "iris/big-pickle": {
+        "big-pickle": {
           "name": "Big Pickle",
           "tools": true
         },
-        "iris/deepseek-v4-flash": {
-          "name": "Deepseek V4 Flash",
+        "deepseek-v4-flash": {
+          "name": "DeepSeek V4 Flash",
           "tools": true
         },
-        "iris/mimo-v2.5": {
-          "name": "Mimo V2.5",
+        "mimo-v2.5": {
+          "name": "MiMo V2.5",
           "tools": true
         },
-        "iris/nemotron-3.5-lightning": {
+        "nemotron-3.5-lightning": {
           "name": "Nemotron 3.5 Lightning",
           "tools": true
         },
-        "iris/hy3": {
+        "hy3": {
           "name": "Hy3",
           "tools": true
         },
-        "iris/mimo-v2.5-pro": {
-          "name": "Mimo V2.5 Pro",
+        "mimo-v2.5-pro": {
+          "name": "MiMo V2.5 Pro",
           "tools": true
         },
-        "iris/kimi-k2.7-code": {
+        "kimi-k2.7-code": {
           "name": "Kimi K2.7 Code",
           "tools": true
         },
-        "iris/glm-5.2": {
-          "name": "Glm 5.2",
+        "glm-5.2": {
+          "name": "GLM 5.2",
           "tools": true
         },
-        "iris/kimi-k3": {
+        "kimi-k3": {
           "name": "Kimi K3",
           "tools": true
         },
-        "iris/minimax-m3": {
-          "name": "Minimax M3",
+        "minimax-m3": {
+          "name": "MiniMax M3",
           "tools": true
         }
       }
