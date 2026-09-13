@@ -2,7 +2,7 @@ mod cli;
 mod login;
 mod window_customizer;
 
-use cli::{install_cli, sync_cli};
+use cli::{cli_health, install_cli, sync_cli};
 use std::{
     collections::VecDeque,
     net::{SocketAddr, TcpListener},
@@ -635,6 +635,7 @@ pub fn run() {
             copy_logs_to_clipboard,
             get_logs,
             install_cli,
+            cli_health,
             iris_action,
             login::save_iris_token,
             login::restart_app,
@@ -748,9 +749,10 @@ pub fn run() {
             }
 
             {
-              let app = app.clone();
-              tauri::async_runtime::spawn(async move {
-                if let Err(e) = sync_cli(app) {
+              // spawn_blocking, not spawn: sync_cli may download the CLI, and a multi-second
+              // blocking call on an async worker starves the runtime the app is using.
+              tauri::async_runtime::spawn_blocking(|| {
+                if let Err(e) = sync_cli() {
                   eprintln!("Failed to sync CLI: {e}");
                 }
               });

@@ -26,3 +26,17 @@ export async function irisAction(action: string, title: string): Promise<void> {
     await message(String(e).slice(0, 2000), { title: `${title} — failed` })
   }
 }
+
+/// Say what CLI the machine actually has, in the menu, without a terminal.
+///
+/// Step 5 of #183738. Until now nothing in the UI named the CLI at all, so an app that had
+/// silently replaced it presented only as "unknown command" — which reads as misconfiguration,
+/// and cost two agents ten minutes on a client call before anyone suspected the app.
+export async function cliHealth(): Promise<void> {
+  try {
+    const out = await invoke<string>("cli_health")
+    await message(out, { title: "IRIS CLI" })
+  } catch (e) {
+    await message(String(e).slice(0, 2000), { title: "IRIS CLI — failed" })
+  }
+}

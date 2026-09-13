@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window"
 
 import { getUpdateMode, runUpdater, setUpdateMode, UPDATER_ENABLED } from "./updater"
 import type { UpdateMode } from "./update-policy"
-import { installCli, irisAction } from "./cli"
+import { cliHealth, installCli, irisAction } from "./cli"
 
 export async function createMenu() {
   // This used to begin `if (ostype() !== "macos") return`, which is why Windows had no menu at
@@ -48,6 +48,12 @@ export async function createMenu() {
           await MenuItem.new({
             action: () => installCli(),
             text: "Install CLI...",
+          }),
+          // Next to the thing it diagnoses. "Install CLI..." cannot tell you whether you
+          // needed it; this can.
+          await MenuItem.new({
+            action: () => cliHealth(),
+            text: "CLI Health",
           }),
           await PredefinedMenuItem.new({
             item: "Separator",
