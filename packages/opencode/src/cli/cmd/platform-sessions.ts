@@ -4,6 +4,7 @@ import { UI } from "../ui"
 import { bridgeFetch, dim, bold, highlight, success, writeJson } from "./iris-api"
 import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import { firstArray } from "../../util/array"
+import { candidateServers, findLiveServer, deliverLive, shouldFallBackToBridge } from "./session-live-delivery"
 
 // ============================================================================
 // iris sessions — see and steer the AI sessions running on this machine (#181239)
@@ -283,6 +284,8 @@ const SendCommand = cmd({
       .positional("id", { type: "string", describe: "session id or prefix" })
       .positional("message", { type: "string", describe: "the message to send" })
       .option("provider", { type: "string" })
+      .option("url", { type: "string", describe: "session server to deliver through (default: $IRIS_SERVER, else http://127.0.0.1:4096)" })
+      .option("submit", { type: "boolean", default: false, describe: "also make their agent take a turn (spends THEIR tokens). Off by default." })
       .option("json", { type: "boolean", default: false }),
   async handler(args: any) {
     UI.empty()
@@ -308,6 +311,37 @@ const SendCommand = cmd({
 
     const spinner = prompts.spinner()
     spinner.start("Sending…")
+
+    // LIVE FIRST. A running server is already listening on loopback; posting to it lands the
+    // message in milliseconds and emits `message.updated` on the bus the TUI renders from.
+    // The bridge path below shells out to `/opt/homebrew/bin/opencode` — upstream opencode,
+    // not iris — which cannot resolve an IRIS session and hangs for 180s delivering nothing
+    // (#184804). It is kept only as a fallback for providers with no live server (claude-code).
+    if (provider === "opencode") {
+      const live = await findLiveServer(row.session_id, candidateServers({ url: args.url, env: process.env }))
+      if (live) {
+        const ok = await deliverLive(live, row.session_id, message, 8000, { submit: Boolean(args.submit) })
+        if (ok) {
+          spinner.stop("Sent")
+          if (args.json) { await writeJson({ ok: true, via: "live", server: live, session_id: row.session_id }); prompts.outro("Done"); return }
+          console.log(`  ${success("✓")} ${dim("delivered live via")} ${live}`)
+          if (!args.submit) console.log(`  ${dim("no model turn was spent — pass --submit to make their agent act")}`)
+          prompts.outro(dim(`iris sessions history ${row.session_id.slice(0, 8)}`))
+          return
+        }
+        // Fall through to the bridge rather than claiming a success we did not achieve.
+        prompts.log.warn(dim(`live delivery to ${live} failed — falling back to the bridge`))
+      }
+      if (!shouldFallBackToBridge({ explicitUrl: args.url ?? null, liveFound: Boolean(live) })) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`No live session server at ${args.url} holds session ${row.session_id.slice(0, 12)}.`)
+        prompts.log.info(dim("Drop --url to try $IRIS_SERVER and the default http://127.0.0.1:4096."))
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
+    }
+
     const res = await bridgeFetch(`/api/sessions/${provider}/${row.session_id}/message`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
