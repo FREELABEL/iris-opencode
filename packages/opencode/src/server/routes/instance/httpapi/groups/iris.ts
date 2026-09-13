@@ -76,12 +76,58 @@ const InboxResponse = Schema.Struct({
   unreadable: described(Schema.Boolean, "The manifest exists and could not be parsed. A fault, not an empty inbox."),
 }).annotate({ identifier: "IrisInboxResponse" })
 
+const AgentsResponse = Schema.Struct({
+  ...Measured,
+  agents: Schema.Array(
+    Schema.Struct({
+      id: Schema.Finite,
+      name: Schema.String,
+      status: Schema.String,
+      model: Schema.optional(Schema.String),
+      heartbeat: Schema.Boolean,
+      schedule: Schema.optional(Schema.String),
+      lastRun: Schema.optional(Schema.String),
+    }).annotate({ identifier: "IrisAgent" }),
+  ),
+}).annotate({ identifier: "IrisAgentsResponse" })
+
+const LeadsResponse = Schema.Struct({
+  ...Measured,
+  leads: Schema.Array(
+    Schema.Struct({
+      id: Schema.Finite,
+      name: Schema.String,
+      status: Schema.optional(Schema.String),
+      company: Schema.optional(Schema.String),
+      email: Schema.optional(Schema.String),
+      hot: Schema.Boolean,
+    }).annotate({ identifier: "IrisLead" }),
+  ),
+}).annotate({ identifier: "IrisLeadsResponse" })
+
+const PagesResponse = Schema.Struct({
+  ...Measured,
+  pages: Schema.Array(
+    Schema.Struct({
+      id: Schema.Finite,
+      title: Schema.String,
+      slug: Schema.optional(Schema.String),
+      status: Schema.String,
+      url: Schema.optional(Schema.String),
+      updatedAt: Schema.optional(Schema.String),
+    }).annotate({ identifier: "IrisPage" }),
+  ),
+}).annotate({ identifier: "IrisPagesResponse" })
+
 const root = "/iris"
 
 export const IrisPaths = {
   bloqs: `${root}/bloqs`,
   inbox: `${root}/inbox`,
   atlas: `${root}/atlas/:bloqID`,
+  agents: `${root}/agents/:bloqID`,
+  leads: `${root}/leads/:bloqID`,
+  pages: `${root}/pages/:bloqID`,
   hive: `${root}/hive`,
 } as const
 
@@ -117,6 +163,37 @@ export const IrisApi = HttpApi.make("iris").add(
           summary: "Get Atlas for a bloq",
           description:
             "Lists and items for one bloq, fetched from fl-api with the signed-in user's token. Check `measured` before rendering: false means the fetch failed, not that the bloq is empty.",
+        }),
+      ),
+      HttpApiEndpoint.get("agents", IrisPaths.agents, {
+        params: { bloqID: Schema.NumberFromString },
+        success: described(AgentsResponse, "Agents on this bloq, merged with their schedules"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.agents",
+          summary: "List agents",
+          description:
+            "Agents for one bloq, each carrying its schedule. `reason` is set with `measured: true` when the agents loaded but their schedules did not — a partial answer that must not read as 'nothing is scheduled'.",
+        }),
+      ),
+      HttpApiEndpoint.get("leads", IrisPaths.leads, {
+        params: { bloqID: Schema.NumberFromString },
+        success: described(LeadsResponse, "Leads on this bloq"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.leads",
+          summary: "List leads",
+          description: "Leads for one bloq. Personal data — this is the route to look at first when reviewing what the local server exposes.",
+        }),
+      ),
+      HttpApiEndpoint.get("pages", IrisPaths.pages, {
+        params: { bloqID: Schema.NumberFromString },
+        success: described(PagesResponse, "Pages owned by this bloq"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "iris.pages",
+          summary: "List pages",
+          description: "Pages owned by one bloq. Narrowed by owner_type/owner_id, not filtered client-side.",
         }),
       ),
       HttpApiEndpoint.get("hive", IrisPaths.hive, {

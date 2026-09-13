@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox } from "@/iris/platform"
+import { fetchAgents, fetchAtlas, fetchBloqs, fetchHiveNodes, fetchInbox, fetchLeads, fetchPages } from "@/iris/platform"
 import { RootHttpApi } from "../api"
 
 /**
@@ -33,12 +33,30 @@ export const irisHandlers = HttpApiBuilder.group(RootHttpApi, "iris", (handlers)
       ),
     )
 
+    const agents = Effect.fn("IrisHttpApi.agents")((ctx: { params: { bloqID: number } }) =>
+      Effect.promise(() => fetchAgents(ctx.params.bloqID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, agents: r.data.agents })),
+      ),
+    )
+
+    const leads = Effect.fn("IrisHttpApi.leads")((ctx: { params: { bloqID: number } }) =>
+      Effect.promise(() => fetchLeads(ctx.params.bloqID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, leads: r.data.leads })),
+      ),
+    )
+
+    const pages = Effect.fn("IrisHttpApi.pages")((ctx: { params: { bloqID: number } }) =>
+      Effect.promise(() => fetchPages(ctx.params.bloqID)).pipe(
+        Effect.map((r) => ({ measured: r.measured, reason: r.reason, pages: r.data.pages })),
+      ),
+    )
+
     const hive = Effect.fn("IrisHttpApi.hive")(() =>
       Effect.promise(() => fetchHiveNodes()).pipe(
         Effect.map((r) => ({ measured: r.measured, reason: r.reason, nodes: r.data.nodes })),
       ),
     )
 
-    return handlers.handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("hive", hive)
+    return handlers.handle("bloqs", bloqs).handle("inbox", inbox).handle("atlas", atlas).handle("agents", agents).handle("leads", leads).handle("pages", pages).handle("hive", hive)
   }),
 )

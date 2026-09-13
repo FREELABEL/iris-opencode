@@ -200,6 +200,33 @@ export interface PlatformResult<T> {
   data: T
 }
 
+
+/**
+ * Is this a bloq the signed-in user actually has?
+ *
+ * MEASURED 2026-09-13, and the reason this exists: `/iris/pages/99999999` came back
+ * `measured: true` with an empty list. fl-api 404s an impossible bloq, so Atlas, agents and
+ * leads all reported "could not look" correctly — but iris-api answers **200 with an empty
+ * page list**, so for pages the honest answer and the reassuring one were the same JSON. The
+ * `measured` flag cannot save a caller when the upstream never says no.
+ *
+ * So the id is checked against the account's own bloqs before the surface is fetched. Applied
+ * to all four bloq-scoped surfaces, not just pages: the other three are correct today only
+ * because of how their upstream happens to behave, which is not a property anyone promised.
+ *
+ * DELIBERATELY FAILS OPEN on an unmeasurable bloq list. If we cannot list bloqs — offline,
+ * 401 — we must not start claiming ids are unknown. A guard that cannot verify should decline
+ * to judge, not invent a verdict.
+ */
+export function unknownBloqReason(bloqId: number, list: PlatformResult<{ bloqs: Bloq[] }>): string | null {
+  if (!list.measured) return null
+  return list.data.bloqs.some((b) => b.id === bloqId) ? null : `unknown bloq ${bloqId}`
+}
+
+async function unknownBloq(bloqId: number): Promise<string | null> {
+  return unknownBloqReason(bloqId, await fetchBloqs())
+}
+
 export interface AtlasItem {
   id: number
   title: string
@@ -216,6 +243,9 @@ export interface AtlasList {
 export async function fetchAtlas(bloqId: number): Promise<PlatformResult<{ lists: AtlasList[] }>> {
   const userId = await resolveUserId()
   if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { lists: [] } }
+
+  const unknown = await unknownBloq(bloqId)
+  if (unknown) return { measured: false, reason: unknown, data: { lists: [] } }
 
   try {
     const res = await irisFetch(`/api/v1/user/${userId}/bloqs/${bloqId}`)
@@ -384,5 +414,157 @@ export function fetchInbox(): InboxState {
     // Present and unreadable is not the same as empty, and reporting zero here is the exact
     // failure this codebase keeps paying for.
     return { unread: null, total: 0, unreadable: true }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The remaining bloq-scoped surfaces
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface Agent {
+  id: number
+  name: string
+  status: string
+  model?: string
+  /** Heartbeat agents run on a schedule; standard ones do not. */
+  heartbeat: boolean
+  schedule?: string
+  lastRun?: string
+}
+
+/**
+ * Agents, merged with their scheduled jobs.
+ *
+ * Two endpoints, one surface — an agent's schedule lives on the job, not the agent, so a list
+ * built from `/agents` alone can tell you a heartbeat agent exists and never that it has not
+ * run in four days. That distinction is the whole reason anyone opens this list.
+ */
+export async function fetchAgents(bloqId: number): Promise<PlatformResult<{ agents: Agent[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { agents: [] } }
+
+  const unknown = await unknownBloq(bloqId)
+  if (unknown) return { measured: false, reason: unknown, data: { agents: [] } }
+
+  try {
+    const [agentsRes, jobsRes] = await Promise.all([
+      irisFetch(`/api/v1/users/${userId}/bloqs/agents?bloq_id=${bloqId}&per_page=50`),
+      irisFetch(`/api/v1/users/${userId}/bloqs/scheduled-jobs?bloq_id=${bloqId}&per_page=50`),
+    ])
+    if (!agentsRes.ok) return { measured: false, reason: `fl-api ${agentsRes.status}`, data: { agents: [] } }
+
+    const unwrap = async (res: Response) => {
+      const j = (await res.json()) as any
+      const d = j?.data ?? j
+      return Array.isArray(d) ? d : (d?.data ?? [])
+    }
+    const rawAgents = await unwrap(agentsRes)
+    // A failed jobs call must not fail the whole list — it costs schedules, not agents. But it
+    // must not silently look like "no schedules" either, hence the reason below.
+    const rawJobs = jobsRes.ok ? await unwrap(jobsRes) : []
+
+    const jobFor = new Map<number, any>()
+    for (const j of rawJobs) {
+      const id = Number(j?.agent_id ?? j?.bloq_agent_id)
+      if (Number.isFinite(id)) jobFor.set(id, j)
+    }
+
+    const agents: Agent[] = rawAgents.map((a: any) => {
+      const job = jobFor.get(Number(a.id))
+      const hb = a.heartbeat_mode === true || a.heartbeat_mode === "true" || Boolean(job)
+      return {
+        id: Number(a.id),
+        name: String(a.name ?? "unnamed"),
+        status: String(a.health_status ?? (a.active === false ? "paused" : "idle")),
+        model: a.model ?? a.config?.model ?? a.config?.modelName ?? undefined,
+        heartbeat: hb,
+        schedule: job?.interval_minutes ? `${job.interval_minutes}m` : undefined,
+        lastRun: job?.last_run_at ?? undefined,
+      }
+    })
+    return {
+      measured: true,
+      reason: jobsRes.ok ? undefined : `schedules unavailable (fl-api ${jobsRes.status})`,
+      data: { agents },
+    }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { agents: [] } }
+  }
+}
+
+export interface Lead {
+  id: number
+  name: string
+  status?: string
+  company?: string
+  email?: string
+  hot: boolean
+}
+
+export async function fetchLeads(bloqId: number): Promise<PlatformResult<{ leads: Lead[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { leads: [] } }
+
+  const unknown = await unknownBloq(bloqId)
+  if (unknown) return { measured: false, reason: unknown, data: { leads: [] } }
+
+  try {
+    const res = await irisFetch(`/api/v1/users/${userId}/leads?bloq_id=${bloqId}&per_page=50`)
+    if (!res.ok) return { measured: false, reason: `fl-api ${res.status}`, data: { leads: [] } }
+    const j = (await res.json()) as any
+    const d = j?.data ?? j
+    const rows = Array.isArray(d) ? d : (d?.data ?? [])
+    const leads: Lead[] = rows.map((l: any) => ({
+      id: Number(l.id),
+      name: String(l.name ?? l.full_name ?? "unnamed"),
+      status: l.status ?? undefined,
+      company: l.company ?? undefined,
+      email: l.email ?? undefined,
+      hot: Number(l.lead_score ?? l.leadScore ?? 0) >= 70,
+    }))
+    return { measured: true, data: { leads } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { leads: [] } }
+  }
+}
+
+export interface Page {
+  id: number
+  title: string
+  slug?: string
+  status: string
+  url?: string
+  updatedAt?: string
+}
+
+export async function fetchPages(bloqId: number): Promise<PlatformResult<{ pages: Page[] }>> {
+  const userId = await resolveUserId()
+  if (!userId) return { measured: false, reason: `not signed in (token: ${tokenSource()})`, data: { pages: [] } }
+
+  const unknown = await unknownBloq(bloqId)
+  if (unknown) return { measured: false, reason: unknown, data: { pages: [] } }
+
+  try {
+    // owner_type/owner_id is a NARROWING filter, which is the point: this used to be fetched
+    // per-user and rendered under a project header, so the list could never change when you
+    // switched project.
+    const res = await irisFetch(
+      `/api/v1/pages?user_id=${userId}&owner_type=bloq&owner_id=${bloqId}&per_page=50`,
+      IRIS_API,
+    )
+    if (!res.ok) return { measured: false, reason: `iris-api ${res.status}`, data: { pages: [] } }
+    const j = (await res.json()) as any
+    const rows = j?.data?.data ?? j?.data ?? []
+    const pages: Page[] = (Array.isArray(rows) ? rows : []).map((p: any) => ({
+      id: Number(p.id),
+      title: String(p.title || p.slug || "Untitled"),
+      slug: p.slug ?? undefined,
+      status: String(p.status ?? "draft"),
+      url: p.public_url || undefined,
+      updatedAt: p.updated_at ?? undefined,
+    }))
+    return { measured: true, data: { pages } }
+  } catch (e) {
+    return { measured: false, reason: e instanceof Error ? e.message : String(e), data: { pages: [] } }
   }
 }
