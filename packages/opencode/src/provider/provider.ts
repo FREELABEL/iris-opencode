@@ -759,22 +759,56 @@ export namespace Provider {
       // server-side (e.g. DO) removes its models from the TUI picker with NO
       // client release. /models is public (no auth). On any failure, fall back
       // to the full catalog rather than an empty picker.
-      const irisAvailable = await (async (): Promise<Set<string> | null> => {
+      type IrisRow = { id?: string; name?: string; available?: boolean; tool_calling?: boolean }
+      const irisRows = await (async (): Promise<IrisRow[] | null> => {
         try {
           const res = await fetch(`${irisApiUrl}/models`, { signal: AbortSignal.timeout(3000) })
           if (!res.ok) return null
-          const body = (await res.json()) as { data?: Array<{ id?: string; available?: boolean }> }
+          const body = (await res.json()) as { data?: IrisRow[] }
           const rows = Array.isArray(body?.data) ? body.data : []
-          return new Set(
-            rows.filter((m) => m?.available === true).map((m) => String(m.id ?? "").replace(/^iris\//, "")),
-          )
+          // An empty list is NOT the same as a failed fetch. Returning [] here would render an
+          // empty picker and look exactly like a server that offers nothing; null falls back
+          // to the catalog, which is the honest answer to "I could not ask".
+          return rows.length ? rows : null
         } catch {
           return null
         }
       })()
 
-      const irisModels: Record<string, Model> = irisAvailable
-        ? Object.fromEntries(Object.entries(irisCatalog).filter(([key]) => irisAvailable.has(key)))
+      // THE REGISTRY IS THE SOURCE OF TRUTH — BUILD FROM IT, DO NOT FILTER A COPY BY IT.
+      //
+      // This used to take the hardcoded catalog above and keep whichever entries /models
+      // also listed. That makes the catalog the source of truth and demotes the server to a
+      // veto, with one consequence: a model added server-side is INVISIBLE until a CLI
+      // release. On 2026-09-12 iris-ai-reasoning was repointed to glm-5.3-flash, which has
+      // never been in this file — so the flagship people are told to use could not be
+      // selected in the picker at all, on any installed binary.
+      //
+      // /models already carries everything a picker needs: id, name (the server's own
+      // displayName(), so "GLM 5.2" not "Glm 5.2"), tool_calling, available. Build from it.
+      //
+      // The catalog stays, for exactly one job: the OFFLINE fallback. If the fetch fails
+      // there must still be a picker, and a short correct list beats an empty one.
+      const irisModels: Record<string, Model> = irisRows
+        ? Object.fromEntries(
+            irisRows
+              .filter((row) => row.available === true)
+              .map((row) => {
+                // Ids arrive namespaced (`iris/glm-5.2`). The key must NOT keep that prefix —
+                // the provider namespaces it again downstream, producing `iris/iris/glm-5.2`
+                // and a second entry for a model already in the list (#183776). Every
+                // duplicate in the picker was this.
+                const key = String(row.id ?? "").replace(/^iris\//, "")
+                const known = irisCatalog[key]
+                const model = makeIrisModel(key, row.name || known?.name || key, {
+                  toolcall: row.tool_calling !== false,
+                  // The API does not publish a reasoning flag yet, so keep what the catalog
+                  // knows for models it knows, and default false rather than guessing.
+                  reasoning: known?.capabilities?.reasoning ?? false,
+                })
+                return [key, model] as const
+              }),
+          )
         : irisCatalog
 
       database["iris"] = {
