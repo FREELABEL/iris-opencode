@@ -79,6 +79,23 @@ const fieldsOf = (pairs: [string, unknown][]): [string, string][] =>
  * fields and maybe a command", and five near-identical panels would drift apart the first time
  * one of them got a fix.
  */
+/**
+ * The commands that act on one Atlas item.
+ *
+ * Kept as data rather than markup so the set is one list to extend, and so the strings can be
+ * asserted: an id pasted into the wrong verb is a command that runs and does the wrong thing,
+ * which is worse than one that fails.
+ */
+export function itemCommands(id: number): { label: string; cmd: string }[] {
+  return [
+    { label: "use", cmd: `iris atlas use ${id}` },
+    { label: "show", cmd: `iris bloqs get-item ${id}` },
+    { label: "edit", cmd: `iris bloqs update-item ${id} --content "…"` },
+    { label: "assign", cmd: `iris agents assign <agent-id> --item ${id}` },
+    { label: "share", cmd: `iris bloqs make-public ${id}` },
+  ]
+}
+
 /** "20h ago" — plain, so a stale reading announces its own age. */
 function relativeAge(iso: string): string | undefined {
   const t = new Date(iso).getTime()
@@ -561,7 +578,19 @@ export function SessionIrisTab() {
   const doFetch = (path: string) => (platform.fetch ?? globalThis.fetch)(`${base()}${path}`)
 
   const [bloqs] = createResource(base, async () => {
-    const res = await doFetch("/iris/bloqs")
+    /*
+     * ALL of them, not the first page.
+     *
+     * This asked for /iris/bloqs with no paging, so it got the server default of 25 out of 156.
+     * Two consequences, both silent: a board outside the first 25 could be SELECTED and loading
+     * its data perfectly while the picker label read "Select a board" — the label could not
+     * find it — and the searchable picker only ever searched 25 boards, so typing a name that
+     * exists returned "No boards match".
+     *
+     * 200 is the server's clamp (iris/pagination.ts MAX_PER_PAGE); this is one list of names
+     * and ids, not rows.
+     */
+    const res = await doFetch("/iris/bloqs?page=1&perPage=200")
     return (await res.json()) as Measured & { bloqs: { id: number; name: string }[] }
   })
 
@@ -1365,6 +1394,33 @@ export function SessionIrisTab() {
             <span class="ms-auto shrink-0 font-mono tabular-nums text-11-regular text-text-weaker">
               #{openItem()!.id}
             </span>
+          </div>
+
+          {/* WHAT TO TYPE NEXT (#185124).
+              Every other detail in this panel ends in a copyable command; an Atlas item — the
+              thing you most often want to act on — ended in prose. The id is already on screen
+              and was useless without the verb that takes it. Each chip copies on click. */}
+          <div class="iris-cmdbar shrink-0">
+            <For each={itemCommands(openItem()!.id)}>
+              {(c) => (
+                <button
+                  type="button"
+                  class="iris-cmdbar__chip"
+                  title={`Copy: ${c.cmd}`}
+                  onClick={(e) => {
+                    navigator.clipboard?.writeText(c.cmd)
+                    // Says it copied, on the control you pressed. A toast would be a second
+                    // system for one word.
+                    const el = e.currentTarget
+                    const was = el.textContent
+                    el.textContent = "copied"
+                    setTimeout(() => (el.textContent = was), 900)
+                  }}
+                >
+                  {c.label}
+                </button>
+              )}
+            </For>
           </div>
           <div
             class="iris-markdown flex-1 min-h-0 overflow-y-auto px-2 pb-4 text-12-regular text-text-base"

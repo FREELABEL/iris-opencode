@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cellText, detailTabsFor, highlightJson, integrationHealth, normalizeSurface, providerMark, resolvePane, surfaceView } from "./session-iris-tab"
+import { cellText, detailTabsFor, highlightJson, integrationHealth, itemCommands, normalizeSurface, providerMark, resolvePane, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -221,5 +221,22 @@ describe("providerMark", () => {
     expect(providerMark(undefined, "Courtlistener")).toBe("CO")
     // And the degenerate case does not render an empty chip.
     expect(providerMark(undefined, "")).toBe("?")
+  })
+})
+
+describe("itemCommands", () => {
+  test("every command carries the item id, and carries it once", () => {
+    // An id pasted into the wrong verb is a command that RUNS and does the wrong thing, which
+    // is worse than one that fails.
+    for (const c of itemCommands(184974)) {
+      expect(c.cmd).toContain("184974")
+      expect(c.cmd.match(/184974/g)).toHaveLength(1)
+      expect(c.cmd.startsWith("iris ")).toBe(true)
+    }
+  })
+
+  test("a placeholder is visibly a placeholder, not a plausible value", () => {
+    const assign = itemCommands(1).find((c) => c.label === "assign")!
+    expect(assign.cmd).toContain("<agent-id>")
   })
 })
