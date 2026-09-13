@@ -211,8 +211,20 @@ export function Sidebar(props: { sessionID: string; width?: number; onCollapse?:
         paddingLeft={2}
         paddingRight={2}
       >
+        {/* WHY EVERY BIT OF CHROME AROUND THE SCROLLBOX CARRIES zIndex.
+            opentui writes its mouse hit grid from each renderable's OWN bounds —
+            `addToHitGrid(this.x, this.y, this.width, this.height, this.num)` in
+            @opentui/core — and nothing clips that to the parent's viewport. A scrollbox
+            scrolls by setting `content.translateY = -scrollTop`, so once you scroll the
+            content's box extends above the viewport (and below it, being taller), and its
+            hit region silently covers the tabs, the search field and the footer. They keep
+            rendering and stop being clickable: measured 2026-09-12, one wheel click still
+            let you hit a tab, twelve did not.
+            Hit IDs are written in z-order and the last write wins, so lifting the chrome
+            above the scrollbox is the whole fix. It changes nothing visually — the viewport
+            already clips the DRAW correctly; only the hit grid was wrong. */}
         {/* IRIS brand header + bloq selector */}
-        <box flexShrink={0} paddingBottom={1}>
+        <box flexShrink={0} zIndex={1} paddingBottom={1}>
           {/* The collapse control lives here because this is where you are looking when you
               want the space back. The keybind (<leader>b) and the command palette entry both
               predate this and neither was visible, so the panel read as fixed furniture. */}
@@ -222,15 +234,20 @@ export function Sidebar(props: { sessionID: string; width?: number; onCollapse?:
             </text>
             <box flexGrow={1} />
             <Show when={props.onCollapse}>
-              <text
+              {/* A filled background on hover, not just a colour change on the glyphs. In a
+                  terminal there is no cursor shape to tell you a thing is clickable, so the
+                  block of colour IS the affordance. */}
+              <box
                 flexShrink={0}
-                fg={hoveredRowId() === "collapse" ? theme.accent : theme.textMuted}
+                paddingLeft={1}
+                paddingRight={1}
+                backgroundColor={hoveredRowId() === "collapse" ? theme.backgroundElement : undefined}
                 onMouseOver={() => setHoveredRowId("collapse")}
                 onMouseOut={() => hoveredRowId() === "collapse" && setHoveredRowId(null)}
                 onMouseDown={() => props.onCollapse?.()}
               >
-                {"› hide"}
-              </text>
+                <text fg={hoveredRowId() === "collapse" ? theme.accent : theme.textMuted}>{"› hide"}</text>
+              </box>
             </Show>
           </box>
           <Show when={iris.data.bloqList.length > 0}>
@@ -284,7 +301,7 @@ export function Sidebar(props: { sessionID: string; width?: number; onCollapse?:
         </box>
 
         {/* Tab bar */}
-        <box flexShrink={0} flexDirection="row" gap={2} paddingBottom={1}>
+        <box flexShrink={0} zIndex={1} flexDirection="row" gap={2} paddingBottom={1}>
           <For each={TABS}>
             {(tab) => (
               <text
@@ -305,6 +322,7 @@ export function Sidebar(props: { sessionID: string; width?: number; onCollapse?:
         <Show when={activeTab() !== "session"}>
           <box
             flexShrink={0}
+            zIndex={1}
             paddingBottom={2}
             onMouseDown={() => {
               searchInput?.focus()
@@ -991,7 +1009,7 @@ export function Sidebar(props: { sessionID: string; width?: number; onCollapse?:
         </scrollbox>
 
         {/* Footer */}
-        <box flexShrink={0} gap={1} paddingTop={1}>
+        <box flexShrink={0} zIndex={1} gap={1} paddingTop={1}>
           <text>
             <span style={{ fg: theme.textMuted }}>{directory().split("/").slice(0, -1).join("/")}/</span>
             <span style={{ fg: theme.text }}>{directory().split("/").at(-1)}</span>
