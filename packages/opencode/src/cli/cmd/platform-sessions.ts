@@ -4,7 +4,7 @@ import { UI } from "../ui"
 import { bridgeFetch, dim, bold, highlight, success, writeJson } from "./iris-api"
 import { probeBridge, assessBridge, printDegradations } from "./subsystem-health"
 import { firstArray } from "../../util/array"
-import { candidateServers, findLiveServer, deliverLive, shouldFallBackToBridge } from "./session-live-delivery"
+import { candidateServers, findLiveServer, deliverLive, shouldFallBackToBridge, deliveryTimeoutMs } from "./session-live-delivery"
 
 // ============================================================================
 // iris sessions — see and steer the AI sessions running on this machine (#181239)
@@ -319,8 +319,22 @@ const SendCommand = cmd({
     // (#184804). It is kept only as a fallback for providers with no live server (claude-code).
     if (provider === "opencode") {
       const live = await findLiveServer(row.session_id, candidateServers({ url: args.url, env: process.env }))
+      // An explicit --url that holds nothing is a hard failure, decided BEFORE any delivery
+      // attempt. Degrading to the bridge here spent 180s on a known-broken path after the user
+      // had named a target (#184804).
+      if (!live && !shouldFallBackToBridge({ explicitUrl: args.url ?? null, liveFound: false })) {
+        spinner.stop("Failed", 1)
+        prompts.log.error(`No live session server at ${args.url} holds session ${row.session_id.slice(0, 12)}.`)
+        prompts.log.info(dim("Drop --url to try $IRIS_SERVER and the default http://127.0.0.1:4096."))
+        process.exitCode = 1
+        prompts.outro("Done")
+        return
+      }
       if (live) {
-        const ok = await deliverLive(live, row.session_id, message, 8000, { submit: Boolean(args.submit) })
+        // --submit runs the recipient's model turn synchronously, so it needs a turn-length
+        // budget. With the notify timeout it reported "Failed" on a turn that then succeeded.
+        if (args.submit) spinner.message("Running their agent's turn…")
+        const ok = await deliverLive(live, row.session_id, message, deliveryTimeoutMs({ submit: Boolean(args.submit) }), { submit: Boolean(args.submit) })
         if (ok) {
           spinner.stop("Sent")
           if (args.json) { await writeJson({ ok: true, via: "live", server: live, session_id: row.session_id }); prompts.outro("Done"); return }
@@ -329,13 +343,12 @@ const SendCommand = cmd({
           prompts.outro(dim(`iris sessions history ${row.session_id.slice(0, 8)}`))
           return
         }
-        // Fall through to the bridge rather than claiming a success we did not achieve.
-        prompts.log.warn(dim(`live delivery to ${live} failed — falling back to the bridge`))
-      }
-      if (!shouldFallBackToBridge({ explicitUrl: args.url ?? null, liveFound: Boolean(live) })) {
+        // The server was there and the POST failed. Say so against THAT server, and do not
+        // silently retry on the bridge — which cannot reach an opencode session anyway.
         spinner.stop("Failed", 1)
-        prompts.log.error(`No live session server at ${args.url} holds session ${row.session_id.slice(0, 12)}.`)
-        prompts.log.info(dim("Drop --url to try $IRIS_SERVER and the default http://127.0.0.1:4096."))
+        prompts.log.error(`Live delivery to ${live} failed for session ${row.session_id.slice(0, 12)}.`)
+        if (args.submit) prompts.log.info(dim("--submit waits for the whole turn; a long turn can still be running."))
+        prompts.log.info(dim(`Check with: iris sessions history ${row.session_id.slice(0, 8)}`))
         process.exitCode = 1
         prompts.outro("Done")
         return

@@ -130,3 +130,17 @@ export function shouldFallBackToBridge(input: {
   if (input.liveFound) return false
   return !input.explicitUrl
 }
+
+/**
+ * How long to wait on the POST.
+ *
+ * A notification returns as soon as the message is persisted — milliseconds. An INSTRUCT runs
+ * the recipient's model turn SYNCHRONOUSLY before responding, so it takes as long as the turn.
+ *
+ * Measured 2026-09-12: `--submit` with an 8s cap printed "Failed" while the turn was still
+ * running. It then completed and the assistant replied "ACK". Reporting failure on success is
+ * the same defect as reporting success on failure — the output did not describe what happened.
+ */
+export function deliveryTimeoutMs(opts: { submit?: boolean }): number {
+  return opts.submit ? 180_000 : 8_000
+}
