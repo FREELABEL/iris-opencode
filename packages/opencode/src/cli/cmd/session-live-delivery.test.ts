@@ -4,6 +4,7 @@ import {
   deliverLive,
   candidateServers,
   shouldFallBackToBridge,
+  deliveryTimeoutMs,
 } from "./session-live-delivery"
 
 /**
@@ -183,5 +184,27 @@ describe("shouldFallBackToBridge — an explicit target must fail loudly, not de
   test("live server found -> never reaches the bridge either way", () => {
     expect(shouldFallBackToBridge({ explicitUrl: null, liveFound: true })).toBe(false)
     expect(shouldFallBackToBridge({ explicitUrl: "http://x", liveFound: true })).toBe(false)
+  })
+})
+
+describe("timeouts — a model turn is not a notification", () => {
+  test("NOTIFY uses a short timeout; INSTRUCT waits long enough for a real turn", () => {
+    // Measured 2026-09-12: `--submit` against a live server reported "Failed" at 8s while the
+    // recipient's model was still running — the turn COMPLETED and the assistant replied "ACK",
+    // but the caller had already given up and printed a failure. A command that reports failure
+    // on success is the same defect as one that reports success on failure: the output does not
+    // describe what happened.
+    expect(deliveryTimeoutMs({ submit: false })).toBe(8_000)
+    expect(deliveryTimeoutMs({ submit: true })).toBeGreaterThanOrEqual(180_000)
+  })
+
+  test("a submit that genuinely exceeds even the long timeout still reports false", async () => {
+    const s = withServer(async () => {
+      await new Promise((r) => setTimeout(r, 400))
+      return Response.json({ ok: true })
+    })
+    try {
+      expect(await deliverLive(s.url, SID, "x", 100, { submit: true })).toBe(false)
+    } finally { s.stop() }
   })
 })
