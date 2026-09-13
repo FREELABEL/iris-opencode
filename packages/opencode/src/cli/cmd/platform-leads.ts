@@ -44,6 +44,20 @@ import {
   type CrmMatch,
 } from "./lead-mentions"
 import { firstArray } from "../../util/array"
+import {
+  groupChannelBlindness,
+  sentimentSufficiency,
+  latestTouch,
+  collectTouchCandidates,
+  hydrationDecision,
+  normalizeTask,
+  findDuplicateTaskGroups,
+  resolveNextBestAction,
+  normalizeTouchDate,
+  buildTouchPayload,
+  nextFollowUpState,
+  type ChannelBlindness,
+} from "./platform-leads-honesty"
 
 // ============================================================================
 // Sync helpers
@@ -1564,6 +1578,14 @@ const LeadsUpdateCommand = cmd({
       .option("chat-id", { describe: "link an iMessage chat ID (e.g. chat713220476491386040)", type: "string" })
       .option("whatsapp-group", { describe: 'link a WhatsApp group chat by name (e.g. "CatoDrive Tech Dev")', type: "string" })
       .option("add-email", { describe: "add an alternate email address (for multi-email inbox scanning)", type: "string" })
+      .option("last-contacted", {
+        describe: "date you last spoke to them (YYYY-MM-DD or 'today') — what pulse reads as the real last touch",
+        type: "string",
+      })
+      .option("next-follow-up", {
+        describe: "date of the next scheduled touch (YYYY-MM-DD) — suppresses already-scheduled pulse recs",
+        type: "string",
+      })
       .option("json", { describe: "JSON output (returns the updated lead)", type: "boolean", default: false }),
   async handler(args) {
     const isJson = args.json === true
@@ -1645,6 +1667,51 @@ const LeadsUpdateCommand = cmd({
       } catch {
         payload.contact_info = { ...(payload.contact_info as Record<string, unknown> ?? {}), emails: [String(args["add-email"]).trim()] }
       }
+    }
+
+    // #184939 — dates on the record. There was nowhere to record "spoke to him today" or
+    // "next touch Wednesday", so pulse recomputed the same recommendation from the same
+    // stale inputs forever. `contact_info` is an unvalidated JSON blob the server merges,
+    // so these need no migration; they merge beside email/chat_ids rather than replacing it.
+    //
+    // A refused date is an ERROR, not a silent drop. `--last-contacted "spoke to him"` that
+    // quietly wrote nothing would leave the operator believing the record was updated — the
+    // exact "reported success, wrote nothing" failure this whole bug family is about.
+    let touchPayload: Record<string, unknown> = {}
+    const wantsTouch = args["last-contacted"] !== undefined || args["next-follow-up"] !== undefined
+    if (wantsTouch) {
+      const lastContacted = normalizeTouchDate(args["last-contacted"] as string | undefined)
+      const nextFollowUp = normalizeTouchDate(args["next-follow-up"] as string | undefined)
+
+      if (args["last-contacted"] !== undefined && !lastContacted) {
+        const msg = `--last-contacted: "${args["last-contacted"]}" is not a date (use YYYY-MM-DD, today, yesterday or tomorrow)`
+        if (isJson) console.log(JSON.stringify({ error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 1
+        if (!isJson) prompts.outro("Done")
+        return
+      }
+      if (args["next-follow-up"] !== undefined && !nextFollowUp) {
+        const msg = `--next-follow-up: "${args["next-follow-up"]}" is not a date (use YYYY-MM-DD, today, yesterday or tomorrow)`
+        if (isJson) console.log(JSON.stringify({ error: msg }))
+        else prompts.log.error(msg)
+        process.exitCode = 1
+        if (!isJson) prompts.outro("Done")
+        return
+      }
+
+      try {
+        const lr = await irisFetch(`/api/v1/leads/${leadId}`)
+        const existingCi = lr.ok ? ((await lr.json()) as any)?.data?.contact_info : null
+        touchPayload = buildTouchPayload({
+          existing: existingCi,
+          lastContacted,
+          nextFollowUp,
+        })
+      } catch {
+        touchPayload = buildTouchPayload({ lastContacted, nextFollowUp })
+      }
+      Object.assign(payload, touchPayload)
     }
 
     if (Object.keys(payload).length === 0) {
@@ -3122,6 +3189,20 @@ const LeadsPulseCommand = cmd({
         }
       } catch { /* non-fatal — pulse still works without fresh comms */ }
 
+      // #184926 — probe channel health BEFORE rendering any score.
+      //
+      // This used to run at the "Integration Health" section much further down,
+      // so the readiness score, the Next Best Action and the sentiment block all
+      // rendered first and none of them could know the instrument was broken.
+      // Hoisted here so blindness is available to every claim that follows.
+      const healthChecks = await runChannelHealthChecks()
+      // #184926 — blindness is a property of the instrument, so it must gate
+      // every claim downstream, not sit here as decoration. Before this, a run
+      // with 4/6 channels down printed "Engagement: 20/100", "Last outreach
+      // 2695h ago" and a HIGH payment follow-up with no qualifier — the same
+      // rendering as a fully-live read, for a lead who had been phoned that day.
+      const blindness: ChannelBlindness = groupChannelBlindness(healthChecks)
+
       // Pulse readiness score — single source of truth.
       // Same number the cron snapshots and the daily digest emails.
       // Replaces the old inline 7-field completeness % calc.
@@ -3149,7 +3230,24 @@ const LeadsPulseCommand = cmd({
           // painting it red would put back the exact claim it withheld.
           insufficient_data: `${UI.Style.TEXT_DIM}${ps}/100  not enough measured${UI.Style.TEXT_NORMAL}`,
         }
-        printKV("Pulse", bandLabel[band] ?? `${ps}/100  ${band}`)
+
+        // #184926 — a score computed over a mostly-blind channel set is not the
+        // same claim as one computed over a live set, and must not render the
+        // same. `unavailable` means the read failed; show UNAVAILABLE rather than
+        // a number a reader would compare against a real one.
+        if (blindness.unavailable) {
+          printKV(
+            "Pulse",
+            `${UI.Style.TEXT_DIM}UNAVAILABLE${UI.Style.TEXT_NORMAL}  ${dim(`— ${blindness.summary}; server score ${ps}/100 withheld`)}`,
+          )
+        } else if (blindness.partial) {
+          printKV(
+            "Pulse",
+            `${bandLabel[band] ?? `${ps}/100  ${band}`}  ${dim(`(partial read — ${blindness.summary})`)}`,
+          )
+        } else {
+          printKV("Pulse", bandLabel[band] ?? `${ps}/100  ${band}`)
+        }
 
         // Sparkline — 8 most recent snapshots, oldest left, newest right.
         const history: Array<{ score: number }> = pulseReadiness.history ?? []
@@ -3756,7 +3854,6 @@ const LeadsPulseCommand = cmd({
       // Step 2: Integration pre-flight checks (#57677)
       console.log()
       console.log(`  ${bold("Integration Health")}`)
-      const healthChecks = await runChannelHealthChecks()
       for (const hc of healthChecks) {
         const icon = hc.ok
           ? success("✓")
@@ -3770,6 +3867,17 @@ const LeadsPulseCommand = cmd({
             : `${UI.Style.TEXT_DANGER}${hc.error}${UI.Style.TEXT_NORMAL}`
         const hint = !hc.ok && hc.hint ? dim(` — ${hc.hint}`) : ""
         console.log(`  ${icon} ${highlight(hc.name.padEnd(18))}${statusText}${hint}`)
+      }
+
+      // #184926 — name the total blindness before anything scores it. The
+      // per-channel lines above say what failed; this says what the failure
+      // means for the numbers below, which previously gave no sign at all.
+      if (blindness.unavailable) {
+        console.log(
+          `  ${UI.Style.TEXT_DANGER}${blindness.summary}${UI.Style.TEXT_NORMAL}  ${dim("— scores below cannot distinguish silence from blindness")}`,
+        )
+      } else if (blindness.partial) {
+        console.log(`  ${dim(`${blindness.summary} — scores below are a partial read`)}`)
       }
 
       // Step 2.5: Requirements (automated tests for this lead's deliverables)
@@ -4281,9 +4389,23 @@ const LeadsPulseCommand = cmd({
         // Sentiment Analysis — dual-model A/B (gpt-4o-mini vs grok-3-fast)
         type SentimentResult = { score: number; label: string; summary: string; model: string; latencyMs: number }
         const sentimentResults: SentimentResult[] = []
-        {
-          const recentMsgs = allMessages.slice(-10)
-          if (recentMsgs.length > 0) {
+
+        // #184940 — state the sample before spending a model call on it.
+        //
+        // Observed: a fluent sentence characterising the relationship ("a
+        // transactional, neutral relationship with no evident positive or
+        // negative sentiment") generated from ONE outbound email, 16 weeks old,
+        // while three inboxes and a calendar returned permission errors. The
+        // ground truth was daily contact, a same-day phone call and a note from
+        // three days earlier. A 0.0 at least looks like a null; prose reads as a
+        // finding, so below the floor the prose must not be produced at all.
+        const recentMsgs = allMessages.slice(-10)
+        const sentimentSample = sentimentSufficiency(recentMsgs, {
+          blindCount: blindness.blind,
+          totalChannels: blindness.total,
+        })
+        if (sentimentSample.sufficient) {
+          {
             const digest = recentMsgs.map((m) => `[${m.isOutbound ? "YOU" : "THEM"}] ${m.text.slice(0, 200)}`).join("\n")
             const sysPrompt = `You analyze business communication sentiment. Return ONLY valid JSON, no markdown fences.
 Format: {"score": <-1.0 to 1.0>, "label": "<positive|neutral|negative|mixed>", "summary": "<1 sentence describing the relationship tone and trajectory>"}
@@ -4394,7 +4516,17 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
           const r = sentimentResults[0]
           const lbl = r.score > 0.3 ? success(r.label) : r.score < -0.3 ? `${UI.Style.TEXT_DANGER}${r.label}${UI.Style.TEXT_NORMAL}` : r.label === "mixed" ? `${UI.Style.TEXT_WARNING}${r.label}${UI.Style.TEXT_NORMAL}` : dim(r.label)
           printKV("  Sentiment", `${lbl} ${dim(`(${r.score.toFixed(1)})`)}`)
+          // #184940 — the denominator travels with the verdict. A -/+ score with
+          // no sample size reads as a finding; "14 messages sampled (mixed, 2
+          // days old)" is the context that lets a reader weigh it.
+          console.log(`    ${dim(`Sample: ${sentimentSample.detail}`)}`)
           if (r.summary) console.log(`    ${dim(r.summary)}`)
+        } else {
+          // #184940 — no prose below the floor. Say why, and what was missing.
+          printKV(
+            "  Sentiment",
+            `${UI.Style.TEXT_DIM}INSUFFICIENT DATA${UI.Style.TEXT_NORMAL}  ${dim(`— ${sentimentSample.detail}`)}`,
+          )
         }
 
         // Response times
@@ -4648,14 +4780,57 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
         // Status
         signals.push(`Status: ${lead.status ?? "Unknown"}`)
 
+        // #184939 — the dates the record now carries, so the answer to the last
+        // recommendation is visible here rather than only in prose inside a note.
+        const followUp = nextFollowUpState(lead.contact_info)
+        const lastContactedDate = (lead.contact_info as any)?.last_contacted
+        if (lastContactedDate) signals.push(`Last contacted (recorded): ${lastContactedDate}`)
+        if (followUp.scheduled) signals.push(`Next follow-up scheduled: ${followUp.label}`)
+        if (followUp.overdue) signals.push(`Follow-up OVERDUE: ${followUp.label}`)
+
         // Determine next best action using rule-based logic (no API call needed)
         let nextAction = ""
         let actionPriority: "high" | "medium" | "low" = "medium"
+        let actionHint = ""
 
+        // Priority 0 (#184926): blindness gates every rule below it.
+        // A recommendation is a claim about the lead; made over a read we know is
+        // incomplete, it is a claim about our own broken instrument instead. In
+        // the measured run this is where "last outreach never" got said about a
+        // person who had been phoned that day.
+        const stripeHasPaid = (stripeData?.total_paid ?? 0) > 0 || (stripeData?.summary?.active_subscriptions ?? 0) > 0
+        const blindAction = resolveNextBestAction({
+          blindness,
+          hasPaymentGate: dealHealth?.has_payment_gate,
+          paymentReceived: dealHealth?.payment_received || stripeHasPaid,
+          lastOutboundAt: commsSignal?.last_outbound_at ? new Date(commsSignal.last_outbound_at) : null,
+          status: lead.status,
+        })
+        if (blindness.unavailable) {
+          nextAction = blindAction.action
+          actionPriority = blindAction.priority
+          actionHint = blindAction.hint
+        }
+        // Priority 0.5 (#184939): a touch is ALREADY ON THE BOOKS, so recommending one is
+        // recommending something the operator has already decided. This is the half of the
+        // loop that never closed: the record had no slot for the answer, so every run
+        // recomputed the same advice from the same stale inputs.
+        //
+        // Overdue is deliberately NOT suppressed — a commitment that came and went is a
+        // fact, not a booking, and hiding it behind "scheduled" is how a missed touch goes
+        // unnoticed. It becomes the action instead.
+        else if (followUp.scheduled) {
+          nextAction = `No action needed — next touch already scheduled ${followUp.label}`
+          actionPriority = "low"
+          actionHint = `Answering pulse is what clears this: iris leads update ${leadId} --next-follow-up <date>`
+        } else if (followUp.overdue) {
+          nextAction = `Missed follow-up — ${followUp.label}; reschedule or close it out`
+          actionPriority = "high"
+          actionHint = `Reschedule: iris leads update ${leadId} --next-follow-up <date>`
+        }
         // Priority 1: Unpaid gate + stale comms
         // Skip if Stripe shows payment received (subscription or invoice paid) even if gate flag is stale
-        const stripeHasPaid = (stripeData?.total_paid ?? 0) > 0 || (stripeData?.summary?.active_subscriptions ?? 0) > 0
-        if (dealHealth?.has_payment_gate && !dealHealth.payment_received && !stripeHasPaid) {
+        else if (dealHealth?.has_payment_gate && !dealHealth.payment_received && !stripeHasPaid) {
           const lastOutbound = commsSignal?.last_outbound_at ? new Date(commsSignal.last_outbound_at) : null
           const hoursSince = lastOutbound ? (Date.now() - lastOutbound.getTime()) / (1000 * 60 * 60) : Infinity
           if (hoursSince > 48) {
@@ -4716,6 +4891,7 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
               ? `${UI.Style.TEXT_WARNING}MEDIUM${UI.Style.TEXT_NORMAL}`
               : dim("LOW")
           console.log(`    [${priorityLabel}] ${nextAction}`)
+          if (actionHint) console.log(`    ${dim(actionHint)}`)
 
           // Quick action hints
           if (nextAction.includes("payment follow-up")) {
@@ -4738,46 +4914,53 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
       const HYDRATION_WINDOW_HOURS = 24
       const stripeHasPaidForHydration = (stripeData?.total_paid ?? 0) > 0 || (stripeData?.summary?.active_subscriptions ?? 0) > 0
       if (dealHealth?.has_payment_gate && !dealHealth.payment_received && !stripeHasPaidForHydration && !dealHealth.deal_complete && email) {
-        // Determine last outreach timestamp
-        let lastOutreachAt: Date | null = null
+        // #184927 — "last contact" is the most recent touch on ANY channel.
+        //
+        // This gate used to read only the comms signal's outbound sequence send,
+        // so a lead spoken to by phone that same day still matched "we haven't
+        // heard from you" and would have been emailed. Notes, call logs, meeting
+        // intel and inbound messages are all contact.
+        const touch = latestTouch(
+          collectTouchCandidates({
+            lastOutboundAt: pulseReadiness?.signals?.comms_freshness?.last_outbound_at ?? null,
+            lastInboundAt: pulseReadiness?.signals?.comms_freshness?.last_inbound_at ?? null,
+            notes: Array.isArray(lead.notes) ? lead.notes : [],
+            activities,
+            outreachSteps,
+            channelMessages: channels
+              .filter((ch) => ch.name === "Gmail" || ch.name === "iMessage" || ch.name === "Apple Mail")
+              .flatMap((ch) =>
+                (ch.messages ?? [])
+                  .map((m: any) => ({
+                    date: m.ts ?? m.date ?? null,
+                    isOutbound:
+                      ch.name === "iMessage"
+                        ? !!m.from_me
+                        : !String(m.from ?? "").toLowerCase().includes(email.toLowerCase()),
+                  })),
+              ),
+          }),
+        )
+        const lastOutreachAt: Date | null = touch.at
 
-        // Check comms signal for last outbound
-        const commsSignal = pulseReadiness?.signals?.comms_freshness ?? {}
-        if (commsSignal.last_outbound_at) {
-          lastOutreachAt = new Date(commsSignal.last_outbound_at)
-        }
+        // Fallback: the gate's own creation date, only when nothing else is known.
+        const touchAt = lastOutreachAt ?? (dealHealth.created_at ? new Date(dealHealth.created_at) : null)
 
-        // Also check channel scan results for most recent outbound
-        if (channels) {
-          for (const ch of channels) {
-            for (const msg of ch.messages ?? []) {
-              const isOutbound =
-                ch.name === "iMessage"
-                  ? msg.from_me
-                  : ch.name === "Gmail"
-                    ? !(msg.from ?? "").toLowerCase().includes(email.toLowerCase())
-                    : false
-              if (isOutbound) {
-                const msgDate = new Date(msg.ts ?? msg.date ?? 0)
-                if (!lastOutreachAt || msgDate > lastOutreachAt) lastOutreachAt = msgDate
-              }
-            }
-          }
-        }
-
-        // Check gate creation date as fallback
-        if (!lastOutreachAt && dealHealth.created_at) {
-          lastOutreachAt = new Date(dealHealth.created_at)
-        }
-
-        const hoursSinceLast = lastOutreachAt ? (Date.now() - lastOutreachAt.getTime()) / (1000 * 60 * 60) : Infinity
+        const decision = hydrationDecision({
+          lastTouchAt: touchAt,
+          windowHours: HYDRATION_WINDOW_HOURS,
+          blind: blindness.unavailable,
+          blindSummary: blindness.summary,
+          force: !!(args as any).force,
+        })
+        const hoursSinceLast = touchAt ? (Date.now() - touchAt.getTime()) / (1000 * 60 * 60) : Infinity
 
         console.log()
         const forceHydrate = !!(args as any).force
-        if (hoursSinceLast >= HYDRATION_WINDOW_HOURS || forceHydrate) {
+        if (decision.eligible) {
           console.log(`  ${bold("Hydration")}`)
           console.log(
-            `  ${UI.Style.TEXT_WARNING}Last outreach: ${lastOutreachAt ? `${Math.floor(hoursSinceLast)}h ago` : "never"}${UI.Style.TEXT_NORMAL}  ${dim(`(${HYDRATION_WINDOW_HOURS}h window)`)}`,
+            `  ${UI.Style.TEXT_WARNING}Last contact: ${decision.hoursSinceLabel}${touch.source ? ` (${touch.source})` : ""}${UI.Style.TEXT_NORMAL}  ${dim(`(${HYDRATION_WINDOW_HOURS}h window)`)}`,
           )
 
           if (!(args as any).hydrate) {
@@ -4890,10 +5073,17 @@ Consider context: "fixed the DNS issue" is positive (problem solved), not negati
               console.log(`  ${dim(`Hydration error: ${e.message}`)}`)
             }
           }
+        } else if (decision.reason === "channels_blind") {
+          // #184926/#184927 — blindness is not a cooldown. Saying "next eligible
+          // in Nh" here would imply a countdown to a send the instrument cannot
+          // justify making.
+          console.log(
+            `  ${UI.Style.TEXT_WARNING}Hydration suppressed${UI.Style.TEXT_NORMAL}  ${dim(`— ${blindness.summary}. Fix channel access, then re-run; --force to override.`)}`,
+          )
         } else {
           const nextIn = Math.ceil(HYDRATION_WINDOW_HOURS - hoursSinceLast)
           console.log(
-            `  ${dim(`Hydration: last outreach ${Math.floor(hoursSinceLast)}h ago — next eligible in ${nextIn}h`)}`,
+            `  ${dim(`Hydration: last contact ${touch.at ? `${Math.floor(hoursSinceLast)}h ago (${touch.source})` : "never"} — next eligible in ${nextIn}h`)}`,
           )
         }
       }
@@ -6380,7 +6570,12 @@ const LeadsTasksListCommand = cmd({
 
       spinner.stop(`${tasks.length} task(s)`)
       if (args.json) {
-        await writeJson(tasks)
+        // #184936 — normalise before emitting. The API sends `is_completed` +
+        // `completed_at` and no `status`, so `--json` dumped `status: null` on
+        // every row. A consumer filtering `status != 'completed'` then reported
+        // completed tasks as open. `status` is now derived from the flags beside
+        // it; the raw fields stay for back-compat.
+        await writeJson(tasks.map((t: any) => normalizeTask(t)))
         return
       }
       if (tasks.length === 0) {
@@ -6388,6 +6583,11 @@ const LeadsTasksListCommand = cmd({
         prompts.outro(dim(`iris leads tasks create ${args.id} --title "Follow up"`))
         return
       }
+
+      // #184941 — duplicates inflate every metric derived from this list.
+      // Surfaced, not silently merged: the operator decides which to keep.
+      const duplicates = findDuplicateTaskGroups(tasks)
+
       printDivider()
       for (const t of tasks) {
         const check = t.is_completed ? success("✓") : "○"
@@ -6402,6 +6602,18 @@ const LeadsTasksListCommand = cmd({
         if (t.description) console.log(`    ${dim(t.description.slice(0, 120))}`)
       }
       printDivider()
+      if (duplicates.length > 0) {
+        const dupCount = duplicates.reduce((n, g) => n + (g.ids.length - 1), 0)
+        prompts.log.warn(
+          `${duplicates.length} duplicate group(s) — ${dupCount} redundant task(s) counted separately:`,
+        )
+        for (const g of duplicates) {
+          console.log(
+            `  ${dim(`#${g.ids.join(", #")}`)}  ${bold(g.title.slice(0, 80))}`,
+          )
+        }
+        console.log(dim(`  Resolve with: iris leads tasks update ${args.id} <task-id> --superseded`))
+      }
       // Show helpful next commands based on context
       const copilotTasks = tasks.filter((t: any) => t.source === "heartbeat_copilot" && !t.is_completed)
       if (copilotTasks.length > 0) {
@@ -6489,6 +6701,101 @@ const LeadsTasksCompleteCommand = cmd({
       prompts.outro(dim(`iris leads tasks list ${args["lead-id"]}`))
     } catch (err) {
       spinner.stop("Error", 1)
+      prompts.log.error(err instanceof Error ? err.message : String(err))
+    }
+  },
+})
+
+// #184939 — there was create / complete / delete / assign and no update, so a due date
+// could not be edited once set. Six tasks created 2026-09-02 from meeting intel (#1263-#1268)
+// sat with due_date null and could only be given one by delete-and-recreate, which loses the
+// task ID and its history. The server already had PUT .../tasks/{id}; only the verb was missing.
+const LeadsTasksUpdateCommand = cmd({
+  command: "update <lead-id> <task-id>",
+  aliases: ["edit"],
+  describe: "update a task's title, description, due date or assignee",
+  builder: (yargs) =>
+    yargs
+      .positional("lead-id", { type: "number", demandOption: true })
+      .positional("task-id", { type: "number", demandOption: true })
+      .option("title", { type: "string", describe: "new title" })
+      .option("description", { alias: "d", type: "string", describe: "new description" })
+      .option("due", { type: "string", describe: "due date (YYYY-MM-DD, today, or 'clear')" })
+      .option("agent-id", { type: "number", describe: "reassign to an agent" })
+      .option("json", { describe: "JSON output", type: "boolean", default: false }),
+  async handler(args) {
+    const isJson = args.json === true
+    if (!isJson) UI.empty()
+    if (!(await requireAuth())) {
+      if (!isJson) prompts.outro("Done")
+      return
+    }
+
+    const body: Record<string, unknown> = {}
+    if (args.title) body.title = args.title
+    if (args.description) body.description = args.description
+    if (args["agent-id"] !== undefined) body.agent_id = args["agent-id"]
+
+    // `--due` is three-valued on purpose: unset leaves the date alone, `clear` removes it,
+    // and a date sets it. A plain "set a date" flag can never undo one, which is how the six
+    // null-due tasks got stranded in the first place.
+    if (args.due !== undefined) {
+      const raw = String(args.due).trim()
+      if (raw.toLowerCase() === "clear" || raw.toLowerCase() === "none") {
+        body.due_date = null
+      } else {
+        const d = normalizeTouchDate(raw)
+        if (!d) {
+          const msg = `--due: "${args.due}" is not a date (use YYYY-MM-DD, today, or 'clear' to remove it)`
+          if (isJson) console.log(JSON.stringify({ error: msg }))
+          else prompts.log.error(msg)
+          process.exitCode = 1
+          if (!isJson) prompts.outro("Done")
+          return
+        }
+        body.due_date = d
+      }
+    }
+
+    if (Object.keys(body).length === 0) {
+      const msg = "Nothing to update — pass --title, --description, --due or --agent-id"
+      if (isJson) console.log(JSON.stringify({ error: msg }))
+      else {
+        prompts.log.error(msg)
+        prompts.outro("Done")
+      }
+      process.exitCode = 1
+      return
+    }
+
+    const spinner = isJson ? null : prompts.spinner()
+    spinner?.start("Updating…")
+    try {
+      const res = await irisFetch(`/api/v1/leads/${args["lead-id"]}/tasks/${args["task-id"]}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      })
+      const ok = await handleApiError(res, "Update task")
+      if (!ok) {
+        spinner?.stop("Failed", 1)
+        if (isJson) console.log(JSON.stringify({ error: "Update task failed" }))
+        else prompts.outro("Done")
+        process.exitCode = 1
+        return
+      }
+      const data = ((await res.json()) as any)?.data?.task
+      if (isJson) {
+        console.log(JSON.stringify(data ? normalizeTask(data) : { success: true }))
+        return
+      }
+      spinner?.stop(success("✓ Task updated"))
+      if (data) {
+        const due = data.due_date ? dim(` due ${String(data.due_date).split("T")[0]}`) : ""
+        console.log(`  ${bold(data.title ?? "")}${dim(` #${data.id}`)}${due}`)
+      }
+      prompts.outro(dim(`iris leads tasks list ${args["lead-id"]}`))
+    } catch (err) {
+      spinner?.stop("Error", 1)
       prompts.log.error(err instanceof Error ? err.message : String(err))
     }
   },
@@ -6658,6 +6965,7 @@ const LeadsTasksCommand = cmd({
     yargs
       .command(LeadsTasksListCommand)
       .command(LeadsTasksCreateCommand)
+      .command(LeadsTasksUpdateCommand)
       .command(LeadsTasksCompleteCommand)
       .command(LeadsTasksDeleteCommand)
       .command(LeadsTasksAssignCommand)
