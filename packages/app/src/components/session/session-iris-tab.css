@@ -513,3 +513,53 @@
   color: var(--text-weaker);
   font-style: italic;
 }
+
+/*
+ * The integration mark (#185126).
+ *
+ * Twenty-five rows of identical grey dots: you could not tell Gmail from TikTok without reading,
+ * and you could not tell a working credential from a dead one at all.
+ *
+ * The MARK carries identity, the RING carries state. Deliberately two channels rather than one
+ * coloured blob, because the questions are independent — "which service is this" and "is it
+ * working" — and one glyph answering both makes each harder to read.
+ *
+ * THREE states, never two. `live` and `off` is the obvious pair and it hides the one that
+ * matters: a credential that exists and is FAILING. That row is why you opened the list.
+ */
+.iris-int__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  border: 1px solid var(--border-weaker-base);
+  background: var(--background-element);
+  color: var(--text-weaker);
+}
+
+/* Live: full contrast, and a green edge. */
+.iris-int__mark--live {
+  color: var(--text-strong);
+  border-color: color-mix(in srgb, #3fb950 55%, var(--border-weaker-base));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #3fb950 22%, transparent);
+}
+
+/* Failing: red, and it sorts to the top of the list as well. Colour alone would not be enough
+   if someone cannot see it — the row also carries the error text. */
+.iris-int__mark--error {
+  color: #f0836a;
+  border-color: color-mix(in srgb, #f0836a 60%, var(--border-weaker-base));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #f0836a 22%, transparent);
+}
+
+/* Off: greyed right down, so the live ones are what your eye lands on. */
+.iris-int__mark--off {
+  opacity: 0.45;
+}

@@ -205,8 +205,10 @@ function describeFields(surface: string, r: any): { title: string; fields: [stri
     return {
       title: r.name,
       fields: fieldsOf([
-        ["id", r.id], ["provider", r.provider], ["category", r.category],
-        ["status", r.status], ["connected", r.connected], ["account", r.account],
+        ["id", r.id], ["provider", r.provider], ["type", r.type], ["category", r.category],
+        ["scope", r.scope], ["status", r.status], ["connected", r.connected],
+        ["account", r.account], ["last tested", r.lastTested],
+        ["last error", r.lastError],
       ]),
       command: r.provider ? `iris connect ${r.provider}` : undefined,
     }
@@ -365,6 +367,13 @@ const SUBVIEWS: Partial<Record<SurfaceId, readonly SubView[]>> = {
     // unrelated rows. Not board-scoped — sites are owned by a user OR a bloq.
     { id: "sites", label: "Sites", pane: "sites", path: (b) => `/iris/sites/${b}` },
   ],
+  integrations: [
+    // A connected account is not automatically a board's to use. Narrowed server-side so the
+    // footer counts the scope on screen — see rule 1 in NAVIGATION-TEMPLATE.md.
+    { id: "project", label: "Project", pane: "integrations", path: (b) => `/iris/integrations/${b}?scope=project` },
+    { id: "organization", label: "Org", pane: "integrations", path: (b) => `/iris/integrations/${b}?scope=organization` },
+    { id: "user", label: "Personal", pane: "integrations", path: (b) => `/iris/integrations/${b}?scope=user` },
+  ],
   hive: [
     { id: "machines", label: "Machines", pane: "hive", path: () => `/iris/hive` },
     // The inbox was the original ask — "I want to see the inbox and all of the other machines
@@ -436,6 +445,43 @@ const DEFAULT_DETAIL_TABS: readonly DetailTab[] = [{ id: "info", label: "Info" }
 
 export function detailTabsFor(pane: string): readonly DetailTab[] {
   return DETAIL_TABS[pane] ?? DEFAULT_DETAIL_TABS
+}
+
+/**
+ * A provider's two-letter mark.
+ *
+ * No icon assets and no network: the CSP blocks remote images and a broken <img> is worse than
+ * a letter. `type` is the provider key — "social-instagram", "gmail" — so the last segment is
+ * the brand. Explicit for the ones whose initials are unhelpful ("X" is one character, "in" is
+ * how LinkedIn writes itself), initials otherwise.
+ */
+const PROVIDER_MARKS: Record<string, string> = {
+  instagram: "IG",
+  tiktok: "TT",
+  linkedin: "in",
+  x: "X",
+  threads: "@",
+  gmail: "M",
+  calendar: "31",
+  drive: "Dr",
+}
+export function providerMark(type: string | undefined, name: string): string {
+  const brand = String(type ?? "").split("-").pop() ?? ""
+  if (PROVIDER_MARKS[brand]) return PROVIDER_MARKS[brand]
+  const src = brand || name
+  return src.slice(0, 2).toUpperCase() || "?"
+}
+
+/**
+ * THREE STATES, NOT TWO.
+ *
+ * "live" and "not live" is the obvious reading and it is missing the one that matters: an
+ * integration that is failing. `error` is not the same as disconnected — the credential is
+ * there and something is wrong with it, which is the row you opened this list to find.
+ */
+export function integrationHealth(i: { status: string; connected: boolean }): "live" | "error" | "off" {
+  if (i.status === "error") return "error"
+  return i.connected ? "live" : "off"
 }
 
 /** A cell value, rendered so an empty one is visibly empty rather than the string "undefined". */
@@ -755,12 +801,27 @@ export function SessionIrisTab() {
 
   // Leaving the surface or the board must close the reader — otherwise you switch to Leads and
   // are still looking at an Atlas item.
+  /**
+   * The last subject we reset for. Compared, not just tracked.
+   *
+   * `activeBloq()` is undefined until the bloqs list lands, then becomes a number — a change
+   * this effect saw as "the board changed", so it closed whatever the reader had open. Opening
+   * a record while that request was still in flight meant the detail shut by itself a moment
+   * later, which is indistinguishable from the panel blanking. Reported as "the whole page
+   * hides and does that black hiccup" (#185119).
+   *
+   * Resolving from nothing to something is not a change of subject. Going from board A to
+   * board B is.
+   */
+  let lastSubject = ""
   createEffect(() => {
-    surface()
-    // The sub-view too: Hive › Machines to Hive › Inbox is as much a change of subject as
-    // Hive to Atlas is, and leaving a machine's detail panel open over the inbox is nonsense.
-    resolved().sub?.id
-    activeBloq()
+    const subject = [surface(), resolved().sub?.id ?? "", activeBloq() ?? ""].join("/")
+    // Nothing to leave yet: the first run just records where we are.
+    if (lastSubject === "" || lastSubject === subject || activeBloq() == null) {
+      if (activeBloq() != null) lastSubject = subject
+      return
+    }
+    lastSubject = subject
     setOpenItem(null)
     setOpenRow(null)
     // Paging resets with the thing being paged. Without this, switching surface while on page 3
@@ -1497,11 +1558,30 @@ export function SessionIrisTab() {
               <Match when={pane() === "integrations"}>
                 <For each={rows()}>
                   {(i) => (
-                    <button type="button" class="w-full text-start flex items-baseline gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), i))}>
-                      <span class="shrink-0" classList={{ "text-text-base": i.connected, "text-text-weak": !i.connected }}>
-                        {i.connected ? "●" : "○"}
+                    <button type="button" class="w-full text-start flex items-center gap-2 px-2 py-1.5 border-b border-border-weaker-base last:border-0 cursor-pointer hover:bg-background-element" onClick={() => setOpenRow(describeRow(pane(), i))}>
+                      {/* The provider mark carries the identity; the ring carries the state.
+                          Twenty-five identical grey dots was a list you could not scan and
+                          could not triage. */}
+                      <span
+                        class="iris-int__mark shrink-0"
+                        classList={{
+                          "iris-int__mark--live": integrationHealth(i) === "live",
+                          "iris-int__mark--error": integrationHealth(i) === "error",
+                          "iris-int__mark--off": integrationHealth(i) === "off",
+                        }}
+                        title={i.type ?? i.name}
+                      >
+                        {providerMark(i.type, i.name)}
                       </span>
-                      <span class="text-12-regular text-text-base min-w-0 flex-1">{i.name}</span>
+                      <span class="min-w-0 flex-1">
+                        <span class="block text-12-regular text-text-base truncate">{i.name}</span>
+                        {/* An error says WHY here. A red mark with no reason is not actionable. */}
+                        <Show when={i.lastError}>
+                          <span class="block text-11-regular text-text-weaker truncate" title={i.lastError}>
+                            {i.lastError}
+                          </span>
+                        </Show>
+                      </span>
                       <span class="font-mono text-11-regular text-text-weaker shrink-0">
                         {i.account || i.category || i.status}
                       </span>

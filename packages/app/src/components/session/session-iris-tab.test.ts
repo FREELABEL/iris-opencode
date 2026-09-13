@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cellText, detailTabsFor, highlightJson, normalizeSurface, resolvePane, surfaceView } from "./session-iris-tab"
+import { cellText, detailTabsFor, highlightJson, integrationHealth, normalizeSurface, providerMark, resolvePane, surfaceView } from "./session-iris-tab"
 
 describe("surfaceView", () => {
   test("a failed fetch is never rendered as an empty surface", () => {
@@ -194,5 +194,32 @@ describe("detailTabsFor — playbooks", () => {
   test("a playbook offers its steps and its local document", () => {
     const ids = detailTabsFor("playbooks").map((t) => t.id)
     expect(ids).toEqual(["info", "steps", "doc", "json"])
+  })
+})
+
+describe("integrationHealth", () => {
+  test("failing is its own state, not 'disconnected'", () => {
+    // The credential exists and something is wrong with it. That is the row you opened this
+    // list to find, and collapsing it into "off" buries it among two dozen healthy ones.
+    expect(integrationHealth({ status: "error", connected: true })).toBe("error")
+    expect(integrationHealth({ status: "error", connected: false })).toBe("error")
+    expect(integrationHealth({ status: "active", connected: true })).toBe("live")
+    expect(integrationHealth({ status: "revoked", connected: false })).toBe("off")
+  })
+})
+
+describe("providerMark", () => {
+  test("reads the brand out of the provider key, not the display name", () => {
+    // "Freelabel — Instagram" and "Beatbox — Instagram" are both Instagram.
+    expect(providerMark("social-instagram", "Freelabel — Instagram")).toBe("IG")
+    expect(providerMark("social-tiktok", "Beatbox — Tiktok")).toBe("TT")
+    expect(providerMark("gmail", "Gmail")).toBe("M")
+  })
+
+  test("an unknown provider still gets a mark rather than a blank", () => {
+    expect(providerMark("tradovate", "Tradovate")).toBe("TR")
+    expect(providerMark(undefined, "Courtlistener")).toBe("CO")
+    // And the degenerate case does not render an empty chip.
+    expect(providerMark(undefined, "")).toBe("?")
   })
 })
