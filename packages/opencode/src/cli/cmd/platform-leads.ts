@@ -262,6 +262,23 @@ async function resolveLeadId(idOrQuery: string): Promise<{ leadId: number; lead:
 // Subcommands
 // ============================================================================
 
+/**
+ * The orderings `leads list` can ask the SERVER for, with the words used to describe
+ * each one back to the reader.
+ *
+ * `activity` is the default because the question behind `leads list` is almost always
+ * "what am I working on", and `created_at` answers "what did a scraper insert last".
+ * Every field here is in the API's own sort allow-list (LeadController::index); an
+ * unmapped field there silently falls back to created_at, which is exactly the kind of
+ * quiet wrong answer this whole change is about, so do not add one without checking.
+ */
+const LIST_SORTS: Record<string, { sortBy: string; sortDirection: string; orderingLabel: string }> = {
+  activity: { sortBy: "updated_at", sortDirection: "desc", orderingLabel: "most recently active" },
+  created: { sortBy: "created_at", sortDirection: "desc", orderingLabel: "newest" },
+  name: { sortBy: "name", sortDirection: "asc", orderingLabel: "first alphabetically" },
+  value: { sortBy: "price_bid", sortDirection: "desc", orderingLabel: "highest value" },
+}
+
 const LeadsListCommand = cmd({
   command: "list",
   aliases: ["ls"],
@@ -273,6 +290,12 @@ const LeadsListCommand = cmd({
       .option("limit", { describe: "max results", type: "number", default: 20 })
       .option("bloq-id", { alias: "bloq", describe: "filter by bloq/project ID", type: "number" })
       .option("all", { describe: "include Prospected leads (hidden by default)", type: "boolean", default: false })
+      .option("sort", {
+        describe: "order the WHOLE book before paging — activity is what you almost always want",
+        type: "string",
+        choices: ["activity", "created", "name", "value"],
+        default: "activity",
+      })
       .option("json", { describe: "JSON output", type: "boolean", default: false }),
   async handler(args) {
     UI.empty()
@@ -291,6 +314,22 @@ const LeadsListCommand = cmd({
       // Fetch more than requested so we can filter + sort client-side
       const fetchLimit = args.all || args.status || args.search ? args.limit : Math.max(args.limit * 5, 100)
       const params = new URLSearchParams({ per_page: String(fetchLimit) })
+      // #184945 — ORDER THE BOOK, NOT THE PAGE.
+      //
+      // The status-priority sort below is client-side, so it can only reorder rows the
+      // server already chose. The server defaulted to `created_at desc`, which on a book
+      // of ~28,500 leads means the page is "whoever was created most recently" — mostly
+      // scraped Prospected junk. Measured 2026-09-13: `--all --limit 1000` returned 1000
+      // rows and did NOT contain lead #15743 (In Negotiation, 115 notes, updated that
+      // same day), while `--status "In Negotiation"` found it instantly, because a status
+      // filter is pushed to the server and therefore queries the whole table.
+      //
+      // A client-side sort over the wrong page is indistinguishable from a correct
+      // answer — it looks sorted. Pushing the order to the server is what makes the
+      // window contain the leads worth seeing.
+      const { sortBy, sortDirection, orderingLabel } = LIST_SORTS[String(args.sort)] ?? LIST_SORTS.activity
+      params.set("sort_by", sortBy)
+      params.set("sort_direction", sortDirection)
       if (args.status) params.set("status", args.status)
       if (args.search) params.set("search", args.search)
       if (args["bloq-id"]) params.set("bloq_id", String(args["bloq-id"]))
@@ -326,8 +365,11 @@ const LeadsListCommand = cmd({
       }
 
       // Sort by status priority: active clients first
+      // Stable sort (ES2019+), so the server's ordering survives as the tiebreak WITHIN
+      // each band: active clients first, and most-recently-active first among them.
       const statusPriority: Record<string, number> = {
         won: 0,
+        converted: 0,
         "in negotiation": 1,
         interested: 2,
         contacted: 3,
@@ -354,7 +396,15 @@ const LeadsListCommand = cmd({
       // in the FLATTERING direction — a truncated sample of WORKED leads looks like a
       // healthy funnel precisely because the unworked ones are what is missing.
       // Reporting lives in leads-scope.ts so it can be tested — it is the part that failed.
-      const scope = describeListScope({ shown: leads.length, total: totalFromApi, prospectedHidden: prospectedCount })
+      const scope = describeListScope({
+        shown: leads.length,
+        total: totalFromApi,
+        prospectedHidden: prospectedCount,
+        // The report must describe the ordering that actually ran. It used to say
+        // "newest … by id" unconditionally, which stops being true the moment --sort
+        // does anything.
+        ordering: orderingLabel,
+      })
       const truncated = scope.truncated
       const suffix = scope.notes.length ? dim(` (${scope.notes.join(" · ")})`) : ""
 
