@@ -1205,7 +1205,7 @@ const AgentsBulkDeleteCommand = cmd({
 
 const AgentsAssignCommand = cmd({
   command: "assign <agent-id>",
-  describe: "assign an agent to a bloq, item, task, or lead task",
+  describe: "assign an agent to a bloq, list, item, task, or lead task",
   builder: (yargs) =>
     yargs
       .positional("agent-id", { type: "number", demandOption: true, describe: "agent ID to assign" })
@@ -1215,10 +1215,18 @@ const AgentsAssignCommand = cmd({
       .option("lead-task", { type: "number", describe: "assign to a LeadTask by ID (requires --lead-id)" })
       .option("lead-id", { type: "number", describe: "lead ID (required with --lead-task)" })
       .option("item", { type: "number", describe: "assign to a bloq/atlas ITEM by ID (opens a task on it)" })
+      .option("list", { type: "number", describe: "stand this agent on a LIST — new items are included too; 0 clears" })
       .option("title", { type: "string", describe: "title for the task --item opens (default: 'Assigned to <agent>')" })
       .check((argv) => {
-        if (!argv.bloq && argv.workspace === undefined && !argv.task && !argv["lead-task"] && !argv.item) {
-          throw new Error("Specify at least one target: --bloq, --workspace, --item, --task, or --lead-task")
+        if (
+          !argv.bloq &&
+          argv.workspace === undefined &&
+          !argv.task &&
+          !argv["lead-task"] &&
+          !argv.item &&
+          argv.list === undefined
+        ) {
+          throw new Error("Specify at least one target: --bloq, --workspace, --list, --item, --task, or --lead-task")
         }
         if (argv["lead-task"] && !argv["lead-id"]) {
           throw new Error("--lead-task requires --lead-id")
@@ -1305,6 +1313,45 @@ const AgentsAssignCommand = cmd({
         }
       } catch (err) {
         spinner.stop("Error", 1)
+        prompts.log.error(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    // Stand the agent on a LIST — a standing responsibility, not a snapshot.
+    //
+    // Nothing is written onto the items. The watch is one field on the list, and the agent's
+    // queue resolves it when read, so an item filed a second from now is already included.
+    // Snapshotting the current contents instead would be wrong for every list on these boards:
+    // they are flows, and the items a snapshot misses are the ones you wanted watched.
+    if (args.list !== undefined) {
+      const listId = args.list as number
+      const clearing = !listId
+      spinner.start(
+        clearing ? `Clearing the watch on list #${args.list}…` : `Standing agent #${agentId} on list #${listId}…`,
+      )
+      try {
+        const uid = await requireUserId(undefined)
+        const res = await irisFetch(`/api/v1/user/${uid}/bloqs/list/${listId || args.list}`, {
+          method: "PATCH",
+          body: JSON.stringify({ agent_id: clearing ? null : agentId }),
+        })
+        const ok = await handleApiError(res, "Assign to list")
+        if (ok) {
+          spinner.stop(
+            success(
+              clearing
+                ? `✓ Watch cleared on list #${args.list}`
+                : `✓ Agent #${agentId} is watching list #${listId} — including items added later`,
+            ),
+          )
+          if (!clearing) prompts.log.info(`See it with:  iris agents tasks ${agentId}`)
+        } else {
+          spinner.stop("Failed", 1)
+          process.exitCode = 1
+        }
+      } catch (err) {
+        spinner.stop("Error", 1)
+        process.exitCode = 1
         prompts.log.error(err instanceof Error ? err.message : String(err))
       }
     }
@@ -1420,8 +1467,9 @@ const AgentsTasksCommand = cmd({
       UI.println(`  ${d?.agent?.name ?? `Agent #${agentId}`}  ${dim(`#${agentId}`)}`)
       UI.empty()
 
-      // An empty queue is a real answer and must not look like a failed read.
-      if (!c.total && !c.heartbeat_bloqs) {
+      // An empty queue is a real answer and must not look like a failed read. A watch counts:
+      // an agent standing on a list has a responsibility even with nothing handed to it directly.
+      if (!c.total && !c.heartbeat_bloqs && !c.watching_lists) {
         UI.println(`  ${dim("Nothing assigned.")}`)
         UI.println(`  ${dim(`Put it on something:  iris agents assign ${agentId} --item <itemId>`)}`)
         prompts.outro("Done")
@@ -1435,6 +1483,14 @@ const AgentsTasksCommand = cmd({
         if (rows.length > 40) UI.println(`    ${dim(`… ${rows.length - 40} more`)}`)
         UI.empty()
       }
+
+      // Counts, never rows. A watched list can hold hundreds of items (Bug Reports is 486);
+      // printing them would bury the work actually handed to this agent.
+      section("WATCHING", d.watching_lists ?? [], (l) => {
+        const n = l.item_count ?? 0
+        const where = l.bloq_name ? `${dim("in")} ${l.bloq_name}` : dim(`bloq #${l.bloq_id}`)
+        return `${l.list_name}  ${dim(`#${l.list_id}`)}  ${n} item${n === 1 ? "" : "s"}  ${where}`
+      })
 
       section("ITEMS", d.item_tasks ?? [], (t) => {
         const where = t.item_title ? `${t.item_title}` : `item #${t.item_id}`
@@ -1452,6 +1508,11 @@ const AgentsTasksCommand = cmd({
       })
       section("BOARDS (heartbeat)", d.heartbeat_bloqs ?? [], (b) => `${b.name}  ${dim(`#${b.bloq_id}`)}`)
 
+      if (c.watching_items) {
+        UI.println(
+          `  ${dim(`Watching ${c.watching_items} item(s) across ${c.watching_lists} list(s) — a standing duty, not counted in assigned work.`)}`,
+        )
+      }
       if (!d?.includes_completed) UI.println(`  ${dim("Open work only — add --all for completed.")}`)
     } catch (err) {
       spinner.stop("Error", 1)

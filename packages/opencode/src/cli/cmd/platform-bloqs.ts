@@ -424,7 +424,12 @@ const BloqsGetCommand = cmd({
       if (lists.length > 0) {
         console.log(`  ${dim("Lists:")}`)
         for (const l of lists) {
-          const count = listItemCounts[l.id] ?? l.items_count ?? 0
+          // The server's items_count is a COUNT(*); listItemCounts is tallied from the items
+          // this command happened to fetch, which is one page. On bloq #297 that page is 500 of
+          // 4,600 rows, so list #1028 rendered "(2 items)" for a list holding 11 — and the
+          // sample was preferred over the real number. Trust the server, fall back to the tally
+          // only when the server did not send one.
+          const count = l.items_count ?? listItemCounts[l.id] ?? 0
           console.log(`    ${dim("—")} ${bold(String(l.name ?? l.id))} ${dim(`#${l.id}`)} ${dim(`(${count} items)`)}`)
           // Show top 3 item previews per list
           const listItems = allItems.filter((i: any) => (i.bloq_list_id ?? i.list_id) === l.id)
